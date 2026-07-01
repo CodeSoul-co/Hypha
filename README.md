@@ -2,8 +2,6 @@
   <img src="docs/hypha_logo.png" alt="Hypha logo" width="180" />
 </p>
 
-<h1 align="center">Hypha</h1>
-
 <p align="center">
   <strong>Harness-oriented agent system framework for production-grade LLM agent applications.</strong>
 </p>
@@ -11,8 +9,6 @@
 <p align="center">
   English | <a href="README.zh-CN.md">中文</a>
 </p>
-
----
 
 ## Overview
 
