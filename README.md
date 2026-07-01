@@ -2,6 +2,8 @@
 
 > Harness-oriented agent system framework for building production-grade LLM agent applications.
 
+![Hypha logo](docs/hypha_logo.png)
+
 **Language:** [中文](#中文) | [English](#english)
 
 ---

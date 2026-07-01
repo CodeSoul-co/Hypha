@@ -143,7 +143,7 @@ const configSchema = z.object({
     autoReload: z.boolean().default(true),
   }),
   prompts: z.object({
-    templatesPath: z.string().default('./prompts'),
+    templatesPath: z.string().default('./src/prompts'),
     cacheEnabled: z.boolean().default(true),
   }),
   logging: z.object({

@@ -393,7 +393,7 @@ workflows:
   autoReload: true
 
 prompts:
-  templatesPath: "./prompts"
+  templatesPath: "./src/prompts"
   cacheEnabled: true
 
 logging:

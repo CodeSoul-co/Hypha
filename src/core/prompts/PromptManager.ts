@@ -31,7 +31,7 @@ export class PromptManager {
   private cache: Map<string, string> = new Map();
 
   constructor(templateDir?: string, cacheEnabled?: boolean) {
-    this.templateDir = templateDir || path.resolve(process.cwd(), 'prompts');
+    this.templateDir = templateDir || path.resolve(process.cwd(), 'src/prompts');
     this.cacheEnabled = cacheEnabled ?? true;
   }
 
