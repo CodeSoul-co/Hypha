@@ -1,0 +1,48 @@
+name: conversation-flow
+version: 1.0.0
+description: Standard conversation workflow with preprocessing and postprocessing
+
+stages:
+  - id: preprocess
+    type: preprocessor
+    name: Preprocessing
+    description: Enrich context and classify intent
+    skills:
+      - context-enrichment
+      - intent-classification
+    next: llm-inference
+    onError: continue
+
+  - id: llm-inference
+    type: llm
+    name: LLM Inference
+    description: Generate response using LLM
+    model: ${defaultModel}
+    next: postprocess
+    onError: stop
+
+  - id: postprocess
+    type: postprocessor
+    name: Postprocessing
+    description: Format and validate response
+    next: end
+    onError: continue
+
+  - id: tool-call
+    type: conditional
+    name: Tool Decision
+    description: Check if tool use is needed
+    condition: "${needs_tool}"
+    branches:
+      - condition: "true"
+        then: tool-execution
+      - condition: "default"
+        then: end
+    next: end
+
+  - id: tool-execution
+    type: tool-call
+    name: Execute Tool
+    tools:
+      - search
+    next: llm-inference

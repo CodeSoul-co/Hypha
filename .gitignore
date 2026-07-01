@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Environment files - never commit secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+.DS_Store
+
+# Test coverage
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# MongoDB data (local dev)
+data/
+
+# Redis dump
+dump.rdb
+
+# TypeScript cache
+*.tsbuildinfo
+
+# OS files
+Thumbs.db

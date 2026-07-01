@@ -1,0 +1,27 @@
+tools:
+  - id: filesystem
+    name: Filesystem
+    description: Read and write files to the local filesystem
+    enabled: true
+    schema:
+      type: object
+      properties:
+        operation:
+          type: string
+          enum: [read, write, list]
+        path:
+          type: string
+        content:
+          type: string
+
+  - id: search
+    name: Web Search
+    description: Search the web for information
+    enabled: true
+    schema:
+      type: object
+      properties:
+        query:
+          type: string
+        limit:
+          type: number

@@ -1,0 +1,25 @@
+agents:
+  - id: default
+    name: Default Agent
+    description: Default conversation agent
+    model: claude-3-5-sonnet-20241022
+    provider: anthropic
+    temperature: 0.7
+    maxTokens: 4096
+    skills:
+      - context-enrichment
+      - intent-classification
+    tools: []
+
+  - id: coding
+    name: Coding Assistant
+    description: Specialized agent for code generation and review
+    model: gpt-4o
+    provider: openai
+    temperature: 0.3
+    maxTokens: 8192
+    skills:
+      - code-analysis
+    tools:
+      - filesystem
+      - search

@@ -1,0 +1,421 @@
+app:
+  name: "OrbitAgent"
+  version: "1.0.0"
+  env: "development"
+  host: "0.0.0.0"
+  port: 3000
+  apiPrefix: "/api/v1"
+
+database:
+  mongodb:
+    host: "${MONGODB_HOST:localhost}"
+    port: "${MONGODB_PORT:27017}"
+    database: "${MONGODB_DATABASE:orbit_agent}"
+    username: "${MONGODB_USERNAME:}"
+    password: "${MONGODB_PASSWORD:}"
+    options:
+      maxPoolSize: 10
+      retryWrites: true
+
+redis:
+  host: "${REDIS_HOST:localhost}"
+  port: "${REDIS_PORT:6379}"
+  password: "${REDIS_PASSWORD:}"
+  db: "${REDIS_DB:0}"
+  keyPrefix: "${REDIS_KEY_PREFIX:orbit:}"
+
+llm:
+  defaultProvider: "deepseek"
+  defaultModel: "deepseek-v4-flash"
+
+  # Anthropic Claude 模型选择
+  anthropic:
+    enabled: true
+    models:
+      - id: "claude-3-5-sonnet-20241022"
+        name: "Claude 3.5 Sonnet"
+        enabled: true
+        default: true
+        description: "Most intelligent model with excellent reasoning"
+        contextWindow: 200000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "claude-3-5-haiku-20241022"
+        name: "Claude 3.5 Haiku"
+        enabled: true
+        default: false
+        description: "Fast and affordable model"
+        contextWindow: 200000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "claude-3-opus-20240229"
+        name: "Claude 3 Opus"
+        enabled: true
+        default: false
+        description: "Most powerful model for complex tasks"
+        contextWindow: 200000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "claude-3-sonnet-20240229"
+        name: "Claude 3 Sonnet"
+        enabled: true
+        default: false
+        description: "Balanced performance and speed"
+        contextWindow: 200000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+
+  # OpenAI 模型选择
+  openai:
+    enabled: true
+    models:
+      - id: "gpt-4o"
+        name: "GPT-4o"
+        enabled: true
+        default: false
+        description: "Most capable model, multimodal"
+        contextWindow: 128000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "gpt-4-turbo"
+        name: "GPT-4 Turbo"
+        enabled: true
+        default: false
+        description: "Fast and capable GPT-4 model"
+        contextWindow: 128000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "gpt-4"
+        name: "GPT-4"
+        enabled: true
+        default: false
+        description: "Original GPT-4 model"
+        contextWindow: 8192
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+      - id: "gpt-3.5-turbo"
+        name: "GPT-3.5 Turbo"
+        enabled: true
+        default: false
+        description: "Fast and affordable"
+        contextWindow: 16385
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+
+  # Google Gemini 模型选择
+  google:
+    enabled: true
+    models:
+      - id: "gemini-2.0-flash"
+        name: "Gemini 2.0 Flash"
+        enabled: true
+        default: false
+        description: "Latest fast model with enhanced capabilities"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "gemini-1.5-pro"
+        name: "Gemini 1.5 Pro"
+        enabled: true
+        default: false
+        description: "Most capable model with large context"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "gemini-1.5-flash"
+        name: "Gemini 1.5 Flash"
+        enabled: true
+        default: false
+        description: "Fast model with large context"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+
+  # Ollama 本地模型 (如果没有安装 Ollama，设为 false)
+  ollama:
+    enabled: false
+    baseUrl: "http://localhost:11434"
+    models:
+      - id: "llama2"
+        name: "Llama 2"
+        enabled: true
+        default: false
+        description: "General purpose model"
+        contextWindow: 4096
+        features:
+          streaming: true
+          toolCalling: false
+          vision: false
+      - id: "llama3"
+        name: "Llama 3"
+        enabled: true
+        default: false
+        description: "Latest Llama model"
+        contextWindow: 8192
+        features:
+          streaming: true
+          toolCalling: false
+          vision: false
+      - id: "mistral"
+        name: "Mistral"
+        enabled: true
+        default: false
+        description: "Efficient and capable model"
+        contextWindow: 8192
+        features:
+          streaming: true
+          toolCalling: false
+          vision: false
+      - id: "codellama"
+        name: "Code Llama"
+        enabled: true
+        default: false
+        description: "Code generation and understanding"
+        contextWindow: 16384
+        features:
+          streaming: true
+          toolCalling: false
+          vision: false
+      - id: "phi3"
+        name: "Phi-3"
+        enabled: true
+        default: false
+        description: "Microsoft's efficient small model"
+        contextWindow: 4096
+        features:
+          streaming: true
+          toolCalling: false
+          vision: false
+
+  # DeepSeek 模型选择 (OpenAI 兼容 API: https://api.deepseek.com)
+  deepseek:
+    enabled: true
+    models:
+      - id: "deepseek-v4-flash"
+        name: "DeepSeek V4 Flash"
+        enabled: true
+        default: true
+        description: "DeepSeek-V4-Flash, 1M context, supports thinking/non-thinking modes"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+      - id: "deepseek-v4-pro"
+        name: "DeepSeek V4 Pro"
+        enabled: true
+        default: false
+        description: "DeepSeek-V4-Pro, 1M context, higher quality"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+      # Legacy model names — deprecated 2026/07/24, alias to v4-flash
+      - id: "deepseek-chat"
+        name: "DeepSeek Chat (Legacy)"
+        enabled: true
+        default: false
+        description: "[DEPRECATED 2026/07/24] Non-thinking mode of deepseek-v4-flash"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+      - id: "deepseek-reasoner"
+        name: "DeepSeek Reasoner (Legacy)"
+        enabled: true
+        default: false
+        description: "[DEPRECATED 2026/07/24] Thinking mode of deepseek-v4-flash"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+
+  # OpenAI 兼容模型 (通过环境变量 API_KEY 配置)
+  compatible:
+    kimi:
+      enabled: true
+      models:
+        - id: "moonshot-v1-8k"
+          name: "Moonshot V1 8K"
+          enabled: true
+          description: "8K context window"
+        - id: "moonshot-v1-32k"
+          name: "Moonshot V1 32K"
+          enabled: true
+          description: "32K context window"
+        - id: "moonshot-v1-128k"
+          name: "Moonshot V1 128K"
+          enabled: true
+          description: "128K context window"
+
+    siliconflow:
+      enabled: true
+      baseUrl: "https://api.siliconflow.cn/v1"
+      models:
+        - id: "Qwen/Qwen3-32B"
+          name: "Qwen3-32B"
+          enabled: true
+          default: true
+          description: "Latest Qwen with strong reasoning"
+          contextWindow: 32000
+        - id: "Qwen/Qwen2.5-7B-Instruct"
+          name: "Qwen 2.5 7B"
+          enabled: true
+          description: "Fast and efficient"
+        - id: "deepseek-ai/DeepSeek-V2.5"
+          name: "DeepSeek V2.5"
+          enabled: true
+          description: "Advanced reasoning"
+        - id: "THUDM/glm-4-9b-chat"
+          name: "GLM-4 9B"
+          enabled: true
+          description: "Chinese optimized"
+
+    groq:
+      enabled: true
+      models:
+        - id: "llama-3.1-70b-versatile"
+          name: "Llama 3.1 70B"
+          enabled: true
+          description: "Fast inference"
+        - id: "llama-3.1-8b-instant"
+          name: "Llama 3.1 8B"
+          enabled: true
+          description: "Ultra fast"
+        - id: "mixtral-8x7b-32768"
+          name: "Mixtral 8x7B"
+          enabled: true
+          description: "High quality"
+
+    together:
+      enabled: true
+      models:
+        - id: "meta-llama/Llama-3-70b-chat-hf"
+          name: "Llama 3 70B"
+          enabled: true
+          description: "High quality chat"
+        - id: "mistralai/Mixtral-8x22B-Instruct-v0.1"
+          name: "Mixtral 8x22B"
+          enabled: true
+          description: "Expert model"
+
+    perplexity:
+      enabled: true
+      models:
+        - id: "llama-3.1-sonar-large-128k-online"
+          name: "Sonar Large Online"
+          enabled: true
+          description: "With web search"
+        - id: "llama-3.1-sonar-huge-128k-online"
+          name: "Sonar Huge Online"
+          enabled: true
+          description: "Best with search"
+        - id: "llama-3.1-sonar-large-128k-chat"
+          name: "Sonar Large Chat"
+          enabled: true
+          description: "General chat"
+
+  providers:
+    anthropic:
+      apiKey: "${ANTHROPIC_API_KEY}"
+      baseUrl: "https://api.anthropic.com"
+      timeout: 60000
+    openai:
+      apiKey: "${OPENAI_API_KEY}"
+      baseUrl: "https://api.openai.com"
+      timeout: 60000
+    google:
+      apiKey: "${GOOGLE_API_KEY}"
+      baseUrl: "https://generativelanguage.googleapis.com"
+      timeout: 60000
+    ollama:
+      apiKey: ""
+      baseUrl: "http://localhost:11434"
+      timeout: 120000
+    deepseek:
+      apiKey: "${DEEPSEEK_API_KEY}"
+      baseUrl: "${DEEPSEEK_BASE_URL:https://api.deepseek.com}"
+      timeout: 60000
+
+memory:
+  temporary:
+    maxPairs: 50
+    ttl: 86400
+    cleanupInterval: 3600
+  permanent:
+    enabled: true
+    archiveAfter: 2592000
+
+agents:
+  configPath: "./configs/agents.yaml"
+  defaultAgentId: "default"
+
+skills:
+  # Each entry is a directory scanned for .md skill files at boot. Order
+  # matters when two skills share an id — later directories override earlier.
+  # Builtins (src/core/skills/builtins) are always scanned last as a
+  # fallback so the default behaviour is preserved.
+  dirs:
+    - "~/.orbit/skills"   # user-installed skills
+  autoLoad: true
+
+tools:
+  configPath: "./configs/tools.yaml"
+  mcpServers: []  # MCP servers can be configured later as needed
+
+workflows:
+  configPath: "./configs/workflows"
+  autoReload: true
+
+prompts:
+  templatesPath: "./prompts"
+  cacheEnabled: true
+
+logging:
+  level: "debug"
+  format: "text"
+  outputs:
+    - type: "console"
+    - type: "file"
+      path: "./logs/app.log"
+
+auth:
+  enabled: true
+  jwt:
+    secret: "${JWT_SECRET}"
+    expiry: 86400
+    refreshExpiry: 604800
+  apiKey:
+    enabled: true
+    headerName: "X-API-Key"
+    storedHashed: true
+
+rateLimit:
+  enabled: true
+  windowMs: 60000
+  max: 100
