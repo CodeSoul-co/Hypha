@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/hypha_logo.png" alt="Hypha logo" width="180" />
+  <img src="docs/hypha_logo.png" alt="hypha logo" width="180" />
 </p>
 
 <p align="center">
@@ -12,24 +12,24 @@
 
 ## Overview
 
-Hypha is an open-source, TypeScript-based, harness-oriented agent system framework for building production-grade LLM agent applications in real business environments.
+hypha is an open-source, TypeScript-based, harness-oriented agent system framework for building production-grade LLM agent applications in real business environments.
 
-Many agent frameworks focus on how agents are composed: roles, prompts, tools, workflows, graphs, crews, or multi-agent conversations. Hypha focuses on a complementary production question: how an agent system is run, evaluated, traced, replayed, governed, and deployed over time.
+Many agent frameworks focus on how agents are composed: roles, prompts, tools, workflows, graphs, crews, or multi-agent conversations. hypha focuses on a complementary production question: how an agent system is run, evaluated, traced, replayed, governed, and deployed over time.
 
-The core idea of Hypha is:
+The core idea of hypha is:
 
 > An agent should not be defined separately from the harness required to run, evaluate, trace, govern, and deploy it.
 
-In Hypha, the primary unit is not an isolated agent. It is a harnessed agent system. Each agent system includes not only the agent's role, tools, memory, and process, but also runtime specifications, evaluation rules, trace structure, replay logic, permission policy, regression configuration, and deployment configuration.
+In hypha, the primary unit is not an isolated agent. It is a harnessed agent system. Each agent system includes not only the agent's role, tools, memory, and process, but also runtime specifications, evaluation rules, trace structure, replay logic, permission policy, regression configuration, and deployment configuration.
 
-Hypha adopts a **ReAct + FSM** execution model:
+hypha adopts a **ReAct + FSM** execution model:
 
 - **ReAct** defines how every agent reasons and acts: observe, reason, plan, act, observe again, and verify.
 - **FSM** defines how the software system implements that loop with explicit states, transitions, guards, and failure handling.
 
-This means Hypha agents are not implemented as loose prompt chains or hidden `while` loops. They are explicit, inspectable, replayable state machines around a ReAct-style reasoning and acting loop.
+This means hypha agents are not implemented as loose prompt chains or hidden `while` loops. They are explicit, inspectable, replayable state machines around a ReAct-style reasoning and acting loop.
 
-## Why Hypha?
+## Why hypha?
 
 A prototype agent often needs only:
 
@@ -59,11 +59,11 @@ multi-tenant / multi-workspace configuration
 
 When these capabilities are scattered across business code, evaluation scripts, logging systems, deployment scripts, and debugging tools, teams pay the cost repeatedly. Reproducibility becomes weak, evaluation becomes inconsistent, regressions become hard to detect, and production behavior becomes difficult to govern.
 
-Hypha aims to unify these concerns in one framework: not only to help developers build agents, but also to help them run, evaluate, trace, govern, and deploy agent systems.
+hypha aims to unify these concerns in one framework: not only to help developers build agents, but also to help them run, evaluate, trace, govern, and deploy agent systems.
 
 ## Core Concept: Harnessed Agent System
 
-Hypha treats every agent application as a complete system package:
+hypha treats every agent application as a complete system package:
 
 ```text
 HarnessedAgentSystem = {
@@ -81,7 +81,7 @@ HarnessedAgentSystem = {
 }
 ```
 
-When defining an agent system in Hypha, developers should describe not only how the agent completes tasks, but also:
+When defining an agent system in hypha, developers should describe not only how the agent completes tasks, but also:
 
 ```text
 how it runs;
@@ -101,15 +101,15 @@ how it is deployed into a business environment.
 
 ## ReAct + FSM Execution Model
 
-Hypha requires every agent to be designed around the **ReAct** pattern: reasoning and acting are interleaved instead of separated into a one-shot plan and a blind execution phase.
+hypha requires every agent to be designed around the **ReAct** pattern: reasoning and acting are interleaved instead of separated into a one-shot plan and a blind execution phase.
 
-A Hypha agent should follow this conceptual loop:
+A hypha agent should follow this conceptual loop:
 
 ```text
 Observe -> Reason / Plan -> Act -> Observe -> Verify -> Continue | Stop | Escalate
 ```
 
-Hypha implements this loop with an explicit finite-state machine. A typical runtime FSM may look like:
+hypha implements this loop with an explicit finite-state machine. A typical runtime FSM may look like:
 
 ```text
 Idle
@@ -125,7 +125,7 @@ Idle
   -> Reasoning | HumanReview | Completed | Failed
 ```
 
-The FSM layer gives Hypha deterministic software-engineering properties around a probabilistic model:
+The FSM layer gives hypha deterministic software-engineering properties around a probabilistic model:
 
 - every state transition can be traced;
 - every tool action can be guarded by policy;
@@ -143,7 +143,7 @@ Production harness = policy, evaluation, audit, deployment, regression
 
 ## Domain Packs
 
-Hypha uses Domain Packs to support business-domain adaptation.
+hypha uses Domain Packs to support business-domain adaptation.
 
 A Domain Pack is a complete agent system definition package for a specific domain. It includes not only domain prompts or tool lists, but also task structures, tool schemas, memory structures, roles, business processes, permission policies, evaluation metrics, guardrails, output formats, and deployment configuration.
 
@@ -165,11 +165,11 @@ FSMOverrides
 RegressionCases
 ```
 
-With Domain Packs, Hypha can adapt the same agent kernel and production harness to domains such as legal assistance, education, enterprise knowledge bases, research writing, data analysis, customer support, software engineering, and internal workflow automation.
+With Domain Packs, hypha can adapt the same agent kernel and production harness to domains such as legal assistance, education, enterprise knowledge bases, research writing, data analysis, customer support, software engineering, and internal workflow automation.
 
 ## Architecture Direction
 
-Hypha's long-term architecture is organized into three layers:
+hypha's long-term architecture is organized into three layers:
 
 ```text
 +------------------------------------------------------+
@@ -178,12 +178,12 @@ Hypha's long-term architecture is organized into three layers:
 +------------------------------------------------------+
 
 +------------------------------------------------------+
-|                  Hypha Agent Kernel                  |
+|                  hypha Agent Kernel                  |
 | ReAct Planner | ReAct Executor | Router | Tool Manager |
 +------------------------------------------------------+
 
 +------------------------------------------------------+
-|                Hypha Production Harness              |
+|                hypha Production Harness              |
 | FSM Runtime | Runs | Traces | Evaluation | Replay      |
 | Policy | Audit | Human Review | Regression             |
 +------------------------------------------------------+
@@ -194,11 +194,11 @@ Hypha's long-term architecture is organized into three layers:
 - **Production Harness** provides run management, trace collection, cost tracking, policy enforcement, failure replay, regression testing, audit logging, and human review.
 - **Domain Packs** define how the framework is adapted to concrete business scenarios.
 
-Hypha's architecture should prioritize clear boundaries, stable interfaces, modular implementation, and testable behavior. Business logic, runtime state, evaluation logic, and deployment configuration should not be coupled into a single layer.
+hypha's architecture should prioritize clear boundaries, stable interfaces, modular implementation, and testable behavior. Business logic, runtime state, evaluation logic, and deployment configuration should not be coupled into a single layer.
 
 ## Memory and State Layer
 
-Hypha does not bind itself to a single memory or storage implementation. Memory is treated as a pluggable, policy-governed agentic layer rather than a single database choice.
+hypha does not bind itself to a single memory or storage implementation. Memory is treated as a pluggable, policy-governed agentic layer rather than a single database choice.
 
 Different agent systems may need different memory patterns:
 
@@ -209,7 +209,7 @@ Different agent systems may need different memory patterns:
 - **Artifact memory**: files, reports, code, tables, generated outputs, and intermediate artifacts.
 - **Governance memory**: policy decisions, approvals, audit records, evaluation results, and regression outcomes.
 
-Depending on the use case, Hypha should support multiple memory backends and mixed memory modes:
+Depending on the use case, hypha should support multiple memory backends and mixed memory modes:
 
 - **Vector databases**, such as Milvus, Chroma, pgvector, Qdrant, Weaviate, or other embedding stores.
 - **Relational databases**, such as PostgreSQL, MySQL, SQLite, or other SQL systems for structured state and transactional records.
@@ -249,18 +249,18 @@ MemorySpec = {
 }
 ```
 
-Hypha and Plasmod can be complementary:
+hypha and Plasmod can be complementary:
 
 ```text
-Hypha   = agent system framework + production harness
+hypha   = agent system framework + production harness
 Plasmod = runtime state, event, memory, and materialized view substrate
 ```
 
-Hypha defines how an agent system is built, run, evaluated, and governed. Plasmod or another state layer stores runtime state, events, memory, traces, visibility scopes, and materialized views.
+hypha defines how an agent system is built, run, evaluated, and governed. Plasmod or another state layer stores runtime state, events, memory, traces, visibility scopes, and materialized views.
 
 ## Engineering Principles
 
-Every part of Hypha should follow these principles:
+Every part of hypha should follow these principles:
 
 - **ReAct-first agent design**: every agent must expose reasoning, acting, observation, and verification as explicit phases.
 - **FSM-first runtime implementation**: every run must move through explicit states and guarded transitions.

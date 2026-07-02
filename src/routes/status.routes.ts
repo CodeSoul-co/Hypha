@@ -46,7 +46,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hypha - API Status</title>
+  <title>hypha - API Status</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(135deg, #1a1a2e, #16213e); min-height: 100vh; color: #fff; padding: 40px 20px; }
@@ -81,7 +81,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
 </head>
 <body>
   <div class="container">
-    <h1>Hypha</h1>
+    <h1>hypha</h1>
     <p class="subtitle">Modular AI Agent Backend Service</p>
     <div class="status-grid">
       <div class="card">
@@ -128,7 +128,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
       ${modelsHtml}
     </div>
     <div class="footer">
-      <p>Hypha v1.0.0 | All systems operational</p>
+      <p>hypha v1.0.0 | All systems operational</p>
       <p style="margin-top:8px">Base URL: <code style="background:rgba(0,217,255,0.1);padding:4px 8px;border-radius:4px">http://localhost:3000/api/v1</code></p>
     </div>
   </div>
@@ -148,7 +148,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   res.json({
     success: true,
     data: {
-      service: 'Hypha',
+      service: 'hypha',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       databases: {

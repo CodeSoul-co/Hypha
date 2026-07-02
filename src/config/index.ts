@@ -38,7 +38,7 @@ const providerConfigSchema = z.object({
 // Configuration schema
 const configSchema = z.object({
   app: z.object({
-    name: z.string().default('Hypha'),
+    name: z.string().default('hypha'),
     version: z.string().default('1.0.0'),
     env: z.enum(['development', 'production', 'test']).default('development'),
     host: z.string().default('0.0.0.0'),

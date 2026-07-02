@@ -1,5 +1,5 @@
 /**
- * Integration Test Script for Hypha
+ * Integration Test Script for hypha
  * Tests: Chat, Memory (Redis), Permanent Storage (MongoDB)
  */
 
@@ -223,7 +223,7 @@ async function testClearChat(token: string, sessionId: string) {
 }
 
 async function checkRedisDirectly() {
-  log('info', 'Checking Redis Keys...');
+  log('info', 'Inspecting Redis Keys...');
   try {
     const { exec } = require('child_process');
     exec('redis-cli KEYS "hypha:*"', (error: any, stdout: string) => {
@@ -243,7 +243,7 @@ async function checkRedisDirectly() {
 }
 
 async function checkMongoDirectly() {
-  log('info', 'Checking MongoDB Collections...');
+  log('info', 'Inspecting MongoDB Collections...');
   try {
     const { exec } = require('child_process');
     exec('mongosh --quiet --eval "db.getMongo().getDBNames()" 2>/dev/null || mongo --quiet --eval "db.getMongo().getDBNames()"', (error: any, stdout: string) => {
@@ -259,7 +259,7 @@ async function checkMongoDirectly() {
 // Run all tests
 async function runTests() {
   console.log('\n' + '='.repeat(60));
-  console.log(`${colors.blue}Hypha Integration Test Suite${colors.reset}`);
+  console.log(`${colors.blue}hypha Integration Test Suite${colors.reset}`);
   console.log('='.repeat(60) + '\n');
 
   // Check infrastructure first

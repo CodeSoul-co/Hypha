@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `hypha` — example command-line client for the Hypha API service.
+ * `hypha` — example command-line client for the hypha API service.
  *
  * This binary is a presentation client over the REST API. It intentionally
  * does NOT re-implement business logic such as chat, auth, memory, or workflow
@@ -28,7 +28,7 @@ const program = new Command();
 
 program
   .name('hypha')
-  .description('Hypha CLI example — thin client over the REST API')
+  .description('hypha CLI example — thin client over the REST API')
   .version('1.0.0');
 
 // Shared pre-action: print where the CLI is talking to + which user.
@@ -55,7 +55,7 @@ registerConfig(program);
 // Default `hypha` with no args -> status line.
 program.action(() => {
   const token = readToken();
-  console.log(chalk.bold('hypha ') + chalk.gray('- Hypha CLI example'));
+  console.log(chalk.bold('hypha ') + chalk.gray('- hypha CLI example'));
   console.log(`  base:  ${chalk.cyan(getBaseUrl())}`);
   console.log(`  home:  ${chalk.cyan(getHome())}`);
   console.log(`  user:  ${token ? chalk.green(token.email) : chalk.yellow('not logged in')}  (${chalk.gray('hypha login')})`);

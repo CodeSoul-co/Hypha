@@ -1,4 +1,4 @@
-// Global types for Hypha
+// Global types for hypha
 
 export type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];

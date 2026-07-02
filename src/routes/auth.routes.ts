@@ -13,18 +13,16 @@ const router = Router();
 // Note: tlds:{allow:false} permits non-public TLDs like ".local" — needed
 // because seeded dev/admin accounts use admin@hypha.local / dev@test.local.
 const registerSchema = Joi.object({
-  email: Joi.string().email({ tlds: { allow: false } }).optional(),
-  phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
+  email: Joi.string().email({ tlds: { allow: false } }).required(),
   username: Joi.string().alphanum().min(3).max(30).required(),
   password: Joi.string().min(6).required(),
   displayName: Joi.string().max(50).optional(),
-}).or('email', 'phone'); // at least one identifier required
+});
 
 const loginSchema = Joi.object({
-  email: Joi.string().email({ tlds: { allow: false } }).optional(),
-  phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
+  email: Joi.string().email({ tlds: { allow: false } }).required(),
   password: Joi.string().required(),
-}).or('email', 'phone'); // at least one identifier required
+});
 
 // Register
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
@@ -33,13 +31,12 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
   }
 
-  const { email, phone, username, password, displayName } = value;
+  const { email, username, password, displayName } = value;
 
   // Check if user exists
   const existingUser = await UserModel.findOne({
     $or: [
-      ...(email ? [{ email }] : []),
-      ...(phone ? [{ phone }] : []),
+      { email },
       { username },
     ],
   });
@@ -47,31 +44,24 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   if (existingUser) {
     throw new AppError(
       'USER_EXISTS',
-      'User with this email, phone, or username already exists',
+      'User with this email or username already exists',
       HTTP_STATUS.CONFLICT
     );
   }
 
-  // Build user object — email is required in JWT, use phone as fallback
+  // Build user object.
   interface UserCreatePayload {
     username: string;
     password: string;
     displayName: string;
-    email?: string;
-    phone?: string;
+    email: string;
   }
   const userPayload: UserCreatePayload = {
+    email,
     username,
     password,
     displayName: displayName || username,
-    ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}),
   };
-
-  // If neither email nor phone, generate a placeholder email
-  if (!email && !phone) {
-    userPayload.email = `${username}@hypha.local`;
-  }
 
   const user = await UserModel.create(userPayload);
 
@@ -98,14 +88,9 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
   }
 
-  const { email, phone, password } = value;
+  const { email, password } = value;
 
-  // Find user by email or phone
-  const query: { email?: string; phone?: string } = {};
-  if (email) query.email = email;
-  if (phone) query.phone = phone;
-
-  const user = await UserModel.findOne(query).select('+password');
+  const user = await UserModel.findOne({ email }).select('+password');
 
   if (!user) {
     throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', HTTP_STATUS.UNAUTHORIZED);
@@ -187,7 +172,7 @@ router.get('/me', authMiddleware(), asyncHandler(async (req: Request, res: Respo
   });
 }));
 
-// Update profile
+// Update current account settings
 router.put('/me', authMiddleware(), asyncHandler(async (req: Request, res: Response) => {
   const { displayName, preferences } = req.body;
 

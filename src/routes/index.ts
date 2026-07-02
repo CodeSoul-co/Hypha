@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import chatRoutes from './chat.routes';
 import authRoutes from './auth.routes';
-import usersRoutes from '../users/users.routes';
 import memoryRoutes from './memory.routes';
 import skillRoutes from './skill.routes';
 import toolRoutes from './tool.routes';
@@ -28,7 +27,6 @@ router.get('/health', (_req, res) => {
 
 // Mount routes
 router.use('/auth', authRoutes);
-router.use('/users', usersRoutes);
 router.use('/chat', chatRoutes);
 router.use('/memory', memoryRoutes);
 router.use('/skills', skillRoutes);

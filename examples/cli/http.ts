@@ -1,5 +1,5 @@
 /**
- * Thin HTTP client wrapping the Hypha REST API. Every command in
+ * Thin HTTP client wrapping the hypha REST API. Every command in
  * examples/cli/commands/* funnels through here so auth, baseUrl, and error
  * handling stay consistent. The CLI stays a pure presentation client.
  */

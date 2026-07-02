@@ -13,7 +13,7 @@ const HOME = process.env.HYPHA_HOME || path.join(os.homedir(), '.hypha');
 const CONFIG_PATH = path.join(HOME, 'config.json');
 const TOKEN_PATH = path.join(HOME, 'token.json');
 
-export interface HyphaCliConfig {
+export interface CliConfig {
   baseUrl: string;
   /** Optional default model; commands fall back to server's `defaults/current`. */
   defaultModel?: string;
@@ -49,13 +49,13 @@ export function getDefaultProvider(): string | undefined {
   return process.env.HYPHA_PROVIDER || readConfig()?.defaultProvider;
 }
 
-export function readConfig(): HyphaCliConfig | null {
+export function readConfig(): CliConfig | null {
   if (!fs.existsSync(CONFIG_PATH)) return null;
   try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')); }
   catch { return null; }
 }
 
-export function writeConfig(patch: Partial<HyphaCliConfig>): HyphaCliConfig {
+export function writeConfig(patch: Partial<CliConfig>): CliConfig {
   ensureHome();
   const current = readConfig() || { baseUrl: 'http://127.0.0.1:3000/api/v1' };
   const next = { ...current, ...patch };

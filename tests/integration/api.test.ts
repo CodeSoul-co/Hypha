@@ -6,7 +6,6 @@
  *
  *   bug 2  — compatible adapter provider tag is correct
  *   bug 4  — /auth/login accepts .local TLD
- *   bug 6  — /users/tasks/feed is public
  *   bug 7  — /models/health exists and is not swallowed by /:id
  *   bug 8  — built-in skills appear in /skills
  *   bug 9  — built-in tools appear in /tools
@@ -100,15 +99,6 @@ describe('POST /api/v1/auth/login (bug 4)', () => {
       .send({ email: 'not-an-email', password: 'whatever' });
     expect(r.status).toBe(400);
     expect(r.body.success).toBe(false);
-  });
-});
-
-describe('GET /api/v1/users/tasks/feed (bug 6)', () => {
-  it('is reachable without an Authorization header', async () => {
-    const r = await request(app).get('/api/v1/users/tasks/feed?page=1&limit=5');
-    // Bug 6: pre-fix this returned 401 AUTH_TOKEN_MISSING.
-    expect(r.status).toBe(200);
-    expect(r.body.success).toBe(true);
   });
 });
 

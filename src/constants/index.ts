@@ -1,6 +1,6 @@
-// Constants for Hypha
+// Constants for hypha
 
-export const APP_NAME = 'Hypha';
+export const APP_NAME = 'hypha';
 export const APP_VERSION = '1.0.0';
 
 // Error codes

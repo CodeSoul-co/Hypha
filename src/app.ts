@@ -301,7 +301,7 @@ class Application {
             if (devToken) {
               logger.info(`    Token:    ${devToken}`);
               logger.info('');
-              logger.info(`    Frontend usage: POST ${apiBase}/dev/token → returns token`);
+              logger.info(`    Client usage: POST ${apiBase}/dev/token returns token`);
               logger.info(`    Or use:   Authorization: Bearer ${devToken}`);
             }
           }

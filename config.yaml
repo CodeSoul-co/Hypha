@@ -1,5 +1,5 @@
 app:
-  name: "Hypha"
+  name: "hypha"
   version: "1.0.0"
   env: "development"
   host: "0.0.0.0"

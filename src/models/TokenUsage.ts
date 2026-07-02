@@ -71,7 +71,7 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'codellama':         { input: 0, output: 0 },
   'phi3':              { input: 0, output: 0 },
 
-  // SiliconFlow (OpenAI compatible — used by frontend by default)
+  // SiliconFlow (OpenAI compatible)
   'Qwen/Qwen2.5-7B-Instruct': { input: 0, output: 0 },  // free tier
   'Qwen/Qwen3-32B':           { input: 0, output: 0 },  // free tier
   'deepseek-ai/DeepSeek-V2.5': { input: 0, output: 0 },  // free tier

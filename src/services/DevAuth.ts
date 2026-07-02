@@ -1,5 +1,4 @@
 import { UserModel } from '../models/User';
-import { UserProfileModel } from '../models/UserProfile';
 import { logger } from '../utils/logger';
 
 /**
@@ -30,13 +29,6 @@ export async function initDevAdminUser(): Promise<{ email: string; password: str
     });
 
     await admin.save();
-
-    // Create associated user profile
-    await UserProfileModel.create({
-      userId: admin._id.toString(),
-      badges: ['admin'],
-      tags: ['管理员'],
-    });
 
     logger.info(`[DevAuth] Created admin user: ${adminEmail} / ${adminPassword}`);
     logger.info(`[DevAuth] Admin login: POST /auth/login with the credentials above`);
@@ -77,7 +69,7 @@ export async function initDevTestUser(): Promise<{ email: string; password: stri
 
     await user.save();
     logger.info(`[DevAuth] Created test user: ${devEmail} / ${devPassword}`);
-    logger.info(`[DevAuth] Use this token in frontend: POST /auth/login with the credentials above`);
+    logger.info(`[DevAuth] Use this token in clients: POST /auth/login with the credentials above`);
 
     return { email: devEmail, password: devPassword };
   } catch (error) {

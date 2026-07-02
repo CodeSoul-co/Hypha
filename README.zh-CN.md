@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/hypha_logo.png" alt="Hypha logo" width="180" />
+  <img src="docs/hypha_logo.png" alt="hypha logo" width="180" />
 </p>
 
-<h1 align="center">Hypha</h1>
+<h1 align="center">hypha</h1>
 
 <p align="center">
   <strong>面向生产级 LLM Agent 应用的 harness-oriented agent system framework。</strong>
@@ -16,24 +16,24 @@
 
 ## 概览
 
-Hypha 是一个基于 TypeScript 的开源 harness-oriented agent system framework，用于构建面向真实业务场景的生产级 LLM Agent 应用。
+hypha 是一个基于 TypeScript 的开源 harness-oriented agent system framework，用于构建面向真实业务场景的生产级 LLM Agent 应用。
 
-很多 agent 框架主要关注 agent 如何被编排：角色、prompt、工具、workflow、graph、多智能体协作或对话流程。Hypha 更关注另一个同样关键的问题：一个 agent system 如何被长期运行、评估、追踪、回放、治理和部署。
+很多 agent 框架主要关注 agent 如何被编排：角色、prompt、工具、workflow、graph、多智能体协作或对话流程。hypha 更关注另一个同样关键的问题：一个 agent system 如何被长期运行、评估、追踪、回放、治理和部署。
 
-Hypha 的核心思想是：
+hypha 的核心思想是：
 
 > agent 不应该和运行、评估、追踪、治理和部署它所需的 harness 分离定义。
 
-在 Hypha 中，基本单位不是一个孤立的 agent，而是一个自带 harness 的 agent system。每个 agent system 在定义时，不仅包含 agent 的角色、工具、记忆和执行流程，也同时包含运行规范、评估规则、trace 结构、失败回放逻辑、权限策略、回归测试配置和部署配置。
+在 hypha 中，基本单位不是一个孤立的 agent，而是一个自带 harness 的 agent system。每个 agent system 在定义时，不仅包含 agent 的角色、工具、记忆和执行流程，也同时包含运行规范、评估规则、trace 结构、失败回放逻辑、权限策略、回归测试配置和部署配置。
 
-Hypha 采用 **ReAct + FSM** 的执行模型：
+hypha 采用 **ReAct + FSM** 的执行模型：
 
 - **ReAct** 负责定义每个 agent 如何观察、推理、规划、行动、再次观察和验证。
 - **FSM** 负责用显式状态、状态转移、转移条件和失败处理来实现这个软件工程系统。
 
-因此，Hypha 中的 agent 不是松散的 prompt chain，也不是隐藏在代码里的无限循环，而是围绕 ReAct 推理与行动过程构建的、可观测、可回放、可测试的有限状态机。
+因此，hypha 中的 agent 不是松散的 prompt chain，也不是隐藏在代码里的无限循环，而是围绕 ReAct 推理与行动过程构建的、可观测、可回放、可测试的有限状态机。
 
-## 为什么需要 Hypha？
+## 为什么需要 hypha？
 
 一个原型 agent 通常只需要：
 
@@ -63,11 +63,11 @@ workflow
 
 这些能力如果分散在业务代码、评估脚本、日志系统、部署脚本和调试工具中，会造成重复实现、评估不一致、失败难以复现、质量难以持续监控，也很难判断 agent 更新后是否发生退化。
 
-Hypha 试图把这些能力统一到一个框架里：不仅帮助开发者搭建 agent，还帮助开发者运行、评估、追踪、治理和部署 agent system。
+hypha 试图把这些能力统一到一个框架里：不仅帮助开发者搭建 agent，还帮助开发者运行、评估、追踪、治理和部署 agent system。
 
 ## 核心概念：Harnessed Agent System
 
-Hypha 将每个 agent 应用视为一个完整的系统包：
+hypha 将每个 agent 应用视为一个完整的系统包：
 
 ```text
 HarnessedAgentSystem = {
@@ -85,7 +85,7 @@ HarnessedAgentSystem = {
 }
 ```
 
-这意味着，在 Hypha 中定义一个 agent system 时，开发者不仅要说明 agent 如何完成任务，也要说明：
+这意味着，在 hypha 中定义一个 agent system 时，开发者不仅要说明 agent 如何完成任务，也要说明：
 
 ```text
 它如何运行；
@@ -105,15 +105,15 @@ HarnessedAgentSystem = {
 
 ## ReAct + FSM 执行模型
 
-Hypha 要求所有 agent 的设计都基于 **ReAct** 模式：推理和行动交替发生，而不是先生成一次性计划再盲目执行。
+hypha 要求所有 agent 的设计都基于 **ReAct** 模式：推理和行动交替发生，而不是先生成一次性计划再盲目执行。
 
-一个 Hypha agent 的概念循环是：
+一个 hypha agent 的概念循环是：
 
 ```text
 Observe -> Reason / Plan -> Act -> Observe -> Verify -> Continue | Stop | Escalate
 ```
 
-Hypha 使用有限状态机显式实现这个循环。一个典型运行时 FSM 可以是：
+hypha 使用有限状态机显式实现这个循环。一个典型运行时 FSM 可以是：
 
 ```text
 Idle
@@ -137,7 +137,7 @@ FSM 层为概率模型外部提供确定性软件工程边界：
 - 每一次运行都可以暂停、恢复、人工审核或终止；
 - 每个 Domain Pack 都可以定制转移条件，而不需要重写 agent kernel。
 
-Hypha 的责任分离是：
+hypha 的责任分离是：
 
 ```text
 ReAct agent logic = 推理、规划、行动、验证
@@ -147,7 +147,7 @@ Production harness = 权限、评估、审计、部署、回归测试
 
 ## Domain Pack
 
-Hypha 通过 Domain Pack 支持跨领域业务适配。
+hypha 通过 Domain Pack 支持跨领域业务适配。
 
 Domain Pack 是某个业务领域的完整 agent system 定义包。它不仅包含领域 prompt 或工具列表，还包含任务结构、工具 schema、记忆结构、角色分工、业务流程、权限策略、评估指标、guardrails、输出格式和部署配置。
 
@@ -169,11 +169,11 @@ FSMOverrides
 RegressionCases
 ```
 
-通过 Domain Pack，Hypha 可以在保持同一套 agent kernel 和 production harness 的前提下，将 agent system 适配到法律、教育、企业知识库、科研写作、数据分析、客户服务、软件工程和内部流程自动化等业务场景。
+通过 Domain Pack，hypha 可以在保持同一套 agent kernel 和 production harness 的前提下，将 agent system 适配到法律、教育、企业知识库、科研写作、数据分析、客户服务、软件工程和内部流程自动化等业务场景。
 
 ## 架构方向
 
-Hypha 的长期架构可以分为三层：
+hypha 的长期架构可以分为三层：
 
 ```text
 +------------------------------------------------------+
@@ -182,12 +182,12 @@ Hypha 的长期架构可以分为三层：
 +------------------------------------------------------+
 
 +------------------------------------------------------+
-|                  Hypha Agent Kernel                  |
+|                  hypha Agent Kernel                  |
 | ReAct Planner | ReAct Executor | Router | Tool Manager |
 +------------------------------------------------------+
 
 +------------------------------------------------------+
-|                Hypha Production Harness              |
+|                hypha Production Harness              |
 | FSM Runtime | Runs | Traces | Evaluation | Replay      |
 | Policy | Audit | Human Review | Regression             |
 +------------------------------------------------------+
@@ -198,11 +198,11 @@ Hypha 的长期架构可以分为三层：
 - **Production Harness**：提供 run management、trace collection、cost tracking、policy enforcement、failure replay、regression testing、audit logging 和 human review。
 - **Domain Pack**：定义框架如何被适配到具体业务场景。
 
-Hypha 的架构演进应优先保持清晰边界、稳定接口、模块化实现和可测试行为，避免把业务逻辑、运行时状态、评估逻辑和部署配置耦合在同一层。
+hypha 的架构演进应优先保持清晰边界、稳定接口、模块化实现和可测试行为，避免把业务逻辑、运行时状态、评估逻辑和部署配置耦合在同一层。
 
 ## Memory 与状态层
 
-Hypha 不绑定单一记忆或存储实现。Memory 在 Hypha 中不是一个简单数据库选型，而是一个可插拔、可治理的 agentic memory layer。
+hypha 不绑定单一记忆或存储实现。Memory 在 hypha 中不是一个简单数据库选型，而是一个可插拔、可治理的 agentic memory layer。
 
 不同 agent system 可以需要不同的 memory 模式：
 
@@ -213,7 +213,7 @@ Hypha 不绑定单一记忆或存储实现。Memory 在 Hypha 中不是一个简
 - **Artifact memory**：文件、报告、代码、表格、生成结果和中间产物。
 - **Governance memory**：权限决策、审批记录、审计记录、评估结果和回归结果。
 
-根据业务场景，Hypha 需要支持多种 memory backend 和混合 memory 模式：
+根据业务场景，hypha 需要支持多种 memory backend 和混合 memory 模式：
 
 - **向量数据库**：例如 Milvus、Chroma、pgvector、Qdrant、Weaviate 或其他 embedding store。
 - **关系型数据库**：例如 PostgreSQL、MySQL、SQLite，适合结构化状态、事务记录和强一致性业务数据。
@@ -253,18 +253,18 @@ MemorySpec = {
 }
 ```
 
-Hypha 与 Plasmod 可以形成互补关系：
+hypha 与 Plasmod 可以形成互补关系：
 
 ```text
-Hypha   = agent system framework + production harness
+hypha   = agent system framework + production harness
 Plasmod = runtime state, event, memory, and materialized view substrate
 ```
 
-Hypha 负责定义 agent system 如何被构建、运行、评估和治理；Plasmod 或其他状态层负责保存系统运行中的状态、事件、记忆、trace、可见性范围和物化视图。
+hypha 负责定义 agent system 如何被构建、运行、评估和治理；Plasmod 或其他状态层负责保存系统运行中的状态、事件、记忆、trace、可见性范围和物化视图。
 
 ## 工程原则
 
-Hypha 的所有部分都应遵循以下原则：
+hypha 的所有部分都应遵循以下原则：
 
 - **ReAct-first agent design**：每个 agent 都必须显式暴露观察、推理、行动和验证阶段。
 - **FSM-first runtime implementation**：每次运行都必须经过显式状态和受 guard 控制的状态转移。
