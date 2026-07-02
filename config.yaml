@@ -406,6 +406,14 @@ logging:
 
 auth:
   enabled: true
+  mode: "single-user" # single-user by default; switch to multi-user when exposing shared deployments.
+  registration:
+    enabled: false
+  singleUser:
+    email: "${HYPHA_OWNER_EMAIL:owner@hypha.local}"
+    username: "${HYPHA_OWNER_USERNAME:owner}"
+    password: "${HYPHA_OWNER_PASSWORD:hypha_owner_2026}"
+    displayName: "${HYPHA_OWNER_DISPLAY_NAME:hypha Owner}"
   jwt:
     secret: "${JWT_SECRET}"
     expiry: 86400

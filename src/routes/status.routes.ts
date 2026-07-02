@@ -2,46 +2,64 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
 import { checkDatabasesHealth } from '../services/database';
+import { getConfig } from '../config';
 
 const router = Router();
 
 function escapeHtml(str: string): string {
-  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return str.replace(/[&<>"']/g, m => map[m] || m);
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return str.replace(/[&<>"']/g, (m) => map[m] || m);
 }
 
-router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
-  const dbHealth = await checkDatabasesHealth();
-  const llmManager = getLLMManager();
-  const llmHealth = await llmManager.healthCheck();
-  const models = await llmManager.listAllModels();
+router.get(
+  '/page',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const dbHealth = await checkDatabasesHealth();
+    const llmManager = getLLMManager();
+    const config = getConfig();
+    const llmHealth = await llmManager.healthCheck();
+    const models = await llmManager.listAllModels();
 
-  let providersHtml = '';
-  let modelsHtml = '';
+    let providersHtml = '';
+    let modelsHtml = '';
 
-  for (const [name, healthy] of Object.entries(llmHealth)) {
-    const providerModels = models.filter(m => m.provider === name);
-    const status = healthy ? 'healthy' : 'unavailable';
-    const statusBadge = healthy ? '<span class="badge success">healthy</span>' : '<span class="badge warning">unavailable</span>';
+    for (const [name, healthy] of Object.entries(llmHealth)) {
+      const providerModels = models.filter((m) => m.provider === name);
+      const status = healthy ? 'healthy' : 'unavailable';
+      const statusBadge = healthy
+        ? '<span class="badge success">healthy</span>'
+        : '<span class="badge warning">unavailable</span>';
 
-    providersHtml += `<div style="margin: 8px 0;">
+      providersHtml += `<div style="margin: 8px 0;">
       <strong>${escapeHtml(name.toUpperCase())}</strong>: ${statusBadge}
       <span style="color:#666;font-size:0.85em">(${providerModels.length} models)</span>
     </div>`;
 
-    const modelNames = providerModels.slice(0, 5).map(m => `<span class="model-item">${escapeHtml(m.displayName || m.id)}</span>`).join('');
-    modelsHtml += `<div style="margin: 16px 0;">
+      const modelNames = providerModels
+        .slice(0, 5)
+        .map(
+          (m) =>
+            `<span class="model-item">${escapeHtml(m.displayName || m.id)}</span>`,
+        )
+        .join('');
+      modelsHtml += `<div style="margin: 16px 0;">
       <strong style="color:#00d9ff">${escapeHtml(name.toUpperCase())}</strong>
       <div class="model-list">${modelNames || '<span style="color:#666">No models loaded</span>'}</div>
     </div>`;
-  }
+    }
 
-  const mongoStatus = dbHealth.mongodb ? 'Connected' : 'Disconnected';
-  const mongoClass = dbHealth.mongodb ? 'success' : 'warning';
-  const redisStatus = dbHealth.redis ? 'Connected' : 'Disconnected';
-  const redisClass = dbHealth.redis ? 'success' : 'warning';
+    const mongoStatus = dbHealth.mongodb ? 'Connected' : 'Disconnected';
+    const mongoClass = dbHealth.mongodb ? 'success' : 'warning';
+    const redisStatus = dbHealth.redis ? 'Connected' : 'Disconnected';
+    const redisClass = dbHealth.redis ? 'success' : 'warning';
 
-  const html = `<!DOCTYPE html>
+    const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -115,13 +133,18 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
     </div>
     <div class="api-section">
       <h2>Available API Endpoints</h2>
-      <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/auth/register</div><div class="endpoint-desc">Register new user</div></div></div>
+      <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/auth/register</div><div class="endpoint-desc">Register user when multi-user registration is enabled</div></div></div>
       <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/auth/login</div><div class="endpoint-desc">Login and get JWT token</div></div></div>
       <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/chat</div><div class="endpoint-desc">Send chat message (requires auth)</div></div></div>
       <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/chat/:sessionId</div><div class="endpoint-desc">Get chat history from Redis</div></div></div>
       <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/memory/permanent</div><div class="endpoint-desc">List conversations from MongoDB</div></div></div>
       <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/models</div><div class="endpoint-desc">List all available LLM models</div></div></div>
       <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/health</div><div class="endpoint-desc">Service health check</div></div></div>
+    </div>
+    <div class="api-section">
+      <h2>Runtime Mode</h2>
+      <div>Auth Mode: <strong>${escapeHtml(config.auth.mode)}</strong></div>
+      <div>Registration: <strong>${config.auth.registration.enabled ? 'enabled' : 'disabled'}</strong></div>
     </div>
     <div class="api-section" style="margin-top:20px;">
       <h2>Available Models</h2>
@@ -135,40 +158,50 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
 </body>
 </html>`;
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
-}));
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  }),
+);
 
-router.get('/', asyncHandler(async (_req: Request, res: Response) => {
-  const dbHealth = await checkDatabasesHealth();
-  const llmManager = getLLMManager();
-  const llmHealth = await llmManager.healthCheck();
-  const models = await llmManager.listAllModels();
+router.get(
+  '/',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const dbHealth = await checkDatabasesHealth();
+    const llmManager = getLLMManager();
+    const llmHealth = await llmManager.healthCheck();
+    const models = await llmManager.listAllModels();
 
-  res.json({
-    success: true,
-    data: {
-      service: 'hypha',
-      version: '1.0.0',
-      timestamp: new Date().toISOString(),
-      databases: {
-        mongodb: { status: dbHealth.mongodb ? 'connected' : 'disconnected', database: 'hypha' },
-        redis: { status: dbHealth.redis ? 'connected' : 'disconnected', type: 'temporary_memory' }
+    res.json({
+      success: true,
+      data: {
+        service: 'hypha',
+        version: '1.0.0',
+        timestamp: new Date().toISOString(),
+        databases: {
+          mongodb: {
+            status: dbHealth.mongodb ? 'connected' : 'disconnected',
+            database: 'hypha',
+          },
+          redis: {
+            status: dbHealth.redis ? 'connected' : 'disconnected',
+            type: 'temporary_memory',
+          },
+        },
+        llm: {
+          health: llmHealth,
+          availableProviders: Object.keys(llmHealth),
+          modelCount: models.length,
+        },
+        endpoints: {
+          baseUrl: '/api/v1',
+          auth: ['/auth/register', '/auth/login', '/auth/me'],
+          chat: ['/chat', '/chat/:sessionId', '/chat/:sessionId/clear'],
+          memory: ['/memory/permanent', '/memory/temp/:sessionId'],
+          models: ['/models', '/models/switch'],
+        },
       },
-      llm: {
-        health: llmHealth,
-        availableProviders: Object.keys(llmHealth),
-        modelCount: models.length
-      },
-      endpoints: {
-        baseUrl: '/api/v1',
-        auth: ['/auth/register', '/auth/login', '/auth/me'],
-        chat: ['/chat', '/chat/:sessionId', '/chat/:sessionId/clear'],
-        memory: ['/memory/permanent', '/memory/temp/:sessionId'],
-        models: ['/models', '/models/switch']
-      }
-    }
-  });
-}));
+    });
+  }),
+);
 
 export default router;

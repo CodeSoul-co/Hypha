@@ -262,6 +262,12 @@ Plasmod = runtime state, event, memory, and materialized view substrate
 
 hypha 负责定义 agent system 如何被构建、运行、评估和治理；Plasmod 或其他状态层负责保存系统运行中的状态、事件、记忆、trace、可见性范围和物化视图。
 
+## 运行模式
+
+hypha 默认采用 **单用户** 运行模式，适合本地和自托管部署。系统会根据 `config.yaml` 中的 `auth.singleUser` 准备 owner 账号，公开注册默认关闭；只有显式切换到 multi-user 并开启 registration 时才允许新增用户注册。
+
+内部运行时仍保留 user-scoped 隔离：session、memory、token usage、API key 和操作队列都继续带有 `userId` 边界。这样默认部署保持简单，同时保留后续多用户客户端需要的并发和排队模型。
+
 ## 工程原则
 
 hypha 的所有部分都应遵循以下原则：
@@ -270,6 +276,7 @@ hypha 的所有部分都应遵循以下原则：
 - **FSM-first runtime implementation**：每次运行都必须经过显式状态和受 guard 控制的状态转移。
 - **模块化边界**：agent kernel、harness、domain pack、memory、policy、evaluation 和 deployment 需要有清晰接口。
 - **Memory-provider neutral**：向量数据库、关系型数据库、文档存储、运行时状态存储和混合模式都应通过 adapter 支持。
+- **默认单用户，内部按用户隔离**：默认部署面向一个 owner 账号，但内部 API 必须保留 `userId` 边界、按用户会话排队和多用户安全的存储结构。
 - **可维护性优先**：避免把 demo 逻辑固化为框架核心；公共能力应通过稳定抽象沉淀。
 - **可扩展性优先**：新模型、新工具、新存储、新领域和新部署方式应能通过插件化或配置化方式接入。
 - **可观测与可回放**：运行、trace、错误、成本、评估和审核记录应成为系统的一等能力。

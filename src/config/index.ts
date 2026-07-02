@@ -16,16 +16,20 @@ const modelConfigSchema = z.object({
   default: z.boolean().default(false),
   description: z.string().optional(),
   contextWindow: z.number().optional(),
-  features: z.object({
-    streaming: z.boolean().default(true),
-    toolCalling: z.boolean().default(false),
-    vision: z.boolean().default(false),
-  }).optional(),
-  pricing: z.object({
-    input: z.number().optional(),
-    output: z.number().optional(),
-    currency: z.string().default('USD'),
-  }).optional(),
+  features: z
+    .object({
+      streaming: z.boolean().default(true),
+      toolCalling: z.boolean().default(false),
+      vision: z.boolean().default(false),
+    })
+    .optional(),
+  pricing: z
+    .object({
+      input: z.number().optional(),
+      output: z.number().optional(),
+      currency: z.string().default('USD'),
+    })
+    .optional(),
 });
 
 // Provider API config schema
@@ -52,10 +56,12 @@ const configSchema = z.object({
       database: z.string().default('hypha'),
       username: z.string().optional(),
       password: z.string().optional(),
-      options: z.object({
-        maxPoolSize: z.number().default(10),
-        retryWrites: z.boolean().default(true),
-      }).optional(),
+      options: z
+        .object({
+          maxPoolSize: z.number().default(10),
+          retryWrites: z.boolean().default(true),
+        })
+        .optional(),
     }),
   }),
   redis: z.object({
@@ -70,31 +76,41 @@ const configSchema = z.object({
     defaultModel: z.string().default('claude-3-5-sonnet-20241022'),
 
     // Provider-specific model configurations
-    anthropic: z.object({
-      enabled: z.boolean().default(true),
-      models: z.array(modelConfigSchema).optional(),
-    }).optional(),
+    anthropic: z
+      .object({
+        enabled: z.boolean().default(true),
+        models: z.array(modelConfigSchema).optional(),
+      })
+      .optional(),
 
-    openai: z.object({
-      enabled: z.boolean().default(true),
-      models: z.array(modelConfigSchema).optional(),
-    }).optional(),
+    openai: z
+      .object({
+        enabled: z.boolean().default(true),
+        models: z.array(modelConfigSchema).optional(),
+      })
+      .optional(),
 
-    google: z.object({
-      enabled: z.boolean().default(true),
-      models: z.array(modelConfigSchema).optional(),
-    }).optional(),
+    google: z
+      .object({
+        enabled: z.boolean().default(true),
+        models: z.array(modelConfigSchema).optional(),
+      })
+      .optional(),
 
-    ollama: z.object({
-      enabled: z.boolean().default(true),
-      baseUrl: z.string().default('http://localhost:11434'),
-      models: z.array(modelConfigSchema).optional(),
-    }).optional(),
+    ollama: z
+      .object({
+        enabled: z.boolean().default(true),
+        baseUrl: z.string().default('http://localhost:11434'),
+        models: z.array(modelConfigSchema).optional(),
+      })
+      .optional(),
 
-    deepseek: z.object({
-      enabled: z.boolean().default(true),
-      models: z.array(modelConfigSchema).optional(),
-    }).optional(),
+    deepseek: z
+      .object({
+        enabled: z.boolean().default(true),
+        models: z.array(modelConfigSchema).optional(),
+      })
+      .optional(),
 
     // Legacy provider config (for API access)
     providers: z.record(providerConfigSchema).optional(),
@@ -126,17 +142,21 @@ const configSchema = z.object({
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
-    mcpServers: z.array(z.object({
-      id: z.string(),
-      name: z.string(),
-      mode: z.enum(['local', 'remote']),
-      command: z.string().optional(),
-      args: z.array(z.string()).optional(),
-      endpoint: z.string().optional(),
-      authToken: z.string().optional(),
-      autoStart: z.boolean().optional(),
-      autoConnect: z.boolean().optional(),
-    })).optional(),
+    mcpServers: z
+      .array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          mode: z.enum(['local', 'remote']),
+          command: z.string().optional(),
+          args: z.array(z.string()).optional(),
+          endpoint: z.string().optional(),
+          authToken: z.string().optional(),
+          autoStart: z.boolean().optional(),
+          autoConnect: z.boolean().optional(),
+        }),
+      )
+      .optional(),
   }),
   workflows: z.object({
     configPath: z.string().default('./configs/workflows'),
@@ -149,13 +169,36 @@ const configSchema = z.object({
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     format: z.enum(['json', 'text']).default('json'),
-    outputs: z.array(z.object({
-      type: z.enum(['console', 'file']),
-      path: z.string().optional(),
-    })).optional(),
+    outputs: z
+      .array(
+        z.object({
+          type: z.enum(['console', 'file']),
+          path: z.string().optional(),
+        }),
+      )
+      .optional(),
   }),
   auth: z.object({
     enabled: z.boolean().default(true),
+    mode: z.enum(['single-user', 'multi-user']).default('single-user'),
+    registration: z
+      .object({
+        enabled: z.boolean().default(false),
+      })
+      .default({ enabled: false }),
+    singleUser: z
+      .object({
+        email: z.string().default('owner@hypha.local'),
+        username: z.string().default('owner'),
+        password: z.string().default('hypha_owner_2026'),
+        displayName: z.string().default('hypha Owner'),
+      })
+      .default({
+        email: 'owner@hypha.local',
+        username: 'owner',
+        password: 'hypha_owner_2026',
+        displayName: 'hypha Owner',
+      }),
     jwt: z.object({
       secret: z.string(),
       expiry: z.number().default(86400),
@@ -265,10 +308,9 @@ function loadConfig(): Config {
   const configPath = path.resolve(process.cwd(), 'config.yaml');
   const yamlConfig = loadYamlConfig(configPath);
 
-  const mergedConfig = mergeConfigs(
-    yamlConfig,
-    { app: { env: process.env.NODE_ENV || 'development' } }
-  );
+  const mergedConfig = mergeConfigs(yamlConfig, {
+    app: { env: process.env.NODE_ENV || 'development' },
+  });
 
   const resolvedConfig = resolveEnvVariables(mergedConfig);
 
@@ -307,19 +349,21 @@ export const rateLimitConfig = () => getConfig().rateLimit;
 // Get enabled models for a provider
 export function getEnabledModels(provider: string): ModelConfig[] {
   const config = getConfig().llm;
-  const providerConfig = (config as any)[provider] as ProviderModelsConfig | undefined;
+  const providerConfig = (config as any)[provider] as
+    | ProviderModelsConfig
+    | undefined;
 
   if (!providerConfig?.enabled || !providerConfig.models) {
     return [];
   }
 
-  return providerConfig.models.filter(m => m.enabled);
+  return providerConfig.models.filter((m) => m.enabled);
 }
 
 // Get default model for a provider
 export function getDefaultModel(provider: string): ModelConfig | undefined {
   const models = getEnabledModels(provider);
-  return models.find(m => m.default) || models[0];
+  return models.find((m) => m.default) || models[0];
 }
 
 export default getConfig;

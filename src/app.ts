@@ -7,17 +7,48 @@ import http from 'http';
 
 import { getConfig } from './config';
 import { logger } from './utils/logger';
-import { initializeDatabases, closeDatabases, checkDatabasesHealth } from './services/database';
-import { initializeLLM, destroyLLM, getLLMManager } from './core/llm/LLMFactory';
-import { initializeSkillManager, destroySkillManager } from './core/skills/SkillManager';
-import { initializeToolManager, destroyToolManager } from './core/tools/ToolManager';
-import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow/WorkflowEngine';
-import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
+import {
+  initializeDatabases,
+  closeDatabases,
+  checkDatabasesHealth,
+} from './services/database';
+import {
+  initializeLLM,
+  destroyLLM,
+  getLLMManager,
+} from './core/llm/LLMFactory';
+import {
+  initializeSkillManager,
+  destroySkillManager,
+} from './core/skills/SkillManager';
+import {
+  initializeToolManager,
+  destroyToolManager,
+} from './core/tools/ToolManager';
+import {
+  initializeWorkflowEngine,
+  destroyWorkflowEngine,
+} from './core/workflow/WorkflowEngine';
+import {
+  initializePromptManager,
+  destroyPromptManager,
+} from './core/prompts/PromptManager';
 import { getTemporaryMemory } from './core/memory/TemporaryMemory';
 import { getPermanentMemory } from './core/memory/PermanentMemory';
-import { initDevTestUser, initDevAdminUser, getDevTestToken } from './services/DevAuth';
+import {
+  initSingleUserOwner,
+  getSingleUserToken,
+  initDevTestUser,
+  initDevAdminUser,
+  getDevTestToken,
+} from './services/DevAuth';
 import routes from './routes';
-import { errorHandler, notFoundHandler, requestLogger, rateLimitHandler } from './middleware/errorHandler';
+import {
+  errorHandler,
+  notFoundHandler,
+  requestLogger,
+  rateLimitHandler,
+} from './middleware/errorHandler';
 import { HTTP_STATUS } from './constants';
 
 class Application {
@@ -48,16 +79,20 @@ class Application {
 
   private setupMiddleware(): void {
     // Security middleware
-    this.app.use(helmet({
-      contentSecurityPolicy: false, // Disable for API
-    }));
+    this.app.use(
+      helmet({
+        contentSecurityPolicy: false, // Disable for API
+      }),
+    );
 
     // CORS
-    this.app.use(cors({
-      origin: '*', // Configure for production
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
-    }));
+    this.app.use(
+      cors({
+        origin: '*', // Configure for production
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+      }),
+    );
 
     // Compression
     this.app.use(compression());
@@ -109,9 +144,9 @@ class Application {
     // Initialize databases
     await initializeDatabases();
 
-    // Seed development/test users as soon as persistence is ready. This keeps
-    // app.initialize() and app.start() behavior consistent.
-    await this.initializeDevUsers();
+    // Seed local accounts as soon as persistence is ready. Single-user mode
+    // creates only the owner account; multi-user dev mode keeps admin/test.
+    await this.initializeLocalUsers();
 
     // Initialize LLM Manager
     await initializeLLM();
@@ -141,14 +176,19 @@ class Application {
     logger.info('All services initialized');
   }
 
-  private async initializeDevUsers(): Promise<void> {
-    if (this.config.app.env === 'production') return;
-
+  private async initializeLocalUsers(): Promise<void> {
     try {
-      await initDevAdminUser();
-      await initDevTestUser();
+      if (this.config.auth.mode === 'single-user') {
+        await initSingleUserOwner();
+        return;
+      }
+
+      if (this.config.app.env !== 'production') {
+        await initDevAdminUser();
+        await initDevTestUser();
+      }
     } catch (err) {
-      logger.warn('Dev user initialization failed:', err);
+      logger.warn('Local user initialization failed:', err);
     }
   }
 
@@ -158,7 +198,9 @@ class Application {
     const available = llm.getAvailableProviders();
 
     if (available.length === 0) {
-      logger.warn('No LLM providers initialized — chat endpoints will fail until an API key is configured.');
+      logger.warn(
+        'No LLM providers initialized — chat endpoints will fail until an API key is configured.',
+      );
       return;
     }
 
@@ -166,11 +208,13 @@ class Application {
       const fallback = available[0];
       logger.warn(
         `Configured defaultProvider="${wanted}" is not initialized (missing API key?). ` +
-        `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`
+          `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`,
       );
-      llm.setDefaultProvider(fallback).catch(err =>
-        logger.error('Failed to set fallback default provider:', err)
-      );
+      llm
+        .setDefaultProvider(fallback)
+        .catch((err) =>
+          logger.error('Failed to set fallback default provider:', err),
+        );
     }
   }
 
@@ -197,7 +241,8 @@ class Application {
   private async startupHealthCheck(host: string, port: number): Promise<void> {
     const baseUrl = `http://${host}:${port}`;
     const apiBase = `${baseUrl}${this.config.app.apiPrefix}`;
-    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] = [];
+    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] =
+      [];
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     logger.info('🔍  Starting health checks...');
@@ -210,7 +255,11 @@ class Application {
         checks.push({ name: 'MongoDB', status: 'pass', detail: 'Connected' });
         logger.info('  ✅ MongoDB    │ Connected');
       } else {
-        checks.push({ name: 'MongoDB', status: 'fail', detail: 'Disconnected' });
+        checks.push({
+          name: 'MongoDB',
+          status: 'fail',
+          detail: 'Disconnected',
+        });
         logger.error('  ❌ MongoDB    │ Disconnected');
       }
     } catch (err) {
@@ -240,7 +289,11 @@ class Application {
         checks.push({ name: 'API /health', status: 'pass', detail: '200 OK' });
         logger.info('  ✅ API Health │ 200 OK');
       } else {
-        checks.push({ name: 'API /health', status: 'fail', detail: `${response.status}` });
+        checks.push({
+          name: 'API /health',
+          status: 'fail',
+          detail: `${response.status}`,
+        });
         logger.error(`  ❌ API Health │ ${response.status}`);
       }
     } catch (err) {
@@ -257,60 +310,99 @@ class Application {
         .map(([name]) => name);
 
       if (healthyProviders.length > 0) {
-        checks.push({ name: 'LLM Providers', status: 'pass', detail: healthyProviders.join(', ') });
+        checks.push({
+          name: 'LLM Providers',
+          status: 'pass',
+          detail: healthyProviders.join(', '),
+        });
         logger.info(`  ✅ LLM         │ ${healthyProviders.join(', ')}`);
       } else {
-        checks.push({ name: 'LLM Providers', status: 'fail', detail: 'No providers available' });
-        logger.warn('  ⚠️  LLM         │ No providers available (check API keys)');
+        checks.push({
+          name: 'LLM Providers',
+          status: 'fail',
+          detail: 'No providers available',
+        });
+        logger.warn(
+          '  ⚠️  LLM         │ No providers available (check API keys)',
+        );
       }
     } catch (err) {
-      checks.push({ name: 'LLM Providers', status: 'fail', detail: String(err) });
+      checks.push({
+        name: 'LLM Providers',
+        status: 'fail',
+        detail: String(err),
+      });
       logger.error('  ❌ LLM         │ Error:', err);
     }
 
     // Summary
-    const passed = checks.filter(c => c.status === 'pass').length;
-    const failed = checks.filter(c => c.status === 'fail').length;
+    const passed = checks.filter((c) => c.status === 'pass').length;
+    const failed = checks.filter((c) => c.status === 'fail').length;
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     if (failed === 0) {
-      logger.info(`🚀  All systems ready! (${passed}/${checks.length} checks passed)`);
+      logger.info(
+        `🚀  All systems ready! (${passed}/${checks.length} checks passed)`,
+      );
       logger.info(`📖  API Docs: ${apiBase}/docs`);
       logger.info(`📊  Status:   ${apiBase}/status/page`);
       logger.info(`💰  Usage:    ${apiBase}/usage/page`);
 
-      // Dev mode: init admin + test user and print credentials
+      // Dev mode: print local credentials for quick CLI/API testing.
       if (this.config.app.env === 'development') {
         try {
-          // Seed admin account
-          const adminCreds = await initDevAdminUser();
-          if (adminCreds) {
-            logger.info('🔐  [Dev Mode] Admin Account Ready:');
-            logger.info(`    Email:    ${adminCreds.email}`);
-            logger.info(`    Password:  ${adminCreds.password}`);
-          }
-          logger.info('');
-
-          const devCreds = await initDevTestUser();
-          if (devCreds) {
+          if (this.config.auth.mode === 'single-user') {
+            const ownerCreds = await initSingleUserOwner();
+            if (ownerCreds) {
+              logger.info('🔐  [Single User Mode] Owner Account Ready:');
+              logger.info(`    Email:    ${ownerCreds.email}`);
+              logger.info(`    Password:  ${ownerCreds.password}`);
+              const ownerToken = await getSingleUserToken();
+              if (ownerToken) {
+                logger.info(`    Token:    ${ownerToken}`);
+                logger.info('');
+                logger.info(
+                  `    Client usage: POST ${apiBase}/dev/token returns token`,
+                );
+                logger.info(
+                  `    Or use:   Authorization: Bearer ${ownerToken}`,
+                );
+              }
+            }
+          } else {
+            const adminCreds = await initDevAdminUser();
+            if (adminCreds) {
+              logger.info('🔐  [Dev Mode] Admin Account Ready:');
+              logger.info(`    Email:    ${adminCreds.email}`);
+              logger.info(`    Password:  ${adminCreds.password}`);
+            }
             logger.info('');
-            logger.info('🔧  [Dev Mode] Test User Ready:');
-            logger.info(`    Email:    ${devCreds.email}`);
-            logger.info(`    Password:  ${devCreds.password}`);
-            const devToken = await getDevTestToken();
-            if (devToken) {
-              logger.info(`    Token:    ${devToken}`);
+
+            const devCreds = await initDevTestUser();
+            if (devCreds) {
               logger.info('');
-              logger.info(`    Client usage: POST ${apiBase}/dev/token returns token`);
-              logger.info(`    Or use:   Authorization: Bearer ${devToken}`);
+              logger.info('🔧  [Dev Mode] Test User Ready:');
+              logger.info(`    Email:    ${devCreds.email}`);
+              logger.info(`    Password:  ${devCreds.password}`);
+              const devToken = await getDevTestToken();
+              if (devToken) {
+                logger.info(`    Token:    ${devToken}`);
+                logger.info('');
+                logger.info(
+                  `    Client usage: POST ${apiBase}/dev/token returns token`,
+                );
+                logger.info(`    Or use:   Authorization: Bearer ${devToken}`);
+              }
             }
           }
         } catch (err) {
-          logger.warn('    ⚠️  Dev test user init failed:', err);
+          logger.warn('    ⚠️  Local user init failed:', err);
         }
       }
     } else {
-      logger.warn(`⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`);
+      logger.warn(
+        `⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`,
+      );
       logger.warn(`🔧  Review logs above for details`);
     }
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

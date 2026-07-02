@@ -2,13 +2,22 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
 import { checkDatabasesHealth } from '../services/database';
+import { getConfig } from '../config';
 
 const router = Router();
 
 function escapeHtml(str: string): string {
-  return String(str).replace(/[&<>"']/g, (m) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[m] || m));
+  return String(str).replace(
+    /[&<>"']/g,
+    (m) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[m] || m,
+  );
 }
 
 // ===================== AUTH =====================
@@ -16,7 +25,7 @@ const authEndpoints = [
   {
     method: 'POST',
     path: '/auth/register',
-    desc: 'Register a new user',
+    desc: 'Register a new user. Disabled by default in single-user mode; enable auth.registration for multi-user deployments.',
     auth: 'None',
     body: `{
   "email": "user@example.com",
@@ -821,7 +830,9 @@ const statusEndpoints = [
 ];
 
 function renderEndpoints(endpoints: any[], _accentColor: string): string {
-  return endpoints.map((ep: any) => `
+  return endpoints
+    .map(
+      (ep: any) => `
     <div class="endpoint-card">
       <div class="endpoint-header">
         <span class="method ${ep.method.toLowerCase()}">${ep.method}</span>
@@ -837,19 +848,24 @@ function renderEndpoints(endpoints: any[], _accentColor: string): string {
         ${ep.response ? `<div class="detail"><strong>Response:</strong> <pre><code>${escapeHtml(ep.response)}</code></pre></div>` : ''}
       </div>
     </div>
-  `).join('');
+  `,
+    )
+    .join('');
 }
 
 // ===================== API DOCS PAGE =====================
-router.get('/', asyncHandler(async (_req: Request, res: Response) => {
-  const dbHealth = await checkDatabasesHealth();
-  const llmManager = getLLMManager();
-  const models = await llmManager.listAllModels();
+router.get(
+  '/',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const config = getConfig();
+    const dbHealth = await checkDatabasesHealth();
+    const llmManager = getLLMManager();
+    const models = await llmManager.listAllModels();
 
-  const baseUrl = '/api/v1';
-  const timestamp = new Date().toISOString();
+    const baseUrl = '/api/v1';
+    const timestamp = new Date().toISOString();
 
-  const html = `<!DOCTYPE html>
+    const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -950,6 +966,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
       <div class="hero-meta">
         <span><div class="status-dot ${dbHealth.mongodb ? 'green' : 'red'}"></div> MongoDB ${dbHealth.mongodb ? 'Connected' : 'Disconnected'}</span>
         <span><div class="status-dot ${dbHealth.redis ? 'green' : 'red'}"></div> Redis ${dbHealth.redis ? 'Connected' : 'Disconnected'}</span>
+        <span>Auth: <code>${escapeHtml(config.auth.mode)}</code></span>
         <span>${models.length} Models Available</span>
         <span>Base: <code>http://localhost:3000${baseUrl}</code></span>
       </div>
@@ -976,22 +993,14 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 
     <div class="quick-start" id="quick-start">
       <h3>Quick Start</h3>
-      <pre><code><span class="comment"># 1. Register a user</span>
-<span class="keyword">POST</span> ${baseUrl}/auth/register
-{
-  "email": "user@example.com",
-  "username": "myuser",
-  "password": "mypassword"
-}
-
-<span class="comment"># 2. Login to get JWT token</span>
+      <pre><code><span class="comment"># 1. Login with the configured owner account</span>
 <span class="keyword">POST</span> ${baseUrl}/auth/login
 {
-  "email": "user@example.com",
-  "password": "mypassword"
+  "email": "owner@hypha.local",
+  "password": "hypha_owner_2026"
 }
 
-<span class="comment"># 3. Send a chat message</span>
+<span class="comment"># 2. Send a chat message</span>
 <span class="keyword">POST</span> ${baseUrl}/chat
 <span class="string">Authorization: Bearer &lt;token&gt;</span>
 {
@@ -999,7 +1008,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   "model": "claude-3-5-sonnet-20241022"
 }
 
-<span class="comment"># 4. Check token usage</span>
+<span class="comment"># 3. Check token usage</span>
 <span class="keyword">GET</span> ${baseUrl}/usage/stats
 <span class="string">Authorization: Bearer &lt;token&gt;</span></code></pre>
     </div>
@@ -1173,44 +1182,48 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 </body>
 </html>`;
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
-}));
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  }),
+);
 
 // JSON API documentation endpoint
-router.get('/json', asyncHandler(async (_req: Request, res: Response) => {
-  const llmManager = getLLMManager();
-  const models = await llmManager.listAllModels();
+router.get(
+  '/json',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const llmManager = getLLMManager();
+    const models = await llmManager.listAllModels();
 
-  const docs = {
-    info: {
-      name: 'hypha API',
-      version: '1.0.0',
-      description: 'Modular AI Agent Backend Service',
-      baseUrl: '/api/v1',
-    },
-    models: models.map(m => ({
-      id: m.id,
-      name: m.name,
-      provider: m.provider,
-      contextWindow: m.contextWindow,
-      features: m.supportedFeatures,
-      pricing: m.pricing,
-    })),
-    endpoints: {
-      auth: authEndpoints,
-      chat: chatEndpoints,
-      memory: memoryEndpoints,
-      models: modelEndpoints,
-      skills: skillEndpoints,
-      tools: toolEndpoints,
-      workflows: workflowEndpoints,
-      usage: usageEndpoints,
-      status: statusEndpoints,
-    },
-  };
+    const docs = {
+      info: {
+        name: 'hypha API',
+        version: '1.0.0',
+        description: 'Modular AI Agent Backend Service',
+        baseUrl: '/api/v1',
+      },
+      models: models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+        contextWindow: m.contextWindow,
+        features: m.supportedFeatures,
+        pricing: m.pricing,
+      })),
+      endpoints: {
+        auth: authEndpoints,
+        chat: chatEndpoints,
+        memory: memoryEndpoints,
+        models: modelEndpoints,
+        skills: skillEndpoints,
+        tools: toolEndpoints,
+        workflows: workflowEndpoints,
+        usage: usageEndpoints,
+        status: statusEndpoints,
+      },
+    };
 
-  res.json({ success: true, data: docs });
-}));
+    res.json({ success: true, data: docs });
+  }),
+);
 
 export default router;

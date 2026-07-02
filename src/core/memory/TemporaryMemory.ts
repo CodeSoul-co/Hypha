@@ -19,7 +19,10 @@ export class TemporaryMemory implements TempMemoryOptions {
     this.ttl = options?.ttl || config.temporary.ttl;
   }
 
-  private getKey(sessionId: string): string {
+  private getKey(sessionId: string, userId?: string): string {
+    if (userId) {
+      return `${REDIS_KEYS.TEMP_MEMORY}:user:${userId}:session:${sessionId}`;
+    }
     return `${REDIS_KEYS.TEMP_MEMORY}:${sessionId}`;
   }
 
@@ -28,16 +31,19 @@ export class TemporaryMemory implements TempMemoryOptions {
   }
 
   private getUserSessionsKey(userId: string): string {
-    return `${REDIS_KEYS.TEMP_MEMORY}:user:${userId}`;
+    return `${REDIS_KEYS.TEMP_MEMORY}:user:${userId}:sessions`;
   }
 
-  async addMessage(sessionId: string, message: Omit<TempMessage, 'id' | 'timestamp'>): Promise<void> {
+  async addMessage(
+    sessionId: string,
+    message: Omit<TempMessage, 'id' | 'timestamp'>,
+  ): Promise<void> {
     const redis = getRedisClient();
     if (!redis) {
       throw new Error('Redis client not initialized');
     }
 
-    const key = this.getKey(sessionId);
+    const key = this.getKey(sessionId, message.userId);
     const id = generateMessageId();
     const timestamp = now();
     const startTime = Date.now();
@@ -52,41 +58,57 @@ export class TemporaryMemory implements TempMemoryOptions {
     await redis.xadd(
       key,
       '*',
-      'id', messageData.id,
-      'userId', messageData.userId,
-      'sessionId', messageData.sessionId,
-      'role', messageData.role,
-      'content', messageData.content,
-      'modelId', messageData.modelId || '',
-      'modelProvider', messageData.modelProvider || '',
-      'timestamp', messageData.timestamp.toISOString(),
-      'metadata', JSON.stringify(messageData.metadata || {})
+      'id',
+      messageData.id,
+      'userId',
+      messageData.userId,
+      'sessionId',
+      messageData.sessionId,
+      'role',
+      messageData.role,
+      'content',
+      messageData.content,
+      'modelId',
+      messageData.modelId || '',
+      'modelProvider',
+      messageData.modelProvider || '',
+      'timestamp',
+      messageData.timestamp.toISOString(),
+      'metadata',
+      JSON.stringify(messageData.metadata || {}),
     );
 
     // Set TTL on the key
     await redis.expire(key, this.ttl);
 
     // Track user's sessions
-    await redis.sadd(this.getUserSessionsKey(message.userId), sessionId);
+    const userSessionsKey = this.getUserSessionsKey(message.userId);
+    await redis.sadd(userSessionsKey, sessionId);
+    await redis.expire(userSessionsKey, this.ttl);
 
     // Enforce max pairs limit
-    await this.enforceLimit(sessionId);
+    await this.enforceLimit(sessionId, message.userId);
 
     const duration = Date.now() - startTime;
     logger.debug(`[Redis] XADD ${key}`, {
       sessionId,
       messageId: id,
       role: message.role,
-      contentPreview: message.content.substring(0, 50) + (message.content.length > 50 ? '...' : ''),
+      contentPreview:
+        message.content.substring(0, 50) +
+        (message.content.length > 50 ? '...' : ''),
       durationMs: duration,
     });
   }
 
-  private async enforceLimit(sessionId: string): Promise<void> {
+  private async enforceLimit(
+    sessionId: string,
+    userId?: string,
+  ): Promise<void> {
     const redis = getRedisClient();
     if (!redis) return;
 
-    const key = this.getKey(sessionId);
+    const key = this.getKey(sessionId, userId);
 
     // Get current message count
     const count = await redis.xlen(key);
@@ -98,17 +120,24 @@ export class TemporaryMemory implements TempMemoryOptions {
       // Remove oldest messages to get back to limit
       const toRemove = count - maxMessages;
       await redis.xtrim(key, 'MAXLEN', toRemove);
-      logger.debug('Trimmed temporary memory', { sessionId, removed: toRemove });
+      logger.debug('Trimmed temporary memory', {
+        sessionId,
+        removed: toRemove,
+      });
     }
   }
 
-  async getMessages(sessionId: string, limit?: number): Promise<TempMessage[]> {
+  async getMessages(
+    sessionId: string,
+    limit?: number,
+    userId?: string,
+  ): Promise<TempMessage[]> {
     const redis = getRedisClient();
     if (!redis) {
       throw new Error('Redis client not initialized');
     }
 
-    const key = this.getKey(sessionId);
+    const key = this.getKey(sessionId, userId);
     const maxMessages = (limit || this.maxPairs) * 2;
     const startTime = Date.now();
 
@@ -142,13 +171,13 @@ export class TemporaryMemory implements TempMemoryOptions {
     });
   }
 
-  async clearMessages(sessionId: string): Promise<void> {
+  async clearMessages(sessionId: string, userId?: string): Promise<void> {
     const redis = getRedisClient();
     if (!redis) {
       throw new Error('Redis client not initialized');
     }
 
-    const key = this.getKey(sessionId);
+    const key = this.getKey(sessionId, userId);
     await redis.del(key);
     logger.debug('Cleared temporary memory', { sessionId });
   }
@@ -164,7 +193,7 @@ export class TemporaryMemory implements TempMemoryOptions {
     // Filter to only return sessions that still have messages
     const validSessions: string[] = [];
     for (const sessionId of sessions) {
-      const key = this.getKey(sessionId);
+      const key = this.getKey(sessionId, userId);
       const exists = await redis.exists(key);
       if (exists) {
         validSessions.push(sessionId);
@@ -177,7 +206,10 @@ export class TemporaryMemory implements TempMemoryOptions {
     return validSessions;
   }
 
-  async getSessionInfo(sessionId: string): Promise<{
+  async getSessionInfo(
+    sessionId: string,
+    userId?: string,
+  ): Promise<{
     messageCount: number;
     oldestTimestamp?: Date;
     newestTimestamp?: Date;
@@ -187,7 +219,7 @@ export class TemporaryMemory implements TempMemoryOptions {
       throw new Error('Redis client not initialized');
     }
 
-    const key = this.getKey(sessionId);
+    const key = this.getKey(sessionId, userId);
     const count = await redis.xlen(key);
 
     if (count === 0) {

@@ -40,7 +40,10 @@ async function testHealthCheck() {
   try {
     const response = await axios.get(`${BASE_URL}/health`);
     if (response.data.success) {
-      log('success', `Health Check: OK (Uptime: ${response.data.data.uptime}s)`);
+      log(
+        'success',
+        `Health Check: OK (Uptime: ${response.data.data.uptime}s)`,
+      );
       results.push({ name: 'Health Check', passed: true });
     }
   } catch (error: any) {
@@ -52,40 +55,32 @@ async function testHealthCheck() {
 async function testAuth() {
   log('info', 'Testing Authentication...');
   try {
-    // Register a test user
-    const timestamp = Date.now().toString(36);
-    const registerData = {
-      email: `test${timestamp}@example.com`,
-      username: `testuser${timestamp}`,
-      password: 'testpassword123',
-    };
+    const tokenResponse = await axios.post(`${BASE_URL}/dev/token`);
+    const token = tokenResponse.data.data?.token;
+    const email = tokenResponse.data.data?.user?.email;
 
-    const registerResponse = await axios.post(`${BASE_URL}/auth/register`, registerData);
-
-    if (registerResponse.data.success) {
-      log('success', `User Registered: ${registerData.username}`);
-
-      // Store token for subsequent tests
-      const token = registerResponse.data.data.accessToken;
-
-      // Test login
-      const loginResponse = await axios.post(`${BASE_URL}/auth/login`, {
-        email: registerData.email,
-        password: registerData.password,
-      });
-
-      if (loginResponse.data.success) {
-        log('success', 'Login Successful');
-        results.push({ name: 'Authentication', passed: true });
-        return token;
-      }
+    if (token && email) {
+      log('success', `Dev Token Ready: ${email}`);
+      results.push({ name: 'Authentication', passed: true });
+      return token;
     }
 
-    results.push({ name: 'Authentication', passed: false, error: 'Registration or login failed' });
+    results.push({
+      name: 'Authentication',
+      passed: false,
+      error: 'Dev token unavailable',
+    });
     return null;
   } catch (error: any) {
-    log('error', `Auth Failed: ${error.response?.data?.error?.message || error.message}`);
-    results.push({ name: 'Authentication', passed: false, error: error.message });
+    log(
+      'error',
+      `Auth Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
+    results.push({
+      name: 'Authentication',
+      passed: false,
+      error: error.message,
+    });
     return null;
   }
 }
@@ -103,19 +98,28 @@ async function testChat(token: string) {
         headers: {
           Authorization: `Bearer ${token}`,
         },
-      }
+      },
     );
 
     if (response.data.success) {
       log('success', `Chat Response Received:`);
       console.log(`   Model: ${response.data.data.model}`);
-      console.log(`   Content: ${response.data.data.content.substring(0, 100)}...`);
+      console.log(
+        `   Content: ${response.data.data.content.substring(0, 100)}...`,
+      );
       results.push({ name: 'Chat (SiliconFlow)', passed: true });
       return response.data.data.sessionId;
     }
   } catch (error: any) {
-    log('error', `Chat Failed: ${error.response?.data?.error?.message || error.message}`);
-    results.push({ name: 'Chat (SiliconFlow)', passed: false, error: error.message });
+    log(
+      'error',
+      `Chat Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
+    results.push({
+      name: 'Chat (SiliconFlow)',
+      passed: false,
+      error: error.message,
+    });
     return null;
   }
 }
@@ -134,8 +138,15 @@ async function testChatHistory(token: string, sessionId: string) {
       return true;
     }
   } catch (error: any) {
-    log('error', `Chat History Failed: ${error.response?.data?.error?.message || error.message}`);
-    results.push({ name: 'Chat History (Redis)', passed: false, error: error.message });
+    log(
+      'error',
+      `Chat History Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
+    results.push({
+      name: 'Chat History (Redis)',
+      passed: false,
+      error: error.message,
+    });
     return false;
   }
 }
@@ -156,7 +167,7 @@ async function testPermanentMemory(token: string, sessionId: string) {
       },
       {
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     );
 
     if (createResponse.data.success) {
@@ -169,14 +180,24 @@ async function testPermanentMemory(token: string, sessionId: string) {
       });
 
       if (listResponse.data.success) {
-        log('success', `Conversations Listed: ${listResponse.data.data.length} found`);
+        log(
+          'success',
+          `Conversations Listed: ${listResponse.data.data.length} found`,
+        );
         results.push({ name: 'Permanent Memory (MongoDB)', passed: true });
         return conversationId;
       }
     }
   } catch (error: any) {
-    log('error', `Permanent Memory Failed: ${error.response?.data?.error?.message || error.message}`);
-    results.push({ name: 'Permanent Memory (MongoDB)', passed: false, error: error.message });
+    log(
+      'error',
+      `Permanent Memory Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
+    results.push({
+      name: 'Permanent Memory (MongoDB)',
+      passed: false,
+      error: error.message,
+    });
   }
 }
 
@@ -189,15 +210,21 @@ async function testModelList(token: string) {
 
     if (response.data.success) {
       const siliconflowModels = response.data.data.filter(
-        (m: any) => m.id.includes('Qwen') || m.provider === 'siliconflow'
+        (m: any) => m.id.includes('Qwen') || m.provider === 'siliconflow',
       );
       log('success', `Models Available: ${response.data.data.length} total`);
-      log('info', `SiliconFlow Models: ${siliconflowModels.map((m: any) => m.id).join(', ')}`);
+      log(
+        'info',
+        `SiliconFlow Models: ${siliconflowModels.map((m: any) => m.id).join(', ')}`,
+      );
       results.push({ name: 'Model List', passed: true });
       return true;
     }
   } catch (error: any) {
-    log('error', `Model List Failed: ${error.response?.data?.error?.message || error.message}`);
+    log(
+      'error',
+      `Model List Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
     results.push({ name: 'Model List', passed: false, error: error.message });
     return false;
   }
@@ -206,9 +233,13 @@ async function testModelList(token: string) {
 async function testClearChat(token: string, sessionId: string) {
   log('info', 'Testing Clear Chat (Redis Cleanup)...');
   try {
-    const response = await axios.post(`${BASE_URL}/chat/${sessionId}/clear`, {}, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await axios.post(
+      `${BASE_URL}/chat/${sessionId}/clear`,
+      {},
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
 
     if (response.data.success) {
       log('success', 'Chat Cleared Successfully');
@@ -216,8 +247,15 @@ async function testClearChat(token: string, sessionId: string) {
       return true;
     }
   } catch (error: any) {
-    log('error', `Clear Chat Failed: ${error.response?.data?.error?.message || error.message}`);
-    results.push({ name: 'Clear Chat (Redis)', passed: false, error: error.message });
+    log(
+      'error',
+      `Clear Chat Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
+    results.push({
+      name: 'Clear Chat (Redis)',
+      passed: false,
+      error: error.message,
+    });
     return false;
   }
 }
@@ -228,7 +266,10 @@ async function checkRedisDirectly() {
     const { exec } = require('child_process');
     exec('redis-cli KEYS "hypha:*"', (error: any, stdout: string) => {
       if (!error) {
-        const keys = stdout.trim().split('\n').filter((k: string) => k);
+        const keys = stdout
+          .trim()
+          .split('\n')
+          .filter((k: string) => k);
         log('success', `Redis Keys Found: ${keys.length}`);
         if (keys.length > 0) {
           keys.slice(0, 5).forEach((key: string) => {
@@ -246,11 +287,14 @@ async function checkMongoDirectly() {
   log('info', 'Inspecting MongoDB Collections...');
   try {
     const { exec } = require('child_process');
-    exec('mongosh --quiet --eval "db.getMongo().getDBNames()" 2>/dev/null || mongo --quiet --eval "db.getMongo().getDBNames()"', (error: any, stdout: string) => {
-      if (!error) {
-        log('success', `MongoDB Databases: ${stdout.trim()}`);
-      }
-    });
+    exec(
+      'mongosh --quiet --eval "db.getMongo().getDBNames()" 2>/dev/null || mongo --quiet --eval "db.getMongo().getDBNames()"',
+      (error: any, stdout: string) => {
+        if (!error) {
+          log('success', `MongoDB Databases: ${stdout.trim()}`);
+        }
+      },
+    );
   } catch (error: any) {
     log('error', `MongoDB Check Failed: ${error.message}`);
   }
@@ -320,7 +364,9 @@ function printSummary() {
   });
 
   console.log('');
-  console.log(`${colors.green}Passed: ${passed}${colors.reset} | ${colors.red}Failed: ${failed}${colors.reset}`);
+  console.log(
+    `${colors.green}Passed: ${passed}${colors.reset} | ${colors.red}Failed: ${failed}${colors.reset}`,
+  );
   console.log('='.repeat(60) + '\n');
 
   process.exit(failed > 0 ? 1 : 0);

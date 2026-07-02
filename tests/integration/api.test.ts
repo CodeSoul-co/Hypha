@@ -15,6 +15,8 @@ import request from 'supertest';
 import application from '../../src/app';
 import { generateToken } from '../../src/middleware/auth';
 import { UserModel } from '../../src/models/User';
+import { getTemporaryMemory } from '../../src/core/memory/TemporaryMemory';
+import { getPermanentMemory } from '../../src/core/memory/PermanentMemory';
 
 const app = application.getApp();
 
@@ -23,11 +25,15 @@ let devUserId = '';
 
 beforeAll(async () => {
   await application.initialize();
-  // Build a JWT for the seeded dev user (DevAuth.initDevTestUser ran during init()).
-  const user = await UserModel.findOne({ email: 'dev@test.local' });
-  if (!user) throw new Error('dev user not seeded — is NODE_ENV=production?');
+  // Build a JWT for the seeded owner user. The default runtime is single-user.
+  const user = await UserModel.findOne({ email: 'owner@hypha.local' });
+  if (!user) throw new Error('owner user not seeded');
   devUserId = String(user._id);
-  devToken = generateToken({ id: devUserId, email: user.email, isAdmin: !!user.isAdmin });
+  devToken = generateToken({
+    id: devUserId,
+    email: user.email,
+    isAdmin: !!user.isAdmin,
+  });
 });
 
 afterAll(async () => {
@@ -45,12 +51,16 @@ describe('GET /api/v1/health', () => {
 
 describe('GET /api/v1/models', () => {
   it('lists at least one model and DeepSeek models carry provider=deepseek (bug 2)', async () => {
-    const r = await request(app).get('/api/v1/models').set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app)
+      .get('/api/v1/models')
+      .set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     expect(Array.isArray(r.body.data)).toBe(true);
     expect(r.body.data.length).toBeGreaterThan(0);
 
-    const dsModels = r.body.data.filter((m: any) => m.id?.startsWith('deepseek-v4'));
+    const dsModels = r.body.data.filter((m: any) =>
+      m.id?.startsWith('deepseek-v4'),
+    );
     if (dsModels.length > 0) {
       // The bug-2 regression: provider was incorrectly tagged 'openai' for
       // OpenAICompatible-backed entries. DeepSeek uses its own adapter so it
@@ -60,9 +70,13 @@ describe('GET /api/v1/models', () => {
   });
 
   it('SiliconFlow / Kimi etc. compatible models report their real provider (bug 2)', async () => {
-    const r = await request(app).get('/api/v1/models').set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app)
+      .get('/api/v1/models')
+      .set('Authorization', `Bearer ${devToken}`);
     const compat = r.body.data.filter((m: any) =>
-      ['siliconflow', 'kimi', 'groq', 'together', 'perplexity'].includes(m.provider)
+      ['siliconflow', 'kimi', 'groq', 'together', 'perplexity'].includes(
+        m.provider,
+      ),
     );
     // Skip if no compatible providers configured in this env.
     if (compat.length === 0) return;
@@ -73,7 +87,9 @@ describe('GET /api/v1/models', () => {
 
 describe('GET /api/v1/models/health (bug 7)', () => {
   it('returns provider health, not MODEL_NOT_FOUND', async () => {
-    const r = await request(app).get('/api/v1/models/health').set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app)
+      .get('/api/v1/models/health')
+      .set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data).toHaveProperty('providers');
@@ -87,7 +103,7 @@ describe('POST /api/v1/auth/login (bug 4)', () => {
   it('accepts .local TLD email and returns tokens', async () => {
     const r = await request(app)
       .post('/api/v1/auth/login')
-      .send({ email: 'dev@test.local', password: 'devpassword123' });
+      .send({ email: 'owner@hypha.local', password: 'hypha_owner_2026' });
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data?.accessToken).toBeTruthy();
@@ -102,19 +118,106 @@ describe('POST /api/v1/auth/login (bug 4)', () => {
   });
 });
 
+describe('POST /api/v1/auth/register', () => {
+  it('is disabled by default in single-user mode', async () => {
+    const r = await request(app)
+      .post('/api/v1/auth/register')
+      .send({
+        email: `blocked-${Date.now()}@example.com`,
+        username: `blocked${Date.now()}`,
+        password: 'testpassword123',
+      });
+    expect(r.status).toBe(403);
+    expect(r.body.success).toBe(false);
+    expect(r.body.error?.code).toBe('REGISTRATION_DISABLED');
+  });
+});
+
+describe('user-scoped session storage', () => {
+  it('keeps the same sessionId isolated across users in temporary memory', async () => {
+    const tempMemory = getTemporaryMemory();
+    const sessionId = `shared-${Date.now()}`;
+
+    await tempMemory.addMessage(sessionId, {
+      userId: 'user-a',
+      sessionId,
+      role: 'user',
+      content: 'message from a',
+    });
+    await tempMemory.addMessage(sessionId, {
+      userId: 'user-b',
+      sessionId,
+      role: 'user',
+      content: 'message from b',
+    });
+
+    const a = await tempMemory.getMessages(sessionId, undefined, 'user-a');
+    const b = await tempMemory.getMessages(sessionId, undefined, 'user-b');
+
+    expect(a.map((m) => m.content)).toEqual(['message from a']);
+    expect(b.map((m) => m.content)).toEqual(['message from b']);
+
+    await tempMemory.clearMessages(sessionId, 'user-a');
+    await tempMemory.clearMessages(sessionId, 'user-b');
+  });
+
+  it('allows duplicate sessionId across users in permanent memory', async () => {
+    const permanentMemory = getPermanentMemory();
+    const sessionId = `shared-${Date.now()}`;
+
+    const a = await permanentMemory.createConversation({
+      userId: 'user-a',
+      sessionId,
+      agentId: 'default',
+      modelId: 'test-model',
+      modelProvider: 'test',
+      tags: [],
+      isArchived: false,
+    });
+    const b = await permanentMemory.createConversation({
+      userId: 'user-b',
+      sessionId,
+      agentId: 'default',
+      modelId: 'test-model',
+      modelProvider: 'test',
+      tags: [],
+      isArchived: false,
+    });
+
+    expect(a.id).not.toBe(b.id);
+    expect(
+      (await permanentMemory.getConversationBySessionId(sessionId, 'user-a'))
+        ?.id,
+    ).toBe(a.id);
+    expect(
+      (await permanentMemory.getConversationBySessionId(sessionId, 'user-b'))
+        ?.id,
+    ).toBe(b.id);
+
+    await permanentMemory.deleteConversation(a.id);
+    await permanentMemory.deleteConversation(b.id);
+  });
+});
+
 describe('GET /api/v1/skills (bug 8)', () => {
   it('includes built-in skills (context-enrichment, intent-classification)', async () => {
-    const r = await request(app).get('/api/v1/skills').set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app)
+      .get('/api/v1/skills')
+      .set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     const ids = (r.body.data || []).map((s: any) => s.id);
     // Pre-fix the list was empty because SkillManager scanned a non-existent dir.
-    expect(ids).toEqual(expect.arrayContaining(['context-enrichment', 'intent-classification']));
+    expect(ids).toEqual(
+      expect.arrayContaining(['context-enrichment', 'intent-classification']),
+    );
   });
 });
 
 describe('GET /api/v1/tools (bug 9)', () => {
   it('includes built-in tools (filesystem, search)', async () => {
-    const r = await request(app).get('/api/v1/tools').set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app)
+      .get('/api/v1/tools')
+      .set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     const names = (r.body.data || []).map((t: any) => t.name);
     expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
@@ -197,7 +300,11 @@ Body.`;
     const install = await request(app)
       .post('/api/v1/skills/install')
       .set('Authorization', `Bearer ${devToken}`)
-      .send({ source: 'inline', content: validSkill, filename: 'integration-test-skill.md' });
+      .send({
+        source: 'inline',
+        content: validSkill,
+        filename: 'integration-test-skill.md',
+      });
     expect(install.status).toBe(200);
     expect(install.body.data.id).toBe('integration-test-skill');
     expect(install.body.data.filePath).toContain('integration-test-skill.md');
@@ -230,7 +337,10 @@ body without required fields`;
   });
 
   it('rejects duplicate id with SKILL_ALREADY_INSTALLED', async () => {
-    const dup = validSkill.replace(/integration-test-skill/, 'integration-test-skill');
+    const dup = validSkill.replace(
+      /integration-test-skill/,
+      'integration-test-skill',
+    );
     const r = await request(app)
       .post('/api/v1/skills/install')
       .set('Authorization', `Bearer ${devToken}`)

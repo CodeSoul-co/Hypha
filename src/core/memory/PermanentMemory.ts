@@ -46,7 +46,7 @@ function toPlainMessage(doc: IMessage): PermanentMessage {
 
 export class PermanentMemory implements IPermanentStore {
   async createConversation(
-    conversation: Omit<PermanentConversation, 'id' | 'createdAt' | 'updatedAt'>
+    conversation: Omit<PermanentConversation, 'id' | 'createdAt' | 'updatedAt'>,
   ): Promise<PermanentConversation> {
     try {
       const doc = await ConversationModel.create({
@@ -64,8 +64,11 @@ export class PermanentMemory implements IPermanentStore {
       return toPlainConversation(doc);
     } catch (error: any) {
       if (error.code === 11000) {
-        // Duplicate sessionId - return existing conversation
-        const existing = await ConversationModel.findOne({ sessionId: conversation.sessionId });
+        // Duplicate user/session pair - return the existing conversation.
+        const existing = await ConversationModel.findOne({
+          sessionId: conversation.sessionId,
+          userId: conversation.userId,
+        });
         if (existing) {
           return toPlainConversation(existing);
         }
@@ -85,9 +88,15 @@ export class PermanentMemory implements IPermanentStore {
     }
   }
 
-  async getConversationBySessionId(sessionId: string): Promise<PermanentConversation | null> {
+  async getConversationBySessionId(
+    sessionId: string,
+    userId?: string,
+  ): Promise<PermanentConversation | null> {
     try {
-      const doc = await ConversationModel.findOne({ sessionId });
+      const doc = await ConversationModel.findOne({
+        sessionId,
+        ...(userId ? { userId } : {}),
+      });
       return doc ? toPlainConversation(doc) : null;
     } catch (error) {
       logger.error('Failed to get conversation by sessionId:', error);
@@ -97,7 +106,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async updateConversation(
     id: string,
-    updates: Partial<PermanentConversation>
+    updates: Partial<PermanentConversation>,
   ): Promise<PermanentConversation | null> {
     try {
       const doc = await ConversationModel.findByIdAndUpdate(
@@ -106,11 +115,13 @@ export class PermanentMemory implements IPermanentStore {
           $set: {
             ...(updates.title !== undefined && { title: updates.title }),
             ...(updates.tags !== undefined && { tags: updates.tags }),
-            ...(updates.isArchived !== undefined && { isArchived: updates.isArchived }),
+            ...(updates.isArchived !== undefined && {
+              isArchived: updates.isArchived,
+            }),
             ...(updates.agentId !== undefined && { agentId: updates.agentId }),
           },
         },
-        { new: true }
+        { new: true },
       );
 
       return doc ? toPlainConversation(doc) : null;
@@ -126,7 +137,9 @@ export class PermanentMemory implements IPermanentStore {
       if (result) {
         // Also delete all messages in this conversation
         await MessageModel.deleteMany({ conversationId: id });
-        logger.debug('Deleted conversation and its messages', { conversationId: id });
+        logger.debug('Deleted conversation and its messages', {
+          conversationId: id,
+        });
         return true;
       }
       return false;
@@ -138,7 +151,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async listConversations(
     userId: string,
-    options: ListConversationsOptions = {}
+    options: ListConversationsOptions = {},
   ): Promise<PermanentConversation[]> {
     try {
       const {
@@ -176,7 +189,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async addMessage(
     conversationId: string,
-    message: Omit<PermanentMessage, 'id' | 'conversationId' | 'timestamp'>
+    message: Omit<PermanentMessage, 'id' | 'conversationId' | 'timestamp'>,
   ): Promise<PermanentMessage> {
     try {
       const doc = await MessageModel.create({
@@ -196,7 +209,10 @@ export class PermanentMemory implements IPermanentStore {
         updatedAt: now(),
       });
 
-      logger.debug('Added message to conversation', { conversationId, messageId: doc._id });
+      logger.debug('Added message to conversation', {
+        conversationId,
+        messageId: doc._id,
+      });
       return toPlainMessage(doc);
     } catch (error) {
       logger.error('Failed to add message:', error);
@@ -206,18 +222,14 @@ export class PermanentMemory implements IPermanentStore {
 
   async getMessages(
     conversationId: string,
-    options: ListMessagesOptions = {}
+    options: ListMessagesOptions = {},
   ): Promise<PermanentMessage[]> {
     try {
-      const {
-        page = 1,
-        pageSize = 50,
-        startDate,
-        endDate,
-        roles,
-      } = options;
+      const { page = 1, pageSize = 50, startDate, endDate, roles } = options;
 
-      const filter: Record<string, any> = { conversationId: new mongoose.Types.ObjectId(conversationId) };
+      const filter: Record<string, any> = {
+        conversationId: new mongoose.Types.ObjectId(conversationId),
+      };
 
       if (startDate || endDate) {
         filter.timestamp = {};
@@ -243,7 +255,10 @@ export class PermanentMemory implements IPermanentStore {
     }
   }
 
-  async deleteMessage(conversationId: string, messageId: string): Promise<boolean> {
+  async deleteMessage(
+    conversationId: string,
+    messageId: string,
+  ): Promise<boolean> {
     try {
       const result = await MessageModel.findOneAndDelete({
         _id: new mongoose.Types.ObjectId(messageId),
@@ -260,7 +275,7 @@ export class PermanentMemory implements IPermanentStore {
   async searchConversations(
     userId: string,
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<PermanentConversation[]> {
     try {
       const { page = 1, pageSize = 20 } = options;
@@ -287,15 +302,17 @@ export class PermanentMemory implements IPermanentStore {
   async searchMessages(
     userId: string,
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<PermanentMessage[]> {
     try {
       const { page = 1, pageSize = 20 } = options;
       const skip = (page - 1) * pageSize;
 
       // First get user's conversation IDs
-      const conversations = await ConversationModel.find({ userId }).select('_id');
-      const conversationIds = conversations.map(c => c._id);
+      const conversations = await ConversationModel.find({ userId }).select(
+        '_id',
+      );
+      const conversationIds = conversations.map((c) => c._id);
 
       const docs = await MessageModel.find({
         conversationId: { $in: conversationIds },
@@ -380,11 +397,13 @@ export class PermanentMemory implements IPermanentStore {
           isArchived: false,
           updatedAt: { $lt: cutoffDate },
         },
-        { $set: { isArchived: true } }
+        { $set: { isArchived: true } },
       );
 
       if (result.modifiedCount > 0) {
-        logger.info('Archived old conversations', { count: result.modifiedCount });
+        logger.info('Archived old conversations', {
+          count: result.modifiedCount,
+        });
       }
 
       return result.modifiedCount;

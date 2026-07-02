@@ -258,6 +258,12 @@ Plasmod = runtime state, event, memory, and materialized view substrate
 
 hypha defines how an agent system is built, run, evaluated, and governed. Plasmod or another state layer stores runtime state, events, memory, traces, visibility scopes, and materialized views.
 
+## Runtime Mode
+
+hypha defaults to a **single-user** runtime for local and self-hosted deployments. A configured owner account is seeded from `auth.singleUser` in `config.yaml`, and public registration is disabled unless multi-user mode is explicitly enabled.
+
+The internal runtime still keeps user-scoped isolation for sessions, memory, token usage, API keys, and operation queues. This keeps today's single-user deployment simple while preserving the concurrency and queueing model required for future multi-user clients.
+
 ## Engineering Principles
 
 Every part of hypha should follow these principles:
@@ -266,6 +272,7 @@ Every part of hypha should follow these principles:
 - **FSM-first runtime implementation**: every run must move through explicit states and guarded transitions.
 - **Modular boundaries**: agent kernel, harness, domain packs, memory, policy, evaluation, and deployment need clear interfaces.
 - **Memory-provider neutrality**: vector, relational, document, runtime-state, and hybrid memory modes should be supported through adapters.
+- **Single-user by default, user-scoped internally**: default deployments should run as one owner account, while internal APIs keep `userId` boundaries, per-user session queues, and multi-user-safe storage.
 - **Maintainability first**: demo logic should not be frozen into framework core; shared capabilities should become stable abstractions.
 - **Extensibility first**: new models, tools, storage backends, domains, and deployment modes should be integrated through plugins or configuration when possible.
 - **Observability and replayability**: runs, traces, errors, cost, evaluation, and review records should be first-class framework capabilities.
