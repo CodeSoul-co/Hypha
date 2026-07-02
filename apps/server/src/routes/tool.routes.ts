@@ -141,7 +141,9 @@ router.post('/execute', asyncHandler(async (req: Request, res: Response) => {
         name: descriptor?.name ?? name,
         description: descriptor?.description ?? `Server tool ${name}`,
         inputSchema: descriptor?.inputSchema ?? { type: 'object' },
-        sideEffectLevel: inferToolSideEffect(name, toolParams),
+        sideEffectLevel: descriptor?.source === 'mcp'
+          ? descriptor.sideEffectLevel
+          : inferToolSideEffect(name, toolParams),
         source: descriptor?.source ?? 'local',
         sourceRef: descriptor?.source === 'mcp'
           ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
@@ -193,22 +195,7 @@ function inferToolSideEffect(
 // List MCP tools
 router.get('/mcp/tools', asyncHandler(async (_req: Request, res: Response) => {
   const toolManager = getToolManager();
-  const servers = toolManager.listMCPClients();
-
-  const allTools: Array<{ serverId: string; serverName: string; tools: any[] }> = [];
-
-  for (const server of servers) {
-    if (server.status === 'connected') {
-      const client = toolManager.getMCPClient(server.id);
-      if (client) {
-        allTools.push({
-          serverId: server.id,
-          serverName: server.name,
-          tools: client.tools,
-        });
-      }
-    }
-  }
+  const allTools = toolManager.listNormalizedMCPTools();
 
   res.json({
     success: true,

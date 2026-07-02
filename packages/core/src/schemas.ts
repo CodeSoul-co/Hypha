@@ -46,8 +46,33 @@ export function defineSpecSchema<TSpec>(definition: {
 export function exportSpecJsonSchemas(
   definitions: readonly SpecSchemaDefinition<unknown>[]
 ): Record<string, JsonSchema> {
+  for (const definition of definitions) {
+    assertSpecSchemaDefinition(definition);
+  }
   return Object.fromEntries(
     definitions.map((definition) => [definition.id, definition.jsonSchema])
+  );
+}
+
+export function assertSpecSchemaDefinition(definition: SpecSchemaDefinition<unknown>): void {
+  definition.parse(definition.example);
+  const required = definition.jsonSchema.required ?? [];
+  const properties = definition.jsonSchema.properties ?? {};
+  for (const field of required) {
+    if (!(field in properties)) {
+      throw new Error(`${definition.id} JSON schema requires undeclared property: ${field}`);
+    }
+    if (!hasOwn(definition.example, field)) {
+      throw new Error(`${definition.id} example is missing required property: ${field}`);
+    }
+  }
+}
+
+function hasOwn(value: unknown, field: string): boolean {
+  return Boolean(
+    value
+      && typeof value === 'object'
+      && Object.prototype.hasOwnProperty.call(value, field)
   );
 }
 

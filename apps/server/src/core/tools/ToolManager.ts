@@ -7,6 +7,11 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
+import {
+  normalizeMCPToolSpec,
+  type MCPCapabilityDescriptor,
+} from '@hypha/mcp';
+import type { ToolSpec as HyphaToolSpec } from '@hypha/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import axios from 'axios';
@@ -368,7 +373,9 @@ export class ToolManager {
     // Also include MCP tools
     for (const client of this.mcpClients.values()) {
       if (client.status === 'connected') {
-        list.push(...client.tools);
+        list.push(...client.tools.map((tool) => this.toolSpecToDefinition(
+          this.normalizeMCPTool(client, tool)
+        )));
       }
     }
 
@@ -381,6 +388,7 @@ export class ToolManager {
     description: string;
     inputSchema: ToolDefinition['inputSchema'];
     source: 'local' | 'mcp';
+    sideEffectLevel: HyphaToolSpec['sideEffectLevel'];
     serverId?: string;
     capabilityId?: string;
   } | null {
@@ -392,6 +400,7 @@ export class ToolManager {
         description: localTool.description,
         inputSchema: localTool.schema.inputSchema,
         source: 'local',
+        sideEffectLevel: 'read',
       };
     }
 
@@ -399,14 +408,16 @@ export class ToolManager {
       if (client.status !== 'connected') continue;
       const tool = client.tools.find((candidate) => candidate.name === name);
       if (tool) {
+        const normalized = this.normalizeMCPTool(client, tool);
         return {
-          id: `${client.id}.${tool.name}`,
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
+          id: normalized.id,
+          name: normalized.name ?? tool.name,
+          description: normalized.description,
+          inputSchema: this.asObjectInputSchema(normalized.inputSchema),
           source: 'mcp',
-          serverId: client.id,
-          capabilityId: tool.name,
+          sideEffectLevel: normalized.sideEffectLevel,
+          serverId: normalized.sourceRef?.serverId,
+          capabilityId: normalized.sourceRef?.capabilityId,
         };
       }
     }
@@ -463,6 +474,20 @@ export class ToolManager {
     return this.mcpClients.get(serverId) || null;
   }
 
+  listNormalizedMCPTools(): Array<{
+    serverId: string;
+    serverName: string;
+    tools: HyphaToolSpec[];
+  }> {
+    return Array.from(this.mcpClients.values())
+      .filter((client) => client.status === 'connected')
+      .map((client) => ({
+        serverId: client.id,
+        serverName: client.name,
+        tools: client.tools.map((tool) => this.normalizeMCPTool(client, tool)),
+      }));
+  }
+
   listMCPClients(): Array<{ id: string; name: string; status: string; toolCount: number }> {
     return Array.from(this.mcpClients.values()).map(client => ({
       id: client.id,
@@ -480,6 +505,44 @@ export class ToolManager {
     }
 
     return health;
+  }
+
+  private normalizeMCPTool(client: MCPClient, tool: ToolDefinition): HyphaToolSpec {
+    return normalizeMCPToolSpec(this.toMCPCapabilityDescriptor(client, tool));
+  }
+
+  private toMCPCapabilityDescriptor(
+    client: MCPClient,
+    tool: ToolDefinition
+  ): MCPCapabilityDescriptor {
+    return {
+      id: `${client.id}.${tool.name}`,
+      version: '0.0.0',
+      serverId: client.id,
+      capabilityId: tool.name,
+      type: 'tool',
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      sideEffectLevel: 'read',
+      trustLevel: 'reviewed',
+    };
+  }
+
+  private toolSpecToDefinition(spec: HyphaToolSpec): ToolDefinition {
+    return {
+      name: spec.name ?? spec.id,
+      description: spec.description,
+      inputSchema: this.asObjectInputSchema(spec.inputSchema),
+    };
+  }
+
+  private asObjectInputSchema(schema: HyphaToolSpec['inputSchema']): ToolDefinition['inputSchema'] {
+    return {
+      type: 'object',
+      properties: schema.properties as Record<string, any> | undefined,
+      required: schema.required,
+    };
   }
 }
 

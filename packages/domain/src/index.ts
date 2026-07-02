@@ -16,6 +16,8 @@ import type {
 } from '@hypha/core';
 import {
   defineSpecSchema,
+  deploymentSpecSchema,
+  evaluationSpecSchema,
   exportSpecJsonSchemas,
   humanReviewPolicySpecSchema,
   jsonSchemaSchema,
@@ -30,10 +32,10 @@ import {
   versionedSpecSchema,
 } from '@hypha/core';
 import type { FSMProcessSpec, FSMStateSpec, FSMTransitionSpec } from '@hypha/fsm';
-import type { MCPIntegrationSpec } from '@hypha/mcp';
-import type { MemorySpec } from '@hypha/memory';
+import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@hypha/mcp';
+import { memorySpecSchema, type MemorySpec } from '@hypha/memory';
 import type { SkillRef } from '@hypha/skills';
-import type { ToolSpec } from '@hypha/tools';
+import { toolSpecSchema, type ToolSpec } from '@hypha/tools';
 
 export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   name: string;
@@ -309,13 +311,13 @@ export const domainPackSpecSchema = versionedSpecSchema
     defaultWorkflow: z.string().optional(),
     allowedSkills: z.array(specRefSchema).optional(),
     defaultSkills: z.array(specRefSchema).optional(),
-    tools: z.array(z.any()).optional(),
-    mcpProfiles: z.array(z.any()).optional(),
-    memoryProfiles: z.array(z.any()).optional(),
+    tools: z.array(toolSpecSchema).optional(),
+    mcpProfiles: z.array(mcpIntegrationSpecSchema).optional(),
+    memoryProfiles: z.array(memorySpecSchema).optional(),
     policies: z.array(policySpecSchema).optional(),
-    evaluationProfiles: z.array(z.any()).optional(),
+    evaluationProfiles: z.array(evaluationSpecSchema).optional(),
     regressionCases: z.array(regressionSpecSchema).optional(),
-    deploymentProfile: z.any().optional(),
+    deploymentProfile: deploymentSpecSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   }) satisfies ZodType<DomainPackSpec>;
 

@@ -107,4 +107,57 @@ describe('@hypha/domain workflow compiler', () => {
       })
     ).toThrow(/Default workflow not found/);
   });
+
+  it('validates nested profile specs instead of accepting arbitrary objects', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        tools: [{ id: 'broken-tool' }],
+      })
+    ).toThrow();
+
+    expect(
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        tools: [
+          {
+            id: 'tool.search',
+            version: '0.0.0',
+            description: 'Search',
+            inputSchema: { type: 'object' },
+            sideEffectLevel: 'read',
+          },
+        ],
+        mcpProfiles: [
+          {
+            id: 'mcp.local',
+            version: '0.0.0',
+            servers: [{ id: 'local', mode: 'local' }],
+          },
+        ],
+        memoryProfiles: [
+          {
+            id: 'memory.local',
+            version: '0.0.0',
+            providers: [{ id: 'structured', type: 'structured', providerRef: 'local' }],
+            memoryTypes: ['working'],
+          },
+        ],
+        evaluationProfiles: [
+          {
+            id: 'eval.schema',
+            version: '0.0.0',
+            type: 'schema',
+            deterministic: true,
+          },
+        ],
+        deploymentProfile: {
+          id: 'deploy.local',
+          version: '0.0.0',
+          mode: 'local',
+          runtimeMode: 'single-user',
+        },
+      }).id
+    ).toBe('domain.default');
+  });
 });

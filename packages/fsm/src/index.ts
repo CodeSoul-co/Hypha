@@ -295,12 +295,50 @@ export function evaluateGuardExpression(
   if (expression.startsWith('else:')) {
     return !evaluateGuardExpression(expression.slice('else:'.length), context);
   }
+  const orParts = splitGuardExpression(expression, '||');
+  if (orParts.length > 1) {
+    return orParts.some((part) => evaluateGuardExpression(part, context));
+  }
+  const andParts = splitGuardExpression(expression, '&&');
+  if (andParts.length > 1) {
+    return andParts.every((part) => evaluateGuardExpression(part, context));
+  }
+  if (expression.startsWith('!')) {
+    return !evaluateGuardExpression(expression.slice(1), context);
+  }
 
-  const equality = expression.match(/^([A-Za-z_][\w.]*?)\s*(===|==|!==|!=)\s*(.+)$/);
-  if (equality) {
-    const actual = readGuardPath(equality[1], context);
-    const expected = parseGuardLiteral(equality[3]);
-    return equality[2].includes('!') ? actual !== expected : actual === expected;
+  const exists = expression.match(/^exists\(([^)]+)\)$/);
+  if (exists) {
+    return readGuardPath(exists[1].trim(), context) !== undefined;
+  }
+
+  const matches = expression.match(/^matches\(([^,]+),\s*(.+)\)$/);
+  if (matches) {
+    const actual = readGuardPath(matches[1].trim(), context);
+    const pattern = String(parseGuardLiteral(matches[2]));
+    return new RegExp(pattern).test(String(actual ?? ''));
+  }
+
+  const comparison = expression.match(/^([A-Za-z_][\w.]*?)\s*(===|==|!==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (comparison) {
+    const actual = readGuardPath(comparison[1], context);
+    const expected = parseGuardLiteral(comparison[3]);
+    switch (comparison[2]) {
+      case '===':
+      case '==':
+        return actual === expected;
+      case '!==':
+      case '!=':
+        return actual !== expected;
+      case '>':
+        return Number(actual) > Number(expected);
+      case '>=':
+        return Number(actual) >= Number(expected);
+      case '<':
+        return Number(actual) < Number(expected);
+      case '<=':
+        return Number(actual) <= Number(expected);
+    }
   }
 
   return Boolean(readGuardPath(expression, context));
@@ -480,4 +518,29 @@ function parseGuardLiteral(value: string): unknown {
   if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
   const quoted = trimmed.match(/^['"](.*)['"]$/);
   return quoted ? quoted[1] : trimmed;
+}
+
+function splitGuardExpression(expression: string, operator: '&&' | '||'): string[] {
+  const parts: string[] = [];
+  let quote: string | null = null;
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < expression.length; index += 1) {
+    const char = expression[index];
+    if ((char === '"' || char === "'") && expression[index - 1] !== '\\') {
+      quote = quote === char ? null : quote ?? char;
+      continue;
+    }
+    if (quote) continue;
+    if (char === '(') depth += 1;
+    if (char === ')') depth = Math.max(0, depth - 1);
+    if (depth === 0 && expression.slice(index, index + operator.length) === operator) {
+      parts.push(expression.slice(start, index).trim());
+      start = index + operator.length;
+      index += operator.length - 1;
+    }
+  }
+  if (parts.length === 0) return [expression];
+  parts.push(expression.slice(start).trim());
+  return parts;
 }

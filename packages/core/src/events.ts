@@ -15,6 +15,7 @@ export type FrameworkEventType =
   | 'agent.reasoning.started'
   | 'agent.reasoning.completed'
   | 'agent.action.selected'
+  | 'react.step.completed'
   | 'inference.requested'
   | 'inference.completed'
   | 'inference.failed'

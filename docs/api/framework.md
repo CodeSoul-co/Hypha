@@ -63,7 +63,7 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `ReAct
 
 `FrameworkEvent` fields include `id`, `type`, `runId`, optional `workspaceId`, `sessionId`, `stepId`, `agentId`, `fsmState`, `timestamp`, `payload`, and `metadata`.
 
-Common event types include `session.created`, `run.created`, `run.started`, `fsm.state.entered`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
+Common event types include `session.created`, `run.created`, `run.started`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
 
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
@@ -80,7 +80,7 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 
 `compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, and `terminalStates`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, and `updatedAt`.
 
-FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, and simple equality checks. Transitions can be rejected by guards, policy, or human-review requirements.
+FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and `matches(path, pattern)`. Transitions can be rejected by guards, policy, or human-review requirements.
 
 ## ReAct Kernel
 
@@ -134,7 +134,7 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 `GovernedToolRunner` records tool request, policy check, approval, start, timeout, retry, completion, failure, and rejection events. It enforces input validation, default side-effect policy, optional timeout policy, retry policy, human review policy, and MCP source tracing. Tool calls return `completed`, `failed`, `denied`, or `human_review_required`.
 
-`MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing.
+`MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing. MCP tools are normalized to `ToolSpec` before being exposed to model/tool callers, and MCP-backed calls keep `sourceRef.serverId` and `sourceRef.capabilityId` for trace and replay.
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
 

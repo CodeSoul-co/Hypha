@@ -71,6 +71,21 @@ describe('@hypha/fsm runtime contracts', () => {
       }).currentState
     ).toBe('Reasoning');
     expect(evaluateGuardExpression('variables.score == 3', { variables: { score: 3 } })).toBe(true);
+    expect(
+      evaluateGuardExpression(
+        "input.ready == true && variables.score >= 3 && matches(metadata.intent, '^ship')",
+        { input: { ready: true }, variables: { score: 4 }, metadata: { intent: 'ship-code' } }
+      )
+    ).toBe(true);
+    expect(
+      evaluateGuardExpression('exists(variables.owner) || input.override == true', {
+        input: { override: false },
+        variables: { owner: 'owner' },
+      })
+    ).toBe(true);
+    expect(
+      evaluateGuardExpression('!exists(variables.blocked)', { variables: {} })
+    ).toBe(true);
   });
 
   it('enforces transition policy and human review state semantics', async () => {

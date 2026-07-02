@@ -4,6 +4,7 @@ import {
   denyExternalEffectsPolicyEngine,
   FrameworkError,
   formatFrameworkId,
+  assertSpecSchemaDefinition,
   coreSpecJsonSchemas,
   InMemoryEventStore,
   traceSpecDefinition,
@@ -63,5 +64,21 @@ describe('@hypha/core contracts', () => {
     })).toMatchObject({ id: 'system.default' });
     expect(coreSpecJsonSchemas.TraceSpec.required).toContain('eventTypes');
     expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.required).toContain('agentRef');
+  });
+
+  it('detects spec JSON schema/example drift for required fields', () => {
+    expect(() =>
+      assertSpecSchemaDefinition({
+        ...traceSpecDefinition,
+        jsonSchema: {
+          ...traceSpecDefinition.jsonSchema,
+          required: ['id', 'version', 'missingField'],
+          properties: {
+            ...traceSpecDefinition.jsonSchema.properties,
+            missingField: { type: 'string' },
+          },
+        },
+      })
+    ).toThrow(/missing required property/);
   });
 });

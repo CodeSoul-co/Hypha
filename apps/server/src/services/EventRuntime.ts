@@ -19,6 +19,11 @@ import {
   type InferenceResponse,
   type ReasoningOptions,
 } from '@hypha/inference';
+import {
+  ReActRunner,
+  type ReActAgentRuntime,
+  type ReActAgentSpec,
+} from '@hypha/kernel';
 import type { ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import { GovernedToolRunner, ToolRegistry, type ToolSpec } from '@hypha/tools';
 import type {
@@ -315,6 +320,90 @@ class EventRuntimeService {
       });
       throw error;
     }
+  }
+
+  async runReActChat(input: ChatInferenceInput & { agentId?: string }): Promise<ChatResponse> {
+    const agent: ReActAgentSpec = {
+      id: input.agentId ?? 'agent.default',
+      version: '0.0.0',
+      name: input.agentId ?? 'Default Runtime Agent',
+      modelAlias: input.modelAlias || input.options?.model || this.resolveChatModel().model,
+      toolRefs: input.options?.tools?.map((tool) => tool.name),
+    };
+    const reactRuntime: ReActAgentRuntime = {
+      async reason(context) {
+        return {
+          runId: context.runId,
+          stepId: context.stepId,
+          agentId: context.agent.id,
+          modelAlias: context.agent.modelAlias,
+          input: {
+            messages: context.messages as LLMMessage[],
+            options: input.options,
+          },
+          metadata: {
+            surface: 'event-runtime.react-chat',
+          },
+        };
+      },
+      async selectAction(response) {
+        return {
+          type: 'finish',
+          input: response.output,
+          reason: 'chat-response-ready',
+        };
+      },
+      async verify() {
+        return { type: 'finish', reason: 'chat-response-verified' };
+      },
+    };
+    const reactInference: InferenceProvider = {
+      id: 'event-runtime-react-chat',
+      infer: async (request): Promise<InferenceResponse<ChatResponse>> => {
+        const requestInput = request.input as LLMInferenceInput;
+        const response = await this.inferChat({
+          runId: request.runId,
+          stepId: request.stepId,
+          modelAlias: request.modelAlias,
+          messages: requestInput.messages,
+          options: requestInput.options,
+          reasoning: input.reasoning,
+        });
+        return {
+          id: response.id,
+          output: response,
+          usage: response.usage,
+          raw: response.raw,
+        };
+      },
+    };
+    const runner = new ReActRunner(reactRuntime, {
+      inference: reactInference,
+      maxIterations: 1,
+      onStep: async (step) => {
+        await this.record(input.runId, 'react.step.completed', {
+          stepId: step.id,
+          phase: step.phase,
+          input: safeSerialize(step.input),
+          output: safeSerialize(step.output),
+        }, step.phase);
+      },
+    });
+    const result = await runner.run({
+      runId: input.runId,
+      stepId: input.stepId,
+      agent,
+      messages: input.messages,
+    });
+    if (result.status !== 'completed') {
+      throw new Error(result.error instanceof Error
+        ? result.error.message
+        : `ReAct chat failed: ${result.status}`);
+    }
+    if (!isChatResponse(result.output)) {
+      throw new Error('ReAct chat completed without a ChatResponse output.');
+    }
+    return result.output;
   }
 
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
@@ -857,7 +946,9 @@ class EventRuntimeService {
             name: descriptor?.name ?? toolName,
             description: descriptor?.description ?? `Workflow tool ${toolName}`,
             inputSchema: descriptor?.inputSchema ?? { type: 'object' },
-            sideEffectLevel: inferToolSideEffect(toolName, params),
+            sideEffectLevel: descriptor?.source === 'mcp'
+              ? descriptor.sideEffectLevel
+              : inferToolSideEffect(toolName, params),
             source: descriptor?.source ?? 'local',
             sourceRef: descriptor?.source === 'mcp'
               ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
@@ -1250,6 +1341,16 @@ function safeSerialize<T>(value: T): T | undefined {
       return undefined;
     }
   }
+}
+
+function isChatResponse(value: unknown): value is ChatResponse {
+  return Boolean(
+    value
+      && typeof value === 'object'
+      && 'id' in value
+      && 'content' in value
+      && 'finishReason' in value
+  );
 }
 
 function inferToolSideEffect(

@@ -231,9 +231,10 @@ router.post(
       await runtime.record(runId, 'agent.reasoning.started', {
         modelAlias: resolvedChatModel.model,
       }, 'reason');
-      const response = await runtime.inferChat({
+      const response = await runtime.runReActChat({
         runId,
         stepId: 'reason',
+        agentId,
         modelAlias: resolvedChatModel.model,
         messages: llmMessages,
         options: {
