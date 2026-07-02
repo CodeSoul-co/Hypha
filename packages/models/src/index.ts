@@ -1,4 +1,16 @@
-import type { JsonSchema, SpecMetadata, SpecRef, VersionedSpec } from '@hypha/core';
+import { z, type ZodType } from 'zod';
+import {
+  defineSpecSchema,
+  exportSpecJsonSchemas,
+  jsonSchemaSchema,
+  specMetadataSchema,
+  specRefSchema,
+  versionedSpecSchema,
+  type JsonSchema,
+  type SpecMetadata,
+  type SpecRef,
+  type VersionedSpec,
+} from '@hypha/core';
 
 export type ModelProviderType = 'openai' | 'openai-compatible' | 'mock' | string;
 
@@ -130,6 +142,115 @@ export class MockModelProvider implements ModelProvider {
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     };
   }
+}
+
+export const modelCapabilitiesSchema = z.object({
+  chat: z.boolean().optional(),
+  streaming: z.boolean().optional(),
+  toolCalling: z.boolean().optional(),
+  jsonMode: z.boolean().optional(),
+  embeddings: z.boolean().optional(),
+  reasoning: z.boolean().optional(),
+});
+
+export const modelProviderSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    type: z.string().min(1),
+    defaultModelAlias: z.string().optional(),
+    capabilities: modelCapabilitiesSchema.optional(),
+    apiKeyEnv: z.string().optional(),
+    baseUrl: z.string().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  }) satisfies ZodType<ModelProviderSpec>;
+
+export const modelAliasSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    alias: z.string().min(1),
+    providerId: z.string().min(1),
+    providerModel: z.string().min(1),
+  }) satisfies ZodType<ModelAliasSpec>;
+
+export const modelRequestSchema = z.object({
+  runId: z.string().min(1),
+  stepId: z.string().min(1),
+  modelAlias: z.string().min(1),
+  instructions: z.string().optional(),
+  input: z.unknown(),
+  tools: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    description: z.string(),
+    inputSchema: jsonSchemaSchema,
+  })).optional(),
+  responseFormat: z.union([specRefSchema, jsonSchemaSchema]).optional(),
+  reasoning: z.object({
+    effort: z.enum(['low', 'medium', 'high']).optional(),
+    budgetTokens: z.number().int().positive().optional(),
+  }).optional(),
+  temperature: z.number().optional(),
+  maxTokens: z.number().int().positive().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const modelProviderSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'type'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    type: { type: 'string' },
+    defaultModelAlias: { type: 'string' },
+    capabilities: {
+      type: 'object',
+      properties: {
+        chat: { type: 'boolean' },
+        streaming: { type: 'boolean' },
+        toolCalling: { type: 'boolean' },
+        jsonMode: { type: 'boolean' },
+        embeddings: { type: 'boolean' },
+        reasoning: { type: 'boolean' },
+      },
+    },
+    apiKeyEnv: { type: 'string' },
+    baseUrl: { type: 'string' },
+    timeoutMs: { type: 'number' },
+  },
+  additionalProperties: false,
+};
+
+export const modelProviderSpecExample: ModelProviderSpec = {
+  id: 'provider.default',
+  version: '0.0.0',
+  name: 'Default OpenAI-compatible Provider',
+  type: 'openai-compatible',
+  defaultModelAlias: 'default-chat',
+  apiKeyEnv: 'HYPHA_LLM_API_KEY',
+  baseUrl: 'https://api.example.com/v1',
+  capabilities: {
+    chat: true,
+    streaming: true,
+    toolCalling: true,
+    jsonMode: true,
+    reasoning: true,
+  },
+};
+
+export const modelProviderSpecDefinition = defineSpecSchema<ModelProviderSpec>({
+  id: 'ModelProviderSpec',
+  zod: modelProviderSpecSchema,
+  jsonSchema: modelProviderSpecJsonSchema,
+  example: modelProviderSpecExample,
+});
+
+export const modelSpecDefinitions = [modelProviderSpecDefinition] as const;
+export const modelSpecJsonSchemas = exportSpecJsonSchemas(modelSpecDefinitions);
+
+export function validateModelProviderSpec(input: unknown): ModelProviderSpec {
+  return modelProviderSpecDefinition.parse(input);
 }
 
 export * from './providers';

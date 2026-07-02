@@ -3,6 +3,9 @@ import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/ada
 import {
   HybridMemoryProvider,
   MemoryManager,
+  memorySpecDefinition,
+  memorySpecJsonSchemas,
+  validateMemorySpec,
   type EmbeddingProvider,
   type MemoryProvider,
   type MemoryRecord,
@@ -69,5 +72,10 @@ describe('@hypha/memory manager contract', () => {
     ).resolves.toMatchObject([
       { record: { id: 'semantic_1' }, score: 1, provenance: { eventId: 'event_1' } },
     ]);
+  });
+
+  it('exports Stage1 MemorySpec schema and minimal example', () => {
+    expect(validateMemorySpec(memorySpecDefinition.example).id).toBe('memory.default');
+    expect(memorySpecJsonSchemas.MemorySpec.required).toContain('providers');
   });
 });

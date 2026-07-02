@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { compileWorkflowToFSM, initializeDomainSession, type DomainPackSpec } from './index';
+import {
+  compileWorkflowToFSM,
+  domainPackSpecDefinition,
+  domainSpecJsonSchemas,
+  initializeDomainSession,
+  validateDomainPackSpec,
+  validateWorkflowSpec,
+  workflowSpecDefinition,
+  type DomainPackSpec,
+} from './index';
 
 describe('@hypha/domain workflow compiler', () => {
   it('compiles a DomainPack WorkflowSpec into an FSMProcessSpec', () => {
@@ -24,7 +33,13 @@ describe('@hypha/domain workflow compiler', () => {
           terminalStates: ['Finalize'],
           states: [
             { id: 'Intake', goal: 'Read task input' },
-            { id: 'ReasonAct', goal: 'Run ReAct loop', allowedSkills: ['review'] },
+            {
+              id: 'ReasonAct',
+              goal: 'Run ReAct loop',
+              allowedSkills: ['review'],
+              timeoutPolicy: { timeoutMs: 1000, onTimeout: 'retry' },
+              retryPolicy: { maxAttempts: 2 },
+            },
             { id: 'Finalize', goal: 'Return final output' },
           ],
           transitions: [
@@ -40,6 +55,10 @@ describe('@hypha/domain workflow compiler', () => {
 
     expect(fsm.id).toBe('minimal.intake-reason-finalize.fsm');
     expect(fsm.states.map((state) => state.id)).toEqual(['Intake', 'ReasonAct', 'Finalize']);
+    expect(fsm.states[1]).toMatchObject({
+      timeoutPolicy: { timeoutMs: 1000, onTimeout: 'retry' },
+      retryPolicy: { maxAttempts: 2 },
+    });
     expect(fsm.transitions[1]).toMatchObject({ from: 'ReasonAct', to: 'Finalize' });
   });
 
@@ -71,5 +90,21 @@ describe('@hypha/domain workflow compiler', () => {
       metadata: { locale: 'en', requestId: 'req_1' },
       memoryProfileRef: 'local-memory',
     });
+  });
+
+  it('exports Stage1 DomainPack and Workflow spec schemas with minimal examples', () => {
+    expect(validateWorkflowSpec(workflowSpecDefinition.example).id).toBe('workflow.default');
+    expect(validateDomainPackSpec(domainPackSpecDefinition.example).id).toBe('domain.default');
+    expect(domainSpecJsonSchemas.WorkflowSpec.required).toContain('states');
+    expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
+  });
+
+  it('rejects a DomainPack whose default workflow is not declared', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        defaultWorkflow: 'missing',
+      })
+    ).toThrow(/Default workflow not found/);
   });
 });

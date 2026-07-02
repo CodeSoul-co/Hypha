@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { InMemoryEventStore } from '@hypha/core';
-import { GovernedToolRunner, ToolRegistry } from './index';
+import {
+  GovernedToolRunner,
+  ToolRegistry,
+  toolSpecDefinition,
+  toolSpecJsonSchemas,
+  validateToolSpec,
+} from './index';
 
 describe('@hypha/tools governed runner', () => {
   it('records policy and denies high-risk side effects by default', async () => {
@@ -170,5 +176,10 @@ describe('@hypha/tools governed runner', () => {
         expect.objectContaining({ type: 'human.review.requested' }),
       ])
     );
+  });
+
+  it('exports Stage1 ToolSpec schema and minimal example', () => {
+    expect(validateToolSpec(toolSpecDefinition.example).id).toBe('tool.search');
+    expect(toolSpecJsonSchemas.ToolSpec.required).toContain('sideEffectLevel');
   });
 });

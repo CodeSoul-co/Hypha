@@ -1,5 +1,9 @@
 import { ClaudeAdapter } from '../../apps/server/src/core/llm/adapters/ClaudeAdapter';
 import { OpenAIAdapter } from '../../apps/server/src/core/llm/adapters/OpenAIAdapter';
+import {
+  createLLMManagerModelProvider,
+  type LLMManager,
+} from '../../apps/server/src/core/llm/LLMFactory';
 
 describe('LLM Adapters', () => {
   describe('ClaudeAdapter', () => {
@@ -67,6 +71,47 @@ describe('LLM Adapters', () => {
       const model = await adapter.getModel('gpt-4o');
       expect(model).toBeDefined();
       expect(model?.id).toBe('gpt-4o');
+    });
+  });
+
+  describe('LLMManagerModelProvider facade', () => {
+    it('normalizes server chat through the package ModelProvider contract', async () => {
+      const manager = {
+        getDefaultModel: () => 'default-chat',
+        getProviderFromModel: () => 'deepseek',
+        chat: jest.fn(async () => ({
+          id: 'chat_1',
+          model: 'default-chat',
+          provider: 'deepseek',
+          content: 'ok',
+          role: 'assistant',
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          raw: { id: 'raw_1' },
+        })),
+        streamChat: async function* () {
+          yield { type: 'content', content: 'o' };
+          yield { type: 'done', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+        },
+      } as unknown as LLMManager;
+      const provider = createLLMManagerModelProvider(manager);
+
+      await expect(
+        provider.generate({
+          runId: 'run_1',
+          stepId: 'step_1',
+          modelAlias: 'default-chat',
+          input: [{ role: 'user', content: 'hello' }],
+        })
+      ).resolves.toMatchObject({
+        id: 'chat_1',
+        content: 'ok',
+        usage: { totalTokens: 2 },
+      });
+      expect(manager.chat).toHaveBeenCalledWith(
+        [{ role: 'user', content: 'hello', name: undefined }],
+        expect.objectContaining({ model: 'default-chat' })
+      );
     });
   });
 });

@@ -1,7 +1,16 @@
+import { z, type ZodType } from 'zod';
 import {
   createFrameworkEvent,
+  auditPolicySpecSchema,
+  defineSpecSchema,
   denyExternalEffectsPolicyEngine,
+  exportSpecJsonSchemas,
   FrameworkError,
+  humanReviewPolicySpecSchema,
+  jsonSchemaSchema,
+  retryPolicySpecSchema,
+  sideEffectLevelSchema,
+  timeoutPolicySpecSchema,
   type AuditPolicySpec,
   type HumanReviewPolicySpec,
   type JsonSchema,
@@ -350,6 +359,87 @@ export class GovernedToolRunner implements ToolRunner {
 
 export interface ToolProfileSpec extends VersionedSpec {
   tools: ToolSpec[];
+}
+
+export const toolSpecSchema = z.object({
+  id: z.string().min(1),
+  version: z.string().min(1),
+  name: z.string().optional(),
+  description: z.string().min(1),
+  inputSchema: jsonSchemaSchema,
+  outputSchema: jsonSchemaSchema.optional(),
+  sideEffectLevel: sideEffectLevelSchema,
+  permissionScope: z.array(z.string()).optional(),
+  preconditions: z.array(z.string()).optional(),
+  postconditions: z.array(z.string()).optional(),
+  timeoutPolicy: timeoutPolicySpecSchema.optional(),
+  retryPolicy: retryPolicySpecSchema.optional(),
+  auditPolicy: auditPolicySpecSchema.optional(),
+  humanApprovalPolicy: humanReviewPolicySpecSchema.optional(),
+  source: z.enum(['local', 'mcp', 'http', 'plugin']).optional(),
+  sourceRef: z.object({
+    serverId: z.string().optional(),
+    capabilityId: z.string().optional(),
+  }).optional(),
+}) satisfies ZodType<ToolSpec>;
+
+export const toolSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'description', 'inputSchema', 'sideEffectLevel'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    sideEffectLevel: {
+      enum: ['none', 'read', 'write', 'external_effect', 'irreversible'],
+    },
+    permissionScope: { type: 'array', items: { type: 'string' } },
+    preconditions: { type: 'array', items: { type: 'string' } },
+    postconditions: { type: 'array', items: { type: 'string' } },
+    timeoutPolicy: { type: 'object' },
+    retryPolicy: { type: 'object' },
+    auditPolicy: { type: 'object' },
+    humanApprovalPolicy: { type: 'object' },
+    source: { enum: ['local', 'mcp', 'http', 'plugin'] },
+    sourceRef: { type: 'object' },
+  },
+  additionalProperties: false,
+};
+
+export const toolSpecExample: ToolSpec = {
+  id: 'tool.search',
+  version: '0.0.0',
+  name: 'Search',
+  description: 'Search local or external indexes through a governed tool call.',
+  inputSchema: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string' },
+    },
+  },
+  sideEffectLevel: 'read',
+  timeoutPolicy: { timeoutMs: 5000, onTimeout: 'fail' },
+  retryPolicy: { maxAttempts: 2 },
+  auditPolicy: { enabled: true, includeInput: true, includeOutput: true },
+  source: 'local',
+};
+
+export const toolSpecDefinition = defineSpecSchema<ToolSpec>({
+  id: 'ToolSpec',
+  zod: toolSpecSchema,
+  jsonSchema: toolSpecJsonSchema,
+  example: toolSpecExample,
+});
+
+export const toolSpecDefinitions = [toolSpecDefinition] as const;
+export const toolSpecJsonSchemas = exportSpecJsonSchemas(toolSpecDefinitions);
+
+export function validateToolSpec(input: unknown): ToolSpec {
+  return toolSpecDefinition.parse(input);
 }
 
 function validateInput(schema: JsonSchema, input: unknown): string | null {

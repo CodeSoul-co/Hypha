@@ -3,6 +3,9 @@ import {
   MockModelProvider,
   ModelRegistry,
   OpenAICompatibleModelProvider,
+  modelProviderSpecDefinition,
+  modelSpecJsonSchemas,
+  validateModelProviderSpec,
   type ModelTransport,
 } from './index';
 
@@ -67,5 +70,10 @@ describe('@hypha/models provider contracts', () => {
       toolCalls: [{ id: 'call_1', toolId: 'search', arguments: { q: 'hypha' } }],
       usage: { totalTokens: 3 },
     });
+  });
+
+  it('exports Stage1 ModelProviderSpec schema and minimal example', () => {
+    expect(validateModelProviderSpec(modelProviderSpecDefinition.example).id).toBe('provider.default');
+    expect(modelSpecJsonSchemas.ModelProviderSpec.required).toContain('type');
   });
 });

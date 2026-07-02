@@ -1,4 +1,14 @@
-import type { JsonSchema, SpecMetadata, VersionedSpec } from '@hypha/core';
+import { z, type ZodType } from 'zod';
+import {
+  defineSpecSchema,
+  exportSpecJsonSchemas,
+  jsonSchemaSchema,
+  specMetadataSchema,
+  versionedSpecSchema,
+  type JsonSchema,
+  type SpecMetadata,
+  type VersionedSpec,
+} from '@hypha/core';
 
 export interface SkillRef {
   id: string;
@@ -99,4 +109,97 @@ function shouldActivate(skill: SkillSpec, context: SkillResolutionContext): bool
   }
   const input = context.inputText?.toLowerCase() ?? '';
   return Boolean(policy.patterns?.some((pattern) => input.includes(pattern.toLowerCase())));
+}
+
+export const skillRefSchema = z.object({
+  id: z.string().min(1),
+  version: z.string().optional(),
+});
+
+export const skillActivationPolicySchema = z.object({
+  mode: z.enum(['always', 'keyword', 'intent', 'manual']),
+  patterns: z.array(z.string()).optional(),
+});
+
+export const skillAssetRefSchema = z.object({
+  path: z.string().min(1),
+  type: z.enum(['reference', 'script', 'asset']),
+  loadPolicy: z.enum(['frontmatter_only', 'on_activation', 'never']).optional(),
+});
+
+export const skillSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    description: z.string().min(1),
+    activationPolicy: skillActivationPolicySchema.optional(),
+    instructions: z.string().optional(),
+    references: z.array(skillAssetRefSchema).optional(),
+    scripts: z.array(skillAssetRefSchema).optional(),
+    assets: z.array(skillAssetRefSchema).optional(),
+    allowedTools: z.array(z.string()).optional(),
+    requiredTools: z.array(z.string()).optional(),
+    requiredMCPServers: z.array(z.string()).optional(),
+    memoryAccessPolicy: z.string().optional(),
+    sideEffectPolicy: z.string().optional(),
+    contextBudget: z.number().int().positive().optional(),
+    inputSchema: jsonSchemaSchema.optional(),
+    outputContract: jsonSchemaSchema.optional(),
+    evaluationCases: z.array(z.string()).optional(),
+    provenance: z.record(z.unknown()).optional(),
+    trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
+  }) satisfies ZodType<SkillSpec>;
+
+export const skillSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'description'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    activationPolicy: { type: 'object' },
+    instructions: { type: 'string' },
+    references: { type: 'array', items: { type: 'object' } },
+    scripts: { type: 'array', items: { type: 'object' } },
+    assets: { type: 'array', items: { type: 'object' } },
+    allowedTools: { type: 'array', items: { type: 'string' } },
+    requiredTools: { type: 'array', items: { type: 'string' } },
+    requiredMCPServers: { type: 'array', items: { type: 'string' } },
+    memoryAccessPolicy: { type: 'string' },
+    sideEffectPolicy: { type: 'string' },
+    contextBudget: { type: 'number' },
+    inputSchema: { type: 'object' },
+    outputContract: { type: 'object' },
+    evaluationCases: { type: 'array', items: { type: 'string' } },
+    provenance: { type: 'object' },
+    trustLevel: { enum: ['trusted', 'reviewed', 'untrusted'] },
+  },
+  additionalProperties: false,
+};
+
+export const skillSpecExample: SkillSpec = {
+  id: 'skill.context-enrichment',
+  version: '0.0.0',
+  name: 'Context Enrichment',
+  description: 'Adds relevant context before reasoning.',
+  activationPolicy: { mode: 'always' },
+  allowedTools: ['tool.search'],
+  contextBudget: 2000,
+  inputSchema: { type: 'object' },
+  outputContract: { type: 'object' },
+  trustLevel: 'reviewed',
+};
+
+export const skillSpecDefinition = defineSpecSchema<SkillSpec>({
+  id: 'SkillSpec',
+  zod: skillSpecSchema,
+  jsonSchema: skillSpecJsonSchema,
+  example: skillSpecExample,
+});
+
+export const skillSpecDefinitions = [skillSpecDefinition] as const;
+export const skillSpecJsonSchemas = exportSpecJsonSchemas(skillSpecDefinitions);
+
+export function validateSkillSpec(input: unknown): SkillSpec {
+  return skillSpecDefinition.parse(input);
 }

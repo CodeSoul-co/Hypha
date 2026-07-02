@@ -4,7 +4,11 @@ import {
   denyExternalEffectsPolicyEngine,
   FrameworkError,
   formatFrameworkId,
+  coreSpecJsonSchemas,
   InMemoryEventStore,
+  traceSpecDefinition,
+  validateHarnessedAgentSystemSpec,
+  validateTraceSpec,
 } from './index';
 
 describe('@hypha/core contracts', () => {
@@ -44,5 +48,20 @@ describe('@hypha/core contracts', () => {
         sideEffectLevel: 'irreversible',
       })
     ).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('exports parseable Stage1 core spec schemas and examples', () => {
+    expect(validateTraceSpec(traceSpecDefinition.example)).toMatchObject({
+      id: 'trace.default',
+    });
+    expect(validateHarnessedAgentSystemSpec({
+      id: 'system.default',
+      version: '0.0.0',
+      agentRef: { id: 'agent.default' },
+      fsmProcessRef: { id: 'fsm.react.default' },
+      traceRef: { id: 'trace.default' },
+    })).toMatchObject({ id: 'system.default' });
+    expect(coreSpecJsonSchemas.TraceSpec.required).toContain('eventTypes');
+    expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.required).toContain('agentRef');
   });
 });

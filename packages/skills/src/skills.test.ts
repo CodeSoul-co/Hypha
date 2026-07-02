@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { SkillRegistry, SkillResolver } from './index';
+import {
+  SkillRegistry,
+  SkillResolver,
+  skillSpecDefinition,
+  skillSpecJsonSchemas,
+  validateSkillSpec,
+} from './index';
 
 describe('@hypha/skills resolver', () => {
   it('resolves only agent-bound active skills and loads activation references', () => {
@@ -21,5 +27,10 @@ describe('@hypha/skills resolver', () => {
 
     expect(resolved).toHaveLength(1);
     expect(resolved[0].loadedReferences[0].path).toBe('references/checklist.md');
+  });
+
+  it('exports Stage1 SkillSpec schema and minimal example', () => {
+    expect(validateSkillSpec(skillSpecDefinition.example).id).toBe('skill.context-enrichment');
+    expect(skillSpecJsonSchemas.SkillSpec.required).toContain('description');
   });
 });

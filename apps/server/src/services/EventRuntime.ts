@@ -1,10 +1,10 @@
 import path from 'path';
 import { SQLiteEventStore } from '@hypha/adapters-local';
-import type { FrameworkEvent, FrameworkEventType, SpecRef } from '@hypha/core';
+import { FrameworkError, type FrameworkEvent, type FrameworkEventType, type SpecRef } from '@hypha/core';
 import { EventFirstRuntime } from '@hypha/harness';
 import { compileWorkflowToFSM, type DomainPackSpec, type WorkflowSpec } from '@hypha/domain';
 import {
-  applyTransition,
+  applyTransitionWithRuntimePolicy,
   createInitialSnapshot,
   type FSMProcessSpec,
   type FSMSnapshot,
@@ -19,6 +19,7 @@ import {
   type InferenceResponse,
   type ReasoningOptions,
 } from '@hypha/inference';
+import type { ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import { GovernedToolRunner, ToolRegistry, type ToolSpec } from '@hypha/tools';
 import type {
   StageResult,
@@ -27,7 +28,12 @@ import type {
   WorkflowExecutionContext,
   WorkflowStage,
 } from '../core/workflow/types';
-import { getLLMManager } from '../core/llm/LLMFactory';
+import {
+  createLLMManagerModelProvider,
+  getLLMManager,
+  modelResponseToChatResponse,
+  modelStreamEventToStreamChunk,
+} from '../core/llm/LLMFactory';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
@@ -78,21 +84,33 @@ interface LLMInferenceInput {
 class ServerLLMInferenceProvider implements InferenceProvider {
   readonly id = 'server-llm';
 
+  constructor(private readonly modelProvider: ModelProvider = createLLMManagerModelProvider()) {}
+
   async infer(request: InferenceRequest<LLMInferenceInput>): Promise<InferenceResponse<ChatResponse>> {
     const systemPrompt = [
       request.resolvedPrefixContent,
       request.input.options?.systemPrompt,
     ].filter(Boolean).join('\n\n') || undefined;
-    const response = await getLLMManager().chat(request.input.messages, {
-      ...request.input.options,
-      systemPrompt,
+    const modelResponse = await this.modelProvider.generate({
+      runId: request.runId,
+      stepId: request.stepId,
+      modelAlias: request.input.options?.model ?? request.modelAlias,
+      instructions: systemPrompt,
+      input: request.input.messages,
+      tools: request.input.options?.tools?.map(legacyToolToModelTool),
+      temperature: request.input.options?.temperature,
+      maxTokens: request.input.options?.maxTokens,
+      metadata: request.metadata,
+    });
+    const response = modelResponseToChatResponse(modelResponse, {
       model: request.input.options?.model ?? request.modelAlias,
+      provider: getLLMManager().getProviderFromModel(request.input.options?.model ?? request.modelAlias),
     });
     return {
       id: response.id,
       output: response,
       usage: response.usage,
-      raw: response.raw,
+      raw: modelResponse.raw,
     };
   }
 
@@ -102,20 +120,39 @@ class ServerLLMInferenceProvider implements InferenceProvider {
       request.input.options?.systemPrompt,
     ].filter(Boolean).join('\n\n') || undefined;
     let index = 0;
-    for await (const chunk of getLLMManager().streamChat(request.input.messages, {
-      ...request.input.options,
-      systemPrompt,
-      model: request.input.options?.model ?? request.modelAlias,
+    if (!this.modelProvider.stream) {
+      throw new Error(`Model provider does not support streaming: ${this.modelProvider.id}`);
+    }
+    for await (const event of this.modelProvider.stream({
+      runId: request.runId,
+      stepId: request.stepId,
+      modelAlias: request.input.options?.model ?? request.modelAlias,
+      instructions: systemPrompt,
+      input: request.input.messages,
+      tools: request.input.options?.tools?.map(legacyToolToModelTool),
+      temperature: request.input.options?.temperature,
+      maxTokens: request.input.options?.maxTokens,
+      metadata: request.metadata,
     })) {
       index += 1;
+      const chunk = modelStreamEventToStreamChunk(event);
       yield {
         id: `${request.runId}:${request.stepId}:stream:${index}`,
         output: chunk,
         usage: chunk.usage,
-        raw: chunk,
+        raw: event,
       };
     }
   }
+}
+
+function legacyToolToModelTool(tool: NonNullable<ChatOptions['tools']>[number]): ModelToolDescriptor {
+  return {
+    id: tool.name,
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  };
 }
 
 class EventRuntimeService {
@@ -191,7 +228,18 @@ class EventRuntimeService {
       fsmState: from,
     });
     try {
-      const next = applyTransition(context.fsm, context.snapshot, to);
+      const next = await applyTransitionWithRuntimePolicy(context.fsm, context.snapshot, to, {
+        userId: context.userId,
+        stepId: String(payload.stepId ?? to),
+        guardContext: {
+          input: payload,
+          variables: payload,
+          metadata: {
+            clientSessionId: context.clientSessionId,
+            runtimeSessionId: context.sessionId,
+          },
+        },
+      });
       await this.append(runId, 'fsm.state.exited', { stateId: from }, undefined, {
         fsmState: from,
       });
@@ -204,6 +252,13 @@ class EventRuntimeService {
       context.snapshot = next;
       this.runs.set(runId, context);
     } catch (error) {
+      if (error instanceof FrameworkError && error.code === 'FSM_HUMAN_REVIEW_REQUIRED') {
+        await this.append(runId, 'human.review.requested', {
+          from,
+          to,
+          reason: error.message,
+        });
+      }
       await this.append(runId, 'fsm.transition.rejected', {
         from,
         to,

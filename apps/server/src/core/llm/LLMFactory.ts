@@ -1,4 +1,15 @@
 import { ILLMAdapter, LLMProvider, ModelInfo, ChatOptions, ChatResponse, LLMMessage, StreamChunk } from './types';
+import type {
+  ModelCapabilities,
+  ModelMessage,
+  ModelProvider as HyphaModelProvider,
+  ModelRequest as HyphaModelRequest,
+  ModelResponse as HyphaModelResponse,
+  ModelStreamEvent,
+  ModelToolDescriptor,
+  ModelUsage,
+  NormalizedToolCall,
+} from '@hypha/models';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
 import { OpenAIAdapter } from './adapters/OpenAIAdapter';
 import { GeminiAdapter } from './adapters/GeminiAdapter';
@@ -356,6 +367,184 @@ export class LLMManager {
     }
     return this.defaultProvider;
   }
+}
+
+export class LLMManagerModelProvider implements HyphaModelProvider<HyphaModelRequest, HyphaModelResponse> {
+  readonly id = 'server-llm-manager';
+
+  constructor(private readonly manager: LLMManager) {}
+
+  capabilities(): ModelCapabilities {
+    return {
+      chat: true,
+      streaming: true,
+      toolCalling: true,
+      jsonMode: true,
+      reasoning: true,
+    };
+  }
+
+  async generate(request: HyphaModelRequest): Promise<HyphaModelResponse> {
+    const response = await this.manager.chat(modelMessagesToLLMMessages(request.input), {
+      model: request.modelAlias || this.manager.getDefaultModel(),
+      systemPrompt: request.instructions,
+      tools: request.tools?.map(modelToolToLegacyTool),
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+    });
+    return chatResponseToModelResponse(response);
+  }
+
+  async *stream(request: HyphaModelRequest): AsyncIterable<ModelStreamEvent> {
+    for await (const chunk of this.manager.streamChat(modelMessagesToLLMMessages(request.input), {
+      model: request.modelAlias || this.manager.getDefaultModel(),
+      systemPrompt: request.instructions,
+      tools: request.tools?.map(modelToolToLegacyTool),
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+    })) {
+      yield streamChunkToModelStreamEvent(chunk);
+    }
+  }
+}
+
+export function createLLMManagerModelProvider(
+  manager: LLMManager = getLLMManager()
+): HyphaModelProvider<HyphaModelRequest, HyphaModelResponse> {
+  return new LLMManagerModelProvider(manager);
+}
+
+export function chatResponseToModelResponse(response: ChatResponse): HyphaModelResponse {
+  return {
+    id: response.id,
+    content: response.content,
+    toolCalls: response.toolCalls?.map((toolCall): NormalizedToolCall => ({
+      id: toolCall.id,
+      toolId: toolCall.name,
+      arguments: toolCall.input,
+    })),
+    usage: response.usage ? legacyUsageToModelUsage(response.usage) : undefined,
+    raw: response,
+  };
+}
+
+export function modelResponseToChatResponse(
+  response: HyphaModelResponse,
+  fallback: { model: string; provider: string }
+): ChatResponse {
+  if (isChatResponse(response.raw)) {
+    return response.raw;
+  }
+  return {
+    id: response.id,
+    model: fallback.model,
+    provider: fallback.provider as LLMProvider,
+    content: typeof response.content === 'string' ? response.content : JSON.stringify(response.content),
+    role: 'assistant',
+    finishReason: response.toolCalls?.length ? 'tool_use' : 'stop',
+    usage: response.usage
+      ? {
+          inputTokens: response.usage.inputTokens ?? 0,
+          outputTokens: response.usage.outputTokens ?? 0,
+          totalTokens: response.usage.totalTokens ?? 0,
+        }
+      : undefined,
+    toolCalls: response.toolCalls?.map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.toolId,
+      input: toolCall.arguments,
+    })),
+    raw: response.raw,
+  };
+}
+
+export function modelStreamEventToStreamChunk(event: ModelStreamEvent): StreamChunk {
+  switch (event.type) {
+    case 'delta':
+      return { type: 'content', content: String(event.content ?? '') };
+    case 'tool_call':
+      return {
+        type: 'tool_call',
+        toolCall: event.toolCall
+          ? { id: event.toolCall.id, name: event.toolCall.toolId, input: event.toolCall.arguments }
+          : undefined,
+      };
+    case 'usage':
+      return { type: 'done', usage: event.usage ? modelUsageToLegacyUsage(event.usage) : undefined };
+    case 'done':
+      return { type: 'done', usage: event.usage ? modelUsageToLegacyUsage(event.usage) : undefined };
+    case 'error':
+      return { type: 'error', error: event.error instanceof Error ? event.error.message : String(event.error) };
+  }
+}
+
+function modelMessagesToLLMMessages(input: HyphaModelRequest['input']): LLMMessage[] {
+  const messages = Array.isArray(input)
+    ? input as ModelMessage[]
+    : [{ role: 'user' as const, content: String(input) }];
+  return messages.map((message) => ({
+    role: message.role === 'tool' ? 'assistant' : message.role,
+    content: message.content,
+    name: message.name,
+  }));
+}
+
+function modelToolToLegacyTool(tool: ModelToolDescriptor): NonNullable<ChatOptions['tools']>[number] {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: {
+      type: 'object',
+      properties: tool.inputSchema.properties as Record<string, any> | undefined,
+      required: tool.inputSchema.required,
+    },
+  };
+}
+
+function streamChunkToModelStreamEvent(chunk: StreamChunk): ModelStreamEvent {
+  switch (chunk.type) {
+    case 'content':
+      return { type: 'delta', content: chunk.content ?? '' };
+    case 'tool_call':
+      return {
+        type: 'tool_call',
+        toolCall: chunk.toolCall
+          ? { id: chunk.toolCall.id, toolId: chunk.toolCall.name, arguments: chunk.toolCall.input }
+          : undefined,
+      };
+    case 'done':
+      return { type: 'done', usage: chunk.usage ? legacyUsageToModelUsage(chunk.usage) : undefined };
+    case 'error':
+      return { type: 'error', error: chunk.error };
+    case 'tool_result':
+      return { type: 'delta', content: chunk.content ?? '' };
+  }
+}
+
+function legacyUsageToModelUsage(usage: NonNullable<ChatResponse['usage']>): ModelUsage {
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+  };
+}
+
+function modelUsageToLegacyUsage(usage: ModelUsage): NonNullable<ChatResponse['usage']> {
+  return {
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+  };
+}
+
+function isChatResponse(value: unknown): value is ChatResponse {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && 'role' in value
+    && 'finishReason' in value
+    && 'provider' in value
+  );
 }
 
 // Singleton instance

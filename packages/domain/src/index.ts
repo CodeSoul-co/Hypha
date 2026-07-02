@@ -1,14 +1,33 @@
+import { z, type ZodType } from 'zod';
 import type {
   DeploymentSpec,
   EvaluationSpec,
+  HumanReviewPolicySpec,
   JsonSchema,
   OutputContractSpec,
   PolicySpec,
   RegressionSpec,
+  RetryPolicySpec,
   RiskLevel,
   SpecMetadata,
   SpecRef,
+  TimeoutPolicySpec,
   VersionedSpec,
+} from '@hypha/core';
+import {
+  defineSpecSchema,
+  exportSpecJsonSchemas,
+  humanReviewPolicySpecSchema,
+  jsonSchemaSchema,
+  outputContractSpecSchema,
+  policySpecSchema,
+  regressionSpecSchema,
+  riskLevelSchema,
+  retryPolicySpecSchema,
+  specMetadataSchema,
+  specRefSchema,
+  timeoutPolicySpecSchema,
+  versionedSpecSchema,
 } from '@hypha/core';
 import type { FSMProcessSpec, FSMStateSpec, FSMTransitionSpec } from '@hypha/fsm';
 import type { MCPIntegrationSpec } from '@hypha/mcp';
@@ -102,8 +121,11 @@ export interface WorkflowStateSpec extends SpecMetadata {
   policyRefs?: string[];
   evaluationRefs?: string[];
   humanReviewRef?: string;
+  humanReviewPolicy?: HumanReviewPolicySpec;
   timeoutMs?: number;
+  timeoutPolicy?: TimeoutPolicySpec;
   retryPolicyRef?: string;
+  retryPolicy?: RetryPolicySpec;
 }
 
 export interface WorkflowTransitionSpec {
@@ -154,7 +176,10 @@ export function compileWorkflowToFSM(
     name: state.name,
     description: state.description ?? state.goal,
     kind: workflow.terminalStates.includes(state.id) ? inferTerminalKind(state.id) : 'domain',
-    timeoutPolicy: state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined,
+    timeoutPolicy: state.timeoutPolicy ?? (state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined),
+    retryPolicy: state.retryPolicy,
+    humanReviewPolicy: state.humanReviewPolicy,
+    policyRefs: state.policyRefs,
     traceEvents: [`workflow.state.${state.id}`],
   }));
   const transitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
@@ -206,4 +231,242 @@ function inferTerminalKind(stateId: string): FSMStateSpec['kind'] {
   if (lower.includes('fail')) return 'failed';
   if (lower.includes('cancel')) return 'cancelled';
   return 'completed';
+}
+
+export const riskProfileSpecSchema = z.object({
+  defaultRiskLevel: riskLevelSchema,
+  escalationPolicyRef: z.string().optional(),
+});
+
+export const sessionProfileSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    metadataSchema: jsonSchemaSchema.optional(),
+    defaultMetadata: z.record(z.unknown()).optional(),
+    defaultMemoryProfileRef: z.string().optional(),
+    defaultToolProfileRef: z.string().optional(),
+    defaultMCPProfileRef: z.string().optional(),
+    defaultSkillPolicyRef: z.string().optional(),
+    defaultPolicyRefs: z.array(z.string()).optional(),
+  }) satisfies ZodType<SessionProfileSpec>;
+
+export const taskSchemaSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    taskType: z.string().min(1),
+    inputSchema: jsonSchemaSchema,
+    constraintsSchema: jsonSchemaSchema.optional(),
+    acceptanceCriteriaSchema: jsonSchemaSchema.optional(),
+    outputContractRef: z.string().min(1),
+    riskProfile: riskProfileSpecSchema.optional(),
+    defaultWorkflowRef: z.string().optional(),
+    defaultSkillRefs: z.array(specRefSchema).optional(),
+  }) satisfies ZodType<TaskSchemaSpec>;
+
+export const workflowStateSpecSchema = specMetadataSchema.extend({
+  id: z.string().min(1),
+  goal: z.string().min(1),
+  inputContract: jsonSchemaSchema.optional(),
+  outputContract: jsonSchemaSchema.optional(),
+  allowedTools: z.array(z.string()).optional(),
+  allowedSkills: z.array(z.string()).optional(),
+  allowedMCPProfiles: z.array(z.string()).optional(),
+  memoryPolicyRef: z.string().optional(),
+  policyRefs: z.array(z.string()).optional(),
+  evaluationRefs: z.array(z.string()).optional(),
+  humanReviewRef: z.string().optional(),
+  humanReviewPolicy: humanReviewPolicySpecSchema.optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  timeoutPolicy: timeoutPolicySpecSchema.optional(),
+  retryPolicyRef: z.string().optional(),
+  retryPolicy: retryPolicySpecSchema.optional(),
+});
+
+export const workflowTransitionSpecSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+  guard: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export const workflowSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    initialState: z.string().min(1),
+    terminalStates: z.array(z.string().min(1)).min(1),
+    states: z.array(workflowStateSpecSchema).min(1),
+    transitions: z.array(workflowTransitionSpecSchema),
+  }) satisfies ZodType<WorkflowSpec>;
+
+export const domainPackSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    name: z.string().min(1),
+    taskSchemas: z.array(taskSchemaSpecSchema),
+    outputContracts: z.array(outputContractSpecSchema).optional(),
+    sessionProfiles: z.array(sessionProfileSpecSchema).optional(),
+    workflows: z.array(workflowSpecSchema).min(1),
+    defaultWorkflow: z.string().optional(),
+    allowedSkills: z.array(specRefSchema).optional(),
+    defaultSkills: z.array(specRefSchema).optional(),
+    tools: z.array(z.any()).optional(),
+    mcpProfiles: z.array(z.any()).optional(),
+    memoryProfiles: z.array(z.any()).optional(),
+    policies: z.array(policySpecSchema).optional(),
+    evaluationProfiles: z.array(z.any()).optional(),
+    regressionCases: z.array(regressionSpecSchema).optional(),
+    deploymentProfile: z.any().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }) satisfies ZodType<DomainPackSpec>;
+
+export const workflowSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'initialState', 'terminalStates', 'states', 'transitions'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    initialState: { type: 'string' },
+    terminalStates: { type: 'array', items: { type: 'string' } },
+    states: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'goal'],
+        properties: {
+          id: { type: 'string' },
+          goal: { type: 'string' },
+          allowedTools: { type: 'array', items: { type: 'string' } },
+          allowedSkills: { type: 'array', items: { type: 'string' } },
+          policyRefs: { type: 'array', items: { type: 'string' } },
+          humanReviewPolicy: { type: 'object' },
+          timeoutPolicy: { type: 'object' },
+          retryPolicy: { type: 'object' },
+        },
+      },
+    },
+    transitions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['from', 'to'],
+        properties: {
+          from: { type: 'string' },
+          to: { type: 'string' },
+          guard: { type: 'string' },
+        },
+      },
+    },
+  },
+  additionalProperties: false,
+};
+
+export const domainPackSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'name', 'taskSchemas', 'workflows'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    taskSchemas: { type: 'array', items: { type: 'object' } },
+    outputContracts: { type: 'array', items: { type: 'object' } },
+    sessionProfiles: { type: 'array', items: { type: 'object' } },
+    workflows: { type: 'array', items: workflowSpecJsonSchema },
+    defaultWorkflow: { type: 'string' },
+    allowedSkills: { type: 'array', items: { type: 'object' } },
+    defaultSkills: { type: 'array', items: { type: 'object' } },
+    tools: { type: 'array', items: { type: 'object' } },
+    mcpProfiles: { type: 'array', items: { type: 'object' } },
+    memoryProfiles: { type: 'array', items: { type: 'object' } },
+    policies: { type: 'array', items: { type: 'object' } },
+    metadata: { type: 'object' },
+  },
+  additionalProperties: false,
+};
+
+export const workflowSpecExample: WorkflowSpec = {
+  id: 'workflow.default',
+  version: '0.0.0',
+  name: 'Default Workflow',
+  initialState: 'Intake',
+  terminalStates: ['Completed', 'Failed'],
+  states: [
+    { id: 'Intake', goal: 'Normalize task input.' },
+    {
+      id: 'Reasoning',
+      goal: 'Reason and select the next action.',
+      timeoutPolicy: { timeoutMs: 30000, onTimeout: 'fail' },
+      retryPolicy: { maxAttempts: 2 },
+    },
+    { id: 'Completed', goal: 'Return final output.' },
+    { id: 'Failed', goal: 'Record failure.' },
+  ],
+  transitions: [
+    { from: 'Intake', to: 'Reasoning', guard: 'input.ready == true' },
+    { from: 'Reasoning', to: 'Completed' },
+    { from: 'Reasoning', to: 'Failed' },
+  ],
+};
+
+export const domainPackSpecExample: DomainPackSpec = {
+  id: 'domain.default',
+  version: '0.0.0',
+  name: 'Default Domain Pack',
+  taskSchemas: [
+    {
+      id: 'task.default',
+      version: '0.0.0',
+      taskType: 'default',
+      inputSchema: { type: 'object' },
+      outputContractRef: 'output.default',
+      defaultWorkflowRef: 'workflow.default',
+    },
+  ],
+  outputContracts: [
+    {
+      id: 'output.default',
+      version: '0.0.0',
+      schema: { type: 'object' },
+    },
+  ],
+  sessionProfiles: [
+    {
+      id: 'session.default',
+      version: '0.0.0',
+      defaultMetadata: { mode: 'single-user' },
+    },
+  ],
+  workflows: [workflowSpecExample],
+  defaultWorkflow: workflowSpecExample.id,
+};
+
+export const workflowSpecDefinition = defineSpecSchema<WorkflowSpec>({
+  id: 'WorkflowSpec',
+  zod: workflowSpecSchema,
+  jsonSchema: workflowSpecJsonSchema,
+  example: workflowSpecExample,
+});
+
+export const domainPackSpecDefinition = defineSpecSchema<DomainPackSpec>({
+  id: 'DomainPackSpec',
+  zod: domainPackSpecSchema,
+  jsonSchema: domainPackSpecJsonSchema,
+  example: domainPackSpecExample,
+});
+
+export const domainSpecDefinitions = [workflowSpecDefinition, domainPackSpecDefinition] as const;
+export const domainSpecJsonSchemas = exportSpecJsonSchemas(domainSpecDefinitions);
+
+export function validateWorkflowSpec(input: unknown): WorkflowSpec {
+  return workflowSpecDefinition.parse(input);
+}
+
+export function validateDomainPackSpec(input: unknown): DomainPackSpec {
+  const domainPack = domainPackSpecDefinition.parse(input);
+  if (domainPack.defaultWorkflow && !domainPack.workflows.some((workflow) => workflow.id === domainPack.defaultWorkflow)) {
+    throw new Error(`Default workflow not found in domain pack: ${domainPack.defaultWorkflow}`);
+  }
+  return domainPack;
 }

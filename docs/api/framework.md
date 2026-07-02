@@ -2,6 +2,12 @@
 
 The framework API is exposed through the TypeScript packages under `packages/*`. Application surfaces such as the HTTP server and CLI call these contracts instead of defining runtime behavior directly.
 
+## Spec Schemas
+
+Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
+
+Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+
 ## DomainPack
 
 `DomainPackSpec` declares domain-level capabilities and contracts.
@@ -73,6 +79,14 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 | `transitions` | `WorkflowTransitionSpec[]` | Allowed state transitions and guards. |
 
 `compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, and `terminalStates`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, and `updatedAt`.
+
+FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, and simple equality checks. Transitions can be rejected by guards, policy, or human-review requirements.
+
+## ReAct Kernel
+
+`ReActAgentSpec` defines an agent's model alias, instructions, skill refs, tool refs, memory profile, policy refs, and optional context spec.
+
+`ReActRunner` executes an explicit loop through observe, reason, model inference, action selection, policy check, tool action, observation, verification, memory sync, and terminal completion or human review. The runner requires an `InferenceProvider`, can use a `ToolRunner`, and uses an explicit `maxIterations` limit.
 
 ## Model Providers
 

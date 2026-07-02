@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyTransition,
+  applyTransitionWithRuntimePolicy,
+  canRetryState,
   createInitialSnapshot,
+  evaluateGuardExpression,
+  evaluateStateTimeout,
+  fsmProcessSpecDefinition,
+  fsmSpecJsonSchemas,
   getAllowedTransitions,
+  parseFSMProcessSpec,
   validateFSMProcessSpec,
   type FSMProcessSpec,
 } from './index';
@@ -39,5 +46,80 @@ describe('@hypha/fsm runtime contracts', () => {
     expect(() => applyTransition(processSpec, initial, 'Completed')).toThrow(
       /Transition not allowed/
     );
+  });
+
+  it('evaluates deterministic transition guards without eval', () => {
+    const guarded: FSMProcessSpec = {
+      ...processSpec,
+      transitions: [
+        { from: 'Idle', to: 'Reasoning', guard: 'input.ready == true' },
+        { from: 'Reasoning', to: 'Completed' },
+      ],
+    };
+    const initial = createInitialSnapshot(guarded, 'run_1');
+
+    expect(() =>
+      applyTransition(guarded, initial, 'Reasoning', {
+        now: '2026-07-02T00:00:01.000Z',
+        guardContext: { input: { ready: false } },
+      })
+    ).toThrow(/Transition guard rejected/);
+
+    expect(
+      applyTransition(guarded, initial, 'Reasoning', {
+        guardContext: { input: { ready: true } },
+      }).currentState
+    ).toBe('Reasoning');
+    expect(evaluateGuardExpression('variables.score == 3', { variables: { score: 3 } })).toBe(true);
+  });
+
+  it('enforces transition policy and human review state semantics', async () => {
+    const reviewProcess: FSMProcessSpec = {
+      ...processSpec,
+      states: [
+        ...processSpec.states,
+        { id: 'HumanReview', kind: 'human_review', humanReviewPolicy: { required: true } },
+      ],
+      transitions: [
+        ...processSpec.transitions,
+        { from: 'Reasoning', to: 'HumanReview' },
+      ],
+    };
+    const initial = applyTransition(reviewProcess, createInitialSnapshot(reviewProcess, 'run_1'), 'Reasoning');
+
+    await expect(
+      applyTransitionWithRuntimePolicy(reviewProcess, initial, 'HumanReview')
+    ).rejects.toThrow(/requires human review/);
+
+    await expect(
+      applyTransitionWithRuntimePolicy(reviewProcess, initial, 'Completed', {
+        policy: {
+          async evaluate() {
+            return { allowed: false, reason: 'blocked by process policy' };
+          },
+        },
+      })
+    ).rejects.toThrow(/blocked by process policy/);
+  });
+
+  it('exposes timeout, retry, schema export, and minimal example contracts', () => {
+    const timed: FSMProcessSpec = {
+      ...processSpec,
+      states: [
+        { id: 'Idle', kind: 'idle', timeoutPolicy: { timeoutMs: 100, onTimeout: 'retry' }, retryPolicy: { maxAttempts: 2 } },
+        { id: 'Reasoning', kind: 'reasoning' },
+        { id: 'Completed', kind: 'completed' },
+      ],
+    };
+    const snapshot = createInitialSnapshot(timed, 'run_1', '2026-07-02T00:00:00.000Z');
+
+    expect(evaluateStateTimeout(timed, snapshot, '2026-07-02T00:00:00.101Z')).toMatchObject({
+      timedOut: true,
+      action: 'retry',
+    });
+    expect(canRetryState(timed, 'Idle', 1)).toBe(true);
+    expect(canRetryState(timed, 'Idle', 2)).toBe(false);
+    expect(parseFSMProcessSpec(fsmProcessSpecDefinition.example).id).toBe('fsm.react.default');
+    expect(fsmSpecJsonSchemas.FSMProcessSpec.required).toContain('states');
   });
 });

@@ -1,4 +1,15 @@
-import type { JsonSchema, PolicyDecision, SpecMetadata, VersionedSpec } from '@hypha/core';
+import { z, type ZodType } from 'zod';
+import {
+  defineSpecSchema,
+  exportSpecJsonSchemas,
+  jsonSchemaSchema,
+  specMetadataSchema,
+  versionedSpecSchema,
+  type JsonSchema,
+  type PolicyDecision,
+  type SpecMetadata,
+  type VersionedSpec,
+} from '@hypha/core';
 
 export interface MemoryScope {
   workspaceId?: string;
@@ -183,6 +194,105 @@ export class MemoryManager {
   ): Promise<MemoryWriteResult> {
     return this.provider.write(scope, record, policy);
   }
+}
+
+export const memoryTypeSchema = z.enum([
+  'working',
+  'episodic',
+  'semantic',
+  'procedural',
+  'artifact',
+  'governance',
+]);
+
+export const memoryProviderProfileSchema = z.object({
+  id: z.string().min(1),
+  type: z.enum(['structured', 'vector', 'artifact', 'hybrid']),
+  providerRef: z.string().min(1),
+  configSchema: jsonSchemaSchema.optional(),
+});
+
+export const memorySpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    providers: z.array(memoryProviderProfileSchema).min(1),
+    memoryTypes: z.array(memoryTypeSchema).min(1),
+    readPolicy: z.string().optional(),
+    writePolicy: z.string().optional(),
+    freshnessPolicy: z.string().optional(),
+    provenancePolicy: z.enum(['required', 'best_effort']).optional(),
+    retentionPolicy: z.string().optional(),
+    privacyPolicy: z.string().optional(),
+    retrievalStrategy: z.string().optional(),
+  }) satisfies ZodType<MemorySpec>;
+
+export const memorySpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'providers', 'memoryTypes'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    providers: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'type', 'providerRef'],
+        properties: {
+          id: { type: 'string' },
+          type: { enum: ['structured', 'vector', 'artifact', 'hybrid'] },
+          providerRef: { type: 'string' },
+          configSchema: { type: 'object' },
+        },
+      },
+    },
+    memoryTypes: {
+      type: 'array',
+      items: {
+        enum: ['working', 'episodic', 'semantic', 'procedural', 'artifact', 'governance'],
+      },
+    },
+    readPolicy: { type: 'string' },
+    writePolicy: { type: 'string' },
+    freshnessPolicy: { type: 'string' },
+    provenancePolicy: { enum: ['required', 'best_effort'] },
+    retentionPolicy: { type: 'string' },
+    privacyPolicy: { type: 'string' },
+    retrievalStrategy: { type: 'string' },
+  },
+  additionalProperties: false,
+};
+
+export const memorySpecExample: MemorySpec = {
+  id: 'memory.default',
+  version: '0.0.0',
+  name: 'Default Hybrid Memory',
+  providers: [
+    {
+      id: 'local-hybrid',
+      type: 'hybrid',
+      providerRef: 'local',
+      configSchema: { type: 'object' },
+    },
+  ],
+  memoryTypes: ['working', 'episodic', 'semantic', 'artifact'],
+  provenancePolicy: 'required',
+  retrievalStrategy: 'hybrid-recent-first',
+};
+
+export const memorySpecDefinition = defineSpecSchema<MemorySpec>({
+  id: 'MemorySpec',
+  zod: memorySpecSchema,
+  jsonSchema: memorySpecJsonSchema,
+  example: memorySpecExample,
+});
+
+export const memorySpecDefinitions = [memorySpecDefinition] as const;
+export const memorySpecJsonSchemas = exportSpecJsonSchemas(memorySpecDefinitions);
+
+export function validateMemorySpec(input: unknown): MemorySpec {
+  return memorySpecDefinition.parse(input);
 }
 
 export * from './hybrid';
