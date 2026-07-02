@@ -212,6 +212,8 @@ The current Express API service lives in `apps/server/src`. The CLI example live
 
 `packages/inference` is reserved for agent-internal inference orchestration, including future prefix and KV cache management.
 
+Stage 0 package contracts now cover core specs/events/policy, ReAct kernel contracts, FSM state transitions, DomainPack workflow compilation, harness trace/replay queues, model/memory/tool/MCP/skill abstractions, inference cache boundaries, and local reference adapters. Run `npm run test:packages` for these contract tests.
+
 ## Memory and State Layer
 
 hypha does not bind itself to a single memory or storage implementation. Memory is treated as a pluggable, policy-governed agentic layer rather than a single database choice.

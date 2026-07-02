@@ -216,6 +216,8 @@ tests/     当前 app 行为的单元测试和集成测试
 
 `packages/inference` 保留给 agent 内部 inference 编排，后续用于承载 prefix 和 KV cache 管理等机制。
 
+Stage 0 的 package contract 已覆盖 core spec/event/policy、ReAct kernel contract、FSM 状态转移、DomainPack workflow 编译、harness trace/replay/queue、model/memory/tool/MCP/skill 抽象、inference cache 边界和本地 reference adapter。使用 `npm run test:packages` 验证这些 contract。
+
 ## Memory 与状态层
 
 hypha 不绑定单一记忆或存储实现。Memory 在 hypha 中不是一个简单数据库选型，而是一个可插拔、可治理的 agentic memory layer。

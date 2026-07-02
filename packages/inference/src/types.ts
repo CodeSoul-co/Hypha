@@ -3,9 +3,11 @@ export interface InferenceRequest<TInput = unknown> {
   stepId: string;
   agentId?: string;
   modelAlias: string;
+  providerId?: string;
   input: TInput;
   prefix?: PrefixCacheRef;
   kvCache?: KvCacheRef;
+  trace?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -62,4 +64,9 @@ export interface KvCacheProvider {
   get(ref: KvCacheRef): Promise<unknown | null>;
   put(ref: KvCacheRef, value: unknown): Promise<void>;
   invalidate(ref: KvCacheRef, reason: string): Promise<void>;
+}
+
+export interface InferenceManagerOptions {
+  prefixCache?: PrefixCacheProvider;
+  kvCache?: KvCacheProvider;
 }

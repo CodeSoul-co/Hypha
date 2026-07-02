@@ -52,3 +52,73 @@ export interface FrameworkEvent<TPayload = unknown> {
   payload: TPayload;
   metadata?: Record<string, unknown>;
 }
+
+export interface EventCreateInput<TPayload = unknown> {
+  id: string;
+  type: FrameworkEventType;
+  runId: string;
+  payload: TPayload;
+  workspaceId?: string;
+  sessionId?: string;
+  stepId?: string;
+  agentId?: string;
+  fsmState?: string;
+  timestamp?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface EventStore {
+  append(event: FrameworkEvent): Promise<void>;
+  list(filter?: EventFilter): Promise<FrameworkEvent[]>;
+}
+
+export interface EventFilter {
+  workspaceId?: string;
+  sessionId?: string;
+  runId?: string;
+  type?: FrameworkEventType;
+}
+
+export interface TraceRecorder {
+  record(event: FrameworkEvent): Promise<void>;
+}
+
+export function createFrameworkEvent<TPayload = unknown>(
+  input: EventCreateInput<TPayload>
+): FrameworkEvent<TPayload> {
+  return {
+    id: input.id,
+    type: input.type,
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    runId: input.runId,
+    stepId: input.stepId,
+    agentId: input.agentId,
+    fsmState: input.fsmState,
+    timestamp: input.timestamp ?? new Date().toISOString(),
+    payload: input.payload,
+    metadata: input.metadata,
+  };
+}
+
+export class InMemoryEventStore implements EventStore, TraceRecorder {
+  private readonly events: FrameworkEvent[] = [];
+
+  async append(event: FrameworkEvent): Promise<void> {
+    this.events.push(event);
+  }
+
+  async record(event: FrameworkEvent): Promise<void> {
+    await this.append(event);
+  }
+
+  async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
+    return this.events.filter((event) => {
+      if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
+      if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
+      if (filter.runId && event.runId !== filter.runId) return false;
+      if (filter.type && event.type !== filter.type) return false;
+      return true;
+    });
+  }
+}

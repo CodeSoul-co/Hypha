@@ -8,6 +8,10 @@ export type FrameworkIdPrefix =
   | 'skill'
   | 'tool'
   | 'memory'
+  | 'model'
+  | 'domain'
+  | 'workflow'
+  | 'policy'
   | 'artifact';
 
 export interface FrameworkId {

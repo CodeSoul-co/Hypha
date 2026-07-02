@@ -18,3 +18,7 @@ export class FrameworkError extends Error {
     this.cause = init.cause;
   }
 }
+
+export function isFrameworkError(error: unknown): error is FrameworkError {
+  return error instanceof FrameworkError;
+}

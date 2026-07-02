@@ -1,6 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "composite": true, "rootDir": "./src", "outDir": "./dist", "baseUrl": "./src" },
+  "compilerOptions": { "composite": true, "rootDir": "./src", "outDir": "./dist" },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "node_modules", "dist"]
+  "exclude": ["src/**/*.test.ts", "node_modules", "dist"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../inference" },
+    { "path": "../memory" },
+    { "path": "../models" },
+    { "path": "../skills" },
+    { "path": "../tools" }
+  ]
 }
