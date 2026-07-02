@@ -38,29 +38,72 @@ export class InferenceManager {
       });
     }
 
-    const [prefixContent, kvCacheValue] = await Promise.all([
-      request.prefix && this.prefixCache ? this.prefixCache.get(request.prefix) : Promise.resolve(null),
-      request.kvCache && this.kvCache ? this.kvCache.get(request.kvCache) : Promise.resolve(null),
-    ]);
+    const prepared = await this.prepareRequest(request);
 
-    const response = await provider.infer({
-      ...request,
-      resolvedPrefixContent: prefixContent ?? undefined,
-      resolvedKvCacheValue: kvCacheValue ?? undefined,
-      metadata: {
-        ...request.metadata,
-        prefixCacheHit: prefixContent !== null,
-        kvCacheHit: kvCacheValue !== null,
-      },
-    });
+    const response = await provider.infer(prepared.request);
 
     return {
       ...response,
       cache: {
         ...response.cache,
-        prefixHit: response.cache?.prefixHit ?? prefixContent !== null,
-        kvCacheHit: response.cache?.kvCacheHit ?? kvCacheValue !== null,
+        prefixHit: response.cache?.prefixHit ?? prepared.prefixHit,
+        kvCacheHit: response.cache?.kvCacheHit ?? prepared.kvCacheHit,
       },
+    };
+  }
+
+  async *stream(providerId: string, request: InferenceRequest): AsyncIterable<InferenceResponse> {
+    const provider = this.get(providerId);
+    if (!provider) {
+      throw new FrameworkError({
+        code: 'INFERENCE_PROVIDER_NOT_FOUND',
+        message: `Inference provider not found: ${providerId}`,
+        context: { providerId, runId: request.runId, stepId: request.stepId },
+      });
+    }
+    if (!provider.stream) {
+      throw new FrameworkError({
+        code: 'INFERENCE_STREAM_NOT_SUPPORTED',
+        message: `Inference provider does not support streaming: ${providerId}`,
+        context: { providerId, runId: request.runId, stepId: request.stepId },
+      });
+    }
+
+    const prepared = await this.prepareRequest(request);
+    for await (const response of provider.stream(prepared.request)) {
+      yield {
+        ...response,
+        cache: {
+          ...response.cache,
+          prefixHit: response.cache?.prefixHit ?? prepared.prefixHit,
+          kvCacheHit: response.cache?.kvCacheHit ?? prepared.kvCacheHit,
+        },
+      };
+    }
+  }
+
+  private async prepareRequest(request: InferenceRequest): Promise<{
+    request: InferenceRequest;
+    prefixHit: boolean;
+    kvCacheHit: boolean;
+  }> {
+    const [prefixContent, kvCacheValue] = await Promise.all([
+      request.prefix && this.prefixCache ? this.prefixCache.get(request.prefix) : Promise.resolve(null),
+      request.kvCache && this.kvCache ? this.kvCache.get(request.kvCache) : Promise.resolve(null),
+    ]);
+    return {
+      request: {
+        ...request,
+        resolvedPrefixContent: prefixContent ?? undefined,
+        resolvedKvCacheValue: kvCacheValue ?? undefined,
+        metadata: {
+          ...request.metadata,
+          prefixCacheHit: prefixContent !== null,
+          kvCacheHit: kvCacheValue !== null,
+        },
+      },
+      prefixHit: prefixContent !== null,
+      kvCacheHit: kvCacheValue !== null,
     };
   }
 }

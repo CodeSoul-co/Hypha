@@ -129,8 +129,12 @@ router.post('/:name/execute', asyncHandler(async (req: Request, res: Response) =
       metadata: { surface: 'http.workflows.execute' },
     });
     runId = runtimeRun.runId;
-    const execution = await engine.execute(name, context, version);
-    await runtime.recordWorkflowExecution(runId, execution);
+    const execution = await runtime.executeWorkflow({
+      runId,
+      userId,
+      workflow,
+      context,
+    });
 
     res.json({
       success: true,

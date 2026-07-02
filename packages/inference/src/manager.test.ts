@@ -70,6 +70,47 @@ describe('@hypha/inference', () => {
     });
   });
 
+  it('routes streaming inference through cache-aware providers', async () => {
+    const prefixCache = new InMemoryPrefixCacheProvider();
+    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
+    await prefixCache.put(prefix, 'cached streaming prompt');
+    const manager = new InferenceManager({ prefixCache });
+    manager.register({
+      id: 'mock',
+      infer: async () => ({ id: 'unused', output: null }),
+      stream: async function* (request) {
+        yield {
+          id: 'chunk_1',
+          output: {
+            prefix: request.resolvedPrefixContent,
+            metadata: request.metadata,
+          },
+        };
+      },
+    });
+
+    const chunks = [];
+    for await (const chunk of manager.stream('mock', {
+      runId: 'run_1',
+      stepId: 'step_stream',
+      modelAlias: 'default',
+      input: 'hello',
+      prefix,
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({
+      id: 'chunk_1',
+      cache: { prefixHit: true },
+      output: {
+        prefix: 'cached streaming prompt',
+        metadata: { prefixCacheHit: true, kvCacheHit: false },
+      },
+    });
+  });
+
   it('manages prefix hashes and KV cache expiry', async () => {
     const prefixCache = new InMemoryPrefixCacheProvider();
     const kvCache = new InMemoryKvCacheProvider();

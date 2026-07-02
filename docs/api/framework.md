@@ -57,7 +57,9 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 `FrameworkEvent` fields include `id`, `type`, `runId`, optional `workspaceId`, `sessionId`, `stepId`, `agentId`, `fsmState`, `timestamp`, `payload`, and `metadata`.
 
-Common event types include `session.created`, `run.created`, `run.started`, `fsm.state.entered`, `agent.reasoning.completed`, `inference.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
+Common event types include `session.created`, `run.created`, `run.started`, `fsm.state.entered`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
+
+Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
 ## Workflow and FSM
 
@@ -91,7 +93,7 @@ OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `typ
 
 `InferenceRequest` contains `runId`, `stepId`, optional `agentId`, `modelAlias`, optional `providerId`, `input`, optional `prefix`, optional `kvCache`, `trace`, `metadata`, and resolved cache fields supplied by the inference manager.
 
-`InferenceResponse` contains `id`, `output`, optional `usage`, optional cache usage, and optional raw provider payload.
+`InferenceResponse` contains `id`, `output`, optional `usage`, optional cache usage, and optional raw provider payload. `InferenceManager.stream(providerId, request)` yields the same response envelope for streaming providers.
 
 Cache references:
 
@@ -100,7 +102,7 @@ Cache references:
 | `PrefixCacheRef` | `id`, `version`, `contentHash`, optional `tokenCount`, `metadata`. |
 | `KvCacheRef` | `id`, `provider`, `modelAlias`, `scope`, optional `expiresAt`, `metadata`. |
 
-`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`. On cache hits, providers receive `resolvedPrefixContent` and `resolvedKvCacheValue` on the request object so adapters can inject prompt prefixes or provider-native cache handles.
+`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`. On cache hits, providers receive `resolvedPrefixContent` and `resolvedKvCacheValue` on the request object so adapters can inject prompt prefixes or provider-native cache handles. Cache hit metadata is applied to both non-streaming and streaming inference.
 
 `ReasoningOrchestrator` supports `direct`, `cot`, `tot`, and `self_consistency`. `ReasoningOptions` include `branches`, `maxDepth`, `revealReasoning`, and an optional evaluator.
 
@@ -116,7 +118,7 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 `ToolSpec` defines `id`, `version`, `description`, `inputSchema`, optional `outputSchema`, `sideEffectLevel`, permission scope, preconditions, postconditions, timeout, retry, audit, human approval, and `source`.
 
-`GovernedToolRunner` records tool request, policy check, and completion events. Tool calls return `completed`, `failed`, `denied`, or `human_review_required`.
+`GovernedToolRunner` records tool request, policy check, approval, start, timeout, retry, completion, failure, and rejection events. It enforces input validation, default side-effect policy, optional timeout policy, retry policy, human review policy, and MCP source tracing. Tool calls return `completed`, `failed`, `denied`, or `human_review_required`.
 
 `MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing.
 

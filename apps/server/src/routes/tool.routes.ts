@@ -124,6 +124,7 @@ router.post('/execute', asyncHandler(async (req: Request, res: Response) => {
   const runId = runtimeRun.runId;
 
   try {
+    const descriptor = toolManager.describeTool(name);
     await runtime.transition(runId, 'ContextBuilt', { tool: name });
     await runtime.transition(runId, 'Reasoning', { tool: name });
     await runtime.transition(runId, 'ActionSelected', { tool: name });
@@ -134,13 +135,17 @@ router.post('/execute', asyncHandler(async (req: Request, res: Response) => {
       stepId: `tool:${name}`,
       userId,
       sessionId: runtimeRun.sessionId,
-      toolId: name,
+      toolId: descriptor?.id ?? name,
       params: toolParams,
       toolSpec: {
-        name,
-        description: `Server tool ${name}`,
-        inputSchema: { type: 'object' },
+        name: descriptor?.name ?? name,
+        description: descriptor?.description ?? `Server tool ${name}`,
+        inputSchema: descriptor?.inputSchema ?? { type: 'object' },
         sideEffectLevel: inferToolSideEffect(name, toolParams),
+        source: descriptor?.source ?? 'local',
+        sourceRef: descriptor?.source === 'mcp'
+          ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
+          : undefined,
       },
       handler: async () => {
         const result = await toolManager.executeTool(name, toolParams);

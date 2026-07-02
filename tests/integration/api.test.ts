@@ -266,7 +266,8 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
     expect(replay.body.data.statePath).toEqual(
       expect.arrayContaining(['RunInitialized', 'Acting', 'Completed']),
     );
-    expect(replay.body.data.toolCallEventIds).toHaveLength(3);
+    expect(replay.body.data.toolCallEventIds).toHaveLength(5);
+    expect(replay.body.data.toolCalls).toHaveLength(1);
 
     const audit = await request(app)
       .get(`/api/v1/runtime/runs/${runId}/audit`)
@@ -282,6 +283,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
     expect(regression.body.data.eventTypes).toEqual(
       expect.arrayContaining(['run.created', 'tool.policy.checked', 'run.completed']),
     );
+    expect(regression.body.data.toolCalls).toHaveLength(1);
   });
 });
 
@@ -303,6 +305,22 @@ describe('workflow template variable resolution (remaining #2)', () => {
     // The LLM stage should NOT fail with "The supported API model names are …"
     // which is the verbatim-placeholder signature bug.
     expect(err).not.toMatch(/supported API model names are/i);
+    expect(r.body.data?.runId).toBeTruthy();
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.data.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    const eventTypes = (events.body.data || []).map((event: any) => event.type);
+    expect(eventTypes).toEqual(
+      expect.arrayContaining(['workflow.stage.started', 'workflow.stage.failed', 'run.failed']),
+    );
+
+    const replay = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.data.runId}/replay`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.statePath).toEqual(expect.arrayContaining(['Failed']));
   });
 });
 

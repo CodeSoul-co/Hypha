@@ -74,6 +74,12 @@ export interface ReplayProjection {
   toolCallEventIds: string[];
   policyDecisionEventIds: string[];
   memoryEventIds: string[];
+  modelCalls: FrameworkEvent[];
+  toolCalls: FrameworkEvent[];
+  memoryReads: FrameworkEvent[];
+  memoryWrites: FrameworkEvent[];
+  policyDecisions: FrameworkEvent[];
+  finalOutput?: unknown;
 }
 
 export interface AuditProjection {
@@ -89,6 +95,9 @@ export interface RegressionProjection {
   runId: string;
   eventTypes: string[];
   statePath: string[];
+  toolCalls: Array<{ toolId?: unknown; status: string }>;
+  memoryWriteCount: number;
+  finalOutput?: unknown;
 }
 
 export class EventFirstRuntime {
@@ -195,6 +204,12 @@ export class EventFirstRuntime {
       runId,
       eventTypes: replay.events.map((event) => event.type),
       statePath: replay.statePath,
+      toolCalls: replay.toolCalls.map((event) => ({
+        toolId: (event.payload as Record<string, unknown>).toolId,
+        status: event.type,
+      })),
+      memoryWriteCount: replay.memoryWrites.length,
+      finalOutput: replay.finalOutput,
     };
   }
 
@@ -237,6 +252,9 @@ export function projectRun(events: FrameworkEvent[]): RuntimeRun | null {
 
 export function projectReplay(events: FrameworkEvent[]): ReplayProjection {
   const runId = events.find((event) => event.runId)?.runId ?? '';
+  const terminal = [...events]
+    .reverse()
+    .find((event) => ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type));
   return {
     runId,
     events,
@@ -252,6 +270,14 @@ export function projectReplay(events: FrameworkEvent[]): ReplayProjection {
     memoryEventIds: events
       .filter((event) => event.type.startsWith('memory.'))
       .map((event) => event.id),
+    modelCalls: events.filter((event) => event.type.startsWith('model.call.')),
+    toolCalls: events.filter((event) =>
+      ['tool.call.completed', 'tool.call.failed', 'tool.call.rejected'].includes(event.type)
+    ),
+    memoryReads: events.filter((event) => event.type.startsWith('memory.read.')),
+    memoryWrites: events.filter((event) => event.type.startsWith('memory.write.')),
+    policyDecisions: events.filter((event) => event.type.includes('policy')),
+    finalOutput: terminal ? (terminal.payload as Record<string, unknown>).output : undefined,
   };
 }
 

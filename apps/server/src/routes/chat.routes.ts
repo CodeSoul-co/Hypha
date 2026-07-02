@@ -3,7 +3,6 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { authMiddleware, apiKeyMiddleware } from '../middleware/auth';
 import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../core/memory/PermanentMemory';
-import { getLLMManager } from '../core/llm/LLMFactory';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
@@ -122,9 +121,9 @@ router.post(
       runId = runtimeRun.runId;
       const messageId = generateMessageId();
       const startTime = Date.now();
-      const llmManager = getLLMManager();
       const tempMemory = getTemporaryMemory();
       const permanentMemory = getPermanentMemory();
+      const resolvedChatModel = runtime.resolveChatModel(model);
 
       logger.debug(`[Chat] Request started`, {
         sessionId: session,
@@ -147,17 +146,13 @@ router.post(
 
       // Save to temporary memory
       const t1 = Date.now();
-      await runtime.record(runId, 'memory.write.requested', {
+      await runtime.recordMemoryWrite({
+        runId,
+        stepId: 'memory:user',
         target: 'temporary',
-        role: 'user',
-        messageId,
-      }, 'memory:user');
-      await tempMemory.addMessage(session, userMsg);
-      await runtime.record(runId, 'memory.write.committed', {
-        target: 'temporary',
-        role: 'user',
-        messageId,
-      }, 'memory:user');
+        details: { role: 'user', messageId },
+        writer: () => tempMemory.addMessage(session, userMsg),
+      });
       logger.debug(`[Chat] Redis: addMessage done`, {
         durationMs: Date.now() - t1,
         sessionId: session,
@@ -165,16 +160,18 @@ router.post(
 
       // Get conversation history
       const t2 = Date.now();
-      const history = await tempMemory.getMessages(session, undefined, userId);
+      const history = await runtime.recordMemoryRead({
+        runId,
+        stepId: 'memory:read',
+        target: 'temporary',
+        details: { sessionId: session },
+        reader: () => tempMemory.getMessages(session, undefined, userId),
+      });
       await runtime.transition(runId, 'ContextBuilt', { messageCount: history.length });
       await runtime.record(runId, 'context.build.completed', {
         source: 'temporary-memory',
         messageCount: history.length,
       }, 'context');
-      await runtime.record(runId, 'memory.read.completed', {
-        target: 'temporary',
-        messageCount: history.length,
-      }, 'memory:read');
       logger.debug(`[Chat] Redis: getMessages done`, {
         durationMs: Date.now() - t2,
         sessionId: session,
@@ -232,12 +229,12 @@ router.post(
       const t3 = Date.now();
       await runtime.transition(runId, 'Reasoning');
       await runtime.record(runId, 'agent.reasoning.started', {
-        modelAlias: model || llmManager.getDefaultModel(),
+        modelAlias: resolvedChatModel.model,
       }, 'reason');
       const response = await runtime.inferChat({
         runId,
         stepId: 'reason',
-        modelAlias: model || llmManager.getDefaultModel(),
+        modelAlias: resolvedChatModel.model,
         messages: llmMessages,
         options: {
           model,
@@ -278,45 +275,49 @@ router.post(
         modelProvider: response.provider,
       };
 
-      await runtime.record(runId, 'memory.write.requested', {
+      await runtime.recordMemoryWrite({
+        runId,
+        stepId: 'memory:assistant',
         target: 'temporary',
-        role: 'assistant',
-        responseId: response.id,
-      }, 'memory:assistant');
-      await tempMemory.addMessage(session, assistantMsg);
-      await runtime.record(runId, 'memory.write.committed', {
-        target: 'temporary',
-        role: 'assistant',
-        responseId: response.id,
-      }, 'memory:assistant');
+        details: { role: 'assistant', responseId: response.id },
+        writer: () => tempMemory.addMessage(session, assistantMsg),
+      });
       await runtime.transition(runId, 'ObservationRecorded', { responseId: response.id });
       await runtime.transition(runId, 'Verifying');
 
       // Save to permanent memory (if conversation exists)
       const t4 = Date.now();
-      const conversation = await permanentMemory.getConversationBySessionId(
-        session,
-        userId,
-      );
+      const conversation = await runtime.recordMemoryRead({
+        runId,
+        stepId: 'memory:permanent',
+        target: 'permanent',
+        details: { sessionId: session, operation: 'getConversationBySessionId' },
+        reader: () => permanentMemory.getConversationBySessionId(
+          session,
+          userId,
+        ),
+      });
       if (conversation) {
-        await Promise.all([
-          permanentMemory.addMessage(conversation.id, {
-            role: 'user',
-            content: trimmedMessage,
-            modelId: model,
-            modelProvider: provider,
-          }),
-          permanentMemory.addMessage(conversation.id, {
-            role: 'assistant',
-            content: response.content,
-            modelId: response.model,
-            modelProvider: response.provider,
-          }),
-        ]);
-        await runtime.record(runId, 'memory.write.committed', {
+        await runtime.recordMemoryWrite({
+          runId,
+          stepId: 'memory:permanent',
           target: 'permanent',
-          conversationId: conversation.id,
-        }, 'memory:permanent');
+          details: { conversationId: conversation.id },
+          writer: () => Promise.all([
+            permanentMemory.addMessage(conversation.id, {
+              role: 'user',
+              content: trimmedMessage,
+              modelId: model,
+              modelProvider: provider,
+            }),
+            permanentMemory.addMessage(conversation.id, {
+              role: 'assistant',
+              content: response.content,
+              modelId: response.model,
+              modelProvider: response.provider,
+            }),
+          ]),
+        });
       }
       await runtime.transition(runId, 'MemorySync');
       logger.debug(`[Chat] MongoDB save done`, {
@@ -430,7 +431,6 @@ router.post('/stream', async (req: Request, res: Response) => {
   const lock = acquireSessionLock(session, userId);
   await lock.wait(); // Wait for any previous request on this session to finish
 
-  const llmManager = getLLMManager();
   const tempMemory = getTemporaryMemory();
   const startTime = Date.now();
   const runtime = getEventRuntime();
@@ -456,16 +456,18 @@ router.post('/stream', async (req: Request, res: Response) => {
     runId = runtimeRun.runId;
     // Get conversation history
     const t1 = Date.now();
-    const history = await tempMemory.getMessages(session, undefined, userId);
+    const history = await runtime.recordMemoryRead({
+      runId,
+      stepId: 'memory:read',
+      target: 'temporary',
+      details: { sessionId: session, stream: true },
+      reader: () => tempMemory.getMessages(session, undefined, userId),
+    });
     await runtime.transition(runId, 'ContextBuilt', { messageCount: history.length });
     await runtime.record(runId, 'context.build.completed', {
       source: 'temporary-memory',
       messageCount: history.length,
     }, 'context');
-    await runtime.record(runId, 'memory.read.completed', {
-      target: 'temporary',
-      messageCount: history.length,
-    }, 'memory:read');
     logger.debug(`[SSE] Redis: getMessages done`, {
       durationMs: Date.now() - t1,
       historyCount: history.length,
@@ -480,28 +482,22 @@ router.post('/stream', async (req: Request, res: Response) => {
     ];
 
     let fullContent = '';
-    // Resolve effective model/provider up front so we record real values in
-    // token_usages even when the client omitted them. Done outside the chunk
-    // loop because StreamChunk doesn't carry model/provider.
-    const resolvedModel = model || llmManager.getDefaultModel();
-    const resolvedProvider =
-      provider || llmManager.getProviderFromModel(resolvedModel);
+    const resolvedChatModel = runtime.resolveChatModel(model);
+    const resolvedModel = resolvedChatModel.model;
+    const resolvedProvider = provider || resolvedChatModel.provider;
     await runtime.transition(runId, 'Reasoning');
     await runtime.record(runId, 'agent.reasoning.started', {
       modelAlias: resolvedModel,
       stream: true,
     }, 'reason');
-    await runtime.record(runId, 'inference.requested', {
-      modelAlias: resolvedModel,
-      stream: true,
-    }, 'reason');
-    await runtime.record(runId, 'model.call.started', {
-      modelAlias: resolvedModel,
-      stream: true,
-    }, 'reason');
 
-    // Stream response
-    for await (const chunk of llmManager.streamChat(llmMessages, { model })) {
+    for await (const chunk of runtime.streamChat({
+      runId,
+      stepId: 'reason',
+      modelAlias: resolvedModel,
+      messages: llmMessages,
+      options: { model },
+    })) {
       if (chunk.type === 'content' && chunk.content) {
         fullContent += chunk.content;
         if (!streamActionEntered) {
@@ -528,40 +524,29 @@ router.post('/stream', async (req: Request, res: Response) => {
           await runtime.transition(runId, 'Acting');
           streamActionEntered = true;
         }
-        await runtime.record(runId, 'model.call.completed', {
-          model: resolvedModel,
-          provider: resolvedProvider,
-          usage: chunk.usage,
-        }, 'reason');
-        await runtime.record(runId, 'inference.completed', {
-          stream: true,
-          usage: chunk.usage,
-        }, 'reason');
         // Save to temporary memory
-        await runtime.record(runId, 'memory.write.requested', {
+        await runtime.recordMemoryWrite({
+          runId,
+          stepId: 'memory:stream',
           target: 'temporary',
-          roles: ['user', 'assistant'],
-        }, 'memory:stream');
-        await Promise.all([
-          tempMemory.addMessage(session, {
-            userId,
-            sessionId: session,
-            role: 'user',
-            content: trimmedMessage,
-          }),
-          tempMemory.addMessage(session, {
-            userId,
-            sessionId: session,
-            role: 'assistant',
-            content: fullContent,
-            modelId: resolvedModel,
-            modelProvider: resolvedProvider,
-          }),
-        ]);
-        await runtime.record(runId, 'memory.write.committed', {
-          target: 'temporary',
-          roles: ['user', 'assistant'],
-        }, 'memory:stream');
+          details: { roles: ['user', 'assistant'], stream: true },
+          writer: () => Promise.all([
+            tempMemory.addMessage(session, {
+              userId,
+              sessionId: session,
+              role: 'user',
+              content: trimmedMessage,
+            }),
+            tempMemory.addMessage(session, {
+              userId,
+              sessionId: session,
+              role: 'assistant',
+              content: fullContent,
+              modelId: resolvedModel,
+              modelProvider: resolvedProvider,
+            }),
+          ]),
+        });
         await runtime.transition(runId, 'ObservationRecorded', { stream: true });
         await runtime.transition(runId, 'Verifying');
         await runtime.transition(runId, 'MemorySync');

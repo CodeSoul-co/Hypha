@@ -54,6 +54,14 @@ describe('@hypha/harness contracts', () => {
       payload: { stateId: 'Reasoning' },
     });
     await runtime.appendRunEvent({
+      id: 'model_1',
+      type: 'model.call.completed',
+      runId: 'run_1',
+      sessionId: 'session_1',
+      userId: 'owner',
+      payload: { model: 'mock', response: 'ok' },
+    });
+    await runtime.appendRunEvent({
       id: 'done_1',
       type: 'run.completed',
       runId: 'run_1',
@@ -72,12 +80,15 @@ describe('@hypha/harness contracts', () => {
     });
     await expect(runtime.projectReplay('run_1')).resolves.toMatchObject({
       statePath: ['Reasoning'],
+      modelCalls: [expect.objectContaining({ id: 'model_1' })],
+      finalOutput: 'ok',
     });
     await expect(runtime.projectAudit('run_1')).resolves.toMatchObject({
-      eventCount: 3,
+      eventCount: 4,
     });
     await expect(runtime.projectRegression('run_1')).resolves.toMatchObject({
-      eventTypes: ['run.created', 'fsm.state.entered', 'run.completed'],
+      eventTypes: ['run.created', 'fsm.state.entered', 'model.call.completed', 'run.completed'],
+      finalOutput: 'ok',
     });
   });
 });

@@ -167,9 +167,15 @@ Runtime views are derived from events recorded during a run.
 | --- | --- | --- |
 | `GET` | `/runtime/runs/:runId` | Project run state from events. |
 | `GET` | `/runtime/runs/:runId/events` | List source events for a run. |
-| `GET` | `/runtime/runs/:runId/replay` | Return replay state path and tool call event ids. |
+| `GET` | `/runtime/runs/:runId/replay` | Return replay state path and event-derived call details. |
 | `GET` | `/runtime/runs/:runId/audit` | Return audit counters and policy evidence. |
-| `GET` | `/runtime/runs/:runId/regression` | Return event-type and state-path regression inputs. |
+| `GET` | `/runtime/runs/:runId/regression` | Return event-type, state-path, tool, memory, and output regression inputs. |
+
+Replay responses include `runId`, `events`, `statePath`, `toolCallEventIds`, `policyDecisionEventIds`, `memoryEventIds`, `modelCalls`, terminal `toolCalls`, `memoryReads`, `memoryWrites`, `policyDecisions`, and optional `finalOutput`.
+
+Audit responses include `eventCount`, `policyDecisionCount`, `memoryWriteCount`, `toolCallCount`, and `missingRunIds`.
+
+Regression responses include `eventTypes`, `statePath`, `toolCalls`, `memoryWriteCount`, and optional `finalOutput`.
 
 ## Concurrency
 

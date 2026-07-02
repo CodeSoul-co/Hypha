@@ -375,6 +375,45 @@ export class ToolManager {
     return list;
   }
 
+  describeTool(name: string): {
+    id: string;
+    name: string;
+    description: string;
+    inputSchema: ToolDefinition['inputSchema'];
+    source: 'local' | 'mcp';
+    serverId?: string;
+    capabilityId?: string;
+  } | null {
+    const localTool = this.getToolByName(name);
+    if (localTool) {
+      return {
+        id: localTool.id,
+        name: localTool.name,
+        description: localTool.description,
+        inputSchema: localTool.schema.inputSchema,
+        source: 'local',
+      };
+    }
+
+    for (const client of this.mcpClients.values()) {
+      if (client.status !== 'connected') continue;
+      const tool = client.tools.find((candidate) => candidate.name === name);
+      if (tool) {
+        return {
+          id: `${client.id}.${tool.name}`,
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          source: 'mcp',
+          serverId: client.id,
+          capabilityId: tool.name,
+        };
+      }
+    }
+
+    return null;
+  }
+
   async executeTool(name: string, params: ToolParams): Promise<ToolResult> {
     // First check local tools
     const localTool = this.getToolByName(name);
