@@ -11,7 +11,7 @@ const router = Router();
 
 // Validation schemas
 // Note: tlds:{allow:false} permits non-public TLDs like ".local" — needed
-// because seeded dev/admin accounts use admin@orbit.local / dev@test.local.
+// because seeded dev/admin accounts use admin@hypha.local / dev@test.local.
 const registerSchema = Joi.object({
   email: Joi.string().email({ tlds: { allow: false } }).optional(),
   phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
@@ -70,7 +70,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
 
   // If neither email nor phone, generate a placeholder email
   if (!email && !phone) {
-    userPayload.email = `${username}@orbit.local`;
+    userPayload.email = `${username}@hypha.local`;
   }
 
   const user = await UserModel.create(userPayload);

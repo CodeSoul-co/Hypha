@@ -7,7 +7,7 @@ import { getConfig } from '../../config';
 
 /**
  * Default skill directories — relative to the project root unless the env
- * ORBIT_SKILLS_DIR adds extras. Override via the `skills.dirs` list in
+ * HYPHA_SKILLS_DIR adds extras. Override via the `skills.dirs` list in
  * config.yaml (or per-env) to control which paths are scanned at boot.
  */
 const DEFAULT_BUILTIN_DIR = path.resolve(process.cwd(), 'src/core/skills/builtins');
@@ -18,7 +18,7 @@ const DEFAULT_BUILTIN_DIR = path.resolve(process.cwd(), 'src/core/skills/builtin
  * implemented in TypeScript here so it can use the same SkillContext /
  * SkillResult contract as before.
  *
- * User-installed skills (under ~/.orbit/skills/) are registered as
+ * User-installed skills (under ~/.hypha/skills/) are registered as
  * no-op skills whose `body` is exposed to the chat handler as a system
  * message — i.e. they are documentation/prompt skills, not executable
  * ones. Adding a new executable user-skill requires writing a `.skill.ts`
@@ -69,9 +69,9 @@ export class SkillManager {
   private dirs: string[];
 
   constructor(opts?: { dirs?: string[] }) {
-    // Precedence: explicit arg > env ORBIT_SKILLS_DIR (colon-separated) > config > builtins.
+    // Precedence: explicit arg > env HYPHA_SKILLS_DIR (colon-separated) > config > builtins.
     const configDirs = (getConfig().skills as any).dirs as string[] | undefined;
-    const envDirs = (process.env.ORBIT_SKILLS_DIR || '')
+    const envDirs = (process.env.HYPHA_SKILLS_DIR || '')
       .split(':').map((s) => s.trim()).filter(Boolean);
     const raw = [
       ...(opts?.dirs || []),

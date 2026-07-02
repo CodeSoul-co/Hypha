@@ -1,5 +1,5 @@
 /**
- * Integration Test Script for OrbitAgent
+ * Integration Test Script for Hypha
  * Tests: Chat, Memory (Redis), Permanent Storage (MongoDB)
  */
 
@@ -226,7 +226,7 @@ async function checkRedisDirectly() {
   log('info', 'Checking Redis Keys...');
   try {
     const { exec } = require('child_process');
-    exec('redis-cli KEYS "orbit:*"', (error: any, stdout: string) => {
+    exec('redis-cli KEYS "hypha:*"', (error: any, stdout: string) => {
       if (!error) {
         const keys = stdout.trim().split('\n').filter((k: string) => k);
         log('success', `Redis Keys Found: ${keys.length}`);
@@ -259,7 +259,7 @@ async function checkMongoDirectly() {
 // Run all tests
 async function runTests() {
   console.log('\n' + '='.repeat(60));
-  console.log(`${colors.blue}OrbitAgent Integration Test Suite${colors.reset}`);
+  console.log(`${colors.blue}Hypha Integration Test Suite${colors.reset}`);
   console.log('='.repeat(60) + '\n');
 
   // Check infrastructure first

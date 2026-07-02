@@ -1,5 +1,5 @@
 /**
- * `orbit history <sessionId>` — GET /chat/:sessionId
+ * `hypha history <sessionId>` — GET /chat/:sessionId
  * Renders the Redis-stored conversation history for a given session.
  */
 import { Command } from 'commander';

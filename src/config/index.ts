@@ -38,7 +38,7 @@ const providerConfigSchema = z.object({
 // Configuration schema
 const configSchema = z.object({
   app: z.object({
-    name: z.string().default('OrbitAgent'),
+    name: z.string().default('Hypha'),
     version: z.string().default('1.0.0'),
     env: z.enum(['development', 'production', 'test']).default('development'),
     host: z.string().default('0.0.0.0'),
@@ -49,7 +49,7 @@ const configSchema = z.object({
     mongodb: z.object({
       host: z.string().default('localhost'),
       port: z.coerce.number().default(27017),
-      database: z.string().default('orbit_agent'),
+      database: z.string().default('hypha'),
       username: z.string().optional(),
       password: z.string().optional(),
       options: z.object({
@@ -63,7 +63,7 @@ const configSchema = z.object({
     port: z.coerce.number().default(6379),
     password: z.string().optional(),
     db: z.coerce.number().default(0),
-    keyPrefix: z.string().default('orbit:'),
+    keyPrefix: z.string().default('hypha:'),
   }),
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),

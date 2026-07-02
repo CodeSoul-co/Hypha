@@ -11,7 +11,7 @@ export interface IUserProfile extends Document {
   avatar?: string;
   checkInStreak: number;
   lastCheckIn?: Date;
-  totalRituals: number;
+  totalTasks: number;
   totalLikes: number;
   totalFollowers: number;
   totalFollowing: number;
@@ -53,7 +53,7 @@ const UserProfileSchema = new Schema<IUserProfile>(
       default: 0,
     },
     lastCheckIn: Date,
-    totalRituals: {
+    totalTasks: {
       type: Number,
       default: 0,
     },
@@ -92,7 +92,7 @@ const UserProfileSchema = new Schema<IUserProfile>(
 // Compound indexes
 // `userId` already has `unique: true, index: true` on the schema above — no
 // need to re-declare. Add other compound / sort indexes here as needed.
-UserProfileSchema.index({ totalRituals: -1 });
+UserProfileSchema.index({ totalTasks: -1 });
 UserProfileSchema.index({ checkInStreak: -1 });
 
 export const UserProfileModel: Model<IUserProfile> = mongoose.model<IUserProfile>(

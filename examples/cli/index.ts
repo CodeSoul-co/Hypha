@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `orbit` — example command-line client for the Hypha API service.
+ * `hypha` — example command-line client for the Hypha API service.
  *
  * This binary is a presentation client over the REST API. It intentionally
  * does NOT re-implement business logic such as chat, auth, memory, or workflow
@@ -27,7 +27,7 @@ import { getHome, readToken, getBaseUrl } from './config';
 const program = new Command();
 
 program
-  .name('orbit')
+  .name('hypha')
   .description('Hypha CLI example — thin client over the REST API')
   .version('1.0.0');
 
@@ -35,7 +35,7 @@ program
 program.hook('preAction', () => {
   if (program.opts().verbose) {
     const token = readToken();
-    process.stderr.write(chalk.gray(`[orbit] base=${getBaseUrl()} user=${token?.email || 'anonymous'}\n`));
+    process.stderr.write(chalk.gray(`[hypha] base=${getBaseUrl()} user=${token?.email || 'anonymous'}\n`));
   }
 });
 
@@ -52,16 +52,16 @@ registerWorkflows(program);
 registerUsage(program);
 registerConfig(program);
 
-// Default `orbit` with no args → status line.
+// Default `hypha` with no args -> status line.
 program.action(() => {
   const token = readToken();
-  console.log(chalk.bold('orbit ') + chalk.gray('— Hypha CLI example'));
+  console.log(chalk.bold('hypha ') + chalk.gray('- Hypha CLI example'));
   console.log(`  base:  ${chalk.cyan(getBaseUrl())}`);
   console.log(`  home:  ${chalk.cyan(getHome())}`);
-  console.log(`  user:  ${token ? chalk.green(token.email) : chalk.yellow('not logged in')}  (${chalk.gray('orbit login')})`);
+  console.log(`  user:  ${token ? chalk.green(token.email) : chalk.yellow('not logged in')}  (${chalk.gray('hypha login')})`);
   console.log();
-  console.log(`  Try:  ${chalk.cyan('orbit chat "hi"')}  •  ${chalk.cyan('orbit models')}  •  ${chalk.cyan('orbit usage')}`);
-  console.log(`  Full: ${chalk.cyan('orbit --help')}`);
+  console.log(`  Try:  ${chalk.cyan('hypha chat "hi"')}  |  ${chalk.cyan('hypha models')}  |  ${chalk.cyan('hypha usage')}`);
+  console.log(`  Full: ${chalk.cyan('hypha --help')}`);
 });
 
 program.parseAsync(process.argv).catch((err) => {

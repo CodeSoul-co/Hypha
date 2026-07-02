@@ -57,7 +57,7 @@ router.get('/installed', asyncHandler(async (_req: Request, res: Response) => {
   res.json({ success: true, data: await listInstalledSkills() });
 }));
 
-// Reload all skill directories (re-scan ~/.orbit/skills etc.). Used after
+// Reload all skill directories (re-scan ~/.hypha/skills etc.). Used after
 // install/uninstall so the new file shows up in /skills without restart.
 router.post('/reload', asyncHandler(async (_req: Request, res: Response) => {
   const mgr = getSkillManager();

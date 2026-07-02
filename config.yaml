@@ -1,5 +1,5 @@
 app:
-  name: "OrbitAgent"
+  name: "Hypha"
   version: "1.0.0"
   env: "development"
   host: "0.0.0.0"
@@ -10,7 +10,7 @@ database:
   mongodb:
     host: "${MONGODB_HOST:localhost}"
     port: "${MONGODB_PORT:27017}"
-    database: "${MONGODB_DATABASE:orbit_agent}"
+    database: "${MONGODB_DATABASE:hypha}"
     username: "${MONGODB_USERNAME:}"
     password: "${MONGODB_PASSWORD:}"
     options:
@@ -22,7 +22,7 @@ redis:
   port: "${REDIS_PORT:6379}"
   password: "${REDIS_PASSWORD:}"
   db: "${REDIS_DB:0}"
-  keyPrefix: "${REDIS_KEY_PREFIX:orbit:}"
+  keyPrefix: "${REDIS_KEY_PREFIX:hypha:}"
 
 llm:
   defaultProvider: "deepseek"
@@ -381,7 +381,7 @@ skills:
   # Builtins (src/core/skills/builtins) are always scanned last as a
   # fallback so the default behaviour is preserved.
   dirs:
-    - "~/.orbit/skills"   # user-installed skills
+    - "~/.hypha/skills"   # user-installed skills
   autoLoad: true
 
 tools:

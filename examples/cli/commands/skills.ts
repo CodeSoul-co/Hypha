@@ -1,5 +1,5 @@
 /**
- * `orbit skills` — GET /skills
+ * `hypha skills` — GET /skills
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

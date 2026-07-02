@@ -1,6 +1,6 @@
 /**
- * `orbit models` — GET /models + GET /models/health + POST /models/switch
- * `orbit defaults` — GET /models/defaults/current
+ * `hypha models` — GET /models + GET /models/health + POST /models/switch
+ * `hypha defaults` — GET /models/defaults/current
  */
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -73,7 +73,7 @@ export function registerModels(program: Command): void {
       try {
         const data = await apiPost<any>('/models/switch', { provider, model });
         console.log(chalk.green(`✓ default → ${data.defaultProvider}/${data.defaultModel}`));
-        // Mirror to local config so subsequent `orbit chat` calls use it.
+        // Mirror to local config so subsequent `hypha chat` calls use it.
         writeConfig({ defaultProvider: data.defaultProvider, defaultModel: data.defaultModel });
       } catch (err: any) {
         console.error(chalk.red(`✗ ${err.message}`));

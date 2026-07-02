@@ -47,8 +47,7 @@ const tokenService = getTokenService();
 
 /**
  * GET /users/tasks/feed
- * Global feed of shared ritual tasks (for "回响之谷"). No auth required —
- * this powers the unauthenticated landing experience.
+ * Global feed of shared conversation tasks. No auth required.
  */
 router.get('/tasks/feed', asyncHandler(async (req: Request, res: Response) => {
   const page = req.query.page ? parseInt(req.query.page as string) : 1;
@@ -110,7 +109,7 @@ router.post('/profile/check-in', asyncHandler(async (req: Request, res: Response
 
 /**
  * GET /users/profile/stats
- * Get user stats summary (rituals, likes, streak)
+ * Get user stats summary (tasks, likes, streak)
  */
 router.get('/profile/stats', asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
@@ -200,7 +199,7 @@ router.get('/profile/token-usage/recent', asyncHandler(async (req: Request, res:
 
 /**
  * POST /users/tasks
- * Create a new ritual conversation task
+ * Create a new conversation task
  */
 router.post('/tasks', asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;

@@ -1,9 +1,9 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 /**
- * Ritual symbols associated with a conversation task
+ * Generic process markers associated with a conversation task.
  */
-export interface IRitualSymbols {
+export interface IProcessMarkers {
   triggers: string[];
   stages: string[];
 }
@@ -21,9 +21,9 @@ export interface ITaskTokenUsage {
 }
 
 /**
- * Sub-document: a single round in the ritual
+ * Sub-document: a single message round in the task.
  */
-export interface IRitualRound {
+export interface ITaskRound {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
@@ -31,20 +31,20 @@ export interface IRitualRound {
 }
 
 /**
- * A ritual conversation task — each "问一问" invocation creates one of these.
+ * A conversation task — each persisted task result creates one of these.
  */
 export interface IConversationTask extends Document {
   userId: string;
   sessionId: string;
-  ritualQuestion: string;
-  ritualSymbols: IRitualSymbols;
+  taskInput: string;
+  processMarkers: IProcessMarkers;
   symbols: string[];
   modelId: string;
   modelProvider: string;
   responseContent: string;
   keyInsight?: string;
   exploreQuestions: string[];
-  rounds: IRitualRound[];
+  rounds: ITaskRound[];
   tokenUsage?: ITaskTokenUsage;
   isArchived: boolean;
   isShared: boolean;
@@ -54,7 +54,7 @@ export interface IConversationTask extends Document {
   updatedAt: Date;
 }
 
-const RitualSymbolsSchema = new Schema<IRitualSymbols>(
+const ProcessMarkersSchema = new Schema<IProcessMarkers>(
   {
     triggers: { type: [String], default: [] },
     stages: { type: [String], default: [] },
@@ -74,7 +74,7 @@ const TokenUsageSchema = new Schema<ITaskTokenUsage>(
   { _id: false }
 );
 
-const RitualRoundSchema = new Schema<IRitualRound>(
+const TaskRoundSchema = new Schema<ITaskRound>(
   {
     role: { type: String, enum: ['user', 'assistant'], required: true },
     content: { type: String, required: true },
@@ -98,15 +98,15 @@ const ConversationTaskSchema = new Schema<IConversationTask>(
       // the existing compound { userId, sessionId, userId } uniqueness rather
       // than a separate single-field index.
     },
-    ritualQuestion: {
+    taskInput: {
       type: String,
       required: true,
     },
-    ritualSymbols: {
-      type: RitualSymbolsSchema,
+    processMarkers: {
+      type: ProcessMarkersSchema,
       default: () => ({
-        triggers: ['乾', '坤', '震'],
-        stages: ['起', '承', '转', '合', '观', '悟'],
+        triggers: [],
+        stages: [],
       }),
     },
     symbols: {
@@ -131,7 +131,7 @@ const ConversationTaskSchema = new Schema<IConversationTask>(
       default: [],
     },
     rounds: {
-      type: [RitualRoundSchema],
+      type: [TaskRoundSchema],
       default: [],
     },
     tokenUsage: {

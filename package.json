@@ -1,7 +1,7 @@
 {
-  "name": "orbit-agent",
+  "name": "hypha",
   "version": "1.0.0",
-  "description": "Modular conversation AI agent backend service with multi-LLM support",
+  "description": "Harness-oriented agent system framework for production-grade LLM agent applications",
   "main": "dist/app.js",
   "files": [
     "dist",

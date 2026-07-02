@@ -372,7 +372,7 @@ router.post('/stream', async (req: Request, res: Response) => {
           type: 'done',
           content: fullContent,
           sessionId: session,
-          // Include the resolved model so SSE clients (e.g. the `orbit`
+          // Include the resolved model so SSE clients (e.g. the `hypha`
           // CLI) can label the response without having to re-resolve.
           model: resolvedModel,
           provider: resolvedProvider,

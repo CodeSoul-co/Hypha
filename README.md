@@ -22,11 +22,12 @@ The core idea of Hypha is:
 
 In Hypha, the primary unit is not an isolated agent. It is a harnessed agent system. Each agent system includes not only the agent's role, tools, memory, and process, but also runtime specifications, evaluation rules, trace structure, replay logic, permission policy, regression configuration, and deployment configuration.
 
-## Current Status
+Hypha adopts a **ReAct + FSM** execution model:
 
-This repository currently uses the `generic-framework` branch of [`erwinmsmith/OrbitAgent`](https://github.com/erwinmsmith/OrbitAgent/tree/generic-framework) as the initial TypeScript backend base. The initialization phase keeps the existing runnable engineering foundation and updates the public project identity to Hypha.
+- **ReAct** defines how every agent reasons and acts: observe, reason, plan, act, observe again, and verify.
+- **FSM** defines how the software system implements that loop with explicit states, transitions, guards, and failure handling.
 
-Future development will gradually refactor and extend this base toward Hypha's target architecture. Every change should preserve an engineering-oriented, maintainable, testable, and extensible design.
+This means Hypha agents are not implemented as loose prompt chains or hidden `while` loops. They are explicit, inspectable, replayable state machines around a ReAct-style reasoning and acting loop.
 
 ## Why Hypha?
 
@@ -66,10 +67,10 @@ Hypha treats every agent application as a complete system package:
 
 ```text
 HarnessedAgentSystem = {
-  AgentSpec,
+  ReActAgentSpec,
   ToolSpec,
   MemorySpec,
-  ProcessSpec,
+  FSMProcessSpec,
   RuntimeHarness,
   EvaluationHarness,
   TraceSpec,
@@ -84,6 +85,8 @@ When defining an agent system in Hypha, developers should describe not only how 
 
 ```text
 how it runs;
+how it observes context;
+how it reasons and plans;
 how it calls tools;
 how it reads and writes state;
 how it records traces;
@@ -94,6 +97,48 @@ how updates are regression-tested;
 what its permission boundaries are;
 when human review is required;
 how it is deployed into a business environment.
+```
+
+## ReAct + FSM Execution Model
+
+Hypha requires every agent to be designed around the **ReAct** pattern: reasoning and acting are interleaved instead of separated into a one-shot plan and a blind execution phase.
+
+A Hypha agent should follow this conceptual loop:
+
+```text
+Observe -> Reason / Plan -> Act -> Observe -> Verify -> Continue | Stop | Escalate
+```
+
+Hypha implements this loop with an explicit finite-state machine. A typical runtime FSM may look like:
+
+```text
+Idle
+  -> RunInitialized
+  -> ContextBuilt
+  -> Reasoning
+  -> ActionSelected
+  -> PolicyChecked
+  -> Acting
+  -> ObservationRecorded
+  -> Verifying
+  -> MemorySync
+  -> Reasoning | HumanReview | Completed | Failed
+```
+
+The FSM layer gives Hypha deterministic software-engineering properties around a probabilistic model:
+
+- every state transition can be traced;
+- every tool action can be guarded by policy;
+- every failure can be categorized and replayed;
+- every run can be paused, resumed, reviewed, or terminated;
+- every Domain Pack can customize transition guards without rewriting the agent kernel.
+
+This is the main separation of responsibilities:
+
+```text
+ReAct agent logic = reasoning, planning, acting, verifying
+FSM runtime       = state transitions, guards, retries, trace, replay, escalation
+Production harness = policy, evaluation, audit, deployment, regression
 ```
 
 ## Domain Packs
@@ -116,6 +161,8 @@ EvaluationRubric
 Guardrails
 OutputContract
 DeploymentConfig
+FSMOverrides
+RegressionCases
 ```
 
 With Domain Packs, Hypha can adapt the same agent kernel and production harness to domains such as legal assistance, education, enterprise knowledge bases, research writing, data analysis, customer support, software engineering, and internal workflow automation.
@@ -132,16 +179,18 @@ Hypha's long-term architecture is organized into three layers:
 
 +------------------------------------------------------+
 |                  Hypha Agent Kernel                  |
-| Planner | Executor | Router | Tool Manager | Runtime |
+| ReAct Planner | ReAct Executor | Router | Tool Manager |
 +------------------------------------------------------+
 
 +------------------------------------------------------+
 |                Hypha Production Harness              |
-| Runs | Traces | Evaluation | Replay | Policy | Audit |
+| FSM Runtime | Runs | Traces | Evaluation | Replay      |
+| Policy | Audit | Human Review | Regression             |
 +------------------------------------------------------+
 ```
 
-- **Agent Kernel** provides common agent execution capabilities, including planning, tool calling, routing, memory access, multi-agent coordination, output validation, and error recovery.
+- **Agent Kernel** provides common ReAct execution capabilities, including observation building, planning, reasoning, tool calling, routing, memory access, output validation, and error recovery.
+- **FSM Runtime** makes the ReAct loop explicit through states, transitions, guards, retries, interruption, continuation, and terminal states.
 - **Production Harness** provides run management, trace collection, cost tracking, policy enforcement, failure replay, regression testing, audit logging, and human review.
 - **Domain Packs** define how the framework is adapted to concrete business scenarios.
 
@@ -149,13 +198,56 @@ Hypha's architecture should prioritize clear boundaries, stable interfaces, modu
 
 ## Memory and State Layer
 
-Hypha does not bind itself to a single memory or storage implementation. Depending on the use case, future versions may support:
+Hypha does not bind itself to a single memory or storage implementation. Memory is treated as a pluggable, policy-governed agentic layer rather than a single database choice.
 
-- vector databases such as Milvus or Chroma;
-- relational databases;
-- documents, Markdown, or file-system storage;
-- Redis, MongoDB, or other runtime state stores;
-- agent-native runtime state substrates such as Plasmod.
+Different agent systems may need different memory patterns:
+
+- **Working memory**: short-lived state for the current run or task step.
+- **Episodic memory**: run history, traces, observations, decisions, and tool outcomes.
+- **Semantic memory**: facts, documents, embeddings, and knowledge retrieved by meaning.
+- **Procedural memory**: reusable skills, task procedures, playbooks, and domain rules.
+- **Artifact memory**: files, reports, code, tables, generated outputs, and intermediate artifacts.
+- **Governance memory**: policy decisions, approvals, audit records, evaluation results, and regression outcomes.
+
+Depending on the use case, Hypha should support multiple memory backends and mixed memory modes:
+
+- **Vector databases**, such as Milvus, Chroma, pgvector, Qdrant, Weaviate, or other embedding stores.
+- **Relational databases**, such as PostgreSQL, MySQL, SQLite, or other SQL systems for structured state and transactional records.
+- **Document and file-system storage**, such as Markdown, JSON, local files, object storage, or repository-backed artifacts.
+- **Runtime state stores**, such as Redis, MongoDB, or other low-latency state layers.
+- **Hybrid memory**, where vector search provides semantic recall while relational storage provides authoritative state, versioning, permissions, and provenance.
+- **Agent-native substrates**, such as Plasmod or similar runtime state, event, memory, and materialized-view systems.
+
+A future `MemoryProvider` interface should make these modes interchangeable:
+
+```text
+MemoryProvider = {
+  read(scope, query)
+  search(scope, query, options)
+  write(scope, record, policy)
+  update(scope, recordId, patch)
+  invalidate(scope, recordId, reason)
+  summarize(scope, options)
+  audit(scope, options)
+}
+```
+
+A `MemorySpec` should declare not only where memory is stored, but also how it is used:
+
+```text
+MemorySpec = {
+  providers,
+  memoryTypes,
+  readPolicy,
+  writePolicy,
+  freshnessPolicy,
+  provenancePolicy,
+  retentionPolicy,
+  privacyPolicy,
+  retrievalStrategy,
+  hybridJoinStrategy
+}
+```
 
 Hypha and Plasmod can be complementary:
 
@@ -170,50 +262,15 @@ Hypha defines how an agent system is built, run, evaluated, and governed. Plasmo
 
 Every part of Hypha should follow these principles:
 
+- **ReAct-first agent design**: every agent must expose reasoning, acting, observation, and verification as explicit phases.
+- **FSM-first runtime implementation**: every run must move through explicit states and guarded transitions.
 - **Modular boundaries**: agent kernel, harness, domain packs, memory, policy, evaluation, and deployment need clear interfaces.
+- **Memory-provider neutrality**: vector, relational, document, runtime-state, and hybrid memory modes should be supported through adapters.
 - **Maintainability first**: demo logic should not be frozen into framework core; shared capabilities should become stable abstractions.
 - **Extensibility first**: new models, tools, storage backends, domains, and deployment modes should be integrated through plugins or configuration when possible.
 - **Observability and replayability**: runs, traces, errors, cost, evaluation, and review records should be first-class framework capabilities.
 - **Testing and regression**: framework capabilities need unit, integration, and regression testing strategies.
 - **Production constraints upfront**: permissions, audit, human review, output contracts, and deployment configuration should not be afterthoughts.
 
-## Repository Boundaries
-
-The default runnable product in this repository is the Hypha API service under `src/`. Core extension areas such as LLM providers, tools, skills, memory, prompts, workflows, and API routes should stay in `src/` with stable interfaces and tests.
-
-Presentation clients are separate from the service core. The current CLI is kept as an example client in `examples/cli/`; future web, desktop, or mobile clients should follow the same pattern and consume the public API instead of importing server internals.
-
-## Local Development
-
-The current base is a TypeScript / Express backend. Before running it locally, prepare Node.js 18+, MongoDB, and Redis.
-
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
-
-Common commands:
-
-```bash
-npm run build
-npm run typecheck
-npm run typecheck:cli
-npm test
-```
-
-Optional CLI example:
-
-```bash
-npm run cli -- --help
-```
-
-Default server URL:
-
-```text
-http://localhost:3000
-```
-
 ## License
-
 MIT

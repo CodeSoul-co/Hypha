@@ -1,5 +1,5 @@
 /**
- * `orbit config` — read/write ~/.orbit/config.json (baseUrl + model preferences)
+ * `hypha config` — read/write ~/.hypha/config.json (baseUrl + model preferences)
  */
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -8,7 +8,7 @@ import { resetClient } from '../http';
 
 export function registerConfig(program: Command): void {
   const cmd = new Command('config')
-    .description('View/edit CLI config (stored in ~/.orbit/config.json)');
+    .description('View/edit CLI config (stored in ~/.hypha/config.json)');
 
   cmd.command('show')
     .description('Print the current effective config')

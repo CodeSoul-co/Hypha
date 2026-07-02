@@ -4,14 +4,14 @@ import { logger } from '../utils/logger';
 
 /**
  * Seed a pre-registered admin account for development
- * Credentials: admin@orbit.local / orbit_admin_2026
+ * Credentials: admin@hypha.local / hypha_admin_2026
  */
 export async function initDevAdminUser(): Promise<{ email: string; password: string } | null> {
   const isDev = process.env.NODE_ENV !== 'production';
   if (!isDev) return null;
 
-  const adminEmail = process.env.DEV_ADMIN_EMAIL || 'admin@orbit.local';
-  const adminPassword = process.env.DEV_ADMIN_PASSWORD || 'orbit_admin_2026';
+  const adminEmail = process.env.DEV_ADMIN_EMAIL || 'admin@hypha.local';
+  const adminPassword = process.env.DEV_ADMIN_PASSWORD || 'hypha_admin_2026';
 
   try {
     const existing = await UserModel.findOne({ email: adminEmail }).select('+password');

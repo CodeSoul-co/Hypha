@@ -1,7 +1,7 @@
 /**
- * `orbit skill ...` — admin subcommands for skill install/uninstall/show/reload.
+ * `hypha skill ...` — admin subcommands for skill install/uninstall/show/reload.
  *
- * Kept in a separate file from skills.ts so the read-only listing (`orbit
+ * Kept in a separate file from skills.ts so the read-only listing (`hypha
  * skills`) stays fast and doesn't drag in axios calls.
  */
 import { Command } from 'commander';

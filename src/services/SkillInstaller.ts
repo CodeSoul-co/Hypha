@@ -2,7 +2,7 @@
  * Skill install / uninstall / list service.
  *
  * The install target is the first writable dir in the SkillManager scan list
- * (typically `~/.orbit/skills/`) so user-installed skills take precedence
+ * (typically `~/.hypha/skills/`) so user-installed skills take precedence
  * over the bundled builtins. All operations work with the on-disk .md file
  * format — there's no separate database; the file IS the record.
  */
@@ -35,7 +35,7 @@ export interface InstallResult {
 /**
  * The first user-writable skill dir. We use the first entry of the manager's
  * dir list; builtins dir (last) is read-only so it's skipped. Falls back to
- * ~/.orbit/skills if the manager hasn't been initialised yet.
+ * ~/.hypha/skills if the manager hasn't been initialised yet.
  */
 function getInstallDir(): string {
   const dirs = (() => {
@@ -48,8 +48,8 @@ function getInstallDir(): string {
     const resolved = d.replace(/^~/, home);
     if (resolved.startsWith(home)) return resolved;
   }
-  // Fallback: ~/.orbit/skills (the conventional default in config.yaml).
-  return path.join(home, '.orbit', 'skills');
+  // Fallback: ~/.hypha/skills (the conventional default in config.yaml).
+  return path.join(home, '.hypha', 'skills');
 }
 
 async function ensureDir(dir: string): Promise<void> {

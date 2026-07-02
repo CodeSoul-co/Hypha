@@ -107,7 +107,7 @@ export class UserService {
     ]);
 
     return {
-      totalRituals: profile.totalRituals,
+      totalTasks: profile.totalTasks,
       totalLikes: profile.totalLikes,
       totalFollowers: profile.totalFollowers,
       totalFollowing: profile.totalFollowing,
@@ -122,7 +122,7 @@ export class UserService {
   // ─── Conversation Tasks ──────────────────────────────────────────────
 
   /**
-   * Create a new ritual conversation task
+   * Create a new conversation task
    */
   async createTask(userId: string, dto: CreateConversationTaskDTO): Promise<IConversationTask> {
     const task = await ConversationTaskModel.create({
@@ -137,8 +137,8 @@ export class UserService {
         : undefined,
     });
 
-    // Increment user's ritual count
-    await UserProfileModel.updateOne({ userId }, { $inc: { totalRituals: 1 } });
+    // Increment user's task count
+    await UserProfileModel.updateOne({ userId }, { $inc: { totalTasks: 1 } });
 
     logger.debug(`[UserService] Created conversation task: ${task._id} for user: ${userId}`);
     return task;

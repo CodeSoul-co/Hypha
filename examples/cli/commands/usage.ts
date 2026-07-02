@@ -1,5 +1,5 @@
 /**
- * `orbit usage` — GET /usage/stats + GET /usage/pricing
+ * `hypha usage` — GET /usage/stats + GET /usage/pricing
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

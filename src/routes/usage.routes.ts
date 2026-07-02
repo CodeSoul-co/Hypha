@@ -201,7 +201,7 @@ router.get('/page', asyncHandler(async (req: Request, res: Response) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OrbitAgent - Token Usage</title>
+  <title>Hypha - Token Usage</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(135deg, #1a1a2e, #16213e); min-height: 100vh; color: #fff; padding: 40px 20px; }
@@ -297,7 +297,7 @@ router.get('/page', asyncHandler(async (req: Request, res: Response) => {
     </div>
 
     <div class="footer">
-      <p>OrbitAgent Token Usage Tracker</p>
+      <p>Hypha Token Usage Tracker</p>
     </div>
   </div>
 </body>

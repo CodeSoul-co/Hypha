@@ -1,5 +1,5 @@
 /**
- * `orbit tools` — GET /tools + POST /tools/execute
+ * `hypha tools` — GET /tools + POST /tools/execute
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

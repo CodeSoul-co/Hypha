@@ -21,8 +21,8 @@ export interface UpdateProfileDTO {
 
 export interface CreateConversationTaskDTO {
   sessionId: string;
-  ritualQuestion: string;
-  ritualSymbols: {
+  taskInput: string;
+  processMarkers: {
     triggers: string[];
     stages: string[];
   };
@@ -65,7 +65,7 @@ export interface PaginatedResult<T> {
 // ─── Aggregation types ─────────────────────────────────────────────────
 
 export interface UserStatsSummary {
-  totalRituals: number;
+  totalTasks: number;
   totalLikes: number;
   totalFollowers: number;
   totalFollowing: number;

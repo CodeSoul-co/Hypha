@@ -804,7 +804,7 @@ const statusEndpoints = [
     response: `{
   "success": true,
   "data": {
-    "service": "OrbitAgent",
+    "service": "Hypha",
     "version": "1.0.0",
     "databases": { "mongodb": { "status": "connected" }, "redis": { "status": "connected" } },
     "llm": { "health": { "anthropic": true, ... }, "availableProviders": [...], "modelCount": 15 }
@@ -854,7 +854,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OrbitAgent - API Documentation</title>
+  <title>Hypha - API Documentation</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0e17; color: #e6edf3; min-height: 100vh; }
@@ -920,7 +920,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 <body>
   <div class="sidebar">
     <div class="sidebar-logo">
-      <h1>OrbitAgent</h1>
+      <h1>Hypha</h1>
       <p>API Documentation v1.0.0</p>
     </div>
     <div class="nav-group">
@@ -945,7 +945,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 
   <div class="main">
     <div class="hero" id="overview">
-      <h1>OrbitAgent API</h1>
+      <h1>Hypha API</h1>
       <p>A modular AI agent backend service with multi-LLM support, temporary and permanent memory, tool calling, workflows, and comprehensive token usage tracking.</p>
       <div class="hero-meta">
         <span><div class="status-dot ${dbHealth.mongodb ? 'green' : 'red'}"></div> MongoDB ${dbHealth.mongodb ? 'Connected' : 'Disconnected'}</span>
@@ -1103,7 +1103,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     </div>
 
     <div class="footer">
-      <p>OrbitAgent API Documentation | Generated at ${timestamp}</p>
+      <p>Hypha API Documentation | Generated at ${timestamp}</p>
       <p style="margin-top:8px;">All endpoints return JSON. Base URL: <code>http://localhost:3000${baseUrl}</code></p>
       <p style="margin-top:4px;"><a href="${baseUrl}/status/page" style="color:#00d9ff;text-decoration:none;">Status Page</a> | <a href="${baseUrl}/usage/page" style="color:#00d9ff;text-decoration:none;">Token Usage Page</a></p>
     </div>
@@ -1184,7 +1184,7 @@ router.get('/json', asyncHandler(async (_req: Request, res: Response) => {
 
   const docs = {
     info: {
-      name: 'OrbitAgent API',
+      name: 'Hypha API',
       version: '1.0.0',
       description: 'Modular AI Agent Backend Service',
       baseUrl: '/api/v1',

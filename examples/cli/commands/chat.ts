@@ -1,5 +1,5 @@
 /**
- * `orbit chat` — POST /chat (or /chat/stream) with optional sessionId.
+ * `hypha chat` — POST /chat (or /chat/stream) with optional sessionId.
  *
  * Multi-turn conversations just pass --session sess_xxx; the server replays
  * the Redis history automatically. There's no client-side message buffer.
@@ -28,7 +28,7 @@ export function registerChat(program: Command): void {
         process.exit(2);
       }
       if (!getToken()) {
-        console.error(chalk.red('✗ Not logged in. Run `orbit login --dev` first.'));
+        console.error(chalk.red('✗ Not logged in. Run `hypha login --dev` first.'));
         process.exit(1);
       }
 

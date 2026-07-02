@@ -1,6 +1,6 @@
-// Constants for OrbitAgent
+// Constants for Hypha
 
-export const APP_NAME = 'OrbitAgent';
+export const APP_NAME = 'Hypha';
 export const APP_VERSION = '1.0.0';
 
 // Error codes

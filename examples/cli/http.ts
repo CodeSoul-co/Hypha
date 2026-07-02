@@ -26,7 +26,7 @@ function getClient(): AxiosInstance {
       if (err.response?.status === 401 && token) {
         clearToken();
         process.stderr.write(
-          `\n[!] Token rejected (401). Run \`orbit login\` or \`orbit login --dev\`.\n`
+          `\n[!] Token rejected (401). Run \`hypha login\` or \`hypha login --dev\`.\n`
         );
       }
       return Promise.reject(err);
@@ -35,7 +35,7 @@ function getClient(): AxiosInstance {
   return client;
 }
 
-/** Reset the cached client — call after `orbit config` changes baseUrl. */
+/** Reset the cached client — call after `hypha config` changes baseUrl. */
 export function resetClient(): void { client = null; }
 
 export interface ApiSuccess<T> { success: true; data: T; }

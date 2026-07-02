@@ -109,6 +109,10 @@ class Application {
     // Initialize databases
     await initializeDatabases();
 
+    // Seed development/test users as soon as persistence is ready. This keeps
+    // app.initialize() and app.start() behavior consistent.
+    await this.initializeDevUsers();
+
     // Initialize LLM Manager
     await initializeLLM();
 
@@ -135,6 +139,17 @@ class Application {
     await initializePromptManager();
 
     logger.info('All services initialized');
+  }
+
+  private async initializeDevUsers(): Promise<void> {
+    if (this.config.app.env === 'production') return;
+
+    try {
+      await initDevAdminUser();
+      await initDevTestUser();
+    } catch (err) {
+      logger.warn('Dev user initialization failed:', err);
+    }
   }
 
   private ensureDefaultProviderAvailable(): void {

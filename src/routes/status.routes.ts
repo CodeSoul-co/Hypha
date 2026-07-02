@@ -46,7 +46,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OrbitAgent - API Status</title>
+  <title>Hypha - API Status</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(135deg, #1a1a2e, #16213e); min-height: 100vh; color: #fff; padding: 40px 20px; }
@@ -81,7 +81,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
 </head>
 <body>
   <div class="container">
-    <h1>OrbitAgent</h1>
+    <h1>Hypha</h1>
     <p class="subtitle">Modular AI Agent Backend Service</p>
     <div class="status-grid">
       <div class="card">
@@ -90,7 +90,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
           <span class="card-title">MongoDB</span>
         </div>
         <div class="card-content">
-          <div>Database: <strong>orbit_agent</strong></div>
+          <div>Database: <strong>hypha</strong></div>
           <div>Status: <span class="badge ${mongoClass}">${mongoStatus}</span></div>
         </div>
       </div>
@@ -128,7 +128,7 @@ router.get('/page', asyncHandler(async (_req: Request, res: Response) => {
       ${modelsHtml}
     </div>
     <div class="footer">
-      <p>OrbitAgent v1.0.0 | All systems operational</p>
+      <p>Hypha v1.0.0 | All systems operational</p>
       <p style="margin-top:8px">Base URL: <code style="background:rgba(0,217,255,0.1);padding:4px 8px;border-radius:4px">http://localhost:3000/api/v1</code></p>
     </div>
   </div>
@@ -148,11 +148,11 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   res.json({
     success: true,
     data: {
-      service: 'OrbitAgent',
+      service: 'Hypha',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       databases: {
-        mongodb: { status: dbHealth.mongodb ? 'connected' : 'disconnected', database: 'orbit_agent' },
+        mongodb: { status: dbHealth.mongodb ? 'connected' : 'disconnected', database: 'hypha' },
         redis: { status: dbHealth.redis ? 'connected' : 'disconnected', type: 'temporary_memory' }
       },
       llm: {

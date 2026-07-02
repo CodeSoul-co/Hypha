@@ -1,13 +1,13 @@
 services:
   - type: keyvalue
-    name: orbit-agent-kv
+    name: hypha-kv
     plan: free
     region: oregon
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []
 
   - type: web
-    name: orbit-agent-api
+    name: hypha-api
     runtime: node
     plan: free
     region: oregon
@@ -22,7 +22,7 @@ services:
       - key: REDIS_URL
         fromService:
           type: keyvalue
-          name: orbit-agent-kv
+          name: hypha-kv
           property: connectionString
       - key: JWT_SECRET
         generateValue: true

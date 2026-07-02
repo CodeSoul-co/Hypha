@@ -1,5 +1,5 @@
 /**
- * CLI state on disk. Two files in $ORBIT_HOME (default ~/.orbit):
+ * CLI state on disk. Two files in $HYPHA_HOME (default ~/.hypha):
  *   - config.json — baseUrl + optional model preferences
  *   - token.json  — JWT for Authorization header
  *
@@ -9,11 +9,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const HOME = process.env.ORBIT_HOME || path.join(os.homedir(), '.orbit');
+const HOME = process.env.HYPHA_HOME || path.join(os.homedir(), '.hypha');
 const CONFIG_PATH = path.join(HOME, 'config.json');
 const TOKEN_PATH = path.join(HOME, 'token.json');
 
-export interface OrbitConfig {
+export interface HyphaCliConfig {
   baseUrl: string;
   /** Optional default model; commands fall back to server's `defaults/current`. */
   defaultModel?: string;
@@ -36,26 +36,26 @@ export function getHome(): string { return HOME; }
 
 export function getBaseUrl(): string {
   // Override precedence: env var > config file > default
-  if (process.env.ORBIT_BASE_URL) return process.env.ORBIT_BASE_URL;
+  if (process.env.HYPHA_BASE_URL) return process.env.HYPHA_BASE_URL;
   const cfg = readConfig();
   return cfg?.baseUrl || 'http://127.0.0.1:3000/api/v1';
 }
 
 export function getDefaultModel(): string | undefined {
-  return process.env.ORBIT_MODEL || readConfig()?.defaultModel;
+  return process.env.HYPHA_MODEL || readConfig()?.defaultModel;
 }
 
 export function getDefaultProvider(): string | undefined {
-  return process.env.ORBIT_PROVIDER || readConfig()?.defaultProvider;
+  return process.env.HYPHA_PROVIDER || readConfig()?.defaultProvider;
 }
 
-export function readConfig(): OrbitConfig | null {
+export function readConfig(): HyphaCliConfig | null {
   if (!fs.existsSync(CONFIG_PATH)) return null;
   try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')); }
   catch { return null; }
 }
 
-export function writeConfig(patch: Partial<OrbitConfig>): OrbitConfig {
+export function writeConfig(patch: Partial<HyphaCliConfig>): HyphaCliConfig {
   ensureHome();
   const current = readConfig() || { baseUrl: 'http://127.0.0.1:3000/api/v1' };
   const next = { ...current, ...patch };

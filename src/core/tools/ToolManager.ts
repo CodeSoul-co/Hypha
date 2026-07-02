@@ -52,7 +52,7 @@ class LocalMCPClient implements MCPClient {
       });
 
       this.client = new Client({
-        name: 'orbit-agent',
+        name: 'hypha',
         version: '1.0.0',
       }, {
         capabilities: {

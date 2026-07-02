@@ -1,7 +1,7 @@
 /**
- * `orbit login` — POST /auth/login (or /dev/token) and persist the JWT.
+ * `hypha login` — POST /auth/login (or /dev/token) and persist the JWT.
  *
- * The token file lives in ~/.orbit/token.json (chmod 600) and is automatically
+ * The token file lives in ~/.hypha/token.json (chmod 600) and is automatically
  * picked up by every subsequent command via the Authorization header.
  */
 import { Command } from 'commander';
@@ -90,7 +90,7 @@ export function registerLogin(program: Command): void {
 export function registerLogout(program: Command): void {
   program
     .command('logout')
-    .description('Remove the stored JWT (alias of `orbit login logout`)')
+    .description('Remove the stored JWT (alias of `hypha login logout`)')
     .action(() => {
       const t = readToken();
       if (!t) { console.log(chalk.gray('Not logged in.')); return; }
@@ -102,10 +102,10 @@ export function registerLogout(program: Command): void {
 export function registerWhoami(program: Command): void {
   program
     .command('whoami')
-    .description('Show the currently stored login (alias of `orbit login whoami`)')
+    .description('Show the currently stored login (alias of `hypha login whoami`)')
     .action(() => {
       const t = readToken();
-      if (!t) { console.log(chalk.yellow('Not logged in. Run `orbit login` or `orbit login --dev`.')); return; }
+      if (!t) { console.log(chalk.yellow('Not logged in. Run `hypha login` or `hypha login --dev`.')); return; }
       console.log(`${t.email}${t.isAdmin ? chalk.cyan(' (admin)') : ''}`);
       console.log(chalk.gray(`  token saved: ${t.savedAt}`));
       console.log(chalk.gray(`  token userId: ${t.userId}`));

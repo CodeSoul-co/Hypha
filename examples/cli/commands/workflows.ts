@@ -1,5 +1,5 @@
 /**
- * `orbit workflows` — GET /workflows + POST /workflows/:name/execute
+ * `hypha workflows` — GET /workflows + POST /workflows/:name/execute
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

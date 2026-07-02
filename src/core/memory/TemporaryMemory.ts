@@ -245,7 +245,7 @@ export class TemporaryMemory implements TempMemoryOptions {
     try {
       // Get all session keys
       const pattern = `${REDIS_KEYS.TEMP_MEMORY}:*`;
-      const keys = await redis.keys(pattern.replace('orbit:', ''));
+      const keys = await redis.keys(pattern);
 
       let cleaned = 0;
       for (const key of keys) {
