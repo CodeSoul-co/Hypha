@@ -39,13 +39,13 @@ Stage 0 defines the public contracts needed before concrete providers and UI sur
 - `@hypha/fsm`: FSM process specs, state/transition validation, snapshots, and explicit transition application.
 - `@hypha/kernel`: ReAct agent specs, phase order, action/observation contracts, and inference-facing runtime interfaces.
 - `@hypha/domain`: DomainPack, TaskSchema, WorkflowSpec, and `compileWorkflowToFSM`.
-- `@hypha/harness`: run records, event-first trace recording, session projection, replay/regression fixtures, and user-scoped session queues.
-- `@hypha/models`: provider-neutral model request/response contracts and a mock provider.
-- `@hypha/memory`: structured store, vector index, artifact store, embedding, and unified MemoryProvider interfaces.
+- `@hypha/harness`: run records, event-first runtime, trace recording, session projection, replay/regression fixtures, and user-scoped session queues.
+- `@hypha/models`: provider-neutral model request/response contracts, mock provider, OpenAI provider, and OpenAI-compatible provider normalization.
+- `@hypha/memory`: structured store, vector index, artifact store, embedding, unified MemoryProvider interfaces, and hybrid memory provider.
 - `@hypha/tools`: ToolSpec, registry, governed runner, policy check, and trace recording.
 - `@hypha/mcp`: MCP integration specs, mock gateway, capability filtering, and ToolSpec normalization.
 - `@hypha/skills`: SkillSpec, agent-bound skill refs, activation policies, and progressive disclosure resolver.
-- `@hypha/inference`: inference manager plus prefix cache and KV cache provider contracts.
+- `@hypha/inference`: inference manager, prefix/KV cache manager, and reasoning strategies.
 - `@hypha/adapters-local`: in-memory local reference adapters for structured records, vectors, and artifacts.
 - `@hypha/testing`: golden trace and state-path helpers.
 
@@ -56,6 +56,8 @@ Stage 0 defines the public contracts needed before concrete providers and UI sur
 ## Runtime Mode
 
 hypha defaults to single-user operation for local and self-hosted deployments. Runtime records, API boundaries, memory, token usage, and session queues must still remain user-scoped so the same code paths can support future multi-user clients without changing storage or concurrency semantics.
+
+Session is not part of DomainPack. DomainPack may declare `SessionProfileSpec` and metadata schema defaults. Runtime Session references a DomainPack and optional SessionProfile. Run is a concrete execution under Session. Event is the smallest fact inside a Run. Trace, replay, audit, regression, session views, and run views are projected from events.
 
 ## Commands
 

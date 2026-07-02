@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '@hypha/core';
-import { InMemoryTraceRecorder, SessionProjector, UserScopedSessionQueue } from './index';
+import { EventFirstRuntime, InMemoryTraceRecorder, SessionProjector, UserScopedSessionQueue } from './index';
 
 describe('@hypha/harness stage-0 contracts', () => {
   it('keeps session views derived from events', async () => {
@@ -30,5 +30,54 @@ describe('@hypha/harness stage-0 contracts', () => {
     expect(queue.dequeue('user-a', 'same')?.id).toBe('a1');
     expect(queue.dequeue('user-b', 'same')?.id).toBe('b1');
     expect(queue.dequeue('user-a', 'same')?.id).toBe('a2');
+  });
+
+  it('derives session, run, replay, audit, and regression state from events', async () => {
+    const runtime = new EventFirstRuntime();
+    await runtime.createSession({
+      id: 'session_1',
+      userId: 'owner',
+      domainPackRef: { id: 'minimal', version: '0.0.0' },
+    });
+    await runtime.createRun({
+      id: 'run_1',
+      sessionId: 'session_1',
+      userId: 'owner',
+      workflowRef: { id: 'workflow', version: '0.0.0' },
+    });
+    await runtime.appendRunEvent({
+      id: 'state_1',
+      type: 'fsm.state.entered',
+      runId: 'run_1',
+      sessionId: 'session_1',
+      userId: 'owner',
+      payload: { stateId: 'Reasoning' },
+    });
+    await runtime.appendRunEvent({
+      id: 'done_1',
+      type: 'run.completed',
+      runId: 'run_1',
+      sessionId: 'session_1',
+      userId: 'owner',
+      payload: { output: 'ok' },
+    });
+
+    await expect(runtime.projectSession('session_1')).resolves.toMatchObject({
+      id: 'session_1',
+      domainPackRef: { id: 'minimal' },
+    });
+    await expect(runtime.projectRun('run_1')).resolves.toMatchObject({
+      status: 'completed',
+      output: 'ok',
+    });
+    await expect(runtime.projectReplay('run_1')).resolves.toMatchObject({
+      statePath: ['Reasoning'],
+    });
+    await expect(runtime.projectAudit('run_1')).resolves.toMatchObject({
+      eventCount: 3,
+    });
+    await expect(runtime.projectRegression('run_1')).resolves.toMatchObject({
+      eventTypes: ['run.created', 'fsm.state.entered', 'run.completed'],
+    });
   });
 });

@@ -216,7 +216,9 @@ tests/     当前 app 行为的单元测试和集成测试
 
 `packages/inference` 保留给 agent 内部 inference 编排，后续用于承载 prefix 和 KV cache 管理等机制。
 
-Stage 0 的 package contract 已覆盖 core spec/event/policy、ReAct kernel contract、FSM 状态转移、DomainPack workflow 编译、harness trace/replay/queue、model/memory/tool/MCP/skill 抽象、inference cache 边界和本地 reference adapter。使用 `npm run test:packages` 验证这些 contract。
+Stage 0/1 的 package contract 已覆盖 core spec/event/policy、ReAct kernel contract、FSM 状态转移、DomainPack workflow 编译、event-first runtime projection、model/memory/tool/MCP/skill 抽象、inference KV/prefix cache 管理、reasoning strategy 和本地 reference adapter。使用 `npm run test:packages` 验证这些 contract。
+
+DomainPack 声明领域定义和可选 SessionProfile 默认值；Session 是运行时上下文容器并引用 DomainPack，Run 是 Session 下的一次具体执行，Event 是 trace、replay、audit、regression 和 state projection 的 source-of-truth fact record。
 
 ## Memory 与状态层
 

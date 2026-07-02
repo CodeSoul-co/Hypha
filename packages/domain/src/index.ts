@@ -20,6 +20,7 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   name: string;
   taskSchemas: TaskSchemaSpec[];
   outputContracts?: OutputContractSpec[];
+  sessionProfiles?: SessionProfileSpec[];
   workflows: WorkflowSpec[];
   defaultWorkflow?: string;
   allowedSkills?: SkillRef[];
@@ -32,6 +33,27 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   regressionCases?: RegressionSpec[];
   deploymentProfile?: DeploymentSpec;
   metadata?: Record<string, unknown>;
+}
+
+export interface SessionProfileSpec extends VersionedSpec, SpecMetadata {
+  metadataSchema?: JsonSchema;
+  defaultMetadata?: Record<string, unknown>;
+  defaultMemoryProfileRef?: string;
+  defaultToolProfileRef?: string;
+  defaultMCPProfileRef?: string;
+  defaultSkillPolicyRef?: string;
+  defaultPolicyRefs?: string[];
+}
+
+export interface DomainSessionInitialization {
+  domainPackRef: SpecRef;
+  sessionProfileRef?: SpecRef;
+  metadata: Record<string, unknown>;
+  memoryProfileRef?: string;
+  toolProfileRef?: string;
+  mcpProfileRef?: string;
+  skillPolicyRef?: string;
+  policyRefs?: string[];
 }
 
 export interface TaskSchemaSpec extends VersionedSpec, SpecMetadata {
@@ -97,6 +119,31 @@ export interface WorkflowCompileOptions {
   agentRef?: SpecRef;
 }
 
+export interface DomainSessionInitOptions {
+  profileId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export function initializeDomainSession(
+  domainPack: DomainPackSpec,
+  options: DomainSessionInitOptions = {}
+): DomainSessionInitialization {
+  const profile = selectSessionProfile(domainPack, options.profileId);
+  return {
+    domainPackRef: { id: domainPack.id, version: domainPack.version },
+    sessionProfileRef: profile ? { id: profile.id, version: profile.version } : undefined,
+    metadata: {
+      ...(profile?.defaultMetadata ?? {}),
+      ...(options.metadata ?? {}),
+    },
+    memoryProfileRef: profile?.defaultMemoryProfileRef,
+    toolProfileRef: profile?.defaultToolProfileRef,
+    mcpProfileRef: profile?.defaultMCPProfileRef,
+    skillPolicyRef: profile?.defaultSkillPolicyRef,
+    policyRefs: profile?.defaultPolicyRefs,
+  };
+}
+
 export function compileWorkflowToFSM(
   domainPack: DomainPackSpec,
   options: WorkflowCompileOptions = {}
@@ -140,6 +187,18 @@ function selectWorkflow(domainPack: DomainPackSpec, workflowId?: string): Workfl
     throw new Error(`Workflow not found in domain pack: ${selectedId ?? '<first>'}`);
   }
   return workflow;
+}
+
+function selectSessionProfile(
+  domainPack: DomainPackSpec,
+  profileId?: string
+): SessionProfileSpec | undefined {
+  if (!profileId) return domainPack.sessionProfiles?.[0];
+  const profile = domainPack.sessionProfiles?.find((candidate) => candidate.id === profileId);
+  if (!profile) {
+    throw new Error(`SessionProfile not found in domain pack: ${profileId}`);
+  }
+  return profile;
 }
 
 function inferTerminalKind(stateId: string): FSMStateSpec['kind'] {

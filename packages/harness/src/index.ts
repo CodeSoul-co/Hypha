@@ -7,6 +7,8 @@ import {
 } from '@hypha/core';
 import type { FSMSnapshot } from '@hypha/fsm';
 
+export * from './runtime';
+
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;
   sessionId?: string;

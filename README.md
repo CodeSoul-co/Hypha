@@ -212,7 +212,9 @@ The current Express API service lives in `apps/server/src`. The CLI example live
 
 `packages/inference` is reserved for agent-internal inference orchestration, including future prefix and KV cache management.
 
-Stage 0 package contracts now cover core specs/events/policy, ReAct kernel contracts, FSM state transitions, DomainPack workflow compilation, harness trace/replay queues, model/memory/tool/MCP/skill abstractions, inference cache boundaries, and local reference adapters. Run `npm run test:packages` for these contract tests.
+Stage 0/1 package contracts now cover core specs/events/policy, ReAct kernel contracts, FSM state transitions, DomainPack workflow compilation, event-first runtime projections, model/memory/tool/MCP/skill abstractions, inference KV/prefix cache management, reasoning strategies, and local reference adapters. Run `npm run test:packages` for these contract tests.
+
+DomainPack declares domain definitions and optional SessionProfile defaults; Session is a runtime context container that references a DomainPack, Run is a concrete execution under Session, and Event is the source-of-truth fact record for trace, replay, audit, regression, and state projection.
 
 ## Memory and State Layer
 

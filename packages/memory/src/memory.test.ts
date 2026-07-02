@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryManager, type MemoryProvider, type MemoryRecord } from './index';
+import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/adapters-local';
+import {
+  HybridMemoryProvider,
+  MemoryManager,
+  type EmbeddingProvider,
+  type MemoryProvider,
+  type MemoryRecord,
+} from './index';
 
 describe('@hypha/memory manager contract', () => {
   it('requires provenance-bearing writes through MemoryProvider', async () => {
@@ -31,5 +38,36 @@ describe('@hypha/memory manager contract', () => {
         { requireProvenance: true }
       )
     ).resolves.toEqual({ recordId: 'memory_1' });
+  });
+
+  it('writes structured source of truth and indexes semantic records', async () => {
+    const embeddings: EmbeddingProvider = {
+      embed: async () => [[1, 0]],
+    };
+    const provider = new HybridMemoryProvider({
+      structured: new InMemoryStructuredStore(),
+      vector: new InMemoryVectorIndexProvider(),
+      embeddings,
+    });
+
+    await expect(
+      provider.write(
+        { userId: 'owner', runId: 'run_1' },
+        {
+          id: 'semantic_1',
+          type: 'semantic',
+          value: 'hypha event-first runtime',
+          provenance: { eventId: 'event_1' },
+          createdAt: '2026-07-02T00:00:00.000Z',
+        },
+        { requireProvenance: true }
+      )
+    ).resolves.toEqual({ recordId: 'semantic_1', vectorIndexed: true });
+
+    await expect(
+      provider.search({ userId: 'owner', runId: 'run_1' }, { vector: [1, 0], topK: 1 })
+    ).resolves.toMatchObject([
+      { record: { id: 'semantic_1' }, score: 1, provenance: { eventId: 'event_1' } },
+    ]);
   });
 });

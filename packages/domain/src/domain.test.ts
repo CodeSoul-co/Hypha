@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compileWorkflowToFSM, type DomainPackSpec } from './index';
+import { compileWorkflowToFSM, initializeDomainSession, type DomainPackSpec } from './index';
 
 describe('@hypha/domain workflow compiler', () => {
   it('compiles a DomainPack WorkflowSpec into an FSMProcessSpec', () => {
@@ -41,5 +41,35 @@ describe('@hypha/domain workflow compiler', () => {
     expect(fsm.id).toBe('minimal.intake-reason-finalize.fsm');
     expect(fsm.states.map((state) => state.id)).toEqual(['Intake', 'ReasonAct', 'Finalize']);
     expect(fsm.transitions[1]).toMatchObject({ from: 'ReasonAct', to: 'Finalize' });
+  });
+
+  it('initializes runtime session metadata from DomainPack SessionProfile without embedding Session', () => {
+    const domainPack: DomainPackSpec = {
+      id: 'minimal',
+      version: '0.0.0',
+      name: 'Minimal',
+      taskSchemas: [],
+      workflows: [],
+      sessionProfiles: [
+        {
+          id: 'default',
+          version: '0.0.0',
+          defaultMetadata: { locale: 'en' },
+          defaultMemoryProfileRef: 'local-memory',
+        },
+      ],
+    };
+
+    expect(
+      initializeDomainSession(domainPack, {
+        profileId: 'default',
+        metadata: { requestId: 'req_1' },
+      })
+    ).toMatchObject({
+      domainPackRef: { id: 'minimal', version: '0.0.0' },
+      sessionProfileRef: { id: 'default', version: '0.0.0' },
+      metadata: { locale: 'en', requestId: 'req_1' },
+      memoryProfileRef: 'local-memory',
+    });
   });
 });

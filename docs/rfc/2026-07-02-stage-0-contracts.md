@@ -18,13 +18,13 @@ The accepted Stage 0 contracts are:
 - `kernel`: ReAct agent contracts.
 - `fsm`: explicit state machine contracts and snapshots.
 - `domain`: DomainPack and WorkflowSpec compiler to FSMProcessSpec.
-- `harness`: trace, replay, regression, run/session, and user-scoped queues.
-- `models`: provider-neutral model request/response contracts.
-- `memory`: structured, vector, artifact, embedding, and unified memory contracts.
+- `harness`: event-first runtime, trace, replay, regression, run/session, and user-scoped queues.
+- `models`: provider-neutral model request/response contracts and OpenAI-compatible normalization.
+- `memory`: structured, vector, artifact, embedding, hybrid provider, and unified memory contracts.
 - `tools`: governed ToolSpec and ToolRunner.
 - `mcp`: MCP capability normalization.
 - `skills`: agent-bound SkillSpec and progressive disclosure.
-- `inference`: agent-internal inference manager with prefix and KV cache boundaries.
+- `inference`: agent-internal inference manager with prefix/KV cache management and reasoning strategies.
 
 ## Consequences
 

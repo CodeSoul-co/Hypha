@@ -184,3 +184,5 @@ export class MemoryManager {
     return this.provider.write(scope, record, policy);
   }
 }
+
+export * from './hybrid';
