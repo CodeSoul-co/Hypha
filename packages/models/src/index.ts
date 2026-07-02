@@ -37,6 +37,8 @@ export interface ModelCapabilities {
   jsonMode?: boolean;
   embeddings?: boolean;
   reasoning?: boolean;
+  prefixCaching?: boolean;
+  kvCaching?: boolean;
 }
 
 export interface ModelMessage {
@@ -58,6 +60,20 @@ export interface ReasoningOptions {
   budgetTokens?: number;
 }
 
+export interface ModelCacheControl {
+  prefixContent?: string;
+  kvCacheValue?: unknown;
+  kvCacheRef?: {
+    id: string;
+    provider: string;
+    modelAlias: string;
+    scope: 'run' | 'session' | 'workspace';
+    expiresAt?: string;
+    metadata?: Record<string, unknown>;
+  };
+  metadata?: Record<string, unknown>;
+}
+
 export interface ModelRequest<TInput = ModelMessage[]> {
   runId: string;
   stepId: string;
@@ -69,6 +85,7 @@ export interface ModelRequest<TInput = ModelMessage[]> {
   reasoning?: ReasoningOptions;
   temperature?: number;
   maxTokens?: number;
+  cache?: ModelCacheControl;
   metadata?: Record<string, unknown>;
 }
 
@@ -151,6 +168,8 @@ export const modelCapabilitiesSchema = z.object({
   jsonMode: z.boolean().optional(),
   embeddings: z.boolean().optional(),
   reasoning: z.boolean().optional(),
+  prefixCaching: z.boolean().optional(),
+  kvCaching: z.boolean().optional(),
 });
 
 export const modelProviderSpecSchema = versionedSpecSchema
@@ -191,6 +210,19 @@ export const modelRequestSchema = z.object({
   }).optional(),
   temperature: z.number().optional(),
   maxTokens: z.number().int().positive().optional(),
+  cache: z.object({
+    prefixContent: z.string().optional(),
+    kvCacheValue: z.unknown().optional(),
+    kvCacheRef: z.object({
+      id: z.string().min(1),
+      provider: z.string().min(1),
+      modelAlias: z.string().min(1),
+      scope: z.enum(['run', 'session', 'workspace']),
+      expiresAt: z.string().optional(),
+      metadata: z.record(z.unknown()).optional(),
+    }).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -213,6 +245,8 @@ export const modelProviderSpecJsonSchema: JsonSchema = {
         jsonMode: { type: 'boolean' },
         embeddings: { type: 'boolean' },
         reasoning: { type: 'boolean' },
+        prefixCaching: { type: 'boolean' },
+        kvCaching: { type: 'boolean' },
       },
     },
     apiKeyEnv: { type: 'string' },
@@ -236,6 +270,8 @@ export const modelProviderSpecExample: ModelProviderSpec = {
     toolCalling: true,
     jsonMode: true,
     reasoning: true,
+    prefixCaching: true,
+    kvCaching: true,
   },
 };
 

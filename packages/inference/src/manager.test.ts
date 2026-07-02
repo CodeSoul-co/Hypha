@@ -140,6 +140,123 @@ describe('@hypha/inference', () => {
     await expect(expiredManager.getKv(kv)).resolves.toBeNull();
   });
 
+  it('enforces KV cache expiry on inference manager reads', async () => {
+    const kvCache = new InMemoryKvCacheProvider();
+    const kv = {
+      id: 'expired',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'run' as const,
+      expiresAt: '2000-01-01T00:00:00.000Z',
+    };
+    await kvCache.put(kv, { stale: true });
+
+    const manager = new InferenceManager({ kvCache });
+    manager.register({
+      id: 'mock',
+      infer: async (request) => ({
+        id: 'response_expired',
+        output: {
+          metadata: request.metadata,
+          kv: request.resolvedKvCacheValue,
+        },
+      }),
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_1',
+        stepId: 'step_expired',
+        modelAlias: 'default',
+        input: 'hello',
+        kvCache: kv,
+      })
+    ).resolves.toMatchObject({
+      cache: { kvCacheHit: false, kvCacheMissReason: 'expired' },
+      output: {
+        metadata: { kvCacheHit: false, kvCacheMissReason: 'expired' },
+      },
+    });
+    await expect(kvCache.get(kv)).resolves.toBeNull();
+  });
+
+  it('writes provider KV cache values and reuses them on later inference', async () => {
+    const kvCache = new InMemoryKvCacheProvider();
+    const kv = { id: 'kv_write', provider: 'mock', modelAlias: 'default', scope: 'session' as const };
+    const manager = new InferenceManager({ kvCache });
+    manager.register({
+      id: 'mock',
+      infer: async (request) => ({
+        id: 'response_write',
+        output: {
+          kv: request.resolvedKvCacheValue,
+        },
+        nextKvCacheValue: { handle: 'provider-cache-handle' },
+      }),
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_1',
+        stepId: 'step_write',
+        modelAlias: 'default',
+        input: 'hello',
+        cachePolicy: {
+          writeKvCache: { ref: kv },
+        },
+      })
+    ).resolves.toMatchObject({
+      cache: { kvCacheWritten: true, kvCacheWriteRef: kv },
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_1',
+        stepId: 'step_read',
+        modelAlias: 'default',
+        input: 'hello again',
+        cachePolicy: {
+          kvCache: kv,
+        },
+      })
+    ).resolves.toMatchObject({
+      cache: { kvCacheHit: true, kvCacheRef: kv },
+      output: { kv: { handle: 'provider-cache-handle' } },
+    });
+  });
+
+  it('does not overwrite an existing KV cache hit when write_if_missing is used', async () => {
+    const kvCache = new InMemoryKvCacheProvider();
+    const kv = { id: 'kv_existing', provider: 'mock', modelAlias: 'default', scope: 'session' as const };
+    await kvCache.put(kv, { handle: 'existing' });
+
+    const manager = new InferenceManager({ kvCache });
+    manager.register({
+      id: 'mock',
+      infer: async () => ({
+        id: 'response_existing',
+        output: null,
+        nextKvCacheValue: { handle: 'new' },
+      }),
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_1',
+        stepId: 'step_existing',
+        modelAlias: 'default',
+        input: 'hello',
+        cachePolicy: {
+          kvCache: kv,
+          writeKvCache: { ref: kv, mode: 'write_if_missing' },
+        },
+      })
+    ).resolves.toMatchObject({
+      cache: { kvCacheHit: true, kvCacheWritten: false },
+    });
+    await expect(kvCache.get(kv)).resolves.toEqual({ handle: 'existing' });
+  });
+
   it('runs CoT and ToT reasoning strategies through provider abstraction', async () => {
     const calls: unknown[] = [];
     const provider: InferenceProvider = {

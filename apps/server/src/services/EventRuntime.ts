@@ -10,13 +10,19 @@ import {
   type FSMSnapshot,
 } from '@hypha/fsm';
 import {
+  hashContent,
   InferenceManager,
   InMemoryKvCacheProvider,
   InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
+  type InferenceCachePolicy,
   type InferenceProvider,
   type InferenceRequest,
   type InferenceResponse,
+  type KvCacheRef,
+  type KvCacheScope,
+  type KvCacheWriteMode,
+  type PrefixCacheRef,
   type ReasoningOptions,
 } from '@hypha/inference';
 import {
@@ -24,7 +30,7 @@ import {
   type ReActAgentRuntime,
   type ReActAgentSpec,
 } from '@hypha/kernel';
-import type { ModelProvider, ModelToolDescriptor } from '@hypha/models';
+import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import { GovernedToolRunner, ToolRegistry, type ToolSpec } from '@hypha/tools';
 import type {
   StageResult,
@@ -79,6 +85,16 @@ export interface ChatInferenceInput {
   messages: LLMMessage[];
   options?: ChatOptions;
   reasoning?: ReasoningOptions;
+  cachePolicy?: InferenceCachePolicy;
+}
+
+interface ChatCachePolicyBuildInput {
+  userId: string;
+  sessionId: string;
+  runId: string;
+  modelAlias: string;
+  provider: string;
+  cache?: unknown;
 }
 
 interface LLMInferenceInput {
@@ -105,6 +121,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
       tools: request.input.options?.tools?.map(legacyToolToModelTool),
       temperature: request.input.options?.temperature,
       maxTokens: request.input.options?.maxTokens,
+      cache: modelCacheControlFromInferenceRequest(request),
       metadata: request.metadata,
     });
     const response = modelResponseToChatResponse(modelResponse, {
@@ -115,6 +132,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
       id: response.id,
       output: response,
       usage: response.usage,
+      nextKvCacheValue: extractNextKvCacheValue(modelResponse.raw),
       raw: modelResponse.raw,
     };
   }
@@ -137,6 +155,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
       tools: request.input.options?.tools?.map(legacyToolToModelTool),
       temperature: request.input.options?.temperature,
       maxTokens: request.input.options?.maxTokens,
+      cache: modelCacheControlFromInferenceRequest(request),
       metadata: request.metadata,
     })) {
       index += 1;
@@ -145,10 +164,37 @@ class ServerLLMInferenceProvider implements InferenceProvider {
         id: `${request.runId}:${request.stepId}:stream:${index}`,
         output: chunk,
         usage: chunk.usage,
+        nextKvCacheValue: extractNextKvCacheValue(event),
         raw: event,
       };
     }
   }
+}
+
+function modelCacheControlFromInferenceRequest(
+  request: InferenceRequest<LLMInferenceInput>
+): ModelCacheControl | undefined {
+  if (!request.resolvedPrefixContent && !request.resolvedKvCacheValue && !request.kvCache) {
+    return undefined;
+  }
+  return {
+    prefixContent: request.resolvedPrefixContent,
+    kvCacheValue: request.resolvedKvCacheValue,
+    kvCacheRef: request.kvCache,
+    metadata: request.metadata,
+  };
+}
+
+function extractNextKvCacheValue(raw: unknown): unknown | undefined {
+  const record = asRecord(raw);
+  if (!record) return undefined;
+  if ('kvCache' in record) return record.kvCache;
+  if ('kv_cache' in record) return record.kv_cache;
+  const cache = asRecord(record.cache);
+  if (!cache) return undefined;
+  if ('kvCache' in cache) return cache.kvCache;
+  if ('kv_cache' in cache) return cache.kv_cache;
+  return undefined;
 }
 
 function legacyToolToModelTool(tool: NonNullable<ChatOptions['tools']>[number]): ModelToolDescriptor {
@@ -289,6 +335,7 @@ class EventRuntimeService {
         runId: input.runId,
         stepId: input.stepId,
         modelAlias: resolved.model,
+        cachePolicy: input.cachePolicy,
         input: {
           messages: input.messages,
           options: {
@@ -341,6 +388,7 @@ class EventRuntimeService {
             messages: context.messages as LLMMessage[],
             options: input.options,
           },
+          cachePolicy: input.cachePolicy,
           metadata: {
             surface: 'event-runtime.react-chat',
           },
@@ -368,6 +416,7 @@ class EventRuntimeService {
           messages: requestInput.messages,
           options: requestInput.options,
           reasoning: input.reasoning,
+          cachePolicy: request.cachePolicy ?? input.cachePolicy,
         });
         return {
           id: response.id,
@@ -424,6 +473,7 @@ class EventRuntimeService {
         runId: input.runId,
         stepId: input.stepId,
         modelAlias: resolved.model,
+        cachePolicy: input.cachePolicy,
         input: {
           messages: input.messages,
           options: {
@@ -493,6 +543,10 @@ class EventRuntimeService {
       model,
       provider: llmManager.getProviderFromModel(model),
     };
+  }
+
+  resolveChatCachePolicy(input: ChatCachePolicyBuildInput): InferenceCachePolicy | undefined {
+    return buildChatInferenceCachePolicy(input);
   }
 
   async runGovernedTool<TOutput>(input: {
@@ -1351,6 +1405,155 @@ function isChatResponse(value: unknown): value is ChatResponse {
       && 'content' in value
       && 'finishReason' in value
   );
+}
+
+function buildChatInferenceCachePolicy(
+  input: ChatCachePolicyBuildInput
+): InferenceCachePolicy | undefined {
+  const config = input.cache === true ? { kvCache: true, writeKvCache: true } : asRecord(input.cache);
+  if (!config) return undefined;
+  const prefix = parsePrefixCacheRef(config.prefix);
+  const kvCache = parseKvCacheRef(config.kvCache, input, 'default');
+  const writeKvCache = parseKvCacheWritePolicy(config.writeKvCache, input, kvCache);
+  if (!prefix && !kvCache && !writeKvCache) return undefined;
+  return {
+    prefix,
+    kvCache,
+    writeKvCache,
+  };
+}
+
+function parsePrefixCacheRef(input: unknown): PrefixCacheRef | undefined {
+  const record = asRecord(input);
+  if (!record) return undefined;
+  const id = stringValue(record.id);
+  const version = stringValue(record.version);
+  const contentHash = stringValue(record.contentHash);
+  if (!id || !version || !contentHash) return undefined;
+  return {
+    id,
+    version,
+    contentHash,
+    tokenCount: numberValue(record.tokenCount),
+    metadata: asRecord(record.metadata),
+  };
+}
+
+function parseKvCacheWritePolicy(
+  input: unknown,
+  defaults: ChatCachePolicyBuildInput,
+  readRef: KvCacheRef | undefined
+): InferenceCachePolicy['writeKvCache'] {
+  if (!input) return undefined;
+  if (input === true) {
+    return { ref: readRef ?? createDefaultKvCacheRef(defaults, 'default') };
+  }
+  const record = asRecord(input);
+  if (!record) return undefined;
+  const nestedRef = parseKvCacheRef(record.ref, defaults, 'write');
+  const inlineRef = parseKvCacheRef(record, defaults, 'write');
+  const ref = nestedRef ?? inlineRef ?? readRef ?? createDefaultKvCacheRef(defaults, 'default');
+  return {
+    ref,
+    mode: parseKvCacheWriteMode(record.mode),
+    ...('value' in record ? { value: record.value } : {}),
+  };
+}
+
+function parseKvCacheRef(
+  input: unknown,
+  defaults: ChatCachePolicyBuildInput,
+  fallbackId: string
+): KvCacheRef | undefined {
+  if (!input) return undefined;
+  if (input === true) return createDefaultKvCacheRef(defaults, fallbackId);
+  const record = asRecord(input);
+  if (!record) return undefined;
+  const scope = parseKvCacheScope(record.scope);
+  const rawId = stringValue(record.id) ?? fallbackId;
+  return {
+    id: scopedKvCacheId(defaults, scope, rawId),
+    provider: defaults.provider,
+    modelAlias: defaults.modelAlias,
+    scope,
+    expiresAt: parseExpiresAt(record),
+    metadata: {
+      ...asRecord(record.metadata),
+      declaredId: rawId,
+      userScoped: true,
+    },
+  };
+}
+
+function createDefaultKvCacheRef(
+  defaults: ChatCachePolicyBuildInput,
+  id: string
+): KvCacheRef {
+  const scope: KvCacheScope = 'session';
+  return {
+    id: scopedKvCacheId(defaults, scope, id),
+    provider: defaults.provider,
+    modelAlias: defaults.modelAlias,
+    scope,
+    metadata: {
+      declaredId: id,
+      userScoped: true,
+    },
+  };
+}
+
+function scopedKvCacheId(
+  defaults: ChatCachePolicyBuildInput,
+  scope: KvCacheScope,
+  declaredId: string
+): string {
+  const scopeKey = scope === 'run'
+    ? defaults.runId
+    : scope === 'session'
+      ? defaults.sessionId
+      : 'workspace';
+  return `chatkv_${hashContent([
+    defaults.userId,
+    scope,
+    scopeKey,
+    defaults.provider,
+    defaults.modelAlias,
+    declaredId,
+  ].join(':')).slice(0, 32)}`;
+}
+
+function parseKvCacheScope(input: unknown): KvCacheScope {
+  return input === 'run' || input === 'workspace' ? input : 'session';
+}
+
+function parseKvCacheWriteMode(input: unknown): KvCacheWriteMode | undefined {
+  if (input === 'write_if_missing' || input === 'refresh' || input === 'write_through') {
+    return input;
+  }
+  return undefined;
+}
+
+function parseExpiresAt(record: Record<string, unknown>): string | undefined {
+  const expiresAt = stringValue(record.expiresAt);
+  if (expiresAt) return expiresAt;
+  const ttlMs = numberValue(record.ttlMs);
+  return ttlMs && ttlMs > 0
+    ? new Date(Date.now() + ttlMs).toISOString()
+    : undefined;
+}
+
+function stringValue(input: unknown): string | undefined {
+  return typeof input === 'string' && input.trim() ? input.trim() : undefined;
+}
+
+function numberValue(input: unknown): number | undefined {
+  return typeof input === 'number' && Number.isFinite(input) ? input : undefined;
+}
+
+function asRecord(input: unknown): Record<string, unknown> | undefined {
+  return input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : undefined;
 }
 
 function inferToolSideEffect(

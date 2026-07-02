@@ -5,6 +5,7 @@ export interface InferenceRequest<TInput = unknown> {
   modelAlias: string;
   providerId?: string;
   input: TInput;
+  cachePolicy?: InferenceCachePolicy;
   prefix?: PrefixCacheRef;
   resolvedPrefixContent?: string;
   kvCache?: KvCacheRef;
@@ -18,6 +19,7 @@ export interface InferenceResponse<TOutput = unknown> {
   output: TOutput;
   usage?: InferenceUsage;
   cache?: InferenceCacheUsage;
+  nextKvCacheValue?: unknown;
   raw?: unknown;
 }
 
@@ -39,14 +41,37 @@ export interface KvCacheRef {
   id: string;
   provider: string;
   modelAlias: string;
-  scope: 'run' | 'session' | 'workspace';
+  scope: KvCacheScope;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
+}
+
+export type KvCacheScope = 'run' | 'session' | 'workspace';
+
+export type InferenceCacheMissReason = 'missing' | 'expired' | 'not_configured';
+
+export type KvCacheWriteMode = 'write_through' | 'write_if_missing' | 'refresh';
+
+export interface KvCacheWritePolicy {
+  ref: KvCacheRef;
+  value?: unknown;
+  mode?: KvCacheWriteMode;
+}
+
+export interface InferenceCachePolicy {
+  prefix?: PrefixCacheRef;
+  kvCache?: KvCacheRef;
+  writeKvCache?: KvCacheWritePolicy;
 }
 
 export interface InferenceCacheUsage {
   prefixHit?: boolean;
   kvCacheHit?: boolean;
+  prefixRef?: PrefixCacheRef;
+  kvCacheRef?: KvCacheRef;
+  kvCacheMissReason?: InferenceCacheMissReason;
+  kvCacheWritten?: boolean;
+  kvCacheWriteRef?: KvCacheRef;
   reusedTokens?: number;
 }
 

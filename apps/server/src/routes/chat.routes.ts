@@ -82,7 +82,7 @@ function sendSSEError(
 router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const { sessionId, message, model, provider, agentId } = req.body;
+    const { sessionId, message, model, provider, agentId, cache } = req.body;
     const userId = req.user?.userId || req.apiKey?.userId;
 
     if (!userId) {
@@ -115,8 +115,8 @@ router.post(
         userId,
         sessionId: session,
         agentId,
-        input: { message: trimmedMessage, model, provider, agentId },
-        metadata: { surface: 'http.chat' },
+        input: { message: trimmedMessage, model, provider, agentId, cacheEnabled: Boolean(cache) },
+        metadata: { surface: 'http.chat', cacheEnabled: Boolean(cache) },
       });
       runId = runtimeRun.runId;
       const messageId = generateMessageId();
@@ -224,6 +224,14 @@ router.post(
       // Get available tools
       const toolManager = getToolManager();
       const tools = toolManager?.listTools() || [];
+      const cachePolicy = runtime.resolveChatCachePolicy({
+        userId,
+        sessionId: session,
+        runId,
+        modelAlias: resolvedChatModel.model,
+        provider: resolvedChatModel.provider,
+        cache,
+      });
 
       // Call LLM
       const t3 = Date.now();
@@ -241,6 +249,7 @@ router.post(
           model,
           tools: tools.length > 0 ? tools : undefined,
         },
+        cachePolicy,
       });
       await runtime.record(runId, 'agent.reasoning.completed', {
         responseId: response.id,
@@ -397,7 +406,7 @@ router.post(
 // Bug 3 Fix: Empty/whitespace message returns SSE error
 // ============================================================
 router.post('/stream', async (req: Request, res: Response) => {
-  const { sessionId, message, model, provider } = req.body;
+  const { sessionId, message, model, provider, cache } = req.body;
   const userId = req.user?.userId || req.apiKey?.userId;
 
   // Bug 3 Fix: Must set SSE headers BEFORE any validation
@@ -451,8 +460,8 @@ router.post('/stream', async (req: Request, res: Response) => {
     const runtimeRun = await runtime.startRun({
       userId,
       sessionId: session,
-      input: { message: trimmedMessage, model, provider, stream: true },
-      metadata: { surface: 'http.chat.stream' },
+      input: { message: trimmedMessage, model, provider, stream: true, cacheEnabled: Boolean(cache) },
+      metadata: { surface: 'http.chat.stream', cacheEnabled: Boolean(cache) },
     });
     runId = runtimeRun.runId;
     // Get conversation history
@@ -486,6 +495,14 @@ router.post('/stream', async (req: Request, res: Response) => {
     const resolvedChatModel = runtime.resolveChatModel(model);
     const resolvedModel = resolvedChatModel.model;
     const resolvedProvider = provider || resolvedChatModel.provider;
+    const cachePolicy = runtime.resolveChatCachePolicy({
+      userId,
+      sessionId: session,
+      runId,
+      modelAlias: resolvedModel,
+      provider: resolvedChatModel.provider,
+      cache,
+    });
     await runtime.transition(runId, 'Reasoning');
     await runtime.record(runId, 'agent.reasoning.started', {
       modelAlias: resolvedModel,
@@ -498,6 +515,7 @@ router.post('/stream', async (req: Request, res: Response) => {
       modelAlias: resolvedModel,
       messages: llmMessages,
       options: { model },
+      cachePolicy,
     })) {
       if (chunk.type === 'content' && chunk.content) {
         fullContent += chunk.content;

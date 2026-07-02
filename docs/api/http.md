@@ -85,7 +85,11 @@ Returns process health.
   "message": "Summarize the active workflow",
   "model": "default",
   "provider": "openai",
-  "agentId": "default"
+  "agentId": "default",
+  "cache": {
+    "kvCache": true,
+    "writeKvCache": { "mode": "write_if_missing", "ttlMs": 3600000 }
+  }
 }
 ```
 
@@ -96,6 +100,7 @@ Returns process health.
 | `model` | no | Model alias or provider model name. |
 | `provider` | no | Provider id. |
 | `agentId` | no | Agent profile id. |
+| `cache` | no | `true` enables session-scoped KV cache read/write. An object may define `prefix`, `kvCache`, and `writeKvCache`; KV refs are normalized per user, session, provider, and model. |
 
 Chat responses include `sessionId`, `runId`, `messageId`, `content`, `model`, `provider`, `finishReason`, `usage`, and optional `toolCalls`.
 

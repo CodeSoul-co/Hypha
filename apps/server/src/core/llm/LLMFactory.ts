@@ -391,6 +391,7 @@ export class LLMManagerModelProvider implements HyphaModelProvider<HyphaModelReq
       tools: request.tools?.map(modelToolToLegacyTool),
       temperature: request.temperature,
       maxTokens: request.maxTokens,
+      cache: request.cache,
     });
     return chatResponseToModelResponse(response);
   }
@@ -402,6 +403,7 @@ export class LLMManagerModelProvider implements HyphaModelProvider<HyphaModelReq
       tools: request.tools?.map(modelToolToLegacyTool),
       temperature: request.temperature,
       maxTokens: request.maxTokens,
+      cache: request.cache,
     })) {
       yield streamChunkToModelStreamEvent(chunk);
     }

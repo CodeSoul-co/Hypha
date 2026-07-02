@@ -35,6 +35,21 @@ export interface ChatOptions {
   systemPrompt?: string;
   tools?: ToolDefinition[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  cache?: LLMCacheOptions;
+}
+
+export interface LLMCacheOptions {
+  prefixContent?: string;
+  kvCacheValue?: unknown;
+  kvCacheRef?: {
+    id: string;
+    provider: string;
+    modelAlias: string;
+    scope: 'run' | 'session' | 'workspace';
+    expiresAt?: string;
+    metadata?: Record<string, unknown>;
+  };
+  metadata?: Record<string, unknown>;
 }
 
 // Tool definition

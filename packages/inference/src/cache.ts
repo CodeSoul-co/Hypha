@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import type {
   KvCacheProvider,
   KvCacheRef,
+  KvCacheScope,
   PrefixCacheProvider,
   PrefixCacheRef,
 } from './types';
@@ -18,7 +19,7 @@ export interface KvCacheCreateInput {
   id: string;
   provider: string;
   modelAlias: string;
-  scope: KvCacheRef['scope'];
+  scope: KvCacheScope;
   ttlMs?: number;
   metadata?: Record<string, unknown>;
 }
@@ -53,7 +54,7 @@ export class InferenceCacheManager {
   }
 
   async putKv(input: KvCacheCreateInput, value: unknown): Promise<KvCacheRef> {
-    const expiresAt = input.ttlMs
+    const expiresAt = input.ttlMs !== undefined
       ? new Date(this.now().getTime() + input.ttlMs).toISOString()
       : undefined;
     const ref: KvCacheRef = {
@@ -69,7 +70,7 @@ export class InferenceCacheManager {
   }
 
   async getKv(ref: KvCacheRef): Promise<unknown | null> {
-    if (ref.expiresAt && new Date(ref.expiresAt).getTime() <= this.now().getTime()) {
+    if (isKvCacheExpired(ref, this.now())) {
       await this.options.kvCache.invalidate(ref, 'expired');
       return null;
     }
@@ -79,4 +80,8 @@ export class InferenceCacheManager {
 
 export function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+export function isKvCacheExpired(ref: KvCacheRef, now: Date = new Date()): boolean {
+  return Boolean(ref.expiresAt && new Date(ref.expiresAt).getTime() <= now.getTime());
 }

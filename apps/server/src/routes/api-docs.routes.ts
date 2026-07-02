@@ -146,7 +146,11 @@ const chatEndpoints = [
   "message": "Hello, how are you?",
   "model": "claude-3-5-sonnet-20241022",  // optional, uses default
   "provider": "anthropic",         // optional
-  "agentId": "default"             // optional
+  "agentId": "default",            // optional
+  "cache": {                       // optional
+    "kvCache": true,
+    "writeKvCache": { "mode": "write_if_missing", "ttlMs": 3600000 }
+  }
 }`,
     response: `{
   "success": true,
@@ -175,7 +179,8 @@ const chatEndpoints = [
   "sessionId": "sess_abc123",
   "message": "Write a story...",
   "model": "claude-3-5-sonnet-20241022",
-  "provider": "anthropic"
+  "provider": "anthropic",
+  "cache": true
 }`,
     response: `data: {"type":"content","content":"Once "}
 data: {"type":"content","content":"upon "}

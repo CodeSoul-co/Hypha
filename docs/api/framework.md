@@ -94,20 +94,22 @@ FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardEx
 
 | Method | Description |
 | --- | --- |
-| `capabilities()` | Returns chat, streaming, tool calling, JSON mode, embedding, and reasoning support. |
+| `capabilities()` | Returns chat, streaming, tool calling, JSON mode, embedding, reasoning, prefix caching, and KV caching support. |
 | `generate(request)` | Produces a normalized model response. |
 | `stream(request)` | Optional streaming event source. |
 | `countTokens(input)` | Optional token accounting. |
 
-`ModelRequest` contains `runId`, `stepId`, `modelAlias`, optional `instructions`, `input`, `tools`, `responseFormat`, `reasoning`, `temperature`, `maxTokens`, and `metadata`.
+`ModelRequest` contains `runId`, `stepId`, `modelAlias`, optional `instructions`, `input`, `tools`, `responseFormat`, `reasoning`, `temperature`, `maxTokens`, `cache`, and `metadata`.
+
+`ModelCacheControl` carries optional `prefixContent`, `kvCacheValue`, `kvCacheRef`, and metadata. Providers that support native cache handles can consume `kvCacheValue` and return a new handle through `InferenceResponse.nextKvCacheValue`.
 
 OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `type`, `baseUrl`, `apiKey` or `apiKeyEnv`, `providerModelByAlias`, `capabilities`, and `timeoutMs`.
 
 ## Inference
 
-`InferenceRequest` contains `runId`, `stepId`, optional `agentId`, `modelAlias`, optional `providerId`, `input`, optional `prefix`, optional `kvCache`, `trace`, `metadata`, and resolved cache fields supplied by the inference manager.
+`InferenceRequest` contains `runId`, `stepId`, optional `agentId`, `modelAlias`, optional `providerId`, `input`, optional `cachePolicy`, optional `prefix`, optional `kvCache`, `trace`, `metadata`, and resolved cache fields supplied by the inference manager.
 
-`InferenceResponse` contains `id`, `output`, optional `usage`, optional cache usage, and optional raw provider payload. `InferenceManager.stream(providerId, request)` yields the same response envelope for streaming providers.
+`InferenceResponse` contains `id`, `output`, optional `usage`, optional cache usage, optional `nextKvCacheValue`, and optional raw provider payload. `InferenceManager.stream(providerId, request)` yields the same response envelope for streaming providers.
 
 Cache references:
 
@@ -116,7 +118,9 @@ Cache references:
 | `PrefixCacheRef` | `id`, `version`, `contentHash`, optional `tokenCount`, `metadata`. |
 | `KvCacheRef` | `id`, `provider`, `modelAlias`, `scope`, optional `expiresAt`, `metadata`. |
 
-`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`. On cache hits, providers receive `resolvedPrefixContent` and `resolvedKvCacheValue` on the request object so adapters can inject prompt prefixes or provider-native cache handles. Cache hit metadata is applied to both non-streaming and streaming inference.
+`InferenceCachePolicy` supports `prefix`, `kvCache`, and `writeKvCache`. `writeKvCache` accepts a target ref, optional explicit value, and mode `write_through`, `write_if_missing`, or `refresh`.
+
+`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`. `InferenceManager` enforces `expiresAt` before provider calls, invalidates expired refs, annotates hit or miss metadata, and applies cache usage to non-streaming and streaming inference. On cache hits, providers receive `resolvedPrefixContent` and `resolvedKvCacheValue`; when a provider returns `nextKvCacheValue`, the manager can write it back according to `cachePolicy.writeKvCache`.
 
 `ReasoningOrchestrator` supports `direct`, `cot`, `tot`, and `self_consistency`. `ReasoningOptions` include `branches`, `maxDepth`, `revealReasoning`, and an optional evaluator.
 
