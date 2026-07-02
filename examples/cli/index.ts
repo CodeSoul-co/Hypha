@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * `orbit` — command-line client for the OrbitAgent backend.
+ * `orbit` — example command-line client for the Hypha API service.
  *
- * Design: this binary is a thin shell over the existing REST API. It
- * intentionally does NOT re-implement any business logic (chat, auth,
- * memory, workflow execution). Every command funnels through src/cli/http.ts
- * which hits the same endpoints the web UI / mobile app use.
+ * This binary is a presentation client over the REST API. It intentionally
+ * does NOT re-implement business logic such as chat, auth, memory, or workflow
+ * execution. Every command funnels through examples/cli/http.ts and hits the
+ * same public endpoints a web or mobile client would use.
  *
- * Subcommands live in src/cli/commands/*. Add a new command by creating a
+ * Subcommands live in examples/cli/commands/*. Add a new command by creating a
  * file there that exports a Command and registering it below.
  */
 import { Command } from 'commander';
@@ -28,7 +28,7 @@ const program = new Command();
 
 program
   .name('orbit')
-  .description('OrbitAgent CLI — thin client over the REST API')
+  .description('Hypha CLI example — thin client over the REST API')
   .version('1.0.0');
 
 // Shared pre-action: print where the CLI is talking to + which user.
@@ -55,7 +55,7 @@ registerConfig(program);
 // Default `orbit` with no args → status line.
 program.action(() => {
   const token = readToken();
-  console.log(chalk.bold('orbit ') + chalk.gray('— OrbitAgent CLI'));
+  console.log(chalk.bold('orbit ') + chalk.gray('— Hypha CLI example'));
   console.log(`  base:  ${chalk.cyan(getBaseUrl())}`);
   console.log(`  home:  ${chalk.cyan(getHome())}`);
   console.log(`  user:  ${token ? chalk.green(token.email) : chalk.yellow('not logged in')}  (${chalk.gray('orbit login')})`);

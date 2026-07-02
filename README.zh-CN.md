@@ -181,6 +181,12 @@ Hypha 的所有部分都应遵循以下原则：
 - **测试与回归**：框架能力需要配套单元测试、集成测试和回归测试策略。
 - **生产约束前置**：权限、审计、人工审核、输出契约和部署配置不应在上线前才补。
 
+## 仓库边界
+
+本仓库默认可运行产品是 `src/` 下的 Hypha API 服务。LLM provider、tool、skill、memory、prompt、workflow 和 API route 等核心扩展区域应保留在 `src/`，并通过稳定接口和测试维护。
+
+CLI、Web、桌面或移动端应用都应作为独立展示媒介存在。当前 CLI 保留为 `examples/cli/` 下的示例客户端；后续展示层应消费公开 API，而不是直接导入服务内部实现。
+
 ## 本地开发
 
 当前 base 是一个 TypeScript / Express backend。运行前请准备 Node.js 18+、MongoDB 和 Redis。
@@ -196,7 +202,14 @@ npm run dev
 ```bash
 npm run build
 npm run typecheck
+npm run typecheck:cli
 npm test
+```
+
+可选 CLI 示例：
+
+```bash
+npm run cli -- --help
 ```
 
 默认服务地址：

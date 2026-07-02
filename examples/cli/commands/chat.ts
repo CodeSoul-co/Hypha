@@ -7,7 +7,7 @@
 import { Command } from 'commander';
 import axios from 'axios';
 import chalk from 'chalk';
-import { generateSessionId, now } from '../../utils/helpers';
+import { randomUUID } from 'crypto';
 import { apiPost } from '../http';
 import { getDefaultModel, getDefaultProvider, getToken } from '../config';
 import { unwrap } from './_util';
@@ -44,6 +44,10 @@ export function registerChat(program: Command): void {
         await runBlocking(body, session);
       }
     });
+}
+
+function generateSessionId(): string {
+  return `sess_${randomUUID()}`;
 }
 
 async function readStdin(): Promise<string> {

@@ -1,8 +1,7 @@
 /**
- * Thin HTTP client wrapping the existing OrbitAgent REST API. Every command
- * in src/cli/commands/* funnels through here so auth + baseUrl + error
- * handling stay consistent. We deliberately do NOT duplicate any backend
- * logic — the CLI is a pure client.
+ * Thin HTTP client wrapping the Hypha REST API. Every command in
+ * examples/cli/commands/* funnels through here so auth, baseUrl, and error
+ * handling stay consistent. The CLI stays a pure presentation client.
  */
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { getBaseUrl, getToken, clearToken } from './config';

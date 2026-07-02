@@ -23,6 +23,9 @@ npm-debug.log*
 *.swo
 .DS_Store
 
+# Local contributor guide
+AGENTS.md
+
 # Test coverage
 coverage/
 

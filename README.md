@@ -177,6 +177,12 @@ Every part of Hypha should follow these principles:
 - **Testing and regression**: framework capabilities need unit, integration, and regression testing strategies.
 - **Production constraints upfront**: permissions, audit, human review, output contracts, and deployment configuration should not be afterthoughts.
 
+## Repository Boundaries
+
+The default runnable product in this repository is the Hypha API service under `src/`. Core extension areas such as LLM providers, tools, skills, memory, prompts, workflows, and API routes should stay in `src/` with stable interfaces and tests.
+
+Presentation clients are separate from the service core. The current CLI is kept as an example client in `examples/cli/`; future web, desktop, or mobile clients should follow the same pattern and consume the public API instead of importing server internals.
+
 ## Local Development
 
 The current base is a TypeScript / Express backend. Before running it locally, prepare Node.js 18+, MongoDB, and Redis.
@@ -192,7 +198,14 @@ Common commands:
 ```bash
 npm run build
 npm run typecheck
+npm run typecheck:cli
 npm test
+```
+
+Optional CLI example:
+
+```bash
+npm run cli -- --help
 ```
 
 Default server URL:
