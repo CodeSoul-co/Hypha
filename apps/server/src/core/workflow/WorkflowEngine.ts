@@ -16,6 +16,8 @@ import { logger } from '../../utils/logger';
 import { generateId, now } from '../../utils/helpers';
 import { LLMMessage } from '../llm/types';
 
+const UNRESOLVED_CONDITION_OPERAND = Symbol('unresolved condition operand');
+
 export class WorkflowEngine implements IWorkflowEngine {
   private workflows: Map<string, WorkflowDefinition> = new Map();
   private executions: Map<string, WorkflowExecution> = new Map();
@@ -178,8 +180,14 @@ export class WorkflowEngine implements IWorkflowEngine {
     let currentStageId: string | undefined = workflow.stages[0]?.id;
     const visitedStages = new Set<string>();
 
-    while (currentStageId && currentStageId !== 'end' && execution.status === 'running') {
-      // Prevent infinite loops
+    for (
+      let transitions = 0;
+      currentStageId && currentStageId !== 'end' && execution.status === 'running';
+      transitions += 1
+    ) {
+      if (transitions > workflow.stages.length) {
+        throw new Error(`Workflow exceeded declared stage count: ${workflow.name}`);
+      }
       if (visitedStages.has(currentStageId)) {
         throw new Error(`Circular dependency detected in workflow: ${currentStageId}`);
       }
@@ -435,20 +443,51 @@ export class WorkflowEngine implements IWorkflowEngine {
   }
 
   private evaluateCondition(condition: string, variables: Record<string, any>): boolean {
-    // Simple condition evaluation
-    try {
-      // Replace variable references
-      let expr = condition;
-      for (const [key, value] of Object.entries(variables)) {
-        expr = expr.replace(new RegExp(`\\$${key}`, 'g'), JSON.stringify(value));
-      }
+    const expr = condition.trim();
+    if (!expr) return false;
+    if (expr === 'true') return true;
+    if (expr === 'false') return false;
 
-      // Evaluate as expression
-      return !!eval(expr);
-    } catch {
-      logger.warn(`Failed to evaluate condition: ${condition}`);
-      return false;
+    const comparison = expr.match(/^(.+?)\s*(===|!==|==|!=)\s*(.+)$/);
+    if (comparison) {
+      const [, leftExpr, operator, rightExpr] = comparison;
+      const left = this.resolveConditionOperand(leftExpr, variables);
+      const right = this.resolveConditionOperand(rightExpr, variables);
+      if (left === UNRESOLVED_CONDITION_OPERAND || right === UNRESOLVED_CONDITION_OPERAND) {
+        return false;
+      }
+      switch (operator) {
+        case '===':
+          return left === right;
+        case '!==':
+          return left !== right;
+        case '==':
+          return String(left) === String(right);
+        case '!=':
+          return String(left) !== String(right);
+        default:
+          return false;
+      }
     }
+
+    const value = this.resolveConditionOperand(expr, variables);
+    return value === UNRESOLVED_CONDITION_OPERAND ? false : Boolean(value);
+  }
+
+  private resolveConditionOperand(expression: string, variables: Record<string, any>): unknown {
+    const value = expression.trim();
+    if (/^\$\{[^}]+\}$/.test(value)) return undefined;
+    if (value.startsWith('$')) return variables[value.slice(1)];
+    if (/^{{[^}]+}}$/.test(value)) return variables[value.slice(2, -2)];
+    if (/^(['"]).*\1$/.test(value)) return value.slice(1, -1);
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    if (value === 'null') return null;
+    if (value === 'undefined') return undefined;
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric) && value !== '') return numeric;
+    if (Object.prototype.hasOwnProperty.call(variables, value)) return variables[value];
+    return UNRESOLVED_CONDITION_OPERAND;
   }
 
   private resolveVariables(template: any, variables: Record<string, any>): any {

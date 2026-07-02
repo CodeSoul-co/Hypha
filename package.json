@@ -13,7 +13,7 @@
     "README.md"
   ],
   "scripts": {
-    "dev": "ts-node -r dotenv/config -P apps/server/tsconfig.json apps/server/src/app.ts",
+    "dev": "npm run build:packages && ts-node -r dotenv/config -P apps/server/tsconfig.json apps/server/src/app.ts",
     "build": "npm run build:packages && npm run build:server && npm run build:cli",
     "build:packages": "tsc -b packages/core packages/inference packages/fsm packages/kernel packages/harness packages/models packages/memory packages/tools packages/mcp packages/skills packages/domain packages/adapters-local packages/testing",
     "build:server": "tsc -p apps/server/tsconfig.json",

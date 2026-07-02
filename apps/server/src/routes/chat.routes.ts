@@ -7,6 +7,7 @@ import { getLLMManager } from '../core/llm/LLMFactory';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
+import { getEventRuntime } from '../services/EventRuntime';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
@@ -107,8 +108,18 @@ router.post(
     const session = sessionId || generateSessionId();
     const lock = acquireSessionLock(session, userId);
     await lock.wait();
+    const runtime = getEventRuntime();
+    let runId: string | undefined;
 
     try {
+      const runtimeRun = await runtime.startRun({
+        userId,
+        sessionId: session,
+        agentId,
+        input: { message: trimmedMessage, model, provider, agentId },
+        metadata: { surface: 'http.chat' },
+      });
+      runId = runtimeRun.runId;
       const messageId = generateMessageId();
       const startTime = Date.now();
       const llmManager = getLLMManager();
@@ -136,7 +147,17 @@ router.post(
 
       // Save to temporary memory
       const t1 = Date.now();
+      await runtime.record(runId, 'memory.write.requested', {
+        target: 'temporary',
+        role: 'user',
+        messageId,
+      }, 'memory:user');
       await tempMemory.addMessage(session, userMsg);
+      await runtime.record(runId, 'memory.write.committed', {
+        target: 'temporary',
+        role: 'user',
+        messageId,
+      }, 'memory:user');
       logger.debug(`[Chat] Redis: addMessage done`, {
         durationMs: Date.now() - t1,
         sessionId: session,
@@ -145,6 +166,15 @@ router.post(
       // Get conversation history
       const t2 = Date.now();
       const history = await tempMemory.getMessages(session, undefined, userId);
+      await runtime.transition(runId, 'ContextBuilt', { messageCount: history.length });
+      await runtime.record(runId, 'context.build.completed', {
+        source: 'temporary-memory',
+        messageCount: history.length,
+      }, 'context');
+      await runtime.record(runId, 'memory.read.completed', {
+        target: 'temporary',
+        messageCount: history.length,
+      }, 'memory:read');
       logger.debug(`[Chat] Redis: getMessages done`, {
         durationMs: Date.now() - t2,
         sessionId: session,
@@ -180,6 +210,10 @@ router.post(
 
         const processedContext = await skillManager.executeSkills(skillContext);
         contextVariables = processedContext.variables || {};
+        await runtime.record(runId, 'skill.selected', {
+          agentId,
+          variableKeys: Object.keys(contextVariables),
+        }, 'skills');
 
         // Update the last message if modified
         if (processedContext.currentMessage.content !== trimmedMessage) {
@@ -196,10 +230,34 @@ router.post(
 
       // Call LLM
       const t3 = Date.now();
-      const response = await llmManager.chat(llmMessages, {
-        model,
-        tools: tools.length > 0 ? tools : undefined,
+      await runtime.transition(runId, 'Reasoning');
+      await runtime.record(runId, 'agent.reasoning.started', {
+        modelAlias: model || llmManager.getDefaultModel(),
+      }, 'reason');
+      const response = await runtime.inferChat({
+        runId,
+        stepId: 'reason',
+        modelAlias: model || llmManager.getDefaultModel(),
+        messages: llmMessages,
+        options: {
+          model,
+          tools: tools.length > 0 ? tools : undefined,
+        },
       });
+      await runtime.record(runId, 'agent.reasoning.completed', {
+        responseId: response.id,
+        finishReason: response.finishReason,
+      }, 'reason');
+      await runtime.transition(runId, 'ActionSelected', {
+        finishReason: response.finishReason,
+        toolCallCount: response.toolCalls?.length ?? 0,
+      });
+      await runtime.record(runId, 'agent.action.selected', {
+        finishReason: response.finishReason,
+        toolCalls: response.toolCalls,
+      }, 'action');
+      await runtime.transition(runId, 'PolicyChecked');
+      await runtime.transition(runId, 'Acting');
       logger.debug(`[Chat] LLM call done`, {
         durationMs: Date.now() - t3,
         model: response.model,
@@ -220,7 +278,19 @@ router.post(
         modelProvider: response.provider,
       };
 
+      await runtime.record(runId, 'memory.write.requested', {
+        target: 'temporary',
+        role: 'assistant',
+        responseId: response.id,
+      }, 'memory:assistant');
       await tempMemory.addMessage(session, assistantMsg);
+      await runtime.record(runId, 'memory.write.committed', {
+        target: 'temporary',
+        role: 'assistant',
+        responseId: response.id,
+      }, 'memory:assistant');
+      await runtime.transition(runId, 'ObservationRecorded', { responseId: response.id });
+      await runtime.transition(runId, 'Verifying');
 
       // Save to permanent memory (if conversation exists)
       const t4 = Date.now();
@@ -243,7 +313,12 @@ router.post(
             modelProvider: response.provider,
           }),
         ]);
+        await runtime.record(runId, 'memory.write.committed', {
+          target: 'permanent',
+          conversationId: conversation.id,
+        }, 'memory:permanent');
       }
+      await runtime.transition(runId, 'MemorySync');
       logger.debug(`[Chat] MongoDB save done`, {
         durationMs: Date.now() - t4,
         sessionId: session,
@@ -273,16 +348,22 @@ router.post(
             completionTokens: response.usage.outputTokens,
             totalTokens: response.usage.totalTokens,
             endpoint: '/chat',
-            requestType: 'chat',
-            responseTimeMs: totalDuration,
-          })
-          .catch((err) => logger.error('Failed to record token usage:', err));
+              requestType: 'chat',
+              responseTimeMs: totalDuration,
+            })
+            .catch((err) => logger.error('Failed to record token usage:', err));
       }
+      await runtime.completeRun(runId, {
+        messageId: response.id,
+        content: response.content,
+        usage: response.usage,
+      });
 
       res.json({
         success: true,
         data: {
           sessionId: session,
+          runId,
           messageId: response.id,
           content: response.content,
           model: response.model,
@@ -292,6 +373,13 @@ router.post(
           toolCalls: response.toolCalls,
         },
       });
+    } catch (error) {
+      if (runId) {
+        await runtime.failRun(runId, error).catch((err) =>
+          logger.error('Failed to record event runtime run failure:', err),
+        );
+      }
+      throw error;
     } finally {
       lock.release();
     }
@@ -345,6 +433,10 @@ router.post('/stream', async (req: Request, res: Response) => {
   const llmManager = getLLMManager();
   const tempMemory = getTemporaryMemory();
   const startTime = Date.now();
+  const runtime = getEventRuntime();
+  let runId: string | undefined;
+  let completed = false;
+  let streamActionEntered = false;
 
   logger.debug(`[SSE] Stream request started`, {
     sessionId: session,
@@ -355,9 +447,25 @@ router.post('/stream', async (req: Request, res: Response) => {
   });
 
   try {
+    const runtimeRun = await runtime.startRun({
+      userId,
+      sessionId: session,
+      input: { message: trimmedMessage, model, provider, stream: true },
+      metadata: { surface: 'http.chat.stream' },
+    });
+    runId = runtimeRun.runId;
     // Get conversation history
     const t1 = Date.now();
     const history = await tempMemory.getMessages(session, undefined, userId);
+    await runtime.transition(runId, 'ContextBuilt', { messageCount: history.length });
+    await runtime.record(runId, 'context.build.completed', {
+      source: 'temporary-memory',
+      messageCount: history.length,
+    }, 'context');
+    await runtime.record(runId, 'memory.read.completed', {
+      target: 'temporary',
+      messageCount: history.length,
+    }, 'memory:read');
     logger.debug(`[SSE] Redis: getMessages done`, {
       durationMs: Date.now() - t1,
       historyCount: history.length,
@@ -378,16 +486,62 @@ router.post('/stream', async (req: Request, res: Response) => {
     const resolvedModel = model || llmManager.getDefaultModel();
     const resolvedProvider =
       provider || llmManager.getProviderFromModel(resolvedModel);
+    await runtime.transition(runId, 'Reasoning');
+    await runtime.record(runId, 'agent.reasoning.started', {
+      modelAlias: resolvedModel,
+      stream: true,
+    }, 'reason');
+    await runtime.record(runId, 'inference.requested', {
+      modelAlias: resolvedModel,
+      stream: true,
+    }, 'reason');
+    await runtime.record(runId, 'model.call.started', {
+      modelAlias: resolvedModel,
+      stream: true,
+    }, 'reason');
 
     // Stream response
     for await (const chunk of llmManager.streamChat(llmMessages, { model })) {
       if (chunk.type === 'content' && chunk.content) {
         fullContent += chunk.content;
+        if (!streamActionEntered) {
+          await runtime.transition(runId, 'ActionSelected', { stream: true });
+          await runtime.record(runId, 'agent.action.selected', {
+            type: 'stream-content',
+          }, 'action');
+          await runtime.transition(runId, 'PolicyChecked');
+          await runtime.transition(runId, 'Acting');
+          streamActionEntered = true;
+        }
         res.write(
           `data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`,
         );
-      } else if (chunk.type === 'done') {
+      } else if (chunk.type === 'done' && !completed) {
+        completed = true;
+        if (!streamActionEntered) {
+          await runtime.transition(runId, 'ActionSelected', { stream: true, emptyContent: true });
+          await runtime.record(runId, 'agent.action.selected', {
+            type: 'stream-completion',
+            emptyContent: fullContent.length === 0,
+          }, 'action');
+          await runtime.transition(runId, 'PolicyChecked');
+          await runtime.transition(runId, 'Acting');
+          streamActionEntered = true;
+        }
+        await runtime.record(runId, 'model.call.completed', {
+          model: resolvedModel,
+          provider: resolvedProvider,
+          usage: chunk.usage,
+        }, 'reason');
+        await runtime.record(runId, 'inference.completed', {
+          stream: true,
+          usage: chunk.usage,
+        }, 'reason');
         // Save to temporary memory
+        await runtime.record(runId, 'memory.write.requested', {
+          target: 'temporary',
+          roles: ['user', 'assistant'],
+        }, 'memory:stream');
         await Promise.all([
           tempMemory.addMessage(session, {
             userId,
@@ -404,6 +558,13 @@ router.post('/stream', async (req: Request, res: Response) => {
             modelProvider: resolvedProvider,
           }),
         ]);
+        await runtime.record(runId, 'memory.write.committed', {
+          target: 'temporary',
+          roles: ['user', 'assistant'],
+        }, 'memory:stream');
+        await runtime.transition(runId, 'ObservationRecorded', { stream: true });
+        await runtime.transition(runId, 'Verifying');
+        await runtime.transition(runId, 'MemorySync');
 
         // Record token usage for stream
         if (chunk.usage && chunk.usage.totalTokens > 0) {
@@ -438,8 +599,13 @@ router.post('/stream', async (req: Request, res: Response) => {
             model: resolvedModel,
             provider: resolvedProvider,
             usage: chunk.usage,
+            runId,
           })}\n\n`,
         );
+        await runtime.completeRun(runId, {
+          content: fullContent,
+          usage: chunk.usage,
+        });
 
         logger.debug(`[SSE] Stream completed`, {
           totalDurationMs: Date.now() - startTime,
@@ -449,6 +615,10 @@ router.post('/stream', async (req: Request, res: Response) => {
         });
       } else if (chunk.type === 'error') {
         // Bug 1 Fix: LLM error also sent as SSE
+        completed = true;
+        if (runId) {
+          await runtime.failRun(runId, chunk.error ?? 'LLM stream error');
+        }
         res.write(
           `data: ${JSON.stringify({ type: 'error', error: chunk.error, code: 'LLM_ERROR' })}\n\n`,
         );
@@ -456,6 +626,11 @@ router.post('/stream', async (req: Request, res: Response) => {
     }
   } catch (error) {
     logger.error('[SSE] Stream error:', error);
+    if (runId) {
+      await runtime.failRun(runId, error).catch((err) =>
+        logger.error('Failed to record event runtime stream failure:', err),
+      );
+    }
     // Bug 1 Fix: All errors sent as SSE, not thrown
     res.write(
       `data: ${JSON.stringify({

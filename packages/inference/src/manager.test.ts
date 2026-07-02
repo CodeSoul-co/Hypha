@@ -43,7 +43,11 @@ describe('@hypha/inference', () => {
       id: 'mock',
       infer: async (request) => ({
         id: 'response_2',
-        output: request.metadata,
+        output: {
+          metadata: request.metadata,
+          prefix: request.resolvedPrefixContent,
+          kv: request.resolvedKvCacheValue,
+        },
       }),
     });
 
@@ -58,7 +62,11 @@ describe('@hypha/inference', () => {
       })
     ).resolves.toMatchObject({
       cache: { prefixHit: true, kvCacheHit: true },
-      output: { prefixCacheHit: true, kvCacheHit: true },
+      output: {
+        metadata: { prefixCacheHit: true, kvCacheHit: true },
+        prefix: 'cached system prompt',
+        kv: { blocks: 1 },
+      },
     });
   });
 

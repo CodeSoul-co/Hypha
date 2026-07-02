@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '@hypha/core';
 import { EventFirstRuntime, InMemoryTraceRecorder, SessionProjector, UserScopedSessionQueue } from './index';
 
-describe('@hypha/harness stage-0 contracts', () => {
+describe('@hypha/harness contracts', () => {
   it('keeps session views derived from events', async () => {
     const trace = new InMemoryTraceRecorder();
     await trace.record(

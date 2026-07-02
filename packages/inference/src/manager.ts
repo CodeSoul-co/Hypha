@@ -45,6 +45,8 @@ export class InferenceManager {
 
     const response = await provider.infer({
       ...request,
+      resolvedPrefixContent: prefixContent ?? undefined,
+      resolvedKvCacheValue: kvCacheValue ?? undefined,
       metadata: {
         ...request.metadata,
         prefixCacheHit: prefixContent !== null,

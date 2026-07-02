@@ -7,7 +7,7 @@ import {
   InMemoryEventStore,
 } from './index';
 
-describe('@hypha/core stage-0 contracts', () => {
+describe('@hypha/core contracts', () => {
   it('formats stable hypha ids', () => {
     expect(formatFrameworkId({ prefix: 'run', value: 'abc' })).toBe('run_abc');
   });

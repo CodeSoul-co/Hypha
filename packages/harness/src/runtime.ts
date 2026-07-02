@@ -60,6 +60,9 @@ export interface AppendRunEventInput<TPayload = unknown> {
   sessionId: string;
   userId: string;
   payload: TPayload;
+  stepId?: string;
+  fsmState?: string;
+  agentId?: string;
   timestamp?: string;
   metadata?: Record<string, unknown>;
 }
@@ -105,7 +108,7 @@ export class EventFirstRuntime {
     };
     await this.events.append(
       createFrameworkEvent({
-        id: `${input.id}:created`,
+        id: `${input.userId}:${input.id}:created`,
         type: 'session.created',
         runId: 'session-bootstrap',
         sessionId: input.id,
@@ -157,6 +160,9 @@ export class EventFirstRuntime {
       type: input.type,
       runId: input.runId,
       sessionId: input.sessionId,
+      stepId: input.stepId,
+      agentId: input.agentId,
+      fsmState: input.fsmState,
       timestamp: input.timestamp,
       payload: input.payload,
       metadata: { ...input.metadata, userId: input.userId },

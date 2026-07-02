@@ -23,7 +23,7 @@ const processSpec: FSMProcessSpec = {
   terminalStates: ['Completed'],
 };
 
-describe('@hypha/fsm stage-0 runtime contracts', () => {
+describe('@hypha/fsm runtime contracts', () => {
   it('validates and applies explicit transitions', () => {
     validateFSMProcessSpec(processSpec);
     const initial = createInitialSnapshot(processSpec, 'run_1', '2026-07-02T00:00:00.000Z');

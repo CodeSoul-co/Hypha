@@ -246,8 +246,42 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       .send({ name: 'search', params: { query: 'ping', limit: 1 } });
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
+    expect(r.body.runId).toBeTruthy();
     // The stub returns deterministic shape; just sanity check the contract.
     expect(r.body.data?.query).toBe('ping');
+  });
+
+  it('derives replay, audit, and regression projections from real tool run events', async () => {
+    const executed = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'search', params: { query: 'event-runtime', limit: 1 } });
+    const runId = executed.body.runId;
+    expect(runId).toBeTruthy();
+
+    const replay = await request(app)
+      .get(`/api/v1/runtime/runs/${runId}/replay`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.statePath).toEqual(
+      expect.arrayContaining(['RunInitialized', 'Acting', 'Completed']),
+    );
+    expect(replay.body.data.toolCallEventIds).toHaveLength(3);
+
+    const audit = await request(app)
+      .get(`/api/v1/runtime/runs/${runId}/audit`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(audit.status).toBe(200);
+    expect(audit.body.data.policyDecisionCount).toBeGreaterThanOrEqual(1);
+    expect(audit.body.data.toolCallCount).toBe(1);
+
+    const regression = await request(app)
+      .get(`/api/v1/runtime/runs/${runId}/regression`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(regression.status).toBe(200);
+    expect(regression.body.data.eventTypes).toEqual(
+      expect.arrayContaining(['run.created', 'tool.policy.checked', 'run.completed']),
+    );
   });
 });
 

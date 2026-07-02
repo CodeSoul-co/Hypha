@@ -89,7 +89,7 @@ OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `typ
 
 ## Inference
 
-`InferenceRequest` contains `runId`, `stepId`, optional `agentId`, `modelAlias`, optional `providerId`, `input`, optional `prefix`, optional `kvCache`, `trace`, and `metadata`.
+`InferenceRequest` contains `runId`, `stepId`, optional `agentId`, `modelAlias`, optional `providerId`, `input`, optional `prefix`, optional `kvCache`, `trace`, `metadata`, and resolved cache fields supplied by the inference manager.
 
 `InferenceResponse` contains `id`, `output`, optional `usage`, optional cache usage, and optional raw provider payload.
 
@@ -100,7 +100,7 @@ Cache references:
 | `PrefixCacheRef` | `id`, `version`, `contentHash`, optional `tokenCount`, `metadata`. |
 | `KvCacheRef` | `id`, `provider`, `modelAlias`, `scope`, optional `expiresAt`, `metadata`. |
 
-`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`.
+`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`. On cache hits, providers receive `resolvedPrefixContent` and `resolvedKvCacheValue` on the request object so adapters can inject prompt prefixes or provider-native cache handles.
 
 `ReasoningOrchestrator` supports `direct`, `cot`, `tot`, and `self_consistency`. `ReasoningOptions` include `branches`, `maxDepth`, `revealReasoning`, and an optional evaluator.
 
@@ -121,3 +121,15 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 `MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing.
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
+
+## Local Adapters
+
+`@hypha/adapters-local` provides development and self-hosted adapters:
+
+| Adapter | Storage | Purpose |
+| --- | --- | --- |
+| `SQLiteEventStore` | SQLite | Event store and trace recorder for replay, audit, regression, and projection. |
+| `SQLiteStructuredStore` | SQLite | JSON source-of-truth structured records with indexed tables. |
+| `LocalVectorIndexProvider` | JSON file | Persistent local vector search with metadata filters. |
+| `FileArtifactStore` | filesystem | Artifact bytes and hash metadata under a configured root. |
+| `MockEmbeddingProvider` | deterministic vectors | Repeatable local embeddings for tests and offline development. |

@@ -10,6 +10,8 @@ const sharedAliases = {
   '^@utils/(.*)$': '<rootDir>/apps/server/src/utils/$1',
   '^@types/(.*)$': '<rootDir>/apps/server/src/types/$1',
   '^@constants/(.*)$': '<rootDir>/apps/server/src/constants/$1',
+  '^@hypha/([^/]+)$': '<rootDir>/packages/$1/src',
+  '^@hypha/([^/]+)/(.*)$': '<rootDir>/packages/$1/src/$2',
 };
 
 // ts-jest transforms .ts. The MCP SDK ships as ESM; let ts-jest also process

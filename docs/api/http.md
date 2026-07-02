@@ -97,7 +97,9 @@ Returns process health.
 | `provider` | no | Provider id. |
 | `agentId` | no | Agent profile id. |
 
-Chat responses include `sessionId`, `messageId`, `content`, `model`, `provider`, `finishReason`, `usage`, and optional `toolCalls`.
+Chat responses include `sessionId`, `runId`, `messageId`, `content`, `model`, `provider`, `finishReason`, `usage`, and optional `toolCalls`.
+
+SSE `done` events from `POST /chat/stream` include `type`, `content`, `sessionId`, `runId`, resolved `model`, resolved `provider`, and optional `usage`.
 
 ## Memory
 
@@ -121,9 +123,53 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 | `/tools` | List available tools and their schemas. |
 | `/skills` | List and administer skill definitions. |
 | `/workflows` | Inspect workflow definitions and runtime workflow status. |
+| `/runtime` | Read run projections, events, replay, audit, and regression views. |
 | `/status` | Read service, provider, and dependency status. |
 | `/usage` | Read token and usage metrics for the current user. |
 | `/docs` | Render the built-in route index. |
+
+## Tools
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/tools` | List registered tools. |
+| `POST` | `/tools/execute` | Execute a tool through the governed runtime path. |
+| `GET` | `/tools/mcp/servers` | List MCP servers. |
+| `GET` | `/tools/mcp/tools` | List tools exposed by connected MCP servers. |
+
+`POST /tools/execute` request:
+
+```json
+{
+  "name": "search",
+  "params": { "query": "hypha" },
+  "sessionId": "sess_abc123"
+}
+```
+
+Successful tool execution returns top-level `runId` plus `data`.
+
+## Workflows
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/workflows` | List workflow definitions. |
+| `GET` | `/workflows/:name` | Read a workflow definition. |
+| `POST` | `/workflows/:name/execute` | Execute a workflow and return its runtime `runId`. |
+| `GET` | `/workflows/executions/:executionId` | Read workflow execution status. |
+| `POST` | `/workflows/executions/:executionId/cancel` | Cancel a running workflow execution. |
+
+## Runtime Projections
+
+Runtime views are derived from events recorded during a run.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/runtime/runs/:runId` | Project run state from events. |
+| `GET` | `/runtime/runs/:runId/events` | List source events for a run. |
+| `GET` | `/runtime/runs/:runId/replay` | Return replay state path and tool call event ids. |
+| `GET` | `/runtime/runs/:runId/audit` | Return audit counters and policy evidence. |
+| `GET` | `/runtime/runs/:runId/regression` | Return event-type and state-path regression inputs. |
 
 ## Concurrency
 

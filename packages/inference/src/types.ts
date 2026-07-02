@@ -6,7 +6,9 @@ export interface InferenceRequest<TInput = unknown> {
   providerId?: string;
   input: TInput;
   prefix?: PrefixCacheRef;
+  resolvedPrefixContent?: string;
   kvCache?: KvCacheRef;
+  resolvedKvCacheValue?: unknown;
   trace?: boolean;
   metadata?: Record<string, unknown>;
 }

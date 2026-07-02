@@ -10,6 +10,7 @@ import statusRoutes from './status.routes';
 import usageRoutes from './usage.routes';
 import apiDocsRoutes from './api-docs.routes';
 import devRoutes from './dev.routes';
+import runtimeRoutes from './runtime.routes';
 
 const router = Router();
 
@@ -36,6 +37,7 @@ router.use('/models', modelRoutes);
 router.use('/status', statusRoutes);
 router.use('/usage', usageRoutes);
 router.use('/docs', apiDocsRoutes);
+router.use('/runtime', runtimeRoutes);
 router.use('/dev', devRoutes);
 
 export default router;
