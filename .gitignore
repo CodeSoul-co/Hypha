@@ -26,6 +26,9 @@ npm-debug.log*
 # Local contributor guide
 AGENTS.md
 
+# Local development planning docs
+docs/dev_tmp_docs/
+
 # Test coverage
 coverage/
 
