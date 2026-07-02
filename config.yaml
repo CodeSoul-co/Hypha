@@ -378,7 +378,7 @@ agents:
 skills:
   # Each entry is a directory scanned for .md skill files at boot. Order
   # matters when two skills share an id — later directories override earlier.
-  # Builtins (src/core/skills/builtins) are always scanned last as a
+  # Builtins (apps/server/src/core/skills/builtins) are always scanned last as a
   # fallback so the default behaviour is preserved.
   dirs:
     - "~/.hypha/skills"   # user-installed skills
@@ -393,7 +393,7 @@ workflows:
   autoReload: true
 
 prompts:
-  templatesPath: "./src/prompts"
+  templatesPath: "./apps/server/src/prompts"
   cacheEnabled: true
 
 logging:

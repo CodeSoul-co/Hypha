@@ -1,0 +1,7 @@
+{
+  "name": "@hypha/server",
+  "version": "0.0.0",
+  "private": true,
+  "main": "../../dist/apps/server/app.js",
+  "types": "../../dist/apps/server/app.d.ts"
+}

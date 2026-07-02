@@ -2,7 +2,7 @@
  * Unit tests for the .md skill parser. These run under the `unit`
  * project (no DB) so they stay fast and pure.
  */
-import { parseSkillMarkdown, listSkillFiles, loadSkillFile } from '../../src/core/skills/parser';
+import { parseSkillMarkdown, listSkillFiles, loadSkillFile } from '../../apps/server/src/core/skills/parser';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';

@@ -2,7 +2,7 @@
 // These run under the `unit` project (DB layer mocked) so they stay fast and
 // don't need a real LLM to compute cost.
 
-import { calculateCost, getModelPricing } from '../../src/models/TokenUsage';
+import { calculateCost, getModelPricing } from '../../apps/server/src/models/TokenUsage';
 
 describe('calculateCost', () => {
   it('returns 0/0/0 for zero tokens', () => {

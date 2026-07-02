@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '.env.test' });
 
 // Mock external services
-jest.mock('../src/services/database', () => ({
+jest.mock('../apps/server/src/services/database', () => ({
   getRedisClient: jest.fn(() => ({
     xadd: jest.fn(),
     xrange: jest.fn(() => []),

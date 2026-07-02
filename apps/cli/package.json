@@ -1,0 +1,9 @@
+{
+  "name": "@hypha/cli",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "hypha": "../../dist/apps/cli/index.js"
+  },
+  "main": "../../dist/apps/cli/index.js"
+}

@@ -1,5 +1,5 @@
-import { ClaudeAdapter } from '../../src/core/llm/adapters/ClaudeAdapter';
-import { OpenAIAdapter } from '../../src/core/llm/adapters/OpenAIAdapter';
+import { ClaudeAdapter } from '../../apps/server/src/core/llm/adapters/ClaudeAdapter';
+import { OpenAIAdapter } from '../../apps/server/src/core/llm/adapters/OpenAIAdapter';
 
 describe('LLM Adapters', () => {
   describe('ClaudeAdapter', () => {

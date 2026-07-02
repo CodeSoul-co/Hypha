@@ -12,11 +12,11 @@
  *   bug 10 — /workflows/:name/execute does not crash on minimal context
  */
 import request from 'supertest';
-import application from '../../src/app';
-import { generateToken } from '../../src/middleware/auth';
-import { UserModel } from '../../src/models/User';
-import { getTemporaryMemory } from '../../src/core/memory/TemporaryMemory';
-import { getPermanentMemory } from '../../src/core/memory/PermanentMemory';
+import application from '../../apps/server/src/app';
+import { generateToken } from '../../apps/server/src/middleware/auth';
+import { UserModel } from '../../apps/server/src/models/User';
+import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
+import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
 
 const app = application.getApp();
 

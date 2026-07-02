@@ -1,28 +1,38 @@
 {
   "name": "hypha",
   "version": "1.0.0",
+  "private": true,
   "description": "Harness-oriented agent system framework for production-grade LLM agent applications",
-  "main": "dist/app.js",
+  "main": "dist/apps/server/app.js",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "files": [
     "dist",
     "README.md"
   ],
   "scripts": {
-    "dev": "ts-node -r dotenv/config src/app.ts",
-    "build": "tsc",
-    "build:cli": "tsc -p examples/cli/tsconfig.json && chmod +x dist/examples/cli/index.js",
-    "start": "node dist/app.js",
-    "typecheck": "tsc --noEmit",
-    "typecheck:cli": "tsc -p examples/cli/tsconfig.json --noEmit",
-    "test": "jest --forceExit",
+    "dev": "ts-node -r dotenv/config -P apps/server/tsconfig.json apps/server/src/app.ts",
+    "build": "npm run build:packages && npm run build:server && npm run build:cli",
+    "build:packages": "tsc -b packages/core packages/inference packages/fsm packages/kernel packages/harness packages/models packages/memory packages/tools packages/mcp packages/skills packages/domain packages/adapters-local packages/testing",
+    "build:server": "tsc -p apps/server/tsconfig.json",
+    "build:cli": "tsc -p apps/cli/tsconfig.json && chmod +x dist/apps/cli/index.js",
+    "start": "node dist/apps/server/app.js",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "typecheck:server": "tsc -p apps/server/tsconfig.json --noEmit",
+    "typecheck:cli": "tsc -p apps/cli/tsconfig.json --noEmit",
+    "typecheck:packages": "tsc -p tsconfig.typecheck.json --noEmit",
+    "test": "npm run test:unit && npm run test:packages && npm run test:integration",
     "test:unit": "jest --selectProjects unit --forceExit",
+    "test:packages": "vitest run",
     "test:integration": "jest --selectProjects integration --runInBand --forceExit",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage --forceExit",
-    "lint": "eslint \"src/**/*.ts\" \"examples/**/*.ts\"",
-    "lint:fix": "eslint \"src/**/*.ts\" \"examples/**/*.ts\" --fix",
-    "format": "prettier --write \"src/**/*.ts\" \"examples/**/*.ts\"",
-    "cli": "ts-node -r dotenv/config examples/cli/index.ts",
+    "lint": "eslint \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\"",
+    "lint:fix": "eslint \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\" --fix",
+    "format": "prettier --write \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\"",
+    "cli": "ts-node -r dotenv/config -P apps/cli/tsconfig.json apps/cli/index.ts",
     "prepare": "husky install"
   },
   "keywords": [
@@ -89,7 +99,8 @@
     "prettier": "^3.1.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.1.1",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": "."
+  },
+  "include": [
+    "apps/server/src/**/*.ts",
+    "apps/cli/**/*.ts",
+    "packages/*/src/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "tests"]
+}

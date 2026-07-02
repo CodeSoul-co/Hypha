@@ -54,7 +54,7 @@ cost monitoring
 audit logs
 human review
 deployment configuration
-multi-tenant / multi-workspace configuration
+user-scoped isolation and workspace configuration
 ```
 
 When these capabilities are scattered across business code, evaluation scripts, logging systems, deployment scripts, and debugging tools, teams pay the cost repeatedly. Reproducibility becomes weak, evaluation becomes inconsistent, regressions become hard to detect, and production behavior becomes difficult to govern.
@@ -194,7 +194,23 @@ hypha's long-term architecture is organized into three layers:
 - **Production Harness** provides run management, trace collection, cost tracking, policy enforcement, failure replay, regression testing, audit logging, and human review.
 - **Domain Packs** define how the framework is adapted to concrete business scenarios.
 
-hypha's architecture should prioritize clear boundaries, stable interfaces, modular implementation, and testable behavior. Business logic, runtime state, evaluation logic, and deployment configuration should not be coupled into a single layer.
+hypha's architecture should prioritize clear boundaries, stable interfaces, modular implementation, and testable behavior. Application logic, runtime state, evaluation logic, and deployment configuration should not be coupled into a single layer.
+
+## Repository Layout
+
+hypha is moving toward a workspace layout:
+
+```text
+packages/  framework specs, interfaces, runtime contracts, and adapters
+apps/      application surfaces such as the API server and CLI
+configs/   local agent, tool, and workflow configuration
+docs/      architecture notes, guides, and shared assets
+tests/     unit and integration tests for current app behavior
+```
+
+The current Express API service lives in `apps/server/src`. The CLI example lives in `apps/cli`. New framework-level work should start in `packages/*` as versioned specs or interfaces before being wired into app surfaces.
+
+`packages/inference` is reserved for agent-internal inference orchestration, including future prefix and KV cache management.
 
 ## Memory and State Layer
 

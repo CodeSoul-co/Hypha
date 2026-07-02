@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { PromptManager } from '../../src/core/prompts/PromptManager';
+import { PromptManager } from '../../apps/server/src/core/prompts/PromptManager';
 
 describe('PromptManager', () => {
   let originalCwd: string;
@@ -12,7 +12,9 @@ describe('PromptManager', () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-prompts-'));
 
     await fs.mkdir(path.join(tmp, 'prompts', 'system'), { recursive: true });
-    await fs.mkdir(path.join(tmp, 'src', 'prompts', 'system'), { recursive: true });
+    await fs.mkdir(path.join(tmp, 'apps', 'server', 'src', 'prompts', 'system'), {
+      recursive: true,
+    });
 
     await fs.writeFile(
       path.join(tmp, 'prompts', 'system', 'sentinel.yaml'),
@@ -27,7 +29,7 @@ describe('PromptManager', () => {
     );
 
     await fs.writeFile(
-      path.join(tmp, 'src', 'prompts', 'system', 'sentinel.yaml'),
+      path.join(tmp, 'apps', 'server', 'src', 'prompts', 'system', 'sentinel.yaml'),
       [
         'id: sentinel',
         'name: Source Sentinel',
@@ -46,7 +48,7 @@ describe('PromptManager', () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it('loads prompt templates from src/prompts by default', async () => {
+  it('loads prompt templates from apps/server/src/prompts by default', async () => {
     const manager = new PromptManager();
 
     await manager.initialize();

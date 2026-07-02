@@ -58,7 +58,7 @@ workflow
 审计日志
 人工审核
 部署配置
-多租户 / 多工作区配置
+按用户隔离和工作区配置
 ```
 
 这些能力如果分散在业务代码、评估脚本、日志系统、部署脚本和调试工具中，会造成重复实现、评估不一致、失败难以复现、质量难以持续监控，也很难判断 agent 更新后是否发生退化。
@@ -198,7 +198,23 @@ hypha 的长期架构可以分为三层：
 - **Production Harness**：提供 run management、trace collection、cost tracking、policy enforcement、failure replay、regression testing、audit logging 和 human review。
 - **Domain Pack**：定义框架如何被适配到具体业务场景。
 
-hypha 的架构演进应优先保持清晰边界、稳定接口、模块化实现和可测试行为，避免把业务逻辑、运行时状态、评估逻辑和部署配置耦合在同一层。
+hypha 的架构演进应优先保持清晰边界、稳定接口、模块化实现和可测试行为，避免把应用逻辑、运行时状态、评估逻辑和部署配置耦合在同一层。
+
+## 仓库结构
+
+hypha 正在演进为 workspace 结构：
+
+```text
+packages/  框架 spec、interface、runtime contract 和 adapter
+apps/      API server、CLI 等应用展示和调用媒介
+configs/   本地 agent、tool、workflow 配置
+docs/      架构说明、指南和共享资产
+tests/     当前 app 行为的单元测试和集成测试
+```
+
+当前 Express API 服务位于 `apps/server/src`，CLI 示例位于 `apps/cli`。新的框架级能力应优先在 `packages/*` 中以 versioned spec 或 interface 的形式定义，再接入 app surface。
+
+`packages/inference` 保留给 agent 内部 inference 编排，后续用于承载 prefix 和 KV cache 管理等机制。
 
 ## Memory 与状态层
 
