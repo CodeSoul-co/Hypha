@@ -8,21 +8,32 @@ app:
 
 database:
   mongodb:
+    uri: "${MONGODB_URI:}"
+    uriEnv: "MONGODB_URI"
+    deployment: "${MONGODB_DEPLOYMENT:local}"
     host: "${MONGODB_HOST:localhost}"
     port: "${MONGODB_PORT:27017}"
     database: "${MONGODB_DATABASE:hypha}"
     username: "${MONGODB_USERNAME:}"
     password: "${MONGODB_PASSWORD:}"
+    tls: "${MONGODB_TLS:false}"
+    authSource: "${MONGODB_AUTH_SOURCE:}"
+    replicaSet: "${MONGODB_REPLICA_SET:}"
+    directConnection: "${MONGODB_DIRECT_CONNECTION:}"
     options:
       maxPoolSize: 10
       retryWrites: true
 
 redis:
+  url: "${REDIS_URL:}"
+  urlEnv: "REDIS_URL"
+  deployment: "${REDIS_DEPLOYMENT:local}"
   host: "${REDIS_HOST:localhost}"
   port: "${REDIS_PORT:6379}"
   password: "${REDIS_PASSWORD:}"
   db: "${REDIS_DB:0}"
   keyPrefix: "${REDIS_KEY_PREFIX:hypha:}"
+  tls: "${REDIS_TLS:false}"
 
 llm:
   defaultProvider: "deepseek"
@@ -370,6 +381,16 @@ memory:
   permanent:
     enabled: true
     archiveAfter: 2592000
+
+storage:
+  local:
+    rootPath: "${HYPHA_STORAGE_ROOT:./data/storage}"
+    sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
+    eventDbPath: "${HYPHA_RUNTIME_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+    structuredDbPath: "${HYPHA_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+    vectorPath: "${HYPHA_VECTOR_INDEX:./data/hypha-vectors.json}"
+    artifactRootPath: "${HYPHA_ARTIFACT_ROOT:./data/artifacts}"
+  profiles: []
 
 agents:
   configPath: "./configs/agents.yaml"

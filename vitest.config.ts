@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@hypha/core': path.resolve(__dirname, 'packages/core/src'),
+      '@hypha/storage': path.resolve(__dirname, 'packages/storage/src'),
       '@hypha/fsm': path.resolve(__dirname, 'packages/fsm/src'),
       '@hypha/kernel': path.resolve(__dirname, 'packages/kernel/src'),
       '@hypha/harness': path.resolve(__dirname, 'packages/harness/src'),

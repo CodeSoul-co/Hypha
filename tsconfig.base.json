@@ -16,6 +16,8 @@
     "paths": {
       "@hypha/core": ["packages/core/src"],
       "@hypha/core/*": ["packages/core/src/*"],
+      "@hypha/storage": ["packages/storage/src"],
+      "@hypha/storage/*": ["packages/storage/src/*"],
       "@hypha/fsm": ["packages/fsm/src"],
       "@hypha/fsm/*": ["packages/fsm/src/*"],
       "@hypha/kernel": ["packages/kernel/src"],

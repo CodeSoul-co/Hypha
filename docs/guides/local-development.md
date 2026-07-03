@@ -36,6 +36,38 @@ The API server reads dotenv configuration. MongoDB and Redis are required for th
 | Local vector index | JSON-backed `LocalVectorIndexProvider`. |
 | Artifacts | Filesystem-backed `FileArtifactStore`. |
 
+`createLocalStorageBackbone()` from `@hypha/adapters-local` creates the local storage stack in one call:
+
+```ts
+import { createLocalStorageBackbone } from '@hypha/adapters-local';
+
+const storage = createLocalStorageBackbone({
+  rootPath: './data/storage',
+  sqliteMode: 'auto',
+});
+
+await storage.memory.write(scope, record, { requireProvenance: true });
+```
+
+The returned object includes `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`.
+
+## MongoDB and Redis
+
+MongoDB supports local host/port settings or a cloud URI:
+
+```bash
+MONGODB_URI=mongodb+srv://...
+MONGODB_DEPLOYMENT=cloud
+```
+
+Redis supports local host/port settings or provider URLs:
+
+```bash
+REDIS_URL=rediss://...
+REDIS_DEPLOYMENT=cloud
+REDIS_TLS=true
+```
+
 Do not commit `.env`, local data, logs, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 
 ## Verification Before Merge

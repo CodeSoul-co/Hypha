@@ -37,6 +37,7 @@ hypha 采用 ReAct + FSM 执行模型。ReAct 描述 agent 的观察、推理、
 - [HTTP API](docs/api/http.md)：REST endpoint、鉴权方式、请求体、响应结构和运行时约定。
 - [Framework API](docs/api/framework.md)：DomainPack、Session、Run、Event、inference、memory、tool、MCP、skill 和 model provider 的 TypeScript 契约。
 - [架构说明](docs/reference/architecture.md)：package 职责、harness 语义、runtime 模型和扩展边界。
+- [Storage](docs/reference/storage.md)：本地 SQLite、向量索引、artifact adapter、storage profile，以及 MongoDB/Redis 的本地或云连接约定。
 - [Domain Pack 指南](docs/guides/domain-packs.md)：声明 workflow、tool、memory、skill、policy、评估和输出契约的字段约定与示例。
 
 服务启动后，也可以访问 `/api/v1/docs` 查看运行时路由索引。

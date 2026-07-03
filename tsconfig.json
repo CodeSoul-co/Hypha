@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/core" },
+    { "path": "packages/storage" },
     { "path": "packages/inference" },
     { "path": "packages/fsm" },
     { "path": "packages/kernel" },

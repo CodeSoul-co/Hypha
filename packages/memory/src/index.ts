@@ -37,6 +37,10 @@ export interface MemoryRecord<TValue = unknown> {
 export interface MemorySpec extends VersionedSpec, SpecMetadata {
   providers: MemoryProviderProfile[];
   memoryTypes: MemoryType[];
+  structuredStoreRef?: string;
+  vectorIndexRef?: string;
+  artifactStoreRef?: string;
+  embeddingProviderRef?: string;
   readPolicy?: string;
   writePolicy?: string;
   freshnessPolicy?: string;
@@ -44,6 +48,16 @@ export interface MemorySpec extends VersionedSpec, SpecMetadata {
   retentionPolicy?: string;
   privacyPolicy?: string;
   retrievalStrategy?: string;
+  retrievalPolicy?: MemoryRetrievalPolicy;
+  writePolicyConfig?: MemoryWritePolicy;
+}
+
+export interface MemoryRetrievalPolicy {
+  defaultTopK?: number;
+  vectorWeight?: number;
+  textWeight?: number;
+  requireScope?: boolean;
+  allowedTypes?: MemoryType[];
 }
 
 export interface MemoryProviderProfile {
@@ -260,11 +274,23 @@ export const memoryProviderProfileSchema = z.object({
   configSchema: jsonSchemaSchema.optional(),
 });
 
+export const memoryRetrievalPolicySchema = z.object({
+  defaultTopK: z.number().int().positive().optional(),
+  vectorWeight: z.number().min(0).max(1).optional(),
+  textWeight: z.number().min(0).max(1).optional(),
+  requireScope: z.boolean().optional(),
+  allowedTypes: z.array(memoryTypeSchema).optional(),
+}) satisfies ZodType<MemoryRetrievalPolicy>;
+
 export const memorySpecSchema = versionedSpecSchema
   .merge(specMetadataSchema)
   .extend({
     providers: z.array(memoryProviderProfileSchema).min(1),
     memoryTypes: z.array(memoryTypeSchema).min(1),
+    structuredStoreRef: z.string().optional(),
+    vectorIndexRef: z.string().optional(),
+    artifactStoreRef: z.string().optional(),
+    embeddingProviderRef: z.string().optional(),
     readPolicy: z.string().optional(),
     writePolicy: z.string().optional(),
     freshnessPolicy: z.string().optional(),
@@ -272,6 +298,19 @@ export const memorySpecSchema = versionedSpecSchema
     retentionPolicy: z.string().optional(),
     privacyPolicy: z.string().optional(),
     retrievalStrategy: z.string().optional(),
+    retrievalPolicy: memoryRetrievalPolicySchema.optional(),
+    writePolicyConfig: z.object({
+      allowLongTerm: z.boolean().optional(),
+      requireProvenance: z.boolean().optional(),
+      decision: z.object({
+        allowed: z.boolean(),
+        requiresHumanReview: z.boolean().optional(),
+        policyId: z.string().optional(),
+        ruleId: z.string().optional(),
+        reason: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      }).optional(),
+    }).optional(),
   }) satisfies ZodType<MemorySpec>;
 
 export const memorySpecJsonSchema: JsonSchema = {
@@ -301,13 +340,19 @@ export const memorySpecJsonSchema: JsonSchema = {
         enum: ['working', 'episodic', 'semantic', 'procedural', 'artifact', 'governance'],
       },
     },
+    structuredStoreRef: { type: 'string' },
+    vectorIndexRef: { type: 'string' },
+    artifactStoreRef: { type: 'string' },
+    embeddingProviderRef: { type: 'string' },
     readPolicy: { type: 'string' },
     writePolicy: { type: 'string' },
+    writePolicyConfig: { type: 'object' },
     freshnessPolicy: { type: 'string' },
     provenancePolicy: { enum: ['required', 'best_effort'] },
     retentionPolicy: { type: 'string' },
     privacyPolicy: { type: 'string' },
     retrievalStrategy: { type: 'string' },
+    retrievalPolicy: { type: 'object' },
   },
   additionalProperties: false,
 };
@@ -325,8 +370,21 @@ export const memorySpecExample: MemorySpec = {
     },
   ],
   memoryTypes: ['working', 'episodic', 'semantic', 'artifact'],
+  structuredStoreRef: 'storage.sqlite.structured',
+  vectorIndexRef: 'storage.local-vector.semantic',
+  artifactStoreRef: 'storage.file-artifact.local',
+  embeddingProviderRef: 'embedding.mock',
   provenancePolicy: 'required',
   retrievalStrategy: 'hybrid-recent-first',
+  retrievalPolicy: {
+    defaultTopK: 5,
+    requireScope: true,
+    allowedTypes: ['working', 'episodic', 'semantic', 'artifact'],
+  },
+  writePolicyConfig: {
+    requireProvenance: true,
+    allowLongTerm: true,
+  },
 };
 
 export const memorySpecDefinition = defineSpecSchema<MemorySpec>({

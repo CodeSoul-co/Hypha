@@ -7,6 +7,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | Package | Responsibility | Should Not Contain |
 | --- | --- | --- |
 | `@hypha/core` | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces. | Provider SDKs, database clients, HTTP server code. |
+| `@hypha/storage` | Storage provider profiles, topology specs, connection resolution, cloud/local profile helpers. | Concrete database clients or memory behavior. |
 | `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, session profile initialization, workflow-to-FSM compilation. | Business-specific workflows or app routes. |
 | `@hypha/fsm` | FSM process spec, guarded transitions, timeout/retry/human-review semantics. | Tool handlers, model calls, storage adapters. |
 | `@hypha/kernel` | ReAct agent spec and executable ReAct runner. | Concrete model providers, direct tool side effects. |
@@ -38,6 +39,7 @@ Allowed examples:
 apps/server -> @hypha/domain -> @hypha/fsm -> @hypha/core
 apps/server -> @hypha/kernel -> @hypha/inference -> @hypha/models
 apps/server -> @hypha/tools -> @hypha/core
+apps/server -> @hypha/storage -> @hypha/core
 ```
 
 Avoid reverse or hidden dependencies:

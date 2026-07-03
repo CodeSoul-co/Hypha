@@ -124,5 +124,11 @@ describe('@hypha/memory manager contract', () => {
   it('exports Stage1 MemorySpec schema and minimal example', () => {
     expect(validateMemorySpec(memorySpecDefinition.example).id).toBe('memory.default');
     expect(memorySpecJsonSchemas.MemorySpec.required).toContain('providers');
+    expect(memorySpecDefinition.example).toMatchObject({
+      structuredStoreRef: 'storage.sqlite.structured',
+      vectorIndexRef: 'storage.local-vector.semantic',
+      writePolicyConfig: { requireProvenance: true },
+      retrievalPolicy: { defaultTopK: 5 },
+    });
   });
 });

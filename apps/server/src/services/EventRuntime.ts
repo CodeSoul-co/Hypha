@@ -46,6 +46,7 @@ import {
   modelResponseToChatResponse,
   modelStreamEventToStreamChunk,
 } from '../core/llm/LLMFactory';
+import { storageConfig } from '../config';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
@@ -216,9 +217,13 @@ class EventRuntimeService {
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
 
   constructor() {
+    const localStorage = storageConfig().local;
     const eventDbPath = process.env.HYPHA_RUNTIME_EVENT_DB
-      ?? path.resolve(process.cwd(), 'data/hypha-runtime-events.sqlite');
-    this.events = new SQLiteEventStore({ filename: eventDbPath });
+      ?? resolveRuntimePath(localStorage.eventDbPath);
+    this.events = new SQLiteEventStore({
+      filename: eventDbPath,
+      mode: localStorage.sqliteMode,
+    });
     this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
@@ -1432,6 +1437,10 @@ function inferCompletedState(fsm: FSMProcessSpec): string {
 function inferFailedState(fsm: FSMProcessSpec): string {
   return fsm.terminalStates.find((state) => state.toLowerCase().includes('fail'))
     ?? fsm.terminalStates[0];
+}
+
+function resolveRuntimePath(filePath: string): string {
+  return path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
 }
 
 function summarizeValue(value: unknown): Record<string, unknown> {

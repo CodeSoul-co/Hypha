@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
+import { storageProviderProfileSchema } from '@hypha/storage';
 import { logger } from '../utils/logger';
 
 // Load environment variables
@@ -39,6 +40,15 @@ const providerConfigSchema = z.object({
   timeout: z.number().default(60000),
 });
 
+const storageDeploymentSchema = z.enum(['local', 'self_hosted', 'managed', 'cloud']);
+const booleanishSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'off', ''].includes(normalized)) return false;
+  return value;
+}, z.boolean());
+
 // Configuration schema
 const configSchema = z.object({
   app: z.object({
@@ -51,11 +61,18 @@ const configSchema = z.object({
   }),
   database: z.object({
     mongodb: z.object({
+      uri: z.string().optional(),
+      uriEnv: z.string().default('MONGODB_URI'),
+      deployment: storageDeploymentSchema.default('local'),
       host: z.string().default('localhost'),
       port: z.coerce.number().default(27017),
       database: z.string().default('hypha'),
       username: z.string().optional(),
       password: z.string().optional(),
+      tls: booleanishSchema.default(false),
+      authSource: z.string().optional(),
+      replicaSet: z.string().optional(),
+      directConnection: booleanishSchema.optional(),
       options: z
         .object({
           maxPoolSize: z.number().default(10),
@@ -65,11 +82,15 @@ const configSchema = z.object({
     }),
   }),
   redis: z.object({
+    url: z.string().optional(),
+    urlEnv: z.string().default('REDIS_URL'),
+    deployment: storageDeploymentSchema.default('local'),
     host: z.string().default('localhost'),
     port: z.coerce.number().default(6379),
     password: z.string().optional(),
     db: z.coerce.number().default(0),
     keyPrefix: z.string().default('hypha:'),
+    tls: booleanishSchema.default(false),
   }),
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),
@@ -126,6 +147,38 @@ const configSchema = z.object({
       archiveAfter: z.number().default(2592000),
     }),
   }),
+  storage: z
+    .object({
+      local: z
+        .object({
+          rootPath: z.string().default('./data/storage'),
+          sqliteMode: z.enum(['auto', 'node-sqlite', 'json']).default('auto'),
+          eventDbPath: z.string().default('./data/hypha-runtime-events.sqlite'),
+          structuredDbPath: z.string().default('./data/hypha-structured.sqlite'),
+          vectorPath: z.string().default('./data/hypha-vectors.json'),
+          artifactRootPath: z.string().default('./data/artifacts'),
+        })
+        .default({
+          rootPath: './data/storage',
+          sqliteMode: 'auto',
+          eventDbPath: './data/hypha-runtime-events.sqlite',
+          structuredDbPath: './data/hypha-structured.sqlite',
+          vectorPath: './data/hypha-vectors.json',
+          artifactRootPath: './data/artifacts',
+        }),
+      profiles: z.array(storageProviderProfileSchema).default([]),
+    })
+    .default({
+      local: {
+        rootPath: './data/storage',
+        sqliteMode: 'auto',
+        eventDbPath: './data/hypha-runtime-events.sqlite',
+        structuredDbPath: './data/hypha-structured.sqlite',
+        vectorPath: './data/hypha-vectors.json',
+        artifactRootPath: './data/artifacts',
+      },
+      profiles: [],
+    }),
   agents: z.object({
     configPath: z.string().default('./configs/agents.yaml'),
     defaultAgentId: z.string().default('default'),
@@ -341,6 +394,7 @@ export function reloadConfig(): Config {
 export const appConfig = () => getConfig().app;
 export const dbConfig = () => getConfig().database.mongodb;
 export const redisConfig = () => getConfig().redis;
+export const storageConfig = () => getConfig().storage;
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
 export const authConfig = () => getConfig().auth;

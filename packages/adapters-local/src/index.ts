@@ -16,9 +16,16 @@ import type {
   VectorRecord,
   VectorSearchResult,
 } from '@hypha/memory';
+import {
+  createFileArtifactStorageProfile,
+  createLocalVectorStorageProfile,
+  createSQLiteStorageProfile,
+  type StorageProviderProfile,
+} from '@hypha/storage';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { HybridMemoryProvider } from '@hypha/memory';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
@@ -41,6 +48,100 @@ export interface LocalAdapterProfile {
 }
 
 export const LOCAL_ADAPTER_TYPES = ['sqlite', 'local-vector', 'file-artifact'] as const;
+
+export interface LocalStorageBackboneOptions {
+  rootPath: string;
+  sqliteMode?: SQLiteEventStoreOptions['mode'];
+  eventDbFilename?: string;
+  structuredDbFilename?: string;
+  vectorFilename?: string;
+  artifactRootPath?: string;
+  memoryTableName?: string;
+  embeddings?: EmbeddingProvider;
+}
+
+export interface LocalStorageBackbone {
+  profiles: StorageProviderProfile[];
+  eventStore: SQLiteEventStore;
+  structured: SQLiteStructuredStore;
+  vector: LocalVectorIndexProvider;
+  artifacts: FileArtifactStore;
+  embeddings: EmbeddingProvider;
+  memory: HybridMemoryProvider;
+}
+
+export function createLocalStorageBackbone(
+  options: LocalStorageBackboneOptions
+): LocalStorageBackbone {
+  const rootPath = path.resolve(options.rootPath);
+  const eventDbFilename = options.eventDbFilename ?? path.join(rootPath, 'events.sqlite');
+  const structuredDbFilename = options.structuredDbFilename ?? path.join(rootPath, 'structured.sqlite');
+  const vectorFilename = options.vectorFilename ?? path.join(rootPath, 'vectors.json');
+  const artifactRootPath = options.artifactRootPath ?? path.join(rootPath, 'artifacts');
+  const embeddings = options.embeddings ?? new MockEmbeddingProvider();
+  const structured = new SQLiteStructuredStore({
+    filename: structuredDbFilename,
+    mode: options.sqliteMode,
+  });
+  const vector = new LocalVectorIndexProvider({ filename: vectorFilename });
+  const artifacts = new FileArtifactStore({ rootPath: artifactRootPath });
+  const eventStore = new SQLiteEventStore({
+    filename: eventDbFilename,
+    mode: options.sqliteMode,
+  });
+  return {
+    profiles: createLocalStorageProfiles({
+      eventDbFilename,
+      structuredDbFilename,
+      vectorFilename,
+      artifactRootPath,
+    }),
+    eventStore,
+    structured,
+    vector,
+    artifacts,
+    embeddings,
+    memory: new HybridMemoryProvider({
+      structured,
+      vector,
+      artifacts,
+      embeddings,
+      tableName: options.memoryTableName,
+    }),
+  };
+}
+
+export function createLocalStorageProfiles(input: {
+  eventDbFilename: string;
+  structuredDbFilename: string;
+  vectorFilename: string;
+  artifactRootPath: string;
+}): StorageProviderProfile[] {
+  return [
+    createSQLiteStorageProfile({
+      id: 'storage.sqlite.events',
+      role: 'event_log',
+      uri: `file:${input.eventDbFilename}`,
+      database: input.eventDbFilename,
+    }),
+    createSQLiteStorageProfile({
+      id: 'storage.sqlite.structured',
+      role: 'source_of_truth',
+      uri: `file:${input.structuredDbFilename}`,
+      database: input.structuredDbFilename,
+    }),
+    createLocalVectorStorageProfile({
+      id: 'storage.local-vector.semantic',
+      uri: `file:${input.vectorFilename}`,
+      database: input.vectorFilename,
+    }),
+    createFileArtifactStorageProfile({
+      id: 'storage.file-artifact.local',
+      uri: `file:${input.artifactRootPath}`,
+      rootPath: input.artifactRootPath,
+    }),
+  ];
+}
 
 export interface SQLiteEventStoreOptions {
   filename: string;

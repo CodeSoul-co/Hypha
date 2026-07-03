@@ -12,23 +12,34 @@ function nonEmptyEnv(name: string): string | undefined {
   return value || undefined;
 }
 
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
 // MongoDB connection
 export async function connectMongoDB(): Promise<typeof mongoose> {
   if (mongoConnection) {
     return mongoConnection;
   }
 
-  // Check for full URI in environment variable first
-  const envUri = nonEmptyEnv('MONGODB_URI');
   const config = dbConfig();
+  const envUri = nonEmptyEnv(config.uriEnv) || nonEmptyEnv('MONGODB_URI');
+  const configUri = nonEmpty(config.uri);
 
   let uri: string;
   if (envUri) {
-    // Use the full URI from environment
     uri = envUri;
-    logger.info('Using MongoDB URI from environment');
+    logger.info('Using MongoDB URI from environment', {
+      uriEnv: config.uriEnv,
+      deployment: config.deployment,
+    });
+  } else if (configUri) {
+    uri = configUri;
+    logger.info('Using MongoDB URI from config', {
+      deployment: config.deployment,
+    });
   } else {
-    // Build from config values
     uri = buildMongoUri({
       host: config.host,
       port: config.port,
@@ -43,10 +54,19 @@ export async function connectMongoDB(): Promise<typeof mongoose> {
     retryWrites: config.options?.retryWrites ?? true,
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
+    ...(config.tls ? { tls: true } : {}),
+    ...(config.authSource ? { authSource: config.authSource } : {}),
+    ...(config.replicaSet ? { replicaSet: config.replicaSet } : {}),
+    ...(config.directConnection !== undefined ? { directConnection: config.directConnection } : {}),
   };
 
   try {
-    logger.info('Connecting to MongoDB...', { host: config.host, database: config.database });
+    logger.info('Connecting to MongoDB...', {
+      host: envUri || configUri ? 'uri' : config.host,
+      database: config.database,
+      deployment: config.deployment,
+      tls: Boolean(config.tls || uri.startsWith('mongodb+srv://')),
+    });
 
     mongoConnection = await mongoose.connect(uri, options);
 
@@ -88,14 +108,23 @@ export async function connectRedis(): Promise<Redis> {
   }
 
   const config = redisConfig();
-  const redisUrl = nonEmptyEnv('REDIS_URL') || nonEmptyEnv('KV_URL') || nonEmptyEnv('RENDER_REDIS_URL');
+  const redisUrl =
+    nonEmptyEnv(config.urlEnv)
+    || nonEmpty(config.url)
+    || nonEmptyEnv('REDIS_URL')
+    || nonEmptyEnv('KV_URL')
+    || nonEmptyEnv('RENDER_REDIS_URL');
   const redisTls = nonEmptyEnv('REDIS_TLS')?.toLowerCase();
-  const useTls =
+  const useTls = Boolean(
+    config.tls ||
     redisTls === 'true' ||
     redisTls === '1' ||
-    redisUrl?.startsWith('rediss://');
+    redisUrl?.startsWith('rediss://')
+  );
 
-  logger.info('Connecting to Redis...', redisUrl ? { url: 'environment' } : { host: config.host, port: config.port });
+  logger.info('Connecting to Redis...', redisUrl
+    ? { url: 'configured', deployment: config.deployment, tls: useTls }
+    : { host: config.host, port: config.port, deployment: config.deployment, tls: useTls });
 
   const options: RedisOptions = {
     keyPrefix: config.keyPrefix,

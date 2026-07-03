@@ -14,6 +14,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | Package | Public Surface |
 | --- | --- |
 | `@hypha/core` | Spec primitives, schema definitions, events, errors, policy interfaces. |
+| `@hypha/storage` | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/vector profile helpers. |
 | `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`. |
 | `@hypha/fsm` | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers. |
 | `@hypha/kernel` | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces. |
@@ -33,7 +34,22 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+
+## Storage Profiles
+
+`StorageProviderProfile` describes a concrete store without leaking client SDK details into core specs.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kind` | string | `relational`, `document`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
+| `engine` | string | Store engine such as `sqlite`, `mongodb`, `redis`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, or `s3`. |
+| `deployment` | string | `local`, `self_hosted`, `managed`, or `cloud`. |
+| `role` | string | Runtime role such as `source_of_truth`, `event_log`, `semantic_index`, `cache`, or `artifact_store`. |
+| `connection` | object | URI/env/host/port/database/TLS metadata. |
+| `capabilities` | string[] | Declared features such as `structured`, `transactions`, `events`, `cache`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
+
+`StorageTopologySpec` groups profiles and declares default refs for relational, document, cache, vector, artifact, event, and memory storage. `createSQLiteStorageProfile`, `createMongoStorageProfile`, `createRedisStorageProfile`, `createQdrantStorageProfile`, `createChromaStorageProfile`, `createPineconeStorageProfile`, and related helpers create common profiles. `resolveStorageConnection(profile, env)` resolves URI/env/local host configuration and `redactStorageConnection(connection)` removes credentials before logging or exposing diagnostics.
 
 ## DomainPack
 
@@ -180,3 +196,5 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 | `LocalVectorIndexProvider` | JSON file | Persistent local vector search with metadata filters. |
 | `FileArtifactStore` | filesystem | Artifact bytes and hash metadata under a configured root. |
 | `MockEmbeddingProvider` | deterministic vectors | Repeatable local embeddings for tests and offline development. |
+
+`createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.

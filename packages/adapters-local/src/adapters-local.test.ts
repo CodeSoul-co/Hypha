@@ -8,6 +8,7 @@ import {
   MockEmbeddingProvider,
   SQLiteEventStore,
   SQLiteStructuredStore,
+  createLocalStorageBackbone,
 } from './index';
 import { createFrameworkEvent } from '@hypha/core';
 import fs from 'fs';
@@ -102,4 +103,54 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(events.list({ runId: 'run_json' })).resolves.toHaveLength(1);
     expect(fs.existsSync(path.join(root, 'events.sqlite.json'))).toBe(true);
   });
+
+  it('creates a durable local storage backbone for events and hybrid memory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-storage-backbone-'));
+    const storage = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'json' });
+    expect(storage.profiles.map((profile) => profile.id)).toEqual([
+      'storage.sqlite.events',
+      'storage.sqlite.structured',
+      'storage.local-vector.semantic',
+      'storage.file-artifact.local',
+    ]);
+
+    await storage.eventStore.append(
+      createFrameworkEvent({
+        id: 'run_1:started',
+        type: 'run.started',
+        runId: 'run_1',
+        sessionId: 'session_1',
+        payload: { input: 'hello' },
+      })
+    );
+    await storage.memory.write(
+      { userId: 'owner', runId: 'run_1' },
+      {
+        id: 'memory_1',
+        type: 'semantic',
+        value: 'hypha durable storage',
+        provenance: { eventId: 'run_1:started' },
+        createdAt: '2026-07-03T00:00:00.000Z',
+      },
+      { requireProvenance: true }
+    );
+
+    const reopened = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'json' });
+    await expect(reopened.eventStore.list({ runId: 'run_1' })).resolves.toMatchObject([
+      { id: 'run_1:started', type: 'run.started' },
+    ]);
+    await expect(reopened.memory.read({ userId: 'owner', runId: 'run_1' }, {}))
+      .resolves.toMatchObject([{ id: 'memory_1', value: 'hypha durable storage' }]);
+    await expect(
+      reopened.memory.search({ userId: 'owner', runId: 'run_1' }, {
+        vector: await awaitVector('hypha durable storage'),
+        topK: 1,
+      })
+    ).resolves.toMatchObject([{ record: { id: 'memory_1' } }]);
+  });
 });
+
+async function awaitVector(value: string): Promise<number[]> {
+  const [vector] = await new MockEmbeddingProvider().embed([value]);
+  return vector;
+}
