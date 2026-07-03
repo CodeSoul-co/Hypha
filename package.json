@@ -33,7 +33,6 @@
     "lint:fix": "eslint \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\" --fix",
     "format": "prettier --write \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\"",
     "cli": "ts-node -r dotenv/config -P apps/cli/tsconfig.json apps/cli/index.ts",
-    "example:local-basic": "npm run build:packages && node examples/local-basic/index.js",
     "prepare": "husky install"
   },
   "keywords": [

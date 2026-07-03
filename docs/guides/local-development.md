@@ -28,7 +28,6 @@ Local runtime records, indexes, artifacts, and detailed system logs are written 
 | `npm run test:integration`    | Run Jest integration tests serially.                                 |
 | `npm run lint`                | Lint apps, packages, and tests.                                      |
 | `npm run cli -- --help`       | Run the example CLI client.                                          |
-| `npm run example:local-basic` | Run the package-only local storage example without MongoDB or Redis. |
 
 ## Runtime Storage
 
@@ -57,13 +56,7 @@ await storage.memory.write(scope, record, { requireProvenance: true });
 
 The returned object includes `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`.
 
-Run the package-only local example without MongoDB or Redis:
-
-```bash
-npm run example:local-basic
-```
-
-The example builds packages, creates a temporary local SQLite/vector/artifact stack, writes a run event and semantic memory record, and prints the generated profile ids.
+Package-level local adapter behavior is covered by `npm run test:packages`. Treat those tests as the maintained contract for local storage instead of relying on standalone demo scripts.
 
 ## Model Providers
 
