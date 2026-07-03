@@ -443,6 +443,13 @@ export interface ToolProfileSpec extends VersionedSpec {
   tools: ToolSpec[];
 }
 
+export interface ToolExampleSpec<TInput = unknown> {
+  id: string;
+  toolSpecId: string;
+  description: string;
+  input: TInput;
+}
+
 export const toolSpecSchema = z.object({
   id: z.string().min(1),
   version: z.string().min(1),
@@ -492,6 +499,64 @@ export const toolSpecJsonSchema: JsonSchema = {
   },
   additionalProperties: false,
 };
+
+export const webSearchToolSpec: ToolSpec = {
+  id: 'web.search',
+  version: '0.0.0',
+  name: 'Web Search',
+  description:
+    'Search external web indexes through a governed read-only tool call with provider fallback.',
+  inputSchema: {
+    type: 'object',
+    required: ['query'],
+    additionalProperties: false,
+    properties: {
+      query: { type: 'string', minLength: 1 },
+      limit: { type: 'integer', minimum: 1, maximum: 10 },
+      provider: { enum: ['auto', 'stub', 'duckduckgo', 'wikipedia'] },
+      fallbackProviders: {
+        type: 'array',
+        items: { enum: ['stub', 'duckduckgo', 'wikipedia'] },
+      },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    required: ['query', 'count', 'items', 'provider'],
+    properties: {
+      query: { type: 'string' },
+      count: { type: 'number' },
+      provider: { enum: ['stub', 'duckduckgo', 'wikipedia'] },
+      note: { type: 'string' },
+      items: { type: 'array', items: { type: 'object' } },
+      attemptedProviders: { type: 'array', items: { type: 'string' } },
+      fallbackFrom: { type: 'string' },
+      providerErrors: { type: 'array', items: { type: 'object' } },
+    },
+  },
+  sideEffectLevel: 'read',
+  permissionScope: ['web.search'],
+  timeoutPolicy: { timeoutMs: 10000, onTimeout: 'fail' },
+  retryPolicy: { maxAttempts: 1 },
+  auditPolicy: { enabled: true, includeInput: true, includeOutput: true },
+  source: 'local',
+};
+
+export const predefinedToolSpecs = [webSearchToolSpec] as const;
+
+export const predefinedToolExamples: ToolExampleSpec[] = [
+  {
+    id: 'web.search.auto',
+    toolSpecId: webSearchToolSpec.id,
+    description: 'Run web search with provider fallback.',
+    input: {
+      query: 'hypha',
+      limit: 3,
+      provider: 'auto',
+      fallbackProviders: ['wikipedia', 'stub'],
+    },
+  },
+];
 
 export const toolSpecExample: ToolSpec = {
   id: 'tool.search',

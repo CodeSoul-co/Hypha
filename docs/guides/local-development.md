@@ -95,15 +95,26 @@ WEB_SEARCH_WIKIPEDIA_ENDPOINT=https://en.wikipedia.org/w/api.php
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
+Use automatic fallback for local real-network testing. This tries DuckDuckGo
+first and falls back to Wikipedia or the offline stub if the local network
+blocks a provider:
+
+```bash
+WEB_SEARCH_PROVIDER=auto
+WEB_SEARCH_PROVIDER_ORDER=duckduckgo,wikipedia,stub
+WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
+```
+
 Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should make real HTTP search calls through DuckDuckGo:
 
 ```bash
 WEB_SEARCH_PROVIDER=duckduckgo
 WEB_SEARCH_DUCKDUCKGO_ENDPOINT=https://api.duckduckgo.com/
+WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-Framework-level MCP examples live in `@hypha/mcp`. `createClassicMCPMockGateway()` provides executable filesystem, fetch, time, and web-search fixtures for tests. Runtime MCP servers are still configured explicitly under `tools.mcpServers` in `config.yaml`.
+Framework-level tool examples live in `@hypha/tools` as `predefinedToolSpecs` and `predefinedToolExamples`. MCP examples live in `@hypha/mcp`; `classicMCPExampleRequests` plus `createClassicMCPMockGateway()` provide executable filesystem, fetch, time, and web-search fixtures for tests. Runtime MCP servers are still configured explicitly under `tools.mcpServers` in `config.yaml`.
 
 ## Inference Backends
 

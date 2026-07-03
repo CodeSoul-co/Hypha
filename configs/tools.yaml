@@ -16,7 +16,7 @@ tools:
 
   - id: search
     name: Web Search
-    description: Search the web for information. Defaults to offline stub; set WEB_SEARCH_PROVIDER=wikipedia or duckduckgo for HTTP search.
+    description: Search the web for information. Defaults to offline stub; set WEB_SEARCH_PROVIDER=auto, wikipedia, or duckduckgo for HTTP search.
     enabled: true
     schema:
       type: object

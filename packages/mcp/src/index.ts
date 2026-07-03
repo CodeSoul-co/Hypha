@@ -146,6 +146,13 @@ export interface ClassicMCPMockGatewayOptions {
   searchResults?: Record<string, ClassicMCPSearchResult[]>;
 }
 
+export interface ClassicMCPExampleRequest<TInput = unknown> {
+  id: string;
+  toolId: string;
+  description: string;
+  input: TInput;
+}
+
 export const classicMCPIntegrationSpec: MCPIntegrationSpec = {
   id: 'mcp.classic.local',
   version: '0.0.0',
@@ -162,6 +169,33 @@ export const classicMCPIntegrationSpec: MCPIntegrationSpec = {
   versionPinning: true,
   capabilityHashing: true,
 };
+
+export const classicMCPExampleRequests: ClassicMCPExampleRequest[] = [
+  {
+    id: 'classic.filesystem.readme',
+    toolId: 'filesystem.read_file',
+    description: 'Read a sandboxed markdown fixture from the filesystem MCP server.',
+    input: { path: '/README.md' },
+  },
+  {
+    id: 'classic.fetch.json',
+    toolId: 'fetch.fetch',
+    description: 'Fetch a JSON document through the fetch MCP server.',
+    input: { url: 'https://example.com/api' },
+  },
+  {
+    id: 'classic.time.utc',
+    toolId: 'time.now',
+    description: 'Read the current UTC timestamp from the time MCP server.',
+    input: { timezone: 'UTC' },
+  },
+  {
+    id: 'classic.search.hypha',
+    toolId: 'search.web_search',
+    description: 'Run a read-only web search through the search MCP server.',
+    input: { query: 'hypha', limit: 1 },
+  },
+];
 
 export const classicMCPCapabilityDescriptors: MCPCapabilityDescriptor[] = [
   {
@@ -277,6 +311,8 @@ export const classicMCPCapabilityDescriptors: MCPCapabilityDescriptor[] = [
       properties: {
         query: { type: 'string' },
         count: { type: 'number' },
+        provider: { type: 'string' },
+        note: { type: 'string' },
         items: { type: 'array', items: { type: 'object' } },
       },
     },
@@ -357,6 +393,8 @@ export function createClassicMCPMockGateway(
     return {
       query,
       count: Math.min(items.length, limit),
+      provider: 'fixture',
+      note: 'classic-mcp-mock',
       items: items.slice(0, limit),
     };
   });

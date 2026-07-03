@@ -3,6 +3,7 @@ import { InMemoryEventStore } from '@hypha/core';
 import { GovernedToolRunner, ToolRegistry } from '@hypha/tools';
 import {
   MockMCPGateway,
+  classicMCPExampleRequests,
   classicMCPIntegrationSpec,
   createClassicMCPMockGateway,
   mcpIntegrationSpecDefinition,
@@ -244,13 +245,29 @@ describe('@hypha/mcp normalization', () => {
     ]);
 
     const runner = new GovernedToolRunner(registry, trace);
+    for (const example of classicMCPExampleRequests) {
+      await expect(
+        runner.run({
+          toolId: example.toolId,
+          input: example.input,
+          context: {
+            runId: 'run_mcp_classic',
+            stepId: `tool.${example.id}`,
+            sessionId: 'session_mcp_classic',
+          },
+        })
+      ).resolves.toMatchObject({
+        status: 'completed',
+      });
+    }
+
     await expect(
       runner.run({
         toolId: 'filesystem.read_file',
         input: { path: '/guide.md' },
         context: {
           runId: 'run_mcp_classic',
-          stepId: 'tool.filesystem',
+          stepId: 'tool.filesystem.custom',
           sessionId: 'session_mcp_classic',
         },
       })
@@ -261,55 +278,23 @@ describe('@hypha/mcp normalization', () => {
         content: 'Classic filesystem fixture content.',
       },
     });
-    await expect(
-      runner.run({
-        toolId: 'fetch.fetch',
-        input: { url: 'https://example.com/api' },
-        context: {
-          runId: 'run_mcp_classic',
-          stepId: 'tool.fetch',
-          sessionId: 'session_mcp_classic',
-        },
-      })
-    ).resolves.toMatchObject({
-      status: 'completed',
-      output: {
-        status: 200,
-        json: { ok: true },
+
+    const searchExample = await runner.run({
+      toolId: 'search.web_search',
+      input: { query: 'hypha', limit: 1 },
+      context: {
+        runId: 'run_mcp_classic',
+        stepId: 'tool.search.assert',
+        sessionId: 'session_mcp_classic',
       },
     });
-    await expect(
-      runner.run({
-        toolId: 'time.now',
-        input: { timezone: 'UTC' },
-        context: {
-          runId: 'run_mcp_classic',
-          stepId: 'tool.time',
-          sessionId: 'session_mcp_classic',
-        },
-      })
-    ).resolves.toMatchObject({
-      status: 'completed',
-      output: {
-        now: '2026-07-03T00:00:00.000Z',
-        timezone: 'UTC',
-      },
-    });
-    await expect(
-      runner.run({
-        toolId: 'search.web_search',
-        input: { query: 'hypha', limit: 1 },
-        context: {
-          runId: 'run_mcp_classic',
-          stepId: 'tool.search',
-          sessionId: 'session_mcp_classic',
-        },
-      })
-    ).resolves.toMatchObject({
+    expect(searchExample).toMatchObject({
       status: 'completed',
       output: {
         query: 'hypha',
         count: 1,
+        provider: 'fixture',
+        note: 'classic-mcp-mock',
       },
     });
 
@@ -328,6 +313,6 @@ describe('@hypha/mcp normalization', () => {
         expect.objectContaining({ type: 'mcp.call.completed' }),
       ])
     );
-    expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(4);
+    expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(6);
   });
 });

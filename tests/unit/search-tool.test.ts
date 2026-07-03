@@ -7,6 +7,8 @@ const originalEnv = {
   WEB_SEARCH_ENDPOINT: process.env.WEB_SEARCH_ENDPOINT,
   WEB_SEARCH_DUCKDUCKGO_ENDPOINT: process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT,
   WEB_SEARCH_WIKIPEDIA_ENDPOINT: process.env.WEB_SEARCH_WIKIPEDIA_ENDPOINT,
+  WEB_SEARCH_PROVIDER_ORDER: process.env.WEB_SEARCH_PROVIDER_ORDER,
+  WEB_SEARCH_FALLBACK_PROVIDERS: process.env.WEB_SEARCH_FALLBACK_PROVIDERS,
   WEB_SEARCH_TIMEOUT_MS: process.env.WEB_SEARCH_TIMEOUT_MS,
   WEB_SEARCH_USER_AGENT: process.env.WEB_SEARCH_USER_AGENT,
 };
@@ -85,25 +87,7 @@ describe('SearchTool', () => {
   });
 
   it('calls the configured Wikipedia OpenSearch-compatible HTTP endpoint', async () => {
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      expect(url.searchParams.get('action')).toBe('opensearch');
-      expect(url.searchParams.get('search')).toBe('hypha');
-      expect(url.searchParams.get('limit')).toBe('2');
-      expect(url.searchParams.get('format')).toBe('json');
-      res.setHeader('content-type', 'application/json');
-      res.end(
-        JSON.stringify([
-          'hypha',
-          ['Hypha', 'Hypha architecture'],
-          [
-            'Hypha is a branching filamentous structure.',
-            'Hypha architecture describes a harness-oriented runtime.',
-          ],
-          ['https://en.wikipedia.org/wiki/Hypha', 'https://example.com/hypha-architecture'],
-        ])
-      );
-    });
+    const server = createWikipediaServer();
     const endpoint = await listen(server);
     process.env.WEB_SEARCH_PROVIDER = 'wikipedia';
     process.env.WEB_SEARCH_ENDPOINT = 'https://api.duckduckgo.com/';
@@ -135,6 +119,74 @@ describe('SearchTool', () => {
       await close(server);
     }
   });
+
+  it('falls back from DuckDuckGo to Wikipedia in auto mode', async () => {
+    const duckDuckGo = http.createServer((_req, res) => {
+      res.statusCode = 503;
+      res.end('temporary unavailable');
+    });
+    const wikipedia = createWikipediaServer();
+    const duckDuckGoEndpoint = await listen(duckDuckGo);
+    const wikipediaEndpoint = await listen(wikipedia);
+    process.env.WEB_SEARCH_PROVIDER = 'auto';
+    process.env.WEB_SEARCH_PROVIDER_ORDER = 'duckduckgo,wikipedia';
+    process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT = duckDuckGoEndpoint;
+    process.env.WEB_SEARCH_WIKIPEDIA_ENDPOINT = wikipediaEndpoint;
+    process.env.WEB_SEARCH_TIMEOUT_MS = '1000';
+
+    try {
+      const result = await new SearchTool().execute({ query: 'hypha', limit: 2 });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        query: 'hypha',
+        count: 2,
+        provider: 'wikipedia',
+        attemptedProviders: ['duckduckgo', 'wikipedia'],
+        fallbackFrom: 'duckduckgo',
+        providerErrors: [expect.objectContaining({ provider: 'duckduckgo', status: 503 })],
+      });
+    } finally {
+      await close(duckDuckGo);
+      await close(wikipedia);
+    }
+  });
+
+  it('supports request-level provider override and fallback providers', async () => {
+    const duckDuckGo = http.createServer((_req, res) => {
+      res.statusCode = 500;
+      res.end('provider failed');
+    });
+    const wikipedia = createWikipediaServer();
+    const duckDuckGoEndpoint = await listen(duckDuckGo);
+    const wikipediaEndpoint = await listen(wikipedia);
+    process.env.WEB_SEARCH_PROVIDER = 'stub';
+    process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT = duckDuckGoEndpoint;
+    process.env.WEB_SEARCH_WIKIPEDIA_ENDPOINT = wikipediaEndpoint;
+    process.env.WEB_SEARCH_FALLBACK_PROVIDERS = 'none';
+    process.env.WEB_SEARCH_TIMEOUT_MS = '1000';
+
+    try {
+      const result = await new SearchTool().execute({
+        query: 'hypha',
+        limit: 1,
+        provider: 'duckduckgo',
+        fallbackProviders: ['wikipedia'],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        count: 1,
+        provider: 'wikipedia',
+        attemptedProviders: ['duckduckgo', 'wikipedia'],
+        fallbackFrom: 'duckduckgo',
+      });
+      expect(result.output.items).toHaveLength(1);
+    } finally {
+      await close(duckDuckGo);
+      await close(wikipedia);
+    }
+  });
 });
 
 function restoreEnv(): void {
@@ -142,6 +194,8 @@ function restoreEnv(): void {
   setOptionalEnv('WEB_SEARCH_ENDPOINT', originalEnv.WEB_SEARCH_ENDPOINT);
   setOptionalEnv('WEB_SEARCH_DUCKDUCKGO_ENDPOINT', originalEnv.WEB_SEARCH_DUCKDUCKGO_ENDPOINT);
   setOptionalEnv('WEB_SEARCH_WIKIPEDIA_ENDPOINT', originalEnv.WEB_SEARCH_WIKIPEDIA_ENDPOINT);
+  setOptionalEnv('WEB_SEARCH_PROVIDER_ORDER', originalEnv.WEB_SEARCH_PROVIDER_ORDER);
+  setOptionalEnv('WEB_SEARCH_FALLBACK_PROVIDERS', originalEnv.WEB_SEARCH_FALLBACK_PROVIDERS);
   setOptionalEnv('WEB_SEARCH_TIMEOUT_MS', originalEnv.WEB_SEARCH_TIMEOUT_MS);
   setOptionalEnv('WEB_SEARCH_USER_AGENT', originalEnv.WEB_SEARCH_USER_AGENT);
 }
@@ -174,5 +228,26 @@ function close(server: http.Server): Promise<void> {
       }
       resolve();
     });
+  });
+}
+
+function createWikipediaServer(): http.Server {
+  return http.createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    expect(url.searchParams.get('action')).toBe('opensearch');
+    expect(url.searchParams.get('search')).toBe('hypha');
+    expect(url.searchParams.get('format')).toBe('json');
+    res.setHeader('content-type', 'application/json');
+    res.end(
+      JSON.stringify([
+        'hypha',
+        ['Hypha', 'Hypha architecture'],
+        [
+          'Hypha is a branching filamentous structure.',
+          'Hypha architecture describes a harness-oriented runtime.',
+        ],
+        ['https://en.wikipedia.org/wiki/Hypha', 'https://example.com/hypha-architecture'],
+      ])
+    );
   });
 }

@@ -7,13 +7,32 @@ const DEFAULT_WIKIPEDIA_ENDPOINT = 'https://en.wikipedia.org/w/api.php';
 const DEFAULT_LIMIT = 3;
 const MAX_LIMIT = 10;
 
-type WebSearchProvider = 'stub' | 'duckduckgo' | 'wikipedia';
+type WebSearchProvider = 'auto' | 'stub' | 'duckduckgo' | 'wikipedia';
+type ConcreteWebSearchProvider = Exclude<WebSearchProvider, 'auto'>;
 
 interface SearchResultItem {
   title: string;
   url: string;
   snippet: string;
   source: string;
+}
+
+interface SearchProviderError {
+  provider: ConcreteWebSearchProvider;
+  message: string;
+  code?: string;
+  status?: number;
+}
+
+interface SearchOutput {
+  query: string;
+  count: number;
+  items: SearchResultItem[];
+  provider: ConcreteWebSearchProvider;
+  note?: string;
+  attemptedProviders?: ConcreteWebSearchProvider[];
+  fallbackFrom?: ConcreteWebSearchProvider;
+  providerErrors?: SearchProviderError[];
 }
 
 interface DuckDuckGoTopic {
@@ -37,7 +56,8 @@ type WikipediaOpenSearchResponse = [string, string[], string[], string[]];
  * Provider-neutral web-search tool.
  *
  * Default mode is a deterministic offline stub for local tests. Set
- * WEB_SEARCH_PROVIDER=duckduckgo to call the DuckDuckGo Instant Answer API
+ * WEB_SEARCH_PROVIDER=auto to try HTTP providers with fallback,
+ * WEB_SEARCH_PROVIDER=duckduckgo to call the DuckDuckGo Instant Answer API,
  * or WEB_SEARCH_PROVIDER=wikipedia to call Wikipedia OpenSearch
  * without introducing a provider SDK dependency.
  */
@@ -53,6 +73,16 @@ export default class SearchTool extends BaseTool {
       properties: {
         query: { type: 'string', description: 'Search query' },
         limit: { type: 'number', description: 'Max results to return' },
+        provider: {
+          type: 'string',
+          enum: ['auto', 'stub', 'duckduckgo', 'wikipedia'],
+          description: 'Optional provider override for this call',
+        },
+        fallbackProviders: {
+          type: 'array',
+          items: { type: 'string', enum: ['stub', 'duckduckgo', 'wikipedia'] },
+          description: 'Optional ordered fallback providers for this call',
+        },
       },
       required: ['query'],
     },
@@ -72,27 +102,39 @@ export default class SearchTool extends BaseTool {
   };
 
   protected async run(params: ToolParams): Promise<any> {
-    const { query, limit = DEFAULT_LIMIT } = params as { query: string; limit?: number };
+    const {
+      query,
+      limit = DEFAULT_LIMIT,
+      provider: providerOverride,
+      fallbackProviders,
+    } = params as {
+      query: string;
+      limit?: number;
+      provider?: string;
+      fallbackProviders?: string[];
+    };
     if (!query || typeof query !== 'string') throw new Error('query is required');
     const normalizedLimit = this.normalizeLimit(limit);
-    const provider = this.provider();
+    const provider = this.provider(providerOverride);
+    const fallbackOrder = this.fallbackProviders(provider, fallbackProviders);
 
-    if (provider === 'duckduckgo') {
-      return this.searchDuckDuckGo(query, normalizedLimit);
-    }
-    if (provider === 'wikipedia') {
-      return this.searchWikipedia(query, normalizedLimit);
+    if (provider === 'auto') {
+      return this.searchWithFallback(query, normalizedLimit, this.autoProviderOrder());
     }
 
-    return this.searchStub(query, normalizedLimit);
+    if (fallbackOrder.length > 0) {
+      return this.searchWithFallback(query, normalizedLimit, [provider, ...fallbackOrder]);
+    }
+
+    return this.searchProvider(provider, query, normalizedLimit);
   }
 
-  private provider(): WebSearchProvider {
-    const raw = (process.env.WEB_SEARCH_PROVIDER || 'stub').toLowerCase();
-    if (raw === 'stub' || raw === 'duckduckgo' || raw === 'wikipedia') {
+  private provider(override?: string): WebSearchProvider {
+    const raw = (override || process.env.WEB_SEARCH_PROVIDER || 'stub').toLowerCase();
+    if (raw === 'auto' || raw === 'stub' || raw === 'duckduckgo' || raw === 'wikipedia') {
       return raw;
     }
-    throw new Error(`Unsupported WEB_SEARCH_PROVIDER: ${raw}`);
+    throw new Error(`Unsupported web search provider: ${raw}`);
   }
 
   private normalizeLimit(limit: number): number {
@@ -102,7 +144,102 @@ export default class SearchTool extends BaseTool {
     return Math.min(Math.trunc(limit), MAX_LIMIT);
   }
 
-  private searchStub(query: string, limit: number): Record<string, unknown> {
+  private autoProviderOrder(): ConcreteWebSearchProvider[] {
+    return this.parseProviderList(
+      process.env.WEB_SEARCH_PROVIDER_ORDER || 'duckduckgo,wikipedia,stub'
+    );
+  }
+
+  private fallbackProviders(
+    provider: WebSearchProvider,
+    override?: string[]
+  ): ConcreteWebSearchProvider[] {
+    if (provider === 'auto' || provider === 'stub') {
+      return [];
+    }
+    if (override) {
+      return this.parseProviderList(override.join(','));
+    }
+    if (process.env.WEB_SEARCH_FALLBACK_PROVIDERS !== undefined) {
+      return this.parseProviderList(process.env.WEB_SEARCH_FALLBACK_PROVIDERS);
+    }
+    return provider === 'duckduckgo' ? ['wikipedia'] : [];
+  }
+
+  private parseProviderList(raw: string): ConcreteWebSearchProvider[] {
+    const providers: ConcreteWebSearchProvider[] = [];
+    for (const item of raw.split(',')) {
+      const value = item.trim().toLowerCase();
+      if (!value || value === 'none') continue;
+      if (value !== 'stub' && value !== 'duckduckgo' && value !== 'wikipedia') {
+        throw new Error(`Unsupported web search provider in list: ${value}`);
+      }
+      if (!providers.includes(value)) {
+        providers.push(value);
+      }
+    }
+    return providers;
+  }
+
+  private async searchWithFallback(
+    query: string,
+    limit: number,
+    providers: ConcreteWebSearchProvider[]
+  ): Promise<SearchOutput> {
+    const attemptedProviders: ConcreteWebSearchProvider[] = [];
+    const providerErrors: SearchProviderError[] = [];
+
+    for (const provider of providers) {
+      attemptedProviders.push(provider);
+      try {
+        const result = await this.searchProvider(provider, query, limit);
+        return {
+          ...result,
+          attemptedProviders,
+          fallbackFrom: attemptedProviders.length > 1 ? attemptedProviders[0] : undefined,
+          providerErrors: providerErrors.length > 0 ? providerErrors : undefined,
+        };
+      } catch (error) {
+        providerErrors.push(this.providerError(provider, error));
+      }
+    }
+
+    const summary = providerErrors
+      .map((error) => `${error.provider}: ${error.message}`)
+      .join('; ');
+    throw new Error(`Web search failed for all providers. ${summary}`);
+  }
+
+  private searchProvider(
+    provider: ConcreteWebSearchProvider,
+    query: string,
+    limit: number
+  ): Promise<SearchOutput> | SearchOutput {
+    if (provider === 'duckduckgo') {
+      return this.searchDuckDuckGo(query, limit);
+    }
+    if (provider === 'wikipedia') {
+      return this.searchWikipedia(query, limit);
+    }
+    return this.searchStub(query, limit);
+  }
+
+  private providerError(provider: ConcreteWebSearchProvider, error: unknown): SearchProviderError {
+    if (axios.isAxiosError(error)) {
+      return {
+        provider,
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+      };
+    }
+    return {
+      provider,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  private searchStub(query: string, limit: number): SearchOutput {
     const items = Array.from({ length: Math.min(limit, DEFAULT_LIMIT) }, (_, i) => ({
       title: `Stub result ${i + 1} for "${query}"`,
       url: `https://example.com/search?q=${encodeURIComponent(query)}&i=${i + 1}`,
@@ -113,7 +250,7 @@ export default class SearchTool extends BaseTool {
     return { query, count: items.length, items, provider: 'stub' };
   }
 
-  private async searchDuckDuckGo(query: string, limit: number): Promise<Record<string, unknown>> {
+  private async searchDuckDuckGo(query: string, limit: number): Promise<SearchOutput> {
     const endpoint =
       process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT ||
       process.env.WEB_SEARCH_ENDPOINT ||
@@ -142,7 +279,7 @@ export default class SearchTool extends BaseTool {
     };
   }
 
-  private async searchWikipedia(query: string, limit: number): Promise<Record<string, unknown>> {
+  private async searchWikipedia(query: string, limit: number): Promise<SearchOutput> {
     const endpoint = process.env.WEB_SEARCH_WIKIPEDIA_ENDPOINT || DEFAULT_WIKIPEDIA_ENDPOINT;
     const timeoutMs = Number(process.env.WEB_SEARCH_TIMEOUT_MS || 10000);
     const response = await axios.get<WikipediaOpenSearchResponse>(endpoint, {
@@ -157,7 +294,7 @@ export default class SearchTool extends BaseTool {
         'User-Agent': process.env.WEB_SEARCH_USER_AGENT || 'hypha/1.0 web-search',
       },
     });
-    const items = this.parseWikipediaResponse(response.data);
+    const items = this.parseWikipediaResponse(response.data).slice(0, limit);
     return {
       query,
       count: items.length,
