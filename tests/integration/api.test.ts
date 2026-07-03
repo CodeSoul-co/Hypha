@@ -17,6 +17,8 @@ import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
 import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
+import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
+import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
 
 const app = application.getApp();
 
@@ -51,9 +53,7 @@ describe('GET /api/v1/health', () => {
 
 describe('GET /api/v1/models', () => {
   it('lists at least one model and DeepSeek models carry provider=deepseek (bug 2)', async () => {
-    const r = await request(app)
-      .get('/api/v1/models')
-      .set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app).get('/api/v1/models').set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     expect(Array.isArray(r.body.data)).toBe(true);
     expect(r.body.data.length).toBeGreaterThan(0);
@@ -68,13 +68,9 @@ describe('GET /api/v1/models', () => {
   });
 
   it('SiliconFlow / Kimi etc. compatible models report their real provider (bug 2)', async () => {
-    const r = await request(app)
-      .get('/api/v1/models')
-      .set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app).get('/api/v1/models').set('Authorization', `Bearer ${devToken}`);
     const compat = r.body.data.filter((m: any) =>
-      ['siliconflow', 'kimi', 'groq', 'together', 'perplexity'].includes(
-        m.provider,
-      ),
+      ['siliconflow', 'kimi', 'groq', 'together', 'perplexity'].includes(m.provider)
     );
     // Skip if no compatible providers configured in this env.
     if (compat.length === 0) return;
@@ -183,14 +179,8 @@ describe('user-scoped session storage', () => {
     });
 
     expect(a.id).not.toBe(b.id);
-    expect(
-      (await permanentMemory.getConversationBySessionId(sessionId, 'user-a'))
-        ?.id,
-    ).toBe(a.id);
-    expect(
-      (await permanentMemory.getConversationBySessionId(sessionId, 'user-b'))
-        ?.id,
-    ).toBe(b.id);
+    expect((await permanentMemory.getConversationBySessionId(sessionId, 'user-a'))?.id).toBe(a.id);
+    expect((await permanentMemory.getConversationBySessionId(sessionId, 'user-b'))?.id).toBe(b.id);
 
     await permanentMemory.deleteConversation(a.id);
     await permanentMemory.deleteConversation(b.id);
@@ -199,23 +189,17 @@ describe('user-scoped session storage', () => {
 
 describe('GET /api/v1/skills (bug 8)', () => {
   it('includes built-in skills (context-enrichment, intent-classification)', async () => {
-    const r = await request(app)
-      .get('/api/v1/skills')
-      .set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app).get('/api/v1/skills').set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     const ids = (r.body.data || []).map((s: any) => s.id);
     // Pre-fix the list was empty because SkillManager scanned a non-existent dir.
-    expect(ids).toEqual(
-      expect.arrayContaining(['context-enrichment', 'intent-classification']),
-    );
+    expect(ids).toEqual(expect.arrayContaining(['context-enrichment', 'intent-classification']));
   });
 });
 
 describe('GET /api/v1/tools (bug 9)', () => {
   it('includes built-in tools (filesystem, search)', async () => {
-    const r = await request(app)
-      .get('/api/v1/tools')
-      .set('Authorization', `Bearer ${devToken}`);
+    const r = await request(app).get('/api/v1/tools').set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     const names = (r.body.data || []).map((t: any) => t.name);
     expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
@@ -249,6 +233,35 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
     expect(r.body.data?.query).toBe('ping');
   });
 
+  it('catches tool schema errors before executing through the HTTP API', async () => {
+    const r = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'search', params: { limit: 1 } });
+    expect(r.status).toBe(400);
+    expect(r.body.success).toBe(false);
+    expect(r.body.runId).toBeTruthy();
+    expect(r.body.error.message).toContain('missing required field: query');
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.failed',
+          payload: expect.objectContaining({
+            phase: 'input_validation',
+            source: 'local',
+            sideEffectLevel: 'read',
+          }),
+        }),
+        expect.objectContaining({ type: 'run.failed' }),
+      ])
+    );
+  });
+
   it('derives replay, audit, and regression projections from real tool run events', async () => {
     const executed = await request(app)
       .post('/api/v1/tools/execute')
@@ -262,7 +275,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       .set('Authorization', `Bearer ${devToken}`);
     expect(replay.status).toBe(200);
     expect(replay.body.data.statePath).toEqual(
-      expect.arrayContaining(['RunInitialized', 'Acting', 'Completed']),
+      expect.arrayContaining(['RunInitialized', 'Acting', 'Completed'])
     );
     expect(replay.body.data.toolCallEventIds).toHaveLength(5);
     expect(replay.body.data.toolCalls).toHaveLength(1);
@@ -279,9 +292,157 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       .set('Authorization', `Bearer ${devToken}`);
     expect(regression.status).toBe(200);
     expect(regression.body.data.eventTypes).toEqual(
-      expect.arrayContaining(['run.created', 'tool.policy.checked', 'run.completed']),
+      expect.arrayContaining(['run.created', 'tool.policy.checked', 'run.completed'])
     );
     expect(regression.body.data.toolCalls).toHaveLength(1);
+  });
+
+  it('blocks dangerous local tools by default policy before handler execution', async () => {
+    let called = false;
+    const dangerousTool: ITool = {
+      id: 'dangerous-policy-test-tool',
+      name: 'dangerous-policy-test-tool',
+      description: 'Integration test tool that must be blocked by default policy',
+      schema: {
+        name: 'dangerous-policy-test-tool',
+        description: 'Integration test tool that must be blocked by default policy',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+        },
+      },
+      governance: {
+        sideEffectLevel: 'irreversible',
+      },
+      async execute(_params: ToolParams): Promise<ToolResult> {
+        called = true;
+        return { success: true, output: { shouldNotRun: true } };
+      },
+    };
+    await getToolManager().register(dangerousTool);
+    try {
+      const r = await request(app)
+        .post('/api/v1/tools/execute')
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({ name: 'dangerous-policy-test-tool', params: { path: '/tmp/hypha-danger' } });
+      expect(r.status).toBe(400);
+      expect(r.body.success).toBe(false);
+      expect(r.body.runId).toBeTruthy();
+      expect(r.body.error.message).toContain('requires an explicit policy override');
+      expect(called).toBe(false);
+
+      const events = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(events.status).toBe(200);
+      expect(events.body.data || []).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool.policy.checked',
+            payload: expect.objectContaining({
+              source: 'local',
+              sideEffectLevel: 'irreversible',
+            }),
+          }),
+          expect.objectContaining({
+            type: 'tool.call.rejected',
+            payload: expect.objectContaining({
+              source: 'local',
+              sideEffectLevel: 'irreversible',
+            }),
+          }),
+          expect.objectContaining({ type: 'run.failed' }),
+        ])
+      );
+    } finally {
+      await getToolManager().unregister('dangerous-policy-test-tool');
+    }
+  });
+
+  it('returns waiting_human for tools that require human approval', async () => {
+    let called = false;
+    const approvalTool: ITool = {
+      id: 'approval-test-tool',
+      name: 'approval-test-tool',
+      description: 'Integration test tool that requires human approval',
+      schema: {
+        name: 'approval-test-tool',
+        description: 'Integration test tool that requires human approval',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            value: { type: 'string' },
+          },
+        },
+      },
+      governance: {
+        sideEffectLevel: 'write',
+        humanApprovalPolicy: {
+          required: true,
+          reason: 'integration approval required',
+        },
+      },
+      async execute(_params: ToolParams): Promise<ToolResult> {
+        called = true;
+        return { success: true, output: { shouldNotRun: true } };
+      },
+    };
+    await getToolManager().register(approvalTool);
+    try {
+      const r = await request(app)
+        .post('/api/v1/tools/execute')
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({ name: 'approval-test-tool', params: { value: 'pending' } });
+      expect(r.status).toBe(202);
+      expect(r.body.success).toBe(true);
+      expect(r.body.data).toMatchObject({
+        tool: 'approval-test-tool',
+        status: 'human_review_required',
+        reason: 'integration approval required',
+      });
+      expect(called).toBe(false);
+
+      const run = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(run.status).toBe(200);
+      expect(run.body.data.status).toBe('waiting_human');
+
+      const events = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(events.status).toBe(200);
+      const eventTypes = (events.body.data || []).map((event: any) => event.type);
+      expect(eventTypes).toEqual(
+        expect.arrayContaining([
+          'tool.policy.checked',
+          'human.review.requested',
+          'fsm.state.entered',
+          'run.waiting_human',
+        ])
+      );
+      expect(events.body.data || []).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'fsm.state.entered',
+            fsmState: 'HumanReview',
+          }),
+          expect.objectContaining({
+            type: 'human.review.requested',
+            payload: expect.objectContaining({
+              source: 'local',
+              sideEffectLevel: 'write',
+              reason: 'integration approval required',
+            }),
+          }),
+        ])
+      );
+    } finally {
+      await getToolManager().unregister('approval-test-tool');
+    }
   });
 });
 
@@ -311,7 +472,7 @@ describe('workflow template variable resolution (remaining #2)', () => {
     expect(events.status).toBe(200);
     const eventTypes = (events.body.data || []).map((event: any) => event.type);
     expect(eventTypes).toEqual(
-      expect.arrayContaining(['workflow.stage.started', 'workflow.stage.failed', 'run.failed']),
+      expect.arrayContaining(['workflow.stage.started', 'workflow.stage.failed', 'run.failed'])
     );
 
     const replay = await request(app)
@@ -387,10 +548,7 @@ body without required fields`;
   });
 
   it('rejects duplicate id with SKILL_ALREADY_INSTALLED', async () => {
-    const dup = validSkill.replace(
-      /integration-test-skill/,
-      'integration-test-skill',
-    );
+    const dup = validSkill.replace(/integration-test-skill/, 'integration-test-skill');
     const r = await request(app)
       .post('/api/v1/skills/install')
       .set('Authorization', `Bearer ${devToken}`)

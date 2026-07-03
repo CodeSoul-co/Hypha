@@ -1,3 +1,5 @@
+import type { ToolSpec } from '@hypha/tools';
+
 // Tool types
 export interface ToolDefinition {
   name: string;
@@ -20,12 +22,28 @@ export interface ToolResult {
   metadata?: Record<string, any>;
 }
 
+export type ToolGovernanceSpec = Partial<
+  Pick<
+    ToolSpec,
+    | 'outputSchema'
+    | 'sideEffectLevel'
+    | 'permissionScope'
+    | 'preconditions'
+    | 'postconditions'
+    | 'timeoutPolicy'
+    | 'retryPolicy'
+    | 'auditPolicy'
+    | 'humanApprovalPolicy'
+  >
+>;
+
 // Tool interface
 export interface ITool {
   readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly schema: ToolDefinition;
+  readonly governance?: ToolGovernanceSpec;
 
   execute(params: ToolParams): Promise<ToolResult>;
 

@@ -1,4 +1,12 @@
-import { ITool, ToolDefinition, ToolParams, ToolResult, ToolRegistration, MCPServerConfig, MCPClient } from './types';
+import {
+  ITool,
+  ToolDefinition,
+  ToolParams,
+  ToolResult,
+  ToolRegistration,
+  MCPServerConfig,
+  MCPClient,
+} from './types';
 import { BaseTool } from './types';
 import FilesystemTool from './builtins/FilesystemTool';
 import SearchTool from './builtins/SearchTool';
@@ -7,10 +15,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
-import {
-  normalizeMCPToolSpec,
-  type MCPCapabilityDescriptor,
-} from '@hypha/mcp';
+import { normalizeMCPToolSpec, type MCPCapabilityDescriptor } from '@hypha/mcp';
 import type { ToolSpec as HyphaToolSpec } from '@hypha/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -18,10 +23,7 @@ import axios from 'axios';
 
 // Built-in tool constructors — registered in initialize(), then enabled/disabled
 // based on configs/tools.yaml.
-const BUILTIN_TOOL_CTORS: Array<new () => ITool> = [
-  FilesystemTool,
-  SearchTool,
-];
+const BUILTIN_TOOL_CTORS: Array<new () => ITool> = [FilesystemTool, SearchTool];
 
 // Local MCP Client implementation
 class LocalMCPClient implements MCPClient {
@@ -56,14 +58,17 @@ class LocalMCPClient implements MCPClient {
         args: this.config.args,
       });
 
-      this.client = new Client({
-        name: 'hypha',
-        version: '1.0.0',
-      }, {
-        capabilities: {
-          tools: {},
+      this.client = new Client(
+        {
+          name: 'hypha',
+          version: '1.0.0',
         },
-      });
+        {
+          capabilities: {
+            tools: {},
+          },
+        }
+      );
 
       await this.client.connect(transport);
       this.status = 'connected';
@@ -284,9 +289,9 @@ export class ToolManager {
         logger.warn(`Tools config not found: ${abs}`);
         return;
       }
-      const parsed = yaml.load(fs.readFileSync(abs, 'utf-8')) as
-        | { tools?: Array<{ id: string; enabled?: boolean }> }
-        | null;
+      const parsed = yaml.load(fs.readFileSync(abs, 'utf-8')) as {
+        tools?: Array<{ id: string; enabled?: boolean }>;
+      } | null;
       if (!parsed?.tools) return;
 
       for (const entry of parsed.tools) {
@@ -373,9 +378,11 @@ export class ToolManager {
     // Also include MCP tools
     for (const client of this.mcpClients.values()) {
       if (client.status === 'connected') {
-        list.push(...client.tools.map((tool) => this.toolSpecToDefinition(
-          this.normalizeMCPTool(client, tool)
-        )));
+        list.push(
+          ...client.tools.map((tool) =>
+            this.toolSpecToDefinition(this.normalizeMCPTool(client, tool))
+          )
+        );
       }
     }
 
@@ -387,20 +394,37 @@ export class ToolManager {
     name: string;
     description: string;
     inputSchema: ToolDefinition['inputSchema'];
+    outputSchema?: HyphaToolSpec['outputSchema'];
     source: 'local' | 'mcp';
     sideEffectLevel: HyphaToolSpec['sideEffectLevel'];
+    permissionScope?: HyphaToolSpec['permissionScope'];
+    preconditions?: HyphaToolSpec['preconditions'];
+    postconditions?: HyphaToolSpec['postconditions'];
+    timeoutPolicy?: HyphaToolSpec['timeoutPolicy'];
+    retryPolicy?: HyphaToolSpec['retryPolicy'];
+    auditPolicy?: HyphaToolSpec['auditPolicy'];
+    humanApprovalPolicy?: HyphaToolSpec['humanApprovalPolicy'];
     serverId?: string;
     capabilityId?: string;
   } | null {
     const localTool = this.getToolByName(name);
     if (localTool) {
+      const governance = localTool.governance;
       return {
         id: localTool.id,
         name: localTool.name,
         description: localTool.description,
         inputSchema: localTool.schema.inputSchema,
+        outputSchema: governance?.outputSchema,
         source: 'local',
-        sideEffectLevel: 'read',
+        sideEffectLevel: governance?.sideEffectLevel ?? 'read',
+        permissionScope: governance?.permissionScope,
+        preconditions: governance?.preconditions,
+        postconditions: governance?.postconditions,
+        timeoutPolicy: governance?.timeoutPolicy,
+        retryPolicy: governance?.retryPolicy,
+        auditPolicy: governance?.auditPolicy,
+        humanApprovalPolicy: governance?.humanApprovalPolicy,
       };
     }
 
@@ -414,8 +438,10 @@ export class ToolManager {
           name: normalized.name ?? tool.name,
           description: normalized.description,
           inputSchema: this.asObjectInputSchema(normalized.inputSchema),
+          outputSchema: normalized.outputSchema,
           source: 'mcp',
           sideEffectLevel: normalized.sideEffectLevel,
+          permissionScope: normalized.permissionScope,
           serverId: normalized.sourceRef?.serverId,
           capabilityId: normalized.sourceRef?.capabilityId,
         };
@@ -435,7 +461,7 @@ export class ToolManager {
     // Then check MCP tools
     for (const client of this.mcpClients.values()) {
       if (client.status === 'connected') {
-        const tool = client.tools.find(t => t.name === name);
+        const tool = client.tools.find((t) => t.name === name);
         if (tool) {
           return client.callTool(name, params);
         }
@@ -446,9 +472,8 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
-    const client = config.mode === 'local'
-      ? new LocalMCPClient(config)
-      : new RemoteMCPClient(config);
+    const client =
+      config.mode === 'local' ? new LocalMCPClient(config) : new RemoteMCPClient(config);
 
     this.mcpClients.set(config.id, client);
 
@@ -489,7 +514,7 @@ export class ToolManager {
   }
 
   listMCPClients(): Array<{ id: string; name: string; status: string; toolCount: number }> {
-    return Array.from(this.mcpClients.values()).map(client => ({
+    return Array.from(this.mcpClients.values()).map((client) => ({
       id: client.id,
       name: client.name,
       status: client.status,

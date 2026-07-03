@@ -796,10 +796,19 @@ class EventRuntimeService {
               name: descriptor?.name ?? request.toolId,
               description: descriptor?.description ?? `ReAct tool ${request.toolId}`,
               inputSchema: descriptor?.inputSchema ?? { type: 'object' },
+              outputSchema: descriptor?.outputSchema,
               sideEffectLevel:
-                descriptor?.source === 'mcp'
+                descriptor?.source === 'mcp' ||
+                (descriptor?.sideEffectLevel && descriptor.sideEffectLevel !== 'read')
                   ? descriptor.sideEffectLevel
                   : inferToolSideEffect(request.toolId, params),
+              permissionScope: descriptor?.permissionScope,
+              preconditions: descriptor?.preconditions,
+              postconditions: descriptor?.postconditions,
+              timeoutPolicy: descriptor?.timeoutPolicy,
+              retryPolicy: descriptor?.retryPolicy,
+              auditPolicy: descriptor?.auditPolicy,
+              humanApprovalPolicy: descriptor?.humanApprovalPolicy,
               source: descriptor?.source ?? 'local',
               sourceRef:
                 descriptor?.source === 'mcp'
@@ -953,6 +962,10 @@ class EventRuntimeService {
       await this.transition(runId, inferFailedState(context.fsm), { reason: message });
     }
     await this.append(runId, 'run.failed', { error: message });
+  }
+
+  async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
+    await this.append(runId, 'run.waiting_human', payload);
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {
@@ -1329,10 +1342,19 @@ class EventRuntimeService {
             name: descriptor?.name ?? toolName,
             description: descriptor?.description ?? `Workflow tool ${toolName}`,
             inputSchema: descriptor?.inputSchema ?? { type: 'object' },
+            outputSchema: descriptor?.outputSchema,
             sideEffectLevel:
-              descriptor?.source === 'mcp'
+              descriptor?.source === 'mcp' ||
+              (descriptor?.sideEffectLevel && descriptor.sideEffectLevel !== 'read')
                 ? descriptor.sideEffectLevel
                 : inferToolSideEffect(toolName, params),
+            permissionScope: descriptor?.permissionScope,
+            preconditions: descriptor?.preconditions,
+            postconditions: descriptor?.postconditions,
+            timeoutPolicy: descriptor?.timeoutPolicy,
+            retryPolicy: descriptor?.retryPolicy,
+            auditPolicy: descriptor?.auditPolicy,
+            humanApprovalPolicy: descriptor?.humanApprovalPolicy,
             source: descriptor?.source ?? 'local',
             sourceRef:
               descriptor?.source === 'mcp'
@@ -1598,7 +1620,7 @@ class EventRuntimeService {
 }
 
 function createDefaultDomainPack(): DomainPackSpec {
-  const states = [
+  const happyPathStates = [
     'RunInitialized',
     'ContextBuilt',
     'Reasoning',
@@ -1608,15 +1630,17 @@ function createDefaultDomainPack(): DomainPackSpec {
     'ObservationRecorded',
     'Verifying',
     'MemorySync',
-    'Completed',
-    'Failed',
   ];
-  const transitions = states.slice(0, -2).map((from, index) => ({
+  const states = [...happyPathStates, 'HumanReview', 'Completed', 'Failed'];
+  const transitions = happyPathStates.map((from, index) => ({
     from,
-    to: states[index + 1],
-    description: `${from} to ${states[index + 1]}`,
+    to: index === happyPathStates.length - 1 ? 'Completed' : happyPathStates[index + 1],
+    description: `${from} next`,
   }));
   transitions.push(
+    ...['ActionSelected', 'PolicyChecked', 'Acting', 'ObservationRecorded', 'Verifying'].map(
+      (from) => ({ from, to: 'HumanReview', description: `${from} requires human review` })
+    ),
     ...states
       .filter((state) => state !== 'Completed' && state !== 'Failed')
       .map((from) => ({ from, to: 'Failed', description: `${from} failed` }))
