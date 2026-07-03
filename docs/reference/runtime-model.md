@@ -22,6 +22,7 @@ session.created
 run.created
 run.started
 fsm.state.entered
+fsm.transition.accepted
 context.build.completed
 agent.reasoning.started
 model.call.started
@@ -37,6 +38,8 @@ run.completed
 ```
 
 The exact event sequence depends on the route, workflow, tools, memory writes, policy decisions, and terminal status. Runtime projections must derive from event content instead of mutable session state.
+
+`RunManager` is the canonical package-level writer for run lifecycle events. It records run start/completion/failure, FSM transition acceptance, FSM state entry, context build events, and ReAct step completion. Application surfaces should call runtime APIs instead of constructing ad hoc run state.
 
 ## FSM and Guards
 
@@ -59,6 +62,13 @@ variables.ready == true && input.override == false
 
 Transitions may be rejected by missing transitions, guard failure, policy denial, or human-review requirements.
 
+`FSMRuntime` keeps the current `FSMSnapshot` for one run and exposes callbacks for accepted transitions and entered states. The default ReAct process path is:
+
+```text
+Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
+  -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying -> Completed
+```
+
 ## ReAct Execution
 
 `ReActRunner` executes explicit phases:
@@ -69,6 +79,8 @@ observe -> reason -> select_action -> policy_check -> act
 ```
 
 Tool actions must use a `ToolRunner`. Model calls must use an `InferenceProvider`. Memory synchronization must keep scope, provenance, policy, and trace behavior explicit.
+
+`ReActAgentRunner` provides the default package-level wiring for `ContextBuilder`, `ReActAgentRuntime`, `Verifier`, inference, and tools. `HarnessedReActFSMRunner` composes that ReAct execution with `FSMRuntime` and `RunManager` so every FSM state is traceable and replayable from events.
 
 ## Side Effects
 

@@ -11,7 +11,7 @@ import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hy
 import type { MemoryScope } from '@hypha/memory';
 import type { ModelMessage } from '@hypha/models';
 import { skillRefSchema, type SkillRef } from '@hypha/skills';
-import type { ToolRunner } from '@hypha/tools';
+import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 
 export interface ReActAgentSpec extends VersionedSpec, SpecMetadata {
   name: string;
@@ -82,6 +82,42 @@ export interface ReActRunnerOptions {
   syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
 }
 
+export interface ContextBuildInput<TInput = unknown> {
+  runId: string;
+  stepId: string;
+  sessionId?: string;
+  userId?: string;
+  agent: ReActAgentSpec;
+  input: TInput;
+  messages?: ModelMessage[];
+  memoryScope?: MemoryScope;
+  contextSpec?: ContextSpec;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BuiltAgentContext extends ReActRunContext {
+  sourceInput?: unknown;
+}
+
+export interface ContextBuilder {
+  build(input: ContextBuildInput): Promise<BuiltAgentContext>;
+}
+
+export interface Verifier {
+  verify(context: ReActRunContext, observation: ReActObservation): Promise<ReActAction>;
+}
+
+export interface BasicReActAgentRuntimeOptions {
+  verifier?: Verifier;
+}
+
+export interface ReActAgentRunnerOptions extends Omit<ReActRunnerOptions, 'toolRunner'> {
+  toolRunner?: ToolRunner;
+  contextBuilder?: ContextBuilder;
+  verifier?: Verifier;
+  runtime?: ReActAgentRuntime;
+}
+
 export interface ReActRunResult {
   runId: string;
   status: 'completed' | 'failed' | 'human_review_required';
@@ -104,6 +140,80 @@ export const REACT_PHASE_ORDER: ReActPhase[] = [
 
 export function createReActStep(id: string, phase: ReActPhase, input?: unknown): ReActStep {
   return { id, phase, input };
+}
+
+export class DefaultContextBuilder implements ContextBuilder {
+  async build(input: ContextBuildInput): Promise<BuiltAgentContext> {
+    const memoryScope = input.memoryScope ?? {
+      userId: input.userId,
+      sessionId: input.sessionId,
+    };
+    return {
+      runId: input.runId,
+      stepId: input.stepId,
+      agent: input.agent,
+      messages: input.messages ?? messagesFromInput(input.input),
+      memoryScope,
+      contextSpec: input.contextSpec,
+      metadata: {
+        ...input.metadata,
+        sessionId: input.sessionId,
+        userId: input.userId,
+      },
+      sourceInput: input.input,
+    };
+  }
+}
+
+export class DefaultVerifier implements Verifier {
+  async verify(_context: ReActRunContext, observation: ReActObservation): Promise<ReActAction> {
+    if (observation.source === 'human') {
+      return {
+        type: 'human_review',
+        input: observation.value,
+        reason: 'Observation requires human review.',
+      };
+    }
+    return { type: 'finish', input: observation.value };
+  }
+}
+
+export class BasicReActAgentRuntime implements ReActAgentRuntime {
+  private readonly verifier: Verifier;
+
+  constructor(options: BasicReActAgentRuntimeOptions = {}) {
+    this.verifier = options.verifier ?? new DefaultVerifier();
+  }
+
+  async reason(context: ReActRunContext): Promise<InferenceRequest> {
+    return {
+      runId: context.runId,
+      stepId: context.stepId,
+      sessionId: context.memoryScope?.sessionId,
+      agentId: context.agent.id,
+      modelAlias: context.agent.modelAlias,
+      input: {
+        instructions: context.agent.systemInstructions,
+        messages: context.messages,
+        context: {
+          memoryScope: context.memoryScope,
+          contextSpec: context.contextSpec,
+          metadata: context.metadata,
+          skillRefs: context.agent.skillRefs,
+          toolRefs: context.agent.toolRefs,
+        },
+      },
+      metadata: context.metadata,
+    };
+  }
+
+  async selectAction(response: InferenceResponse): Promise<ReActAction> {
+    return actionFromInferenceOutput(response.output);
+  }
+
+  async verify(context: ReActRunContext, observation: ReActObservation): Promise<ReActAction> {
+    return this.verifier.verify(context, observation);
+  }
 }
 
 export class ReActRunner {
@@ -207,6 +317,26 @@ export class ReActRunner {
         await pushStep('verify', observation, action);
         await this.options.syncMemory?.(context, observation);
         await pushStep('memory_sync', { source: observation.source });
+        if (action.type === 'human_review') {
+          await pushStep('human_review', action);
+          return {
+            runId: context.runId,
+            status: 'human_review_required',
+            steps,
+            finalAction: action,
+          };
+        }
+        if (action.type === 'finish' || action.type === 'model') {
+          const output = action.input ?? observation.value;
+          await pushStep('complete', action, output);
+          return {
+            runId: context.runId,
+            status: 'completed',
+            steps,
+            output,
+            finalAction: action,
+          };
+        }
       }
 
       throw new Error(`ReAct runner exceeded max iterations: ${this.maxIterations}`);
@@ -257,6 +387,106 @@ export class ReActRunner {
       provenance: { toolId: action.target, status: result.status },
     };
   }
+}
+
+export class ReActAgentRunner {
+  private readonly contextBuilder: ContextBuilder;
+  private readonly runner: ReActRunner;
+
+  constructor(options: ReActAgentRunnerOptions) {
+    const verifier = options.verifier ?? new DefaultVerifier();
+    const runtime = options.runtime ?? new BasicReActAgentRuntime({ verifier });
+    this.contextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    this.runner = new ReActRunner(runtime, {
+      inference: options.inference,
+      toolRunner: options.toolRunner ?? new MockToolRunner(),
+      maxIterations: options.maxIterations,
+      onStep: options.onStep,
+      syncMemory: options.syncMemory,
+    });
+  }
+
+  async run(input: ContextBuildInput): Promise<ReActRunResult> {
+    return this.runner.run(await this.contextBuilder.build(input));
+  }
+}
+
+function actionFromInferenceOutput(output: unknown): ReActAction {
+  if (isRecord(output)) {
+    const action = stringField(output, 'action') ?? stringField(output, 'type');
+    if (action === 'tool') {
+      return {
+        type: 'tool',
+        target: stringField(output, 'toolId') ?? stringField(output, 'target'),
+        input: output.input ?? output.arguments ?? {},
+        reason: stringField(output, 'reason'),
+      };
+    }
+    if (action === 'human_review') {
+      return {
+        type: 'human_review',
+        input: output.input ?? output,
+        reason: stringField(output, 'reason'),
+      };
+    }
+    if (action === 'finish' || action === 'model') {
+      return {
+        type: action,
+        input: output.output ?? output.content ?? output.input ?? output,
+        reason: stringField(output, 'reason'),
+      };
+    }
+    const toolCall = firstToolCall(output);
+    if (toolCall) return toolCall;
+  }
+  return { type: 'finish', input: output };
+}
+
+function firstToolCall(output: Record<string, unknown>): ReActAction | null {
+  const toolCalls = output.toolCalls;
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return null;
+  const first = toolCalls[0];
+  if (!isRecord(first)) return null;
+  const target = stringField(first, 'toolId') ?? stringField(first, 'name') ?? stringField(first, 'target');
+  if (!target) return null;
+  return {
+    type: 'tool',
+    target,
+    input: first.arguments ?? first.input ?? {},
+    reason: stringField(first, 'reason'),
+  };
+}
+
+function messagesFromInput(input: unknown): ModelMessage[] {
+  if (isModelMessageArray(input)) return input;
+  if (isRecord(input) && isModelMessageArray(input.messages)) return input.messages;
+  return [{ role: 'user', content: stringifyInput(input) }];
+}
+
+function stringifyInput(input: unknown): string {
+  if (typeof input === 'string') return input;
+  if (input === undefined) return '';
+  return JSON.stringify(input);
+}
+
+function isModelMessageArray(value: unknown): value is ModelMessage[] {
+  return Array.isArray(value) && value.every((item) => {
+    if (!isRecord(item)) return false;
+    const role = item.role;
+    return (
+      (role === 'system' || role === 'user' || role === 'assistant' || role === 'tool') &&
+      typeof item.content === 'string'
+    );
+  });
+}
+
+function stringField(value: Record<string, unknown>, key: string): string | undefined {
+  const field = value[key];
+  return typeof field === 'string' ? field : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 export const reactPhaseSchema = z.enum([

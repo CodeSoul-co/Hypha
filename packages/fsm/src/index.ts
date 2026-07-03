@@ -75,6 +75,17 @@ export interface FSMSnapshot {
   metadata?: Record<string, unknown>;
 }
 
+export interface StateTransition {
+  processId: string;
+  runId: string;
+  from: string;
+  to: string;
+  transition: FSMTransitionSpec;
+  snapshot: FSMSnapshot;
+  acceptedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface FSMGuardContext {
   input?: unknown;
   variables?: Record<string, unknown>;
@@ -91,6 +102,24 @@ export interface FSMRuntimeTransitionOptions extends FSMTransitionOptions {
   userId?: string;
   stepId?: string;
   policy?: PolicyEngine;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FSMStateEnteredRecord {
+  processId: string;
+  runId: string;
+  stateId: string;
+  fromState?: string;
+  snapshot: FSMSnapshot;
+  enteredAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FSMRuntimeOptions {
+  now?: () => string;
+  policy?: PolicyEngine;
+  onStateEntered?: (record: FSMStateEnteredRecord) => Promise<void> | void;
+  onTransition?: (record: StateTransition) => Promise<void> | void;
 }
 
 export type FSMGuardEvaluator = (
@@ -169,6 +198,166 @@ export function createInitialSnapshot(
     status: spec.terminalStates.includes(spec.initialState) ? 'completed' : 'running',
     updatedAt: now,
   };
+}
+
+export const REACT_FSM_STATE_PATH = [
+  'Idle',
+  'RunInitialized',
+  'ContextBuilt',
+  'Reasoning',
+  'ActionSelected',
+  'PolicyChecked',
+  'Acting',
+  'ObservationRecorded',
+  'Verifying',
+  'Completed',
+] as const;
+
+export const defaultReActFSMProcessSpec: FSMProcessSpec = {
+  id: 'fsm.react.runtime.default',
+  version: '0.0.0',
+  name: 'Default ReAct Runtime FSM',
+  description: 'Default ReAct + FSM runtime path for a minimal governed agent run.',
+  initialState: 'Idle',
+  states: [
+    { id: 'Idle', kind: 'idle', traceEvents: ['fsm.state.entered'] },
+    { id: 'RunInitialized', kind: 'run_initialized', traceEvents: ['fsm.state.entered'] },
+    { id: 'ContextBuilt', kind: 'context_built', traceEvents: ['fsm.state.entered'] },
+    { id: 'Reasoning', kind: 'reasoning', traceEvents: ['fsm.state.entered'] },
+    { id: 'ActionSelected', kind: 'action_selected', traceEvents: ['fsm.state.entered'] },
+    { id: 'PolicyChecked', kind: 'policy_checked', traceEvents: ['fsm.state.entered'] },
+    { id: 'Acting', kind: 'acting', traceEvents: ['fsm.state.entered'] },
+    { id: 'ObservationRecorded', kind: 'observation_recorded', traceEvents: ['fsm.state.entered'] },
+    { id: 'Verifying', kind: 'verifying', traceEvents: ['fsm.state.entered'] },
+    { id: 'HumanReview', kind: 'human_review', traceEvents: ['fsm.state.entered'] },
+    { id: 'Completed', kind: 'completed', traceEvents: ['fsm.state.entered'] },
+    { id: 'Failed', kind: 'failed', traceEvents: ['fsm.state.entered'] },
+    { id: 'Cancelled', kind: 'cancelled', traceEvents: ['fsm.state.entered'] },
+  ],
+  transitions: [
+    { from: 'Idle', to: 'RunInitialized', traceEvent: 'fsm.transition.accepted' },
+    { from: 'RunInitialized', to: 'ContextBuilt', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ContextBuilt', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Reasoning', to: 'ActionSelected', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ActionSelected', to: 'PolicyChecked', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ActionSelected', to: 'Verifying', traceEvent: 'fsm.transition.accepted' },
+    { from: 'PolicyChecked', to: 'Acting', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Acting', to: 'ObservationRecorded', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ObservationRecorded', to: 'Verifying', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ActionSelected', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'PolicyChecked', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Acting', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ObservationRecorded', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Idle', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'RunInitialized', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ContextBuilt', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Reasoning', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ActionSelected', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'PolicyChecked', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Acting', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ObservationRecorded', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+  ],
+  terminalStates: ['Completed', 'Failed', 'Cancelled'],
+};
+
+export class FSMRuntime {
+  private snapshot: FSMSnapshot;
+  private started = false;
+
+  constructor(
+    private readonly spec: FSMProcessSpec,
+    runId: string,
+    private readonly options: FSMRuntimeOptions = {},
+    snapshot?: FSMSnapshot
+  ) {
+    this.snapshot = snapshot ?? createInitialSnapshot(spec, runId, this.now());
+  }
+
+  getSnapshot(): FSMSnapshot {
+    return this.snapshot;
+  }
+
+  async start(metadata?: Record<string, unknown>): Promise<FSMSnapshot> {
+    if (this.started) return this.snapshot;
+    this.started = true;
+    await this.emitStateEntered({
+      stateId: this.snapshot.currentState,
+      enteredAt: this.snapshot.updatedAt,
+      metadata,
+    });
+    return this.snapshot;
+  }
+
+  async transition(
+    to: string,
+    options: FSMRuntimeTransitionOptions = {}
+  ): Promise<StateTransition> {
+    const from = this.snapshot.currentState;
+    const transition = this.spec.transitions.find(
+      (candidate) => candidate.from === from && candidate.to === to
+    );
+    const acceptedAt = options.now ?? this.now();
+    const next = await applyTransitionWithRuntimePolicy(this.spec, this.snapshot, to, {
+      ...options,
+      now: acceptedAt,
+      policy: options.policy ?? this.options.policy,
+    });
+    const record: StateTransition = {
+      processId: this.spec.id,
+      runId: this.snapshot.runId,
+      from,
+      to,
+      transition: transition ?? { from, to },
+      snapshot: next,
+      acceptedAt,
+      metadata: options.metadata,
+    };
+    this.snapshot = next;
+    await this.options.onTransition?.(record);
+    await this.emitStateEntered({
+      stateId: to,
+      fromState: from,
+      enteredAt: acceptedAt,
+      metadata: options.metadata,
+    });
+    return record;
+  }
+
+  async transitionPath(
+    states: string[],
+    options: FSMRuntimeTransitionOptions = {}
+  ): Promise<StateTransition[]> {
+    const records: StateTransition[] = [];
+    for (const state of states) {
+      records.push(await this.transition(state, options));
+    }
+    return records;
+  }
+
+  private async emitStateEntered(input: {
+    stateId: string;
+    fromState?: string;
+    enteredAt: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.options.onStateEntered?.({
+      processId: this.spec.id,
+      runId: this.snapshot.runId,
+      stateId: input.stateId,
+      fromState: input.fromState,
+      snapshot: this.snapshot,
+      enteredAt: input.enteredAt,
+      metadata: input.metadata,
+    });
+  }
+
+  private now(): string {
+    return this.options.now?.() ?? new Date().toISOString();
+  }
 }
 
 export function applyTransition(

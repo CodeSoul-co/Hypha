@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryEventStore } from '@hypha/core';
 import {
   GovernedToolRunner,
+  MockToolRunner,
   ToolRegistry,
   toolSpecDefinition,
   toolSpecJsonSchemas,
@@ -181,5 +182,39 @@ describe('@hypha/tools governed runner', () => {
   it('exports Stage1 ToolSpec schema and minimal example', () => {
     expect(validateToolSpec(toolSpecDefinition.example).id).toBe('tool.search');
     expect(toolSpecJsonSchemas.ToolSpec.required).toContain('sideEffectLevel');
+  });
+
+  it('provides a mock ToolRunner for package-level runtime tests', async () => {
+    const runner = new MockToolRunner();
+    runner.registerResult('tool.mock', {
+      toolId: 'tool.mock',
+      status: 'completed',
+      output: { ok: true },
+    });
+
+    await expect(
+      runner.run({
+        toolId: 'tool.mock',
+        input: { value: 1 },
+        context: { runId: 'run_mock', stepId: 'step_mock' },
+      })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: { ok: true },
+    });
+
+    await expect(
+      runner.run({
+        toolId: 'tool.echo',
+        input: { value: 2 },
+        context: { runId: 'run_mock', stepId: 'step_echo' },
+      })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: {
+        toolId: 'tool.echo',
+        input: { value: 2 },
+      },
+    });
   });
 });

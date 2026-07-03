@@ -27,6 +27,8 @@ The runtime model is event-first:
 - `Run` is one concrete execution under a Session.
 - `Event` is the smallest source-of-truth fact record. Trace, replay, audit, regression, and state projection are derived from events.
 
+The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state.
+
 ## API Documentation
 
 Public API documentation is maintained as field-level references:

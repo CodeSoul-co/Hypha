@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
-import type { ToolRunner } from '@hypha/tools';
+import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 import {
   createReActStep,
+  DefaultContextBuilder,
   kernelSpecJsonSchemas,
+  ReActAgentRunner,
   ReActRunner,
   reactAgentSpecDefinition,
   REACT_PHASE_ORDER,
@@ -171,6 +173,58 @@ describe('@hypha/kernel ReAct contracts', () => {
       expect.arrayContaining(['policy_check', 'act', 'observe_result', 'human_review'])
     );
     expect(result.steps.map((step) => step.phase)).not.toContain('verify');
+  });
+
+  it('runs the default ReActAgentRunner with context builder, verifier, and mock tool runner', async () => {
+    const provider: InferenceProvider = {
+      id: 'test-provider',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'tool',
+            toolId: 'tool.mock',
+            input: { value: 'from-model' },
+          },
+        };
+      },
+    };
+    const toolRunner = new MockToolRunner();
+    toolRunner.registerResult('tool.mock', {
+      toolId: 'tool.mock',
+      status: 'completed',
+      output: { value: 'from-tool' },
+    });
+    const runner = new ReActAgentRunner({
+      inference: provider,
+      toolRunner,
+      contextBuilder: new DefaultContextBuilder(),
+    });
+
+    const result = await runner.run({
+      runId: 'run_agent_runner',
+      stepId: 'react',
+      sessionId: 'session_agent_runner',
+      userId: 'owner',
+      agent: reactAgentSpecDefinition.example,
+      input: 'use the mock tool',
+    });
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      output: { value: 'from-tool' },
+    });
+    expect(result.steps.map((step) => step.phase)).toEqual([
+      'observe',
+      'reason',
+      'select_action',
+      'policy_check',
+      'act',
+      'observe_result',
+      'verify',
+      'memory_sync',
+      'complete',
+    ]);
   });
 
   it('exports Stage1 ReActAgentSpec schema and minimal example', () => {

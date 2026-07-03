@@ -6,6 +6,27 @@ import {
   type FrameworkEvent,
   type SpecRef,
 } from '@hypha/core';
+import {
+  defaultReActFSMProcessSpec,
+  FSMRuntime,
+  type FSMProcessSpec,
+  type FSMStateEnteredRecord,
+  type StateTransition,
+} from '@hypha/fsm';
+import type { InferenceProvider } from '@hypha/inference';
+import {
+  BasicReActAgentRuntime,
+  DefaultContextBuilder,
+  DefaultVerifier,
+  ReActRunner,
+  type ContextBuildInput,
+  type ContextBuilder,
+  type ReActAgentRuntime,
+  type ReActRunResult,
+  type ReActStep,
+  type Verifier,
+} from '@hypha/kernel';
+import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 
 export interface RuntimeSession {
   id: string;
@@ -98,6 +119,44 @@ export interface RegressionProjection {
   toolCalls: Array<{ toolId?: unknown; status: string }>;
   memoryWriteCount: number;
   finalOutput?: unknown;
+}
+
+export interface RunExecutionContext {
+  runId: string;
+  sessionId: string;
+  userId: string;
+  agentId?: string;
+}
+
+export interface RunManagerOptions {
+  runtime?: EventFirstRuntime;
+}
+
+export interface HarnessedReActFSMRunnerOptions {
+  inference: InferenceProvider;
+  toolRunner?: ToolRunner;
+  runManager?: RunManager;
+  fsmSpec?: FSMProcessSpec;
+  contextBuilder?: ContextBuilder;
+  verifier?: Verifier;
+  reactRuntime?: ReActAgentRuntime;
+  maxIterations?: number;
+  now?: () => string;
+}
+
+export interface HarnessedReActFSMRunInput<TInput = unknown> extends ContextBuildInput<TInput> {
+  sessionId: string;
+  userId: string;
+  domainPackRef?: SpecRef;
+  workflowRef?: SpecRef;
+  createSession?: boolean;
+}
+
+export interface HarnessedReActFSMRunResult {
+  run: RuntimeRun;
+  react: ReActRunResult;
+  fsmSnapshot: ReturnType<FSMRuntime['getSnapshot']>;
+  events: FrameworkEvent[];
 }
 
 export class EventFirstRuntime {
@@ -215,6 +274,327 @@ export class EventFirstRuntime {
 
   async listEvents(runId: string): Promise<FrameworkEvent[]> {
     return this.events.list({ runId });
+  }
+}
+
+export class RunManager {
+  private readonly runtime: EventFirstRuntime;
+  private readonly eventCounts = new Map<string, number>();
+
+  constructor(options: RunManagerOptions = {}) {
+    this.runtime = options.runtime ?? new EventFirstRuntime();
+  }
+
+  eventRuntime(): EventFirstRuntime {
+    return this.runtime;
+  }
+
+  async createSession(input: CreateSessionInput): Promise<RuntimeSession> {
+    return this.runtime.createSession(input);
+  }
+
+  async createRun(input: CreateRunInput): Promise<RuntimeRun> {
+    return this.runtime.createRun(input);
+  }
+
+  async startRun(run: RuntimeRun, timestamp?: string): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(run.id, 'run.started'),
+      type: 'run.started',
+      runId: run.id,
+      sessionId: run.sessionId,
+      userId: run.userId,
+      timestamp,
+      payload: { runId: run.id, input: run.input },
+      metadata: { agentRef: run.agentRef, workflowRef: run.workflowRef },
+    });
+  }
+
+  async recordTransitionAccepted(
+    context: RunExecutionContext,
+    transition: StateTransition
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'fsm.transition.accepted'),
+      type: 'fsm.transition.accepted',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      stepId: transition.metadata?.stepId as string | undefined,
+      agentId: context.agentId,
+      fsmState: transition.to,
+      timestamp: transition.acceptedAt,
+      payload: {
+        processId: transition.processId,
+        from: transition.from,
+        to: transition.to,
+        transition: transition.transition,
+        snapshot: transition.snapshot,
+      },
+      metadata: transition.metadata,
+    });
+  }
+
+  async recordStateEntered(
+    context: RunExecutionContext,
+    record: FSMStateEnteredRecord
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, `fsm.state.entered.${record.stateId}`),
+      type: 'fsm.state.entered',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      fsmState: record.stateId,
+      timestamp: record.enteredAt,
+      payload: {
+        processId: record.processId,
+        stateId: record.stateId,
+        fromState: record.fromState,
+        snapshot: record.snapshot,
+      },
+      metadata: record.metadata,
+    });
+  }
+
+  async recordContextBuildStarted(context: RunExecutionContext): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'context.build.started'),
+      type: 'context.build.started',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload: { runId: context.runId },
+    });
+  }
+
+  async recordContextBuildCompleted(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'context.build.completed'),
+      type: 'context.build.completed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordReactStep(
+    context: RunExecutionContext,
+    step: ReActStep
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, `react.step.${step.phase}`),
+      type: 'react.step.completed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      stepId: step.id,
+      agentId: context.agentId,
+      payload: { step },
+    });
+  }
+
+  async completeRun(
+    context: RunExecutionContext,
+    output: unknown,
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'run.completed'),
+      type: 'run.completed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload: { output },
+    });
+  }
+
+  async failRun(
+    context: RunExecutionContext,
+    error: unknown,
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'run.failed'),
+      type: 'run.failed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload: { error: error instanceof Error ? error.message : String(error) },
+    });
+  }
+
+  async listEvents(runId: string): Promise<FrameworkEvent[]> {
+    return this.runtime.listEvents(runId);
+  }
+
+  async projectRun(runId: string): Promise<RuntimeRun | null> {
+    return this.runtime.projectRun(runId);
+  }
+
+  async projectReplay(runId: string): Promise<ReplayProjection> {
+    return this.runtime.projectReplay(runId);
+  }
+
+  private nextEventId(runId: string, label: string): string {
+    const next = (this.eventCounts.get(runId) ?? 0) + 1;
+    this.eventCounts.set(runId, next);
+    return `${runId}:${label}:${next}`;
+  }
+}
+
+export class HarnessedReActFSMRunner {
+  private readonly runManager: RunManager;
+  private readonly fsmSpec: FSMProcessSpec;
+  private readonly contextBuilder: ContextBuilder;
+  private readonly verifier: Verifier;
+  private readonly toolRunner: ToolRunner;
+  private readonly reactRuntime?: ReActAgentRuntime;
+  private readonly maxIterations?: number;
+  private readonly now: () => string;
+
+  constructor(private readonly options: HarnessedReActFSMRunnerOptions) {
+    this.runManager = options.runManager ?? new RunManager();
+    this.fsmSpec = options.fsmSpec ?? defaultReActFSMProcessSpec;
+    this.contextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    this.verifier = options.verifier ?? new DefaultVerifier();
+    this.toolRunner = options.toolRunner ?? new MockToolRunner();
+    this.reactRuntime = options.reactRuntime;
+    this.maxIterations = options.maxIterations;
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  async run(input: HarnessedReActFSMRunInput): Promise<HarnessedReActFSMRunResult> {
+    const runContext: RunExecutionContext = {
+      runId: input.runId,
+      sessionId: input.sessionId,
+      userId: input.userId,
+      agentId: input.agent.id,
+    };
+
+    if (input.createSession !== false) {
+      await this.runManager.createSession({
+        id: input.sessionId,
+        userId: input.userId,
+        domainPackRef: input.domainPackRef,
+        metadata: input.metadata,
+        timestamp: this.now(),
+      });
+    }
+
+    const run = await this.runManager.createRun({
+      id: input.runId,
+      sessionId: input.sessionId,
+      userId: input.userId,
+      domainPackRef: input.domainPackRef,
+      workflowRef: input.workflowRef,
+      agentRef: { id: input.agent.id, version: input.agent.version },
+      input: input.input,
+      timestamp: this.now(),
+    });
+    await this.runManager.startRun(run, this.now());
+
+    const fsm = new FSMRuntime(this.fsmSpec, input.runId, {
+      now: this.now,
+      onTransition: async (transition) => {
+        await this.runManager.recordTransitionAccepted(runContext, transition);
+      },
+      onStateEntered: async (record) => {
+        await this.runManager.recordStateEntered(runContext, record);
+      },
+    });
+    await fsm.start({ phase: 'idle' });
+    await this.transitionIfNeeded(fsm, 'RunInitialized', { phase: 'run_initialized' });
+
+    await this.runManager.recordContextBuildStarted(runContext);
+    const context = await this.contextBuilder.build(input);
+    await this.runManager.recordContextBuildCompleted(runContext, {
+      messageCount: context.messages.length,
+      memoryScope: context.memoryScope,
+    });
+    await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
+
+    const reactRuntime =
+      this.reactRuntime ?? new BasicReActAgentRuntime({ verifier: this.verifier });
+    const reactRunner = new ReActRunner(reactRuntime, {
+      inference: this.options.inference,
+      toolRunner: this.toolRunner,
+      maxIterations: this.maxIterations,
+      onStep: async (step) => {
+        await this.runManager.recordReactStep(runContext, step);
+        const state = stateForReActStep(step);
+        if (state) {
+          await this.transitionIfNeeded(fsm, state, {
+            phase: step.phase,
+            stepId: step.id,
+          });
+        }
+      },
+    });
+
+    const react = await reactRunner.run(context);
+    if (react.status === 'completed') {
+      await this.transitionIfNeeded(fsm, 'Completed', { phase: 'complete' });
+      await this.runManager.completeRun(runContext, react.output, this.now());
+    } else if (react.status === 'human_review_required') {
+      await this.transitionIfNeeded(fsm, 'HumanReview', { phase: 'human_review' });
+    } else {
+      await this.transitionIfNeeded(fsm, 'Failed', { phase: 'fail' });
+      await this.runManager.failRun(runContext, react.error, this.now());
+    }
+
+    return {
+      run,
+      react,
+      fsmSnapshot: fsm.getSnapshot(),
+      events: await this.runManager.listEvents(input.runId),
+    };
+  }
+
+  private async transitionIfNeeded(
+    fsm: FSMRuntime,
+    to: string,
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
+    if (fsm.getSnapshot().currentState === to) return;
+    await fsm.transition(to, { metadata });
+  }
+}
+
+function stateForReActStep(step: ReActStep): string | null {
+  switch (step.phase) {
+    case 'reason':
+      return 'Reasoning';
+    case 'select_action':
+      return 'ActionSelected';
+    case 'policy_check':
+      return 'PolicyChecked';
+    case 'act':
+      return 'Acting';
+    case 'observe_result':
+      return 'ObservationRecorded';
+    case 'verify':
+      return 'Verifying';
+    case 'complete':
+      return 'Completed';
+    case 'fail':
+      return 'Failed';
+    case 'human_review':
+      return 'HumanReview';
+    case 'observe':
+    case 'memory_sync':
+      return null;
   }
 }
 

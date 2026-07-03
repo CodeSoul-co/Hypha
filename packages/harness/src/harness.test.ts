@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '@hypha/core';
-import { EventFirstRuntime, InMemoryTraceRecorder, SessionProjector, UserScopedSessionQueue } from './index';
+import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
+import { MockToolRunner } from '@hypha/tools';
+import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
+import {
+  EventFirstRuntime,
+  HarnessedReActFSMRunner,
+  InMemoryTraceRecorder,
+  RunManager,
+  SessionProjector,
+  UserScopedSessionQueue,
+} from './index';
 
 describe('@hypha/harness contracts', () => {
   it('keeps session views derived from events', async () => {
@@ -89,6 +99,82 @@ describe('@hypha/harness contracts', () => {
     await expect(runtime.projectRegression('run_1')).resolves.toMatchObject({
       eventTypes: ['run.created', 'fsm.state.entered', 'model.call.completed', 'run.completed'],
       finalOutput: 'ok',
+    });
+  });
+
+  it('runs the minimal ReAct + FSM runtime closure with trace events for each state', async () => {
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'tool',
+            toolId: 'tool.mock',
+            input: { query: 'hypha' },
+          },
+        };
+      },
+    };
+    const toolRunner = new MockToolRunner();
+    toolRunner.registerResult('tool.mock', {
+      toolId: 'tool.mock',
+      status: 'completed',
+      output: { answer: 'ok' },
+    });
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      toolRunner,
+      runManager,
+      now: () => '2026-07-03T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_stage4_minimal',
+      stepId: 'react',
+      sessionId: 'session_stage4',
+      userId: 'owner',
+      agent: {
+        id: 'agent.stage4',
+        version: '0.0.0',
+        name: 'Stage Runtime Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.mock'],
+      },
+      input: 'use tool',
+    });
+
+    expect(result.react).toMatchObject({
+      status: 'completed',
+      output: { answer: 'ok' },
+    });
+    expect(result.fsmSnapshot).toMatchObject({
+      currentState: 'Completed',
+      status: 'completed',
+      statePath: [...REACT_FSM_STATE_PATH],
+    });
+    expect(
+      result.events
+        .filter((event) => event.type === 'fsm.state.entered')
+        .map((event) => (event.payload as Record<string, unknown>).stateId)
+    ).toEqual([...REACT_FSM_STATE_PATH]);
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'context.build.started' }),
+        expect.objectContaining({ type: 'context.build.completed' }),
+        expect.objectContaining({ type: 'react.step.completed' }),
+        expect.objectContaining({ type: 'run.completed' }),
+      ])
+    );
+
+    await expect(runManager.projectRun('run_stage4_minimal')).resolves.toMatchObject({
+      status: 'completed',
+      output: { answer: 'ok' },
+    });
+    await expect(runManager.projectReplay('run_stage4_minimal')).resolves.toMatchObject({
+      statePath: [...REACT_FSM_STATE_PATH],
+      finalOutput: { answer: 'ok' },
     });
   });
 });

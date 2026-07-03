@@ -29,6 +29,8 @@ hypha 采用 ReAct + FSM 执行模型。ReAct 描述 agent 的观察、推理、
 - `Run` 是 Session 下的一次具体执行实例。
 - `Event` 是最小事实记录。trace、replay、audit、regression 和 state projection 都从 events 派生。
 
+包级运行时提供 `FSMRuntime`、`ReActAgentRunner`、`RunManager` 和 `HarnessedReActFSMRunner`，用于执行带治理和 trace 的最小 agent 状态闭环。
+
 ## API 文档
 
 公开文档以 API 和字段说明为主：

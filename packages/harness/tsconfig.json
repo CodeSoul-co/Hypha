@@ -3,5 +3,11 @@
   "compilerOptions": { "composite": true, "rootDir": "./src", "outDir": "./dist" },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "node_modules", "dist"],
-  "references": [{ "path": "../core" }, { "path": "../fsm" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../fsm" },
+    { "path": "../inference" },
+    { "path": "../kernel" },
+    { "path": "../tools" }
+  ]
 }

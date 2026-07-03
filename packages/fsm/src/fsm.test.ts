@@ -4,12 +4,15 @@ import {
   applyTransitionWithRuntimePolicy,
   canRetryState,
   createInitialSnapshot,
+  defaultReActFSMProcessSpec,
   evaluateGuardExpression,
   evaluateStateTimeout,
+  FSMRuntime,
   fsmProcessSpecDefinition,
   fsmSpecJsonSchemas,
   getAllowedTransitions,
   parseFSMProcessSpec,
+  REACT_FSM_STATE_PATH,
   validateFSMProcessSpec,
   type FSMProcessSpec,
 } from './index';
@@ -136,5 +139,40 @@ describe('@hypha/fsm runtime contracts', () => {
     expect(canRetryState(timed, 'Idle', 2)).toBe(false);
     expect(parseFSMProcessSpec(fsmProcessSpecDefinition.example).id).toBe('fsm.react.default');
     expect(fsmSpecJsonSchemas.FSMProcessSpec.required).toContain('states');
+  });
+
+  it('runs the default ReAct FSM path and emits state transition records', async () => {
+    const entered: string[] = [];
+    const transitions: string[] = [];
+    const runtime = new FSMRuntime(defaultReActFSMProcessSpec, 'run_react_fsm', {
+      now: () => `2026-07-03T00:00:0${entered.length}.000Z`,
+      onStateEntered(record) {
+        entered.push(record.stateId);
+      },
+      onTransition(record) {
+        transitions.push(`${record.from}->${record.to}`);
+      },
+    });
+
+    await runtime.start();
+    await runtime.transitionPath(REACT_FSM_STATE_PATH.slice(1));
+
+    expect(entered).toEqual([...REACT_FSM_STATE_PATH]);
+    expect(transitions).toEqual([
+      'Idle->RunInitialized',
+      'RunInitialized->ContextBuilt',
+      'ContextBuilt->Reasoning',
+      'Reasoning->ActionSelected',
+      'ActionSelected->PolicyChecked',
+      'PolicyChecked->Acting',
+      'Acting->ObservationRecorded',
+      'ObservationRecorded->Verifying',
+      'Verifying->Completed',
+    ]);
+    expect(runtime.getSnapshot()).toMatchObject({
+      currentState: 'Completed',
+      status: 'completed',
+      statePath: [...REACT_FSM_STATE_PATH],
+    });
   });
 });

@@ -83,6 +83,39 @@ export interface ToolRunner {
   run(request: ToolCallRequest): Promise<ToolCallResult>;
 }
 
+export type MockToolHandler = (request: ToolCallRequest) => Promise<ToolCallResult> | ToolCallResult;
+
+export class MockToolRunner implements ToolRunner {
+  private readonly handlers = new Map<string, MockToolHandler>();
+  private readonly results = new Map<string, ToolCallResult>();
+
+  constructor(private readonly defaultOutput: unknown = { ok: true }) {}
+
+  registerHandler(toolId: string, handler: MockToolHandler): void {
+    this.handlers.set(toolId, handler);
+  }
+
+  registerResult(toolId: string, result: ToolCallResult): void {
+    this.results.set(toolId, result);
+  }
+
+  async run(request: ToolCallRequest): Promise<ToolCallResult> {
+    const handler = this.handlers.get(request.toolId);
+    if (handler) return handler(request);
+    const result = this.results.get(request.toolId);
+    if (result) return result;
+    return {
+      toolId: request.toolId,
+      status: 'completed',
+      output: {
+        toolId: request.toolId,
+        input: request.input,
+        output: this.defaultOutput,
+      },
+    };
+  }
+}
+
 export class ToolRegistry {
   private readonly specs = new Map<string, ToolSpec>();
   private readonly handlers = new Map<string, ToolHandler>();

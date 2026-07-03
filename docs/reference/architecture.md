@@ -9,15 +9,15 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/core` | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces. | Provider SDKs, database clients, HTTP server code. |
 | `@hypha/storage` | Storage provider profiles, topology specs, connection resolution, cloud/local profile helpers. | Concrete database clients or memory behavior. |
 | `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, session profile initialization, workflow-to-FSM compilation. | Business-specific workflows or app routes. |
-| `@hypha/fsm` | FSM process spec, guarded transitions, timeout/retry/human-review semantics. | Tool handlers, model calls, storage adapters. |
-| `@hypha/kernel` | ReAct agent spec and executable ReAct runner. | Concrete model providers, direct tool side effects. |
+| `@hypha/fsm` | FSM process spec, `FSMRuntime`, guarded transitions, timeout/retry/human-review semantics. | Tool handlers, model calls, storage adapters. |
+| `@hypha/kernel` | ReAct agent spec, context builder/verifier interfaces, executable ReAct runners. | Concrete model providers, direct tool side effects. |
 | `@hypha/inference` | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration. | Provider-specific request types in public kernel contracts. |
 | `@hypha/models` | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters. | Agent loop, workflow semantics, or app-specific model preferences. |
-| `@hypha/tools` | Tool specs, registry, governed runner, side-effect policy and trace events. | Direct execution bypassing policy. |
+| `@hypha/tools` | Tool specs, registry, governed runner, mock runner, side-effect policy and trace events. | Direct execution bypassing policy. |
 | `@hypha/mcp` | MCP profile specs and capability normalization into framework contracts. | Real server lifecycle as framework core. |
 | `@hypha/memory` | Memory provider interfaces, scopes, records, write policy, hybrid provider. | App session storage rules. |
 | `@hypha/skills` | Skill specs, refs, activation policy, instruction/assets metadata. | Workflow replacement logic. |
-| `@hypha/harness` | Event-first runtime projections, session/run views, queues, replay/audit/regression structures. | FSM internals or app-specific state. |
+| `@hypha/harness` | Event-first runtime projections, `RunManager`, ReAct/FSM runner, session/run views, queues, replay/audit/regression structures. | FSM internals or app-specific state. |
 | `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting. | Framework spec definitions. |
 | `@hypha/testing` | Fixtures and test helpers for event/spec/runtime contracts. | Production runtime behavior. |
 
@@ -28,6 +28,8 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 `runtime` is the execution layer. It creates sessions and runs, appends events, records side effects, and projects state from events. The server surface currently adapts HTTP requests into this runtime through `apps/server/src/services/EventRuntime.ts`.
 
 `fsm` remains a separate package because FSM is a reusable process language. Domain workflows compile into `FSMProcessSpec`, and the ReAct runtime uses FSM transitions without coupling domain declarations to HTTP, storage, or provider adapters.
+
+`RunManager` and `HarnessedReActFSMRunner` live in `@hypha/harness` because they coordinate event recording, run lifecycle, ReAct execution, and FSM callbacks. They do not define FSM semantics; they consume `FSMRuntime` and record the resulting state and transition facts as events.
 
 ## Dependency Direction
 

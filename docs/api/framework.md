@@ -16,15 +16,15 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/core`           | Spec primitives, schema definitions, events, errors, policy interfaces.                                                    |
 | `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
 | `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`.                                            |
-| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers.                                  |
-| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces.                                                      |
+| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, timeout/retry/human-review helpers.                    |
+| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                              |
 | `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.           |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
-| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, side-effect governance.                                                  |
+| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, side-effect governance.                                |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, capability normalization into tool/resource/prompt specs.                                            |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
 | `@hypha/skills`         | `SkillSpec`, skill refs, activation and side-effect policy fields.                                                         |
-| `@hypha/harness`        | Event-first runtime views, queues, replay/audit/regression projections.                                                    |
+| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, queues, replay/audit/regression projections.                    |
 | `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
 | `@hypha/testing`        | Event and spec test helpers.                                                                                               |
 
@@ -110,6 +110,8 @@ Common event types include `session.created`, `run.created`, `run.started`, `fsm
 
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
+`RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, and finalizes runs with `run.completed` or `run.failed`.
+
 ## Workflow and FSM
 
 `WorkflowSpec` fields:
@@ -125,11 +127,26 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 
 FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and `matches(path, pattern)`. Transitions can be rejected by guards, policy, or human-review requirements.
 
+`FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, and `getSnapshot()`. Runtime callbacks `onTransition` and `onStateEntered` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
+
+`defaultReActFSMProcessSpec` declares the minimal agent closure:
+
+```text
+Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
+  -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying -> Completed
+```
+
 ## ReAct Kernel
 
 `ReActAgentSpec` defines an agent's model alias, instructions, skill refs, tool refs, memory profile, policy refs, and optional context spec.
 
 `ReActRunner` executes an explicit loop through observe, reason, model inference, action selection, policy check, tool action, observation, verification, memory sync, and terminal completion or human review. The runner requires an `InferenceProvider`, can use a `ToolRunner`, and uses an explicit `maxIterations` limit.
+
+`ContextBuilder` builds `ReActRunContext` from runtime input, messages, agent spec, memory scope, and metadata. `DefaultContextBuilder` is the local skeleton implementation. `Verifier` checks observations and returns the next `ReActAction`; `DefaultVerifier` completes with the observation value unless the observation requires human review.
+
+`ReActAgentRunner` wires `DefaultContextBuilder`, `BasicReActAgentRuntime`, `DefaultVerifier`, `InferenceProvider`, and `ToolRunner` into a runnable agent. Use `MockToolRunner` for package tests and local examples; production tools should use `GovernedToolRunner`.
+
+`HarnessedReActFSMRunner` from `@hypha/harness` composes `RunManager`, `FSMRuntime`, and `ReActRunner`. It records a trace event for every FSM state and projects run/replay state from events.
 
 ## Model Providers
 
