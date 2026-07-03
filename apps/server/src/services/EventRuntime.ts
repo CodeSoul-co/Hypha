@@ -1,6 +1,11 @@
 import path from 'path';
 import { SQLiteEventStore } from '@hypha/adapters-local';
-import { FrameworkError, type FrameworkEvent, type FrameworkEventType, type SpecRef } from '@hypha/core';
+import {
+  FrameworkError,
+  type FrameworkEvent,
+  type FrameworkEventType,
+  type SpecRef,
+} from '@hypha/core';
 import { EventFirstRuntime } from '@hypha/harness';
 import { compileWorkflowToFSM, type DomainPackSpec, type WorkflowSpec } from '@hypha/domain';
 import {
@@ -26,13 +31,15 @@ import {
   type PrefixCacheRef,
   type ReasoningOptions,
 } from '@hypha/inference';
-import {
-  ReActRunner,
-  type ReActAgentRuntime,
-  type ReActAgentSpec,
-} from '@hypha/kernel';
+import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
-import { GovernedToolRunner, ToolRegistry, type ToolRunner, type ToolSpec } from '@hypha/tools';
+import {
+  GovernedToolRunner,
+  ToolRegistry,
+  type ToolCallResult,
+  type ToolRunner,
+  type ToolSpec,
+} from '@hypha/tools';
 import type {
   StageResult,
   WorkflowDefinition,
@@ -107,11 +114,13 @@ class ServerLLMInferenceProvider implements InferenceProvider {
 
   constructor(private readonly modelProvider: ModelProvider = createLLMManagerModelProvider()) {}
 
-  async infer(request: InferenceRequest<LLMInferenceInput>): Promise<InferenceResponse<ChatResponse>> {
-    const systemPrompt = [
-      request.resolvedPrefixContent,
-      request.input.options?.systemPrompt,
-    ].filter(Boolean).join('\n\n') || undefined;
+  async infer(
+    request: InferenceRequest<LLMInferenceInput>
+  ): Promise<InferenceResponse<ChatResponse>> {
+    const systemPrompt =
+      [request.resolvedPrefixContent, request.input.options?.systemPrompt]
+        .filter(Boolean)
+        .join('\n\n') || undefined;
     const modelResponse = await this.modelProvider.generate({
       runId: request.runId,
       stepId: request.stepId,
@@ -126,7 +135,9 @@ class ServerLLMInferenceProvider implements InferenceProvider {
     });
     const response = modelResponseToChatResponse(modelResponse, {
       model: request.input.options?.model ?? request.modelAlias,
-      provider: getLLMManager().getProviderFromModel(request.input.options?.model ?? request.modelAlias),
+      provider: getLLMManager().getProviderFromModel(
+        request.input.options?.model ?? request.modelAlias
+      ),
     });
     return {
       id: response.id,
@@ -137,11 +148,13 @@ class ServerLLMInferenceProvider implements InferenceProvider {
     };
   }
 
-  async *stream(request: InferenceRequest<LLMInferenceInput>): AsyncIterable<InferenceResponse<StreamChunk>> {
-    const systemPrompt = [
-      request.resolvedPrefixContent,
-      request.input.options?.systemPrompt,
-    ].filter(Boolean).join('\n\n') || undefined;
+  async *stream(
+    request: InferenceRequest<LLMInferenceInput>
+  ): AsyncIterable<InferenceResponse<StreamChunk>> {
+    const systemPrompt =
+      [request.resolvedPrefixContent, request.input.options?.systemPrompt]
+        .filter(Boolean)
+        .join('\n\n') || undefined;
     let index = 0;
     if (!this.modelProvider.stream) {
       throw new Error(`Model provider does not support streaming: ${this.modelProvider.id}`);
@@ -197,7 +210,9 @@ function extractNextKvCacheValue(raw: unknown): unknown | undefined {
   return undefined;
 }
 
-function legacyToolToModelTool(tool: NonNullable<ChatOptions['tools']>[number]): ModelToolDescriptor {
+function legacyToolToModelTool(
+  tool: NonNullable<ChatOptions['tools']>[number]
+): ModelToolDescriptor {
   return {
     id: tool.name,
     name: tool.name,
@@ -218,8 +233,8 @@ class EventRuntimeService {
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
-    const eventDbPath = process.env.HYPHA_RUNTIME_EVENT_DB
-      ?? resolveRuntimePath(sqliteStorage.eventDbPath);
+    const eventDbPath =
+      process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
     this.events = new SQLiteEventStore({
       filename: eventDbPath,
       mode: sqliteStorage.sqliteMode,
@@ -275,7 +290,11 @@ class EventRuntimeService {
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
-  async transition(runId: string, to: string, payload: Record<string, unknown> = {}): Promise<void> {
+  async transition(
+    runId: string,
+    to: string,
+    payload: Record<string, unknown> = {}
+  ): Promise<void> {
     const context = this.requireRun(runId);
     if (context.snapshot.currentState === to) return;
     const from = context.snapshot.currentState;
@@ -325,14 +344,26 @@ class EventRuntimeService {
 
   async inferChat(input: ChatInferenceInput): Promise<ChatResponse> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
-    await this.append(input.runId, 'inference.requested', {
-      stepId: input.stepId,
-      modelAlias: resolved.model,
-      reasoning: input.reasoning?.method ?? 'direct',
-    }, undefined, { stepId: input.stepId });
-    await this.append(input.runId, 'model.call.started', {
-      modelAlias: resolved.model,
-    }, undefined, { stepId: input.stepId });
+    await this.append(
+      input.runId,
+      'inference.requested',
+      {
+        stepId: input.stepId,
+        modelAlias: resolved.model,
+        reasoning: input.reasoning?.method ?? 'direct',
+      },
+      undefined,
+      { stepId: input.stepId }
+    );
+    await this.append(
+      input.runId,
+      'model.call.started',
+      {
+        modelAlias: resolved.model,
+      },
+      undefined,
+      { stepId: input.stepId }
+    );
 
     try {
       const response = await this.reasoning.infer({
@@ -350,16 +381,28 @@ class EventRuntimeService {
         reasoning: input.reasoning,
       });
       const chat = response.output as ChatResponse;
-      await this.append(input.runId, 'model.call.completed', {
-        model: chat.model,
-        provider: chat.provider,
-        usage: chat.usage,
-      }, undefined, { stepId: input.stepId });
-      await this.append(input.runId, 'inference.completed', {
-        responseId: chat.id,
-        usage: response.usage,
-        cache: response.cache,
-      }, undefined, { stepId: input.stepId });
+      await this.append(
+        input.runId,
+        'model.call.completed',
+        {
+          model: chat.model,
+          provider: chat.provider,
+          usage: chat.usage,
+        },
+        undefined,
+        { stepId: input.stepId }
+      );
+      await this.append(
+        input.runId,
+        'inference.completed',
+        {
+          responseId: chat.id,
+          usage: response.usage,
+          cache: response.cache,
+        },
+        undefined,
+        { stepId: input.stepId }
+      );
       return chat;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -373,11 +416,13 @@ class EventRuntimeService {
     }
   }
 
-  async runReActChat(input: ChatInferenceInput & {
-    agentId?: string;
-    userId?: string;
-    sessionId?: string;
-  }): Promise<ChatResponse> {
+  async runReActChat(
+    input: ChatInferenceInput & {
+      agentId?: string;
+      userId?: string;
+      sessionId?: string;
+    }
+  ): Promise<ChatResponse> {
     const agent: ReActAgentSpec = {
       id: input.agentId ?? 'agent.default',
       version: '0.0.0',
@@ -483,12 +528,17 @@ class EventRuntimeService {
       toolRunner: this.createReActToolRunner(input.runId, userId, sessionId),
       maxIterations: Math.max(4, (input.options?.tools?.length ?? 0) + 2),
       onStep: async (step) => {
-        await this.record(input.runId, 'react.step.completed', {
-          stepId: step.id,
-          phase: step.phase,
-          input: safeSerialize(step.input),
-          output: safeSerialize(step.output),
-        }, step.phase);
+        await this.record(
+          input.runId,
+          'react.step.completed',
+          {
+            stepId: step.id,
+            phase: step.phase,
+            input: safeSerialize(step.input),
+            output: safeSerialize(step.output),
+          },
+          step.phase
+        );
       },
     });
     const result = await runner.run({
@@ -499,9 +549,9 @@ class EventRuntimeService {
       memoryScope: { userId, sessionId },
     });
     if (result.status !== 'completed') {
-      throw new Error(result.error instanceof Error
-        ? result.error.message
-        : `ReAct chat failed: ${result.status}`);
+      throw new Error(
+        result.error instanceof Error ? result.error.message : `ReAct chat failed: ${result.status}`
+      );
     }
     if (!isChatResponse(result.output)) {
       throw new Error('ReAct chat completed without a ChatResponse output.');
@@ -511,15 +561,27 @@ class EventRuntimeService {
 
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
-    await this.append(input.runId, 'inference.requested', {
-      stepId: input.stepId,
-      modelAlias: resolved.model,
-      stream: true,
-    }, undefined, { stepId: input.stepId });
-    await this.append(input.runId, 'model.call.started', {
-      modelAlias: resolved.model,
-      stream: true,
-    }, undefined, { stepId: input.stepId });
+    await this.append(
+      input.runId,
+      'inference.requested',
+      {
+        stepId: input.stepId,
+        modelAlias: resolved.model,
+        stream: true,
+      },
+      undefined,
+      { stepId: input.stepId }
+    );
+    await this.append(
+      input.runId,
+      'model.call.started',
+      {
+        modelAlias: resolved.model,
+        stream: true,
+      },
+      undefined,
+      { stepId: input.stepId }
+    );
 
     let completed = false;
     try {
@@ -540,52 +602,100 @@ class EventRuntimeService {
         const chunk = response.output as StreamChunk;
         if (chunk.type === 'error') {
           const message = chunk.error || 'LLM stream error';
-          await this.append(input.runId, 'model.call.failed', { error: message, stream: true }, undefined, {
-            stepId: input.stepId,
-          });
-          await this.append(input.runId, 'inference.failed', { error: message, stream: true }, undefined, {
-            stepId: input.stepId,
-          });
+          await this.append(
+            input.runId,
+            'model.call.failed',
+            { error: message, stream: true },
+            undefined,
+            {
+              stepId: input.stepId,
+            }
+          );
+          await this.append(
+            input.runId,
+            'inference.failed',
+            { error: message, stream: true },
+            undefined,
+            {
+              stepId: input.stepId,
+            }
+          );
           yield chunk;
           return;
         }
         if (chunk.type === 'done') {
           completed = true;
-          await this.append(input.runId, 'model.call.completed', {
-            model: resolved.model,
-            provider: resolved.provider,
-            usage: chunk.usage,
-            stream: true,
-          }, undefined, { stepId: input.stepId });
-          await this.append(input.runId, 'inference.completed', {
-            stream: true,
-            usage: response.usage,
-            cache: response.cache,
-          }, undefined, { stepId: input.stepId });
+          await this.append(
+            input.runId,
+            'model.call.completed',
+            {
+              model: resolved.model,
+              provider: resolved.provider,
+              usage: chunk.usage,
+              stream: true,
+            },
+            undefined,
+            { stepId: input.stepId }
+          );
+          await this.append(
+            input.runId,
+            'inference.completed',
+            {
+              stream: true,
+              usage: response.usage,
+              cache: response.cache,
+            },
+            undefined,
+            { stepId: input.stepId }
+          );
         }
         yield chunk;
       }
 
       if (!completed) {
-        await this.append(input.runId, 'model.call.completed', {
-          model: resolved.model,
-          provider: resolved.provider,
-          stream: true,
-          endedWithoutDone: true,
-        }, undefined, { stepId: input.stepId });
-        await this.append(input.runId, 'inference.completed', {
-          stream: true,
-          endedWithoutDone: true,
-        }, undefined, { stepId: input.stepId });
+        await this.append(
+          input.runId,
+          'model.call.completed',
+          {
+            model: resolved.model,
+            provider: resolved.provider,
+            stream: true,
+            endedWithoutDone: true,
+          },
+          undefined,
+          { stepId: input.stepId }
+        );
+        await this.append(
+          input.runId,
+          'inference.completed',
+          {
+            stream: true,
+            endedWithoutDone: true,
+          },
+          undefined,
+          { stepId: input.stepId }
+        );
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.append(input.runId, 'model.call.failed', { error: message, stream: true }, undefined, {
-        stepId: input.stepId,
-      });
-      await this.append(input.runId, 'inference.failed', { error: message, stream: true }, undefined, {
-        stepId: input.stepId,
-      });
+      await this.append(
+        input.runId,
+        'model.call.failed',
+        { error: message, stream: true },
+        undefined,
+        {
+          stepId: input.stepId,
+        }
+      );
+      await this.append(
+        input.runId,
+        'inference.failed',
+        { error: message, stream: true },
+        undefined,
+        {
+          stepId: input.stepId,
+        }
+      );
       throw error;
     }
   }
@@ -603,7 +713,7 @@ class EventRuntimeService {
     return buildChatInferenceCachePolicy(input);
   }
 
-  async runGovernedTool<TOutput>(input: {
+  async runGovernedToolResult<TOutput>(input: {
     runId: string;
     stepId: string;
     userId: string;
@@ -612,7 +722,7 @@ class EventRuntimeService {
     toolSpec?: Partial<ToolSpec>;
     params: unknown;
     handler: () => Promise<TOutput>;
-  }): Promise<TOutput> {
+  }): Promise<ToolCallResult<TOutput>> {
     const registry = new ToolRegistry();
     registry.register(
       {
@@ -624,6 +734,12 @@ class EventRuntimeService {
         outputSchema: input.toolSpec?.outputSchema,
         sideEffectLevel: input.toolSpec?.sideEffectLevel ?? 'read',
         permissionScope: input.toolSpec?.permissionScope,
+        preconditions: input.toolSpec?.preconditions,
+        postconditions: input.toolSpec?.postconditions,
+        timeoutPolicy: input.toolSpec?.timeoutPolicy,
+        retryPolicy: input.toolSpec?.retryPolicy,
+        auditPolicy: input.toolSpec?.auditPolicy,
+        humanApprovalPolicy: input.toolSpec?.humanApprovalPolicy,
         source: input.toolSpec?.source ?? 'local',
         sourceRef: input.toolSpec?.sourceRef,
       },
@@ -640,8 +756,24 @@ class EventRuntimeService {
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
       },
     });
+    return result as ToolCallResult<TOutput>;
+  }
+
+  async runGovernedTool<TOutput>(input: {
+    runId: string;
+    stepId: string;
+    userId: string;
+    sessionId: string;
+    toolId: string;
+    toolSpec?: Partial<ToolSpec>;
+    params: unknown;
+    handler: () => Promise<TOutput>;
+  }): Promise<TOutput> {
+    const result = await this.runGovernedToolResult(input);
     if (result.status !== 'completed') {
-      throw new Error(typeof result.error === 'string' ? result.error : `Tool failed: ${input.toolId}`);
+      throw new Error(
+        typeof result.error === 'string' ? result.error : `Tool failed: ${input.toolId}`
+      );
     }
     return result.output as TOutput;
   }
@@ -653,7 +785,7 @@ class EventRuntimeService {
         const descriptor = toolManager.describeTool(request.toolId);
         const params = normalizeToolInput(request.input);
         try {
-          const output = await this.runGovernedTool({
+          const result = await this.runGovernedToolResult({
             runId,
             stepId: request.context.stepId,
             userId,
@@ -664,13 +796,15 @@ class EventRuntimeService {
               name: descriptor?.name ?? request.toolId,
               description: descriptor?.description ?? `ReAct tool ${request.toolId}`,
               inputSchema: descriptor?.inputSchema ?? { type: 'object' },
-              sideEffectLevel: descriptor?.source === 'mcp'
-                ? descriptor.sideEffectLevel
-                : inferToolSideEffect(request.toolId, params),
+              sideEffectLevel:
+                descriptor?.source === 'mcp'
+                  ? descriptor.sideEffectLevel
+                  : inferToolSideEffect(request.toolId, params),
               source: descriptor?.source ?? 'local',
-              sourceRef: descriptor?.source === 'mcp'
-                ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
-                : undefined,
+              sourceRef:
+                descriptor?.source === 'mcp'
+                  ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
+                  : undefined,
             },
             handler: async () => {
               const result = await toolManager.executeTool(request.toolId, params);
@@ -680,7 +814,12 @@ class EventRuntimeService {
               return result.output;
             },
           });
-          return { toolId: request.toolId, status: 'completed', output };
+          return {
+            toolId: request.toolId,
+            status: result.status,
+            output: result.output,
+            error: result.error,
+          };
         } catch (error) {
           return {
             toolId: request.toolId,
@@ -699,24 +838,39 @@ class EventRuntimeService {
     details?: Record<string, unknown>;
     reader: () => Promise<TValue>;
   }): Promise<TValue> {
-    await this.record(input.runId, 'memory.read.requested', {
-      target: input.target,
-      ...input.details,
-    }, input.stepId);
+    await this.record(
+      input.runId,
+      'memory.read.requested',
+      {
+        target: input.target,
+        ...input.details,
+      },
+      input.stepId
+    );
     try {
       const value = await input.reader();
-      await this.record(input.runId, 'memory.read.completed', {
-        target: input.target,
-        ...input.details,
-        resultSummary: summarizeValue(value),
-      }, input.stepId);
+      await this.record(
+        input.runId,
+        'memory.read.completed',
+        {
+          target: input.target,
+          ...input.details,
+          resultSummary: summarizeValue(value),
+        },
+        input.stepId
+      );
       return value;
     } catch (error) {
-      await this.record(input.runId, 'memory.read.failed', {
-        target: input.target,
-        ...input.details,
-        error: error instanceof Error ? error.message : String(error),
-      }, input.stepId);
+      await this.record(
+        input.runId,
+        'memory.read.failed',
+        {
+          target: input.target,
+          ...input.details,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        input.stepId
+      );
       throw error;
     }
   }
@@ -728,34 +882,59 @@ class EventRuntimeService {
     details?: Record<string, unknown>;
     writer: () => Promise<TValue>;
   }): Promise<TValue> {
-    await this.record(input.runId, 'memory.write.requested', {
-      target: input.target,
-      ...input.details,
-    }, input.stepId);
-    await this.record(input.runId, 'memory.write.validated', {
-      target: input.target,
-      policy: 'default-allow-local-memory',
-      ...input.details,
-    }, input.stepId);
+    await this.record(
+      input.runId,
+      'memory.write.requested',
+      {
+        target: input.target,
+        ...input.details,
+      },
+      input.stepId
+    );
+    await this.record(
+      input.runId,
+      'memory.write.validated',
+      {
+        target: input.target,
+        policy: 'default-allow-local-memory',
+        ...input.details,
+      },
+      input.stepId
+    );
     try {
       const value = await input.writer();
-      await this.record(input.runId, 'memory.write.committed', {
-        target: input.target,
-        ...input.details,
-        resultSummary: summarizeValue(value),
-      }, input.stepId);
+      await this.record(
+        input.runId,
+        'memory.write.committed',
+        {
+          target: input.target,
+          ...input.details,
+          resultSummary: summarizeValue(value),
+        },
+        input.stepId
+      );
       return value;
     } catch (error) {
-      await this.record(input.runId, 'memory.write.rejected', {
-        target: input.target,
-        ...input.details,
-        error: error instanceof Error ? error.message : String(error),
-      }, input.stepId);
+      await this.record(
+        input.runId,
+        'memory.write.rejected',
+        {
+          target: input.target,
+          ...input.details,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        input.stepId
+      );
       throw error;
     }
   }
 
-  async record(runId: string, type: FrameworkEventType, payload: unknown, stepId?: string): Promise<void> {
+  async record(
+    runId: string,
+    type: FrameworkEventType,
+    payload: unknown,
+    stepId?: string
+  ): Promise<void> {
     await this.append(runId, type, payload, undefined, { stepId });
   }
 
@@ -832,11 +1011,16 @@ class EventRuntimeService {
 
         execution.currentStage = stage.id;
         const startedAt = Date.now();
-        await this.record(input.runId, 'workflow.stage.started', {
-          executionId: execution.id,
-          stageId: stage.id,
-          stageType: stage.type,
-        }, stage.id);
+        await this.record(
+          input.runId,
+          'workflow.stage.started',
+          {
+            executionId: execution.id,
+            stageId: stage.id,
+            stageType: stage.type,
+          },
+          stage.id
+        );
 
         try {
           const result = await this.executeWorkflowStage(input.runId, workflow, stage, execution);
@@ -850,11 +1034,16 @@ class EventRuntimeService {
           };
           execution.stageResults.set(stage.id, stageResult);
 
-          await this.record(input.runId, result.success ? 'workflow.stage.completed' : 'workflow.stage.failed', {
-            executionId: execution.id,
-            stageId: stage.id,
-            result: stageResult,
-          }, stage.id);
+          await this.record(
+            input.runId,
+            result.success ? 'workflow.stage.completed' : 'workflow.stage.failed',
+            {
+              executionId: execution.id,
+              stageId: stage.id,
+              result: stageResult,
+            },
+            stage.id
+          );
 
           if (!result.success && stage.onError === 'stop') {
             throw new Error(stageResult.error || 'Stage failed');
@@ -867,9 +1056,8 @@ class EventRuntimeService {
           if (!nextStageId || nextStageId === 'end') {
             currentStageId = undefined;
           } else {
-            const target = nextStageId === 'Completed' || nextStageId === 'Failed'
-              ? nextStageId
-              : nextStageId;
+            const target =
+              nextStageId === 'Completed' || nextStageId === 'Failed' ? nextStageId : nextStageId;
             await this.transition(input.runId, target, {
               executionId: execution.id,
               fromStage: stage.id,
@@ -888,11 +1076,16 @@ class EventRuntimeService {
               duration: Date.now() - startedAt,
             };
             execution.stageResults.set(stage.id, stageResult);
-            await this.record(input.runId, 'workflow.stage.failed', {
-              executionId: execution.id,
-              stageId: stage.id,
-              result: stageResult,
-            }, stage.id);
+            await this.record(
+              input.runId,
+              'workflow.stage.failed',
+              {
+                executionId: execution.id,
+                stageId: stage.id,
+                result: stageResult,
+              },
+              stage.id
+            );
           }
           throw error;
         }
@@ -960,11 +1153,16 @@ class EventRuntimeService {
       const skill = skillManager.getSkill(skillId);
       await this.record(runId, 'skill.selected', { skillId, stageId: stage.id }, stage.id);
       if (!skill) {
-        await this.record(runId, 'skill.failed', {
-          skillId,
-          stageId: stage.id,
-          error: 'Skill not found',
-        }, stage.id);
+        await this.record(
+          runId,
+          'skill.failed',
+          {
+            skillId,
+            stageId: stage.id,
+            error: 'Skill not found',
+          },
+          stage.id
+        );
         return { success: false, error: `Skill not found: ${skillId}` };
       }
 
@@ -979,11 +1177,16 @@ class EventRuntimeService {
         metadata: execution.context.metadata,
       });
       if (!result.success) {
-        await this.record(runId, 'skill.failed', {
-          skillId,
-          stageId: stage.id,
-          error: result.error,
-        }, stage.id);
+        await this.record(
+          runId,
+          'skill.failed',
+          {
+            skillId,
+            stageId: stage.id,
+            error: result.error,
+          },
+          stage.id
+        );
         return { success: false, error: result.error };
       }
       execution.context.variables = {
@@ -993,11 +1196,16 @@ class EventRuntimeService {
       if (result.modifiedContent) {
         currentMessage.content = result.modifiedContent;
       }
-      await this.record(runId, 'skill.completed', {
-        skillId,
-        stageId: stage.id,
-        variableKeys: Object.keys(result.variables ?? {}),
-      }, stage.id);
+      await this.record(
+        runId,
+        'skill.completed',
+        {
+          skillId,
+          stageId: stage.id,
+          variableKeys: Object.keys(result.variables ?? {}),
+        },
+        stage.id
+      );
       if (!result.shouldContinue) break;
     }
     return { success: true, nextStage: stage.next };
@@ -1008,7 +1216,13 @@ class EventRuntimeService {
     workflow: WorkflowDefinition,
     stage: WorkflowStage,
     execution: WorkflowExecution
-  ): Promise<{ success: boolean; output?: unknown; error?: string; nextStage?: string; metadata?: Record<string, unknown> }> {
+  ): Promise<{
+    success: boolean;
+    output?: unknown;
+    error?: string;
+    nextStage?: string;
+    metadata?: Record<string, unknown>;
+  }> {
     const llm = getLLMManager();
     const messages: LLMMessage[] = execution.context.messages.map((message) => ({
       role: message.role as LLMMessage['role'],
@@ -1028,10 +1242,15 @@ class EventRuntimeService {
       : undefined;
 
     try {
-      await this.record(runId, 'agent.reasoning.started', {
-        stageId: stage.id,
-        modelAlias,
-      }, stage.id);
+      await this.record(
+        runId,
+        'agent.reasoning.started',
+        {
+          stageId: stage.id,
+          modelAlias,
+        },
+        stage.id
+      );
       const response = await this.inferChat({
         runId,
         stepId: stage.id,
@@ -1048,16 +1267,26 @@ class EventRuntimeService {
         content: response.content,
         timestamp: now(),
       });
-      await this.record(runId, 'agent.reasoning.completed', {
-        stageId: stage.id,
-        responseId: response.id,
-        finishReason: response.finishReason,
-      }, stage.id);
-      await this.record(runId, 'agent.action.selected', {
-        stageId: stage.id,
-        finishReason: response.finishReason,
-        toolCalls: response.toolCalls,
-      }, stage.id);
+      await this.record(
+        runId,
+        'agent.reasoning.completed',
+        {
+          stageId: stage.id,
+          responseId: response.id,
+          finishReason: response.finishReason,
+        },
+        stage.id
+      );
+      await this.record(
+        runId,
+        'agent.action.selected',
+        {
+          stageId: stage.id,
+          finishReason: response.finishReason,
+          toolCalls: response.toolCalls,
+        },
+        stage.id
+      );
       return {
         success: true,
         output: response.content,
@@ -1100,16 +1329,21 @@ class EventRuntimeService {
             name: descriptor?.name ?? toolName,
             description: descriptor?.description ?? `Workflow tool ${toolName}`,
             inputSchema: descriptor?.inputSchema ?? { type: 'object' },
-            sideEffectLevel: descriptor?.source === 'mcp'
-              ? descriptor.sideEffectLevel
-              : inferToolSideEffect(toolName, params),
+            sideEffectLevel:
+              descriptor?.source === 'mcp'
+                ? descriptor.sideEffectLevel
+                : inferToolSideEffect(toolName, params),
             source: descriptor?.source ?? 'local',
-            sourceRef: descriptor?.source === 'mcp'
-              ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
-              : undefined,
+            sourceRef:
+              descriptor?.source === 'mcp'
+                ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
+                : undefined,
           },
           handler: async () => {
-            const result = await toolManager.executeTool(toolName, params as Record<string, unknown>);
+            const result = await toolManager.executeTool(
+              toolName,
+              params as Record<string, unknown>
+            );
             if (!result.success) {
               throw new Error(result.error || `Tool failed: ${toolName}`);
             }
@@ -1147,17 +1381,24 @@ class EventRuntimeService {
         messages: execution.context.messages,
       },
     });
-    const branch = stage.branches.find((candidate) =>
-      (candidate.condition === 'true' && conditionMet)
-      || (candidate.condition === 'false' && !conditionMet)
-    ) || stage.branches.find((candidate) => candidate.condition === 'default');
-    await this.record(runId, 'workflow.condition.evaluated', {
-      stageId: stage.id,
-      condition: stage.condition,
-      guard,
-      conditionMet,
-      nextStage: branch?.then ?? stage.next,
-    }, stage.id);
+    const branch =
+      stage.branches.find(
+        (candidate) =>
+          (candidate.condition === 'true' && conditionMet) ||
+          (candidate.condition === 'false' && !conditionMet)
+      ) || stage.branches.find((candidate) => candidate.condition === 'default');
+    await this.record(
+      runId,
+      'workflow.condition.evaluated',
+      {
+        stageId: stage.id,
+        condition: stage.condition,
+        guard,
+        conditionMet,
+        nextStage: branch?.then ?? stage.next,
+      },
+      stage.id
+    );
     return { success: true, output: { conditionMet }, nextStage: branch?.then ?? stage.next };
   }
 
@@ -1205,7 +1446,10 @@ class EventRuntimeService {
     return next;
   }
 
-  private resolveWorkflowStage(stage: WorkflowStage, variables: Record<string, unknown>): WorkflowStage {
+  private resolveWorkflowStage(
+    stage: WorkflowStage,
+    variables: Record<string, unknown>
+  ): WorkflowStage {
     const llm = getLLMManager();
     const mergedVars: Record<string, unknown> = {
       defaultProvider: llm.getDefaultProvider(),
@@ -1214,18 +1458,26 @@ class EventRuntimeService {
     };
     return {
       ...stage,
-      model: stage.model ? String(this.resolveWorkflowVariables(stage.model, mergedVars)) : stage.model,
-      prompt: stage.prompt ? String(this.resolveWorkflowVariables(stage.prompt, mergedVars)) : stage.prompt,
+      model: stage.model
+        ? String(this.resolveWorkflowVariables(stage.model, mergedVars))
+        : stage.model,
+      prompt: stage.prompt
+        ? String(this.resolveWorkflowVariables(stage.prompt, mergedVars))
+        : stage.prompt,
       condition: stage.condition
         ? String(this.resolveWorkflowVariables(stage.condition, mergedVars))
         : stage.condition,
       tools: stage.tools?.map((tool) => String(this.resolveWorkflowVariables(tool, mergedVars))),
-      skills: stage.skills?.map((skill) => String(this.resolveWorkflowVariables(skill, mergedVars))),
+      skills: stage.skills?.map((skill) =>
+        String(this.resolveWorkflowVariables(skill, mergedVars))
+      ),
       branches: stage.branches?.map((branch) => ({
         ...branch,
         condition: String(this.resolveWorkflowVariables(branch.condition, mergedVars)),
         then: String(this.resolveWorkflowVariables(branch.then, mergedVars)),
-        else: branch.else ? String(this.resolveWorkflowVariables(branch.else, mergedVars)) : undefined,
+        else: branch.else
+          ? String(this.resolveWorkflowVariables(branch.else, mergedVars))
+          : undefined,
       })),
     };
   }
@@ -1430,13 +1682,17 @@ function workflowDefinitionToWorkflowSpec(workflow: WorkflowDefinition): Workflo
 }
 
 function inferCompletedState(fsm: FSMProcessSpec): string {
-  return fsm.terminalStates.find((state) => state.toLowerCase().includes('complete'))
-    ?? fsm.terminalStates[0];
+  return (
+    fsm.terminalStates.find((state) => state.toLowerCase().includes('complete')) ??
+    fsm.terminalStates[0]
+  );
 }
 
 function inferFailedState(fsm: FSMProcessSpec): string {
-  return fsm.terminalStates.find((state) => state.toLowerCase().includes('fail'))
-    ?? fsm.terminalStates[0];
+  return (
+    fsm.terminalStates.find((state) => state.toLowerCase().includes('fail')) ??
+    fsm.terminalStates[0]
+  );
 }
 
 function resolveRuntimePath(filePath: string): string {
@@ -1503,18 +1759,19 @@ function safeSerialize<T>(value: T): T | undefined {
 
 function isChatResponse(value: unknown): value is ChatResponse {
   return Boolean(
-    value
-      && typeof value === 'object'
-      && 'id' in value
-      && 'content' in value
-      && 'finishReason' in value
+    value &&
+    typeof value === 'object' &&
+    'id' in value &&
+    'content' in value &&
+    'finishReason' in value
   );
 }
 
 function buildChatInferenceCachePolicy(
   input: ChatCachePolicyBuildInput
 ): InferenceCachePolicy | undefined {
-  const config = input.cache === true ? { kvCache: true, writeKvCache: true } : asRecord(input.cache);
+  const config =
+    input.cache === true ? { kvCache: true, writeKvCache: true } : asRecord(input.cache);
   if (!config) return undefined;
   const prefix = parsePrefixCacheRef(config.prefix);
   const kvCache = parseKvCacheRef(config.kvCache, input, 'default');
@@ -1589,10 +1846,7 @@ function parseKvCacheRef(
   };
 }
 
-function createDefaultKvCacheRef(
-  defaults: ChatCachePolicyBuildInput,
-  id: string
-): KvCacheRef {
+function createDefaultKvCacheRef(defaults: ChatCachePolicyBuildInput, id: string): KvCacheRef {
   const scope: KvCacheScope = 'session';
   return {
     id: scopedKvCacheId(defaults, scope, id),
@@ -1611,19 +1865,11 @@ function scopedKvCacheId(
   scope: KvCacheScope,
   declaredId: string
 ): string {
-  const scopeKey = scope === 'run'
-    ? defaults.runId
-    : scope === 'session'
-      ? defaults.sessionId
-      : 'workspace';
-  return `chatkv_${hashContent([
-    defaults.userId,
-    scope,
-    scopeKey,
-    defaults.provider,
-    defaults.modelAlias,
-    declaredId,
-  ].join(':')).slice(0, 32)}`;
+  const scopeKey =
+    scope === 'run' ? defaults.runId : scope === 'session' ? defaults.sessionId : 'workspace';
+  return `chatkv_${hashContent(
+    [defaults.userId, scope, scopeKey, defaults.provider, defaults.modelAlias, declaredId].join(':')
+  ).slice(0, 32)}`;
 }
 
 function parseKvCacheScope(input: unknown): KvCacheScope {
@@ -1641,9 +1887,7 @@ function parseExpiresAt(record: Record<string, unknown>): string | undefined {
   const expiresAt = stringValue(record.expiresAt);
   if (expiresAt) return expiresAt;
   const ttlMs = numberValue(record.ttlMs);
-  return ttlMs && ttlMs > 0
-    ? new Date(Date.now() + ttlMs).toISOString()
-    : undefined;
+  return ttlMs && ttlMs > 0 ? new Date(Date.now() + ttlMs).toISOString() : undefined;
 }
 
 function stringValue(input: unknown): string | undefined {
@@ -1656,7 +1900,7 @@ function numberValue(input: unknown): number | undefined {
 
 function asRecord(input: unknown): Record<string, unknown> | undefined {
   return input && typeof input === 'object' && !Array.isArray(input)
-    ? input as Record<string, unknown>
+    ? (input as Record<string, unknown>)
     : undefined;
 }
 

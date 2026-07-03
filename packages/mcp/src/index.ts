@@ -1,5 +1,6 @@
 import { z, type ZodType } from 'zod';
 import {
+  createFrameworkEvent,
   defineSpecSchema,
   exportSpecJsonSchemas,
   jsonSchemaSchema,
@@ -9,9 +10,10 @@ import {
   type JsonSchema,
   type SideEffectLevel,
   type SpecMetadata,
+  type TraceRecorder,
   type VersionedSpec,
 } from '@hypha/core';
-import type { ToolSpec } from '@hypha/tools';
+import type { ToolCallContext, ToolRegistry, ToolSpec } from '@hypha/tools';
 
 export interface MCPIntegrationSpec {
   id: string;
@@ -58,13 +60,31 @@ export interface NormalizedMCPCapability {
   sideEffectLevel?: SideEffectLevel;
 }
 
+export interface MCPToolCallRequest<TInput = unknown> {
+  serverId: string;
+  capabilityId: string;
+  input: TInput;
+  context: ToolCallContext;
+}
+
+export type MCPToolHandler<TInput = unknown, TOutput = unknown> = (
+  request: MCPToolCallRequest<TInput>
+) => Promise<TOutput> | TOutput;
+
 export interface MCPGateway {
   discover(integration: MCPIntegrationSpec): Promise<MCPCapabilityDescriptor[]>;
   normalize(capability: MCPCapabilityDescriptor): Promise<NormalizedMCPCapability>;
+  callTool?(request: MCPToolCallRequest): Promise<unknown>;
 }
 
 export class MockMCPGateway implements MCPGateway {
+  private readonly handlers = new Map<string, MCPToolHandler>();
+
   constructor(private readonly capabilities: MCPCapabilityDescriptor[] = []) {}
+
+  registerToolHandler(serverId: string, capabilityId: string, handler: MCPToolHandler): void {
+    this.handlers.set(this.toolKey(serverId, capabilityId), handler);
+  }
 
   async discover(integration: MCPIntegrationSpec): Promise<MCPCapabilityDescriptor[]> {
     const allowed = new Set(integration.allowedCapabilities ?? []);
@@ -87,6 +107,104 @@ export class MockMCPGateway implements MCPGateway {
       sideEffectLevel: capability.sideEffectLevel,
     };
   }
+
+  async callTool(request: MCPToolCallRequest): Promise<unknown> {
+    const handler = this.handlers.get(this.toolKey(request.serverId, request.capabilityId));
+    if (handler) {
+      return handler(request);
+    }
+    return {
+      serverId: request.serverId,
+      capabilityId: request.capabilityId,
+      input: request.input,
+      ok: true,
+    };
+  }
+
+  private toolKey(serverId: string, capabilityId: string): string {
+    return `${serverId}:${capabilityId}`;
+  }
+}
+
+export interface MCPGatewayToolRegistrationContext {
+  runId: string;
+  stepId?: string;
+  sessionId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MCPGatewayToolRegistrationOptions {
+  integration: MCPIntegrationSpec;
+  gateway: MCPGateway;
+  registry: ToolRegistry;
+  trace?: TraceRecorder;
+  traceContext?: MCPGatewayToolRegistrationContext;
+}
+
+export interface MCPGatewayToolRegistrationResult {
+  discoveredCapabilities: MCPCapabilityDescriptor[];
+  normalizedCapabilities: NormalizedMCPCapability[];
+  registeredTools: ToolSpec[];
+}
+
+export async function registerMCPGatewayTools(
+  options: MCPGatewayToolRegistrationOptions
+): Promise<MCPGatewayToolRegistrationResult> {
+  const discoveredCapabilities = await options.gateway.discover(options.integration);
+  const normalizedCapabilities: NormalizedMCPCapability[] = [];
+  const registeredTools: ToolSpec[] = [];
+
+  for (const capability of discoveredCapabilities) {
+    await recordMCPGatewayTrace(options, 'mcp.capability.discovered', {
+      integrationId: options.integration.id,
+      serverId: capability.serverId,
+      capabilityId: capability.capabilityId,
+      capabilityType: capability.type,
+      capabilityHash: capability.capabilityHash,
+      sideEffectLevel: capability.sideEffectLevel,
+      trustLevel: capability.trustLevel,
+    });
+    const normalized = await options.gateway.normalize(capability);
+    normalizedCapabilities.push(normalized);
+
+    if (capability.type !== 'tool') {
+      continue;
+    }
+
+    const toolSpec = normalizeMCPToolSpec(capability);
+    options.registry.register(toolSpec, async (input, context) => {
+      if (!options.gateway.callTool) {
+        throw new Error(
+          `MCP gateway does not support tool calls: ${capability.serverId}.${capability.capabilityId}`
+        );
+      }
+      return options.gateway.callTool({
+        serverId: capability.serverId,
+        capabilityId: capability.capabilityId,
+        input,
+        context,
+      });
+    });
+    registeredTools.push(toolSpec);
+
+    await recordMCPGatewayTrace(options, 'mcp.tool.normalized', {
+      integrationId: options.integration.id,
+      serverId: capability.serverId,
+      capabilityId: capability.capabilityId,
+      normalizedSpecId: normalized.normalizedSpecId,
+      toolSpecId: toolSpec.id,
+      capabilityHash: normalized.capabilityHash,
+      sideEffectLevel: toolSpec.sideEffectLevel,
+      source: 'mcp',
+      sourceRef: toolSpec.sourceRef,
+    });
+  }
+
+  return {
+    discoveredCapabilities,
+    normalizedCapabilities,
+    registeredTools,
+  };
 }
 
 export function normalizeMCPToolSpec(capability: MCPCapabilityDescriptor): ToolSpec {
@@ -131,19 +249,17 @@ export const mcpIntegrationSpecSchema = z.object({
   capabilityHashing: z.boolean().optional(),
 }) satisfies ZodType<MCPIntegrationSpec>;
 
-export const mcpCapabilityDescriptorSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    serverId: z.string().min(1),
-    capabilityId: z.string().min(1),
-    type: z.enum(['tool', 'resource', 'prompt']),
-    inputSchema: jsonSchemaSchema.optional(),
-    outputSchema: jsonSchemaSchema.optional(),
-    sideEffectLevel: sideEffectLevelSchema.optional(),
-    permissionScope: z.array(z.string()).optional(),
-    capabilityHash: z.string().optional(),
-    trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
-  });
+export const mcpCapabilityDescriptorSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  serverId: z.string().min(1),
+  capabilityId: z.string().min(1),
+  type: z.enum(['tool', 'resource', 'prompt']),
+  inputSchema: jsonSchemaSchema.optional(),
+  outputSchema: jsonSchemaSchema.optional(),
+  sideEffectLevel: sideEffectLevelSchema.optional(),
+  permissionScope: z.array(z.string()).optional(),
+  capabilityHash: z.string().optional(),
+  trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
+});
 
 export const mcpIntegrationSpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -207,4 +323,36 @@ export const mcpSpecJsonSchemas = exportSpecJsonSchemas(mcpSpecDefinitions);
 
 export function validateMCPIntegrationSpec(input: unknown): MCPIntegrationSpec {
   return mcpIntegrationSpecDefinition.parse(input);
+}
+
+async function recordMCPGatewayTrace(
+  options: MCPGatewayToolRegistrationOptions,
+  type: 'mcp.capability.discovered' | 'mcp.tool.normalized',
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (!options.trace || !options.traceContext) {
+    return;
+  }
+  const context = options.traceContext;
+  await options.trace.record(
+    createFrameworkEvent({
+      id: [
+        context.runId,
+        context.stepId ?? 'mcp',
+        type,
+        String(payload.integrationId ?? options.integration.id),
+        String(payload.serverId ?? 'server'),
+        String(payload.capabilityId ?? 'capability'),
+      ].join(':'),
+      type,
+      runId: context.runId,
+      stepId: context.stepId,
+      sessionId: context.sessionId,
+      payload,
+      metadata: {
+        ...context.metadata,
+        source: 'mcp',
+      },
+    })
+  );
 }

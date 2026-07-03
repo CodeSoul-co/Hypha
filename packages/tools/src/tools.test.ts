@@ -6,6 +6,7 @@ import {
   ToolRegistry,
   toolSpecDefinition,
   toolSpecJsonSchemas,
+  validateToolInput,
   validateToolSpec,
 } from './index';
 
@@ -35,7 +36,13 @@ describe('@hypha/tools governed runner', () => {
     await expect(trace.list({ runId: 'run_1' })).resolves.toHaveLength(3);
     await expect(trace.list({ runId: 'run_1' })).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: 'tool.call.rejected' }),
+        expect.objectContaining({
+          type: 'tool.call.rejected',
+          payload: expect.objectContaining({
+            source: 'local',
+            sideEffectLevel: 'irreversible',
+          }),
+        }),
       ])
     );
   });
@@ -68,10 +75,78 @@ describe('@hypha/tools governed runner', () => {
     expect(result.status).toBe('failed');
     expect(called).toBe(false);
     await expect(trace.list({ runId: 'run_2' })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: 'tool.call.failed' }),
-      ])
+      expect.arrayContaining([expect.objectContaining({ type: 'tool.call.failed' })])
     );
+  });
+
+  it('validates nested JSON schema fields before handler execution', async () => {
+    const registry = new ToolRegistry();
+    let called = false;
+    registry.register(
+      {
+        id: 'structured-search',
+        version: '0.0.0',
+        description: 'Requires nested search options',
+        inputSchema: {
+          type: 'object',
+          required: ['query', 'filters'],
+          additionalProperties: false,
+          properties: {
+            query: { type: 'string', minLength: 2 },
+            filters: {
+              type: 'object',
+              required: ['limit'],
+              additionalProperties: false,
+              properties: {
+                limit: { type: 'integer', minimum: 1, maximum: 10 },
+                tags: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+        sideEffectLevel: 'read',
+      },
+      async () => {
+        called = true;
+        return { ok: true };
+      }
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace);
+
+    const result = await runner.run({
+      toolId: 'structured-search',
+      input: {
+        query: 'h',
+        filters: { limit: 0, tags: ['ok', 1], extra: true },
+        unexpected: true,
+      },
+      context: { runId: 'run_nested_schema', stepId: 'step_1' },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(called).toBe(false);
+    expect(String(result.error)).toContain('$.query');
+    expect(String(result.error)).toContain('$.filters.limit');
+    expect(String(result.error)).toContain('$.filters.tags[1]');
+    expect(String(result.error)).toContain('$.filters.extra');
+    expect(String(result.error)).toContain('$.unexpected');
+  });
+
+  it('exposes reusable tool input validation results', () => {
+    expect(
+      validateToolInput(
+        {
+          type: 'object',
+          required: ['mode'],
+          properties: { mode: { enum: ['fast', 'safe'] } },
+        },
+        { mode: 'unsafe' }
+      )
+    ).toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ path: '$.mode' })],
+    });
   });
 
   it('records MCP calls through the same governed runner', async () => {
@@ -103,8 +178,108 @@ describe('@hypha/tools governed runner', () => {
       expect.arrayContaining([
         expect.objectContaining({ type: 'mcp.call.started' }),
         expect.objectContaining({ type: 'mcp.call.completed' }),
-        expect.objectContaining({ type: 'tool.call.completed' }),
+        expect.objectContaining({
+          type: 'tool.call.started',
+          payload: expect.objectContaining({
+            source: 'mcp',
+            sourceRef: { serverId: 'mcp_1', capabilityId: 'search' },
+          }),
+        }),
+        expect.objectContaining({
+          type: 'tool.call.completed',
+          payload: expect.objectContaining({ source: 'mcp' }),
+        }),
       ])
+    );
+  });
+
+  it('returns a human review stub result before executing tools that require approval', async () => {
+    const registry = new ToolRegistry();
+    let called = false;
+    registry.register(
+      {
+        id: 'approval-tool',
+        version: '0.0.0',
+        description: 'Requires approval',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'write',
+        humanApprovalPolicy: { required: true, reason: 'owner approval required' },
+      },
+      async () => {
+        called = true;
+        return { ok: true };
+      }
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace);
+
+    await expect(
+      runner.run({
+        toolId: 'approval-tool',
+        input: { value: 1 },
+        context: { runId: 'run_human_approval', stepId: 'step_1' },
+      })
+    ).resolves.toMatchObject({
+      status: 'human_review_required',
+      error: 'owner approval required',
+    });
+    expect(called).toBe(false);
+    await expect(trace.list({ runId: 'run_human_approval' })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'human.review.requested',
+          payload: expect.objectContaining({
+            source: 'local',
+            reason: 'owner approval required',
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('validates tool output schema before recording completion', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        id: 'bad-output',
+        version: '0.0.0',
+        description: 'Returns invalid output',
+        inputSchema: { type: 'object' },
+        outputSchema: {
+          type: 'object',
+          required: ['answer'],
+          properties: { answer: { type: 'string' } },
+        },
+        sideEffectLevel: 'read',
+      },
+      async () => ({ answer: 1 })
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace);
+
+    await expect(
+      runner.run({
+        toolId: 'bad-output',
+        input: {},
+        context: { runId: 'run_output_schema', stepId: 'step_1' },
+      })
+    ).resolves.toMatchObject({
+      status: 'failed',
+    });
+
+    const events = await trace.list({ runId: 'run_output_schema' });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.failed',
+          payload: expect.objectContaining({
+            phase: 'output_validation',
+          }),
+        }),
+      ])
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'tool.call.completed' })])
     );
   });
 

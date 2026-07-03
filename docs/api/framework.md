@@ -18,10 +18,10 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`.                                            |
 | `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, timeout/retry/human-review helpers.                    |
 | `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                              |
-| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.           |
+| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
-| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, side-effect governance.                                |
-| `@hypha/mcp`            | `MCPIntegrationSpec`, capability normalization into tool/resource/prompt specs.                                            |
+| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
+| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
 | `@hypha/skills`         | `SkillSpec`, skill refs, activation and side-effect policy fields.                                                         |
 | `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, queues, replay/audit/regression projections.                    |
@@ -35,6 +35,8 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
 Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+
+`createPolicySpecEngine(policy)` creates a basic `PolicyEngine` from `PolicySpec`. Rules are evaluated in order and can match `sideEffectLevels`, `scopes`, and simple expressions `true` or `default`. Effects map to allow, deny, or human-review-required decisions; unmatched rules use `defaultEffect`.
 
 ## Storage Profiles
 
@@ -201,12 +203,12 @@ InferenceRequest -> PromptCompiler -> PrefixSegmenter -> PlasmodHotLayer -> Infe
 
 Backend ids:
 
-| Backend id   | Adapter                         | Default URL                         |
-| ------------ | ------------------------------- | ----------------------------------- |
-| `sglang`     | `SGLangInferenceBackend`        | `http://localhost:30000/generate`   |
-| `vllm`       | `VLLMInferenceBackend`          | `http://localhost:8000/v1/chat/completions` |
-| `llama.cpp`  | `LlamaCppInferenceBackend`      | `http://localhost:8080/completion`  |
-| `openai-api` | `OpenAIAPIInferenceBackend`     | `https://api.openai.com/v1/chat/completions` |
+| Backend id   | Adapter                     | Default URL                                  |
+| ------------ | --------------------------- | -------------------------------------------- |
+| `sglang`     | `SGLangInferenceBackend`    | `http://localhost:30000/generate`            |
+| `vllm`       | `VLLMInferenceBackend`      | `http://localhost:8000/v1/chat/completions`  |
+| `llama.cpp`  | `LlamaCppInferenceBackend`  | `http://localhost:8080/completion`           |
+| `openai-api` | `OpenAIAPIInferenceBackend` | `https://api.openai.com/v1/chat/completions` |
 
 `createDefaultInferenceBackendRegistry()` registers all four backends and defaults to `sglang`. Each backend consumes `InferenceBackendRequest` and returns `InferenceBackendResponse` with normalized `output`, `usage`, optional `physicalKvCache`, optional `metadata`, and optional `raw`.
 
@@ -233,9 +235,11 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 `ToolSpec` defines `id`, `version`, `description`, `inputSchema`, optional `outputSchema`, `sideEffectLevel`, permission scope, preconditions, postconditions, timeout, retry, audit, human approval, and `source`.
 
-`GovernedToolRunner` records tool request, policy check, approval, start, timeout, retry, completion, failure, and rejection events. It enforces input validation, default side-effect policy, optional timeout policy, retry policy, human review policy, and MCP source tracing. Tool calls return `completed`, `failed`, `denied`, or `human_review_required`.
+`ToolRegistry.register(spec, handler)` validates `ToolSpec` before making a tool executable. `validateToolInput(schema, input)` validates recursive JSON Schema features used by tool contracts, including nested objects, arrays, required fields, enum, type checks, `additionalProperties`, string length/pattern, and numeric bounds.
 
-`MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing. MCP tools are normalized to `ToolSpec` before being exposed to model/tool callers, and MCP-backed calls keep `sourceRef.serverId` and `sourceRef.capabilityId` for trace and replay.
+`GovernedToolRunner` records tool request, policy check, approval, start, timeout, retry, completion, failure, and rejection events. It enforces input validation, output validation, default side-effect policy, optional timeout policy, retry policy, human review policy, and MCP source tracing. Tool calls return `completed`, `failed`, `denied`, or `human_review_required`. Tool trace payloads include `source`, `sourceRef`, `sideEffectLevel`, and `permissionScope` so local and MCP execution are auditable even when policy blocks the call.
+
+`MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing. `MockMCPGateway` supports capability discovery and mock tool handlers. `registerMCPGatewayTools({ integration, gateway, registry, trace, traceContext })` discovers MCP capabilities, records `mcp.capability.discovered`, normalizes tool capabilities to `ToolSpec`, records `mcp.tool.normalized`, and registers handlers into the same `ToolRegistry` used by local tools. MCP-backed calls keep `sourceRef.serverId` and `sourceRef.capabilityId` for trace and replay.
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
 

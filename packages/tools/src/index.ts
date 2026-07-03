@@ -83,7 +83,9 @@ export interface ToolRunner {
   run(request: ToolCallRequest): Promise<ToolCallResult>;
 }
 
-export type MockToolHandler = (request: ToolCallRequest) => Promise<ToolCallResult> | ToolCallResult;
+export type MockToolHandler = (
+  request: ToolCallRequest
+) => Promise<ToolCallResult> | ToolCallResult;
 
 export class MockToolRunner implements ToolRunner {
   private readonly handlers = new Map<string, MockToolHandler>();
@@ -121,8 +123,9 @@ export class ToolRegistry {
   private readonly handlers = new Map<string, ToolHandler>();
 
   register(spec: ToolSpec, handler: ToolHandler): void {
-    this.specs.set(spec.id, spec);
-    this.handlers.set(spec.id, handler);
+    const parsed = validateToolSpec(spec);
+    this.specs.set(parsed.id, parsed);
+    this.handlers.set(parsed.id, handler);
   }
 
   getSpec(toolId: string): ToolSpec | null {
@@ -155,6 +158,7 @@ export class GovernedToolRunner implements ToolRunner {
         context: { toolId: request.toolId },
       });
     }
+    const basePayload = toolTracePayload(request.toolId, spec);
 
     await this.trace.record(
       createFrameworkEvent({
@@ -163,11 +167,12 @@ export class GovernedToolRunner implements ToolRunner {
         runId: request.context.runId,
         stepId: request.context.stepId,
         sessionId: request.context.sessionId,
-        payload: { toolId: request.toolId, input: request.input },
+        payload: { ...basePayload, input: request.input },
       })
     );
 
-    const validationError = validateInput(spec.inputSchema, request.input);
+    const validation = validateToolInput(spec.inputSchema, request.input);
+    const validationError = validation.error;
     if (validationError) {
       await this.trace.record(
         createFrameworkEvent({
@@ -176,7 +181,12 @@ export class GovernedToolRunner implements ToolRunner {
           runId: request.context.runId,
           stepId: request.context.stepId,
           sessionId: request.context.sessionId,
-          payload: { toolId: request.toolId, error: validationError, phase: 'input_validation' },
+          payload: {
+            ...basePayload,
+            error: validationError,
+            issues: validation.issues,
+            phase: 'input_validation',
+          },
         })
       );
       return { toolId: request.toolId, status: 'failed', error: validationError };
@@ -189,6 +199,12 @@ export class GovernedToolRunner implements ToolRunner {
       capabilityId: request.toolId,
       sideEffectLevel: spec.sideEffectLevel,
       input: request.input,
+      metadata: {
+        ...request.context.metadata,
+        source: spec.source ?? 'local',
+        sourceRef: spec.sourceRef,
+        permissionScope: spec.permissionScope,
+      },
     });
 
     await this.trace.record(
@@ -198,7 +214,7 @@ export class GovernedToolRunner implements ToolRunner {
         runId: request.context.runId,
         stepId: request.context.stepId,
         sessionId: request.context.sessionId,
-        payload: { toolId: request.toolId, decision },
+        payload: { ...basePayload, decision },
       })
     );
 
@@ -210,7 +226,7 @@ export class GovernedToolRunner implements ToolRunner {
           runId: request.context.runId,
           stepId: request.context.stepId,
           sessionId: request.context.sessionId,
-          payload: { toolId: request.toolId, decision },
+          payload: { ...basePayload, decision },
         })
       );
       return { toolId: request.toolId, status: 'denied', error: decision.reason };
@@ -225,7 +241,7 @@ export class GovernedToolRunner implements ToolRunner {
           stepId: request.context.stepId,
           sessionId: request.context.sessionId,
           payload: {
-            toolId: request.toolId,
+            ...basePayload,
             reason: decision.reason ?? spec.humanApprovalPolicy?.reason,
           },
         })
@@ -244,7 +260,7 @@ export class GovernedToolRunner implements ToolRunner {
         runId: request.context.runId,
         stepId: request.context.stepId,
         sessionId: request.context.sessionId,
-        payload: { toolId: request.toolId, decision },
+        payload: { ...basePayload, decision },
       })
     );
     await this.trace.record(
@@ -254,7 +270,7 @@ export class GovernedToolRunner implements ToolRunner {
         runId: request.context.runId,
         stepId: request.context.stepId,
         sessionId: request.context.sessionId,
-        payload: { toolId: request.toolId, source: spec.source ?? 'local' },
+        payload: basePayload,
       })
     );
     if (spec.source === 'mcp') {
@@ -266,7 +282,7 @@ export class GovernedToolRunner implements ToolRunner {
           stepId: request.context.stepId,
           sessionId: request.context.sessionId,
           payload: {
-            toolId: request.toolId,
+            ...basePayload,
             serverId: spec.sourceRef?.serverId,
             capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
           },
@@ -290,7 +306,7 @@ export class GovernedToolRunner implements ToolRunner {
               stepId: request.context.stepId,
               sessionId: request.context.sessionId,
               payload: {
-                toolId: request.toolId,
+                ...basePayload,
                 serverId: spec.sourceRef?.serverId,
                 capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
                 output,
@@ -299,6 +315,30 @@ export class GovernedToolRunner implements ToolRunner {
             })
           );
         }
+        const outputValidation = spec.outputSchema
+          ? validateToolInput(spec.outputSchema, output)
+          : undefined;
+        if (outputValidation && !outputValidation.valid) {
+          const outputValidationError =
+            outputValidation.error ?? 'Tool output failed schema validation.';
+          await this.trace.record(
+            createFrameworkEvent({
+              id: `${request.context.runId}:${request.context.stepId}:${request.toolId}:failed:output-validation`,
+              type: 'tool.call.failed',
+              runId: request.context.runId,
+              stepId: request.context.stepId,
+              sessionId: request.context.sessionId,
+              payload: {
+                ...basePayload,
+                error: outputValidationError,
+                issues: outputValidation.issues,
+                attempts: attempt,
+                phase: 'output_validation',
+              },
+            })
+          );
+          return { toolId: request.toolId, status: 'failed', error: outputValidationError };
+        }
         await this.trace.record(
           createFrameworkEvent({
             id: `${request.context.runId}:${request.context.stepId}:${request.toolId}:completed`,
@@ -306,7 +346,7 @@ export class GovernedToolRunner implements ToolRunner {
             runId: request.context.runId,
             stepId: request.context.stepId,
             sessionId: request.context.sessionId,
-            payload: { toolId: request.toolId, output, attempts: attempt },
+            payload: { ...basePayload, output, attempts: attempt },
           })
         );
         return { toolId: request.toolId, status: 'completed', output };
@@ -321,7 +361,7 @@ export class GovernedToolRunner implements ToolRunner {
               runId: request.context.runId,
               stepId: request.context.stepId,
               sessionId: request.context.sessionId,
-              payload: { toolId: request.toolId, attempt, timeoutMs: spec.timeoutPolicy?.timeoutMs },
+              payload: { ...basePayload, attempt, timeoutMs: spec.timeoutPolicy?.timeoutMs },
             })
           );
           if (spec.timeoutPolicy?.onTimeout === 'human_review') {
@@ -332,7 +372,7 @@ export class GovernedToolRunner implements ToolRunner {
                 runId: request.context.runId,
                 stepId: request.context.stepId,
                 sessionId: request.context.sessionId,
-                payload: { toolId: request.toolId, reason: message, attempt },
+                payload: { ...basePayload, reason: message, attempt },
               })
             );
             return { toolId: request.toolId, status: 'human_review_required', error: message };
@@ -347,7 +387,12 @@ export class GovernedToolRunner implements ToolRunner {
               runId: request.context.runId,
               stepId: request.context.stepId,
               sessionId: request.context.sessionId,
-              payload: { toolId: request.toolId, attempt, nextAttempt: attempt + 1, error: message },
+              payload: {
+                ...basePayload,
+                attempt,
+                nextAttempt: attempt + 1,
+                error: message,
+              },
             })
           );
           await sleep(spec.retryPolicy?.backoffMs ?? 0);
@@ -363,7 +408,7 @@ export class GovernedToolRunner implements ToolRunner {
               stepId: request.context.stepId,
               sessionId: request.context.sessionId,
               payload: {
-                toolId: request.toolId,
+                ...basePayload,
                 serverId: spec.sourceRef?.serverId,
                 capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
                 error: message,
@@ -379,14 +424,18 @@ export class GovernedToolRunner implements ToolRunner {
             runId: request.context.runId,
             stepId: request.context.stepId,
             sessionId: request.context.sessionId,
-            payload: { toolId: request.toolId, error: message, attempts: attempt },
+            payload: { ...basePayload, error: message, attempts: attempt },
           })
         );
         return { toolId: request.toolId, status: 'failed', error: message };
       }
     }
 
-    return { toolId: request.toolId, status: 'failed', error: 'Tool failed without a terminal result.' };
+    return {
+      toolId: request.toolId,
+      status: 'failed',
+      error: 'Tool failed without a terminal result.',
+    };
   }
 }
 
@@ -410,10 +459,12 @@ export const toolSpecSchema = z.object({
   auditPolicy: auditPolicySpecSchema.optional(),
   humanApprovalPolicy: humanReviewPolicySpecSchema.optional(),
   source: z.enum(['local', 'mcp', 'http', 'plugin']).optional(),
-  sourceRef: z.object({
-    serverId: z.string().optional(),
-    capabilityId: z.string().optional(),
-  }).optional(),
+  sourceRef: z
+    .object({
+      serverId: z.string().optional(),
+      capabilityId: z.string().optional(),
+    })
+    .optional(),
 }) satisfies ZodType<ToolSpec>;
 
 export const toolSpecJsonSchema: JsonSchema = {
@@ -475,21 +526,27 @@ export function validateToolSpec(input: unknown): ToolSpec {
   return toolSpecDefinition.parse(input);
 }
 
-function validateInput(schema: JsonSchema, input: unknown): string | null {
-  if (schema.type === 'object') {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) {
-      return 'Tool input must be an object.';
-    }
-    for (const field of schema.required ?? []) {
-      if (!Object.prototype.hasOwnProperty.call(input as Record<string, unknown>, field)) {
-        return `Tool input missing required field: ${field}`;
-      }
-    }
-  }
-  if (schema.enum && !schema.enum.includes(input)) {
-    return 'Tool input does not match enum.';
-  }
-  return null;
+export interface ToolSchemaValidationIssue {
+  path: string;
+  message: string;
+}
+
+export interface ToolSchemaValidationResult {
+  valid: boolean;
+  error?: string;
+  issues: ToolSchemaValidationIssue[];
+}
+
+export function validateToolInput(schema: JsonSchema, input: unknown): ToolSchemaValidationResult {
+  const issues: ToolSchemaValidationIssue[] = [];
+  validateSchemaValue(schema, input, '$', issues);
+  return {
+    valid: issues.length === 0,
+    error: issues.length
+      ? issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ')
+      : undefined,
+    issues,
+  };
 }
 
 async function executeWithTimeout<T>(work: Promise<T>, timeoutMs?: number): Promise<T> {
@@ -515,9 +572,10 @@ function shouldRetry(error: unknown, spec: ToolSpec, timedOut: boolean): boolean
   if (!retryableCodes?.length) {
     return true;
   }
-  const code = typeof error === 'object' && error !== null && 'code' in error
-    ? String((error as { code?: unknown }).code)
-    : undefined;
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : undefined;
   return !!code && retryableCodes.includes(code);
 }
 
@@ -526,4 +584,240 @@ function sleep(ms: number): Promise<void> {
     return Promise.resolve();
   }
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toolTracePayload(toolId: string, spec: ToolSpec): Record<string, unknown> {
+  return {
+    toolId,
+    source: spec.source ?? 'local',
+    sourceRef: spec.sourceRef,
+    sideEffectLevel: spec.sideEffectLevel,
+    permissionScope: spec.permissionScope,
+  };
+}
+
+function validateSchemaValue(
+  schema: JsonSchema,
+  value: unknown,
+  path: string,
+  issues: ToolSchemaValidationIssue[]
+): void {
+  const allOf = schemaArrayKeyword(schema, 'allOf');
+  if (allOf) {
+    for (const nested of allOf) {
+      validateSchemaValue(nested, value, path, issues);
+    }
+  }
+
+  const anyOf = schemaArrayKeyword(schema, 'anyOf');
+  if (anyOf && !anyOf.some((nested) => schemaMatches(nested, value))) {
+    issues.push({ path, message: 'must match at least one anyOf schema' });
+  }
+
+  const oneOf = schemaArrayKeyword(schema, 'oneOf');
+  if (oneOf) {
+    const matches = oneOf.filter((nested) => schemaMatches(nested, value)).length;
+    if (matches !== 1) {
+      issues.push({ path, message: 'must match exactly one oneOf schema' });
+    }
+  }
+
+  if (schema.enum && !schema.enum.some((candidate) => deepEqual(candidate, value))) {
+    issues.push({ path, message: 'must be one of the declared enum values' });
+    return;
+  }
+
+  const allowedTypes = schemaTypes(schema);
+  if (allowedTypes.length > 0 && !allowedTypes.some((type) => typeMatches(type, value))) {
+    issues.push({ path, message: `must be ${allowedTypes.join(' or ')}` });
+    return;
+  }
+
+  if (allowedTypes.includes('object') || shouldValidateObject(schema, value)) {
+    validateObjectSchema(schema, value, path, issues);
+  }
+  if (allowedTypes.includes('array') || shouldValidateArray(schema, value)) {
+    validateArraySchema(schema, value, path, issues);
+  }
+  if (typeof value === 'string') {
+    validateStringSchema(schema, value, path, issues);
+  }
+  if (typeof value === 'number') {
+    validateNumberSchema(schema, value, path, issues);
+  }
+}
+
+function validateObjectSchema(
+  schema: JsonSchema,
+  value: unknown,
+  path: string,
+  issues: ToolSchemaValidationIssue[]
+): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    issues.push({ path, message: 'must be an object' });
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const properties = schema.properties ?? {};
+  for (const field of schema.required ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+      issues.push({ path, message: `missing required field: ${field}` });
+    }
+  }
+  for (const [field, nested] of Object.entries(properties)) {
+    if (Object.prototype.hasOwnProperty.call(record, field)) {
+      validateSchemaValue(nested, record[field], `${path}.${field}`, issues);
+    }
+  }
+  const extraKeys = Object.keys(record).filter((field) => !(field in properties));
+  if (schema.additionalProperties === false) {
+    for (const field of extraKeys) {
+      issues.push({ path: `${path}.${field}`, message: 'additional property is not allowed' });
+    }
+  } else if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+    for (const field of extraKeys) {
+      validateSchemaValue(schema.additionalProperties, record[field], `${path}.${field}`, issues);
+    }
+  }
+}
+
+function validateArraySchema(
+  schema: JsonSchema,
+  value: unknown,
+  path: string,
+  issues: ToolSchemaValidationIssue[]
+): void {
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: 'must be an array' });
+    return;
+  }
+  if (schema.items) {
+    value.forEach((item, index) => {
+      validateSchemaValue(schema.items as JsonSchema, item, `${path}[${index}]`, issues);
+    });
+  }
+  const minItems = numberKeyword(schema, 'minItems');
+  if (minItems !== undefined && value.length < minItems) {
+    issues.push({ path, message: `must contain at least ${minItems} items` });
+  }
+  const maxItems = numberKeyword(schema, 'maxItems');
+  if (maxItems !== undefined && value.length > maxItems) {
+    issues.push({ path, message: `must contain at most ${maxItems} items` });
+  }
+}
+
+function validateStringSchema(
+  schema: JsonSchema,
+  value: string,
+  path: string,
+  issues: ToolSchemaValidationIssue[]
+): void {
+  const minLength = numberKeyword(schema, 'minLength');
+  if (minLength !== undefined && value.length < minLength) {
+    issues.push({ path, message: `must contain at least ${minLength} characters` });
+  }
+  const maxLength = numberKeyword(schema, 'maxLength');
+  if (maxLength !== undefined && value.length > maxLength) {
+    issues.push({ path, message: `must contain at most ${maxLength} characters` });
+  }
+  const pattern = stringKeyword(schema, 'pattern');
+  if (pattern && !new RegExp(pattern).test(value)) {
+    issues.push({ path, message: `must match pattern ${pattern}` });
+  }
+}
+
+function validateNumberSchema(
+  schema: JsonSchema,
+  value: number,
+  path: string,
+  issues: ToolSchemaValidationIssue[]
+): void {
+  const minimum = numberKeyword(schema, 'minimum');
+  if (minimum !== undefined && value < minimum) {
+    issues.push({ path, message: `must be greater than or equal to ${minimum}` });
+  }
+  const maximum = numberKeyword(schema, 'maximum');
+  if (maximum !== undefined && value > maximum) {
+    issues.push({ path, message: `must be less than or equal to ${maximum}` });
+  }
+}
+
+function schemaMatches(schema: JsonSchema, value: unknown): boolean {
+  const issues: ToolSchemaValidationIssue[] = [];
+  validateSchemaValue(schema, value, '$', issues);
+  return issues.length === 0;
+}
+
+function schemaArrayKeyword(schema: JsonSchema, key: string): JsonSchema[] | undefined {
+  const value = schema[key];
+  return Array.isArray(value) ? value.filter(isJsonSchema) : undefined;
+}
+
+function schemaTypes(schema: JsonSchema): string[] {
+  const type = schema.type;
+  if (Array.isArray(type))
+    return type.filter((value): value is string => typeof value === 'string');
+  return typeof type === 'string' ? [type] : [];
+}
+
+function typeMatches(type: string, value: unknown): boolean {
+  switch (type) {
+    case 'object':
+      return !!value && typeof value === 'object' && !Array.isArray(value);
+    case 'array':
+      return Array.isArray(value);
+    case 'integer':
+      return Number.isInteger(value);
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value);
+    case 'string':
+      return typeof value === 'string';
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'null':
+      return value === null;
+    default:
+      return true;
+  }
+}
+
+function shouldValidateObject(schema: JsonSchema, value: unknown): boolean {
+  return (
+    !!schema.properties ||
+    !!schema.required?.length ||
+    (!!value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      schema.additionalProperties !== undefined)
+  );
+}
+
+function shouldValidateArray(schema: JsonSchema, value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    (!!schema.items || schema.minItems !== undefined || schema.maxItems !== undefined)
+  );
+}
+
+function numberKeyword(schema: JsonSchema, key: string): number | undefined {
+  const value = schema[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringKeyword(schema: JsonSchema, key: string): string | undefined {
+  const value = schema[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function isJsonSchema(value: unknown): value is JsonSchema {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deepEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
 }

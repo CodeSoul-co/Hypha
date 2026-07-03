@@ -4,12 +4,12 @@ hypha uses an event-first runtime model. Sessions and runs are useful views, but
 
 ## Core Runtime Objects
 
-| Object | Role | Source of Truth |
-| --- | --- | --- |
-| `DomainPack` | Declares task schemas, workflows, tools, MCP profiles, memory profiles, skill policy, policy, evaluation, regression, output contracts, and deployment metadata. | Versioned spec. |
-| `Session` | Runtime user or product context container. It can reference a DomainPack and SessionProfile. | Projected from events plus runtime metadata. |
-| `Run` | One concrete execution under a Session. | Projected from run events. |
-| `Event` | Smallest factual runtime record. | Append-only event log. |
+| Object       | Role                                                                                                                                                             | Source of Truth                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `DomainPack` | Declares task schemas, workflows, tools, MCP profiles, memory profiles, skill policy, policy, evaluation, regression, output contracts, and deployment metadata. | Versioned spec.                              |
+| `Session`    | Runtime user or product context container. It can reference a DomainPack and SessionProfile.                                                                     | Projected from events plus runtime metadata. |
+| `Run`        | One concrete execution under a Session.                                                                                                                          | Projected from run events.                   |
+| `Event`      | Smallest factual runtime record.                                                                                                                                 | Append-only event log.                       |
 
 Session is not part of DomainPack. DomainPack may declare `sessionProfiles`, but a Session is created at runtime and only references those definitions.
 
@@ -97,6 +97,10 @@ irreversible
 ```
 
 `external_effect` and `irreversible` should require explicit policy or human review.
+
+Tool governance is enforced by `GovernedToolRunner`. The runner validates `inputSchema` before handler execution, validates `outputSchema` before recording completion, evaluates policy with side-effect and source metadata, and emits terminal results as `completed`, `failed`, `denied`, or `human_review_required`.
+
+Every tool trace event includes `source` (`local`, `mcp`, `http`, or `plugin`) and the declared `sideEffectLevel`. MCP tools are discovered through an `MCPGateway`, normalized into `ToolSpec`, registered in `ToolRegistry`, and executed through the same runner as local tools. Discovery emits `mcp.capability.discovered`; tool normalization emits `mcp.tool.normalized`; actual MCP calls emit `mcp.call.started`, `mcp.call.completed`, or `mcp.call.failed`.
 
 ## Concurrency
 

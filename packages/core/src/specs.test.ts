@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createFrameworkEvent,
+  createPolicySpecEngine,
   denyExternalEffectsPolicyEngine,
   FrameworkError,
   formatFrameworkId,
@@ -63,6 +64,64 @@ describe('@hypha/core contracts', () => {
         sideEffectLevel: 'irreversible',
       })
     ).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('evaluates basic PolicySpec rules by side effect and scope', async () => {
+    const engine = createPolicySpecEngine({
+      id: 'policy.tools',
+      version: '0.0.0',
+      defaultEffect: 'deny',
+      rules: [
+        {
+          id: 'policy.rule.read',
+          version: '0.0.0',
+          effect: 'allow',
+          sideEffectLevels: ['read'],
+        },
+        {
+          id: 'policy.rule.approve-files',
+          version: '0.0.0',
+          effect: 'require_human_review',
+          sideEffectLevels: ['write'],
+          scopes: ['filesystem:write'],
+        },
+      ],
+    });
+
+    await expect(
+      engine.evaluate({
+        runId: 'run_policy',
+        capabilityId: 'search',
+        sideEffectLevel: 'read',
+      })
+    ).resolves.toMatchObject({
+      allowed: true,
+      ruleId: 'policy.rule.read',
+    });
+
+    await expect(
+      engine.evaluate({
+        runId: 'run_policy',
+        capabilityId: 'filesystem',
+        sideEffectLevel: 'write',
+        metadata: { permissionScope: ['filesystem:write'] },
+      })
+    ).resolves.toMatchObject({
+      allowed: true,
+      requiresHumanReview: true,
+      ruleId: 'policy.rule.approve-files',
+    });
+
+    await expect(
+      engine.evaluate({
+        runId: 'run_policy',
+        capabilityId: 'delete',
+        sideEffectLevel: 'irreversible',
+      })
+    ).resolves.toMatchObject({
+      allowed: false,
+      policyId: 'policy.tools',
+    });
   });
 
   it('exports parseable Stage1 core spec schemas and examples', () => {

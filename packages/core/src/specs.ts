@@ -111,6 +111,59 @@ export const denyExternalEffectsPolicyEngine: PolicyEngine = {
   },
 };
 
+export function createPolicySpecEngine(policy: PolicySpec): PolicyEngine {
+  return {
+    async evaluate(context: PolicyEvaluationContext): Promise<PolicyDecision> {
+      const rule = policy.rules.find((candidate) => policyRuleMatches(candidate, context));
+      if (!rule) {
+        const allowed = policy.defaultEffect === 'allow';
+        return {
+          allowed,
+          policyId: policy.id,
+          reason: allowed ? undefined : `Policy ${policy.id} default effect denied the capability.`,
+        };
+      }
+      const base = {
+        policyId: policy.id,
+        ruleId: rule.id,
+        reason: `Policy ${policy.id} matched rule ${rule.id}.`,
+      };
+      if (rule.effect === 'allow') {
+        return { ...base, allowed: true };
+      }
+      if (rule.effect === 'require_human_review') {
+        return { ...base, allowed: true, requiresHumanReview: true };
+      }
+      return { ...base, allowed: false };
+    },
+  };
+}
+
+function policyRuleMatches(rule: PolicyRuleSpec, context: PolicyEvaluationContext): boolean {
+  if (
+    rule.sideEffectLevels?.length &&
+    (!context.sideEffectLevel || !rule.sideEffectLevels.includes(context.sideEffectLevel))
+  ) {
+    return false;
+  }
+  if (rule.scopes?.length && !rule.scopes.some((scope) => policyScopeMatches(scope, context))) {
+    return false;
+  }
+  return policyExpressionMatches(rule.expression);
+}
+
+function policyScopeMatches(scope: string, context: PolicyEvaluationContext): boolean {
+  if (context.capabilityId === scope) return true;
+  const permissionScope = context.metadata?.permissionScope;
+  return Array.isArray(permissionScope) && permissionScope.some((value) => value === scope);
+}
+
+function policyExpressionMatches(expression?: string): boolean {
+  if (!expression) return true;
+  const normalized = expression.trim().toLowerCase();
+  return normalized === 'true' || normalized === 'default';
+}
+
 export interface OutputContractSpec extends VersionedSpec, SpecMetadata {
   schema: JsonSchema;
 }
@@ -159,7 +212,9 @@ export interface ReplaySpec extends VersionedSpec, SpecMetadata {
 
 export interface RegressionSpec extends VersionedSpec, SpecMetadata {
   fixtureRefs: SpecRef[];
-  requiredChecks: Array<'event_types' | 'state_path' | 'tool_calls' | 'policy_decisions' | 'output_contract'>;
+  requiredChecks: Array<
+    'event_types' | 'state_path' | 'tool_calls' | 'policy_decisions' | 'output_contract'
+  >;
 }
 
 export interface DeploymentSpec extends VersionedSpec, SpecMetadata {
