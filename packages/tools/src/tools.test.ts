@@ -4,8 +4,6 @@ import {
   GovernedToolRunner,
   MockToolRunner,
   ToolRegistry,
-  predefinedToolExamples,
-  predefinedToolSpecs,
   toolSpecDefinition,
   toolSpecJsonSchemas,
   validateToolInput,
@@ -359,47 +357,6 @@ describe('@hypha/tools governed runner', () => {
   it('exports Stage1 ToolSpec schema and minimal example', () => {
     expect(validateToolSpec(toolSpecDefinition.example).id).toBe('tool.search');
     expect(toolSpecJsonSchemas.ToolSpec.required).toContain('sideEffectLevel');
-  });
-
-  it('exports executable predefined tool examples', async () => {
-    const registry = new ToolRegistry();
-    for (const spec of predefinedToolSpecs) {
-      expect(validateToolSpec(spec).id).toBe(spec.id);
-      registry.register(spec, async (input) => ({
-        query: (input as { query: string }).query,
-        count: 1,
-        provider: 'stub',
-        items: [
-          {
-            title: 'Hypha fixture',
-            url: 'https://example.com/hypha',
-            snippet: 'Predefined tool example fixture.',
-            source: 'test.fixture',
-          },
-        ],
-      }));
-    }
-
-    const trace = new InMemoryEventStore();
-    const runner = new GovernedToolRunner(registry, trace);
-    for (const example of predefinedToolExamples) {
-      const spec = registry.getSpec(example.toolSpecId);
-      expect(spec).toBeTruthy();
-      expect(validateToolInput(spec!.inputSchema, example.input)).toMatchObject({ valid: true });
-      await expect(
-        runner.run({
-          toolId: example.toolSpecId,
-          input: example.input,
-          context: { runId: `run_${example.id}`, stepId: 'tool.example' },
-        })
-      ).resolves.toMatchObject({
-        status: 'completed',
-        output: {
-          provider: 'stub',
-          count: 1,
-        },
-      });
-    }
   });
 
   it('provides a mock ToolRunner for package-level runtime tests', async () => {

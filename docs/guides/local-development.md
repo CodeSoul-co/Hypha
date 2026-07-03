@@ -114,7 +114,7 @@ WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-Framework-level tool examples live in `@hypha/tools` as `predefinedToolSpecs` and `predefinedToolExamples`. MCP examples live in `@hypha/mcp`; `classicMCPExampleRequests` plus `createClassicMCPMockGateway()` provide executable filesystem, fetch, time, and web-search fixtures for tests. Runtime MCP servers are still configured explicitly under `tools.mcpServers` in `config.yaml`.
+Framework-level MCP fixtures live in `@hypha/mcp`; `createClassicMCPMockGateway()` provides deterministic filesystem, fetch, time, and web-search capabilities for tests. Runtime MCP servers are still configured explicitly under `tools.mcpServers` in `config.yaml`.
 
 ## Inference Backends
 
