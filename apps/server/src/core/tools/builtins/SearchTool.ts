@@ -4,11 +4,13 @@ import axios from 'axios';
 
 const DEFAULT_DUCKDUCKGO_ENDPOINT = 'https://api.duckduckgo.com/';
 const DEFAULT_WIKIPEDIA_ENDPOINT = 'https://en.wikipedia.org/w/api.php';
+const DEFAULT_BAIDU_SUGGEST_ENDPOINT = 'https://www.baidu.com/sugrec';
+const DEFAULT_SO360_SUGGEST_ENDPOINT = 'https://sug.so.360.cn/suggest';
 const DEFAULT_LIMIT = 3;
 const MAX_LIMIT = 10;
 
-type WebSearchProvider = 'auto' | 'stub' | 'duckduckgo' | 'wikipedia';
-type ConcreteWebSearchProvider = Exclude<WebSearchProvider, 'auto'>;
+type WebSearchProvider = 'auto' | 'china' | 'stub' | 'duckduckgo' | 'wikipedia' | 'baidu' | 'so360';
+type ConcreteWebSearchProvider = Exclude<WebSearchProvider, 'auto' | 'china'>;
 
 interface SearchResultItem {
   title: string;
@@ -57,6 +59,7 @@ type WikipediaOpenSearchResponse = [string, string[], string[], string[]];
  *
  * Default mode is a deterministic offline stub for local tests. Set
  * WEB_SEARCH_PROVIDER=auto to try HTTP providers with fallback,
+ * WEB_SEARCH_PROVIDER=china to prefer mainland China HTTP providers,
  * WEB_SEARCH_PROVIDER=duckduckgo to call the DuckDuckGo Instant Answer API,
  * or WEB_SEARCH_PROVIDER=wikipedia to call Wikipedia OpenSearch
  * without introducing a provider SDK dependency.
@@ -75,12 +78,12 @@ export default class SearchTool extends BaseTool {
         limit: { type: 'number', description: 'Max results to return' },
         provider: {
           type: 'string',
-          enum: ['auto', 'stub', 'duckduckgo', 'wikipedia'],
+          enum: ['auto', 'china', 'stub', 'duckduckgo', 'wikipedia', 'baidu', 'so360'],
           description: 'Optional provider override for this call',
         },
         fallbackProviders: {
           type: 'array',
-          items: { type: 'string', enum: ['stub', 'duckduckgo', 'wikipedia'] },
+          items: { type: 'string', enum: ['stub', 'duckduckgo', 'wikipedia', 'baidu', 'so360'] },
           description: 'Optional ordered fallback providers for this call',
         },
       },
@@ -121,6 +124,9 @@ export default class SearchTool extends BaseTool {
     if (provider === 'auto') {
       return this.searchWithFallback(query, normalizedLimit, this.autoProviderOrder());
     }
+    if (provider === 'china') {
+      return this.searchWithFallback(query, normalizedLimit, this.chinaProviderOrder());
+    }
 
     if (fallbackOrder.length > 0) {
       return this.searchWithFallback(query, normalizedLimit, [provider, ...fallbackOrder]);
@@ -131,7 +137,15 @@ export default class SearchTool extends BaseTool {
 
   private provider(override?: string): WebSearchProvider {
     const raw = (override || process.env.WEB_SEARCH_PROVIDER || 'stub').toLowerCase();
-    if (raw === 'auto' || raw === 'stub' || raw === 'duckduckgo' || raw === 'wikipedia') {
+    if (
+      raw === 'auto' ||
+      raw === 'china' ||
+      raw === 'stub' ||
+      raw === 'duckduckgo' ||
+      raw === 'wikipedia' ||
+      raw === 'baidu' ||
+      raw === 'so360'
+    ) {
       return raw;
     }
     throw new Error(`Unsupported web search provider: ${raw}`);
@@ -150,20 +164,33 @@ export default class SearchTool extends BaseTool {
     );
   }
 
+  private chinaProviderOrder(): ConcreteWebSearchProvider[] {
+    return this.parseProviderList(
+      process.env.WEB_SEARCH_CHINA_PROVIDER_ORDER || 'baidu,so360,stub'
+    );
+  }
+
   private fallbackProviders(
     provider: WebSearchProvider,
     override?: string[]
   ): ConcreteWebSearchProvider[] {
-    if (provider === 'auto' || provider === 'stub') {
+    if (provider === 'auto' || provider === 'china' || provider === 'stub') {
       return [];
     }
     if (override) {
-      return this.parseProviderList(override.join(','));
+      return this.parseProviderList(override.join(',')).filter(
+        (candidate) => candidate !== provider
+      );
     }
     if (process.env.WEB_SEARCH_FALLBACK_PROVIDERS !== undefined) {
-      return this.parseProviderList(process.env.WEB_SEARCH_FALLBACK_PROVIDERS);
+      return this.parseProviderList(process.env.WEB_SEARCH_FALLBACK_PROVIDERS).filter(
+        (candidate) => candidate !== provider
+      );
     }
-    return provider === 'duckduckgo' ? ['wikipedia'] : [];
+    if (provider === 'duckduckgo') return ['wikipedia'];
+    if (provider === 'baidu') return ['so360', 'stub'];
+    if (provider === 'so360') return ['baidu', 'stub'];
+    return [];
   }
 
   private parseProviderList(raw: string): ConcreteWebSearchProvider[] {
@@ -171,7 +198,13 @@ export default class SearchTool extends BaseTool {
     for (const item of raw.split(',')) {
       const value = item.trim().toLowerCase();
       if (!value || value === 'none') continue;
-      if (value !== 'stub' && value !== 'duckduckgo' && value !== 'wikipedia') {
+      if (
+        value !== 'stub' &&
+        value !== 'duckduckgo' &&
+        value !== 'wikipedia' &&
+        value !== 'baidu' &&
+        value !== 'so360'
+      ) {
         throw new Error(`Unsupported web search provider in list: ${value}`);
       }
       if (!providers.includes(value)) {
@@ -204,9 +237,7 @@ export default class SearchTool extends BaseTool {
       }
     }
 
-    const summary = providerErrors
-      .map((error) => `${error.provider}: ${error.message}`)
-      .join('; ');
+    const summary = providerErrors.map((error) => `${error.provider}: ${error.message}`).join('; ');
     throw new Error(`Web search failed for all providers. ${summary}`);
   }
 
@@ -220,6 +251,12 @@ export default class SearchTool extends BaseTool {
     }
     if (provider === 'wikipedia') {
       return this.searchWikipedia(query, limit);
+    }
+    if (provider === 'baidu') {
+      return this.searchBaidu(query, limit);
+    }
+    if (provider === 'so360') {
+      return this.searchSo360(query, limit);
     }
     return this.searchStub(query, limit);
   }
@@ -244,7 +281,7 @@ export default class SearchTool extends BaseTool {
       title: `Stub result ${i + 1} for "${query}"`,
       url: `https://example.com/search?q=${encodeURIComponent(query)}&i=${i + 1}`,
       snippet:
-        'Deterministic offline result. Set WEB_SEARCH_PROVIDER=wikipedia or duckduckgo for HTTP search.',
+        'Deterministic offline result. Set WEB_SEARCH_PROVIDER=china, baidu, so360, wikipedia, or duckduckgo for HTTP search.',
       source: 'stub',
     }));
     return { query, count: items.length, items, provider: 'stub' };
@@ -304,6 +341,73 @@ export default class SearchTool extends BaseTool {
     };
   }
 
+  private async searchBaidu(query: string, limit: number): Promise<SearchOutput> {
+    const endpoint =
+      process.env.WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT || DEFAULT_BAIDU_SUGGEST_ENDPOINT;
+    const timeoutMs = Number(process.env.WEB_SEARCH_TIMEOUT_MS || 10000);
+    const response = await axios.get(endpoint, {
+      params: {
+        prod: 'pc',
+        wd: query,
+      },
+      timeout: timeoutMs,
+      headers: {
+        'User-Agent': process.env.WEB_SEARCH_USER_AGENT || 'hypha/1.0 web-search',
+      },
+    });
+    const suggestions = this.parseBaiduSuggestResponse(response.data);
+    const items = this.suggestionItems({
+      provider: 'baidu',
+      query,
+      suggestions,
+      limit,
+      searchUrlBase: 'https://www.baidu.com/s?wd=',
+      source: 'baidu.suggest',
+      label: 'Baidu',
+    });
+    return {
+      query,
+      count: items.length,
+      items,
+      provider: 'baidu',
+      note: suggestions.length === 0 ? 'direct-search-link' : 'suggest-api',
+    };
+  }
+
+  private async searchSo360(query: string, limit: number): Promise<SearchOutput> {
+    const endpoint =
+      process.env.WEB_SEARCH_SO360_SUGGEST_ENDPOINT || DEFAULT_SO360_SUGGEST_ENDPOINT;
+    const timeoutMs = Number(process.env.WEB_SEARCH_TIMEOUT_MS || 10000);
+    const response = await axios.get(endpoint, {
+      params: {
+        word: query,
+        encodein: 'utf-8',
+        encodeout: 'utf-8',
+      },
+      timeout: timeoutMs,
+      headers: {
+        'User-Agent': process.env.WEB_SEARCH_USER_AGENT || 'hypha/1.0 web-search',
+      },
+    });
+    const suggestions = this.parseSo360SuggestResponse(response.data);
+    const items = this.suggestionItems({
+      provider: 'so360',
+      query,
+      suggestions,
+      limit,
+      searchUrlBase: 'https://www.so.com/s?q=',
+      source: 'so360.suggest',
+      label: '360 Search',
+    });
+    return {
+      query,
+      count: items.length,
+      items,
+      provider: 'so360',
+      note: suggestions.length === 0 ? 'direct-search-link' : 'suggest-api',
+    };
+  }
+
   private parseDuckDuckGoResponse(query: string, data: DuckDuckGoResponse): SearchResultItem[] {
     const items: SearchResultItem[] = [];
     if (data.AbstractText) {
@@ -352,6 +456,64 @@ export default class SearchTool extends BaseTool {
       url: urls[index] ?? '',
       snippet: descriptions[index] || `Wikipedia result for ${title}`,
       source: 'wikipedia.opensearch',
+    }));
+  }
+
+  private parseBaiduSuggestResponse(data: unknown): string[] {
+    if (!data || typeof data !== 'object') return [];
+    const rawItems = (data as { g?: unknown }).g;
+    if (!Array.isArray(rawItems)) return [];
+    return rawItems
+      .map((item) => {
+        if (!item || typeof item !== 'object') return undefined;
+        const value = (item as { q?: unknown }).q;
+        return typeof value === 'string' ? value : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+  }
+
+  private parseSo360SuggestResponse(data: unknown): string[] {
+    if (!data || typeof data !== 'object') return [];
+    const record = data as { s?: unknown; result?: unknown };
+    if (Array.isArray(record.s)) {
+      return record.s.filter((value): value is string => typeof value === 'string' && !!value);
+    }
+    if (Array.isArray(record.result)) {
+      return record.result
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (!item || typeof item !== 'object') return undefined;
+          const value = (item as { word?: unknown; title?: unknown }).word;
+          const fallback = (item as { title?: unknown }).title;
+          return typeof value === 'string'
+            ? value
+            : typeof fallback === 'string'
+              ? fallback
+              : undefined;
+        })
+        .filter((value): value is string => Boolean(value));
+    }
+    return [];
+  }
+
+  private suggestionItems(options: {
+    provider: ConcreteWebSearchProvider;
+    query: string;
+    suggestions: string[];
+    limit: number;
+    searchUrlBase: string;
+    source: string;
+    label: string;
+  }): SearchResultItem[] {
+    const unique = Array.from(
+      new Set(options.suggestions.map((item) => item.trim()).filter(Boolean))
+    );
+    const terms = unique.length > 0 ? unique : [options.query];
+    return terms.slice(0, options.limit).map((term) => ({
+      title: term,
+      url: `${options.searchUrlBase}${encodeURIComponent(term)}`,
+      snippet: `${options.label} mainland China search suggestion for "${term}".`,
+      source: options.source,
     }));
   }
 }

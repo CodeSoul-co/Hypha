@@ -237,9 +237,11 @@ describe('@hypha/mcp normalization', () => {
     });
 
     expect(registration.registeredTools.map((tool) => tool.id).sort()).toEqual([
+      'baidu.web_search',
       'fetch.fetch',
       'filesystem.read_file',
       'search.web_search',
+      'so360.web_search',
       'time.now',
     ]);
 
@@ -317,6 +319,25 @@ describe('@hypha/mcp normalization', () => {
       },
     });
 
+    const baiduSearch = await runner.run({
+      toolId: 'baidu.web_search',
+      input: { query: 'hypha', limit: 1 },
+      context: {
+        runId: 'run_mcp_classic',
+        stepId: 'tool.baidu.assert',
+        sessionId: 'session_mcp_classic',
+      },
+    });
+    expect(baiduSearch).toMatchObject({
+      status: 'completed',
+      output: {
+        query: 'hypha',
+        count: 1,
+        provider: 'baidu-fixture',
+        note: 'classic-mcp-mainland-baidu',
+      },
+    });
+
     const events = await trace.list({ runId: 'run_mcp_classic' });
     expect(events).toEqual(
       expect.arrayContaining([
@@ -332,6 +353,6 @@ describe('@hypha/mcp normalization', () => {
         expect.objectContaining({ type: 'mcp.call.completed' }),
       ])
     );
-    expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(4);
+    expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(5);
   });
 });

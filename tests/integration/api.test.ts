@@ -217,7 +217,7 @@ describe('MCP tool invocation', () => {
         expect.objectContaining({
           id: 'classic',
           status: 'connected',
-          toolCount: 4,
+          toolCount: 6,
         }),
       ])
     );
@@ -230,7 +230,12 @@ describe('MCP tool invocation', () => {
     expect(classic).toBeTruthy();
     const toolIds = (classic.tools || []).map((tool: any) => tool.id);
     expect(toolIds).toEqual(
-      expect.arrayContaining(['filesystem.read_file', 'search.web_search'])
+      expect.arrayContaining([
+        'filesystem.read_file',
+        'search.web_search',
+        'baidu.web_search',
+        'so360.web_search',
+      ])
     );
     expect(classic.tools || []).toEqual(
       expect.arrayContaining([
@@ -247,7 +252,7 @@ describe('MCP tool invocation', () => {
       .set('Authorization', `Bearer ${devToken}`);
     expect(allTools.status).toBe(200);
     expect((allTools.body.data || []).map((tool: any) => tool.name)).toEqual(
-      expect.arrayContaining(['filesystem.read_file', 'search.web_search'])
+      expect.arrayContaining(['filesystem.read_file', 'search.web_search', 'baidu.web_search'])
     );
   });
 
@@ -283,6 +288,38 @@ describe('MCP tool invocation', () => {
             source: 'mcp',
             serverId: 'filesystem',
             capabilityId: 'read_file',
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('executes a mainland MCP search fixture through the governed HTTP path', async () => {
+    const r = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'baidu.web_search', params: { query: 'hypha', limit: 1 } });
+    expect(r.status).toBe(200);
+    expect(r.body.success).toBe(true);
+    expect(r.body.data).toMatchObject({
+      query: 'hypha',
+      count: 1,
+      provider: 'baidu-fixture',
+      note: 'classic-mcp-mainland-baidu',
+    });
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'mcp.call.completed',
+          payload: expect.objectContaining({
+            source: 'mcp',
+            serverId: 'baidu',
+            capabilityId: 'web_search',
           }),
         }),
       ])

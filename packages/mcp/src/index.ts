@@ -154,6 +154,8 @@ export const classicMCPIntegrationSpec: MCPIntegrationSpec = {
     { id: 'fetch', mode: 'local', command: 'mcp-server-fetch' },
     { id: 'time', mode: 'local', command: 'mcp-server-time' },
     { id: 'search', mode: 'remote', endpoint: 'https://example.invalid/mcp/search' },
+    { id: 'baidu', mode: 'remote', endpoint: 'https://www.baidu.com/sugrec' },
+    { id: 'so360', mode: 'remote', endpoint: 'https://sug.so.360.cn/suggest' },
   ],
   allowedCapabilities: ['read_file', 'fetch', 'now', 'web_search'],
   trustPolicy: 'trusted local test fixture',
@@ -287,6 +289,72 @@ export const classicMCPCapabilityDescriptors: MCPCapabilityDescriptor[] = [
     capabilityHash: 'sha256:classic-search-web-search',
     trustLevel: 'reviewed',
   },
+  {
+    id: 'mcp.classic.baidu.web_search',
+    version: '0.0.0',
+    name: 'baidu.web_search',
+    description: 'Run a web-search query through a Baidu-compatible MCP search server.',
+    serverId: 'baidu',
+    capabilityId: 'web_search',
+    type: 'tool',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['query', 'items'],
+      properties: {
+        query: { type: 'string' },
+        count: { type: 'number' },
+        provider: { type: 'string' },
+        note: { type: 'string' },
+        items: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    sideEffectLevel: 'read',
+    permissionScope: ['web.search.cn'],
+    capabilityHash: 'sha256:classic-baidu-web-search',
+    trustLevel: 'reviewed',
+  },
+  {
+    id: 'mcp.classic.so360.web_search',
+    version: '0.0.0',
+    name: 'so360.web_search',
+    description: 'Run a web-search query through a 360 Search-compatible MCP search server.',
+    serverId: 'so360',
+    capabilityId: 'web_search',
+    type: 'tool',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['query', 'items'],
+      properties: {
+        query: { type: 'string' },
+        count: { type: 'number' },
+        provider: { type: 'string' },
+        note: { type: 'string' },
+        items: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    sideEffectLevel: 'read',
+    permissionScope: ['web.search.cn'],
+    capabilityHash: 'sha256:classic-so360-web-search',
+    trustLevel: 'reviewed',
+  },
 ];
 
 export function createClassicMCPMockGateway(
@@ -364,6 +432,26 @@ export function createClassicMCPMockGateway(
       items: items.slice(0, limit),
     };
   });
+
+  gateway.registerToolHandler('baidu', 'web_search', ({ input }) =>
+    mainlandSearchFixture(input, {
+      provider: 'baidu-fixture',
+      note: 'classic-mcp-mainland-baidu',
+      baseUrl: 'https://www.baidu.com/s',
+      sourceLabel: 'Baidu',
+      searchResults,
+    })
+  );
+
+  gateway.registerToolHandler('so360', 'web_search', ({ input }) =>
+    mainlandSearchFixture(input, {
+      provider: 'so360-fixture',
+      note: 'classic-mcp-mainland-so360',
+      baseUrl: 'https://www.so.com/s',
+      sourceLabel: '360 Search',
+      searchResults,
+    })
+  );
 
   return gateway;
 }
@@ -565,6 +653,45 @@ export const mcpSpecJsonSchemas = exportSpecJsonSchemas(mcpSpecDefinitions);
 
 export function validateMCPIntegrationSpec(input: unknown): MCPIntegrationSpec {
   return mcpIntegrationSpecDefinition.parse(input);
+}
+
+function mainlandSearchFixture(
+  input: unknown,
+  options: {
+    provider: string;
+    note: string;
+    baseUrl: string;
+    sourceLabel: string;
+    searchResults: Record<string, ClassicMCPSearchResult[]>;
+  }
+): {
+  query: string;
+  count: number;
+  provider: string;
+  note: string;
+  items: ClassicMCPSearchResult[];
+} {
+  const query = stringField(input, 'query');
+  const limit =
+    input &&
+    typeof input === 'object' &&
+    typeof (input as Record<string, unknown>).limit === 'number'
+      ? Math.min(Math.trunc((input as Record<string, number>).limit), 10)
+      : 3;
+  const items =
+    options.searchResults[query] ??
+    Array.from({ length: Math.min(limit, 3) }, (_value, index) => ({
+      title: `${options.sourceLabel} MCP fixture result ${index + 1} for ${query}`,
+      url: `${options.baseUrl}?q=${encodeURIComponent(query)}&i=${index + 1}`,
+      snippet: `Deterministic ${options.sourceLabel} mainland search fixture.`,
+    }));
+  return {
+    query,
+    count: Math.min(items.length, limit),
+    provider: options.provider,
+    note: options.note,
+    items: items.slice(0, limit),
+  };
 }
 
 function cloneCapability(capability: MCPCapabilityDescriptor): MCPCapabilityDescriptor {

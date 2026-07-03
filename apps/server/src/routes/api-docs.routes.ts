@@ -537,7 +537,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "toolCount": 4 }]
+  "data": [{ "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "toolCount": 6 }]
 }`,
   },
   {
@@ -592,7 +592,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "serverId": "classic", "serverName": "Classic MCP Fixture", "tools": [{ "id": "filesystem.read_file", "source": "mcp" }] }]
+  "data": [{ "serverId": "classic", "serverName": "Classic MCP Fixture", "tools": [{ "id": "baidu.web_search", "source": "mcp" }] }]
 }`,
   },
 ];

@@ -87,6 +87,17 @@ The built-in `search` tool is available without network access by default:
 WEB_SEARCH_PROVIDER=stub
 ```
 
+Use mainland China no-key HTTP providers when DuckDuckGo or Wikipedia are slow
+or blocked by the local network:
+
+```bash
+WEB_SEARCH_PROVIDER=china
+WEB_SEARCH_CHINA_PROVIDER_ORDER=baidu,so360,stub
+WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT=https://www.baidu.com/sugrec
+WEB_SEARCH_SO360_SUGGEST_ENDPOINT=https://sug.so.360.cn/suggest
+WEB_SEARCH_TIMEOUT_MS=10000
+```
+
 Use Wikipedia OpenSearch for a no-key HTTP search provider:
 
 ```bash
@@ -119,22 +130,24 @@ WEB_SEARCH_TIMEOUT_MS=10000
 ```yaml
 tools:
   mcpServers:
-    - id: "classic"
-      name: "Classic MCP Fixture"
-      mode: "fixture"
+    - id: 'classic'
+      name: 'Classic MCP Fixture'
+      mode: 'fixture'
       autoConnect: true
 ```
 
-The fixture exposes `filesystem.read_file`, `fetch.fetch`, `time.now`, and
-`search.web_search` through the same governed `/tools/execute` path as remote
-or stdio MCP servers. Replace `mode: "fixture"` with `mode: "local"` plus
-`command`/`args`, or `mode: "remote"` plus `endpoint` and optional `authToken`
-for deployment MCP servers.
+The fixture exposes `filesystem.read_file`, `fetch.fetch`, `time.now`,
+`search.web_search`, `baidu.web_search`, and `so360.web_search` through the
+same governed `/tools/execute` path as remote or stdio MCP servers. Replace
+`mode: "fixture"` with `mode: "local"` plus `command`/`args`, or
+`mode: "remote"` plus `endpoint` and optional `authToken` for deployment MCP
+servers.
 
 ```bash
 npm run dev
 npm run cli -- tools
 npm run cli -- exec filesystem.read_file -p '{"path":"/README.md"}'
+npm run cli -- exec baidu.web_search -p '{"query":"hypha","limit":1}'
 npm run cli -- exec search.web_search -p '{"query":"hypha","limit":1}'
 ```
 

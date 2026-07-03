@@ -7,7 +7,10 @@ const originalEnv = {
   WEB_SEARCH_ENDPOINT: process.env.WEB_SEARCH_ENDPOINT,
   WEB_SEARCH_DUCKDUCKGO_ENDPOINT: process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT,
   WEB_SEARCH_WIKIPEDIA_ENDPOINT: process.env.WEB_SEARCH_WIKIPEDIA_ENDPOINT,
+  WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT: process.env.WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT,
+  WEB_SEARCH_SO360_SUGGEST_ENDPOINT: process.env.WEB_SEARCH_SO360_SUGGEST_ENDPOINT,
   WEB_SEARCH_PROVIDER_ORDER: process.env.WEB_SEARCH_PROVIDER_ORDER,
+  WEB_SEARCH_CHINA_PROVIDER_ORDER: process.env.WEB_SEARCH_CHINA_PROVIDER_ORDER,
   WEB_SEARCH_FALLBACK_PROVIDERS: process.env.WEB_SEARCH_FALLBACK_PROVIDERS,
   WEB_SEARCH_TIMEOUT_MS: process.env.WEB_SEARCH_TIMEOUT_MS,
   WEB_SEARCH_USER_AGENT: process.env.WEB_SEARCH_USER_AGENT,
@@ -120,6 +123,94 @@ describe('SearchTool', () => {
     }
   });
 
+  it('calls the configured Baidu suggest-compatible HTTP endpoint', async () => {
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      expect(url.searchParams.get('prod')).toBe('pc');
+      expect(url.searchParams.get('wd')).toBe('hypha');
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          g: [{ q: 'hypha agent' }, { q: 'hypha runtime' }],
+        })
+      );
+    });
+    const endpoint = await listen(server);
+    process.env.WEB_SEARCH_PROVIDER = 'baidu';
+    process.env.WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT = endpoint;
+    process.env.WEB_SEARCH_TIMEOUT_MS = '1000';
+
+    try {
+      const result = await new SearchTool().execute({ query: 'hypha', limit: 2 });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        query: 'hypha',
+        count: 2,
+        provider: 'baidu',
+        note: 'suggest-api',
+      });
+      expect(result.output.items).toEqual([
+        expect.objectContaining({
+          title: 'hypha agent',
+          url: 'https://www.baidu.com/s?wd=hypha%20agent',
+          source: 'baidu.suggest',
+        }),
+        expect.objectContaining({
+          title: 'hypha runtime',
+          source: 'baidu.suggest',
+        }),
+      ]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('uses mainland China fallback from Baidu to 360 search', async () => {
+    const baidu = http.createServer((_req, res) => {
+      res.statusCode = 503;
+      res.end('temporary unavailable');
+    });
+    const so360 = http.createServer((req, res) => {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      expect(url.searchParams.get('word')).toBe('hypha');
+      expect(url.searchParams.get('encodeout')).toBe('utf-8');
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ s: ['hypha runtime'] }));
+    });
+    const baiduEndpoint = await listen(baidu);
+    const so360Endpoint = await listen(so360);
+    process.env.WEB_SEARCH_PROVIDER = 'china';
+    process.env.WEB_SEARCH_CHINA_PROVIDER_ORDER = 'baidu,so360';
+    process.env.WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT = baiduEndpoint;
+    process.env.WEB_SEARCH_SO360_SUGGEST_ENDPOINT = so360Endpoint;
+    process.env.WEB_SEARCH_TIMEOUT_MS = '1000';
+
+    try {
+      const result = await new SearchTool().execute({ query: 'hypha', limit: 1 });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        query: 'hypha',
+        count: 1,
+        provider: 'so360',
+        attemptedProviders: ['baidu', 'so360'],
+        fallbackFrom: 'baidu',
+        providerErrors: [expect.objectContaining({ provider: 'baidu', status: 503 })],
+      });
+      expect(result.output.items).toEqual([
+        expect.objectContaining({
+          title: 'hypha runtime',
+          url: 'https://www.so.com/s?q=hypha%20runtime',
+          source: 'so360.suggest',
+        }),
+      ]);
+    } finally {
+      await close(baidu);
+      await close(so360);
+    }
+  });
+
   it('falls back from DuckDuckGo to Wikipedia in auto mode', async () => {
     const duckDuckGo = http.createServer((_req, res) => {
       res.statusCode = 503;
@@ -194,7 +285,16 @@ function restoreEnv(): void {
   setOptionalEnv('WEB_SEARCH_ENDPOINT', originalEnv.WEB_SEARCH_ENDPOINT);
   setOptionalEnv('WEB_SEARCH_DUCKDUCKGO_ENDPOINT', originalEnv.WEB_SEARCH_DUCKDUCKGO_ENDPOINT);
   setOptionalEnv('WEB_SEARCH_WIKIPEDIA_ENDPOINT', originalEnv.WEB_SEARCH_WIKIPEDIA_ENDPOINT);
+  setOptionalEnv(
+    'WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT',
+    originalEnv.WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT
+  );
+  setOptionalEnv(
+    'WEB_SEARCH_SO360_SUGGEST_ENDPOINT',
+    originalEnv.WEB_SEARCH_SO360_SUGGEST_ENDPOINT
+  );
   setOptionalEnv('WEB_SEARCH_PROVIDER_ORDER', originalEnv.WEB_SEARCH_PROVIDER_ORDER);
+  setOptionalEnv('WEB_SEARCH_CHINA_PROVIDER_ORDER', originalEnv.WEB_SEARCH_CHINA_PROVIDER_ORDER);
   setOptionalEnv('WEB_SEARCH_FALLBACK_PROVIDERS', originalEnv.WEB_SEARCH_FALLBACK_PROVIDERS);
   setOptionalEnv('WEB_SEARCH_TIMEOUT_MS', originalEnv.WEB_SEARCH_TIMEOUT_MS);
   setOptionalEnv('WEB_SEARCH_USER_AGENT', originalEnv.WEB_SEARCH_USER_AGENT);
