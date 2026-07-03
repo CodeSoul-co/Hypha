@@ -14,7 +14,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | Package | Public Surface |
 | --- | --- |
 | `@hypha/core` | Spec primitives, schema definitions, events, errors, policy interfaces. |
-| `@hypha/storage` | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/vector profile helpers. |
+| `@hypha/storage` | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
 | `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`. |
 | `@hypha/fsm` | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers. |
 | `@hypha/kernel` | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces. |
@@ -42,14 +42,14 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `Stora
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `kind` | string | `relational`, `document`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
-| `engine` | string | Store engine such as `sqlite`, `mongodb`, `redis`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, or `s3`. |
+| `kind` | string | `relational`, `document`, `messaging`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
+| `engine` | string | Store engine such as `sqlite`, `mongodb`, `redis`, `kafka`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, or `s3`. |
 | `deployment` | string | `local`, `self_hosted`, `managed`, or `cloud`. |
-| `role` | string | Runtime role such as `source_of_truth`, `event_log`, `semantic_index`, `cache`, or `artifact_store`. |
+| `role` | string | Runtime role such as `source_of_truth`, `event_log`, `semantic_index`, `cache`, `message_queue`, or `artifact_store`. |
 | `connection` | object | URI/env/host/port/database/TLS metadata. |
-| `capabilities` | string[] | Declared features such as `structured`, `transactions`, `events`, `cache`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
+| `capabilities` | string[] | Declared features such as `structured`, `transactions`, `events`, `cache`, `queue`, `pubsub`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
 
-`StorageTopologySpec` groups profiles and declares default refs for relational, document, cache, vector, artifact, event, and memory storage. `createSQLiteStorageProfile`, `createMongoStorageProfile`, `createRedisStorageProfile`, `createQdrantStorageProfile`, `createChromaStorageProfile`, `createPineconeStorageProfile`, and related helpers create common profiles. `resolveStorageConnection(profile, env)` resolves URI/env/local host configuration and `redactStorageConnection(connection)` removes credentials before logging or exposing diagnostics.
+`StorageTopologySpec` groups profiles and declares default refs for relational, document, messaging, cache, vector, artifact, event, and memory storage. `messagingRef` is the default queue/stream/pub-sub path; `cacheRef` may point to the same Redis profile when cache behavior is colocated. `createSQLiteStorageProfile`, `createMongoStorageProfile`, `createRedisStorageProfile`, `createKafkaStorageProfile`, `createQdrantStorageProfile`, `createChromaStorageProfile`, `createPineconeStorageProfile`, and related helpers create common profiles. `resolveStorageConnection(profile, env)` resolves URI/env/local host configuration and `redactStorageConnection(connection)` removes credentials before logging or exposing diagnostics.
 
 ## DomainPack
 

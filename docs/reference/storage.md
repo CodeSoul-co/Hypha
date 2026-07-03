@@ -33,14 +33,14 @@ const storage = createLocalStorageBackbone({
 
 | Field | Description |
 | --- | --- |
-| `kind` | Store category: `relational`, `document`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
-| `engine` | Concrete engine: `sqlite`, `postgres`, `mongodb`, `redis`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, `s3`, and others. |
+| `kind` | Store category: `relational`, `document`, `messaging`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
+| `engine` | Concrete engine: `sqlite`, `postgres`, `mongodb`, `redis`, `kafka`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, `s3`, and others. |
 | `deployment` | `local`, `self_hosted`, `managed`, or `cloud`. |
-| `role` | How the runtime uses the store: `source_of_truth`, `event_log`, `semantic_index`, `cache`, `artifact_store`, `document_store`, or `hybrid_memory`. |
+| `role` | How the runtime uses the store: `source_of_truth`, `event_log`, `semantic_index`, `cache`, `message_queue`, `artifact_store`, `document_store`, or `hybrid_memory`. |
 | `connection` | URI/env/host/port/database/TLS metadata. |
-| `capabilities` | Declared features such as `structured`, `transactions`, `events`, `cache`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
+| `capabilities` | Declared features such as `structured`, `transactions`, `events`, `cache`, `queue`, `pubsub`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
 
-Use `StorageTopologySpec` to group profiles and declare default refs for relational, document, cache, vector, artifact, event, and memory stores.
+Use `StorageTopologySpec` to group profiles and declare default refs for relational, document, messaging, cache, vector, artifact, event, and memory stores. `messagingRef` is the primary queue/stream/pub-sub default; `cacheRef` can point to the same Redis profile when cache behavior is colocated.
 
 Common profile factories are exported from `@hypha/storage`:
 
@@ -49,6 +49,7 @@ import {
   createSQLiteStorageProfile,
   createMongoStorageProfile,
   createRedisStorageProfile,
+  createKafkaStorageProfile,
   createQdrantStorageProfile,
   createPineconeStorageProfile,
 } from '@hypha/storage';
@@ -56,11 +57,26 @@ import {
 const eventStore = createSQLiteStorageProfile({ role: 'event_log' });
 const mongo = createMongoStorageProfile({ deployment: 'cloud', tls: true });
 const redis = createRedisStorageProfile({ deployment: 'cloud', tls: true });
+const kafka = createKafkaStorageProfile({ deployment: 'self_hosted' });
 const qdrant = createQdrantStorageProfile({ host: 'localhost', port: 6333 });
 const pinecone = createPineconeStorageProfile();
 ```
 
-## MongoDB
+## Configuration Taxonomy
+
+Runtime configuration is grouped by function before provider:
+
+| Config Path | Function | Examples |
+| --- | --- | --- |
+| `storage.document` | Document records | MongoDB local or Atlas. |
+| `storage.messaging` | Cache, streams, queues, pub/sub | Redis local/cloud, Kafka self-hosted/managed. |
+| `storage.relational` | Event logs and structured source of truth | SQLite local, Postgres production. |
+| `storage.vector` | Semantic indexes | Local JSON, Qdrant, Chroma, Pinecone. |
+| `storage.artifacts` | File/blob payloads | Local filesystem, S3-compatible stores. |
+
+Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
+
+## Document Storage
 
 MongoDB is currently used by the API server for permanent conversation memory. Local deployment uses host/port settings:
 
@@ -81,7 +97,7 @@ MONGODB_TLS=true
 
 `MONGODB_URI` takes precedence over host/port config. Optional fields include `MONGODB_AUTH_SOURCE`, `MONGODB_REPLICA_SET`, and `MONGODB_DIRECT_CONNECTION`.
 
-## Redis
+## Messaging Storage
 
 Redis is currently used for temporary chat memory, session-scoped streams, and API runtime cache behavior. Local deployment:
 
@@ -102,6 +118,8 @@ REDIS_TLS=true
 ```
 
 `REDIS_URL` takes precedence over host/port config. `KV_URL` and `RENDER_REDIS_URL` are also recognized as compatibility fallbacks.
+
+Kafka config is available under `storage.messaging.kafka` for queue/pub-sub adapters. It is optional and not required for the current API startup path.
 
 ## Relational and Vector Extension Points
 

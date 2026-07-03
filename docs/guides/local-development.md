@@ -11,6 +11,8 @@ cp .env.example .env
 
 The API server reads dotenv configuration. MongoDB and Redis are required for the current integration API surface. Local runtime events and structured records can use SQLite when available, with JSON fallback in local adapters.
 
+`config.yaml` is the tracked typed configuration template. `.env` is ignored and should contain deployment-specific URLs, secrets, local paths, and CLI overrides.
+
 ## Common Commands
 
 | Command | Purpose |
@@ -29,12 +31,12 @@ The API server reads dotenv configuration. MongoDB and Redis are required for th
 
 | Area | Default Implementation |
 | --- | --- |
-| Temporary chat memory | Redis, keyed by user and session. |
-| Permanent conversation memory | MongoDB. |
-| Runtime events | `SQLiteEventStore` from `@hypha/adapters-local`, with JSON fallback. |
-| Structured local records | `SQLiteStructuredStore`, with JSON fallback. |
-| Local vector index | JSON-backed `LocalVectorIndexProvider`. |
-| Artifacts | Filesystem-backed `FileArtifactStore`. |
+| `storage.document.mongodb` | MongoDB permanent conversation memory and user-owned records. |
+| `storage.messaging.redis` | Redis temporary memory, streams, cache, and queue-ready messaging. |
+| `storage.messaging.kafka` | Optional Kafka queue/pub-sub integration point. |
+| `storage.relational.sqlite` | Local event and structured record stores with SQLite/JSON fallback. |
+| `storage.vector.local` | JSON-backed local semantic vector index. |
+| `storage.artifacts.local` | Filesystem-backed artifact store. |
 
 `createLocalStorageBackbone()` from `@hypha/adapters-local` creates the local storage stack in one call:
 
@@ -51,7 +53,7 @@ await storage.memory.write(scope, record, { requireProvenance: true });
 
 The returned object includes `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`.
 
-## MongoDB and Redis
+## Local and Cloud Overrides
 
 MongoDB supports local host/port settings or a cloud URI:
 
@@ -67,6 +69,8 @@ REDIS_URL=rediss://...
 REDIS_DEPLOYMENT=cloud
 REDIS_TLS=true
 ```
+
+Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` but disabled by default. Enable them through `.env` only when a concrete adapter is available for the deployment.
 
 Do not commit `.env`, local data, logs, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 

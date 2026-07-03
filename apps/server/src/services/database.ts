@@ -109,22 +109,22 @@ export async function connectRedis(): Promise<Redis> {
 
   const config = redisConfig();
   const redisUrl =
-    nonEmptyEnv(config.urlEnv)
-    || nonEmpty(config.url)
-    || nonEmptyEnv('REDIS_URL')
-    || nonEmptyEnv('KV_URL')
-    || nonEmptyEnv('RENDER_REDIS_URL');
+    nonEmptyEnv(config.urlEnv) ||
+    nonEmpty(config.url) ||
+    nonEmptyEnv('REDIS_URL') ||
+    nonEmptyEnv('KV_URL') ||
+    nonEmptyEnv('RENDER_REDIS_URL');
   const redisTls = nonEmptyEnv('REDIS_TLS')?.toLowerCase();
   const useTls = Boolean(
-    config.tls ||
-    redisTls === 'true' ||
-    redisTls === '1' ||
-    redisUrl?.startsWith('rediss://')
+    config.tls || redisTls === 'true' || redisTls === '1' || redisUrl?.startsWith('rediss://')
   );
 
-  logger.info('Connecting to Redis...', redisUrl
-    ? { url: 'configured', deployment: config.deployment, tls: useTls }
-    : { host: config.host, port: config.port, deployment: config.deployment, tls: useTls });
+  logger.info(
+    'Connecting to Redis...',
+    redisUrl
+      ? { url: 'configured', deployment: config.deployment, tls: useTls }
+      : { host: config.host, port: config.port, deployment: config.deployment, tls: useTls }
+  );
 
   const options: RedisOptions = {
     keyPrefix: config.keyPrefix,
@@ -136,13 +136,15 @@ export async function connectRedis(): Promise<Redis> {
     ...(useTls ? { tls: {} } : {}),
   };
 
-  redisClient = redisUrl ? new Redis(redisUrl, options) : new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password || undefined,
-    db: config.db,
-    ...options,
-  });
+  redisClient = redisUrl
+    ? new Redis(redisUrl, options)
+    : new Redis({
+        host: config.host,
+        port: config.port,
+        password: config.password || undefined,
+        db: config.db,
+        ...options,
+      });
 
   redisClient.on('connect', () => {
     logger.info('Redis connected successfully');
@@ -171,15 +173,17 @@ export function getRedisClient(): Redis | null {
   return redisClient;
 }
 
-// Health check
-export async function checkDatabasesHealth(): Promise<{
+export interface StorageHealth {
   mongodb: boolean;
   redis: boolean;
-}> {
+}
+
+// Health check
+export async function checkStorageHealth(): Promise<StorageHealth> {
   let mongodbHealthy = false;
   let redisHealthy = false;
 
-  // Check MongoDB
+  // Check document storage engine.
   try {
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.db?.admin().ping();
@@ -189,7 +193,7 @@ export async function checkDatabasesHealth(): Promise<{
     logger.error('MongoDB health check failed:', error);
   }
 
-  // Check Redis
+  // Check messaging storage engine.
   try {
     if (redisClient) {
       const result = await redisClient.ping();
@@ -202,16 +206,18 @@ export async function checkDatabasesHealth(): Promise<{
   return { mongodb: mongodbHealthy, redis: redisHealthy };
 }
 
-// Initialize all databases
+export const checkDatabasesHealth = checkStorageHealth;
+
+// Initialize runtime storage connections.
 export async function initializeDatabases(): Promise<void> {
   await connectMongoDB();
   await connectRedis();
-  logger.info('All databases initialized');
+  logger.info('All storage connections initialized');
 }
 
-// Disconnect all databases
+// Disconnect runtime storage connections.
 export async function closeDatabases(): Promise<void> {
   await disconnectMongoDB();
   await disconnectRedis();
-  logger.info('All databases closed');
+  logger.info('All storage connections closed');
 }

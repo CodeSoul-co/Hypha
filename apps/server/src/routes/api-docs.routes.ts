@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
-import { checkDatabasesHealth } from '../services/database';
+import { checkStorageHealth } from '../services/database';
 import { getConfig } from '../config';
 
 const router = Router();
@@ -16,7 +16,7 @@ function escapeHtml(str: string): string {
         '>': '&gt;',
         '"': '&quot;',
         "'": '&#39;',
-      })[m] || m,
+      })[m] || m
   );
 }
 
@@ -190,7 +190,7 @@ data: {"type":"done","content":"Full response..."}`,
   {
     method: 'GET',
     path: '/chat/:sessionId',
-    desc: 'Get chat history from Redis',
+    desc: 'Get chat history from messaging storage',
     auth: 'JWT Bearer Token or X-API-Key',
     params: `sessionId: Chat session ID`,
     query: `?limit=50`,
@@ -205,7 +205,7 @@ data: {"type":"done","content":"Full response..."}`,
   {
     method: 'POST',
     path: '/chat/:sessionId/clear',
-    desc: 'Clear chat history (Redis temporary memory)',
+    desc: 'Clear chat history from messaging storage',
     auth: 'JWT Bearer Token or X-API-Key',
     params: `sessionId: Chat session ID`,
     response: `{
@@ -216,7 +216,7 @@ data: {"type":"done","content":"Full response..."}`,
   {
     method: 'DELETE',
     path: '/chat/:sessionId',
-    desc: 'Delete a chat session (Redis + MongoDB)',
+    desc: 'Delete a chat session across runtime storage',
     auth: 'JWT Bearer Token or X-API-Key',
     params: `sessionId: Chat session ID`,
     response: `{
@@ -231,7 +231,7 @@ const memoryEndpoints = [
   {
     method: 'GET',
     path: '/memory/temp/:sessionId',
-    desc: 'Get temporary memory (Redis) for a session',
+    desc: 'Get temporary memory for a session',
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
@@ -261,7 +261,7 @@ const memoryEndpoints = [
   {
     method: 'GET',
     path: '/memory/permanent',
-    desc: 'List all permanent conversations (MongoDB)',
+    desc: 'List all permanent conversations from document storage',
     auth: 'JWT Bearer Token or X-API-Key',
     query: `?page=1&limit=20&archived=false`,
     response: `{
@@ -820,7 +820,10 @@ const statusEndpoints = [
   "data": {
     "service": "hypha",
     "version": "1.0.0",
-    "databases": { "mongodb": { "status": "connected" }, "redis": { "status": "connected" } },
+    "storage": {
+      "document": { "engine": "mongodb", "status": "connected" },
+      "messaging": { "engine": "redis", "status": "connected" }
+    },
     "llm": { "health": { "anthropic": true, ... }, "availableProviders": [...], "modelCount": 15 }
   }
 }`,
@@ -853,7 +856,7 @@ function renderEndpoints(endpoints: any[], _accentColor: string): string {
         ${ep.response ? `<div class="detail"><strong>Response:</strong> <pre><code>${escapeHtml(ep.response)}</code></pre></div>` : ''}
       </div>
     </div>
-  `,
+  `
     )
     .join('');
 }
@@ -863,7 +866,7 @@ router.get(
   '/',
   asyncHandler(async (_req: Request, res: Response) => {
     const config = getConfig();
-    const dbHealth = await checkDatabasesHealth();
+    const dbHealth = await checkStorageHealth();
     const llmManager = getLLMManager();
     const models = await llmManager.listAllModels();
 
@@ -969,8 +972,8 @@ router.get(
       <h1>hypha API</h1>
       <p>A modular AI agent backend service with multi-LLM support, temporary and permanent memory, tool calling, workflows, and comprehensive token usage tracking.</p>
       <div class="hero-meta">
-        <span><div class="status-dot ${dbHealth.mongodb ? 'green' : 'red'}"></div> MongoDB ${dbHealth.mongodb ? 'Connected' : 'Disconnected'}</span>
-        <span><div class="status-dot ${dbHealth.redis ? 'green' : 'red'}"></div> Redis ${dbHealth.redis ? 'Connected' : 'Disconnected'}</span>
+        <span><div class="status-dot ${dbHealth.mongodb ? 'green' : 'red'}"></div> Document Store ${dbHealth.mongodb ? 'Connected' : 'Disconnected'}</span>
+        <span><div class="status-dot ${dbHealth.redis ? 'green' : 'red'}"></div> Messaging Store ${dbHealth.redis ? 'Connected' : 'Disconnected'}</span>
         <span>Auth: <code>${escapeHtml(config.auth.mode)}</code></span>
         <span>${models.length} Models Available</span>
         <span>Base: <code>http://localhost:3000${baseUrl}</code></span>
@@ -1189,7 +1192,7 @@ router.get(
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
-  }),
+  })
 );
 
 // JSON API documentation endpoint
@@ -1228,7 +1231,7 @@ router.get(
     };
 
     res.json({ success: true, data: docs });
-  }),
+  })
 );
 
 export default router;

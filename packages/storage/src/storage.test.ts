@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertStorageCapability,
   createFileArtifactStorageProfile,
+  createKafkaStorageProfile,
   createLocalVectorStorageProfile,
   createMongoStorageProfile,
   createPineconeStorageProfile,
@@ -18,12 +19,23 @@ import {
 
 describe('@hypha/storage contracts', () => {
   it('exports schema definitions and examples for storage profiles', () => {
-    expect(validateStorageProviderProfile(storageTopologySpecDefinition.example.providers[0]).id)
-      .toBe('storage.sqlite.structured');
-    expect(validateStorageTopologySpec(storageTopologySpecDefinition.example).defaults.vectorRef)
-      .toMatchObject({ id: 'storage.local-vector.semantic' });
+    expect(
+      validateStorageProviderProfile(storageTopologySpecDefinition.example.providers[0]).id
+    ).toBe('storage.sqlite.structured');
+    expect(
+      validateStorageTopologySpec(storageTopologySpecDefinition.example).defaults.messagingRef
+    ).toMatchObject({ id: 'storage.redis.messaging' });
+    expect(
+      validateStorageTopologySpec(storageTopologySpecDefinition.example).defaults.vectorRef
+    ).toMatchObject({ id: 'storage.local-vector.semantic' });
     expect(storageSpecJsonSchemas.StorageProviderProfile.required).toContain('engine');
     expect(storageSpecJsonSchemas.StorageTopologySpec.required).toContain('providers');
+    const profileProperties = storageSpecJsonSchemas.StorageProviderProfile.properties ?? {};
+    const topologyProperties = storageSpecJsonSchemas.StorageTopologySpec.properties ?? {};
+    expect((profileProperties.capabilities as any).items.enum).toEqual(
+      expect.arrayContaining(['queue', 'pubsub'])
+    );
+    expect((topologyProperties.defaults as any).properties).toHaveProperty('messagingRef');
   });
 
   it('resolves MongoDB local and cloud connection profiles without leaking secrets', () => {
@@ -50,6 +62,13 @@ describe('@hypha/storage contracts', () => {
   });
 
   it('resolves Redis local and TLS cloud profiles', () => {
+    expect(createRedisStorageProfile()).toMatchObject({
+      id: 'storage.redis.messaging',
+      kind: 'messaging',
+      role: 'message_queue',
+      capabilities: ['cache', 'streams', 'queue', 'pubsub'],
+    });
+
     const local = resolveStorageConnection(createRedisStorageProfile(), {});
     expect(local).toMatchObject({
       engine: 'redis',
@@ -71,6 +90,20 @@ describe('@hypha/storage contracts', () => {
     const profile = createRedisStorageProfile();
     expect(() => assertStorageCapability(profile, 'cache')).not.toThrow();
     expect(() => assertStorageCapability(profile, 'vector_search')).toThrow(/vector_search/);
+  });
+
+  it('creates messaging profiles for queues and streams', () => {
+    const kafka = createKafkaStorageProfile({ host: 'kafka.internal', tls: true });
+    expect(kafka).toMatchObject({
+      kind: 'messaging',
+      engine: 'kafka',
+      role: 'message_queue',
+      capabilities: ['queue', 'pubsub', 'streams', 'tls'],
+    });
+    expect(resolveStorageConnection(kafka)).toMatchObject({
+      uri: 'kafka+ssl://kafka.internal:9092',
+      uriSource: 'composed',
+    });
   });
 
   it('creates local relational, vector, and artifact profiles', () => {

@@ -35,7 +35,7 @@ Public API documentation is maintained as field-level references:
 - [HTTP API](docs/api/http.md): REST endpoints, authentication, request bodies, response shapes, and runtime conventions.
 - [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, inference, memory, tools, MCP, skills, and model providers.
 - [Architecture](docs/reference/architecture.md): package responsibilities, harness semantics, runtime model, and extension boundaries.
-- [Storage](docs/reference/storage.md): local SQLite/vector/artifact adapters, storage profiles, and MongoDB/Redis local or cloud connection conventions.
+- [Storage](docs/reference/storage.md): document, messaging, relational, vector, and artifact storage conventions for local, self-hosted, managed, and cloud deployments.
 - [Domain Packs](docs/guides/domain-packs.md): field contracts and examples for declaring workflows, tools, memory, skills, policy, and output contracts.
 
 When the server is running, the interactive route index is also available at `/api/v1/docs`.

@@ -217,12 +217,12 @@ class EventRuntimeService {
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
 
   constructor() {
-    const localStorage = storageConfig().local;
+    const sqliteStorage = storageConfig().relational.sqlite;
     const eventDbPath = process.env.HYPHA_RUNTIME_EVENT_DB
-      ?? resolveRuntimePath(localStorage.eventDbPath);
+      ?? resolveRuntimePath(sqliteStorage.eventDbPath);
     this.events = new SQLiteEventStore({
       filename: eventDbPath,
-      mode: localStorage.sqliteMode,
+      mode: sqliteStorage.sqliteMode,
     });
     this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({

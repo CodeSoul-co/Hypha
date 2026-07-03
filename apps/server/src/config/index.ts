@@ -33,21 +33,165 @@ const modelConfigSchema = z.object({
     .optional(),
 });
 
-// Provider API config schema
-const providerConfigSchema = z.object({
-  apiKey: z.string().optional(),
-  baseUrl: z.string().optional(),
-  timeout: z.number().default(60000),
-});
-
 const storageDeploymentSchema = z.enum(['local', 'self_hosted', 'managed', 'cloud']);
-const booleanishSchema = z.preprocess((value) => {
+const optionalStringSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}, z.string().optional());
+
+function parseBooleanish(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   const normalized = value.trim().toLowerCase();
   if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
   if (['false', '0', 'no', 'n', 'off', ''].includes(normalized)) return false;
   return value;
-}, z.boolean());
+}
+
+const booleanishSchema = z.preprocess(parseBooleanish, z.boolean());
+const optionalBooleanishSchema = z.preprocess((value) => {
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  return parseBooleanish(value);
+}, z.boolean().optional());
+
+// Provider API config schema
+const providerConfigSchema = z.object({
+  apiKey: optionalStringSchema,
+  baseUrl: optionalStringSchema,
+  timeout: z.number().default(60000),
+});
+
+const mongoStorageConfigSchema = z.object({
+  uri: optionalStringSchema,
+  uriEnv: z.string().default('MONGODB_URI'),
+  deployment: storageDeploymentSchema.default('local'),
+  host: z.string().default('localhost'),
+  port: z.coerce.number().default(27017),
+  database: z.string().default('hypha'),
+  username: optionalStringSchema,
+  password: optionalStringSchema,
+  tls: booleanishSchema.default(false),
+  authSource: optionalStringSchema,
+  replicaSet: optionalStringSchema,
+  directConnection: optionalBooleanishSchema,
+  options: z
+    .object({
+      maxPoolSize: z.coerce.number().default(10),
+      retryWrites: booleanishSchema.default(true),
+    })
+    .optional(),
+});
+
+const redisStorageConfigSchema = z.object({
+  url: optionalStringSchema,
+  urlEnv: z.string().default('REDIS_URL'),
+  deployment: storageDeploymentSchema.default('local'),
+  host: z.string().default('localhost'),
+  port: z.coerce.number().default(6379),
+  password: optionalStringSchema,
+  db: z.coerce.number().default(0),
+  keyPrefix: z.string().default('hypha:'),
+  tls: booleanishSchema.default(false),
+});
+
+const kafkaStorageConfigSchema = z.object({
+  enabled: booleanishSchema.default(false),
+  deployment: storageDeploymentSchema.default('local'),
+  brokers: z.array(z.string()).default([]),
+  brokersEnv: z.string().default('KAFKA_BROKERS'),
+  clientId: z.string().default('hypha'),
+  ssl: booleanishSchema.default(false),
+  saslUsernameEnv: z.string().optional(),
+  saslPasswordEnv: z.string().optional(),
+});
+
+const relationalStorageConfigSchema = z.object({
+  sqlite: z
+    .object({
+      enabled: booleanishSchema.default(true),
+      deployment: z.literal('local').default('local'),
+      sqliteMode: z.enum(['auto', 'node-sqlite', 'json']).default('auto'),
+      eventDbPath: z.string().default('./data/hypha-runtime-events.sqlite'),
+      structuredDbPath: z.string().default('./data/hypha-structured.sqlite'),
+    })
+    .default({}),
+  postgres: z
+    .object({
+      enabled: booleanishSchema.default(false),
+      deployment: storageDeploymentSchema.default('local'),
+      url: optionalStringSchema,
+      urlEnv: z.string().default('POSTGRES_URL'),
+      host: z.string().default('localhost'),
+      port: z.coerce.number().default(5432),
+      database: z.string().default('hypha'),
+      username: optionalStringSchema,
+      passwordEnv: z.string().default('POSTGRES_PASSWORD'),
+      tls: booleanishSchema.default(false),
+    })
+    .default({}),
+});
+
+const vectorStorageConfigSchema = z.object({
+  local: z
+    .object({
+      enabled: booleanishSchema.default(true),
+      deployment: z.literal('local').default('local'),
+      path: z.string().default('./data/hypha-vectors.json'),
+    })
+    .default({}),
+  qdrant: z
+    .object({
+      enabled: booleanishSchema.default(false),
+      deployment: storageDeploymentSchema.default('self_hosted'),
+      url: optionalStringSchema,
+      urlEnv: z.string().default('QDRANT_URL'),
+      collection: z.string().default('hypha_memory'),
+      apiKeyEnv: z.string().default('QDRANT_API_KEY'),
+      tls: booleanishSchema.default(false),
+    })
+    .default({}),
+  chroma: z
+    .object({
+      enabled: booleanishSchema.default(false),
+      deployment: storageDeploymentSchema.default('local'),
+      url: optionalStringSchema,
+      urlEnv: z.string().default('CHROMA_URL'),
+      collection: z.string().default('hypha_memory'),
+      tls: booleanishSchema.default(false),
+    })
+    .default({}),
+  pinecone: z
+    .object({
+      enabled: booleanishSchema.default(false),
+      deployment: storageDeploymentSchema.default('managed'),
+      url: optionalStringSchema,
+      urlEnv: z.string().default('PINECONE_URL'),
+      index: z.string().default('hypha-memory'),
+      apiKeyEnv: z.string().default('PINECONE_API_KEY'),
+      region: optionalStringSchema,
+      tls: booleanishSchema.default(true),
+    })
+    .default({}),
+});
+
+const artifactStorageConfigSchema = z.object({
+  local: z
+    .object({
+      enabled: booleanishSchema.default(true),
+      deployment: z.literal('local').default('local'),
+      rootPath: z.string().default('./data/artifacts'),
+    })
+    .default({}),
+  s3: z
+    .object({
+      enabled: booleanishSchema.default(false),
+      deployment: storageDeploymentSchema.default('managed'),
+      bucket: optionalStringSchema,
+      region: optionalStringSchema,
+      endpoint: optionalStringSchema,
+    })
+    .default({}),
+});
 
 // Configuration schema
 const configSchema = z.object({
@@ -59,39 +203,12 @@ const configSchema = z.object({
     port: z.coerce.number().default(3000),
     apiPrefix: z.string().default('/api/v1'),
   }),
-  database: z.object({
-    mongodb: z.object({
-      uri: z.string().optional(),
-      uriEnv: z.string().default('MONGODB_URI'),
-      deployment: storageDeploymentSchema.default('local'),
-      host: z.string().default('localhost'),
-      port: z.coerce.number().default(27017),
-      database: z.string().default('hypha'),
-      username: z.string().optional(),
-      password: z.string().optional(),
-      tls: booleanishSchema.default(false),
-      authSource: z.string().optional(),
-      replicaSet: z.string().optional(),
-      directConnection: booleanishSchema.optional(),
-      options: z
-        .object({
-          maxPoolSize: z.number().default(10),
-          retryWrites: z.boolean().default(true),
-        })
-        .optional(),
-    }),
-  }),
-  redis: z.object({
-    url: z.string().optional(),
-    urlEnv: z.string().default('REDIS_URL'),
-    deployment: storageDeploymentSchema.default('local'),
-    host: z.string().default('localhost'),
-    port: z.coerce.number().default(6379),
-    password: z.string().optional(),
-    db: z.coerce.number().default(0),
-    keyPrefix: z.string().default('hypha:'),
-    tls: booleanishSchema.default(false),
-  }),
+  database: z
+    .object({
+      mongodb: mongoStorageConfigSchema.default({}),
+    })
+    .optional(),
+  redis: redisStorageConfigSchema.optional(),
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),
     defaultModel: z.string().default('claude-3-5-sonnet-20241022'),
@@ -149,34 +266,35 @@ const configSchema = z.object({
   }),
   storage: z
     .object({
-      local: z
+      deployment: z
         .object({
-          rootPath: z.string().default('./data/storage'),
-          sqliteMode: z.enum(['auto', 'node-sqlite', 'json']).default('auto'),
-          eventDbPath: z.string().default('./data/hypha-runtime-events.sqlite'),
-          structuredDbPath: z.string().default('./data/hypha-structured.sqlite'),
-          vectorPath: z.string().default('./data/hypha-vectors.json'),
-          artifactRootPath: z.string().default('./data/artifacts'),
+          mode: storageDeploymentSchema.default('local'),
+          profile: z.string().default('local'),
         })
-        .default({
-          rootPath: './data/storage',
-          sqliteMode: 'auto',
-          eventDbPath: './data/hypha-runtime-events.sqlite',
-          structuredDbPath: './data/hypha-structured.sqlite',
-          vectorPath: './data/hypha-vectors.json',
-          artifactRootPath: './data/artifacts',
-        }),
+        .default({}),
+      document: z
+        .object({
+          mongodb: mongoStorageConfigSchema.default({}),
+        })
+        .default({}),
+      messaging: z
+        .object({
+          redis: redisStorageConfigSchema.default({}),
+          kafka: kafkaStorageConfigSchema.default({}),
+        })
+        .default({}),
+      relational: relationalStorageConfigSchema.default({}),
+      vector: vectorStorageConfigSchema.default({}),
+      artifacts: artifactStorageConfigSchema.default({}),
       profiles: z.array(storageProviderProfileSchema).default([]),
     })
     .default({
-      local: {
-        rootPath: './data/storage',
-        sqliteMode: 'auto',
-        eventDbPath: './data/hypha-runtime-events.sqlite',
-        structuredDbPath: './data/hypha-structured.sqlite',
-        vectorPath: './data/hypha-vectors.json',
-        artifactRootPath: './data/artifacts',
-      },
+      deployment: {},
+      document: {},
+      messaging: {},
+      relational: {},
+      vector: {},
+      artifacts: {},
       profiles: [],
     }),
   agents: z.object({
@@ -207,7 +325,7 @@ const configSchema = z.object({
           authToken: z.string().optional(),
           autoStart: z.boolean().optional(),
           autoConnect: z.boolean().optional(),
-        }),
+        })
       )
       .optional(),
   }),
@@ -227,7 +345,7 @@ const configSchema = z.object({
         z.object({
           type: z.enum(['console', 'file']),
           path: z.string().optional(),
-        }),
+        })
       )
       .optional(),
   }),
@@ -392,8 +510,14 @@ export function reloadConfig(): Config {
 
 // Export specific config sections for convenience
 export const appConfig = () => getConfig().app;
-export const dbConfig = () => getConfig().database.mongodb;
-export const redisConfig = () => getConfig().redis;
+export const dbConfig = () => {
+  const config = getConfig();
+  return config.database?.mongodb ?? config.storage.document.mongodb;
+};
+export const redisConfig = () => {
+  const config = getConfig();
+  return config.redis ?? config.storage.messaging.redis;
+};
 export const storageConfig = () => getConfig().storage;
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
@@ -403,9 +527,7 @@ export const rateLimitConfig = () => getConfig().rateLimit;
 // Get enabled models for a provider
 export function getEnabledModels(provider: string): ModelConfig[] {
   const config = getConfig().llm;
-  const providerConfig = (config as any)[provider] as
-    | ProviderModelsConfig
-    | undefined;
+  const providerConfig = (config as any)[provider] as ProviderModelsConfig | undefined;
 
   if (!providerConfig?.enabled || !providerConfig.models) {
     return [];

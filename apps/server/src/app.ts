@@ -10,7 +10,7 @@ import { logger } from './utils/logger';
 import {
   initializeDatabases,
   closeDatabases,
-  checkDatabasesHealth,
+  checkStorageHealth,
 } from './services/database';
 import {
   initializeLLM,
@@ -141,7 +141,7 @@ class Application {
   private async initializeServices(): Promise<void> {
     logger.info('Initializing services...');
 
-    // Initialize databases
+    // Initialize runtime storage connections
     await initializeDatabases();
 
     // Seed local accounts as soon as persistence is ready. Single-user mode
@@ -248,38 +248,50 @@ class Application {
     logger.info('🔍  Starting health checks...');
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-    // 1. Check MongoDB
+    // 1. Check document storage
     try {
-      const dbHealth = await checkDatabasesHealth();
+      const dbHealth = await checkStorageHealth();
       if (dbHealth.mongodb) {
-        checks.push({ name: 'MongoDB', status: 'pass', detail: 'Connected' });
-        logger.info('  ✅ MongoDB    │ Connected');
+        checks.push({
+          name: 'Document Store',
+          status: 'pass',
+          detail: 'MongoDB connected',
+        });
+        logger.info('  ✅ Document   │ MongoDB connected');
       } else {
         checks.push({
-          name: 'MongoDB',
+          name: 'Document Store',
           status: 'fail',
-          detail: 'Disconnected',
+          detail: 'MongoDB disconnected',
         });
-        logger.error('  ❌ MongoDB    │ Disconnected');
+        logger.error('  ❌ Document   │ MongoDB disconnected');
       }
     } catch (err) {
-      checks.push({ name: 'MongoDB', status: 'fail', detail: String(err) });
-      logger.error('  ❌ MongoDB    │ Error:', err);
+      checks.push({ name: 'Document Store', status: 'fail', detail: String(err) });
+      logger.error('  ❌ Document   │ Error:', err);
     }
 
-    // 2. Check Redis
+    // 2. Check messaging storage
     try {
-      const dbHealth = await checkDatabasesHealth();
+      const dbHealth = await checkStorageHealth();
       if (dbHealth.redis) {
-        checks.push({ name: 'Redis', status: 'pass', detail: 'Connected' });
-        logger.info('  ✅ Redis      │ Connected');
+        checks.push({
+          name: 'Messaging Store',
+          status: 'pass',
+          detail: 'Redis connected',
+        });
+        logger.info('  ✅ Messaging  │ Redis connected');
       } else {
-        checks.push({ name: 'Redis', status: 'fail', detail: 'Disconnected' });
-        logger.error('  ❌ Redis      │ Disconnected');
+        checks.push({
+          name: 'Messaging Store',
+          status: 'fail',
+          detail: 'Redis disconnected',
+        });
+        logger.error('  ❌ Messaging  │ Redis disconnected');
       }
     } catch (err) {
-      checks.push({ name: 'Redis', status: 'fail', detail: String(err) });
-      logger.error('  ❌ Redis      │ Error:', err);
+      checks.push({ name: 'Messaging Store', status: 'fail', detail: String(err) });
+      logger.error('  ❌ Messaging  │ Error:', err);
     }
 
     // 3. Check API /health endpoint

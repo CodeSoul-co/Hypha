@@ -15,6 +15,7 @@ import {
 export type StorageProviderKind =
   | 'relational'
   | 'document'
+  | 'messaging'
   | 'cache'
   | 'vector'
   | 'object'
@@ -29,6 +30,7 @@ export type StorageEngine =
   | 'mysql'
   | 'mongodb'
   | 'redis'
+  | 'kafka'
   | 'local-vector'
   | 'pgvector'
   | 'qdrant'
@@ -47,6 +49,8 @@ export type StorageCapability =
   | 'transactions'
   | 'events'
   | 'cache'
+  | 'queue'
+  | 'pubsub'
   | 'streams'
   | 'vector_search'
   | 'metadata_filter'
@@ -60,6 +64,7 @@ export type StorageRole =
   | 'event_log'
   | 'semantic_index'
   | 'cache'
+  | 'message_queue'
   | 'artifact_store'
   | 'document_store'
   | 'hybrid_memory';
@@ -105,6 +110,7 @@ export interface StorageTopologySpec extends VersionedSpec, SpecMetadata {
   defaults: {
     relationalRef?: SpecRef;
     documentRef?: SpecRef;
+    messagingRef?: SpecRef;
     cacheRef?: SpecRef;
     vectorRef?: SpecRef;
     artifactRef?: SpecRef;
@@ -133,6 +139,7 @@ export type EnvSource = Record<string, string | undefined>;
 export const storageProviderKindSchema = z.enum([
   'relational',
   'document',
+  'messaging',
   'cache',
   'vector',
   'object',
@@ -148,6 +155,7 @@ export const storageEngineSchema = z.enum([
   'mysql',
   'mongodb',
   'redis',
+  'kafka',
   'local-vector',
   'pgvector',
   'qdrant',
@@ -167,6 +175,8 @@ export const storageCapabilitySchema = z.enum([
   'transactions',
   'events',
   'cache',
+  'queue',
+  'pubsub',
   'streams',
   'vector_search',
   'metadata_filter',
@@ -181,6 +191,7 @@ export const storageRoleSchema = z.enum([
   'event_log',
   'semantic_index',
   'cache',
+  'message_queue',
   'artifact_store',
   'document_store',
   'hybrid_memory',
@@ -233,6 +244,7 @@ export const storageTopologySpecSchema = versionedSpecSchema
     defaults: z.object({
       relationalRef: specRefSchema.optional(),
       documentRef: specRefSchema.optional(),
+      messagingRef: specRefSchema.optional(),
       cacheRef: specRefSchema.optional(),
       vectorRef: specRefSchema.optional(),
       artifactRef: specRefSchema.optional(),
@@ -250,7 +262,7 @@ export const storageProviderProfileJsonSchema: JsonSchema = {
     name: { type: 'string' },
     description: { type: 'string' },
     kind: {
-      enum: ['relational', 'document', 'cache', 'vector', 'object', 'event', 'hybrid'],
+      enum: ['relational', 'document', 'messaging', 'cache', 'vector', 'object', 'event', 'hybrid'],
     },
     engine: {
       enum: [
@@ -259,6 +271,7 @@ export const storageProviderProfileJsonSchema: JsonSchema = {
         'mysql',
         'mongodb',
         'redis',
+        'kafka',
         'local-vector',
         'pgvector',
         'qdrant',
@@ -280,16 +293,61 @@ export const storageProviderProfileJsonSchema: JsonSchema = {
         'event_log',
         'semantic_index',
         'cache',
+        'message_queue',
         'artifact_store',
         'document_store',
         'hybrid_memory',
       ],
     },
-    connection: { type: 'object' },
-    capabilities: { type: 'array', items: { type: 'string' } },
+    connection: {
+      type: 'object',
+      properties: {
+        uri: { type: 'string' },
+        uriEnv: { type: 'string' },
+        host: { type: 'string' },
+        port: { type: 'number' },
+        database: { type: 'string' },
+        username: { type: 'string' },
+        usernameEnv: { type: 'string' },
+        passwordEnv: { type: 'string' },
+        tls: { type: 'boolean' },
+        region: { type: 'string' },
+        options: { type: 'object' },
+      },
+      additionalProperties: false,
+    },
+    capabilities: {
+      type: 'array',
+      items: {
+        enum: [
+          'structured',
+          'transactions',
+          'events',
+          'cache',
+          'queue',
+          'pubsub',
+          'streams',
+          'vector_search',
+          'metadata_filter',
+          'artifact_bytes',
+          'managed_backup',
+          'tls',
+          'multi_region',
+        ],
+      },
+    },
     consistency: { enum: ['strong', 'eventual'] },
     secrets: { type: 'object' },
     configSchema: { type: 'object' },
+  },
+  additionalProperties: false,
+};
+
+const specRefJsonSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
   },
   additionalProperties: false,
 };
@@ -303,7 +361,20 @@ export const storageTopologySpecJsonSchema: JsonSchema = {
     name: { type: 'string' },
     description: { type: 'string' },
     providers: { type: 'array', items: storageProviderProfileJsonSchema },
-    defaults: { type: 'object' },
+    defaults: {
+      type: 'object',
+      properties: {
+        relationalRef: specRefJsonSchema,
+        documentRef: specRefJsonSchema,
+        messagingRef: specRefJsonSchema,
+        cacheRef: specRefJsonSchema,
+        vectorRef: specRefJsonSchema,
+        artifactRef: specRefJsonSchema,
+        eventRef: specRefJsonSchema,
+        memoryRef: specRefJsonSchema,
+      },
+      additionalProperties: false,
+    },
   },
   additionalProperties: false,
 };
@@ -330,6 +401,22 @@ export const storageTopologySpecExample: StorageTopologySpec = {
   providers: [
     storageProviderProfileExample,
     {
+      id: 'storage.redis.messaging',
+      version: '0.0.0',
+      name: 'Redis Messaging Store',
+      kind: 'messaging',
+      engine: 'redis',
+      deployment: 'local',
+      role: 'message_queue',
+      connection: {
+        uriEnv: 'REDIS_URL',
+        host: 'localhost',
+        port: 6379,
+      },
+      capabilities: ['cache', 'streams', 'queue', 'pubsub'],
+      consistency: 'eventual',
+    },
+    {
       id: 'storage.local-vector.semantic',
       version: '0.0.0',
       name: 'Local Vector Semantic Index',
@@ -344,6 +431,8 @@ export const storageTopologySpecExample: StorageTopologySpec = {
   ],
   defaults: {
     relationalRef: { id: 'storage.sqlite.structured', version: '0.0.0' },
+    messagingRef: { id: 'storage.redis.messaging', version: '0.0.0' },
+    cacheRef: { id: 'storage.redis.messaging', version: '0.0.0' },
     vectorRef: { id: 'storage.local-vector.semantic', version: '0.0.0' },
   },
 };
@@ -490,13 +579,13 @@ export function createRedisStorageProfile(input: {
 } = {}): StorageProviderProfile {
   const deployment = input.deployment ?? 'local';
   return {
-    id: input.id ?? 'storage.redis.cache',
+    id: input.id ?? 'storage.redis.messaging',
     version: '0.0.0',
-    name: 'Redis Cache and Stream Store',
-    kind: 'cache',
+    name: 'Redis Messaging Store',
+    kind: 'messaging',
     engine: 'redis',
     deployment,
-    role: 'cache',
+    role: 'message_queue',
     connection: {
       uri: input.uri,
       uriEnv: input.uriEnv ?? 'REDIS_URL',
@@ -505,7 +594,45 @@ export function createRedisStorageProfile(input: {
       database: input.database,
       tls: input.tls,
     },
-    capabilities: withDeploymentCapabilities(['cache', 'streams'], deployment, input.tls),
+    capabilities: withDeploymentCapabilities(
+      ['cache', 'streams', 'queue', 'pubsub'],
+      deployment,
+      input.tls
+    ),
+    consistency: 'eventual',
+  };
+}
+
+export function createKafkaStorageProfile(
+  input: {
+    id?: string;
+    deployment?: StorageDeploymentMode;
+    uriEnv?: string;
+    uri?: string;
+    host?: string;
+    port?: number;
+    tls?: boolean;
+    region?: string;
+  } = {}
+): StorageProviderProfile {
+  const deployment = input.deployment ?? 'local';
+  return {
+    id: input.id ?? 'storage.kafka.messaging',
+    version: '0.0.0',
+    name: 'Kafka Message Queue',
+    kind: 'messaging',
+    engine: 'kafka',
+    deployment,
+    role: 'message_queue',
+    connection: {
+      uri: input.uri,
+      uriEnv: input.uriEnv ?? 'KAFKA_BROKERS',
+      host: input.host ?? 'localhost',
+      port: input.port ?? 9092,
+      tls: input.tls,
+      region: input.region,
+    },
+    capabilities: withDeploymentCapabilities(['queue', 'pubsub', 'streams'], deployment, input.tls),
     consistency: 'eventual',
   };
 }
@@ -529,9 +656,10 @@ export function createSQLiteStorageProfile(input: {
       uri: input.uri ?? `file:${input.database ?? './data/hypha.sqlite'}`,
       database: input.database,
     },
-    capabilities: role === 'event_log'
-      ? ['events', 'structured', 'transactions']
-      : ['structured', 'transactions'],
+    capabilities:
+      role === 'event_log'
+        ? ['events', 'structured', 'transactions']
+        : ['structured', 'transactions'],
     consistency: 'strong',
   };
 }
@@ -674,6 +802,8 @@ function composeStorageUri(
       return `mongodb://${auth}${connection.host}${port}${database}`;
     case 'redis':
       return `${connection.tls ? 'rediss' : 'redis'}://${auth}${connection.host}${port}${database}`;
+    case 'kafka':
+      return `${connection.tls ? 'kafka+ssl' : 'kafka'}://${connection.host}${port}`;
     case 'pgvector':
       return `postgresql://${auth}${connection.host}${port}${database}`;
     case 'qdrant':

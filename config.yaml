@@ -6,34 +6,188 @@ app:
   port: "${PORT:3000}"
   apiPrefix: "${HYPHA_API_PREFIX:/api/v1}"
 
-database:
-  mongodb:
-    uri: "${MONGODB_URI:}"
-    uriEnv: "MONGODB_URI"
-    deployment: "${MONGODB_DEPLOYMENT:local}"
-    host: "${MONGODB_HOST:localhost}"
-    port: "${MONGODB_PORT:27017}"
-    database: "${MONGODB_DATABASE:hypha}"
-    username: "${MONGODB_USERNAME:}"
-    password: "${MONGODB_PASSWORD:}"
-    tls: "${MONGODB_TLS:false}"
-    authSource: "${MONGODB_AUTH_SOURCE:}"
-    replicaSet: "${MONGODB_REPLICA_SET:}"
-    directConnection: "${MONGODB_DIRECT_CONNECTION:}"
-    options:
-      maxPoolSize: 10
-      retryWrites: true
+storage:
+  deployment:
+    mode: "${HYPHA_STORAGE_DEPLOYMENT:local}"
+    profile: "${HYPHA_STORAGE_PROFILE:local}"
 
-redis:
-  url: "${REDIS_URL:}"
-  urlEnv: "REDIS_URL"
-  deployment: "${REDIS_DEPLOYMENT:local}"
-  host: "${REDIS_HOST:localhost}"
-  port: "${REDIS_PORT:6379}"
-  password: "${REDIS_PASSWORD:}"
-  db: "${REDIS_DB:0}"
-  keyPrefix: "${REDIS_KEY_PREFIX:hypha:}"
-  tls: "${REDIS_TLS:false}"
+  # Document stores hold application records that are not event-source facts.
+  # MongoDB currently backs permanent conversation memory and user-owned records.
+  document:
+    mongodb:
+      uri: "${MONGODB_URI:}"
+      uriEnv: "MONGODB_URI"
+      deployment: "${MONGODB_DEPLOYMENT:local}"
+      host: "${MONGODB_HOST:localhost}"
+      port: "${MONGODB_PORT:27017}"
+      database: "${MONGODB_DATABASE:hypha}"
+      username: "${MONGODB_USERNAME:}"
+      password: "${MONGODB_PASSWORD:}"
+      tls: "${MONGODB_TLS:false}"
+      authSource: "${MONGODB_AUTH_SOURCE:}"
+      replicaSet: "${MONGODB_REPLICA_SET:}"
+      directConnection: "${MONGODB_DIRECT_CONNECTION:}"
+      options:
+        maxPoolSize: 10
+        retryWrites: true
+
+  # Messaging stores provide queues, streams, cache, and pub/sub surfaces.
+  # Redis is used by the current server for temporary memory and session streams.
+  messaging:
+    redis:
+      url: "${REDIS_URL:}"
+      urlEnv: "REDIS_URL"
+      deployment: "${REDIS_DEPLOYMENT:local}"
+      host: "${REDIS_HOST:localhost}"
+      port: "${REDIS_PORT:6379}"
+      password: "${REDIS_PASSWORD:}"
+      db: "${REDIS_DB:0}"
+      keyPrefix: "${REDIS_KEY_PREFIX:hypha:}"
+      tls: "${REDIS_TLS:false}"
+    kafka:
+      enabled: "${KAFKA_ENABLED:false}"
+      deployment: "${KAFKA_DEPLOYMENT:local}"
+      brokers: []
+      brokersEnv: "KAFKA_BROKERS"
+      clientId: "${KAFKA_CLIENT_ID:hypha}"
+      ssl: "${KAFKA_SSL:false}"
+      saslUsernameEnv: "KAFKA_SASL_USERNAME"
+      saslPasswordEnv: "KAFKA_SASL_PASSWORD"
+
+  # Relational stores hold structured source-of-truth records and event logs.
+  relational:
+    sqlite:
+      enabled: true
+      deployment: "local"
+      sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
+      eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+      structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+    postgres:
+      enabled: "${POSTGRES_ENABLED:false}"
+      deployment: "${POSTGRES_DEPLOYMENT:local}"
+      url: "${POSTGRES_URL:}"
+      urlEnv: "POSTGRES_URL"
+      host: "${POSTGRES_HOST:localhost}"
+      port: "${POSTGRES_PORT:5432}"
+      database: "${POSTGRES_DATABASE:hypha}"
+      username: "${POSTGRES_USERNAME:}"
+      passwordEnv: "POSTGRES_PASSWORD"
+      tls: "${POSTGRES_TLS:false}"
+
+  # Vector stores are semantic retrieval indexes, not the factual source of truth.
+  vector:
+    local:
+      enabled: true
+      deployment: "local"
+      path: "${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
+    qdrant:
+      enabled: "${QDRANT_ENABLED:false}"
+      deployment: "${QDRANT_DEPLOYMENT:self_hosted}"
+      url: "${QDRANT_URL:}"
+      urlEnv: "QDRANT_URL"
+      collection: "${QDRANT_COLLECTION:hypha_memory}"
+      apiKeyEnv: "QDRANT_API_KEY"
+      tls: "${QDRANT_TLS:false}"
+    chroma:
+      enabled: "${CHROMA_ENABLED:false}"
+      deployment: "${CHROMA_DEPLOYMENT:local}"
+      url: "${CHROMA_URL:}"
+      urlEnv: "CHROMA_URL"
+      collection: "${CHROMA_COLLECTION:hypha_memory}"
+      tls: "${CHROMA_TLS:false}"
+    pinecone:
+      enabled: "${PINECONE_ENABLED:false}"
+      deployment: "${PINECONE_DEPLOYMENT:managed}"
+      url: "${PINECONE_URL:}"
+      urlEnv: "PINECONE_URL"
+      index: "${PINECONE_INDEX:hypha-memory}"
+      apiKeyEnv: "PINECONE_API_KEY"
+      region: "${PINECONE_REGION:}"
+      tls: "${PINECONE_TLS:true}"
+
+  artifacts:
+    local:
+      enabled: true
+      deployment: "local"
+      rootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
+    s3:
+      enabled: "${S3_ARTIFACTS_ENABLED:false}"
+      deployment: "${S3_ARTIFACTS_DEPLOYMENT:managed}"
+      bucket: "${S3_ARTIFACTS_BUCKET:}"
+      region: "${S3_ARTIFACTS_REGION:}"
+      endpoint: "${S3_ARTIFACTS_ENDPOINT:}"
+
+  # Provider profiles expose stable ids for specs. They are derived from the
+  # functional groups above and should not carry app/client state.
+  profiles:
+    - id: "storage.mongodb.document"
+      version: "0.0.0"
+      name: "MongoDB Document Store"
+      kind: "document"
+      engine: "mongodb"
+      deployment: "${MONGODB_DEPLOYMENT:local}"
+      role: "document_store"
+      connection:
+        uriEnv: "MONGODB_URI"
+        database: "${MONGODB_DATABASE:hypha}"
+      capabilities: ["structured"]
+      consistency: "strong"
+    - id: "storage.redis.messaging"
+      version: "0.0.0"
+      name: "Redis Cache and Stream Store"
+      kind: "messaging"
+      engine: "redis"
+      deployment: "${REDIS_DEPLOYMENT:local}"
+      role: "message_queue"
+      connection:
+        uriEnv: "REDIS_URL"
+        database: "${REDIS_DB:0}"
+      capabilities: ["cache", "streams", "queue", "pubsub"]
+      consistency: "eventual"
+    - id: "storage.sqlite.events"
+      version: "0.0.0"
+      name: "Local SQLite Event Store"
+      kind: "event"
+      engine: "sqlite"
+      deployment: "local"
+      role: "event_log"
+      connection:
+        uri: "file:${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+      capabilities: ["events", "structured", "transactions"]
+      consistency: "strong"
+    - id: "storage.sqlite.structured"
+      version: "0.0.0"
+      name: "Local SQLite Structured Store"
+      kind: "relational"
+      engine: "sqlite"
+      deployment: "local"
+      role: "source_of_truth"
+      connection:
+        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+      capabilities: ["structured", "transactions"]
+      consistency: "strong"
+    - id: "storage.local-vector.semantic"
+      version: "0.0.0"
+      name: "Local Vector Semantic Index"
+      kind: "vector"
+      engine: "local-vector"
+      deployment: "local"
+      role: "semantic_index"
+      connection:
+        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
+      capabilities: ["vector_search", "metadata_filter"]
+      consistency: "eventual"
+    - id: "storage.file-artifact.local"
+      version: "0.0.0"
+      name: "Local File Artifact Store"
+      kind: "object"
+      engine: "file-artifact"
+      deployment: "local"
+      role: "artifact_store"
+      connection:
+        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
+      capabilities: ["artifact_bytes"]
+      consistency: "strong"
 
 llm:
   defaultProvider: "${HYPHA_LLM_DEFAULT_PROVIDER:openai}"
@@ -391,92 +545,6 @@ memory:
   permanent:
     enabled: true
     archiveAfter: 2592000
-
-storage:
-  local:
-    rootPath: "${HYPHA_STORAGE_ROOT:./data/storage}"
-    sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
-    eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
-    structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
-    vectorPath: "${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
-    artifactRootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
-  # Provider profiles are deploy-time declarations. Framework specs reference
-  # these ids; adapters resolve concrete URIs from env or connection metadata.
-  profiles:
-    - id: "storage.sqlite.events"
-      version: "0.0.0"
-      name: "Local SQLite Event Store"
-      kind: "event"
-      engine: "sqlite"
-      deployment: "local"
-      role: "event_log"
-      connection:
-        uri: "file:${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
-      capabilities: ["events", "structured", "transactions"]
-      consistency: "strong"
-    - id: "storage.sqlite.structured"
-      version: "0.0.0"
-      name: "Local SQLite Structured Store"
-      kind: "relational"
-      engine: "sqlite"
-      deployment: "local"
-      role: "source_of_truth"
-      connection:
-        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
-      capabilities: ["structured", "transactions"]
-      consistency: "strong"
-    - id: "storage.local-vector.semantic"
-      version: "0.0.0"
-      name: "Local Vector Semantic Index"
-      kind: "vector"
-      engine: "local-vector"
-      deployment: "local"
-      role: "semantic_index"
-      connection:
-        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
-      capabilities: ["vector_search", "metadata_filter"]
-      consistency: "eventual"
-    - id: "storage.file-artifact.local"
-      version: "0.0.0"
-      name: "Local File Artifact Store"
-      kind: "object"
-      engine: "file-artifact"
-      deployment: "local"
-      role: "artifact_store"
-      connection:
-        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
-      capabilities: ["artifact_bytes"]
-      consistency: "strong"
-    # Example external vector providers. Uncomment and set matching env values
-    # when a deployment uses a remote vector index instead of local-vector.
-    # - id: "storage.qdrant.semantic"
-    #   version: "0.0.0"
-    #   name: "Qdrant Semantic Index"
-    #   kind: "vector"
-    #   engine: "qdrant"
-    #   deployment: "self_hosted"
-    #   role: "semantic_index"
-    #   connection:
-    #     uriEnv: "QDRANT_URL"
-    #     tls: false
-    #   capabilities: ["vector_search", "metadata_filter"]
-    #   consistency: "eventual"
-    # - id: "storage.pinecone.semantic"
-    #   version: "0.0.0"
-    #   name: "Pinecone Semantic Index"
-    #   kind: "vector"
-    #   engine: "pinecone"
-    #   deployment: "managed"
-    #   role: "semantic_index"
-    #   connection:
-    #     uriEnv: "PINECONE_URL"
-    #     region: "${PINECONE_REGION:}"
-    #     tls: true
-    #   secrets:
-    #     apiKey:
-    #       env: "PINECONE_API_KEY"
-    #   capabilities: ["vector_search", "metadata_filter", "managed_backup", "tls"]
-    #   consistency: "eventual"
 
 agents:
   configPath: "./configs/agents.yaml"

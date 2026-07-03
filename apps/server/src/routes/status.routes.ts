@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
-import { checkDatabasesHealth } from '../services/database';
+import { checkStorageHealth } from '../services/database';
 import { getConfig } from '../config';
 
 const router = Router();
@@ -20,7 +20,7 @@ function escapeHtml(str: string): string {
 router.get(
   '/page',
   asyncHandler(async (_req: Request, res: Response) => {
-    const dbHealth = await checkDatabasesHealth();
+    const dbHealth = await checkStorageHealth();
     const llmManager = getLLMManager();
     const config = getConfig();
     const llmHealth = await llmManager.healthCheck();
@@ -43,10 +43,7 @@ router.get(
 
       const modelNames = providerModels
         .slice(0, 5)
-        .map(
-          (m) =>
-            `<span class="model-item">${escapeHtml(m.displayName || m.id)}</span>`,
-        )
+        .map((m) => `<span class="model-item">${escapeHtml(m.displayName || m.id)}</span>`)
         .join('');
       modelsHtml += `<div style="margin: 16px 0;">
       <strong style="color:#00d9ff">${escapeHtml(name.toUpperCase())}</strong>
@@ -54,10 +51,10 @@ router.get(
     </div>`;
     }
 
-    const mongoStatus = dbHealth.mongodb ? 'Connected' : 'Disconnected';
-    const mongoClass = dbHealth.mongodb ? 'success' : 'warning';
-    const redisStatus = dbHealth.redis ? 'Connected' : 'Disconnected';
-    const redisClass = dbHealth.redis ? 'success' : 'warning';
+    const documentStoreStatus = dbHealth.mongodb ? 'Connected' : 'Disconnected';
+    const documentStoreClass = dbHealth.mongodb ? 'success' : 'warning';
+    const messagingStoreStatus = dbHealth.redis ? 'Connected' : 'Disconnected';
+    const messagingStoreClass = dbHealth.redis ? 'success' : 'warning';
 
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -105,21 +102,22 @@ router.get(
       <div class="card">
         <div class="card-header">
           <div class="status-dot ${dbHealth.mongodb ? 'healthy' : 'unavailable'}"></div>
-          <span class="card-title">MongoDB</span>
+          <span class="card-title">Document Store</span>
         </div>
         <div class="card-content">
-          <div>Database: <strong>hypha</strong></div>
-          <div>Status: <span class="badge ${mongoClass}">${mongoStatus}</span></div>
+          <div>Engine: <strong>MongoDB</strong></div>
+          <div>Status: <span class="badge ${documentStoreClass}">${documentStoreStatus}</span></div>
         </div>
       </div>
       <div class="card">
         <div class="card-header">
           <div class="status-dot ${dbHealth.redis ? 'healthy' : 'unavailable'}"></div>
-          <span class="card-title">Redis</span>
+          <span class="card-title">Messaging Store</span>
         </div>
         <div class="card-content">
-          <div>Memory: <strong>Temporary (Stream)</strong></div>
-          <div>Status: <span class="badge ${redisClass}">${redisStatus}</span></div>
+          <div>Engine: <strong>Redis</strong></div>
+          <div>Role: <strong>Cache, stream, queue-ready</strong></div>
+          <div>Status: <span class="badge ${messagingStoreClass}">${messagingStoreStatus}</span></div>
           <div>Max Pairs: <strong>50</strong></div>
         </div>
       </div>
@@ -136,8 +134,8 @@ router.get(
       <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/auth/register</div><div class="endpoint-desc">Register user when multi-user registration is enabled</div></div></div>
       <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/auth/login</div><div class="endpoint-desc">Login and get JWT token</div></div></div>
       <div class="endpoint"><span class="method post">POST</span><div><div class="endpoint-path">/chat</div><div class="endpoint-desc">Send chat message (requires auth)</div></div></div>
-      <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/chat/:sessionId</div><div class="endpoint-desc">Get chat history from Redis</div></div></div>
-      <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/memory/permanent</div><div class="endpoint-desc">List conversations from MongoDB</div></div></div>
+      <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/chat/:sessionId</div><div class="endpoint-desc">Get chat history from messaging storage</div></div></div>
+      <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/memory/permanent</div><div class="endpoint-desc">List conversations from document storage</div></div></div>
       <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/models</div><div class="endpoint-desc">List all available LLM models</div></div></div>
       <div class="endpoint"><span class="method get">GET</span><div><div class="endpoint-path">/health</div><div class="endpoint-desc">Service health check</div></div></div>
     </div>
@@ -160,13 +158,13 @@ router.get(
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
-  }),
+  })
 );
 
 router.get(
   '/',
   asyncHandler(async (_req: Request, res: Response) => {
-    const dbHealth = await checkDatabasesHealth();
+    const dbHealth = await checkStorageHealth();
     const llmManager = getLLMManager();
     const llmHealth = await llmManager.healthCheck();
     const models = await llmManager.listAllModels();
@@ -177,15 +175,20 @@ router.get(
         service: 'hypha',
         version: '1.0.0',
         timestamp: new Date().toISOString(),
-        databases: {
-          mongodb: {
+        storage: {
+          document: {
+            engine: 'mongodb',
             status: dbHealth.mongodb ? 'connected' : 'disconnected',
-            database: 'hypha',
           },
-          redis: {
+          messaging: {
+            engine: 'redis',
             status: dbHealth.redis ? 'connected' : 'disconnected',
-            type: 'temporary_memory',
+            capabilities: ['cache', 'streams'],
           },
+        },
+        databases: {
+          mongodb: { status: dbHealth.mongodb ? 'connected' : 'disconnected' },
+          redis: { status: dbHealth.redis ? 'connected' : 'disconnected' },
         },
         llm: {
           health: llmHealth,
@@ -201,7 +204,7 @@ router.get(
         },
       },
     });
-  }),
+  })
 );
 
 export default router;
