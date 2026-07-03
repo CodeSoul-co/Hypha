@@ -2,6 +2,33 @@
 
 The framework API is exposed through the TypeScript packages under `packages/*`. Application surfaces such as the HTTP server and CLI call these contracts instead of defining runtime behavior directly.
 
+## Documentation Map
+
+- [Architecture Reference](../reference/architecture.md) explains package responsibilities, harness semantics, and extension boundaries.
+- [Runtime Model](../reference/runtime-model.md) explains event-first execution, FSM transitions, ReAct phases, side effects, and concurrency.
+- [Domain Packs](../guides/domain-packs.md) provides a field-level guide and minimal declaration example.
+- [Local Development](../guides/local-development.md) lists setup, storage, and verification commands.
+
+## Package Boundary Summary
+
+| Package | Public Surface |
+| --- | --- |
+| `@hypha/core` | Spec primitives, schema definitions, events, errors, policy interfaces. |
+| `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`. |
+| `@hypha/fsm` | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers. |
+| `@hypha/kernel` | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces. |
+| `@hypha/inference` | `InferenceManager`, prefix/KV cache providers, reasoning orchestration. |
+| `@hypha/models` | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters. |
+| `@hypha/tools` | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, side-effect governance. |
+| `@hypha/mcp` | `MCPIntegrationSpec`, capability normalization into tool/resource/prompt specs. |
+| `@hypha/memory` | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory. |
+| `@hypha/skills` | `SkillSpec`, skill refs, activation and side-effect policy fields. |
+| `@hypha/harness` | Event-first runtime views, queues, replay/audit/regression projections. |
+| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters. |
+| `@hypha/testing` | Event and spec test helpers. |
+
+Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
+
 ## Spec Schemas
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.

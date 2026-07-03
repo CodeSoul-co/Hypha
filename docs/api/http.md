@@ -133,6 +133,26 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 | `/usage` | Read token and usage metrics for the current user. |
 | `/docs` | Render the built-in route index. |
 
+## Models
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/models` | List configured models. Optional `provider` query filters by provider id. |
+| `GET` | `/models/health` | Return provider health, default provider, and default model. |
+| `GET` | `/models/:id` | Return one model by id. |
+| `GET` | `/models/providers/list` | List configured providers and default marker. |
+| `POST` | `/models/switch` | Switch default provider and/or model for the running server. |
+| `GET` | `/models/defaults/current` | Return the current default provider and model. |
+
+`POST /models/switch` request:
+
+```json
+{
+  "provider": "openai",
+  "model": "default-reasoning"
+}
+```
+
 ## Tools
 
 | Method | Path | Description |
@@ -140,6 +160,9 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 | `GET` | `/tools` | List registered tools. |
 | `POST` | `/tools/execute` | Execute a tool through the governed runtime path. |
 | `GET` | `/tools/mcp/servers` | List MCP servers. |
+| `GET` | `/tools/mcp/servers/:id/health` | Read one MCP server health record. |
+| `POST` | `/tools/mcp/servers/:id/connect` | Connect an MCP server. Admin only. |
+| `POST` | `/tools/mcp/servers/:id/disconnect` | Disconnect an MCP server. Admin only. |
 | `GET` | `/tools/mcp/tools` | List tools exposed by connected MCP servers. |
 
 `POST /tools/execute` request:
@@ -161,8 +184,46 @@ Successful tool execution returns top-level `runId` plus `data`.
 | `GET` | `/workflows` | List workflow definitions. |
 | `GET` | `/workflows/:name` | Read a workflow definition. |
 | `POST` | `/workflows/:name/execute` | Execute a workflow and return its runtime `runId`. |
+| `POST` | `/workflows` | Load a workflow definition. Admin only. |
+| `DELETE` | `/workflows/:name` | Unload a workflow definition. Admin only. |
 | `GET` | `/workflows/executions/:executionId` | Read workflow execution status. |
 | `POST` | `/workflows/executions/:executionId/cancel` | Cancel a running workflow execution. |
+
+`POST /workflows/:name/execute` request:
+
+```json
+{
+  "context": {
+    "sessionId": "sess_abc123",
+    "messages": [{ "role": "user", "content": "Run this workflow" }],
+    "variables": {},
+    "metadata": {}
+  },
+  "version": "1.0.0"
+}
+```
+
+Workflow execution creates a runtime run, records workflow stage events, and returns an execution object plus `runId` when available.
+
+## Skills
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/skills` | List available skills. |
+| `GET` | `/skills/:id` | Read one skill. |
+| `GET` | `/skills/installed` | List installed skill files. |
+| `POST` | `/skills/install` | Install a Markdown skill from inline content. |
+| `DELETE` | `/skills/install/:id` | Uninstall a skill. Admin only. |
+| `POST` | `/skills/reload` | Reload skill definitions. |
+| `PATCH` | `/skills/:id` | Update skill metadata or activation state. Admin only. |
+
+`POST /skills/install` request:
+
+```json
+{
+  "content": "---\nname: Example\nversion: 0.0.0\ndescription: Example skill\npriority: 10\n---\nSkill instructions."
+}
+```
 
 ## Runtime Projections
 
@@ -185,3 +246,15 @@ Regression responses include `eventTypes`, `statePath`, `toolCalls`, `memoryWrit
 ## Concurrency
 
 Chat requests are queued per `userId + sessionId`. Requests for the same user's session are serialized, while different users and different sessions can run independently.
+
+## Usage and Status
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/usage/stats` | Aggregate token and cost statistics. |
+| `GET` | `/usage/recent` | Recent usage records. |
+| `GET` | `/usage/conversation/:conversationId` | Usage records for one conversation. |
+| `GET` | `/usage/pricing` | Current pricing table used for estimates. |
+| `GET` | `/usage/page` | Paginated usage records. |
+| `GET` | `/status` | JSON service/provider/dependency status. |
+| `GET` | `/status/page` | Human-readable status page. |
