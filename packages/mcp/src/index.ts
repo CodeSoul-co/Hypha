@@ -126,6 +126,244 @@ export class MockMCPGateway implements MCPGateway {
   }
 }
 
+export interface ClassicMCPFetchResponse {
+  status?: number;
+  headers?: Record<string, string>;
+  body?: string;
+  json?: unknown;
+}
+
+export interface ClassicMCPSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface ClassicMCPMockGatewayOptions {
+  files?: Record<string, string>;
+  fetchResponses?: Record<string, ClassicMCPFetchResponse>;
+  now?: string;
+  searchResults?: Record<string, ClassicMCPSearchResult[]>;
+}
+
+export const classicMCPIntegrationSpec: MCPIntegrationSpec = {
+  id: 'mcp.classic.local',
+  version: '0.0.0',
+  servers: [
+    { id: 'filesystem', mode: 'local', command: 'mcp-server-filesystem', args: ['./data/mcp'] },
+    { id: 'fetch', mode: 'local', command: 'mcp-server-fetch' },
+    { id: 'time', mode: 'local', command: 'mcp-server-time' },
+    { id: 'search', mode: 'remote', endpoint: 'https://example.invalid/mcp/search' },
+  ],
+  allowedCapabilities: ['read_file', 'fetch', 'now', 'web_search'],
+  trustPolicy: 'trusted local test fixture',
+  importPolicy: 'tools-only',
+  toolPolicy: 'read-only capabilities may execute without human review',
+  versionPinning: true,
+  capabilityHashing: true,
+};
+
+export const classicMCPCapabilityDescriptors: MCPCapabilityDescriptor[] = [
+  {
+    id: 'mcp.classic.filesystem.read_file',
+    version: '0.0.0',
+    name: 'filesystem.read_file',
+    description: 'Read a file from a sandboxed MCP filesystem server.',
+    serverId: 'filesystem',
+    capabilityId: 'read_file',
+    type: 'tool',
+    inputSchema: {
+      type: 'object',
+      required: ['path'],
+      additionalProperties: false,
+      properties: {
+        path: { type: 'string' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['path', 'content'],
+      properties: {
+        path: { type: 'string' },
+        content: { type: 'string' },
+        bytes: { type: 'number' },
+      },
+    },
+    sideEffectLevel: 'read',
+    permissionScope: ['filesystem.read'],
+    capabilityHash: 'sha256:classic-filesystem-read-file',
+    trustLevel: 'reviewed',
+  },
+  {
+    id: 'mcp.classic.fetch.fetch',
+    version: '0.0.0',
+    name: 'fetch.fetch',
+    description: 'Fetch a URL through an MCP network reader.',
+    serverId: 'fetch',
+    capabilityId: 'fetch',
+    type: 'tool',
+    inputSchema: {
+      type: 'object',
+      required: ['url'],
+      additionalProperties: false,
+      properties: {
+        url: { type: 'string' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['url', 'status'],
+      properties: {
+        url: { type: 'string' },
+        status: { type: 'number' },
+        headers: { type: 'object' },
+        body: { type: 'string' },
+        json: {},
+      },
+    },
+    sideEffectLevel: 'read',
+    permissionScope: ['network.read'],
+    capabilityHash: 'sha256:classic-fetch-fetch',
+    trustLevel: 'reviewed',
+  },
+  {
+    id: 'mcp.classic.time.now',
+    version: '0.0.0',
+    name: 'time.now',
+    description: 'Return the current time from an MCP time server.',
+    serverId: 'time',
+    capabilityId: 'now',
+    type: 'tool',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        timezone: { type: 'string' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['now', 'timezone'],
+      properties: {
+        now: { type: 'string' },
+        timezone: { type: 'string' },
+      },
+    },
+    sideEffectLevel: 'read',
+    permissionScope: ['time.read'],
+    capabilityHash: 'sha256:classic-time-now',
+    trustLevel: 'reviewed',
+  },
+  {
+    id: 'mcp.classic.search.web_search',
+    version: '0.0.0',
+    name: 'search.web_search',
+    description: 'Run a web-search query through an MCP search server.',
+    serverId: 'search',
+    capabilityId: 'web_search',
+    type: 'tool',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['query', 'items'],
+      properties: {
+        query: { type: 'string' },
+        count: { type: 'number' },
+        items: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    sideEffectLevel: 'read',
+    permissionScope: ['web.search'],
+    capabilityHash: 'sha256:classic-search-web-search',
+    trustLevel: 'reviewed',
+  },
+];
+
+export function createClassicMCPMockGateway(
+  options: ClassicMCPMockGatewayOptions = {}
+): MockMCPGateway {
+  const gateway = new MockMCPGateway(classicMCPCapabilityDescriptors.map(cloneCapability));
+  const files: Record<string, string> = {
+    '/README.md': '# Hypha\n\nClassic MCP filesystem fixture.\n',
+    ...(options.files ?? {}),
+  };
+  const fetchResponses = options.fetchResponses ?? {};
+  const searchResults = options.searchResults ?? {};
+
+  gateway.registerToolHandler('filesystem', 'read_file', ({ input }) => {
+    const path = stringField(input, 'path');
+    if (!(path in files)) {
+      throw new Error(`MCP fixture file not found: ${path}`);
+    }
+    const content = files[path];
+    return {
+      path,
+      content,
+      bytes: Buffer.byteLength(content, 'utf-8'),
+    };
+  });
+
+  gateway.registerToolHandler('fetch', 'fetch', ({ input }) => {
+    const url = stringField(input, 'url');
+    validateHttpUrl(url);
+    const response = fetchResponses[url] ?? {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+      body: `Mock MCP fetch response for ${url}`,
+    };
+    return {
+      url,
+      status: response.status ?? 200,
+      headers: response.headers ?? {},
+      ...(response.body !== undefined ? { body: response.body } : {}),
+      ...(response.json !== undefined ? { json: response.json } : {}),
+    };
+  });
+
+  gateway.registerToolHandler('time', 'now', ({ input }) => {
+    const timezone =
+      input && typeof input === 'object' && 'timezone' in input
+        ? String((input as Record<string, unknown>).timezone)
+        : 'UTC';
+    return {
+      now: options.now ?? new Date().toISOString(),
+      timezone,
+    };
+  });
+
+  gateway.registerToolHandler('search', 'web_search', ({ input }) => {
+    const query = stringField(input, 'query');
+    const limit =
+      input &&
+      typeof input === 'object' &&
+      typeof (input as Record<string, unknown>).limit === 'number'
+        ? Math.min(Math.trunc((input as Record<string, number>).limit), 10)
+        : 3;
+    const items =
+      searchResults[query] ??
+      Array.from({ length: Math.min(limit, 3) }, (_value, index) => ({
+        title: `MCP fixture result ${index + 1} for ${query}`,
+        url: `https://example.com/mcp-search?q=${encodeURIComponent(query)}&i=${index + 1}`,
+        snippet: 'Deterministic MCP web-search fixture.',
+      }));
+    return {
+      query,
+      count: Math.min(items.length, limit),
+      items: items.slice(0, limit),
+    };
+  });
+
+  return gateway;
+}
+
 export interface MCPGatewayToolRegistrationContext {
   runId: string;
   stepId?: string;
@@ -323,6 +561,28 @@ export const mcpSpecJsonSchemas = exportSpecJsonSchemas(mcpSpecDefinitions);
 
 export function validateMCPIntegrationSpec(input: unknown): MCPIntegrationSpec {
   return mcpIntegrationSpecDefinition.parse(input);
+}
+
+function cloneCapability(capability: MCPCapabilityDescriptor): MCPCapabilityDescriptor {
+  return JSON.parse(JSON.stringify(capability)) as MCPCapabilityDescriptor;
+}
+
+function stringField(input: unknown, field: string): string {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`MCP fixture input must be an object with field: ${field}`);
+  }
+  const value = (input as Record<string, unknown>)[field];
+  if (typeof value !== 'string' || !value) {
+    throw new Error(`MCP fixture field must be a non-empty string: ${field}`);
+  }
+  return value;
+}
+
+function validateHttpUrl(url: string): void {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`MCP fixture URL must be http or https: ${url}`);
+  }
 }
 
 async function recordMCPGatewayTrace(

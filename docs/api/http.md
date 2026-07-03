@@ -177,6 +177,11 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 
 Successful tool execution returns top-level `runId` plus `data`.
 
+The built-in `search` tool uses deterministic offline results by default. Set
+`WEB_SEARCH_PROVIDER=duckduckgo` and optionally `WEB_SEARCH_ENDPOINT` to use a
+DuckDuckGo Instant Answer-compatible HTTP endpoint while keeping the same
+`POST /tools/execute` contract.
+
 Tools that require human approval return HTTP `202` with `data.status` set to
 `human_review_required`. The run remains queryable through `/runtime/runs/:runId`
 and projects as `waiting_human` from `run.waiting_human` events.

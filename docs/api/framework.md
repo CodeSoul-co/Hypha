@@ -241,7 +241,11 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
+The built-in server `search` tool is a governed local tool with `permissionScope: ["web.search"]`. It defaults to deterministic offline results. Set `WEB_SEARCH_PROVIDER=duckduckgo` to call a DuckDuckGo Instant Answer-compatible HTTP endpoint; `WEB_SEARCH_ENDPOINT`, `WEB_SEARCH_TIMEOUT_MS`, and `WEB_SEARCH_USER_AGENT` control deployment-specific transport details.
+
 `MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing. `MockMCPGateway` supports capability discovery and mock tool handlers. `registerMCPGatewayTools({ integration, gateway, registry, trace, traceContext })` discovers MCP capabilities, records `mcp.capability.discovered`, normalizes tool capabilities to `ToolSpec`, records `mcp.tool.normalized`, and registers handlers into the same `ToolRegistry` used by local tools. MCP-backed calls keep `sourceRef.serverId` and `sourceRef.capabilityId` for trace and replay.
+
+`@hypha/mcp` exports `classicMCPIntegrationSpec`, `classicMCPCapabilityDescriptors`, and `createClassicMCPMockGateway()` for executable examples. The preset covers `filesystem.read_file`, `fetch.fetch`, `time.now`, and `search.web_search`; each capability normalizes to `ToolSpec` and runs through `GovernedToolRunner` with normal policy, schema validation, and trace events.
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
 

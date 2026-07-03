@@ -603,6 +603,8 @@ skills:
 
 tools:
   configPath: "./configs/tools.yaml"
+  # Runtime MCP servers are configured explicitly. Package tests can use
+  # @hypha/mcp's classic preset fixture without adding hidden default servers.
   mcpServers: []  # MCP servers can be configured later as needed
 
 workflows:

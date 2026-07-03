@@ -3,6 +3,8 @@ import { InMemoryEventStore } from '@hypha/core';
 import { GovernedToolRunner, ToolRegistry } from '@hypha/tools';
 import {
   MockMCPGateway,
+  classicMCPIntegrationSpec,
+  createClassicMCPMockGateway,
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
   normalizeMCPToolSpec,
@@ -41,7 +43,7 @@ describe('@hypha/mcp normalization', () => {
     });
   });
 
-  it('exports Stage1 MCPIntegrationSpec schema and minimal example', () => {
+  it('exports MCPIntegrationSpec schema and minimal example', () => {
     expect(validateMCPIntegrationSpec(mcpIntegrationSpecDefinition.example).id).toBe('mcp.default');
     expect(mcpSpecJsonSchemas.MCPIntegrationSpec.required).toContain('servers');
   });
@@ -194,5 +196,138 @@ describe('@hypha/mcp normalization', () => {
     expect(events).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'mcp.call.started' })])
     );
+  });
+
+  it('executes classic predefined MCP examples through the governed runner', async () => {
+    const gateway = createClassicMCPMockGateway({
+      files: {
+        '/guide.md': 'Classic filesystem fixture content.',
+      },
+      fetchResponses: {
+        'https://example.com/api': {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          json: { ok: true },
+        },
+      },
+      now: '2026-07-03T00:00:00.000Z',
+      searchResults: {
+        hypha: [
+          {
+            title: 'Hypha test result',
+            url: 'https://example.com/hypha',
+            snippet: 'Deterministic MCP search result.',
+          },
+        ],
+      },
+    });
+    const registry = new ToolRegistry();
+    const trace = new InMemoryEventStore();
+
+    const registration = await registerMCPGatewayTools({
+      integration: classicMCPIntegrationSpec,
+      gateway,
+      registry,
+      trace,
+      traceContext: {
+        runId: 'run_mcp_classic',
+        stepId: 'mcp.discover',
+        sessionId: 'session_mcp_classic',
+      },
+    });
+
+    expect(registration.registeredTools.map((tool) => tool.id).sort()).toEqual([
+      'fetch.fetch',
+      'filesystem.read_file',
+      'search.web_search',
+      'time.now',
+    ]);
+
+    const runner = new GovernedToolRunner(registry, trace);
+    await expect(
+      runner.run({
+        toolId: 'filesystem.read_file',
+        input: { path: '/guide.md' },
+        context: {
+          runId: 'run_mcp_classic',
+          stepId: 'tool.filesystem',
+          sessionId: 'session_mcp_classic',
+        },
+      })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: {
+        path: '/guide.md',
+        content: 'Classic filesystem fixture content.',
+      },
+    });
+    await expect(
+      runner.run({
+        toolId: 'fetch.fetch',
+        input: { url: 'https://example.com/api' },
+        context: {
+          runId: 'run_mcp_classic',
+          stepId: 'tool.fetch',
+          sessionId: 'session_mcp_classic',
+        },
+      })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: {
+        status: 200,
+        json: { ok: true },
+      },
+    });
+    await expect(
+      runner.run({
+        toolId: 'time.now',
+        input: { timezone: 'UTC' },
+        context: {
+          runId: 'run_mcp_classic',
+          stepId: 'tool.time',
+          sessionId: 'session_mcp_classic',
+        },
+      })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: {
+        now: '2026-07-03T00:00:00.000Z',
+        timezone: 'UTC',
+      },
+    });
+    await expect(
+      runner.run({
+        toolId: 'search.web_search',
+        input: { query: 'hypha', limit: 1 },
+        context: {
+          runId: 'run_mcp_classic',
+          stepId: 'tool.search',
+          sessionId: 'session_mcp_classic',
+        },
+      })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: {
+        query: 'hypha',
+        count: 1,
+      },
+    });
+
+    const events = await trace.list({ runId: 'run_mcp_classic' });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'mcp.capability.discovered' }),
+        expect.objectContaining({ type: 'mcp.tool.normalized' }),
+        expect.objectContaining({
+          type: 'tool.policy.checked',
+          payload: expect.objectContaining({
+            source: 'mcp',
+            sideEffectLevel: 'read',
+          }),
+        }),
+        expect.objectContaining({ type: 'mcp.call.completed' }),
+      ])
+    );
+    expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(4);
   });
 });

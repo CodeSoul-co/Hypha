@@ -79,6 +79,24 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 The server exposes configured aliases such as `default-chat`, `default-fast`, and `default-reasoning` to agent runtime code. These aliases resolve to `provider:model` targets in `llm.aliases`, so package and kernel code do not need provider-specific model ids.
 
+## Tools and MCP Fixtures
+
+The built-in `search` tool is available without network access by default:
+
+```bash
+WEB_SEARCH_PROVIDER=stub
+```
+
+Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should make real HTTP search calls:
+
+```bash
+WEB_SEARCH_PROVIDER=duckduckgo
+WEB_SEARCH_ENDPOINT=https://api.duckduckgo.com/
+WEB_SEARCH_TIMEOUT_MS=10000
+```
+
+Framework-level MCP examples live in `@hypha/mcp`. `createClassicMCPMockGateway()` provides executable filesystem, fetch, time, and web-search fixtures for tests. Runtime MCP servers are still configured explicitly under `tools.mcpServers` in `config.yaml`.
+
 ## Inference Backends
 
 Agent inference backend settings live under `inference` in `config.yaml`. SGLang is the default physical backend; vLLM, llama.cpp, and OpenAI API use the same package-level interface.

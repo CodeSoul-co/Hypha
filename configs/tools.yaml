@@ -16,10 +16,12 @@ tools:
 
   - id: search
     name: Web Search
-    description: Search the web for information
+    description: Search the web for information. Defaults to offline stub; set WEB_SEARCH_PROVIDER=duckduckgo for HTTP search.
     enabled: true
     schema:
       type: object
+      required: [query]
+      additionalProperties: false
       properties:
         query:
           type: string
