@@ -1,9 +1,4 @@
-import type {
-  EventFilter,
-  EventStore,
-  FrameworkEvent,
-  TraceRecorder,
-} from '@hypha/core';
+import type { EventFilter, EventStore, FrameworkEvent, TraceRecorder } from '@hypha/core';
 import type {
   ArtifactMeta,
   ArtifactRef,
@@ -75,7 +70,8 @@ export function createLocalStorageBackbone(
 ): LocalStorageBackbone {
   const rootPath = path.resolve(options.rootPath);
   const eventDbFilename = options.eventDbFilename ?? path.join(rootPath, 'events.sqlite');
-  const structuredDbFilename = options.structuredDbFilename ?? path.join(rootPath, 'structured.sqlite');
+  const structuredDbFilename =
+    options.structuredDbFilename ?? path.join(rootPath, 'structured.sqlite');
   const vectorFilename = options.vectorFilename ?? path.join(rootPath, 'vectors.json');
   const artifactRootPath = options.artifactRootPath ?? path.join(rootPath, 'artifacts');
   const embeddings = options.embeddings ?? new MockEmbeddingProvider();
@@ -145,7 +141,7 @@ export function createLocalStorageProfiles(input: {
 
 export interface SQLiteEventStoreOptions {
   filename: string;
-  mode?: 'auto' | 'node-sqlite' | 'json';
+  mode?: 'auto' | 'sqlite' | 'node-sqlite' | 'json';
   jsonFallbackFilename?: string;
 }
 
@@ -154,7 +150,10 @@ export class SQLiteEventStore implements EventStore, TraceRecorder {
 
   constructor(options: SQLiteEventStoreOptions) {
     fs.mkdirSync(path.dirname(options.filename), { recursive: true });
-    const sqlite = options.mode === 'json' ? null : loadNodeSqlite(options.mode === 'node-sqlite');
+    const sqlite =
+      options.mode === 'json'
+        ? null
+        : loadSqlite(options.mode === 'sqlite' || options.mode === 'node-sqlite');
     this.backend = sqlite
       ? new NodeSQLiteEventStoreBackend(options.filename, sqlite)
       : new JsonEventStoreBackend(options.jsonFallbackFilename ?? `${options.filename}.json`);
@@ -175,7 +174,7 @@ export class SQLiteEventStore implements EventStore, TraceRecorder {
 
 export interface SQLiteStructuredStoreOptions {
   filename: string;
-  mode?: 'auto' | 'node-sqlite' | 'json';
+  mode?: 'auto' | 'sqlite' | 'node-sqlite' | 'json';
   jsonFallbackFilename?: string;
 }
 
@@ -184,7 +183,10 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
 
   constructor(options: SQLiteStructuredStoreOptions) {
     fs.mkdirSync(path.dirname(options.filename), { recursive: true });
-    const sqlite = options.mode === 'json' ? null : loadNodeSqlite(options.mode === 'node-sqlite');
+    const sqlite =
+      options.mode === 'json'
+        ? null
+        : loadSqlite(options.mode === 'sqlite' || options.mode === 'node-sqlite');
     this.backend = sqlite
       ? new NodeSQLiteStructuredStoreBackend(options.filename, sqlite)
       : new JsonStructuredStoreBackend(options.jsonFallbackFilename ?? `${options.filename}.json`);
@@ -302,7 +304,9 @@ class NodeSQLiteStructuredStoreBackend implements StructuredStoreProvider {
 
   async get<T>(table: string, id: string): Promise<T | null> {
     this.ensureTable(table);
-    const row = this.db.prepare(`SELECT record FROM ${quoteIdentifier(table)} WHERE id = ?`).get(id);
+    const row = this.db
+      .prepare(`SELECT record FROM ${quoteIdentifier(table)} WHERE id = ?`)
+      .get(id);
     return row?.record ? (JSON.parse(String(row.record)) as T) : null;
   }
 
@@ -601,15 +605,22 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / Math.sqrt(aNorm * bNorm);
 }
 
-function loadNodeSqlite(required = false): SqliteModule | null {
+function loadSqlite(required = false): SqliteModule | null {
   try {
     return require('node:sqlite') as SqliteModule;
-  } catch (error) {
-    if (!required) return null;
-    throw new Error(
-      'SQLite local adapters require a Node.js runtime with node:sqlite support when mode is node-sqlite.',
-      { cause: error }
-    );
+  } catch (nodeSqliteError) {
+    try {
+      const BetterSqliteDatabase = require('better-sqlite3') as new (
+        filename: string
+      ) => SqliteDatabaseSync;
+      return { DatabaseSync: BetterSqliteDatabase };
+    } catch (betterSqliteError) {
+      if (!required) return null;
+      throw new Error(
+        'SQLite local adapters require node:sqlite or better-sqlite3 when mode is sqlite.',
+        { cause: { nodeSqliteError, betterSqliteError } }
+      );
+    }
   }
 }
 

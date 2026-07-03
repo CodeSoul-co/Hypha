@@ -33,6 +33,7 @@
     "lint:fix": "eslint \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\" --fix",
     "format": "prettier --write \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\"",
     "cli": "ts-node -r dotenv/config -P apps/cli/tsconfig.json apps/cli/index.ts",
+    "example:local-basic": "npm run build:packages && node examples/local-basic/index.js",
     "prepare": "husky install"
   },
   "keywords": [
@@ -53,8 +54,9 @@
     "@google/generative-ai": "^0.2.0",
     "@modelcontextprotocol/sdk": "^0.5.0",
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.10.0",
     "chalk": "^5.6.2",
-    "commander": "^15.0.0",
+    "commander": "^13.1.0",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
     "dayjs": "^1.11.0",

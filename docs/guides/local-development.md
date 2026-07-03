@@ -17,29 +17,30 @@ Local runtime records, indexes, artifacts, and detailed system logs are written 
 
 ## Common Commands
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Build packages and start the Express API server with dotenv. |
-| `npm run build` | Compile framework packages, API server, and CLI. |
-| `npm run typecheck` | Type-check packages, server, CLI, and tests. |
-| `npm test` | Run unit, package, and integration tests. |
-| `npm run test:unit` | Run Jest unit tests. |
-| `npm run test:packages` | Run Vitest package contract tests. |
-| `npm run test:integration` | Run Jest integration tests serially. |
-| `npm run lint` | Lint apps, packages, and tests. |
-| `npm run cli -- --help` | Run the example CLI client. |
+| Command                       | Purpose                                                              |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `npm run dev`                 | Build packages and start the Express API server with dotenv.         |
+| `npm run build`               | Compile framework packages, API server, and CLI.                     |
+| `npm run typecheck`           | Type-check packages, server, CLI, and tests.                         |
+| `npm test`                    | Run unit, package, and integration tests.                            |
+| `npm run test:unit`           | Run Jest unit tests.                                                 |
+| `npm run test:packages`       | Run Vitest package contract tests.                                   |
+| `npm run test:integration`    | Run Jest integration tests serially.                                 |
+| `npm run lint`                | Lint apps, packages, and tests.                                      |
+| `npm run cli -- --help`       | Run the example CLI client.                                          |
+| `npm run example:local-basic` | Run the package-only local storage example without MongoDB or Redis. |
 
 ## Runtime Storage
 
-| Area | Default Implementation |
-| --- | --- |
-| `storage.document.mongodb` | MongoDB permanent conversation memory and user-owned records. |
-| `storage.messaging.redis` | Redis temporary memory, streams, cache, and queue-ready messaging. |
-| `storage.messaging.kafka` | Optional Kafka queue/pub-sub integration point. |
+| Area                        | Default Implementation                                                           |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| `storage.document.mongodb`  | MongoDB permanent conversation memory and user-owned records.                    |
+| `storage.messaging.redis`   | Redis temporary memory, streams, cache, and queue-ready messaging.               |
+| `storage.messaging.kafka`   | Optional Kafka queue/pub-sub integration point.                                  |
 | `storage.relational.sqlite` | `data/runtime/events/` and `data/runtime/structured/` with SQLite/JSON fallback. |
-| `storage.vector.local` | `data/storage/vector/` JSON-backed semantic index. |
-| `storage.artifacts.local` | `data/storage/artifacts/` filesystem-backed artifact store. |
-| `logging.outputs` | `data/logs/system.log` detailed system runtime log. |
+| `storage.vector.local`      | `data/storage/vector/` JSON-backed semantic index.                               |
+| `storage.artifacts.local`   | `data/storage/artifacts/` filesystem-backed artifact store.                      |
+| `logging.outputs`           | `data/logs/system.log` detailed system runtime log.                              |
 
 `createLocalStorageBackbone()` from `@hypha/adapters-local` creates the local storage stack in one call:
 
@@ -55,6 +56,14 @@ await storage.memory.write(scope, record, { requireProvenance: true });
 ```
 
 The returned object includes `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`.
+
+Run the package-only local example without MongoDB or Redis:
+
+```bash
+npm run example:local-basic
+```
+
+The example builds packages, creates a temporary local SQLite/vector/artifact stack, writes a run event and semantic memory record, and prints the generated profile ids.
 
 ## Model Providers
 

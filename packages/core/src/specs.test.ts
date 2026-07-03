@@ -7,8 +7,22 @@ import {
   assertSpecSchemaDefinition,
   coreSpecJsonSchemas,
   InMemoryEventStore,
+  contextSpecDefinition,
+  deploymentSpecDefinition,
+  evaluationSpecDefinition,
+  outputContractSpecDefinition,
+  policySpecDefinition,
+  regressionSpecDefinition,
+  replaySpecDefinition,
   traceSpecDefinition,
+  validateContextSpec,
+  validateDeploymentSpec,
+  validateEvaluationSpec,
   validateHarnessedAgentSystemSpec,
+  validateOutputContractSpec,
+  validatePolicySpec,
+  validateRegressionSpec,
+  validateReplaySpec,
   validateTraceSpec,
 } from './index';
 
@@ -52,17 +66,35 @@ describe('@hypha/core contracts', () => {
   });
 
   it('exports parseable Stage1 core spec schemas and examples', () => {
+    expect(validatePolicySpec(policySpecDefinition.example).id).toBe('policy.default');
+    expect(validateOutputContractSpec(outputContractSpecDefinition.example).id).toBe(
+      'output.default'
+    );
+    expect(validateContextSpec(contextSpecDefinition.example).id).toBe('context.default');
     expect(validateTraceSpec(traceSpecDefinition.example)).toMatchObject({
       id: 'trace.default',
     });
-    expect(validateHarnessedAgentSystemSpec({
-      id: 'system.default',
-      version: '0.0.0',
-      agentRef: { id: 'agent.default' },
-      fsmProcessRef: { id: 'fsm.react.default' },
-      traceRef: { id: 'trace.default' },
-    })).toMatchObject({ id: 'system.default' });
+    expect(validateEvaluationSpec(evaluationSpecDefinition.example).id).toBe('evaluation.default');
+    expect(validateReplaySpec(replaySpecDefinition.example).id).toBe('replay.default');
+    expect(validateRegressionSpec(regressionSpecDefinition.example).id).toBe('regression.default');
+    expect(validateDeploymentSpec(deploymentSpecDefinition.example).id).toBe('deployment.local');
+    expect(
+      validateHarnessedAgentSystemSpec({
+        id: 'system.default',
+        version: '0.0.0',
+        agentRef: { id: 'agent.default' },
+        fsmProcessRef: { id: 'fsm.react.default' },
+        traceRef: { id: 'trace.default' },
+      })
+    ).toMatchObject({ id: 'system.default' });
+    expect(coreSpecJsonSchemas.PolicySpec.required).toContain('rules');
+    expect(coreSpecJsonSchemas.OutputContractSpec.required).toContain('schema');
+    expect(coreSpecJsonSchemas.ContextSpec.required).toContain('sources');
     expect(coreSpecJsonSchemas.TraceSpec.required).toContain('eventTypes');
+    expect(coreSpecJsonSchemas.EvaluationSpec.required).toContain('type');
+    expect(coreSpecJsonSchemas.ReplaySpec.required).toEqual(['id', 'version']);
+    expect(coreSpecJsonSchemas.RegressionSpec.required).toContain('requiredChecks');
+    expect(coreSpecJsonSchemas.DeploymentSpec.required).toContain('mode');
     expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.required).toContain('agentRef');
   });
 

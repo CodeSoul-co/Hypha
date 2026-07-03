@@ -110,7 +110,7 @@ const relationalStorageConfigSchema = z.object({
     .object({
       enabled: booleanishSchema.default(true),
       deployment: z.literal('local').default('local'),
-      sqliteMode: z.enum(['auto', 'node-sqlite', 'json']).default('auto'),
+      sqliteMode: z.enum(['auto', 'sqlite', 'node-sqlite', 'json']).default('auto'),
       eventDbPath: z.string().default('./data/runtime/events/hypha-runtime-events.sqlite'),
       structuredDbPath: z.string().default('./data/runtime/structured/hypha-structured.sqlite'),
     })

@@ -11,22 +11,22 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 ## Package Boundary Summary
 
-| Package | Public Surface |
-| --- | --- |
-| `@hypha/core` | Spec primitives, schema definitions, events, errors, policy interfaces. |
-| `@hypha/storage` | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
-| `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`. |
-| `@hypha/fsm` | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers. |
-| `@hypha/kernel` | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces. |
-| `@hypha/inference` | `InferenceManager`, prefix/KV cache providers, reasoning orchestration. |
-| `@hypha/models` | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters. |
-| `@hypha/tools` | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, side-effect governance. |
-| `@hypha/mcp` | `MCPIntegrationSpec`, capability normalization into tool/resource/prompt specs. |
-| `@hypha/memory` | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory. |
-| `@hypha/skills` | `SkillSpec`, skill refs, activation and side-effect policy fields. |
-| `@hypha/harness` | Event-first runtime views, queues, replay/audit/regression projections. |
-| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters. |
-| `@hypha/testing` | Event and spec test helpers. |
+| Package                 | Public Surface                                                                                                             |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `@hypha/core`           | Spec primitives, schema definitions, events, errors, policy interfaces.                                                    |
+| `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`.                                            |
+| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers.                                  |
+| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces.                                                      |
+| `@hypha/inference`      | `InferenceManager`, prefix/KV cache providers, reasoning orchestration.                                                    |
+| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
+| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, side-effect governance.                                                  |
+| `@hypha/mcp`            | `MCPIntegrationSpec`, capability normalization into tool/resource/prompt specs.                                            |
+| `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
+| `@hypha/skills`         | `SkillSpec`, skill refs, activation and side-effect policy fields.                                                         |
+| `@hypha/harness`        | Event-first runtime views, queues, replay/audit/regression projections.                                                    |
+| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
+| `@hypha/testing`        | Event and spec test helpers.                                                                                               |
 
 Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
 
@@ -34,19 +34,19 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
 
 ## Storage Profiles
 
 `StorageProviderProfile` describes a concrete store without leaking client SDK details into core specs.
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `kind` | string | `relational`, `document`, `messaging`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
-| `engine` | string | Store engine such as `sqlite`, `mongodb`, `redis`, `kafka`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, or `s3`. |
-| `deployment` | string | `local`, `self_hosted`, `managed`, or `cloud`. |
-| `role` | string | Runtime role such as `source_of_truth`, `event_log`, `semantic_index`, `cache`, `message_queue`, or `artifact_store`. |
-| `connection` | object | URI/env/host/port/database/TLS metadata. |
+| Field          | Type     | Description                                                                                                                                                       |
+| -------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`         | string   | `relational`, `document`, `messaging`, `cache`, `vector`, `object`, `event`, or `hybrid`.                                                                         |
+| `engine`       | string   | Store engine such as `sqlite`, `mongodb`, `redis`, `kafka`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, or `s3`.                   |
+| `deployment`   | string   | `local`, `self_hosted`, `managed`, or `cloud`.                                                                                                                    |
+| `role`         | string   | Runtime role such as `source_of_truth`, `event_log`, `semantic_index`, `cache`, `message_queue`, or `artifact_store`.                                             |
+| `connection`   | object   | URI/env/host/port/database/TLS metadata.                                                                                                                          |
 | `capabilities` | string[] | Declared features such as `structured`, `transactions`, `events`, `cache`, `queue`, `pubsub`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
 
 `StorageTopologySpec` groups profiles and declares default refs for relational, document, messaging, cache, vector, artifact, event, and memory storage. `messagingRef` is the default queue/stream/pub-sub path; `cacheRef` may point to the same Redis profile when cache behavior is colocated. `createSQLiteStorageProfile`, `createMongoStorageProfile`, `createRedisStorageProfile`, `createKafkaStorageProfile`, `createQdrantStorageProfile`, `createChromaStorageProfile`, `createPineconeStorageProfile`, and related helpers create common profiles. `resolveStorageConnection(profile, env)` resolves URI/env/local host configuration and `redactStorageConnection(connection)` removes credentials before logging or exposing diagnostics.
@@ -55,22 +55,22 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `Stora
 
 `DomainPackSpec` declares domain-level capabilities and contracts.
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `id`, `version`, `name` | string | Stable identity and display name. |
-| `taskSchemas` | `TaskSchemaSpec[]` | Supported task types and input contracts. |
-| `workflows` | `WorkflowSpec[]` | Domain workflows that can compile to FSM specs. |
-| `defaultWorkflow` | string | Workflow id used when none is specified. |
-| `sessionProfiles` | `SessionProfileSpec[]` | Defaults for initializing runtime sessions. |
-| `tools` | `ToolSpec[]` | Local or normalized tool contracts. |
-| `mcpProfiles` | `MCPIntegrationSpec[]` | MCP server and capability profiles. |
-| `memoryProfiles` | `MemorySpec[]` | Memory provider and policy profiles. |
-| `allowedSkills`, `defaultSkills` | `SkillRef[]` | Skill allow-list and defaults. |
-| `policies` | `PolicySpec[]` | Permission, audit, review, and retry policies. |
-| `evaluationProfiles` | `EvaluationSpec[]` | Evaluation contracts. |
-| `regressionCases` | `RegressionSpec[]` | Regression cases. |
-| `outputContracts` | `OutputContractSpec[]` | Structured output contracts. |
-| `metadata` | object | Domain-specific metadata. |
+| Field                            | Type                   | Description                                     |
+| -------------------------------- | ---------------------- | ----------------------------------------------- |
+| `id`, `version`, `name`          | string                 | Stable identity and display name.               |
+| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.       |
+| `workflows`                      | `WorkflowSpec[]`       | Domain workflows that can compile to FSM specs. |
+| `defaultWorkflow`                | string                 | Workflow id used when none is specified.        |
+| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.     |
+| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.             |
+| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.             |
+| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.            |
+| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                  |
+| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.  |
+| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                           |
+| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                               |
+| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                    |
+| `metadata`                       | object                 | Domain-specific metadata.                       |
 
 `SessionProfileSpec` may define `metadataSchema`, `defaultMetadata`, and default references for memory, tool, MCP, skill, and policy profiles.
 
@@ -82,27 +82,27 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `Stora
 
 `RuntimeSession` fields:
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `id` | string | Session id. |
-| `userId` | string | Owner account boundary. |
-| `domainPackRef` | `SpecRef` | Optional referenced DomainPack. |
-| `sessionProfileRef` | `SpecRef` | Optional referenced SessionProfile. |
-| `metadata` | object | Runtime user or business context. |
-| `status` | `active` or `closed` | Session lifecycle state. |
-| `createdAt`, `updatedAt` | string | ISO timestamps. |
+| Field                    | Type                 | Description                         |
+| ------------------------ | -------------------- | ----------------------------------- |
+| `id`                     | string               | Session id.                         |
+| `userId`                 | string               | Owner account boundary.             |
+| `domainPackRef`          | `SpecRef`            | Optional referenced DomainPack.     |
+| `sessionProfileRef`      | `SpecRef`            | Optional referenced SessionProfile. |
+| `metadata`               | object               | Runtime user or business context.   |
+| `status`                 | `active` or `closed` | Session lifecycle state.            |
+| `createdAt`, `updatedAt` | string               | ISO timestamps.                     |
 
 `RuntimeRun` fields:
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `id` | string | Run id. |
-| `sessionId` | string | Parent session id. |
-| `userId` | string | Owner account boundary. |
-| `domainPackRef`, `workflowRef`, `agentRef` | `SpecRef` | Optional runtime references. |
-| `status` | string | `queued`, `running`, `waiting_human`, `completed`, `failed`, or `cancelled`. |
-| `input`, `output` | unknown | Execution input and terminal output. |
-| `createdAt`, `updatedAt`, `completedAt` | string | ISO timestamps. |
+| Field                                      | Type      | Description                                                                  |
+| ------------------------------------------ | --------- | ---------------------------------------------------------------------------- |
+| `id`                                       | string    | Run id.                                                                      |
+| `sessionId`                                | string    | Parent session id.                                                           |
+| `userId`                                   | string    | Owner account boundary.                                                      |
+| `domainPackRef`, `workflowRef`, `agentRef` | `SpecRef` | Optional runtime references.                                                 |
+| `status`                                   | string    | `queued`, `running`, `waiting_human`, `completed`, `failed`, or `cancelled`. |
+| `input`, `output`                          | unknown   | Execution input and terminal output.                                         |
+| `createdAt`, `updatedAt`, `completedAt`    | string    | ISO timestamps.                                                              |
 
 `FrameworkEvent` fields include `id`, `type`, `runId`, optional `workspaceId`, `sessionId`, `stepId`, `agentId`, `fsmState`, `timestamp`, `payload`, and `metadata`.
 
@@ -114,12 +114,12 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 
 `WorkflowSpec` fields:
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `initialState` | string | First workflow state. |
-| `terminalStates` | string[] | States that end the workflow. |
-| `states` | `WorkflowStateSpec[]` | State goals, contracts, policies, tools, skills, and timeouts. |
-| `transitions` | `WorkflowTransitionSpec[]` | Allowed state transitions and guards. |
+| Field            | Type                       | Description                                                    |
+| ---------------- | -------------------------- | -------------------------------------------------------------- |
+| `initialState`   | string                     | First workflow state.                                          |
+| `terminalStates` | string[]                   | States that end the workflow.                                  |
+| `states`         | `WorkflowStateSpec[]`      | State goals, contracts, policies, tools, skills, and timeouts. |
+| `transitions`    | `WorkflowTransitionSpec[]` | Allowed state transitions and guards.                          |
 
 `compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, and `terminalStates`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, and `updatedAt`.
 
@@ -135,12 +135,12 @@ FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardEx
 
 `ModelProvider` implementations expose:
 
-| Method | Description |
-| --- | --- |
-| `capabilities()` | Returns chat, streaming, tool calling, JSON mode, embedding, reasoning, prefix caching, and KV caching support. |
-| `generate(request)` | Produces a normalized model response. |
-| `stream(request)` | Optional streaming event source. |
-| `countTokens(input)` | Optional token accounting. |
+| Method               | Description                                                                                                     |
+| -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `capabilities()`     | Returns chat, streaming, tool calling, JSON mode, embedding, reasoning, prefix caching, and KV caching support. |
+| `generate(request)`  | Produces a normalized model response.                                                                           |
+| `stream(request)`    | Optional streaming event source.                                                                                |
+| `countTokens(input)` | Optional token accounting.                                                                                      |
 
 `ModelRequest` contains `runId`, `stepId`, `modelAlias`, optional `instructions`, `input`, `tools`, `responseFormat`, `reasoning`, `temperature`, `maxTokens`, `cache`, and `metadata`.
 
@@ -148,11 +148,11 @@ FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardEx
 
 `ModelAliasSpec` binds a stable alias to a provider target:
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `alias` | string | Stable runtime name such as `default-chat`, `default-fast`, or `default-reasoning`. |
-| `providerId` | string | Registered `ModelProvider` id. |
-| `providerModel` | string | Concrete provider model id used only by the provider adapter. |
+| Field           | Type   | Description                                                                         |
+| --------------- | ------ | ----------------------------------------------------------------------------------- |
+| `alias`         | string | Stable runtime name such as `default-chat`, `default-fast`, or `default-reasoning`. |
+| `providerId`    | string | Registered `ModelProvider` id.                                                      |
+| `providerModel` | string | Concrete provider model id used only by the provider adapter.                       |
 
 `ModelRoutingSpec` groups aliases and optional fallback aliases. `ModelRouter` resolves aliases, calls the selected provider, annotates responses with provider/model metadata, and falls back only when the normalized provider error is retryable.
 
@@ -172,10 +172,10 @@ OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `typ
 
 Cache references:
 
-| Type | Key fields |
-| --- | --- |
-| `PrefixCacheRef` | `id`, `version`, `contentHash`, optional `tokenCount`, `metadata`. |
-| `KvCacheRef` | `id`, `provider`, `modelAlias`, `scope`, optional `expiresAt`, `metadata`. |
+| Type             | Key fields                                                                 |
+| ---------------- | -------------------------------------------------------------------------- |
+| `PrefixCacheRef` | `id`, `version`, `contentHash`, optional `tokenCount`, `metadata`.         |
+| `KvCacheRef`     | `id`, `provider`, `modelAlias`, `scope`, optional `expiresAt`, `metadata`. |
 
 `InferenceCachePolicy` supports `prefix`, `kvCache`, and `writeKvCache`. `writeKvCache` accepts a target ref, optional explicit value, and mode `write_through`, `write_if_missing`, or `refresh`.
 
@@ -205,12 +205,12 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 `@hypha/adapters-local` provides development and self-hosted adapters:
 
-| Adapter | Storage | Purpose |
-| --- | --- | --- |
-| `SQLiteEventStore` | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available and a JSON sidecar otherwise. |
-| `SQLiteStructuredStore` | SQLite or JSON fallback | JSON source-of-truth structured records with indexed tables. Uses the same `node:sqlite`/JSON fallback behavior. |
-| `LocalVectorIndexProvider` | JSON file | Persistent local vector search with metadata filters. |
-| `FileArtifactStore` | filesystem | Artifact bytes and hash metadata under a configured root. |
-| `MockEmbeddingProvider` | deterministic vectors | Repeatable local embeddings for tests and offline development. |
+| Adapter                    | Storage                 | Purpose                                                                                                                                                                                      |
+| -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SQLiteEventStore`         | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
+| `SQLiteStructuredStore`    | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
+| `LocalVectorIndexProvider` | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
+| `FileArtifactStore`        | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
+| `MockEmbeddingProvider`    | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.

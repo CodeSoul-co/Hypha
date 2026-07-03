@@ -6,13 +6,13 @@ hypha uses a storage-profile model. Framework specs reference storage by stable 
 
 The local backbone is designed for a complete local harness:
 
-| Component | Provider | Role |
-| --- | --- | --- |
-| Events | `SQLiteEventStore` | Trace, replay, audit, regression, and runtime projection source. |
-| Structured records | `SQLiteStructuredStore` | Source of truth for runs, memory records, policies, evaluations, and task state. |
-| Semantic recall | `LocalVectorIndexProvider` | Vector index with metadata filters. |
-| Artifacts | `FileArtifactStore` | Files, snapshots, large tool outputs, and exports. |
-| Memory | `HybridMemoryProvider` | Simple composition of structured source of truth plus optional vector/artifact indexes. |
+| Component          | Provider                   | Role                                                                                    |
+| ------------------ | -------------------------- | --------------------------------------------------------------------------------------- |
+| Events             | `SQLiteEventStore`         | Trace, replay, audit, regression, and runtime projection source.                        |
+| Structured records | `SQLiteStructuredStore`    | Source of truth for runs, memory records, policies, evaluations, and task state.        |
+| Semantic recall    | `LocalVectorIndexProvider` | Vector index with metadata filters.                                                     |
+| Artifacts          | `FileArtifactStore`        | Files, snapshots, large tool outputs, and exports.                                      |
+| Memory             | `HybridMemoryProvider`     | Simple composition of structured source of truth plus optional vector/artifact indexes. |
 
 Create the full local stack:
 
@@ -25,20 +25,20 @@ const storage = createLocalStorageBackbone({
 });
 ```
 
-`sqliteMode: "auto"` uses `node:sqlite` when available and falls back to JSON sidecar files otherwise. Use `"json"` for deterministic test fixtures and `"node-sqlite"` when SQLite support is required.
+`sqliteMode: "auto"` uses a real SQLite engine (`node:sqlite` when available, otherwise `better-sqlite3`) and falls back to JSON sidecar files only when no SQLite engine can be loaded. Use `"sqlite"` when SQLite is required and `"json"` for deterministic test fixtures. `"node-sqlite"` is accepted as a compatibility alias for required SQLite mode.
 
 ## Storage Provider Profile
 
 `StorageProviderProfile` declares:
 
-| Field | Description |
-| --- | --- |
-| `kind` | Store category: `relational`, `document`, `messaging`, `cache`, `vector`, `object`, `event`, or `hybrid`. |
-| `engine` | Concrete engine: `sqlite`, `postgres`, `mongodb`, `redis`, `kafka`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, `s3`, and others. |
-| `deployment` | `local`, `self_hosted`, `managed`, or `cloud`. |
-| `role` | How the runtime uses the store: `source_of_truth`, `event_log`, `semantic_index`, `cache`, `message_queue`, `artifact_store`, `document_store`, or `hybrid_memory`. |
-| `connection` | URI/env/host/port/database/TLS metadata. |
-| `capabilities` | Declared features such as `structured`, `transactions`, `events`, `cache`, `queue`, `pubsub`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
+| Field          | Description                                                                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`         | Store category: `relational`, `document`, `messaging`, `cache`, `vector`, `object`, `event`, or `hybrid`.                                                           |
+| `engine`       | Concrete engine: `sqlite`, `postgres`, `mongodb`, `redis`, `kafka`, `local-vector`, `pgvector`, `qdrant`, `milvus`, `chroma`, `file-artifact`, `s3`, and others.    |
+| `deployment`   | `local`, `self_hosted`, `managed`, or `cloud`.                                                                                                                      |
+| `role`         | How the runtime uses the store: `source_of_truth`, `event_log`, `semantic_index`, `cache`, `message_queue`, `artifact_store`, `document_store`, or `hybrid_memory`. |
+| `connection`   | URI/env/host/port/database/TLS metadata.                                                                                                                            |
+| `capabilities` | Declared features such as `structured`, `transactions`, `events`, `cache`, `queue`, `pubsub`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`.   |
 
 Use `StorageTopologySpec` to group profiles and declare default refs for relational, document, messaging, cache, vector, artifact, event, and memory stores. `messagingRef` is the primary queue/stream/pub-sub default; `cacheRef` can point to the same Redis profile when cache behavior is colocated.
 
@@ -66,13 +66,13 @@ const pinecone = createPineconeStorageProfile();
 
 Runtime configuration is grouped by function before provider:
 
-| Config Path | Function | Examples |
-| --- | --- | --- |
-| `storage.document` | Document records | MongoDB local or Atlas. |
-| `storage.messaging` | Cache, streams, queues, pub/sub | Redis local/cloud, Kafka self-hosted/managed. |
-| `storage.relational` | Event logs and structured source of truth | SQLite local, Postgres production. |
-| `storage.vector` | Semantic indexes | Local JSON, Qdrant, Chroma, Pinecone. |
-| `storage.artifacts` | File/blob payloads | Local filesystem, S3-compatible stores. |
+| Config Path          | Function                                  | Examples                                      |
+| -------------------- | ----------------------------------------- | --------------------------------------------- |
+| `storage.document`   | Document records                          | MongoDB local or Atlas.                       |
+| `storage.messaging`  | Cache, streams, queues, pub/sub           | Redis local/cloud, Kafka self-hosted/managed. |
+| `storage.relational` | Event logs and structured source of truth | SQLite local, Postgres production.            |
+| `storage.vector`     | Semantic indexes                          | Local JSON, Qdrant, Chroma, Pinecone.         |
+| `storage.artifacts`  | File/blob payloads                        | Local filesystem, S3-compatible stores.       |
 
 Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
 

@@ -104,9 +104,56 @@ describe('@hypha/adapters-local reference providers', () => {
     expect(fs.existsSync(path.join(root, 'events.sqlite.json'))).toBe(true);
   });
 
+  it('uses a real SQLite file when SQLite mode is required', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-sqlite-adapters-'));
+    const structuredFilename = path.join(root, 'structured.sqlite');
+    const eventsFilename = path.join(root, 'events.sqlite');
+
+    const structured = new SQLiteStructuredStore({
+      filename: structuredFilename,
+      mode: 'sqlite',
+    });
+    await structured.insert('runs', { id: 'run_sqlite', status: 'completed' });
+    await expect(structured.get('runs', 'run_sqlite')).resolves.toMatchObject({
+      status: 'completed',
+    });
+
+    const events = new SQLiteEventStore({
+      filename: eventsFilename,
+      mode: 'sqlite',
+    });
+    await events.append(
+      createFrameworkEvent({
+        id: 'run_sqlite:created',
+        type: 'run.created',
+        runId: 'run_sqlite',
+        payload: { id: 'run_sqlite' },
+      })
+    );
+
+    await expect(events.list({ runId: 'run_sqlite' })).resolves.toHaveLength(1);
+    expect(fs.existsSync(structuredFilename)).toBe(true);
+    expect(fs.existsSync(eventsFilename)).toBe(true);
+    expect(fs.existsSync(`${structuredFilename}.json`)).toBe(false);
+    expect(fs.existsSync(`${eventsFilename}.json`)).toBe(false);
+
+    const reopenedStructured = new SQLiteStructuredStore({
+      filename: structuredFilename,
+      mode: 'sqlite',
+    });
+    const reopenedEvents = new SQLiteEventStore({
+      filename: eventsFilename,
+      mode: 'sqlite',
+    });
+    await expect(reopenedStructured.get('runs', 'run_sqlite')).resolves.toMatchObject({
+      status: 'completed',
+    });
+    await expect(reopenedEvents.list({ runId: 'run_sqlite' })).resolves.toHaveLength(1);
+  });
+
   it('creates a durable local storage backbone for events and hybrid memory', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-storage-backbone-'));
-    const storage = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'json' });
+    const storage = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'sqlite' });
     expect(storage.profiles.map((profile) => profile.id)).toEqual([
       'storage.sqlite.events',
       'storage.sqlite.structured',
@@ -135,17 +182,21 @@ describe('@hypha/adapters-local reference providers', () => {
       { requireProvenance: true }
     );
 
-    const reopened = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'json' });
+    const reopened = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'sqlite' });
     await expect(reopened.eventStore.list({ runId: 'run_1' })).resolves.toMatchObject([
       { id: 'run_1:started', type: 'run.started' },
     ]);
-    await expect(reopened.memory.read({ userId: 'owner', runId: 'run_1' }, {}))
-      .resolves.toMatchObject([{ id: 'memory_1', value: 'hypha durable storage' }]);
     await expect(
-      reopened.memory.search({ userId: 'owner', runId: 'run_1' }, {
-        vector: await awaitVector('hypha durable storage'),
-        topK: 1,
-      })
+      reopened.memory.read({ userId: 'owner', runId: 'run_1' }, {})
+    ).resolves.toMatchObject([{ id: 'memory_1', value: 'hypha durable storage' }]);
+    await expect(
+      reopened.memory.search(
+        { userId: 'owner', runId: 'run_1' },
+        {
+          vector: await awaitVector('hypha durable storage'),
+          topK: 1,
+        }
+      )
     ).resolves.toMatchObject([{ record: { id: 'memory_1' } }]);
   });
 });
