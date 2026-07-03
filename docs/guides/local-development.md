@@ -87,11 +87,19 @@ The built-in `search` tool is available without network access by default:
 WEB_SEARCH_PROVIDER=stub
 ```
 
-Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should make real HTTP search calls:
+Use Wikipedia OpenSearch for a no-key HTTP search provider:
+
+```bash
+WEB_SEARCH_PROVIDER=wikipedia
+WEB_SEARCH_WIKIPEDIA_ENDPOINT=https://en.wikipedia.org/w/api.php
+WEB_SEARCH_TIMEOUT_MS=10000
+```
+
+Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should make real HTTP search calls through DuckDuckGo:
 
 ```bash
 WEB_SEARCH_PROVIDER=duckduckgo
-WEB_SEARCH_ENDPOINT=https://api.duckduckgo.com/
+WEB_SEARCH_DUCKDUCKGO_ENDPOINT=https://api.duckduckgo.com/
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 

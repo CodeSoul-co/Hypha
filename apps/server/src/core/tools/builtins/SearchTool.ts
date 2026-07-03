@@ -3,10 +3,11 @@ import type { ToolDefinition, ToolGovernanceSpec, ToolParams } from '../types';
 import axios from 'axios';
 
 const DEFAULT_DUCKDUCKGO_ENDPOINT = 'https://api.duckduckgo.com/';
+const DEFAULT_WIKIPEDIA_ENDPOINT = 'https://en.wikipedia.org/w/api.php';
 const DEFAULT_LIMIT = 3;
 const MAX_LIMIT = 10;
 
-type WebSearchProvider = 'stub' | 'duckduckgo';
+type WebSearchProvider = 'stub' | 'duckduckgo' | 'wikipedia';
 
 interface SearchResultItem {
   title: string;
@@ -30,11 +31,14 @@ interface DuckDuckGoResponse {
   RelatedTopics?: DuckDuckGoTopic[];
 }
 
+type WikipediaOpenSearchResponse = [string, string[], string[], string[]];
+
 /**
  * Provider-neutral web-search tool.
  *
  * Default mode is a deterministic offline stub for local tests. Set
  * WEB_SEARCH_PROVIDER=duckduckgo to call the DuckDuckGo Instant Answer API
+ * or WEB_SEARCH_PROVIDER=wikipedia to call Wikipedia OpenSearch
  * without introducing a provider SDK dependency.
  */
 export default class SearchTool extends BaseTool {
@@ -76,13 +80,16 @@ export default class SearchTool extends BaseTool {
     if (provider === 'duckduckgo') {
       return this.searchDuckDuckGo(query, normalizedLimit);
     }
+    if (provider === 'wikipedia') {
+      return this.searchWikipedia(query, normalizedLimit);
+    }
 
     return this.searchStub(query, normalizedLimit);
   }
 
   private provider(): WebSearchProvider {
     const raw = (process.env.WEB_SEARCH_PROVIDER || 'stub').toLowerCase();
-    if (raw === 'stub' || raw === 'duckduckgo') {
+    if (raw === 'stub' || raw === 'duckduckgo' || raw === 'wikipedia') {
       return raw;
     }
     throw new Error(`Unsupported WEB_SEARCH_PROVIDER: ${raw}`);
@@ -99,14 +106,18 @@ export default class SearchTool extends BaseTool {
     const items = Array.from({ length: Math.min(limit, DEFAULT_LIMIT) }, (_, i) => ({
       title: `Stub result ${i + 1} for "${query}"`,
       url: `https://example.com/search?q=${encodeURIComponent(query)}&i=${i + 1}`,
-      snippet: 'Deterministic offline result. Set WEB_SEARCH_PROVIDER=duckduckgo for HTTP search.',
+      snippet:
+        'Deterministic offline result. Set WEB_SEARCH_PROVIDER=wikipedia or duckduckgo for HTTP search.',
       source: 'stub',
     }));
     return { query, count: items.length, items, provider: 'stub' };
   }
 
   private async searchDuckDuckGo(query: string, limit: number): Promise<Record<string, unknown>> {
-    const endpoint = process.env.WEB_SEARCH_ENDPOINT || DEFAULT_DUCKDUCKGO_ENDPOINT;
+    const endpoint =
+      process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT ||
+      process.env.WEB_SEARCH_ENDPOINT ||
+      DEFAULT_DUCKDUCKGO_ENDPOINT;
     const timeoutMs = Number(process.env.WEB_SEARCH_TIMEOUT_MS || 10000);
     const response = await axios.get<DuckDuckGoResponse>(endpoint, {
       params: {
@@ -128,6 +139,31 @@ export default class SearchTool extends BaseTool {
       items,
       provider: 'duckduckgo',
       note: items.length === 0 ? 'no-results' : 'instant-answer-api',
+    };
+  }
+
+  private async searchWikipedia(query: string, limit: number): Promise<Record<string, unknown>> {
+    const endpoint = process.env.WEB_SEARCH_WIKIPEDIA_ENDPOINT || DEFAULT_WIKIPEDIA_ENDPOINT;
+    const timeoutMs = Number(process.env.WEB_SEARCH_TIMEOUT_MS || 10000);
+    const response = await axios.get<WikipediaOpenSearchResponse>(endpoint, {
+      params: {
+        action: 'opensearch',
+        search: query,
+        limit,
+        format: 'json',
+      },
+      timeout: timeoutMs,
+      headers: {
+        'User-Agent': process.env.WEB_SEARCH_USER_AGENT || 'hypha/1.0 web-search',
+      },
+    });
+    const items = this.parseWikipediaResponse(response.data);
+    return {
+      query,
+      count: items.length,
+      items,
+      provider: 'wikipedia',
+      note: items.length === 0 ? 'no-results' : 'opensearch-api',
     };
   }
 
@@ -168,5 +204,17 @@ export default class SearchTool extends BaseTool {
   private topicTitle(text: string): string {
     const [title] = text.split(' - ');
     return title || text.slice(0, 80);
+  }
+
+  private parseWikipediaResponse(data: WikipediaOpenSearchResponse): SearchResultItem[] {
+    const titles = Array.isArray(data[1]) ? data[1] : [];
+    const descriptions = Array.isArray(data[2]) ? data[2] : [];
+    const urls = Array.isArray(data[3]) ? data[3] : [];
+    return titles.map((title, index) => ({
+      title,
+      url: urls[index] ?? '',
+      snippet: descriptions[index] || `Wikipedia result for ${title}`,
+      source: 'wikipedia.opensearch',
+    }));
   }
 }

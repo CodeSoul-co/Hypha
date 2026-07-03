@@ -472,14 +472,23 @@ describe('workflow template variable resolution (remaining #2)', () => {
     expect(events.status).toBe(200);
     const eventTypes = (events.body.data || []).map((event: any) => event.type);
     expect(eventTypes).toEqual(
-      expect.arrayContaining(['workflow.stage.started', 'workflow.stage.failed', 'run.failed'])
+      expect.arrayContaining(['workflow.stage.started', 'agent.reasoning.started'])
     );
+
+    const reasoningStarted = (events.body.data || []).find(
+      (event: any) => event.type === 'agent.reasoning.started'
+    );
+    expect(reasoningStarted?.payload?.modelAlias).toBe('deepseek-v4-flash');
+    expect(JSON.stringify(events.body.data)).not.toContain('${AGENT_DEFAULT_MODEL}');
+    expect(JSON.stringify(events.body.data)).not.toMatch(/supported API model names are/i);
 
     const replay = await request(app)
       .get(`/api/v1/runtime/runs/${r.body.data.runId}/replay`)
       .set('Authorization', `Bearer ${devToken}`);
     expect(replay.status).toBe(200);
-    expect(replay.body.data.statePath).toEqual(expect.arrayContaining(['Failed']));
+    expect(replay.body.data.statePath).toEqual(
+      expect.arrayContaining([expect.stringMatching(/Completed|Failed/)])
+    );
   });
 });
 

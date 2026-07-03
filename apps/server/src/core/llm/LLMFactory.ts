@@ -19,7 +19,11 @@ import type {
   ModelUsage,
   NormalizedToolCall,
 } from '@hypha/models';
-import { OpenAICompatibleModelProvider, OpenAIModelProvider, createDeepSeekProvider } from '@hypha/models';
+import {
+  OpenAICompatibleModelProvider,
+  OpenAIModelProvider,
+  createDeepSeekProvider,
+} from '@hypha/models';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
 import { GeminiAdapter } from './adapters/GeminiAdapter';
 import { OllamaAdapter } from './adapters/OllamaAdapter';
@@ -196,6 +200,7 @@ class PackageModelProviderAdapter implements ILLMAdapter {
 
 export class LLMManager {
   private adapters: Map<string, ILLMAdapter> = new Map();
+  private providerDefaultModels: Map<string, string> = new Map();
   private defaultProvider: string;
   private defaultModel: string;
   private initialized: boolean = false;
@@ -255,6 +260,7 @@ export class LLMManager {
       );
       await adapter.initialize();
       this.adapters.set('openai', adapter);
+      this.providerDefaultModels.set('openai', defaultModel);
       logger.info('OpenAI package model provider initialized');
     }
 
@@ -317,6 +323,7 @@ export class LLMManager {
       );
       await adapter.initialize();
       this.adapters.set('deepseek', adapter);
+      this.providerDefaultModels.set('deepseek', defaultModel);
       logger.info('DeepSeek package model provider initialized');
     }
 
@@ -350,6 +357,7 @@ export class LLMManager {
           );
           await adapter.initialize();
           this.adapters.set(providerKey, adapter);
+          this.providerDefaultModels.set(providerKey, defaultModel);
           logger.info(`${providerConfig.name} package model provider initialized`);
         } catch (error) {
           logger.warn(`${providerConfig.name} package model provider failed to initialize`);
@@ -371,6 +379,7 @@ export class LLMManager {
       logger.info(`Adapter ${provider} destroyed`);
     }
     this.adapters.clear();
+    this.providerDefaultModels.clear();
     this.initialized = false;
   }
 
@@ -392,14 +401,14 @@ export class LLMManager {
       throw new Error(`Provider ${provider} is not available`);
     }
     this.defaultProvider = provider;
-
-    // Find default model for this provider
-    const providerModels = COMPATIBLE_PROVIDERS[provider as keyof typeof COMPATIBLE_PROVIDERS];
-    if (providerModels?.defaultModel) {
-      this.defaultModel = providerModels.defaultModel;
+    const providerDefaultModel = await this.resolveDefaultModelForProvider(provider);
+    if (providerDefaultModel) {
+      this.defaultModel = providerDefaultModel;
     }
 
-    logger.info(`Default provider changed to ${provider}`);
+    logger.info(`Default provider changed to ${provider}`, {
+      defaultModel: this.defaultModel,
+    });
   }
 
   async setDefaultModel(model: string): Promise<void> {
@@ -520,6 +529,22 @@ export class LLMManager {
     const config = getConfig();
     const providerConfig = (config.llm as any)[provider];
     return providerConfig?.enabled !== false;
+  }
+
+  private async resolveDefaultModelForProvider(provider: string): Promise<string | undefined> {
+    const configuredDefault = this.providerDefaultModels.get(provider);
+    if (configuredDefault) {
+      return configuredDefault;
+    }
+    const adapter = this.adapters.get(provider);
+    if (!adapter) {
+      return undefined;
+    }
+    const models = await adapter.listModels().catch(() => []);
+    if (models.some((model) => model.id === this.defaultModel)) {
+      return this.defaultModel;
+    }
+    return models[0]?.id;
   }
 
   async isModelEnabled(modelId: string): Promise<boolean> {

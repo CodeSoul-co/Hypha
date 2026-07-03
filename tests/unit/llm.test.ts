@@ -1,8 +1,16 @@
 import { ClaudeAdapter } from '../../apps/server/src/core/llm/adapters/ClaudeAdapter';
 import {
   createLLMManagerModelProvider,
-  type LLMManager,
+  LLMManager,
 } from '../../apps/server/src/core/llm/LLMFactory';
+import type {
+  ChatResponse,
+  ILLMAdapter,
+  LLMMessage,
+  ModelInfo,
+  StreamChunk,
+  ToolDefinition,
+} from '../../apps/server/src/core/llm/types';
 
 describe('LLM Adapters', () => {
   describe('ClaudeAdapter', () => {
@@ -47,6 +55,24 @@ describe('LLM Adapters', () => {
     });
   });
 
+  describe('LLMManager defaults', () => {
+    it('updates the default model when switching to a provider fallback', async () => {
+      const manager = new LLMManager();
+      const deepseekModels = [
+        createModelInfo('deepseek-v4-flash', 'deepseek'),
+        createModelInfo('deepseek-v4-pro', 'deepseek'),
+      ];
+
+      (manager as any).adapters.set('deepseek', createAdapter('deepseek', deepseekModels));
+      (manager as any).providerDefaultModels.set('deepseek', 'deepseek-v4-flash');
+
+      await manager.setDefaultProvider('deepseek');
+
+      expect(manager.getDefaultProvider()).toBe('deepseek');
+      expect(manager.getDefaultModel()).toBe('deepseek-v4-flash');
+    });
+  });
+
   describe('LLMManagerModelProvider facade', () => {
     it('normalizes server chat through the package ModelProvider contract', async () => {
       const manager = {
@@ -88,3 +114,53 @@ describe('LLM Adapters', () => {
     });
   });
 });
+
+function createAdapter(provider: ModelInfo['provider'], models: ModelInfo[]): ILLMAdapter {
+  return {
+    name: `${provider}TestAdapter`,
+    provider,
+    async initialize(): Promise<void> {},
+    async destroy(): Promise<void> {},
+    async chat(): Promise<ChatResponse> {
+      return {
+        id: 'chat_test',
+        model: models[0].id,
+        provider,
+        content: 'ok',
+        role: 'assistant',
+        finishReason: 'stop',
+      };
+    },
+    async *streamChat(): AsyncGenerator<StreamChunk> {
+      yield { type: 'done' };
+    },
+    async createToolCall(_messages: LLMMessage[], _tools: ToolDefinition[]): Promise<ChatResponse> {
+      return this.chat();
+    },
+    async listModels(): Promise<ModelInfo[]> {
+      return models;
+    },
+    async getModel(modelId: string): Promise<ModelInfo | null> {
+      return models.find((model) => model.id === modelId) ?? null;
+    },
+    async healthCheck(): Promise<boolean> {
+      return true;
+    },
+  };
+}
+
+function createModelInfo(id: string, provider: ModelInfo['provider']): ModelInfo {
+  return {
+    id,
+    name: id,
+    provider,
+    displayName: id,
+    description: '',
+    contextWindow: 0,
+    supportedFeatures: {
+      streaming: true,
+      toolCalling: true,
+      vision: false,
+    },
+  };
+}

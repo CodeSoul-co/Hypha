@@ -48,7 +48,7 @@ export async function initSingleUserOwner(): Promise<{
 
 /**
  * Seed a pre-registered admin account for development
- * Credentials: admin@hypha.local / hypha_admin_2026
+ * The password is read from configuration and is never printed to logs.
  */
 export async function initDevAdminUser(): Promise<{
   email: string;
@@ -80,11 +80,9 @@ export async function initDevAdminUser(): Promise<{
 
     await admin.save();
 
+    logger.info(`[DevAuth] Created admin user: ${adminEmail}`);
     logger.info(
-      `[DevAuth] Created admin user: ${adminEmail} / ${adminPassword}`,
-    );
-    logger.info(
-      `[DevAuth] Admin login: POST /auth/login with the credentials above`,
+      `[DevAuth] Admin login: POST /auth/login with configured credentials`,
     );
 
     return { email: adminEmail, password: adminPassword };
@@ -127,9 +125,9 @@ export async function initDevTestUser(): Promise<{
     });
 
     await user.save();
-    logger.info(`[DevAuth] Created test user: ${devEmail} / ${devPassword}`);
+    logger.info(`[DevAuth] Created test user: ${devEmail}`);
     logger.info(
-      `[DevAuth] Use this token in clients: POST /auth/login with the credentials above`,
+      `[DevAuth] Test user login: POST /auth/login with configured credentials`,
     );
 
     return { email: devEmail, password: devPassword };

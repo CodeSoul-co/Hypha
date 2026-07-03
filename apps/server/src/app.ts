@@ -155,7 +155,7 @@ class Application {
     // (typically missing API key), fall back to any provider that did so chat
     // calls don't 500 with "No adapter available for provider: X". The
     // previous behaviour was to silently boot with a broken default.
-    this.ensureDefaultProviderAvailable();
+    await this.ensureDefaultProviderAvailable();
 
     // Initialize Memory
     const tempMemory = getTemporaryMemory();
@@ -192,7 +192,7 @@ class Application {
     }
   }
 
-  private ensureDefaultProviderAvailable(): void {
+  private async ensureDefaultProviderAvailable(): Promise<void> {
     const llm = getLLMManager();
     const wanted = llm.getDefaultProvider();
     const available = llm.getAvailableProviders();
@@ -210,11 +210,7 @@ class Application {
         `Configured defaultProvider="${wanted}" is not initialized (missing API key?). ` +
           `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`,
       );
-      llm
-        .setDefaultProvider(fallback)
-        .catch((err) =>
-          logger.error('Failed to set fallback default provider:', err),
-        );
+      await llm.setDefaultProvider(fallback);
     }
   }
 
@@ -368,17 +364,13 @@ class Application {
             if (ownerCreds) {
               logger.info('🔐  [Single User Mode] Owner Account Ready:');
               logger.info(`    Email:    ${ownerCreds.email}`);
-              logger.info(`    Password:  ${ownerCreds.password}`);
               const ownerToken = await getSingleUserToken();
               if (ownerToken) {
-                logger.info(`    Token:    ${ownerToken}`);
                 logger.info('');
                 logger.info(
                   `    Client usage: POST ${apiBase}/dev/token returns token`,
                 );
-                logger.info(
-                  `    Or use:   Authorization: Bearer ${ownerToken}`,
-                );
+                logger.info('    Credentials and tokens are intentionally not printed.');
               }
             }
           } else {
@@ -386,7 +378,7 @@ class Application {
             if (adminCreds) {
               logger.info('🔐  [Dev Mode] Admin Account Ready:');
               logger.info(`    Email:    ${adminCreds.email}`);
-              logger.info(`    Password:  ${adminCreds.password}`);
+              logger.info('    Password: configured in env or config; not printed.');
             }
             logger.info('');
 
@@ -395,15 +387,13 @@ class Application {
               logger.info('');
               logger.info('🔧  [Dev Mode] Test User Ready:');
               logger.info(`    Email:    ${devCreds.email}`);
-              logger.info(`    Password:  ${devCreds.password}`);
               const devToken = await getDevTestToken();
               if (devToken) {
-                logger.info(`    Token:    ${devToken}`);
                 logger.info('');
                 logger.info(
                   `    Client usage: POST ${apiBase}/dev/token returns token`,
                 );
-                logger.info(`    Or use:   Authorization: Bearer ${devToken}`);
+                logger.info('    Credentials and tokens are intentionally not printed.');
               }
             }
           }
