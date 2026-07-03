@@ -39,7 +39,7 @@ run.completed
 
 The exact event sequence depends on the route, workflow, tools, memory writes, policy decisions, and terminal status. Runtime projections must derive from event content instead of mutable session state.
 
-`RunManager` is the canonical package-level writer for run lifecycle events. It records run start/completion/failure, FSM transition acceptance, FSM state entry, context build events, and ReAct step completion. Application surfaces should call runtime APIs instead of constructing ad hoc run state.
+`RunManager` is the canonical package-level writer for run lifecycle events. It records run start/completion/failure, human-review waits, FSM transition acceptance, FSM state entry, context build events, and ReAct step completion. Application surfaces should call runtime APIs instead of constructing ad hoc run state.
 
 ## FSM and Guards
 

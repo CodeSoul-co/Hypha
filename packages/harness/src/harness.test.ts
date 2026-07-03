@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '@hypha/core';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
+import type { ContextBuilder } from '@hypha/kernel';
 import { MockToolRunner } from '@hypha/tools';
 import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
 import {
@@ -175,6 +176,106 @@ describe('@hypha/harness contracts', () => {
     await expect(runManager.projectReplay('run_stage4_minimal')).resolves.toMatchObject({
       statePath: [...REACT_FSM_STATE_PATH],
       finalOutput: { answer: 'ok' },
+    });
+    await expect(runManager.projectAudit('run_stage4_minimal')).resolves.toMatchObject({
+      runId: 'run_stage4_minimal',
+    });
+    await expect(runManager.projectRegression('run_stage4_minimal')).resolves.toMatchObject({
+      statePath: [...REACT_FSM_STATE_PATH],
+    });
+  });
+
+  it('projects human-review runs from events instead of leaving them running', async () => {
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'human_review',
+            reason: 'approval required',
+          },
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      now: () => '2026-07-03T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_stage4_human',
+      stepId: 'react',
+      sessionId: 'session_stage4',
+      userId: 'owner',
+      agent: {
+        id: 'agent.stage4',
+        version: '0.0.0',
+        name: 'Human Review Agent',
+        modelAlias: 'default-chat',
+      },
+      input: 'needs approval',
+    });
+
+    expect(result.react.status).toBe('human_review_required');
+    expect(result.fsmSnapshot.currentState).toBe('HumanReview');
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'run.waiting_human' }),
+        expect.objectContaining({ type: 'fsm.state.entered', fsmState: 'HumanReview' }),
+      ])
+    );
+    await expect(runManager.projectRun('run_stage4_human')).resolves.toMatchObject({
+      status: 'waiting_human',
+    });
+  });
+
+  it('records failed FSM state and run.failed when context building throws', async () => {
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(): Promise<InferenceResponse> {
+        throw new Error('inference should not run');
+      },
+    };
+    const contextBuilder: ContextBuilder = {
+      async build() {
+        throw new Error('context failed');
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      contextBuilder,
+      runManager,
+      now: () => '2026-07-03T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_stage4_failed',
+      stepId: 'react',
+      sessionId: 'session_stage4',
+      userId: 'owner',
+      agent: {
+        id: 'agent.stage4',
+        version: '0.0.0',
+        name: 'Failing Agent',
+        modelAlias: 'default-chat',
+      },
+      input: 'fail context',
+    });
+
+    expect(result.react.status).toBe('failed');
+    expect(result.fsmSnapshot.currentState).toBe('Failed');
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'fsm.state.entered', fsmState: 'Failed' }),
+        expect.objectContaining({ type: 'run.failed' }),
+      ])
+    );
+    await expect(runManager.projectRun('run_stage4_failed')).resolves.toMatchObject({
+      status: 'failed',
     });
   });
 });

@@ -4,6 +4,7 @@ export type FrameworkEventType =
   | 'session.closed'
   | 'run.created'
   | 'run.started'
+  | 'run.waiting_human'
   | 'run.completed'
   | 'run.failed'
   | 'run.cancelled'

@@ -106,11 +106,11 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `Outp
 
 `FrameworkEvent` fields include `id`, `type`, `runId`, optional `workspaceId`, `sessionId`, `stepId`, `agentId`, `fsmState`, `timestamp`, `payload`, and `metadata`.
 
-Common event types include `session.created`, `run.created`, `run.started`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
+Common event types include `session.created`, `run.created`, `run.started`, `run.waiting_human`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
 
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
-`RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, and finalizes runs with `run.completed` or `run.failed`.
+`RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, marks human-review waits with `run.waiting_human`, and finalizes runs with `run.completed` or `run.failed`.
 
 ## Workflow and FSM
 

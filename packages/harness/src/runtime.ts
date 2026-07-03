@@ -418,6 +418,23 @@ export class RunManager {
     });
   }
 
+  async waitForHumanReview(
+    context: RunExecutionContext,
+    payload: Record<string, unknown> = {},
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'run.waiting_human'),
+      type: 'run.waiting_human',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload,
+    });
+  }
+
   async failRun(
     context: RunExecutionContext,
     error: unknown,
@@ -443,8 +460,20 @@ export class RunManager {
     return this.runtime.projectRun(runId);
   }
 
+  async projectSession(sessionId: string): Promise<RuntimeSession | null> {
+    return this.runtime.projectSession(sessionId);
+  }
+
   async projectReplay(runId: string): Promise<ReplayProjection> {
     return this.runtime.projectReplay(runId);
+  }
+
+  async projectAudit(runId: string): Promise<AuditProjection> {
+    return this.runtime.projectAudit(runId);
+  }
+
+  async projectRegression(runId: string): Promise<RegressionProjection> {
+    return this.runtime.projectRegression(runId);
   }
 
   private nextEventId(runId: string, label: string): string {
@@ -514,52 +543,74 @@ export class HarnessedReActFSMRunner {
         await this.runManager.recordStateEntered(runContext, record);
       },
     });
-    await fsm.start({ phase: 'idle' });
-    await this.transitionIfNeeded(fsm, 'RunInitialized', { phase: 'run_initialized' });
+    try {
+      await fsm.start({ phase: 'idle' });
+      await this.transitionIfNeeded(fsm, 'RunInitialized', { phase: 'run_initialized' });
 
-    await this.runManager.recordContextBuildStarted(runContext);
-    const context = await this.contextBuilder.build(input);
-    await this.runManager.recordContextBuildCompleted(runContext, {
-      messageCount: context.messages.length,
-      memoryScope: context.memoryScope,
-    });
-    await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
+      await this.runManager.recordContextBuildStarted(runContext);
+      const context = await this.contextBuilder.build(input);
+      await this.runManager.recordContextBuildCompleted(runContext, {
+        messageCount: context.messages.length,
+        memoryScope: context.memoryScope,
+      });
+      await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
 
-    const reactRuntime =
-      this.reactRuntime ?? new BasicReActAgentRuntime({ verifier: this.verifier });
-    const reactRunner = new ReActRunner(reactRuntime, {
-      inference: this.options.inference,
-      toolRunner: this.toolRunner,
-      maxIterations: this.maxIterations,
-      onStep: async (step) => {
-        await this.runManager.recordReactStep(runContext, step);
-        const state = stateForReActStep(step);
-        if (state) {
-          await this.transitionIfNeeded(fsm, state, {
-            phase: step.phase,
-            stepId: step.id,
-          });
-        }
-      },
-    });
+      const reactRuntime =
+        this.reactRuntime ?? new BasicReActAgentRuntime({ verifier: this.verifier });
+      const reactRunner = new ReActRunner(reactRuntime, {
+        inference: this.options.inference,
+        toolRunner: this.toolRunner,
+        maxIterations: this.maxIterations,
+        onStep: async (step) => {
+          await this.runManager.recordReactStep(runContext, step);
+          const state = stateForReActStep(step);
+          if (state) {
+            await this.transitionIfNeeded(fsm, state, {
+              phase: step.phase,
+              stepId: step.id,
+            });
+          }
+        },
+      });
 
-    const react = await reactRunner.run(context);
-    if (react.status === 'completed') {
-      await this.transitionIfNeeded(fsm, 'Completed', { phase: 'complete' });
-      await this.runManager.completeRun(runContext, react.output, this.now());
-    } else if (react.status === 'human_review_required') {
-      await this.transitionIfNeeded(fsm, 'HumanReview', { phase: 'human_review' });
-    } else {
-      await this.transitionIfNeeded(fsm, 'Failed', { phase: 'fail' });
-      await this.runManager.failRun(runContext, react.error, this.now());
+      const react = await reactRunner.run(context);
+      if (react.status === 'completed') {
+        await this.transitionIfNeeded(fsm, 'Completed', { phase: 'complete' });
+        await this.runManager.completeRun(runContext, react.output, this.now());
+      } else if (react.status === 'human_review_required') {
+        await this.transitionIfNeeded(fsm, 'HumanReview', { phase: 'human_review' });
+        await this.runManager.waitForHumanReview(
+          runContext,
+          { finalAction: react.finalAction },
+          this.now()
+        );
+      } else {
+        await this.transitionIfNeeded(fsm, 'Failed', { phase: 'fail' });
+        await this.runManager.failRun(runContext, react.error, this.now());
+      }
+
+      return {
+        run,
+        react,
+        fsmSnapshot: fsm.getSnapshot(),
+        events: await this.runManager.listEvents(input.runId),
+      };
+    } catch (error) {
+      await this.transitionToFailedIfPossible(fsm, error);
+      await this.runManager.failRun(runContext, error, this.now());
+      const react: ReActRunResult = {
+        runId: input.runId,
+        status: 'failed',
+        steps: [],
+        error,
+      };
+      return {
+        run,
+        react,
+        fsmSnapshot: fsm.getSnapshot(),
+        events: await this.runManager.listEvents(input.runId),
+      };
     }
-
-    return {
-      run,
-      react,
-      fsmSnapshot: fsm.getSnapshot(),
-      events: await this.runManager.listEvents(input.runId),
-    };
   }
 
   private async transitionIfNeeded(
@@ -569,6 +620,18 @@ export class HarnessedReActFSMRunner {
   ): Promise<void> {
     if (fsm.getSnapshot().currentState === to) return;
     await fsm.transition(to, { metadata });
+  }
+
+  private async transitionToFailedIfPossible(fsm: FSMRuntime, error: unknown): Promise<void> {
+    if (fsm.getSnapshot().status !== 'running') return;
+    try {
+      await this.transitionIfNeeded(fsm, 'Failed', {
+        phase: 'fail',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // A failed transition should not prevent the run.failed fact from being recorded.
+    }
   }
 }
 
@@ -618,12 +681,17 @@ export function projectRun(events: FrameworkEvent[]): RuntimeRun | null {
   const last = events[events.length - 1] ?? created;
   const terminal = [...events]
     .reverse()
-    .find((event) =>
-      ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)
-    );
+    .find((event) => ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type));
+  const waitingHuman = [...events]
+    .reverse()
+    .find((event) => event.type === 'run.waiting_human');
   return {
     ...run,
-    status: terminal ? statusFromRunEvent(terminal.type) : statusFromEvents(events, run.status),
+    status: terminal
+      ? statusFromRunEvent(terminal.type)
+      : waitingHuman
+        ? 'waiting_human'
+        : statusFromEvents(events, run.status),
     updatedAt: last.timestamp,
     completedAt: terminal?.timestamp,
     output: terminal ? (terminal.payload as Record<string, unknown>).output : run.output,
