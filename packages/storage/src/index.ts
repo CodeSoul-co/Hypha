@@ -388,7 +388,7 @@ export const storageProviderProfileExample: StorageProviderProfile = {
   deployment: 'local',
   role: 'source_of_truth',
   connection: {
-    uri: 'file:./data/hypha.sqlite',
+    uri: 'file:./data/runtime/structured/hypha.sqlite',
   },
   capabilities: ['structured', 'transactions'],
   consistency: 'strong',
@@ -424,7 +424,7 @@ export const storageTopologySpecExample: StorageTopologySpec = {
       engine: 'local-vector',
       deployment: 'local',
       role: 'semantic_index',
-      connection: { uri: 'file:./data/vectors.json' },
+      connection: { uri: 'file:./data/storage/vector/vectors.json' },
       capabilities: ['vector_search', 'metadata_filter'],
       consistency: 'eventual',
     },
@@ -644,6 +644,9 @@ export function createSQLiteStorageProfile(input: {
   database?: string;
 } = {}): StorageProviderProfile {
   const role = input.role ?? 'source_of_truth';
+  const defaultDatabase = role === 'event_log'
+    ? './data/runtime/events/hypha-events.sqlite'
+    : './data/runtime/structured/hypha.sqlite';
   return {
     id: input.id ?? (role === 'event_log' ? 'storage.sqlite.events' : 'storage.sqlite.structured'),
     version: '0.0.0',
@@ -653,7 +656,7 @@ export function createSQLiteStorageProfile(input: {
     deployment: 'local',
     role,
     connection: {
-      uri: input.uri ?? `file:${input.database ?? './data/hypha.sqlite'}`,
+      uri: input.uri ?? `file:${input.database ?? defaultDatabase}`,
       database: input.database,
     },
     capabilities:
@@ -678,7 +681,7 @@ export function createLocalVectorStorageProfile(input: {
     deployment: 'local',
     role: 'semantic_index',
     connection: {
-      uri: input.uri ?? `file:${input.database ?? './data/vectors.json'}`,
+      uri: input.uri ?? `file:${input.database ?? './data/storage/vector/vectors.json'}`,
       database: input.database,
     },
     capabilities: ['vector_search', 'metadata_filter'],
@@ -700,7 +703,7 @@ export function createFileArtifactStorageProfile(input: {
     deployment: 'local',
     role: 'artifact_store',
     connection: {
-      uri: input.uri ?? `file:${input.rootPath ?? './data/artifacts'}`,
+      uri: input.uri ?? `file:${input.rootPath ?? './data/storage/artifacts'}`,
       database: input.rootPath,
     },
     capabilities: ['artifact_bytes'],

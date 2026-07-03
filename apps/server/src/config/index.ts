@@ -111,8 +111,8 @@ const relationalStorageConfigSchema = z.object({
       enabled: booleanishSchema.default(true),
       deployment: z.literal('local').default('local'),
       sqliteMode: z.enum(['auto', 'node-sqlite', 'json']).default('auto'),
-      eventDbPath: z.string().default('./data/hypha-runtime-events.sqlite'),
-      structuredDbPath: z.string().default('./data/hypha-structured.sqlite'),
+      eventDbPath: z.string().default('./data/runtime/events/hypha-runtime-events.sqlite'),
+      structuredDbPath: z.string().default('./data/runtime/structured/hypha-structured.sqlite'),
     })
     .default({}),
   postgres: z
@@ -136,7 +136,7 @@ const vectorStorageConfigSchema = z.object({
     .object({
       enabled: booleanishSchema.default(true),
       deployment: z.literal('local').default('local'),
-      path: z.string().default('./data/hypha-vectors.json'),
+      path: z.string().default('./data/storage/vector/hypha-vectors.json'),
     })
     .default({}),
   qdrant: z
@@ -179,7 +179,7 @@ const artifactStorageConfigSchema = z.object({
     .object({
       enabled: booleanishSchema.default(true),
       deployment: z.literal('local').default('local'),
-      rootPath: z.string().default('./data/artifacts'),
+      rootPath: z.string().default('./data/storage/artifacts'),
     })
     .default({}),
   s3: z
@@ -347,7 +347,10 @@ const configSchema = z.object({
           path: z.string().optional(),
         })
       )
-      .optional(),
+      .default([
+        { type: 'console' },
+        { type: 'file', path: './data/logs/system.log' },
+      ]),
   }),
   auth: z.object({
     enabled: z.boolean().default(true),

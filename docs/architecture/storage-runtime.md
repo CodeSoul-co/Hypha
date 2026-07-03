@@ -12,6 +12,8 @@ hypha separates storage by runtime function and deployment mode.
 | `vector` | Local JSON index, Qdrant/Chroma/Pinecone-ready config | Semantic retrieval indexes. |
 | `artifacts` | Filesystem, S3-ready config | Files, snapshots, large tool outputs, and exports. |
 
+Local records live under `data/` by function: `runtime/events`, `runtime/structured`, `storage/vector`, `storage/artifacts`, and `logs/system.log`.
+
 ## Local and Cloud
 
 Each store declares a `deployment` value:

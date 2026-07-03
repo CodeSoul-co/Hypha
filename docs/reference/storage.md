@@ -76,6 +76,8 @@ Runtime configuration is grouped by function before provider:
 
 Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
 
+Local defaults are organized under `data/`: events in `data/runtime/events/`, structured records in `data/runtime/structured/`, vector indexes in `data/storage/vector/`, artifacts in `data/storage/artifacts/`, and system logs in `data/logs/system.log`.
+
 ## Document Storage
 
 MongoDB is currently used by the API server for permanent conversation memory. Local deployment uses host/port settings:

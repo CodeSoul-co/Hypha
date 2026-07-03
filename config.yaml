@@ -60,8 +60,8 @@ storage:
       enabled: true
       deployment: "local"
       sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
-      eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
-      structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+      eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/runtime/events/hypha-runtime-events.sqlite}"
+      structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/runtime/structured/hypha-structured.sqlite}"
     postgres:
       enabled: "${POSTGRES_ENABLED:false}"
       deployment: "${POSTGRES_DEPLOYMENT:local}"
@@ -79,7 +79,7 @@ storage:
     local:
       enabled: true
       deployment: "local"
-      path: "${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
+      path: "${HYPHA_STORAGE_VECTOR_INDEX:./data/storage/vector/hypha-vectors.json}"
     qdrant:
       enabled: "${QDRANT_ENABLED:false}"
       deployment: "${QDRANT_DEPLOYMENT:self_hosted}"
@@ -109,7 +109,7 @@ storage:
     local:
       enabled: true
       deployment: "local"
-      rootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
+      rootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/storage/artifacts}"
     s3:
       enabled: "${S3_ARTIFACTS_ENABLED:false}"
       deployment: "${S3_ARTIFACTS_DEPLOYMENT:managed}"
@@ -152,7 +152,7 @@ storage:
       deployment: "local"
       role: "event_log"
       connection:
-        uri: "file:${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+        uri: "file:${HYPHA_STORAGE_EVENT_DB:./data/runtime/events/hypha-runtime-events.sqlite}"
       capabilities: ["events", "structured", "transactions"]
       consistency: "strong"
     - id: "storage.sqlite.structured"
@@ -163,7 +163,7 @@ storage:
       deployment: "local"
       role: "source_of_truth"
       connection:
-        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB:./data/runtime/structured/hypha-structured.sqlite}"
       capabilities: ["structured", "transactions"]
       consistency: "strong"
     - id: "storage.local-vector.semantic"
@@ -174,7 +174,7 @@ storage:
       deployment: "local"
       role: "semantic_index"
       connection:
-        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
+        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX:./data/storage/vector/hypha-vectors.json}"
       capabilities: ["vector_search", "metadata_filter"]
       consistency: "eventual"
     - id: "storage.file-artifact.local"
@@ -185,7 +185,7 @@ storage:
       deployment: "local"
       role: "artifact_store"
       connection:
-        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
+        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT:./data/storage/artifacts}"
       capabilities: ["artifact_bytes"]
       consistency: "strong"
 
@@ -577,7 +577,7 @@ logging:
   outputs:
     - type: "console"
     - type: "file"
-      path: "./logs/app.log"
+      path: "${HYPHA_SYSTEM_LOG_PATH:./data/logs/system.log}"
 
 auth:
   enabled: true

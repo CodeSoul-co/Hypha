@@ -10,13 +10,6 @@ export function createLogger(): winston.Logger {
     return loggerInstance;
   }
 
-  const logDir = path.resolve(process.cwd(), 'logs');
-
-  // Ensure logs directory exists
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
-  }
-
   let config: { level: string; format: string; outputs?: Array<{ type: string; path?: string }> };
   let appEnv = 'development';
   try {
@@ -29,8 +22,8 @@ export function createLogger(): winston.Logger {
       format: 'json',
       outputs: [
         { type: 'console' },
-        { type: 'file', path: './logs/app.log' }
-      ]
+        { type: 'file', path: './data/logs/system.log' }
+      ],
     };
   }
 

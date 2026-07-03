@@ -13,6 +13,8 @@ The API server reads dotenv configuration. MongoDB and Redis are required for th
 
 `config.yaml` is the tracked typed configuration template. `.env` is ignored and should contain deployment-specific URLs, secrets, local paths, and CLI overrides.
 
+Local runtime records, indexes, artifacts, and detailed system logs are written under `data/`. See [Local Data Layout](../reference/local-data-layout.md) for the default tree.
+
 ## Common Commands
 
 | Command | Purpose |
@@ -34,9 +36,10 @@ The API server reads dotenv configuration. MongoDB and Redis are required for th
 | `storage.document.mongodb` | MongoDB permanent conversation memory and user-owned records. |
 | `storage.messaging.redis` | Redis temporary memory, streams, cache, and queue-ready messaging. |
 | `storage.messaging.kafka` | Optional Kafka queue/pub-sub integration point. |
-| `storage.relational.sqlite` | Local event and structured record stores with SQLite/JSON fallback. |
-| `storage.vector.local` | JSON-backed local semantic vector index. |
-| `storage.artifacts.local` | Filesystem-backed artifact store. |
+| `storage.relational.sqlite` | `data/runtime/events/` and `data/runtime/structured/` with SQLite/JSON fallback. |
+| `storage.vector.local` | `data/storage/vector/` JSON-backed semantic index. |
+| `storage.artifacts.local` | `data/storage/artifacts/` filesystem-backed artifact store. |
+| `logging.outputs` | `data/logs/system.log` detailed system runtime log. |
 
 `createLocalStorageBackbone()` from `@hypha/adapters-local` creates the local storage stack in one call:
 
@@ -72,7 +75,7 @@ REDIS_TLS=true
 
 Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` but disabled by default. Enable them through `.env` only when a concrete adapter is available for the deployment.
 
-Do not commit `.env`, local data, logs, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
+Do not commit `.env`, `data/`, root `logs/`, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 
 ## Verification Before Merge
 
