@@ -30,6 +30,12 @@ export interface ModelAliasSpec extends VersionedSpec, SpecMetadata {
   providerModel: string;
 }
 
+export interface ModelRoutingSpec extends VersionedSpec, SpecMetadata {
+  defaultAlias: string;
+  aliases: ModelAliasSpec[];
+  fallbackAliases?: string[];
+}
+
 export interface ModelCapabilities {
   chat?: boolean;
   streaming?: boolean;
@@ -74,7 +80,7 @@ export interface ModelCacheControl {
   metadata?: Record<string, unknown>;
 }
 
-export interface ModelRequest<TInput = ModelMessage[]> {
+export interface ModelRequest<TInput = unknown> {
   runId: string;
   stepId: string;
   modelAlias: string;
@@ -99,13 +105,17 @@ export interface ModelUsage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  cacheHitTokens?: number;
 }
 
 export interface ModelResponse<TContent = string> {
   id: string;
+  providerId?: string;
+  model?: string;
   content: TContent;
   toolCalls?: NormalizedToolCall[];
   usage?: ModelUsage;
+  metadata?: Record<string, unknown>;
   raw?: unknown;
 }
 
@@ -149,14 +159,39 @@ export class MockModelProvider implements ModelProvider {
   }
 
   capabilities(): ModelCapabilities {
-    return { chat: true, streaming: false, toolCalling: true, jsonMode: true };
+    return { chat: true, streaming: true, toolCalling: true, jsonMode: true };
   }
 
   async generate(request: ModelRequest): Promise<ModelResponse> {
+    const content =
+      typeof request.input === 'string' ? request.input : JSON.stringify(request.input);
     return {
       id: `${request.runId}:${request.stepId}:mock-response`,
-      content: typeof request.input === 'string' ? request.input : JSON.stringify(request.input),
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      providerId: this.id,
+      model: request.modelAlias,
+      content,
+      usage: this.estimateUsage(content),
+      metadata: { deterministic: true },
+    };
+  }
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    const response = await this.generate(request);
+    yield { type: 'delta', content: response.content };
+    yield { type: 'usage', usage: response.usage };
+    yield { type: 'done', usage: response.usage };
+  }
+
+  async countTokens(input: unknown): Promise<ModelUsage> {
+    return this.estimateUsage(typeof input === 'string' ? input : JSON.stringify(input));
+  }
+
+  private estimateUsage(content: string): ModelUsage {
+    const tokenEstimate = content.trim() ? content.trim().split(/\s+/).length : 0;
+    return {
+      inputTokens: tokenEstimate,
+      outputTokens: tokenEstimate,
+      totalTokens: tokenEstimate * 2,
     };
   }
 }
@@ -172,24 +207,26 @@ export const modelCapabilitiesSchema = z.object({
   kvCaching: z.boolean().optional(),
 });
 
-export const modelProviderSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    type: z.string().min(1),
-    defaultModelAlias: z.string().optional(),
-    capabilities: modelCapabilitiesSchema.optional(),
-    apiKeyEnv: z.string().optional(),
-    baseUrl: z.string().optional(),
-    timeoutMs: z.number().int().positive().optional(),
-  }) satisfies ZodType<ModelProviderSpec>;
+export const modelProviderSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  type: z.string().min(1),
+  defaultModelAlias: z.string().optional(),
+  capabilities: modelCapabilitiesSchema.optional(),
+  apiKeyEnv: z.string().optional(),
+  baseUrl: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+}) satisfies ZodType<ModelProviderSpec>;
 
-export const modelAliasSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    alias: z.string().min(1),
-    providerId: z.string().min(1),
-    providerModel: z.string().min(1),
-  }) satisfies ZodType<ModelAliasSpec>;
+export const modelAliasSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  alias: z.string().min(1),
+  providerId: z.string().min(1),
+  providerModel: z.string().min(1),
+}) satisfies ZodType<ModelAliasSpec>;
+
+export const modelRoutingSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  defaultAlias: z.string().min(1),
+  aliases: z.array(modelAliasSpecSchema),
+  fallbackAliases: z.array(z.string().min(1)).optional(),
+}) satisfies ZodType<ModelRoutingSpec>;
 
 export const modelRequestSchema = z.object({
   runId: z.string().min(1),
@@ -197,32 +234,42 @@ export const modelRequestSchema = z.object({
   modelAlias: z.string().min(1),
   instructions: z.string().optional(),
   input: z.unknown(),
-  tools: z.array(z.object({
-    id: z.string(),
-    name: z.string(),
-    description: z.string(),
-    inputSchema: jsonSchemaSchema,
-  })).optional(),
+  tools: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        description: z.string(),
+        inputSchema: jsonSchemaSchema,
+      })
+    )
+    .optional(),
   responseFormat: z.union([specRefSchema, jsonSchemaSchema]).optional(),
-  reasoning: z.object({
-    effort: z.enum(['low', 'medium', 'high']).optional(),
-    budgetTokens: z.number().int().positive().optional(),
-  }).optional(),
+  reasoning: z
+    .object({
+      effort: z.enum(['low', 'medium', 'high']).optional(),
+      budgetTokens: z.number().int().positive().optional(),
+    })
+    .optional(),
   temperature: z.number().optional(),
   maxTokens: z.number().int().positive().optional(),
-  cache: z.object({
-    prefixContent: z.string().optional(),
-    kvCacheValue: z.unknown().optional(),
-    kvCacheRef: z.object({
-      id: z.string().min(1),
-      provider: z.string().min(1),
-      modelAlias: z.string().min(1),
-      scope: z.enum(['run', 'session', 'workspace']),
-      expiresAt: z.string().optional(),
+  cache: z
+    .object({
+      prefixContent: z.string().optional(),
+      kvCacheValue: z.unknown().optional(),
+      kvCacheRef: z
+        .object({
+          id: z.string().min(1),
+          provider: z.string().min(1),
+          modelAlias: z.string().min(1),
+          scope: z.enum(['run', 'session', 'workspace']),
+          expiresAt: z.string().optional(),
+          metadata: z.record(z.unknown()).optional(),
+        })
+        .optional(),
       metadata: z.record(z.unknown()).optional(),
-    }).optional(),
-    metadata: z.record(z.unknown()).optional(),
-  }).optional(),
+    })
+    .optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -256,6 +303,36 @@ export const modelProviderSpecJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+export const modelAliasSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'alias', 'providerId', 'providerModel'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    alias: { type: 'string' },
+    providerId: { type: 'string' },
+    providerModel: { type: 'string' },
+  },
+  additionalProperties: false,
+};
+
+export const modelRoutingSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'defaultAlias', 'aliases'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    defaultAlias: { type: 'string' },
+    aliases: { type: 'array', items: modelAliasSpecJsonSchema },
+    fallbackAliases: { type: 'array', items: { type: 'string' } },
+  },
+  additionalProperties: false,
+};
+
 export const modelProviderSpecExample: ModelProviderSpec = {
   id: 'provider.default',
   version: '0.0.0',
@@ -275,6 +352,24 @@ export const modelProviderSpecExample: ModelProviderSpec = {
   },
 };
 
+export const modelAliasSpecExample: ModelAliasSpec = {
+  id: 'model.alias.default-chat',
+  version: '0.0.0',
+  name: 'Default Chat Alias',
+  alias: 'default-chat',
+  providerId: 'provider.default',
+  providerModel: 'provider-chat-model',
+};
+
+export const modelRoutingSpecExample: ModelRoutingSpec = {
+  id: 'model.routing.default',
+  version: '0.0.0',
+  name: 'Default Model Routing',
+  defaultAlias: 'default-chat',
+  aliases: [modelAliasSpecExample],
+  fallbackAliases: ['default-chat'],
+};
+
 export const modelProviderSpecDefinition = defineSpecSchema<ModelProviderSpec>({
   id: 'ModelProviderSpec',
   zod: modelProviderSpecSchema,
@@ -282,11 +377,38 @@ export const modelProviderSpecDefinition = defineSpecSchema<ModelProviderSpec>({
   example: modelProviderSpecExample,
 });
 
-export const modelSpecDefinitions = [modelProviderSpecDefinition] as const;
+export const modelAliasSpecDefinition = defineSpecSchema<ModelAliasSpec>({
+  id: 'ModelAliasSpec',
+  zod: modelAliasSpecSchema,
+  jsonSchema: modelAliasSpecJsonSchema,
+  example: modelAliasSpecExample,
+});
+
+export const modelRoutingSpecDefinition = defineSpecSchema<ModelRoutingSpec>({
+  id: 'ModelRoutingSpec',
+  zod: modelRoutingSpecSchema,
+  jsonSchema: modelRoutingSpecJsonSchema,
+  example: modelRoutingSpecExample,
+});
+
+export const modelSpecDefinitions = [
+  modelProviderSpecDefinition,
+  modelAliasSpecDefinition,
+  modelRoutingSpecDefinition,
+] as const;
 export const modelSpecJsonSchemas = exportSpecJsonSchemas(modelSpecDefinitions);
 
 export function validateModelProviderSpec(input: unknown): ModelProviderSpec {
   return modelProviderSpecDefinition.parse(input);
 }
 
+export function validateModelAliasSpec(input: unknown): ModelAliasSpec {
+  return modelAliasSpecDefinition.parse(input);
+}
+
+export function validateModelRoutingSpec(input: unknown): ModelRoutingSpec {
+  return modelRoutingSpecDefinition.parse(input);
+}
+
 export * from './providers';
+export * from './router';

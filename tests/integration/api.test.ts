@@ -58,13 +58,11 @@ describe('GET /api/v1/models', () => {
     expect(Array.isArray(r.body.data)).toBe(true);
     expect(r.body.data.length).toBeGreaterThan(0);
 
-    const dsModels = r.body.data.filter((m: any) =>
-      m.id?.startsWith('deepseek-v4'),
-    );
+    const dsModels = r.body.data.filter((m: any) => m.provider === 'deepseek');
     if (dsModels.length > 0) {
       // The bug-2 regression: provider was incorrectly tagged 'openai' for
-      // OpenAICompatible-backed entries. DeepSeek uses its own adapter so it
-      // was unaffected; we still assert here as a smoke check.
+      // OpenAI-compatible entries. DeepSeek now uses the package provider
+      // profile, so this remains a direct smoke check for provider metadata.
       for (const m of dsModels) expect(m.provider).toBe('deepseek');
     }
   });

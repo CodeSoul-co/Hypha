@@ -12,7 +12,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/fsm` | FSM process spec, guarded transitions, timeout/retry/human-review semantics. | Tool handlers, model calls, storage adapters. |
 | `@hypha/kernel` | ReAct agent spec and executable ReAct runner. | Concrete model providers, direct tool side effects. |
 | `@hypha/inference` | Provider-neutral inference manager, prefix cache, KV cache, reasoning orchestration. | Provider-specific request types in public kernel contracts. |
-| `@hypha/models` | `ModelProvider` abstraction and OpenAI-compatible provider adapters. | Agent loop or workflow semantics. |
+| `@hypha/models` | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters. | Agent loop, workflow semantics, or app-specific model preferences. |
 | `@hypha/tools` | Tool specs, registry, governed runner, side-effect policy and trace events. | Direct execution bypassing policy. |
 | `@hypha/mcp` | MCP profile specs and capability normalization into framework contracts. | Real server lifecycle as framework core. |
 | `@hypha/memory` | Memory provider interfaces, scopes, records, write policy, hybrid provider. | App session storage rules. |
@@ -50,6 +50,7 @@ Avoid reverse or hidden dependencies:
 @hypha/domain -> business-specific prompt or route
 tool handler -> filesystem/network side effect without ToolRunner
 memory writer -> provider write without scope, policy, and trace
+agent kernel -> provider-specific model request or response type
 ```
 
 ## Extension Boundaries

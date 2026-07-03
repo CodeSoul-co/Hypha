@@ -56,6 +56,20 @@ await storage.memory.write(scope, record, { requireProvenance: true });
 
 The returned object includes `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`.
 
+## Model Providers
+
+Model provider credentials belong in `.env`; stable aliases belong in `config.yaml`.
+
+```bash
+HYPHA_LLM_DEFAULT_PROVIDER=openai
+HYPHA_LLM_DEFAULT_MODEL=gpt-4o-mini
+HYPHA_LLM_DEFAULT_CHAT_TARGET=openai:gpt-4o-mini
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+The server exposes configured aliases such as `default-chat`, `default-fast`, and `default-reasoning` to agent runtime code. These aliases resolve to `provider:model` targets in `llm.aliases`, so package and kernel code do not need provider-specific model ids.
+
 ## Local and Cloud Overrides
 
 MongoDB supports local host/port settings or a cloud URI:

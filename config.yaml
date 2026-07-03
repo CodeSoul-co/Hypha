@@ -192,6 +192,11 @@ storage:
 llm:
   defaultProvider: "${HYPHA_LLM_DEFAULT_PROVIDER:openai}"
   defaultModel: "${HYPHA_LLM_DEFAULT_MODEL:gpt-4o-mini}"
+  aliases:
+    default-chat: "${HYPHA_LLM_DEFAULT_CHAT_TARGET:openai:gpt-4o-mini}"
+    default-fast: "${HYPHA_LLM_DEFAULT_FAST_TARGET:openai:gpt-4o-mini}"
+    default-reasoning: "${HYPHA_LLM_DEFAULT_REASONING_TARGET:openai:gpt-4o-mini}"
+  fallbackAliases: ["default-fast"]
 
   # Anthropic Claude 模型选择
   anthropic:
@@ -522,7 +527,7 @@ llm:
       timeout: 60000
     openai:
       apiKey: "${OPENAI_API_KEY}"
-      baseUrl: "${OPENAI_BASE_URL:https://api.openai.com}"
+      baseUrl: "${OPENAI_BASE_URL:https://api.openai.com/v1}"
       timeout: 60000
     google:
       apiKey: "${GOOGLE_API_KEY}"
@@ -534,7 +539,7 @@ llm:
       timeout: 120000
     deepseek:
       apiKey: "${DEEPSEEK_API_KEY}"
-      baseUrl: "${DEEPSEEK_BASE_URL:https://api.deepseek.com}"
+      baseUrl: "${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}"
       timeout: 60000
 
 memory:

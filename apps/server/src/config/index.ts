@@ -212,6 +212,8 @@ const configSchema = z.object({
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),
     defaultModel: z.string().default('claude-3-5-sonnet-20241022'),
+    aliases: z.record(z.string()).default({}),
+    fallbackAliases: z.array(z.string()).default([]),
 
     // Provider-specific model configurations
     anthropic: z

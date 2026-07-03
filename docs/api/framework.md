@@ -34,7 +34,7 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+Schema exports are available for `HarnessedAgentSystemSpec`, `TraceSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
 
 ## Storage Profiles
 
@@ -144,9 +144,25 @@ FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardEx
 
 `ModelRequest` contains `runId`, `stepId`, `modelAlias`, optional `instructions`, `input`, `tools`, `responseFormat`, `reasoning`, `temperature`, `maxTokens`, `cache`, and `metadata`.
 
+`ModelResponse` contains `id`, optional `providerId`, optional resolved `model`, normalized `content`, optional `toolCalls`, optional `usage`, optional `metadata`, and optional `raw` provider payload. Kernel and runtime code should depend on normalized fields only; `raw` is for trace/debug adapters.
+
+`ModelAliasSpec` binds a stable alias to a provider target:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `alias` | string | Stable runtime name such as `default-chat`, `default-fast`, or `default-reasoning`. |
+| `providerId` | string | Registered `ModelProvider` id. |
+| `providerModel` | string | Concrete provider model id used only by the provider adapter. |
+
+`ModelRoutingSpec` groups aliases and optional fallback aliases. `ModelRouter` resolves aliases, calls the selected provider, annotates responses with provider/model metadata, and falls back only when the normalized provider error is retryable.
+
+Provider errors are normalized as `ModelProviderError` with `code`, `providerId`, `modelAlias`, optional HTTP `status`, `retryable`, and raw provider error data. Common codes include `MODEL_PROVIDER_HTTP_ERROR`, `MODEL_PROVIDER_RATE_LIMITED`, `MODEL_PROVIDER_AUTH_FAILED`, `MODEL_PROVIDER_BAD_REQUEST`, `MODEL_PROVIDER_STREAM_ERROR`, `MODEL_PROVIDER_NOT_FOUND`, and `MODEL_ALIAS_NOT_FOUND`.
+
 `ModelCacheControl` carries optional `prefixContent`, `kvCacheValue`, `kvCacheRef`, and metadata. Providers that support native cache handles can consume `kvCacheValue` and return a new handle through `InferenceResponse.nextKvCacheValue`.
 
-OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `type`, `baseUrl`, `apiKey` or `apiKeyEnv`, `providerModelByAlias`, `capabilities`, and `timeoutMs`.
+OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `type`, `baseUrl`, `apiKey` or `apiKeyEnv`, `providerModelByAlias`, `capabilities`, and `timeoutMs`. `OpenAIModelProvider` is the OpenAI reference implementation. `createDeepSeekProvider()` configures DeepSeek through the same OpenAI-compatible adapter path.
+
+`ModelStreamEvent` normalizes streaming provider output as `delta`, `tool_call`, `usage`, `done`, or `error` events. OpenAI-compatible SSE chunks are parsed into this envelope before they reach the agent kernel or HTTP surface.
 
 ## Inference
 

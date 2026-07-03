@@ -1,4 +1,13 @@
-import { ILLMAdapter, LLMProvider, ModelInfo, ChatOptions, ChatResponse, LLMMessage, StreamChunk } from './types';
+import {
+  ILLMAdapter,
+  LLMProvider,
+  ModelInfo,
+  ChatOptions,
+  ChatResponse,
+  LLMMessage,
+  StreamChunk,
+  ToolDefinition,
+} from './types';
 import type {
   ModelCapabilities,
   ModelMessage,
@@ -10,12 +19,10 @@ import type {
   ModelUsage,
   NormalizedToolCall,
 } from '@hypha/models';
+import { OpenAICompatibleModelProvider, OpenAIModelProvider, createDeepSeekProvider } from '@hypha/models';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
-import { OpenAIAdapter } from './adapters/OpenAIAdapter';
 import { GeminiAdapter } from './adapters/GeminiAdapter';
 import { OllamaAdapter } from './adapters/OllamaAdapter';
-import { DeepSeekAdapter } from './adapters/DeepSeekAdapter';
-import { OpenAICompatibleAdapter } from './adapters/OpenAICompatibleAdapter';
 import { llmConfig, getConfig } from '../../config';
 import { logger } from '../../utils/logger';
 
@@ -63,8 +70,16 @@ const COMPATIBLE_PROVIDERS: Record<string, CompatibleProviderConfig> = {
     name: 'Together AI',
     baseUrl: 'https://api.together.xyz/v1',
     models: [
-      { id: 'meta-llama/Llama-3-70b-chat-hf', name: 'Llama 3 70B', description: 'High quality chat' },
-      { id: 'mistralai/Mixtral-8x22B-Instruct-v0.1', name: 'Mixtral 8x22B', description: 'Expert model' },
+      {
+        id: 'meta-llama/Llama-3-70b-chat-hf',
+        name: 'Llama 3 70B',
+        description: 'High quality chat',
+      },
+      {
+        id: 'mistralai/Mixtral-8x22B-Instruct-v0.1',
+        name: 'Mixtral 8x22B',
+        description: 'Expert model',
+      },
       { id: 'deepseek-ai/DeepSeek-V2', name: 'DeepSeek V2', description: 'Efficient MoE' },
     ],
     defaultModel: 'meta-llama/Llama-3-70b-chat-hf',
@@ -73,13 +88,111 @@ const COMPATIBLE_PROVIDERS: Record<string, CompatibleProviderConfig> = {
     name: 'Perplexity',
     baseUrl: 'https://api.perplexity.ai',
     models: [
-      { id: 'llama-3.1-sonar-large-128k-online', name: 'Sonar Large Online', description: 'With web search' },
-      { id: 'llama-3.1-sonar-huge-128k-online', name: 'Sonar Huge Online', description: 'Best with search' },
-      { id: 'llama-3.1-sonar-large-128k-chat', name: 'Sonar Large Chat', description: 'General chat' },
+      {
+        id: 'llama-3.1-sonar-large-128k-online',
+        name: 'Sonar Large Online',
+        description: 'With web search',
+      },
+      {
+        id: 'llama-3.1-sonar-huge-128k-online',
+        name: 'Sonar Huge Online',
+        description: 'Best with search',
+      },
+      {
+        id: 'llama-3.1-sonar-large-128k-chat',
+        name: 'Sonar Large Chat',
+        description: 'General chat',
+      },
     ],
     defaultModel: 'llama-3.1-sonar-large-128k-online',
   },
 };
+
+class PackageModelProviderAdapter implements ILLMAdapter {
+  readonly name: string;
+
+  constructor(
+    readonly provider: LLMProvider,
+    private readonly modelProvider: HyphaModelProvider<HyphaModelRequest, HyphaModelResponse>,
+    private readonly models: ModelInfo[],
+    private readonly defaultModel: string
+  ) {
+    this.name = `${provider}PackageModelProviderAdapter`;
+  }
+
+  async initialize(): Promise<void> {
+    logger.info(`${this.name} initialized`);
+  }
+
+  async destroy(): Promise<void> {
+    logger.info(`${this.name} destroyed`);
+  }
+
+  async chat(messages: LLMMessage[], options?: ChatOptions): Promise<ChatResponse> {
+    const model = options?.model || this.defaultModel;
+    const response = await this.modelProvider.generate({
+      runId: createServerModelRunId(),
+      stepId: 'chat',
+      modelAlias: model,
+      instructions: options?.systemPrompt,
+      input: messages,
+      tools: options?.tools?.map(legacyToolToModelTool),
+      temperature: options?.temperature,
+      maxTokens: options?.maxTokens,
+      cache: options?.cache,
+      metadata: {
+        provider: this.provider,
+        source: 'apps.server.llm-manager',
+      },
+    });
+    return modelResponseToChatResponse(response, { model, provider: this.provider });
+  }
+
+  async *streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk> {
+    if (!this.modelProvider.stream) {
+      yield { type: 'error', error: `Provider ${this.provider} does not support streaming` };
+      return;
+    }
+    const model = options?.model || this.defaultModel;
+    for await (const event of this.modelProvider.stream({
+      runId: createServerModelRunId(),
+      stepId: 'stream-chat',
+      modelAlias: model,
+      instructions: options?.systemPrompt,
+      input: messages,
+      tools: options?.tools?.map(legacyToolToModelTool),
+      temperature: options?.temperature,
+      maxTokens: options?.maxTokens,
+      cache: options?.cache,
+      metadata: {
+        provider: this.provider,
+        source: 'apps.server.llm-manager',
+      },
+    })) {
+      yield modelStreamEventToStreamChunk(event);
+    }
+  }
+
+  async createToolCall(
+    messages: LLMMessage[],
+    tools: ToolDefinition[],
+    options?: ChatOptions
+  ): Promise<ChatResponse> {
+    return this.chat(messages, { ...options, tools });
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    return this.models;
+  }
+
+  async getModel(modelId: string): Promise<ModelInfo | null> {
+    return this.models.find((model) => model.id === modelId) ?? null;
+  }
+
+  async healthCheck(): Promise<boolean> {
+    return true;
+  }
+}
 
 export class LLMManager {
   private adapters: Map<string, ILLMAdapter> = new Map();
@@ -110,16 +223,39 @@ export class LLMManager {
       logger.info('Anthropic Claude adapter initialized');
     }
 
-    // Initialize OpenAI
+    // Initialize OpenAI through the package-level ModelProvider abstraction.
     if (config.llm.openai?.enabled !== false && config.llm.providers?.openai?.apiKey) {
-      const adapter = new OpenAIAdapter(
-        config.llm.providers.openai.apiKey,
-        config.llm.providers.openai.baseUrl,
-        config.llm.providers.openai.timeout
+      const models = modelInfosFromConfig(
+        'openai',
+        config.llm.openai?.models,
+        config.llm.defaultModel
+      );
+      const defaultModel = defaultModelForProvider(models, config.llm.defaultModel);
+      const adapter = new PackageModelProviderAdapter(
+        'openai',
+        new OpenAIModelProvider({
+          id: 'openai',
+          baseUrl: normalizeOpenAICompatibleBaseUrl(
+            config.llm.providers.openai.baseUrl,
+            'https://api.openai.com'
+          ),
+          apiKey: config.llm.providers.openai.apiKey,
+          apiKeyEnv: 'OPENAI_API_KEY',
+          providerModelByAlias: providerModelAliasMap(
+            'openai',
+            models,
+            defaultModel,
+            config.llm.aliases
+          ),
+          capabilities: capabilitiesFromModels(models),
+          timeoutMs: config.llm.providers.openai.timeout,
+        }),
+        models,
+        defaultModel
       );
       await adapter.initialize();
       this.adapters.set('openai', adapter);
-      logger.info('OpenAI adapter initialized');
+      logger.info('OpenAI package model provider initialized');
     }
 
     // Initialize Gemini
@@ -149,16 +285,39 @@ export class LLMManager {
       }
     }
 
-    // Initialize DeepSeek (has its own adapter)
+    // Initialize DeepSeek through the OpenAI-compatible package provider.
     if (config.llm.deepseek?.enabled !== false && config.llm.providers?.deepseek?.apiKey) {
-      const adapter = new DeepSeekAdapter(
-        config.llm.providers.deepseek.apiKey,
-        config.llm.providers.deepseek.baseUrl,
-        config.llm.providers.deepseek.timeout
+      const models = modelInfosFromConfig(
+        'deepseek',
+        config.llm.deepseek?.models,
+        config.llm.defaultModel
+      );
+      const defaultModel = defaultModelForProvider(models, config.llm.defaultModel);
+      const adapter = new PackageModelProviderAdapter(
+        'deepseek',
+        createDeepSeekProvider({
+          id: 'deepseek',
+          baseUrl: normalizeOpenAICompatibleBaseUrl(
+            config.llm.providers.deepseek.baseUrl,
+            'https://api.deepseek.com'
+          ),
+          apiKey: config.llm.providers.deepseek.apiKey,
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          providerModelByAlias: providerModelAliasMap(
+            'deepseek',
+            models,
+            defaultModel,
+            config.llm.aliases
+          ),
+          capabilities: capabilitiesFromModels(models),
+          timeoutMs: config.llm.providers.deepseek.timeout,
+        }),
+        models,
+        defaultModel
       );
       await adapter.initialize();
       this.adapters.set('deepseek', adapter);
-      logger.info('DeepSeek adapter initialized');
+      logger.info('DeepSeek package model provider initialized');
     }
 
     // Initialize OpenAI-compatible providers
@@ -167,20 +326,33 @@ export class LLMManager {
 
       if (apiKey) {
         try {
-          const adapter = new OpenAICompatibleAdapter({
-            name: providerConfig.name,
-            provider: providerKey as LLMProvider,
-            baseUrl: providerConfig.baseUrl,
-            apiKey,
-            timeout: 60000,
-            models: providerConfig.models.map(m => m.id),
-            defaultModel: providerConfig.defaultModel,
-          });
+          const provider = providerKey as LLMProvider;
+          const models = compatibleProviderModelInfos(provider, providerConfig);
+          const defaultModel = providerConfig.defaultModel ?? models[0]?.id ?? providerKey;
+          const adapter = new PackageModelProviderAdapter(
+            provider,
+            new OpenAICompatibleModelProvider({
+              id: providerKey,
+              type: 'openai-compatible',
+              baseUrl: providerConfig.baseUrl,
+              apiKey,
+              providerModelByAlias: providerModelAliasMap(
+                providerKey,
+                models,
+                defaultModel,
+                config.llm.aliases
+              ),
+              capabilities: capabilitiesFromModels(models),
+              timeoutMs: 60000,
+            }),
+            models,
+            defaultModel
+          );
           await adapter.initialize();
           this.adapters.set(providerKey, adapter);
-          logger.info(`${providerConfig.name} adapter initialized`);
+          logger.info(`${providerConfig.name} package model provider initialized`);
         } catch (error) {
-          logger.warn(`${providerConfig.name} adapter failed to initialize`);
+          logger.warn(`${providerConfig.name} package model provider failed to initialize`);
         }
       }
     }
@@ -236,7 +408,9 @@ export class LLMManager {
   }
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    const provider = options?.model ? this.getProviderFromModel(options.model) : this.defaultProvider;
+    const provider = options?.model
+      ? this.getProviderFromModel(options.model)
+      : this.defaultProvider;
     const adapter = this.getAdapter(provider);
 
     if (!adapter) {
@@ -250,7 +424,9 @@ export class LLMManager {
   }
 
   async *streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk> {
-    const provider = options?.model ? this.getProviderFromModel(options.model) : this.defaultProvider;
+    const provider = options?.model
+      ? this.getProviderFromModel(options.model)
+      : this.defaultProvider;
     const adapter = this.getAdapter(provider);
 
     if (!adapter) {
@@ -268,7 +444,7 @@ export class LLMManager {
 
     // Add models from compatible providers
     for (const [providerKey, providerConfig] of Object.entries(COMPATIBLE_PROVIDERS)) {
-      const models = providerConfig.models.map(m => ({
+      const models = providerConfig.models.map((m) => ({
         id: m.id,
         name: m.id,
         provider: providerKey as LLMProvider,
@@ -306,7 +482,7 @@ export class LLMManager {
     // Return predefined models for compatible providers
     const providerConfig = COMPATIBLE_PROVIDERS[provider as keyof typeof COMPATIBLE_PROVIDERS];
     if (providerConfig) {
-      return providerConfig.models.map(m => ({
+      return providerConfig.models.map((m) => ({
         id: m.id,
         name: m.id,
         provider: provider as LLMProvider,
@@ -348,13 +524,13 @@ export class LLMManager {
 
   async isModelEnabled(modelId: string): Promise<boolean> {
     const allModels = await this.listAllModels();
-    return allModels.some(m => m.id === modelId);
+    return allModels.some((m) => m.id === modelId);
   }
 
   getProviderFromModel(modelId: string): string {
     // Check if it's a known model ID for a compatible provider
     for (const [providerKey, providerConfig] of Object.entries(COMPATIBLE_PROVIDERS)) {
-      if (providerConfig.models.some(m => m.id === modelId)) {
+      if (providerConfig.models.some((m) => m.id === modelId)) {
         return providerKey;
       }
     }
@@ -369,7 +545,10 @@ export class LLMManager {
   }
 }
 
-export class LLMManagerModelProvider implements HyphaModelProvider<HyphaModelRequest, HyphaModelResponse> {
+export class LLMManagerModelProvider implements HyphaModelProvider<
+  HyphaModelRequest,
+  HyphaModelResponse
+> {
   readonly id = 'server-llm-manager';
 
   constructor(private readonly manager: LLMManager) {}
@@ -420,11 +599,13 @@ export function chatResponseToModelResponse(response: ChatResponse): HyphaModelR
   return {
     id: response.id,
     content: response.content,
-    toolCalls: response.toolCalls?.map((toolCall): NormalizedToolCall => ({
-      id: toolCall.id,
-      toolId: toolCall.name,
-      arguments: toolCall.input,
-    })),
+    toolCalls: response.toolCalls?.map(
+      (toolCall): NormalizedToolCall => ({
+        id: toolCall.id,
+        toolId: toolCall.name,
+        arguments: toolCall.input,
+      })
+    ),
     usage: response.usage ? legacyUsageToModelUsage(response.usage) : undefined,
     raw: response,
   };
@@ -441,7 +622,8 @@ export function modelResponseToChatResponse(
     id: response.id,
     model: fallback.model,
     provider: fallback.provider as LLMProvider,
-    content: typeof response.content === 'string' ? response.content : JSON.stringify(response.content),
+    content:
+      typeof response.content === 'string' ? response.content : JSON.stringify(response.content),
     role: 'assistant',
     finishReason: response.toolCalls?.length ? 'tool_use' : 'stop',
     usage: response.usage
@@ -472,17 +654,177 @@ export function modelStreamEventToStreamChunk(event: ModelStreamEvent): StreamCh
           : undefined,
       };
     case 'usage':
-      return { type: 'done', usage: event.usage ? modelUsageToLegacyUsage(event.usage) : undefined };
+      return {
+        type: 'done',
+        usage: event.usage ? modelUsageToLegacyUsage(event.usage) : undefined,
+      };
     case 'done':
-      return { type: 'done', usage: event.usage ? modelUsageToLegacyUsage(event.usage) : undefined };
+      return {
+        type: 'done',
+        usage: event.usage ? modelUsageToLegacyUsage(event.usage) : undefined,
+      };
     case 'error':
-      return { type: 'error', error: event.error instanceof Error ? event.error.message : String(event.error) };
+      return {
+        type: 'error',
+        error: event.error instanceof Error ? event.error.message : String(event.error),
+      };
   }
+}
+
+function createServerModelRunId(): string {
+  return `server-model-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function modelInfosFromConfig(
+  provider: LLMProvider,
+  models:
+    | Array<{
+        id: string;
+        name: string;
+        enabled: boolean;
+        default: boolean;
+        description?: string;
+        contextWindow?: number;
+        features?: {
+          streaming: boolean;
+          toolCalling: boolean;
+          vision: boolean;
+        };
+        pricing?: {
+          input?: number;
+          output?: number;
+          currency: string;
+        };
+      }>
+    | undefined,
+  fallbackModel: string
+): ModelInfo[] {
+  const enabled = models?.filter((model) => model.enabled) ?? [];
+  if (!enabled.length) {
+    return [
+      {
+        id: fallbackModel,
+        name: fallbackModel,
+        provider,
+        displayName: fallbackModel,
+        description: `${provider} model from runtime config`,
+        contextWindow: 0,
+        supportedFeatures: {
+          streaming: true,
+          toolCalling: true,
+          vision: false,
+          functionCalling: true,
+        },
+      },
+    ];
+  }
+  return enabled.map((model) => ({
+    id: model.id,
+    name: model.id,
+    provider,
+    displayName: model.name,
+    description: model.description ?? '',
+    contextWindow: model.contextWindow ?? 0,
+    supportedFeatures: {
+      streaming: model.features?.streaming ?? true,
+      toolCalling: model.features?.toolCalling ?? false,
+      vision: model.features?.vision ?? false,
+      functionCalling: model.features?.toolCalling ?? false,
+    },
+    pricing: model.pricing,
+  }));
+}
+
+function compatibleProviderModelInfos(
+  provider: LLMProvider,
+  config: CompatibleProviderConfig
+): ModelInfo[] {
+  return config.models.map((model) => ({
+    id: model.id,
+    name: model.id,
+    provider,
+    displayName: model.name,
+    description: model.description ?? '',
+    contextWindow: 128000,
+    supportedFeatures: {
+      streaming: true,
+      toolCalling: true,
+      vision: false,
+      functionCalling: true,
+    },
+  }));
+}
+
+function defaultModelForProvider(models: ModelInfo[], fallbackModel: string): string {
+  return models.some((model) => model.id === fallbackModel)
+    ? fallbackModel
+    : (models[0]?.id ?? fallbackModel);
+}
+
+function providerModelAliasMap(
+  provider: string,
+  models: ModelInfo[],
+  defaultModel: string,
+  aliases: Record<string, string> | undefined
+): Record<string, string> {
+  const modelIds = new Set(models.map((model) => model.id));
+  const map: Record<string, string> = {};
+  for (const model of models) {
+    map[model.id] = model.id;
+  }
+  map.default = defaultModel;
+  map['default-chat'] = defaultModel;
+  map['default-fast'] = defaultModel;
+  map['default-reasoning'] = defaultModel;
+  for (const [alias, target] of Object.entries(aliases ?? {})) {
+    const parsed = parseProviderTarget(target);
+    if (parsed?.provider === provider) {
+      map[alias] = parsed.model;
+    } else if (!parsed && modelIds.has(target)) {
+      map[alias] = target;
+    }
+  }
+  return map;
+}
+
+function parseProviderTarget(target: string): { provider: string; model: string } | null {
+  const separator = target.indexOf(':');
+  if (separator <= 0 || separator === target.length - 1) return null;
+  return {
+    provider: target.slice(0, separator),
+    model: target.slice(separator + 1),
+  };
+}
+
+function capabilitiesFromModels(models: ModelInfo[]): ModelCapabilities {
+  return {
+    chat: true,
+    streaming: models.some((model) => model.supportedFeatures.streaming),
+    toolCalling: models.some((model) => model.supportedFeatures.toolCalling),
+    jsonMode: true,
+    reasoning: true,
+    prefixCaching: true,
+    kvCaching: true,
+  };
+}
+
+function normalizeOpenAICompatibleBaseUrl(baseUrl: string | undefined, fallback: string): string {
+  const normalized = (baseUrl || fallback).replace(/\/$/, '');
+  return /\/v\d+$/i.test(normalized) ? normalized : `${normalized}/v1`;
+}
+
+function legacyToolToModelTool(tool: ToolDefinition): ModelToolDescriptor {
+  return {
+    id: tool.name,
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  };
 }
 
 function modelMessagesToLLMMessages(input: HyphaModelRequest['input']): LLMMessage[] {
   const messages = Array.isArray(input)
-    ? input as ModelMessage[]
+    ? (input as ModelMessage[])
     : [{ role: 'user' as const, content: String(input) }];
   return messages.map((message) => ({
     role: message.role === 'tool' ? 'assistant' : message.role,
@@ -491,7 +833,9 @@ function modelMessagesToLLMMessages(input: HyphaModelRequest['input']): LLMMessa
   }));
 }
 
-function modelToolToLegacyTool(tool: ModelToolDescriptor): NonNullable<ChatOptions['tools']>[number] {
+function modelToolToLegacyTool(
+  tool: ModelToolDescriptor
+): NonNullable<ChatOptions['tools']>[number] {
   return {
     name: tool.name,
     description: tool.description,
@@ -515,7 +859,10 @@ function streamChunkToModelStreamEvent(chunk: StreamChunk): ModelStreamEvent {
           : undefined,
       };
     case 'done':
-      return { type: 'done', usage: chunk.usage ? legacyUsageToModelUsage(chunk.usage) : undefined };
+      return {
+        type: 'done',
+        usage: chunk.usage ? legacyUsageToModelUsage(chunk.usage) : undefined,
+      };
     case 'error':
       return { type: 'error', error: chunk.error };
     case 'tool_result':
@@ -541,11 +888,11 @@ function modelUsageToLegacyUsage(usage: ModelUsage): NonNullable<ChatResponse['u
 
 function isChatResponse(value: unknown): value is ChatResponse {
   return Boolean(
-    value
-    && typeof value === 'object'
-    && 'role' in value
-    && 'finishReason' in value
-    && 'provider' in value
+    value &&
+    typeof value === 'object' &&
+    'role' in value &&
+    'finishReason' in value &&
+    'provider' in value
   );
 }
 

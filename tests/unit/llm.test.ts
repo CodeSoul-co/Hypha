@@ -1,5 +1,4 @@
 import { ClaudeAdapter } from '../../apps/server/src/core/llm/adapters/ClaudeAdapter';
-import { OpenAIAdapter } from '../../apps/server/src/core/llm/adapters/OpenAIAdapter';
 import {
   createLLMManagerModelProvider,
   type LLMManager,
@@ -45,32 +44,6 @@ describe('LLM Adapters', () => {
       await adapter.initialize();
       const healthy = await adapter.healthCheck();
       expect(typeof healthy).toBe('boolean');
-    });
-  });
-
-  describe('OpenAIAdapter', () => {
-    let adapter: OpenAIAdapter;
-
-    beforeEach(() => {
-      adapter = new OpenAIAdapter('test-api-key');
-    });
-
-    it('should create an instance', () => {
-      expect(adapter).toBeDefined();
-      expect(adapter.provider).toBe('openai');
-    });
-
-    it('should list available models', async () => {
-      const models = await adapter.listModels();
-      expect(models).toBeDefined();
-      expect(Array.isArray(models)).toBe(true);
-      expect(models.length).toBeGreaterThan(0);
-    });
-
-    it('should get model info', async () => {
-      const model = await adapter.getModel('gpt-4o');
-      expect(model).toBeDefined();
-      expect(model?.id).toBe('gpt-4o');
     });
   });
 
