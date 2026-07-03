@@ -18,7 +18,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`.                                            |
 | `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, guarded transitions, timeout/retry/human-review helpers.                                  |
 | `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, ReAct phases and runtime interfaces.                                                      |
-| `@hypha/inference`      | `InferenceManager`, prefix/KV cache providers, reasoning orchestration.                                                    |
+| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.           |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
 | `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, side-effect governance.                                                  |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, capability normalization into tool/resource/prompt specs.                                            |
@@ -166,9 +166,32 @@ OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `typ
 
 ## Inference
 
-`InferenceRequest` contains `runId`, `stepId`, optional `agentId`, `modelAlias`, optional `providerId`, `input`, optional `cachePolicy`, optional `prefix`, optional `kvCache`, `trace`, `metadata`, and resolved cache fields supplied by the inference manager.
+`HyphaInferencePipeline` is the default agent inference provider. It executes:
 
-`InferenceResponse` contains `id`, `output`, optional `usage`, optional cache usage, optional `nextKvCacheValue`, and optional raw provider payload. `InferenceManager.stream(providerId, request)` yields the same response envelope for streaming providers.
+```text
+InferenceRequest -> PromptCompiler -> PrefixSegmenter -> PlasmodHotLayer -> InferenceBackend -> InferenceResponse
+```
+
+`InferenceRequest` fields include `runId`, `stepId`, optional `sessionId`, optional `agentId`, `modelAlias`, optional `providerId`, optional `backendId`, `input`, optional generation `options`, optional `cachePolicy`, optional `prefix`, optional `kvCache`, `trace`, `metadata`, and resolved cache fields supplied by `InferenceManager`. `providerId` remains for manager routing; `backendId` selects the physical inference backend when using `HyphaInferencePipeline`.
+
+`InferenceResponse` contains `id`, normalized `output`, optional `usage`, optional cache usage, optional `nextKvCacheValue`, optional `metadata`, and optional raw provider payload.
+
+`DefaultPromptCompiler` accepts string prompts, `PromptMessage[]`, or structured input with `instructions`, `messages`, `context`, `prompt`, or `input`. It returns `CompiledPrompt` with normalized messages and rendered text. `DefaultPrefixSegmenter` splits compiled prompts into cacheable stable segments and dynamic prompt content.
+
+`PrefixSegment` fields include `id`, `kind`, `scope`, `content`, `contentHash`, optional `tokenCount`, `cacheable`, optional `dependencies`, and optional `metadata`. Cacheable roles are `system`, `developer`, `context`, `memory`, and `tool`; `user` and `assistant` content stays dynamic by default.
+
+`PlasmodHotLayer` manages prefix registry, cache metadata, session state, invalidation graph, and reuse policy. `PlasmodReusePolicy` supports `allowCrossSession`, `allowCrossAgent`, `minTokenCount`, `requireExactHash`, and `maxPrefixRefs`. The in-memory implementation is suitable for local runtimes and tests; production deployments can replace it without changing kernel contracts.
+
+Backend ids:
+
+| Backend id   | Adapter                         | Default URL                         |
+| ------------ | ------------------------------- | ----------------------------------- |
+| `sglang`     | `SGLangInferenceBackend`        | `http://localhost:30000/generate`   |
+| `vllm`       | `VLLMInferenceBackend`          | `http://localhost:8000/v1/chat/completions` |
+| `llama.cpp`  | `LlamaCppInferenceBackend`      | `http://localhost:8080/completion`  |
+| `openai-api` | `OpenAIAPIInferenceBackend`     | `https://api.openai.com/v1/chat/completions` |
+
+`createDefaultInferenceBackendRegistry()` registers all four backends and defaults to `sglang`. Each backend consumes `InferenceBackendRequest` and returns `InferenceBackendResponse` with normalized `output`, `usage`, optional `physicalKvCache`, optional `metadata`, and optional `raw`.
 
 Cache references:
 
@@ -177,9 +200,7 @@ Cache references:
 | `PrefixCacheRef` | `id`, `version`, `contentHash`, optional `tokenCount`, `metadata`.         |
 | `KvCacheRef`     | `id`, `provider`, `modelAlias`, `scope`, optional `expiresAt`, `metadata`. |
 
-`InferenceCachePolicy` supports `prefix`, `kvCache`, and `writeKvCache`. `writeKvCache` accepts a target ref, optional explicit value, and mode `write_through`, `write_if_missing`, or `refresh`.
-
-`InferenceCacheManager` creates and reads prefix and KV cache refs. KV cache scope is `run`, `session`, or `workspace`. `InferenceManager` enforces `expiresAt` before provider calls, invalidates expired refs, annotates hit or miss metadata, and applies cache usage to non-streaming and streaming inference. On cache hits, providers receive `resolvedPrefixContent` and `resolvedKvCacheValue`; when a provider returns `nextKvCacheValue`, the manager can write it back according to `cachePolicy.writeKvCache`.
+`InferenceCachePolicy` supports `prefix`, `kvCache`, and `writeKvCache`. `writeKvCache` accepts a target ref, optional explicit value, and mode `write_through`, `write_if_missing`, or `refresh`. `InferenceManager` enforces `expiresAt`, annotates hit or miss metadata, and can persist `nextKvCacheValue` returned from an inference provider.
 
 `ReasoningOrchestrator` supports `direct`, `cot`, `tot`, and `self_consistency`. `ReasoningOptions` include `branches`, `maxDepth`, `revealReasoning`, and an optional evaluator.
 

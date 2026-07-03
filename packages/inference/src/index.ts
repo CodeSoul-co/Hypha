@@ -2,3 +2,8 @@ export * from './types';
 export * from './manager';
 export * from './cache';
 export * from './reasoning';
+export * from './prompt';
+export * from './prefix';
+export * from './plasmod';
+export * from './backends';
+export * from './pipeline';

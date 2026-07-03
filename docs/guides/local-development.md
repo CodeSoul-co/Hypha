@@ -79,6 +79,20 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 The server exposes configured aliases such as `default-chat`, `default-fast`, and `default-reasoning` to agent runtime code. These aliases resolve to `provider:model` targets in `llm.aliases`, so package and kernel code do not need provider-specific model ids.
 
+## Inference Backends
+
+Agent inference backend settings live under `inference` in `config.yaml`. SGLang is the default physical backend; vLLM, llama.cpp, and OpenAI API use the same package-level interface.
+
+```bash
+HYPHA_INFERENCE_DEFAULT_BACKEND=sglang
+SGLANG_BASE_URL=http://localhost:30000
+VLLM_BASE_URL=http://localhost:8000
+LLAMA_CPP_BASE_URL=http://localhost:8080
+OPENAI_INFERENCE_BASE_URL=https://api.openai.com/v1
+```
+
+`HYPHA_INFERENCE_ALLOW_CROSS_SESSION_CACHE=false` and `HYPHA_INFERENCE_ALLOW_CROSS_AGENT_CACHE=false` keep prefix and KV cache reuse inside the current runtime boundary by default. Enable cross-boundary reuse only when the deployment has explicit tenant isolation and cache invalidation policy.
+
 ## Local and Cloud Overrides
 
 MongoDB supports local host/port settings or a cloud URI:

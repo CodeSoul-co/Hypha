@@ -1,4 +1,4 @@
-import { dbConfig, redisConfig, reloadConfig, storageConfig } from './index';
+import { dbConfig, inferenceConfig, redisConfig, reloadConfig, storageConfig } from './index';
 
 const trackedEnv = [
   'MONGODB_URI',
@@ -11,6 +11,11 @@ const trackedEnv = [
   'HYPHA_STORAGE_ARTIFACT_ROOT',
   'HYPHA_SYSTEM_LOG_PATH',
   'KAFKA_ENABLED',
+  'HYPHA_INFERENCE_DEFAULT_BACKEND',
+  'SGLANG_BASE_URL',
+  'VLLM_BASE_URL',
+  'LLAMA_CPP_BASE_URL',
+  'OPENAI_INFERENCE_BASE_URL',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -71,9 +76,7 @@ describe('configuration storage taxonomy', () => {
     expect(storageConfig().relational.sqlite.structuredDbPath).toBe(
       './data/runtime/structured/hypha-structured.sqlite'
     );
-    expect(storageConfig().vector.local.path).toBe(
-      './data/storage/vector/hypha-vectors.json'
-    );
+    expect(storageConfig().vector.local.path).toBe('./data/storage/vector/hypha-vectors.json');
     expect(storageConfig().artifacts.local.rootPath).toBe('./data/storage/artifacts');
     expect(reloadConfig().logging.outputs?.[1]?.path).toBe('./data/logs/system.log');
   });
@@ -85,5 +88,25 @@ describe('configuration storage taxonomy', () => {
     expect(profiles).toContain('storage.redis.messaging');
     expect(profiles).toContain('storage.sqlite.events');
     expect(profiles).toContain('storage.local-vector.semantic');
+  });
+
+  it('loads inference backend configuration with SGLang as default', () => {
+    process.env.HYPHA_INFERENCE_DEFAULT_BACKEND = 'sglang';
+    process.env.SGLANG_BASE_URL = 'http://sglang.local:30000';
+    process.env.VLLM_BASE_URL = 'http://vllm.local:8000';
+    process.env.LLAMA_CPP_BASE_URL = 'http://llama.local:8080';
+    process.env.OPENAI_INFERENCE_BASE_URL = 'https://openai.example/v1';
+
+    const config = reloadConfig();
+
+    expect(config.inference.defaultBackend).toBe('sglang');
+    expect(inferenceConfig().backends.sglang.baseUrl).toBe('http://sglang.local:30000');
+    expect(inferenceConfig().backends.vllm.baseUrl).toBe('http://vllm.local:8000');
+    expect(inferenceConfig().backends.llamaCpp.baseUrl).toBe('http://llama.local:8080');
+    expect(inferenceConfig().backends.openaiApi.baseUrl).toBe('https://openai.example/v1');
+    expect(inferenceConfig().plasmod.reusePolicy).toMatchObject({
+      allowCrossSession: false,
+      requireExactHash: true,
+    });
   });
 });

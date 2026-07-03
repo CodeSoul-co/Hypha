@@ -11,7 +11,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/domain` | `DomainPackSpec`, `WorkflowSpec`, session profile initialization, workflow-to-FSM compilation. | Business-specific workflows or app routes. |
 | `@hypha/fsm` | FSM process spec, guarded transitions, timeout/retry/human-review semantics. | Tool handlers, model calls, storage adapters. |
 | `@hypha/kernel` | ReAct agent spec and executable ReAct runner. | Concrete model providers, direct tool side effects. |
-| `@hypha/inference` | Provider-neutral inference manager, prefix cache, KV cache, reasoning orchestration. | Provider-specific request types in public kernel contracts. |
+| `@hypha/inference` | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration. | Provider-specific request types in public kernel contracts. |
 | `@hypha/models` | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters. | Agent loop, workflow semantics, or app-specific model preferences. |
 | `@hypha/tools` | Tool specs, registry, governed runner, side-effect policy and trace events. | Direct execution bypassing policy. |
 | `@hypha/mcp` | MCP profile specs and capability normalization into framework contracts. | Real server lifecycle as framework core. |
@@ -52,6 +52,12 @@ tool handler -> filesystem/network side effect without ToolRunner
 memory writer -> provider write without scope, policy, and trace
 agent kernel -> provider-specific model request or response type
 ```
+
+## Inference Runtime
+
+Agent inference is a packages-layer pipeline: `PromptCompiler` normalizes runtime input, `PrefixSegmenter` separates stable prefix segments from dynamic content, `PlasmodHotLayer` tracks prefix registry/cache metadata/session state/invalidation graph/reuse policy, and `InferenceBackend` adapters call physical backends.
+
+`sglang` is the default backend. `vllm`, `llama.cpp`, and `openai-api` are registered through the same backend interface. Backends may expose physical KV cache handles through `InferenceBackendResponse.physicalKvCache`; the pipeline returns that handle as `InferenceResponse.nextKvCacheValue` so `InferenceManager` can persist it through `cachePolicy.writeKvCache`.
 
 ## Extension Boundaries
 

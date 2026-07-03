@@ -61,6 +61,75 @@ const providerConfigSchema = z.object({
   timeout: z.number().default(60000),
 });
 
+const inferenceBackendIdSchema = z.enum(['sglang', 'vllm', 'llama.cpp', 'openai-api']);
+
+const inferenceHttpBackendConfigSchema = z.object({
+  enabled: booleanishSchema.default(true),
+  baseUrl: z.string(),
+  endpoint: z.string(),
+  apiKeyEnv: optionalStringSchema,
+  timeoutMs: z.coerce.number().default(60000),
+});
+
+const inferenceConfigSchema = z
+  .object({
+    defaultBackend: inferenceBackendIdSchema.default('sglang'),
+    promptCompiler: z
+      .object({
+        enabled: booleanishSchema.default(true),
+      })
+      .default({}),
+    prefixSegmenter: z
+      .object({
+        enabled: booleanishSchema.default(true),
+      })
+      .default({}),
+    plasmod: z
+      .object({
+        enabled: booleanishSchema.default(true),
+        reusePolicy: z
+          .object({
+            allowCrossSession: booleanishSchema.default(false),
+            allowCrossAgent: booleanishSchema.default(false),
+            minTokenCount: z.coerce.number().default(1),
+            requireExactHash: booleanishSchema.default(true),
+            maxPrefixRefs: z.coerce.number().default(32),
+          })
+          .default({}),
+      })
+      .default({}),
+    backends: z
+      .object({
+        sglang: inferenceHttpBackendConfigSchema.default({
+          enabled: true,
+          baseUrl: 'http://localhost:30000',
+          endpoint: '/generate',
+          timeoutMs: 60000,
+        }),
+        vllm: inferenceHttpBackendConfigSchema.default({
+          enabled: true,
+          baseUrl: 'http://localhost:8000',
+          endpoint: '/v1/chat/completions',
+          timeoutMs: 60000,
+        }),
+        llamaCpp: inferenceHttpBackendConfigSchema.default({
+          enabled: true,
+          baseUrl: 'http://localhost:8080',
+          endpoint: '/completion',
+          timeoutMs: 60000,
+        }),
+        openaiApi: inferenceHttpBackendConfigSchema.default({
+          enabled: true,
+          baseUrl: 'https://api.openai.com/v1',
+          endpoint: '/chat/completions',
+          apiKeyEnv: 'OPENAI_API_KEY',
+          timeoutMs: 60000,
+        }),
+      })
+      .default({}),
+  })
+  .default({});
+
 const mongoStorageConfigSchema = z.object({
   uri: optionalStringSchema,
   uriEnv: z.string().default('MONGODB_URI'),
@@ -209,6 +278,7 @@ const configSchema = z.object({
     })
     .optional(),
   redis: redisStorageConfigSchema.optional(),
+  inference: inferenceConfigSchema,
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),
     defaultModel: z.string().default('claude-3-5-sonnet-20241022'),
@@ -349,10 +419,7 @@ const configSchema = z.object({
           path: z.string().optional(),
         })
       )
-      .default([
-        { type: 'console' },
-        { type: 'file', path: './data/logs/system.log' },
-      ]),
+      .default([{ type: 'console' }, { type: 'file', path: './data/logs/system.log' }]),
   }),
   auth: z.object({
     enabled: z.boolean().default(true),
@@ -524,6 +591,7 @@ export const redisConfig = () => {
   return config.redis ?? config.storage.messaging.redis;
 };
 export const storageConfig = () => getConfig().storage;
+export const inferenceConfig = () => getConfig().inference;
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
 export const authConfig = () => getConfig().auth;

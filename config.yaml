@@ -189,6 +189,43 @@ storage:
       capabilities: ["artifact_bytes"]
       consistency: "strong"
 
+inference:
+  defaultBackend: "${HYPHA_INFERENCE_DEFAULT_BACKEND:sglang}"
+  promptCompiler:
+    enabled: true
+  prefixSegmenter:
+    enabled: true
+  plasmod:
+    enabled: true
+    reusePolicy:
+      allowCrossSession: "${HYPHA_INFERENCE_ALLOW_CROSS_SESSION_CACHE:false}"
+      allowCrossAgent: "${HYPHA_INFERENCE_ALLOW_CROSS_AGENT_CACHE:false}"
+      minTokenCount: "${HYPHA_INFERENCE_MIN_PREFIX_TOKENS:1}"
+      requireExactHash: true
+      maxPrefixRefs: "${HYPHA_INFERENCE_MAX_PREFIX_REFS:32}"
+  backends:
+    sglang:
+      enabled: "${SGLANG_ENABLED:true}"
+      baseUrl: "${SGLANG_BASE_URL:http://localhost:30000}"
+      endpoint: "${SGLANG_ENDPOINT:/generate}"
+      timeoutMs: "${SGLANG_TIMEOUT_MS:60000}"
+    vllm:
+      enabled: "${VLLM_ENABLED:true}"
+      baseUrl: "${VLLM_BASE_URL:http://localhost:8000}"
+      endpoint: "${VLLM_ENDPOINT:/v1/chat/completions}"
+      timeoutMs: "${VLLM_TIMEOUT_MS:60000}"
+    llamaCpp:
+      enabled: "${LLAMA_CPP_ENABLED:true}"
+      baseUrl: "${LLAMA_CPP_BASE_URL:http://localhost:8080}"
+      endpoint: "${LLAMA_CPP_ENDPOINT:/completion}"
+      timeoutMs: "${LLAMA_CPP_TIMEOUT_MS:60000}"
+    openaiApi:
+      enabled: "${OPENAI_INFERENCE_ENABLED:true}"
+      baseUrl: "${OPENAI_INFERENCE_BASE_URL:https://api.openai.com/v1}"
+      endpoint: "${OPENAI_INFERENCE_ENDPOINT:/chat/completions}"
+      apiKeyEnv: "OPENAI_API_KEY"
+      timeoutMs: "${OPENAI_INFERENCE_TIMEOUT_MS:60000}"
+
 llm:
   defaultProvider: "${HYPHA_LLM_DEFAULT_PROVIDER:openai}"
   defaultModel: "${HYPHA_LLM_DEFAULT_MODEL:gpt-4o-mini}"

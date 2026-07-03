@@ -1,8 +1,81 @@
 import { describe, expect, it } from 'vitest';
+import {
+  createDefaultInferenceBackendRegistry,
+  LlamaCppInferenceBackend,
+  OpenAIAPIInferenceBackend,
+  SGLangInferenceBackend,
+  VLLMInferenceBackend,
+} from './backends';
 import { InferenceCacheManager } from './cache';
 import { InferenceManager, InMemoryKvCacheProvider, InMemoryPrefixCacheProvider } from './manager';
+import { HyphaInferencePipeline } from './pipeline';
+import { InMemoryPlasmodHotLayer } from './plasmod';
+import { DefaultPrefixSegmenter } from './prefix';
+import { DefaultPromptCompiler } from './prompt';
 import { ReasoningOrchestrator } from './reasoning';
-import type { InferenceProvider } from './types';
+import type { InferenceBackendRequest, InferenceProvider } from './types';
+
+class RecordingTransport {
+  readonly calls: Array<{
+    url: string;
+    body: unknown;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  }> = [];
+
+  constructor(private readonly response: unknown) {}
+
+  async postJson<TResponse = unknown>(
+    url: string,
+    body: unknown,
+    headers?: Record<string, string>,
+    timeoutMs?: number
+  ): Promise<TResponse> {
+    this.calls.push({ url, body, headers, timeoutMs });
+    return this.response as TResponse;
+  }
+}
+
+function backendRequest(): InferenceBackendRequest {
+  return {
+    runId: 'run_backend',
+    stepId: 'step_backend',
+    sessionId: 'session_backend',
+    agentId: 'agent_backend',
+    modelAlias: 'default-chat',
+    compiledPrompt: {
+      id: 'prompt_backend',
+      text: '<system>\nstable\n</system>\n\n<user>\nhello\n</user>',
+      messages: [
+        { role: 'system', content: 'stable' },
+        { role: 'user', content: 'hello' },
+      ],
+    },
+    segmentation: {
+      compiled: {
+        id: 'prompt_backend',
+        text: '<system>\nstable\n</system>\n\n<user>\nhello\n</user>',
+        messages: [
+          { role: 'system', content: 'stable' },
+          { role: 'user', content: 'hello' },
+        ],
+      },
+      segments: [],
+      stablePrefix: '<system>\nstable\n</system>',
+      dynamicPrompt: '<user>\nhello\n</user>',
+      metadata: { stablePrefixHash: 'stable_hash' },
+    },
+    prefixRefs: [
+      {
+        id: 'prefix_ref',
+        version: 'sglang:default-chat',
+        contentHash: 'hash',
+      },
+    ],
+    options: { temperature: 0.2, maxTokens: 32 },
+    metadata: { providerModel: 'provider-model' },
+  };
+}
 
 describe('@hypha/inference', () => {
   it('routes inference requests through registered providers', async () => {
@@ -334,5 +407,217 @@ describe('@hypha/inference', () => {
       })
     ).resolves.toMatchObject({ id: 'response_2' });
     expect(calls).toHaveLength(3);
+  });
+
+  it('compiles prompts and segments stable prefixes from dynamic input', async () => {
+    const compiler = new DefaultPromptCompiler();
+    const compiled = await compiler.compile({
+      runId: 'run_prompt',
+      stepId: 'step_prompt',
+      sessionId: 'session_prompt',
+      agentId: 'agent_prompt',
+      modelAlias: 'default-chat',
+      instructions: 'Follow the domain policy.',
+      context: { domain: 'general', ownerMode: 'single-user' },
+      input: 'Summarize the current run.',
+    });
+
+    expect(compiled.messages.map((message) => message.role)).toEqual([
+      'developer',
+      'context',
+      'user',
+    ]);
+
+    const segmented = await new DefaultPrefixSegmenter().segment(compiled);
+    expect(segmented.stablePrefix).toContain('Follow the domain policy.');
+    expect(segmented.dynamicPrompt).toContain('Summarize the current run.');
+    expect(segmented.segments.filter((segment) => segment.cacheable)).toHaveLength(2);
+    expect(segmented.metadata).toMatchObject({
+      segmentCount: 3,
+      cacheableSegmentCount: 2,
+    });
+  });
+
+  it('tracks prefix registry, cache metadata, session state, and invalidation in Plasmod', async () => {
+    const compiler = new DefaultPromptCompiler();
+    const compiled = await compiler.compile({
+      runId: 'run_plasmod_1',
+      stepId: 'step_plasmod',
+      sessionId: 'session_plasmod',
+      agentId: 'agent_plasmod',
+      modelAlias: 'default-chat',
+      instructions: 'Stable runtime contract.',
+      input: 'First dynamic request.',
+    });
+    const segmented = await new DefaultPrefixSegmenter().segment(compiled);
+    const hotLayer = new InMemoryPlasmodHotLayer(() => new Date('2026-07-03T00:00:00.000Z'));
+
+    const first = await hotLayer.prepare({
+      runId: 'run_plasmod_1',
+      stepId: 'step_plasmod',
+      sessionId: 'session_plasmod',
+      agentId: 'agent_plasmod',
+      modelAlias: 'default-chat',
+      backendId: 'sglang',
+      segmentation: segmented,
+    });
+    const second = await hotLayer.prepare({
+      runId: 'run_plasmod_2',
+      stepId: 'step_plasmod',
+      sessionId: 'session_plasmod',
+      agentId: 'agent_plasmod',
+      modelAlias: 'default-chat',
+      backendId: 'sglang',
+      segmentation: segmented,
+    });
+
+    expect(first.reusedSegmentIds).toHaveLength(0);
+    expect(second.reusedSegmentIds).toHaveLength(1);
+    expect(hotLayer.snapshot()).toMatchObject({
+      prefixRegistrySize: 1,
+      cacheMetadataSize: 1,
+      sessionStateSize: 2,
+    });
+
+    const state = hotLayer.getSessionState(second.metadata?.stateId as string);
+    expect(state).toMatchObject({
+      sessionId: 'session_plasmod',
+      backendId: 'sglang',
+      modelAlias: 'default-chat',
+    });
+
+    const ref = second.prefixRefs[0];
+    expect(hotLayer.getCacheMetadata(ref.id)).toMatchObject({
+      segmentId: ref.id,
+      reused: true,
+    });
+
+    await hotLayer.invalidateSegment(ref.id, 'test');
+    expect(hotLayer.getCacheMetadata(ref.id)).toBeNull();
+  });
+
+  it('registers all inference backends and defaults to SGLang', () => {
+    const registry = createDefaultInferenceBackendRegistry();
+    expect(registry.default().id).toBe('sglang');
+    expect(
+      registry
+        .list()
+        .map((entry) => entry.id)
+        .sort()
+    ).toEqual(['llama.cpp', 'openai-api', 'sglang', 'vllm']);
+  });
+
+  it('normalizes concrete backend request and response shapes', async () => {
+    const sglangTransport = new RecordingTransport({
+      id: 'sglang_response',
+      text: 'sglang output',
+      usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+      kv_cache: { handle: 'sglang-kv' },
+    });
+    const sglang = new SGLangInferenceBackend({ transport: sglangTransport });
+    await expect(sglang.infer(backendRequest())).resolves.toMatchObject({
+      id: 'sglang_response',
+      output: 'sglang output',
+      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      physicalKvCache: { handle: 'sglang-kv' },
+    });
+    expect(sglangTransport.calls[0].url).toBe('http://localhost:30000/generate');
+    expect(sglangTransport.calls[0].body).toMatchObject({
+      text: expect.stringContaining('hello'),
+      sampling_params: { max_new_tokens: 32, temperature: 0.2 },
+      stream: false,
+    });
+
+    const vllmTransport = new RecordingTransport({
+      id: 'vllm_response',
+      choices: [{ message: { content: 'vllm output' } }],
+      usage: { prompt_tokens: 2, completion_tokens: 5 },
+    });
+    const vllm = new VLLMInferenceBackend({ transport: vllmTransport });
+    await expect(vllm.infer(backendRequest())).resolves.toMatchObject({
+      output: 'vllm output',
+      usage: { inputTokens: 2, outputTokens: 5, totalTokens: 7 },
+    });
+    expect(vllmTransport.calls[0].body).toMatchObject({
+      model: 'provider-model',
+      messages: [
+        { role: 'system', content: 'stable' },
+        { role: 'user', content: 'hello' },
+      ],
+    });
+
+    const llamaTransport = new RecordingTransport({
+      content: 'llama output',
+      tokens_evaluated: 6,
+      tokens_predicted: 8,
+    });
+    const llama = new LlamaCppInferenceBackend({ transport: llamaTransport });
+    await expect(llama.infer(backendRequest())).resolves.toMatchObject({
+      output: 'llama output',
+      usage: { inputTokens: 6, outputTokens: 8, totalTokens: 14 },
+    });
+    expect(llamaTransport.calls[0].body).toMatchObject({
+      prompt: expect.stringContaining('hello'),
+      cache_prompt: true,
+      n_predict: 32,
+    });
+
+    const openaiTransport = new RecordingTransport({
+      id: 'openai_response',
+      choices: [{ message: { content: 'openai output' } }],
+    });
+    const openai = new OpenAIAPIInferenceBackend({
+      transport: openaiTransport,
+      apiKey: 'test-key',
+    });
+    await expect(openai.infer(backendRequest())).resolves.toMatchObject({
+      output: 'openai output',
+    });
+    expect(openaiTransport.calls[0].url).toBe('https://api.openai.com/v1/chat/completions');
+    expect(openaiTransport.calls[0].headers).toMatchObject({
+      authorization: 'Bearer test-key',
+    });
+  });
+
+  it('runs the full Hypha inference pipeline through default SGLang and returns generated tokens', async () => {
+    const transport = new RecordingTransport({
+      id: 'pipeline_response',
+      text: 'generated tokens',
+      kv_cache: { handle: 'physical-kv-cache' },
+    });
+    const registry = createDefaultInferenceBackendRegistry({
+      sglang: { transport },
+    });
+    const pipeline = new HyphaInferencePipeline({ backends: registry });
+
+    await expect(
+      pipeline.infer({
+        runId: 'run_pipeline',
+        stepId: 'step_pipeline',
+        sessionId: 'session_pipeline',
+        agentId: 'agent_pipeline',
+        modelAlias: 'default-chat',
+        input: {
+          instructions: 'Keep responses concise.',
+          prompt: 'Say hello.',
+        },
+      })
+    ).resolves.toMatchObject({
+      id: 'pipeline_response',
+      output: 'generated tokens',
+      nextKvCacheValue: { handle: 'physical-kv-cache' },
+      metadata: {
+        backendId: 'sglang',
+        backendKind: 'sglang',
+      },
+      cache: {
+        kvCacheRef: { provider: 'sglang', modelAlias: 'default-chat', scope: 'session' },
+      },
+    });
+    expect(transport.calls[0].url).toBe('http://localhost:30000/generate');
+    expect(transport.calls[0].body).toMatchObject({
+      text: expect.stringContaining('Say hello.'),
+      stream: false,
+    });
   });
 });
