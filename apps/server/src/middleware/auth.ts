@@ -214,7 +214,7 @@ export function generateRefreshToken(user: { id?: string; _id?: unknown }): stri
   const config = authConfig();
   return jwt.sign(
     { userId, type: 'refresh' },
-    config.jwt.secret,
+    config.jwt.refreshSecret ?? config.jwt.secret,
     { expiresIn: config.jwt.refreshExpiry }
   );
 }
@@ -227,7 +227,7 @@ interface RefreshTokenPayload {
 export function verifyRefreshToken(token: string): { userId: string } | null {
   try {
     const config = authConfig();
-    const decoded = jwt.verify(token, config.jwt.secret) as RefreshTokenPayload;
+    const decoded = jwt.verify(token, config.jwt.refreshSecret ?? config.jwt.secret) as RefreshTokenPayload;
     if (decoded.type !== 'refresh') {
       return null;
     }

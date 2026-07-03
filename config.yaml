@@ -1,10 +1,10 @@
 app:
-  name: "hypha"
-  version: "1.0.0"
-  env: "development"
-  host: "0.0.0.0"
-  port: 3000
-  apiPrefix: "/api/v1"
+  name: "${HYPHA_APP_NAME:hypha}"
+  version: "${HYPHA_APP_VERSION:1.0.0}"
+  env: "${NODE_ENV:development}"
+  host: "${HOST:0.0.0.0}"
+  port: "${PORT:3000}"
+  apiPrefix: "${HYPHA_API_PREFIX:/api/v1}"
 
 database:
   mongodb:
@@ -36,8 +36,8 @@ redis:
   tls: "${REDIS_TLS:false}"
 
 llm:
-  defaultProvider: "deepseek"
-  defaultModel: "deepseek-v4-flash"
+  defaultProvider: "${HYPHA_LLM_DEFAULT_PROVIDER:openai}"
+  defaultModel: "${HYPHA_LLM_DEFAULT_MODEL:gpt-4o-mini}"
 
   # Anthropic Claude 模型选择
   anthropic:
@@ -93,6 +93,16 @@ llm:
         enabled: true
         default: false
         description: "Most capable model, multimodal"
+        contextWindow: 128000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: true
+      - id: "gpt-4o-mini"
+        name: "GPT-4o Mini"
+        enabled: true
+        default: true
+        description: "Fast default OpenAI model"
         contextWindow: 128000
         features:
           streaming: true
@@ -167,7 +177,7 @@ llm:
   # Ollama 本地模型 (如果没有安装 Ollama，设为 false)
   ollama:
     enabled: false
-    baseUrl: "http://localhost:11434"
+    baseUrl: "${OLLAMA_BASE_URL:http://localhost:11434}"
     models:
       - id: "llama2"
         name: "Llama 2"
@@ -354,19 +364,19 @@ llm:
   providers:
     anthropic:
       apiKey: "${ANTHROPIC_API_KEY}"
-      baseUrl: "https://api.anthropic.com"
+      baseUrl: "${ANTHROPIC_BASE_URL:https://api.anthropic.com}"
       timeout: 60000
     openai:
       apiKey: "${OPENAI_API_KEY}"
-      baseUrl: "https://api.openai.com"
+      baseUrl: "${OPENAI_BASE_URL:https://api.openai.com}"
       timeout: 60000
     google:
       apiKey: "${GOOGLE_API_KEY}"
-      baseUrl: "https://generativelanguage.googleapis.com"
+      baseUrl: "${GOOGLE_BASE_URL:https://generativelanguage.googleapis.com}"
       timeout: 60000
     ollama:
       apiKey: ""
-      baseUrl: "http://localhost:11434"
+      baseUrl: "${OLLAMA_BASE_URL:http://localhost:11434}"
       timeout: 120000
     deepseek:
       apiKey: "${DEEPSEEK_API_KEY}"
@@ -386,11 +396,87 @@ storage:
   local:
     rootPath: "${HYPHA_STORAGE_ROOT:./data/storage}"
     sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
-    eventDbPath: "${HYPHA_RUNTIME_EVENT_DB:./data/hypha-runtime-events.sqlite}"
-    structuredDbPath: "${HYPHA_STRUCTURED_DB:./data/hypha-structured.sqlite}"
-    vectorPath: "${HYPHA_VECTOR_INDEX:./data/hypha-vectors.json}"
-    artifactRootPath: "${HYPHA_ARTIFACT_ROOT:./data/artifacts}"
-  profiles: []
+    eventDbPath: "${HYPHA_STORAGE_EVENT_DB|HYPHA_RUNTIME_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+    structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB|HYPHA_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+    vectorPath: "${HYPHA_STORAGE_VECTOR_INDEX|HYPHA_VECTOR_INDEX:./data/hypha-vectors.json}"
+    artifactRootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT|HYPHA_ARTIFACT_ROOT:./data/artifacts}"
+  # Provider profiles are deploy-time declarations. Framework specs reference
+  # these ids; adapters resolve concrete URIs from env or connection metadata.
+  profiles:
+    - id: "storage.sqlite.events"
+      version: "0.0.0"
+      name: "Local SQLite Event Store"
+      kind: "event"
+      engine: "sqlite"
+      deployment: "local"
+      role: "event_log"
+      connection:
+        uri: "file:${HYPHA_STORAGE_EVENT_DB|HYPHA_RUNTIME_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+      capabilities: ["events", "structured", "transactions"]
+      consistency: "strong"
+    - id: "storage.sqlite.structured"
+      version: "0.0.0"
+      name: "Local SQLite Structured Store"
+      kind: "relational"
+      engine: "sqlite"
+      deployment: "local"
+      role: "source_of_truth"
+      connection:
+        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB|HYPHA_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+      capabilities: ["structured", "transactions"]
+      consistency: "strong"
+    - id: "storage.local-vector.semantic"
+      version: "0.0.0"
+      name: "Local Vector Semantic Index"
+      kind: "vector"
+      engine: "local-vector"
+      deployment: "local"
+      role: "semantic_index"
+      connection:
+        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX|HYPHA_VECTOR_INDEX:./data/hypha-vectors.json}"
+      capabilities: ["vector_search", "metadata_filter"]
+      consistency: "eventual"
+    - id: "storage.file-artifact.local"
+      version: "0.0.0"
+      name: "Local File Artifact Store"
+      kind: "object"
+      engine: "file-artifact"
+      deployment: "local"
+      role: "artifact_store"
+      connection:
+        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT|HYPHA_ARTIFACT_ROOT:./data/artifacts}"
+      capabilities: ["artifact_bytes"]
+      consistency: "strong"
+    # Example external vector providers. Uncomment and set matching env values
+    # when a deployment uses a remote vector index instead of local-vector.
+    # - id: "storage.qdrant.semantic"
+    #   version: "0.0.0"
+    #   name: "Qdrant Semantic Index"
+    #   kind: "vector"
+    #   engine: "qdrant"
+    #   deployment: "self_hosted"
+    #   role: "semantic_index"
+    #   connection:
+    #     uriEnv: "QDRANT_URL"
+    #     tls: false
+    #   capabilities: ["vector_search", "metadata_filter"]
+    #   consistency: "eventual"
+    # - id: "storage.pinecone.semantic"
+    #   version: "0.0.0"
+    #   name: "Pinecone Semantic Index"
+    #   kind: "vector"
+    #   engine: "pinecone"
+    #   deployment: "managed"
+    #   role: "semantic_index"
+    #   connection:
+    #     uriEnv: "PINECONE_URL"
+    #     region: "${PINECONE_REGION:}"
+    #     tls: true
+    #   secrets:
+    #     apiKey:
+    #       env: "PINECONE_API_KEY"
+    #   capabilities: ["vector_search", "metadata_filter", "managed_backup", "tls"]
+    #   consistency: "eventual"
 
 agents:
   configPath: "./configs/agents.yaml"
@@ -436,9 +522,10 @@ auth:
     password: "${HYPHA_OWNER_PASSWORD:hypha_owner_2026}"
     displayName: "${HYPHA_OWNER_DISPLAY_NAME:hypha Owner}"
   jwt:
-    secret: "${JWT_SECRET}"
-    expiry: 86400
-    refreshExpiry: 604800
+    secret: "${JWT_SECRET:change-me-local-access-secret}"
+    refreshSecret: "${JWT_REFRESH_SECRET:}"
+    expiry: "${JWT_EXPIRY_SECONDS:86400}"
+    refreshExpiry: "${JWT_REFRESH_EXPIRY_SECONDS:604800}"
   apiKey:
     enabled: true
     headerName: "X-API-Key"

@@ -218,8 +218,7 @@ class EventRuntimeService {
 
   constructor() {
     const localStorage = storageConfig().local;
-    const eventDbPath = process.env.HYPHA_RUNTIME_EVENT_DB
-      ?? resolveRuntimePath(localStorage.eventDbPath);
+    const eventDbPath = resolveRuntimePath(localStorage.eventDbPath);
     this.events = new SQLiteEventStore({
       filename: eventDbPath,
       mode: localStorage.sqliteMode,
