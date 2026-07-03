@@ -33,37 +33,21 @@ const modelConfigSchema = z.object({
     .optional(),
 });
 
-const storageDeploymentSchema = z.enum(['local', 'self_hosted', 'managed', 'cloud']);
-const optionalStringSchema = z.preprocess((value) => {
-  if (typeof value !== 'string') return value;
-  const trimmed = value.trim();
-  return trimmed === '' ? undefined : trimmed;
-}, z.string().optional());
-const requiredStringSchema = z.preprocess((value) => {
-  if (typeof value !== 'string') return value;
-  return value.trim();
-}, z.string().min(1));
+// Provider API config schema
+const providerConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  timeout: z.number().default(60000),
+});
 
-function parseBooleanish(value: unknown): unknown {
+const storageDeploymentSchema = z.enum(['local', 'self_hosted', 'managed', 'cloud']);
+const booleanishSchema = z.preprocess((value) => {
   if (typeof value !== 'string') return value;
   const normalized = value.trim().toLowerCase();
   if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
   if (['false', '0', 'no', 'n', 'off', ''].includes(normalized)) return false;
   return value;
-}
-
-const booleanishSchema = z.preprocess(parseBooleanish, z.boolean());
-const optionalBooleanishSchema = z.preprocess((value) => {
-  if (typeof value === 'string' && value.trim() === '') return undefined;
-  return parseBooleanish(value);
-}, z.boolean().optional());
-
-// Provider API config schema
-const providerConfigSchema = z.object({
-  apiKey: optionalStringSchema,
-  baseUrl: optionalStringSchema,
-  timeout: z.number().default(60000),
-});
+}, z.boolean());
 
 // Configuration schema
 const configSchema = z.object({
@@ -77,18 +61,18 @@ const configSchema = z.object({
   }),
   database: z.object({
     mongodb: z.object({
-      uri: optionalStringSchema,
+      uri: z.string().optional(),
       uriEnv: z.string().default('MONGODB_URI'),
       deployment: storageDeploymentSchema.default('local'),
       host: z.string().default('localhost'),
       port: z.coerce.number().default(27017),
       database: z.string().default('hypha'),
-      username: optionalStringSchema,
-      password: optionalStringSchema,
+      username: z.string().optional(),
+      password: z.string().optional(),
       tls: booleanishSchema.default(false),
-      authSource: optionalStringSchema,
-      replicaSet: optionalStringSchema,
-      directConnection: optionalBooleanishSchema,
+      authSource: z.string().optional(),
+      replicaSet: z.string().optional(),
+      directConnection: booleanishSchema.optional(),
       options: z
         .object({
           maxPoolSize: z.number().default(10),
@@ -98,12 +82,12 @@ const configSchema = z.object({
     }),
   }),
   redis: z.object({
-    url: optionalStringSchema,
+    url: z.string().optional(),
     urlEnv: z.string().default('REDIS_URL'),
     deployment: storageDeploymentSchema.default('local'),
     host: z.string().default('localhost'),
     port: z.coerce.number().default(6379),
-    password: optionalStringSchema,
+    password: z.string().optional(),
     db: z.coerce.number().default(0),
     keyPrefix: z.string().default('hypha:'),
     tls: booleanishSchema.default(false),
@@ -219,8 +203,8 @@ const configSchema = z.object({
           mode: z.enum(['local', 'remote']),
           command: z.string().optional(),
           args: z.array(z.string()).optional(),
-          endpoint: optionalStringSchema,
-          authToken: optionalStringSchema,
+          endpoint: z.string().optional(),
+          authToken: z.string().optional(),
           autoStart: z.boolean().optional(),
           autoConnect: z.boolean().optional(),
         }),
@@ -269,10 +253,9 @@ const configSchema = z.object({
         displayName: 'hypha Owner',
       }),
     jwt: z.object({
-      secret: requiredStringSchema,
-      refreshSecret: optionalStringSchema,
-      expiry: z.coerce.number().default(86400),
-      refreshExpiry: z.coerce.number().default(604800),
+      secret: z.string(),
+      expiry: z.number().default(86400),
+      refreshExpiry: z.number().default(604800),
     }),
     apiKey: z.object({
       enabled: z.boolean().default(true),
@@ -316,17 +299,15 @@ export interface ProviderModelsConfig {
   baseUrl?: string;
 }
 
-// Environment variable resolver - supports ${VAR}, ${VAR:default}, and
-// ${PRIMARY_VAR|LEGACY_VAR:default}.
+// Environment variable resolver - supports ${VAR} and ${VAR:default}
 function resolveEnvVariables(obj: any): any {
   if (typeof obj === 'string') {
+    // Match ${VAR} or ${VAR:default}
     const envPattern = /\$\{([^}:]+)(?::([^}]*))?\}/g;
-    return obj.replace(envPattern, (_, varNames, defaultValue) => {
-      for (const varName of String(varNames).split('|')) {
-        const envValue = process.env[varName];
-        if (envValue !== undefined && envValue !== '') {
-          return envValue;
-        }
+    return obj.replace(envPattern, (_, varName, defaultValue) => {
+      const envValue = process.env[varName];
+      if (envValue !== undefined && envValue !== '') {
+        return envValue;
       }
       return defaultValue !== undefined ? defaultValue : '';
     });

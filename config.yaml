@@ -396,10 +396,10 @@ storage:
   local:
     rootPath: "${HYPHA_STORAGE_ROOT:./data/storage}"
     sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
-    eventDbPath: "${HYPHA_STORAGE_EVENT_DB|HYPHA_RUNTIME_EVENT_DB:./data/hypha-runtime-events.sqlite}"
-    structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB|HYPHA_STRUCTURED_DB:./data/hypha-structured.sqlite}"
-    vectorPath: "${HYPHA_STORAGE_VECTOR_INDEX|HYPHA_VECTOR_INDEX:./data/hypha-vectors.json}"
-    artifactRootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT|HYPHA_ARTIFACT_ROOT:./data/artifacts}"
+    eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+    structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+    vectorPath: "${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
+    artifactRootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
   # Provider profiles are deploy-time declarations. Framework specs reference
   # these ids; adapters resolve concrete URIs from env or connection metadata.
   profiles:
@@ -411,7 +411,7 @@ storage:
       deployment: "local"
       role: "event_log"
       connection:
-        uri: "file:${HYPHA_STORAGE_EVENT_DB|HYPHA_RUNTIME_EVENT_DB:./data/hypha-runtime-events.sqlite}"
+        uri: "file:${HYPHA_STORAGE_EVENT_DB:./data/hypha-runtime-events.sqlite}"
       capabilities: ["events", "structured", "transactions"]
       consistency: "strong"
     - id: "storage.sqlite.structured"
@@ -422,7 +422,7 @@ storage:
       deployment: "local"
       role: "source_of_truth"
       connection:
-        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB|HYPHA_STRUCTURED_DB:./data/hypha-structured.sqlite}"
+        uri: "file:${HYPHA_STORAGE_STRUCTURED_DB:./data/hypha-structured.sqlite}"
       capabilities: ["structured", "transactions"]
       consistency: "strong"
     - id: "storage.local-vector.semantic"
@@ -433,7 +433,7 @@ storage:
       deployment: "local"
       role: "semantic_index"
       connection:
-        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX|HYPHA_VECTOR_INDEX:./data/hypha-vectors.json}"
+        uri: "file:${HYPHA_STORAGE_VECTOR_INDEX:./data/hypha-vectors.json}"
       capabilities: ["vector_search", "metadata_filter"]
       consistency: "eventual"
     - id: "storage.file-artifact.local"
@@ -444,7 +444,7 @@ storage:
       deployment: "local"
       role: "artifact_store"
       connection:
-        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT|HYPHA_ARTIFACT_ROOT:./data/artifacts}"
+        uri: "file:${HYPHA_STORAGE_ARTIFACT_ROOT:./data/artifacts}"
       capabilities: ["artifact_bytes"]
       consistency: "strong"
     # Example external vector providers. Uncomment and set matching env values
@@ -523,9 +523,8 @@ auth:
     displayName: "${HYPHA_OWNER_DISPLAY_NAME:hypha Owner}"
   jwt:
     secret: "${JWT_SECRET:change-me-local-access-secret}"
-    refreshSecret: "${JWT_REFRESH_SECRET:}"
-    expiry: "${JWT_EXPIRY_SECONDS:86400}"
-    refreshExpiry: "${JWT_REFRESH_EXPIRY_SECONDS:604800}"
+    expiry: 86400
+    refreshExpiry: 604800
   apiKey:
     enabled: true
     headerName: "X-API-Key"

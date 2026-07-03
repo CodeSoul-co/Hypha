@@ -27,15 +27,6 @@ const storage = createLocalStorageBackbone({
 
 `sqliteMode: "auto"` uses `node:sqlite` when available and falls back to JSON sidecar files otherwise. Use `"json"` for deterministic test fixtures and `"node-sqlite"` when SQLite support is required.
 
-Local path overrides use namespaced env vars:
-
-```bash
-HYPHA_STORAGE_EVENT_DB=./data/hypha-runtime-events.sqlite
-HYPHA_STORAGE_STRUCTURED_DB=./data/hypha-structured.sqlite
-HYPHA_STORAGE_VECTOR_INDEX=./data/hypha-vectors.json
-HYPHA_STORAGE_ARTIFACT_ROOT=./data/artifacts
-```
-
 ## Storage Provider Profile
 
 `StorageProviderProfile` declares:
