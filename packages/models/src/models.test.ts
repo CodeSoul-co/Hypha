@@ -29,9 +29,11 @@ describe('@hypha/models provider contracts', () => {
   });
 
   it('normalizes OpenAI-compatible responses and keeps aliases provider-neutral', async () => {
+    const requests: unknown[] = [];
     const transport: ModelTransport = {
-      postJson: async <TResponse>(_url: string, body: unknown): Promise<TResponse> =>
-        ({
+      postJson: async <TResponse>(_url: string, body: unknown): Promise<TResponse> => {
+        requests.push(body);
+        return ({
           id: 'chatcmpl_1',
           choices: [
             {
@@ -48,7 +50,8 @@ describe('@hypha/models provider contracts', () => {
           ],
           usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
           body,
-        }) as TResponse,
+        }) as TResponse;
+      },
     };
     const provider = new OpenAICompatibleModelProvider({
       id: 'compatible',
@@ -63,12 +66,19 @@ describe('@hypha/models provider contracts', () => {
         runId: 'run_1',
         stepId: 'step_1',
         modelAlias: 'default-fast',
+        instructions: 'system instructions',
         input: [{ role: 'user', content: 'hello' }],
+        cache: { prefixContent: 'cached prefix' },
       })
     ).resolves.toMatchObject({
       content: 'ok',
       toolCalls: [{ id: 'call_1', toolId: 'search', arguments: { q: 'hypha' } }],
       usage: { totalTokens: 3 },
+    });
+    const requestBody = requests[0] as { messages?: Array<{ role: string; content: string }> };
+    expect(requestBody.messages?.[0]).toEqual({
+      role: 'system',
+      content: 'cached prefix\n\nsystem instructions',
     });
   });
 

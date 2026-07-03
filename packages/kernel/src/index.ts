@@ -147,13 +147,35 @@ export class ReActRunner {
         }
 
         if (action.type === 'finish' || action.type === 'model') {
-          await pushStep('complete', action, action.input ?? response.output);
+          const observation: ReActObservation = {
+            source: action.type === 'model' ? 'model' : 'system',
+            value: action.input ?? response.output,
+          };
+          const verifiedAction = await this.runtime.verify(context, observation);
+          await pushStep('verify', observation, verifiedAction);
+          if (verifiedAction.type === 'human_review') {
+            await pushStep('human_review', verifiedAction);
+            return {
+              runId: context.runId,
+              status: 'human_review_required',
+              steps,
+              finalAction: verifiedAction,
+            };
+          }
+          if (verifiedAction.type !== 'finish' && verifiedAction.type !== 'model') {
+            action = verifiedAction;
+            continue;
+          }
+          await this.options.syncMemory?.(context, observation);
+          await pushStep('memory_sync', { source: observation.source });
+          const output = verifiedAction.input ?? observation.value;
+          await pushStep('complete', verifiedAction, output);
           return {
             runId: context.runId,
             status: 'completed',
             steps,
-            output: action.input ?? response.output,
-            finalAction: action,
+            output,
+            finalAction: verifiedAction,
           };
         }
 

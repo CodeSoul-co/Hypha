@@ -148,8 +148,8 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 | Adapter | Storage | Purpose |
 | --- | --- | --- |
-| `SQLiteEventStore` | SQLite | Event store and trace recorder for replay, audit, regression, and projection. |
-| `SQLiteStructuredStore` | SQLite | JSON source-of-truth structured records with indexed tables. |
+| `SQLiteEventStore` | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available and a JSON sidecar otherwise. |
+| `SQLiteStructuredStore` | SQLite or JSON fallback | JSON source-of-truth structured records with indexed tables. Uses the same `node:sqlite`/JSON fallback behavior. |
 | `LocalVectorIndexProvider` | JSON file | Persistent local vector search with metadata filters. |
 | `FileArtifactStore` | filesystem | Artifact bytes and hash metadata under a configured root. |
 | `MockEmbeddingProvider` | deterministic vectors | Repeatable local embeddings for tests and offline development. |

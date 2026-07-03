@@ -243,6 +243,8 @@ router.post(
         runId,
         stepId: 'reason',
         agentId,
+        userId,
+        sessionId: session,
         modelAlias: resolvedChatModel.model,
         messages: llmMessages,
         options: {

@@ -43,6 +43,53 @@ describe('@hypha/memory manager contract', () => {
     ).resolves.toEqual({ recordId: 'memory_1' });
   });
 
+  it('enforces memory write policy before provider side effects', async () => {
+    let writes = 0;
+    const provider: MemoryProvider = {
+      read: async () => [],
+      search: async () => [],
+      write: async (_scope, record) => {
+        writes += 1;
+        return { recordId: record.id };
+      },
+      update: async () => {},
+      invalidate: async () => {},
+      summarize: async (scope) => ({ scope, recordCount: 0, types: {} }),
+      audit: async (scope) => ({ scope, recordsChecked: 0, missingProvenance: [] }),
+    };
+    const manager = new MemoryManager(provider);
+    const record: MemoryRecord = {
+      id: 'semantic_denied',
+      type: 'semantic',
+      value: 'persist me',
+      provenance: {},
+      createdAt: '2026-07-02T00:00:00.000Z',
+    };
+
+    await expect(
+      manager.write(
+        { userId: 'owner', runId: 'run_1' },
+        record,
+        { requireProvenance: true, allowLongTerm: true }
+      )
+    ).rejects.toThrow(/requires provenance/);
+    await expect(
+      manager.write(
+        { userId: 'owner', runId: 'run_1' },
+        { ...record, provenance: { eventId: 'event_1' } },
+        { decision: { allowed: false, reason: 'blocked' }, allowLongTerm: true }
+      )
+    ).rejects.toThrow(/blocked/);
+    await expect(
+      manager.write(
+        { userId: 'owner', runId: 'run_1' },
+        { ...record, provenance: { eventId: 'event_1' } },
+        {}
+      )
+    ).rejects.toThrow(/allowLongTerm/);
+    expect(writes).toBe(0);
+  });
+
   it('writes structured source of truth and indexes semantic records', async () => {
     const embeddings: EmbeddingProvider = {
       embed: async () => [[1, 0]],

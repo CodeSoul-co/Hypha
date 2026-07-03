@@ -97,6 +97,11 @@ describe('@hypha/domain workflow compiler', () => {
     expect(validateDomainPackSpec(domainPackSpecDefinition.example).id).toBe('domain.default');
     expect(domainSpecJsonSchemas.WorkflowSpec.required).toContain('states');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
+    expect(domainSpecJsonSchemas.DomainPackSpec.properties).toMatchObject({
+      evaluationProfiles: { type: 'array' },
+      regressionCases: { type: 'array' },
+      deploymentProfile: { type: 'object' },
+    });
   });
 
   it('rejects a DomainPack whose default workflow is not declared', () => {

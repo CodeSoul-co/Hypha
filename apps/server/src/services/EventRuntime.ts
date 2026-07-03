@@ -6,6 +6,7 @@ import { compileWorkflowToFSM, type DomainPackSpec, type WorkflowSpec } from '@h
 import {
   applyTransitionWithRuntimePolicy,
   createInitialSnapshot,
+  evaluateGuardExpression,
   type FSMProcessSpec,
   type FSMSnapshot,
 } from '@hypha/fsm';
@@ -31,7 +32,7 @@ import {
   type ReActAgentSpec,
 } from '@hypha/kernel';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
-import { GovernedToolRunner, ToolRegistry, type ToolSpec } from '@hypha/tools';
+import { GovernedToolRunner, ToolRegistry, type ToolRunner, type ToolSpec } from '@hypha/tools';
 import type {
   StageResult,
   WorkflowDefinition,
@@ -49,8 +50,6 @@ import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
-
-const UNRESOLVED_CONDITION_OPERAND = Symbol('unresolved workflow condition operand');
 
 interface RuntimeRunContext {
   runId: string;
@@ -369,7 +368,11 @@ class EventRuntimeService {
     }
   }
 
-  async runReActChat(input: ChatInferenceInput & { agentId?: string }): Promise<ChatResponse> {
+  async runReActChat(input: ChatInferenceInput & {
+    agentId?: string;
+    userId?: string;
+    sessionId?: string;
+  }): Promise<ChatResponse> {
     const agent: ReActAgentSpec = {
       id: input.agentId ?? 'agent.default',
       version: '0.0.0',
@@ -377,6 +380,20 @@ class EventRuntimeService {
       modelAlias: input.modelAlias || input.options?.model || this.resolveChatModel().model,
       toolRefs: input.options?.tools?.map((tool) => tool.name),
     };
+    const runContext = this.runs.get(input.runId);
+    const userId = input.userId ?? runContext?.userId ?? 'single-user';
+    const sessionId = input.sessionId ?? runContext?.clientSessionId ?? input.runId;
+    let chatResponse: ChatResponse | undefined;
+    let nextToolCallIndex = 0;
+    const toolObservations: Array<Record<string, unknown>> = [];
+
+    const selectToolAction = (toolCall: NonNullable<ChatResponse['toolCalls']>[number]) => ({
+      type: 'tool' as const,
+      target: toolCall.name,
+      input: toolCall.input,
+      reason: `model-tool-call:${toolCall.id}`,
+    });
+
     const reactRuntime: ReActAgentRuntime = {
       async reason(context) {
         return {
@@ -395,14 +412,44 @@ class EventRuntimeService {
         };
       },
       async selectAction(response) {
+        if (isChatResponse(response.output)) {
+          chatResponse = response.output;
+          const toolCall = chatResponse.toolCalls?.[0];
+          if (toolCall) {
+            return selectToolAction(toolCall);
+          }
+        }
         return {
           type: 'finish',
           input: response.output,
           reason: 'chat-response-ready',
         };
       },
-      async verify() {
-        return { type: 'finish', reason: 'chat-response-verified' };
+      async verify(_context, observation) {
+        if (chatResponse && observation.source === 'tool') {
+          const toolCall = chatResponse.toolCalls?.[nextToolCallIndex];
+          toolObservations.push({
+            toolCallId: toolCall?.id,
+            toolName: toolCall?.name,
+            status: observation.provenance?.status,
+            output: safeSerialize(observation.value),
+          });
+          nextToolCallIndex += 1;
+          const nextToolCall = chatResponse.toolCalls?.[nextToolCallIndex];
+          if (nextToolCall) {
+            return selectToolAction(nextToolCall);
+          }
+          return {
+            type: 'finish',
+            input: attachToolObservations(chatResponse, toolObservations),
+            reason: 'all-tool-calls-observed',
+          };
+        }
+        return {
+          type: 'finish',
+          input: observation.value,
+          reason: 'chat-response-verified',
+        };
       },
     };
     const reactInference: InferenceProvider = {
@@ -428,7 +475,8 @@ class EventRuntimeService {
     };
     const runner = new ReActRunner(reactRuntime, {
       inference: reactInference,
-      maxIterations: 1,
+      toolRunner: this.createReActToolRunner(input.runId, userId, sessionId),
+      maxIterations: Math.max(4, (input.options?.tools?.length ?? 0) + 2),
       onStep: async (step) => {
         await this.record(input.runId, 'react.step.completed', {
           stepId: step.id,
@@ -443,6 +491,7 @@ class EventRuntimeService {
       stepId: input.stepId,
       agent,
       messages: input.messages,
+      memoryScope: { userId, sessionId },
     });
     if (result.status !== 'completed') {
       throw new Error(result.error instanceof Error
@@ -590,6 +639,52 @@ class EventRuntimeService {
       throw new Error(typeof result.error === 'string' ? result.error : `Tool failed: ${input.toolId}`);
     }
     return result.output as TOutput;
+  }
+
+  private createReActToolRunner(runId: string, userId: string, sessionId: string): ToolRunner {
+    return {
+      run: async (request) => {
+        const toolManager = getToolManager();
+        const descriptor = toolManager.describeTool(request.toolId);
+        const params = normalizeToolInput(request.input);
+        try {
+          const output = await this.runGovernedTool({
+            runId,
+            stepId: request.context.stepId,
+            userId,
+            sessionId,
+            toolId: descriptor?.id ?? request.toolId,
+            params,
+            toolSpec: {
+              name: descriptor?.name ?? request.toolId,
+              description: descriptor?.description ?? `ReAct tool ${request.toolId}`,
+              inputSchema: descriptor?.inputSchema ?? { type: 'object' },
+              sideEffectLevel: descriptor?.source === 'mcp'
+                ? descriptor.sideEffectLevel
+                : inferToolSideEffect(request.toolId, params),
+              source: descriptor?.source ?? 'local',
+              sourceRef: descriptor?.source === 'mcp'
+                ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
+                : undefined,
+            },
+            handler: async () => {
+              const result = await toolManager.executeTool(request.toolId, params);
+              if (!result.success) {
+                throw new Error(result.error || `Tool failed: ${request.toolId}`);
+              }
+              return result.output;
+            },
+          });
+          return { toolId: request.toolId, status: 'completed', output };
+        } catch (error) {
+          return {
+            toolId: request.toolId,
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+    };
   }
 
   async recordMemoryRead<TValue>(input: {
@@ -1036,7 +1131,17 @@ class EventRuntimeService {
     if (!stage.condition || !stage.branches) {
       return { success: true, nextStage: stage.next };
     }
-    const conditionMet = this.evaluateWorkflowCondition(stage.condition, execution.context.variables);
+    const guard = normalizeWorkflowGuardCondition(stage.condition);
+    const conditionMet = evaluateGuardExpression(guard, {
+      variables: execution.context.variables,
+      metadata: execution.context.metadata,
+      input: {
+        userId: execution.context.userId,
+        sessionId: execution.context.sessionId,
+        conversationId: execution.context.conversationId,
+        messages: execution.context.messages,
+      },
+    });
     const branch = stage.branches.find((candidate) =>
       (candidate.condition === 'true' && conditionMet)
       || (candidate.condition === 'false' && !conditionMet)
@@ -1044,6 +1149,7 @@ class EventRuntimeService {
     await this.record(runId, 'workflow.condition.evaluated', {
       stageId: stage.id,
       condition: stage.condition,
+      guard,
       conditionMet,
       nextStage: branch?.then ?? stage.next,
     }, stage.id);
@@ -1152,54 +1258,6 @@ class EventRuntimeService {
       return result;
     }
     return template;
-  }
-
-  private evaluateWorkflowCondition(condition: string, variables: Record<string, unknown>): boolean {
-    const expression = condition.trim();
-    if (!expression) return false;
-    if (expression === 'true') return true;
-    if (expression === 'false') return false;
-
-    const comparison = expression.match(/^(.+?)\s*(===|!==|==|!=)\s*(.+)$/);
-    if (comparison) {
-      const [, leftExpression, operator, rightExpression] = comparison;
-      const left = this.resolveConditionOperand(leftExpression, variables);
-      const right = this.resolveConditionOperand(rightExpression, variables);
-      if (left === UNRESOLVED_CONDITION_OPERAND || right === UNRESOLVED_CONDITION_OPERAND) {
-        return false;
-      }
-      switch (operator) {
-        case '===':
-          return left === right;
-        case '!==':
-          return left !== right;
-        case '==':
-          return String(left) === String(right);
-        case '!=':
-          return String(left) !== String(right);
-        default:
-          return false;
-      }
-    }
-
-    const value = this.resolveConditionOperand(expression, variables);
-    return value === UNRESOLVED_CONDITION_OPERAND ? false : Boolean(value);
-  }
-
-  private resolveConditionOperand(expression: string, variables: Record<string, unknown>): unknown {
-    const value = expression.trim();
-    if (/^\$\{[^}]+\}$/.test(value)) return undefined;
-    if (value.startsWith('$')) return variables[value.slice(1)];
-    if (/^{{[^}]+}}$/.test(value)) return variables[value.slice(2, -2)];
-    if (/^(['"]).*\1$/.test(value)) return value.slice(1, -1);
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    if (value === 'null') return null;
-    if (value === 'undefined') return undefined;
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric) && value !== '') return numeric;
-    if (Object.prototype.hasOwnProperty.call(variables, value)) return variables[value];
-    return UNRESOLVED_CONDITION_OPERAND;
   }
 
   projectRun(runId: string) {
@@ -1344,13 +1402,13 @@ function workflowDefinitionToWorkflowSpec(workflow: WorkflowDefinition): Workflo
       transitions.push({
         from: stage.id,
         to: branch.then === 'end' ? 'Completed' : branch.then,
-        guard: branch.condition,
+        description: `${stage.id} branch:${branch.condition}`,
       });
       if (branch.else) {
         transitions.push({
           from: stage.id,
           to: branch.else === 'end' ? 'Completed' : branch.else,
-          guard: `else:${branch.condition}`,
+          description: `${stage.id} else:${branch.condition}`,
         });
       }
     }
@@ -1382,6 +1440,43 @@ function summarizeValue(value: unknown): Record<string, unknown> {
     return { type: 'object', keys: Object.keys(value as Record<string, unknown>) };
   }
   return { type: typeof value };
+}
+
+function normalizeToolInput(input: unknown): Record<string, unknown> {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    return input as Record<string, unknown>;
+  }
+  return input === undefined ? {} : { value: input };
+}
+
+function attachToolObservations(
+  response: ChatResponse,
+  toolObservations: Array<Record<string, unknown>>
+): ChatResponse {
+  if (!toolObservations.length) return response;
+  return {
+    ...response,
+    raw: {
+      ...(asRecord(response.raw) ?? {}),
+      hyphaToolObservations: toolObservations,
+    },
+  };
+}
+
+function normalizeWorkflowGuardCondition(condition: string): string {
+  return condition
+    .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, pathValue: string) =>
+      normalizeWorkflowGuardPath(pathValue)
+    )
+    .replace(/\$([A-Za-z_][\w.]*)/g, (_match, pathValue: string) =>
+      normalizeWorkflowGuardPath(pathValue)
+    );
+}
+
+function normalizeWorkflowGuardPath(pathValue: string): string {
+  const trimmed = pathValue.trim();
+  if (/^(variables|metadata|input)\./.test(trimmed)) return trimmed;
+  return `variables.${trimmed}`;
 }
 
 function safeSerialize<T>(value: T): T | undefined {

@@ -74,4 +74,32 @@ describe('@hypha/adapters-local reference providers', () => {
       { id: 'run_1:created', type: 'run.created', sessionId: 'session_1' },
     ]);
   });
+
+  it('uses JSON fallback storage when node:sqlite is unavailable or disabled', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-json-adapters-'));
+    const structured = new SQLiteStructuredStore({
+      filename: path.join(root, 'hypha.sqlite'),
+      mode: 'json',
+    });
+    await structured.insert('runs', { id: 'run_json', status: 'completed' });
+    await expect(structured.get('runs', 'run_json')).resolves.toMatchObject({
+      status: 'completed',
+    });
+
+    const events = new SQLiteEventStore({
+      filename: path.join(root, 'events.sqlite'),
+      mode: 'json',
+    });
+    await events.append(
+      createFrameworkEvent({
+        id: 'run_json:created',
+        type: 'run.created',
+        runId: 'run_json',
+        payload: { id: 'run_json' },
+      })
+    );
+
+    await expect(events.list({ runId: 'run_json' })).resolves.toHaveLength(1);
+    expect(fs.existsSync(path.join(root, 'events.sqlite.json'))).toBe(true);
+  });
 });

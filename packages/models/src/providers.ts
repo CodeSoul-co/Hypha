@@ -103,11 +103,15 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
 
   async generate(request: ModelRequest): Promise<ModelResponse> {
     const providerModel = this.resolveModel(request.modelAlias);
+    const instructions = [
+      request.cache?.prefixContent,
+      request.instructions,
+    ].filter(Boolean).join('\n\n') || undefined;
     const response = await this.transport.postJson<OpenAIChatCompletionResponse>(
       `${this.config.baseUrl.replace(/\/$/, '')}/chat/completions`,
       {
         model: providerModel,
-        messages: normalizeMessages(request.instructions, request.input),
+        messages: normalizeMessages(instructions, request.input),
         tools: request.tools?.map((tool) => ({
           type: 'function',
           function: {

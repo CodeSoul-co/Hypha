@@ -52,17 +52,25 @@ describe('@hypha/kernel ReAct contracts', () => {
     };
     const runner = new ReActRunner(runtime, { inference: provider });
 
-    await expect(
-      runner.run({
-        runId: 'run_1',
-        stepId: 'react',
-        agent: reactAgentSpecDefinition.example,
-        messages: [{ role: 'user', content: 'hello' }],
-      })
-    ).resolves.toMatchObject({
+    const result = await runner.run({
+      runId: 'run_1',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result).toMatchObject({
       status: 'completed',
       output: 'final answer',
     });
+    expect(result.steps.map((step) => step.phase)).toEqual([
+      'observe',
+      'reason',
+      'select_action',
+      'verify',
+      'memory_sync',
+      'complete',
+    ]);
   });
 
   it('executes a tool action and verifies the observation', async () => {

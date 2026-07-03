@@ -2,6 +2,7 @@ import { z, type ZodType } from 'zod';
 import {
   defineSpecSchema,
   exportSpecJsonSchemas,
+  FrameworkError,
   jsonSchemaSchema,
   specMetadataSchema,
   versionedSpecSchema,
@@ -187,13 +188,60 @@ export class MemoryManager {
     return this.provider.search(scope, query);
   }
 
-  write(
+  async write(
     scope: MemoryScope,
     record: MemoryRecord,
     policy: MemoryWritePolicy
   ): Promise<MemoryWriteResult> {
+    validateMemoryWrite(scope, record, policy);
     return this.provider.write(scope, record, policy);
   }
+}
+
+function validateMemoryWrite(
+  scope: MemoryScope,
+  record: MemoryRecord,
+  policy: MemoryWritePolicy
+): void {
+  if (!scope.userId && !scope.sessionId && !scope.runId && !scope.workspaceId) {
+    throw new FrameworkError({
+      code: 'MEMORY_SCOPE_REQUIRED',
+      message: 'Memory writes require at least one explicit scope boundary.',
+      context: { recordId: record.id },
+    });
+  }
+  if (policy.decision && !policy.decision.allowed) {
+    throw new FrameworkError({
+      code: 'MEMORY_POLICY_DENIED',
+      message: policy.decision.reason ?? `Memory write denied: ${record.id}`,
+      context: { recordId: record.id, decision: policy.decision },
+    });
+  }
+  if (policy.decision?.requiresHumanReview) {
+    throw new FrameworkError({
+      code: 'MEMORY_HUMAN_REVIEW_REQUIRED',
+      message: policy.decision.reason ?? `Memory write requires human review: ${record.id}`,
+      context: { recordId: record.id, decision: policy.decision },
+    });
+  }
+  if (policy.requireProvenance && Object.keys(record.provenance ?? {}).length === 0) {
+    throw new FrameworkError({
+      code: 'MEMORY_PROVENANCE_REQUIRED',
+      message: `Memory record ${record.id} requires provenance.`,
+      context: { recordId: record.id },
+    });
+  }
+  if (isLongTermMemory(record) && !policy.allowLongTerm) {
+    throw new FrameworkError({
+      code: 'MEMORY_LONG_TERM_WRITE_DENIED',
+      message: `Long-term memory write requires allowLongTerm: ${record.id}`,
+      context: { recordId: record.id, type: record.type },
+    });
+  }
+}
+
+function isLongTermMemory(record: MemoryRecord): boolean {
+  return record.type !== 'working';
 }
 
 export const memoryTypeSchema = z.enum([

@@ -44,15 +44,77 @@ export const LOCAL_ADAPTER_TYPES = ['sqlite', 'local-vector', 'file-artifact'] a
 
 export interface SQLiteEventStoreOptions {
   filename: string;
+  mode?: 'auto' | 'node-sqlite' | 'json';
+  jsonFallbackFilename?: string;
 }
 
 export class SQLiteEventStore implements EventStore, TraceRecorder {
-  private readonly db: SqliteDatabaseSync;
+  private readonly backend: EventStore & TraceRecorder;
 
   constructor(options: SQLiteEventStoreOptions) {
     fs.mkdirSync(path.dirname(options.filename), { recursive: true });
-    const sqlite = loadNodeSqlite();
-    this.db = new sqlite.DatabaseSync(options.filename);
+    const sqlite = options.mode === 'json' ? null : loadNodeSqlite(options.mode === 'node-sqlite');
+    this.backend = sqlite
+      ? new NodeSQLiteEventStoreBackend(options.filename, sqlite)
+      : new JsonEventStoreBackend(options.jsonFallbackFilename ?? `${options.filename}.json`);
+  }
+
+  async append(event: FrameworkEvent): Promise<void> {
+    await this.backend.append(event);
+  }
+
+  async record(event: FrameworkEvent): Promise<void> {
+    await this.backend.record(event);
+  }
+
+  async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
+    return this.backend.list(filter);
+  }
+}
+
+export interface SQLiteStructuredStoreOptions {
+  filename: string;
+  mode?: 'auto' | 'node-sqlite' | 'json';
+  jsonFallbackFilename?: string;
+}
+
+export class SQLiteStructuredStore implements StructuredStoreProvider {
+  private readonly backend: StructuredStoreProvider;
+
+  constructor(options: SQLiteStructuredStoreOptions) {
+    fs.mkdirSync(path.dirname(options.filename), { recursive: true });
+    const sqlite = options.mode === 'json' ? null : loadNodeSqlite(options.mode === 'node-sqlite');
+    this.backend = sqlite
+      ? new NodeSQLiteStructuredStoreBackend(options.filename, sqlite)
+      : new JsonStructuredStoreBackend(options.jsonFallbackFilename ?? `${options.filename}.json`);
+  }
+
+  async get<T>(table: string, id: string): Promise<T | null> {
+    return this.backend.get(table, id);
+  }
+
+  async insert<T extends { id: string }>(table: string, record: T): Promise<void> {
+    await this.backend.insert(table, record);
+  }
+
+  async update<T>(table: string, id: string, patch: Partial<T>): Promise<void> {
+    await this.backend.update(table, id, patch);
+  }
+
+  async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
+    return this.backend.query(table, query);
+  }
+
+  async transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T> {
+    return this.backend.transaction(fn);
+  }
+}
+
+class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
+  private readonly db: SqliteDatabaseSync;
+
+  constructor(filename: string, sqlite: SqliteModule) {
+    this.db = new sqlite.DatabaseSync(filename);
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS framework_events (' +
         'id TEXT PRIMARY KEY, ' +
@@ -91,30 +153,50 @@ export class SQLiteEventStore implements EventStore, TraceRecorder {
     const rows = this.db
       .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, id ASC')
       .all();
-    return rows
-      .map((row) => JSON.parse(String(row.event)) as FrameworkEvent)
-      .filter((event) => {
-        if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
-        if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
-        if (filter.runId && event.runId !== filter.runId) return false;
-        if (filter.type && event.type !== filter.type) return false;
-        return true;
-      });
+    return filterEvents(
+      rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent),
+      filter
+    );
   }
 }
 
-export interface SQLiteStructuredStoreOptions {
-  filename: string;
+class JsonEventStoreBackend implements EventStore, TraceRecorder {
+  private events: FrameworkEvent[];
+
+  constructor(private readonly filename: string) {
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    this.events = readJsonFile<FrameworkEvent[]>(filename, []);
+  }
+
+  async append(event: FrameworkEvent): Promise<void> {
+    const existingIndex = this.events.findIndex((candidate) => candidate.id === event.id);
+    if (existingIndex >= 0) {
+      this.events[existingIndex] = event;
+    } else {
+      this.events.push(event);
+    }
+    this.flush();
+  }
+
+  async record(event: FrameworkEvent): Promise<void> {
+    await this.append(event);
+  }
+
+  async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
+    return filterEvents([...this.events].sort(compareEvents), filter);
+  }
+
+  private flush(): void {
+    writeJsonFile(this.filename, this.events);
+  }
 }
 
-export class SQLiteStructuredStore implements StructuredStoreProvider {
+class NodeSQLiteStructuredStoreBackend implements StructuredStoreProvider {
   private readonly db: SqliteDatabaseSync;
   private readonly initializedTables = new Set<string>();
 
-  constructor(options: SQLiteStructuredStoreOptions) {
-    fs.mkdirSync(path.dirname(options.filename), { recursive: true });
-    const sqlite = loadNodeSqlite();
-    this.db = new sqlite.DatabaseSync(options.filename);
+  constructor(filename: string, sqlite: SqliteModule) {
+    this.db = new sqlite.DatabaseSync(filename);
   }
 
   async get<T>(table: string, id: string): Promise<T | null> {
@@ -164,6 +246,60 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
         'id TEXT PRIMARY KEY, record TEXT NOT NULL)'
     );
     this.initializedTables.add(table);
+  }
+}
+
+class JsonStructuredStoreBackend implements StructuredStoreProvider {
+  private tables: Record<string, Record<string, Record<string, unknown>>>;
+
+  constructor(private readonly filename: string) {
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    this.tables = readJsonFile<Record<string, Record<string, Record<string, unknown>>>>(
+      filename,
+      {}
+    );
+  }
+
+  async get<T>(table: string, id: string): Promise<T | null> {
+    validateIdentifier(table);
+    return (this.tables[table]?.[id] as T | undefined) ?? null;
+  }
+
+  async insert<T extends { id: string }>(table: string, record: T): Promise<void> {
+    validateIdentifier(table);
+    this.tables[table] = this.tables[table] ?? {};
+    this.tables[table][record.id] = record as Record<string, unknown>;
+    this.flush();
+  }
+
+  async update<T>(table: string, id: string, patch: Partial<T>): Promise<void> {
+    const existing = await this.get<Record<string, unknown>>(table, id);
+    if (!existing) return;
+    await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
+  }
+
+  async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
+    validateIdentifier(table);
+    const records = Object.values(this.tables[table] ?? {});
+    const filtered = filterRecords(records, query.where);
+    return filtered.slice(0, query.limit ?? filtered.length) as T[];
+  }
+
+  async transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T> {
+    const snapshot = JSON.parse(JSON.stringify(this.tables)) as typeof this.tables;
+    try {
+      const value = await fn(this);
+      this.flush();
+      return value;
+    } catch (error) {
+      this.tables = snapshot;
+      this.flush();
+      throw error;
+    }
+  }
+
+  private flush(): void {
+    writeJsonFile(this.filename, this.tables);
   }
 }
 
@@ -364,15 +500,45 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / Math.sqrt(aNorm * bNorm);
 }
 
-function loadNodeSqlite(): SqliteModule {
+function loadNodeSqlite(required = false): SqliteModule | null {
   try {
     return require('node:sqlite') as SqliteModule;
   } catch (error) {
+    if (!required) return null;
     throw new Error(
-      'SQLiteStructuredStore requires a Node.js runtime with node:sqlite support.',
+      'SQLite local adapters require a Node.js runtime with node:sqlite support when mode is node-sqlite.',
       { cause: error }
     );
   }
+}
+
+function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): FrameworkEvent[] {
+  return events.filter((event) => {
+    if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
+    if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
+    if (filter.runId && event.runId !== filter.runId) return false;
+    if (filter.type && event.type !== filter.type) return false;
+    return true;
+  });
+}
+
+function compareEvents(left: FrameworkEvent, right: FrameworkEvent): number {
+  return left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id);
+}
+
+function readJsonFile<T>(filename: string, fallback: T): T {
+  if (!fs.existsSync(filename)) return fallback;
+  try {
+    return JSON.parse(fs.readFileSync(filename, 'utf-8')) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filename: string, value: unknown): void {
+  const tempFile = `${filename}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(value, null, 2));
+  fs.renameSync(tempFile, filename);
 }
 
 function validateIdentifier(identifier: string): void {

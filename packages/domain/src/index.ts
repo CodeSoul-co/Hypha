@@ -383,6 +383,9 @@ export const domainPackSpecJsonSchema: JsonSchema = {
     mcpProfiles: { type: 'array', items: { type: 'object' } },
     memoryProfiles: { type: 'array', items: { type: 'object' } },
     policies: { type: 'array', items: { type: 'object' } },
+    evaluationProfiles: { type: 'array', items: { type: 'object' } },
+    regressionCases: { type: 'array', items: { type: 'object' } },
+    deploymentProfile: { type: 'object' },
     metadata: { type: 'object' },
   },
   additionalProperties: false,
@@ -442,6 +445,28 @@ export const domainPackSpecExample: DomainPackSpec = {
   ],
   workflows: [workflowSpecExample],
   defaultWorkflow: workflowSpecExample.id,
+  evaluationProfiles: [
+    {
+      id: 'eval.output-schema',
+      version: '0.0.0',
+      type: 'schema',
+      deterministic: true,
+    },
+  ],
+  regressionCases: [
+    {
+      id: 'regression.event-contract',
+      version: '0.0.0',
+      fixtureRefs: [{ id: 'fixture.default', version: '0.0.0' }],
+      requiredChecks: ['event_types', 'state_path', 'output_contract'],
+    },
+  ],
+  deploymentProfile: {
+    id: 'deployment.local',
+    version: '0.0.0',
+    mode: 'local',
+    runtimeMode: 'single-user',
+  },
 };
 
 export const workflowSpecDefinition = defineSpecSchema<WorkflowSpec>({
