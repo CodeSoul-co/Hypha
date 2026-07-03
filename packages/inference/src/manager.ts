@@ -120,9 +120,7 @@ export class InferenceManager {
     }
     if (!this.kvCache) return { value: null, missReason: 'not_configured' };
     const value = await this.kvCache.get(ref);
-    return value === null
-      ? { value: null, missReason: 'missing' }
-      : { value };
+    return value === null ? { value: null, missReason: 'missing' } : { value };
   }
 
   private async finalizeResponse(
@@ -136,15 +134,21 @@ export class InferenceManager {
         ...response.cache,
         prefixHit: response.cache?.prefixHit ?? prepared.prefixHit,
         kvCacheHit: response.cache?.kvCacheHit ?? prepared.kvCacheHit,
-        ...(prepared.prefixRef && !response.cache?.prefixRef ? { prefixRef: prepared.prefixRef } : {}),
-        ...(prepared.kvCacheRef && !response.cache?.kvCacheRef ? { kvCacheRef: prepared.kvCacheRef } : {}),
+        ...(prepared.prefixRef && !response.cache?.prefixRef
+          ? { prefixRef: prepared.prefixRef }
+          : {}),
+        ...(prepared.kvCacheRef && !response.cache?.kvCacheRef
+          ? { kvCacheRef: prepared.kvCacheRef }
+          : {}),
         ...(prepared.kvCacheMissReason && !response.cache?.kvCacheMissReason
           ? { kvCacheMissReason: prepared.kvCacheMissReason }
           : {}),
         ...(write.ref || response.cache?.kvCacheWritten !== undefined
           ? {
               kvCacheWritten: response.cache?.kvCacheWritten ?? write.written,
-              ...(write.ref && !response.cache?.kvCacheWriteRef ? { kvCacheWriteRef: write.ref } : {}),
+              ...(write.ref && !response.cache?.kvCacheWriteRef
+                ? { kvCacheWriteRef: write.ref }
+                : {}),
             }
           : {}),
       },
@@ -159,12 +163,18 @@ export class InferenceManager {
     if (!policy) return { written: false };
     const ref = policy.ref;
     if (!this.kvCache) return { written: false, ref };
-    if ((policy.mode ?? 'write_through') === 'write_if_missing' && prepared.kvCacheHit) {
-      return { written: false, ref };
-    }
     if (isKvCacheExpired(ref)) {
       await this.kvCache.invalidate(ref, 'expired');
       return { written: false, ref };
+    }
+    if ((policy.mode ?? 'write_through') === 'write_if_missing') {
+      if (prepared.kvCacheHit) {
+        return { written: false, ref };
+      }
+      const existing = await this.kvCache.get(ref);
+      if (existing !== null) {
+        return { written: false, ref };
+      }
     }
     const value = policy.value !== undefined ? policy.value : response.nextKvCacheValue;
     if (value === undefined) return { written: false, ref };

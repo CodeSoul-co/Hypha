@@ -118,7 +118,11 @@ export class ReActRunner {
 
   async run(context: ReActRunContext): Promise<ReActRunResult> {
     const steps: ReActStep[] = [];
-    const pushStep = async (phase: ReActPhase, input?: unknown, output?: unknown): Promise<ReActStep> => {
+    const pushStep = async (
+      phase: ReActPhase,
+      input?: unknown,
+      output?: unknown
+    ): Promise<ReActStep> => {
       const step = createReActStep(`${context.stepId}:${steps.length + 1}:${phase}`, phase, input);
       step.output = output;
       steps.push(step);
@@ -183,6 +187,21 @@ export class ReActRunner {
         const observation = await this.executeAction(context, action);
         await pushStep('act', action, observation);
         await pushStep('observe_result', action, observation);
+        if (observation.source === 'human') {
+          const humanReviewAction: ReActAction = {
+            type: 'human_review',
+            target: action.target,
+            input: observation.value,
+            reason: 'Tool action requires human review.',
+          };
+          await pushStep('human_review', observation, humanReviewAction);
+          return {
+            runId: context.runId,
+            status: 'human_review_required',
+            steps,
+            finalAction: humanReviewAction,
+          };
+        }
 
         action = await this.runtime.verify(context, observation);
         await pushStep('verify', observation, action);
@@ -210,7 +229,9 @@ export class ReActRunner {
       return { source: 'system', value: action };
     }
     if (!this.options.toolRunner || !action.target) {
-      throw new Error(`Tool action cannot execute without toolRunner and target: ${action.target ?? '<missing>'}`);
+      throw new Error(
+        `Tool action cannot execute without toolRunner and target: ${action.target ?? '<missing>'}`
+      );
     }
     const result = await this.options.toolRunner.run({
       toolId: action.target,
@@ -252,18 +273,16 @@ export const reactPhaseSchema = z.enum([
   'human_review',
 ]);
 
-export const reactAgentSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    name: z.string().min(1),
-    modelAlias: z.string().min(1),
-    systemInstructions: z.string().optional(),
-    skillRefs: z.array(skillRefSchema).optional(),
-    toolRefs: z.array(z.string()).optional(),
-    memoryProfileRef: z.string().optional(),
-    policyRefs: z.array(z.string()).optional(),
-    contextSpecRef: specRefSchema.optional(),
-  }) satisfies ZodType<ReActAgentSpec>;
+export const reactAgentSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  name: z.string().min(1),
+  modelAlias: z.string().min(1),
+  systemInstructions: z.string().optional(),
+  skillRefs: z.array(skillRefSchema).optional(),
+  toolRefs: z.array(z.string()).optional(),
+  memoryProfileRef: z.string().optional(),
+  policyRefs: z.array(z.string()).optional(),
+  contextSpecRef: specRefSchema.optional(),
+}) satisfies ZodType<ReActAgentSpec>;
 
 export const reactAgentSpecJsonSchema: JsonSchema = {
   type: 'object',

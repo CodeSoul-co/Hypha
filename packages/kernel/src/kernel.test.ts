@@ -118,6 +118,61 @@ describe('@hypha/kernel ReAct contracts', () => {
     expect(result.output).toEqual({ result: 'hypha' });
   });
 
+  it('stops the ReAct loop when a tool action requires human review', async () => {
+    const provider: InferenceProvider = {
+      id: 'test-provider',
+      async infer(): Promise<InferenceResponse> {
+        return { id: 'response_2', output: 'needs approval' };
+      },
+    };
+    const toolRunner: ToolRunner = {
+      async run() {
+        return {
+          toolId: 'tool.search',
+          status: 'human_review_required',
+          error: 'approval required',
+        };
+      },
+    };
+    const runtime: ReActAgentRuntime = {
+      async reason(context) {
+        return {
+          runId: context.runId,
+          stepId: context.stepId,
+          modelAlias: context.agent.modelAlias,
+          input: context.messages,
+        };
+      },
+      async selectAction() {
+        return { type: 'tool', target: 'tool.search', input: { query: 'hypha' } };
+      },
+      async verify() {
+        throw new Error('verify must not run after tool human review');
+      },
+    };
+    const runner = new ReActRunner(runtime, { inference: provider, toolRunner });
+
+    const result = await runner.run({
+      runId: 'run_3',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user', content: 'search' }],
+      memoryScope: { userId: 'owner', sessionId: 'session_1' },
+    });
+
+    expect(result).toMatchObject({
+      status: 'human_review_required',
+      finalAction: {
+        type: 'human_review',
+        target: 'tool.search',
+      },
+    });
+    expect(result.steps.map((step) => step.phase)).toEqual(
+      expect.arrayContaining(['policy_check', 'act', 'observe_result', 'human_review'])
+    );
+    expect(result.steps.map((step) => step.phase)).not.toContain('verify');
+  });
+
   it('exports Stage1 ReActAgentSpec schema and minimal example', () => {
     expect(validateReActAgentSpec(reactAgentSpecDefinition.example).id).toBe('agent.default');
     expect(kernelSpecJsonSchemas.ReActAgentSpec.required).toContain('modelAlias');

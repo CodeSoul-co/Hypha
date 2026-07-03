@@ -182,7 +182,12 @@ describe('@hypha/inference', () => {
 
   it('writes provider KV cache values and reuses them on later inference', async () => {
     const kvCache = new InMemoryKvCacheProvider();
-    const kv = { id: 'kv_write', provider: 'mock', modelAlias: 'default', scope: 'session' as const };
+    const kv = {
+      id: 'kv_write',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'session' as const,
+    };
     const manager = new InferenceManager({ kvCache });
     manager.register({
       id: 'mock',
@@ -227,7 +232,12 @@ describe('@hypha/inference', () => {
 
   it('does not overwrite an existing KV cache hit when write_if_missing is used', async () => {
     const kvCache = new InMemoryKvCacheProvider();
-    const kv = { id: 'kv_existing', provider: 'mock', modelAlias: 'default', scope: 'session' as const };
+    const kv = {
+      id: 'kv_existing',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'session' as const,
+    };
     await kvCache.put(kv, { handle: 'existing' });
 
     const manager = new InferenceManager({ kvCache });
@@ -253,6 +263,42 @@ describe('@hypha/inference', () => {
       })
     ).resolves.toMatchObject({
       cache: { kvCacheHit: true, kvCacheWritten: false },
+    });
+    await expect(kvCache.get(kv)).resolves.toEqual({ handle: 'existing' });
+  });
+
+  it('checks the target KV ref before write_if_missing writes without a read policy', async () => {
+    const kvCache = new InMemoryKvCacheProvider();
+    const kv = {
+      id: 'kv_existing_write_only',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'session' as const,
+    };
+    await kvCache.put(kv, { handle: 'existing' });
+
+    const manager = new InferenceManager({ kvCache });
+    manager.register({
+      id: 'mock',
+      infer: async () => ({
+        id: 'response_write_only',
+        output: null,
+        nextKvCacheValue: { handle: 'new' },
+      }),
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_1',
+        stepId: 'step_write_only',
+        modelAlias: 'default',
+        input: 'hello',
+        cachePolicy: {
+          writeKvCache: { ref: kv, mode: 'write_if_missing' },
+        },
+      })
+    ).resolves.toMatchObject({
+      cache: { kvCacheWritten: false, kvCacheWriteRef: kv },
     });
     await expect(kvCache.get(kv)).resolves.toEqual({ handle: 'existing' });
   });
