@@ -533,11 +533,11 @@ const toolEndpoints = [
   {
     method: 'GET',
     path: '/tools/mcp/servers',
-    desc: 'List all MCP server configurations',
+    desc: 'List configured MCP runtime clients',
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "id", "name", "url", "status", "toolCount" }]
+  "data": [{ "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "toolCount": 4 }]
 }`,
   },
   {
@@ -547,7 +547,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": { "status": "healthy", "latencyMs": 45 }
+  "data": { "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "healthy": true }
 }`,
   },
   {
@@ -573,15 +573,16 @@ const toolEndpoints = [
   {
     method: 'POST',
     path: '/tools/execute',
-    desc: 'Execute a tool directly',
+    desc: 'Execute a local or MCP tool through the governed runtime path',
     auth: 'JWT Bearer Token or X-API-Key',
     body: `{
-  "toolName": "calculator",
-  "input": { "expression": "2 + 2" }
+  "name": "filesystem.read_file",
+  "params": { "path": "/README.md" }
 }`,
     response: `{
   "success": true,
-  "data": { "result": 4 }
+  "runId": "run_...",
+  "data": { "path": "/README.md", "content": "..." }
 }`,
   },
   {
@@ -591,7 +592,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "name", "description", "inputSchema", "serverId" }]
+  "data": [{ "serverId": "classic", "serverName": "Classic MCP Fixture", "tools": [{ "id": "filesystem.read_file", "source": "mcp" }] }]
 }`,
   },
 ];

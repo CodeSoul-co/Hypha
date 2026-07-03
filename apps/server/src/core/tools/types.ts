@@ -8,7 +8,11 @@ export interface ToolDefinition {
     type: 'object';
     properties?: Record<string, any>;
     required?: string[];
+    additionalProperties?: boolean | Record<string, any>;
+    [key: string]: any;
   };
+  outputSchema?: Record<string, any>;
+  metadata?: Record<string, any>;
 }
 
 export interface ToolParams {
@@ -81,7 +85,7 @@ export abstract class BaseTool implements ITool {
 export interface MCPServerConfig {
   id: string;
   name: string;
-  mode: 'local' | 'remote';
+  mode: 'local' | 'remote' | 'fixture';
   command?: string;
   args?: string[];
   endpoint?: string;

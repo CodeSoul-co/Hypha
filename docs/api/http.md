@@ -177,6 +177,33 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 
 Successful tool execution returns top-level `runId` plus `data`.
 
+MCP tools use the same endpoint. Connected MCP tools are listed with stable
+fully qualified names such as `filesystem.read_file`:
+
+```json
+{
+  "name": "filesystem.read_file",
+  "params": { "path": "/README.md" },
+  "sessionId": "sess_abc123"
+}
+```
+
+The default `config.yaml` registers a local fixture gateway:
+
+```yaml
+tools:
+  mcpServers:
+    - id: "classic"
+      name: "Classic MCP Fixture"
+      mode: "fixture"
+      autoConnect: true
+```
+
+Deployment MCP servers use the same list with `mode: "local"` and
+`command`/`args`, or `mode: "remote"` and `endpoint` plus optional `authToken`.
+`GET /tools/mcp/tools` reports normalized `ToolSpec` records, including
+`sourceRef.serverId` and `sourceRef.capabilityId`.
+
 The built-in `search` tool uses deterministic offline results by default. Set
 `WEB_SEARCH_PROVIDER=auto` to try `duckduckgo,wikipedia,stub` in order,
 `WEB_SEARCH_PROVIDER=wikipedia` for Wikipedia OpenSearch, or

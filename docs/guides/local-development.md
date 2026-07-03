@@ -114,7 +114,29 @@ WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-Framework-level MCP fixtures live in `@hypha/mcp`; `createClassicMCPMockGateway()` provides deterministic filesystem, fetch, time, and web-search capabilities for tests. Runtime MCP servers are still configured explicitly under `tools.mcpServers` in `config.yaml`.
+`config.yaml` enables the in-process classic MCP fixture by default:
+
+```yaml
+tools:
+  mcpServers:
+    - id: "classic"
+      name: "Classic MCP Fixture"
+      mode: "fixture"
+      autoConnect: true
+```
+
+The fixture exposes `filesystem.read_file`, `fetch.fetch`, `time.now`, and
+`search.web_search` through the same governed `/tools/execute` path as remote
+or stdio MCP servers. Replace `mode: "fixture"` with `mode: "local"` plus
+`command`/`args`, or `mode: "remote"` plus `endpoint` and optional `authToken`
+for deployment MCP servers.
+
+```bash
+npm run dev
+npm run cli -- tools
+npm run cli -- exec filesystem.read_file -p '{"path":"/README.md"}'
+npm run cli -- exec search.web_search -p '{"query":"hypha","limit":1}'
+```
 
 ## Inference Backends
 

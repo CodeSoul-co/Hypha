@@ -390,7 +390,7 @@ const configSchema = z.object({
         z.object({
           id: z.string(),
           name: z.string(),
-          mode: z.enum(['local', 'remote']),
+          mode: z.enum(['local', 'remote', 'fixture']),
           command: z.string().optional(),
           args: z.array(z.string()).optional(),
           endpoint: z.string().optional(),

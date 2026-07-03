@@ -206,6 +206,117 @@ describe('GET /api/v1/tools (bug 9)', () => {
   });
 });
 
+describe('MCP tool invocation', () => {
+  it('lists the configured fixture server and normalized MCP tools', async () => {
+    const servers = await request(app)
+      .get('/api/v1/tools/mcp/servers')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(servers.status).toBe(200);
+    expect(servers.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'classic',
+          status: 'connected',
+          toolCount: 4,
+        }),
+      ])
+    );
+
+    const tools = await request(app)
+      .get('/api/v1/tools/mcp/tools')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(tools.status).toBe(200);
+    const classic = (tools.body.data || []).find((server: any) => server.serverId === 'classic');
+    expect(classic).toBeTruthy();
+    const toolIds = (classic.tools || []).map((tool: any) => tool.id);
+    expect(toolIds).toEqual(
+      expect.arrayContaining(['filesystem.read_file', 'search.web_search'])
+    );
+    expect(classic.tools || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'filesystem.read_file',
+          source: 'mcp',
+          sourceRef: { serverId: 'filesystem', capabilityId: 'read_file' },
+        }),
+      ])
+    );
+
+    const allTools = await request(app)
+      .get('/api/v1/tools')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(allTools.status).toBe(200);
+    expect((allTools.body.data || []).map((tool: any) => tool.name)).toEqual(
+      expect.arrayContaining(['filesystem.read_file', 'search.web_search'])
+    );
+  });
+
+  it('executes a fixture MCP filesystem tool through the governed HTTP path', async () => {
+    const r = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'filesystem.read_file', params: { path: '/README.md' } });
+    expect(r.status).toBe(200);
+    expect(r.body.success).toBe(true);
+    expect(r.body.data).toMatchObject({
+      path: '/README.md',
+      content: expect.stringContaining('Classic MCP fixture'),
+    });
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'mcp.call.started',
+          payload: expect.objectContaining({
+            source: 'mcp',
+            serverId: 'filesystem',
+            capabilityId: 'read_file',
+          }),
+        }),
+        expect.objectContaining({
+          type: 'mcp.call.completed',
+          payload: expect.objectContaining({
+            source: 'mcp',
+            serverId: 'filesystem',
+            capabilityId: 'read_file',
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('validates MCP tool input before execution', async () => {
+    const r = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'filesystem.read_file', params: {} });
+    expect(r.status).toBe(400);
+    expect(r.body.success).toBe(false);
+    expect(r.body.error.message).toContain('missing required field: path');
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.failed',
+          payload: expect.objectContaining({
+            phase: 'input_validation',
+            source: 'mcp',
+            sideEffectLevel: 'read',
+          }),
+        }),
+      ])
+    );
+  });
+});
+
 describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
   it('does not crash on minimal context (was: "Cannot read properties of undefined (reading map)")', async () => {
     const r = await request(app)

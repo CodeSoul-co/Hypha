@@ -247,6 +247,13 @@ The built-in server `search` tool is a governed local tool with `permissionScope
 
 `@hypha/mcp` exports `classicMCPIntegrationSpec`, `classicMCPCapabilityDescriptors`, and `createClassicMCPMockGateway()` for deterministic MCP fixtures. The preset covers `filesystem.read_file`, `fetch.fetch`, `time.now`, and `search.web_search`; each capability normalizes to `ToolSpec` and runs through `GovernedToolRunner` with normal policy, schema validation, and trace events.
 
+The API server registers runtime MCP clients from `tools.mcpServers` in
+`config.yaml`. Supported modes are `fixture` for the in-process classic gateway,
+`local` for stdio MCP servers with `command` and `args`, and `remote` for HTTP
+gateways with `endpoint` and optional bearer `authToken`. Server MCP tools are
+published through `/tools`, `/tools/mcp/tools`, ReAct chat, workflow stages, and
+`POST /tools/execute` using normalized names such as `search.web_search`.
+
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
 
 ## Local Adapters

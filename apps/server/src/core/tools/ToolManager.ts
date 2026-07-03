@@ -15,7 +15,13 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
-import { normalizeMCPToolSpec, type MCPCapabilityDescriptor } from '@hypha/mcp';
+import {
+  classicMCPCapabilityDescriptors,
+  createClassicMCPMockGateway,
+  normalizeMCPToolSpec,
+  type MCPCapabilityDescriptor,
+  type MCPGateway,
+} from '@hypha/mcp';
 import type { ToolSpec as HyphaToolSpec } from '@hypha/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -24,6 +30,23 @@ import axios from 'axios';
 // Built-in tool constructors — registered in initialize(), then enabled/disabled
 // based on configs/tools.yaml.
 const BUILTIN_TOOL_CTORS: Array<new () => ITool> = [FilesystemTool, SearchTool];
+
+type MCPToolResolution = {
+  client: MCPClient;
+  tool: ToolDefinition;
+  spec: HyphaToolSpec;
+};
+
+type MCPToolMetadata = {
+  sourceRef?: {
+    serverId?: string;
+    capabilityId?: string;
+  };
+  sideEffectLevel?: HyphaToolSpec['sideEffectLevel'];
+  permissionScope?: string[];
+  trustLevel?: MCPCapabilityDescriptor['trustLevel'];
+  version?: string;
+};
 
 // Local MCP Client implementation
 class LocalMCPClient implements MCPClient {
@@ -74,7 +97,7 @@ class LocalMCPClient implements MCPClient {
       this.status = 'connected';
 
       // List available tools
-      await this.listTools();
+      await this.refreshTools();
 
       logger.info(`MCP server connected: ${this.name}`, { toolCount: this.tools.length });
     } catch (error: any) {
@@ -122,13 +145,7 @@ class LocalMCPClient implements MCPClient {
     }
 
     try {
-      const response = await this.client.listTools();
-      this.tools = response.tools.map((tool: any) => ({
-        name: tool.name,
-        description: tool.description || '',
-        inputSchema: tool.inputSchema || { type: 'object' },
-      }));
-      return this.tools;
+      return await this.refreshTools();
     } catch (error) {
       logger.error(`Failed to list tools from ${this.name}:`, error);
       return [];
@@ -138,11 +155,32 @@ class LocalMCPClient implements MCPClient {
   async healthCheck(): Promise<boolean> {
     if (!this.client) return false;
     try {
-      await this.listTools();
+      await this.refreshTools();
       return true;
     } catch {
       return false;
     }
+  }
+
+  private async refreshTools(): Promise<ToolDefinition[]> {
+    if (!this.client || this.status !== 'connected') {
+      throw new Error('MCP client not connected');
+    }
+    const response = await this.client.listTools();
+    this.tools = response.tools.map((tool: any) => ({
+      name: String(tool.name),
+      description: tool.description || '',
+      inputSchema: tool.inputSchema || { type: 'object' },
+      outputSchema: tool.outputSchema,
+      metadata: {
+        sourceRef: {
+          serverId: this.id,
+          capabilityId: String(tool.name),
+        },
+        sideEffectLevel: 'read',
+      },
+    }));
+    return this.tools;
   }
 }
 
@@ -172,8 +210,11 @@ class RemoteMCPClient implements MCPClient {
     logger.info(`Connecting to remote MCP server: ${this.name}`);
 
     try {
+      if (!this.baseUrl) {
+        throw new Error('Remote MCP endpoint is required');
+      }
       // Verify connection by listing tools
-      await this.listTools();
+      await this.fetchTools();
       this.status = 'connected';
       logger.info(`Remote MCP server connected: ${this.name}`);
     } catch (error: any) {
@@ -221,18 +262,7 @@ class RemoteMCPClient implements MCPClient {
 
   async listTools(): Promise<ToolDefinition[]> {
     try {
-      const headers: Record<string, string> = {};
-      if (this.authToken) {
-        headers['Authorization'] = `Bearer ${this.authToken}`;
-      }
-
-      const response = await axios.get(`${this.baseUrl}/tools`, {
-        headers,
-        timeout: 10000,
-      });
-
-      this.tools = response.data.tools || [];
-      return this.tools;
+      return await this.fetchTools();
     } catch (error) {
       logger.error(`Failed to list tools from remote MCP ${this.name}:`, error);
       return [];
@@ -241,11 +271,207 @@ class RemoteMCPClient implements MCPClient {
 
   async healthCheck(): Promise<boolean> {
     try {
-      await this.listTools();
+      await this.fetchTools();
       return true;
     } catch {
       return false;
     }
+  }
+
+  private async fetchTools(): Promise<ToolDefinition[]> {
+    if (!this.baseUrl) {
+      throw new Error('Remote MCP endpoint is required');
+    }
+    const headers: Record<string, string> = {};
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
+    const response = await axios.get(`${this.baseUrl}/tools`, {
+      headers,
+      timeout: 10000,
+    });
+
+    const remoteTools = Array.isArray(response.data?.tools) ? response.data.tools : [];
+    this.tools = remoteTools.map((tool: any) => ({
+      name: String(tool.name),
+      description: tool.description || '',
+      inputSchema: tool.inputSchema || { type: 'object' },
+      outputSchema: tool.outputSchema,
+      metadata: {
+        sourceRef: {
+          serverId: this.id,
+          capabilityId: String(tool.name),
+        },
+        sideEffectLevel: tool.sideEffectLevel || 'read',
+        permissionScope: tool.permissionScope,
+      },
+    }));
+    return this.tools;
+  }
+}
+
+// Deterministic in-process MCP client for local verification and tests.
+class FixtureMCPClient implements MCPClient {
+  id: string;
+  name: string;
+  status: 'connecting' | 'connected' | 'disconnected' | 'error' = 'disconnected';
+  tools: ToolDefinition[] = [];
+
+  private readonly gateway: MCPGateway;
+  private readonly capabilities: MCPCapabilityDescriptor[];
+  private readonly capabilityByName = new Map<string, MCPCapabilityDescriptor>();
+
+  constructor(config: MCPServerConfig) {
+    this.id = config.id;
+    this.name = config.name;
+    this.gateway = createClassicMCPMockGateway({
+      files: {
+        '/README.md': '# Hypha\n\nClassic MCP fixture exposed by the API server.\n',
+        '/runtime/status.json': JSON.stringify(
+          {
+            service: 'hypha',
+            fixture: 'classic-mcp',
+            ok: true,
+          },
+          null,
+          2
+        ),
+      },
+      fetchResponses: {
+        'https://example.com/hypha.json': {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          json: { service: 'hypha', source: 'classic-mcp-fixture' },
+        },
+      },
+      searchResults: {
+        hypha: [
+          {
+            title: 'Hypha runtime',
+            url: 'https://example.com/hypha/runtime',
+            snippet: 'Deterministic MCP fixture result for the Hypha runtime.',
+          },
+        ],
+      },
+    });
+    this.capabilities = classicMCPCapabilityDescriptors.map((capability) =>
+      JSON.parse(JSON.stringify(capability))
+    );
+    for (const capability of this.capabilities) {
+      this.indexCapability(capability);
+    }
+  }
+
+  async connect(): Promise<void> {
+    if (this.status === 'connected') return;
+    this.status = 'connecting';
+    try {
+      this.status = 'connected';
+      await this.refreshTools();
+      logger.info(`Fixture MCP server connected: ${this.name}`, { toolCount: this.tools.length });
+    } catch (error) {
+      this.status = 'error';
+      logger.error(`Failed to connect fixture MCP server ${this.name}:`, error);
+      throw error;
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    this.status = 'disconnected';
+    this.tools = [];
+    logger.info(`Fixture MCP server disconnected: ${this.name}`);
+  }
+
+  async callTool(name: string, args: any): Promise<ToolResult> {
+    if (this.status !== 'connected') {
+      return { success: false, error: 'Fixture MCP client not connected' };
+    }
+    const capability = this.resolveCapability(name);
+    if (!capability) {
+      return { success: false, error: `MCP fixture tool not found: ${name}` };
+    }
+    if (!this.gateway.callTool) {
+      return { success: false, error: 'Fixture MCP gateway does not support tool calls' };
+    }
+    try {
+      const output = await this.gateway.callTool({
+        serverId: capability.serverId,
+        capabilityId: capability.capabilityId,
+        input: args,
+        context: {
+          runId: `fixture:${this.id}`,
+          stepId: `mcp:${capability.serverId}.${capability.capabilityId}`,
+          metadata: {
+            source: 'server-fixture',
+            gatewayId: this.id,
+          },
+        },
+      });
+      return { success: true, output };
+    } catch (error) {
+      logger.error(`Fixture MCP tool call failed: ${name}`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async listTools(): Promise<ToolDefinition[]> {
+    if (this.status !== 'connected') {
+      return [];
+    }
+    return this.refreshTools();
+  }
+
+  async healthCheck(): Promise<boolean> {
+    return this.status === 'connected';
+  }
+
+  private refreshTools(): ToolDefinition[] {
+    this.tools = this.capabilities.map((capability) => {
+      const spec = normalizeMCPToolSpec(capability);
+      return {
+        name: spec.id,
+        description: spec.description,
+        inputSchema: this.asObjectInputSchema(spec.inputSchema),
+        outputSchema: spec.outputSchema as Record<string, any> | undefined,
+        metadata: {
+          sourceRef: spec.sourceRef,
+          sideEffectLevel: spec.sideEffectLevel,
+          permissionScope: spec.permissionScope,
+          trustLevel: capability.trustLevel,
+          version: capability.version,
+        } satisfies MCPToolMetadata,
+      };
+    });
+    return this.tools;
+  }
+
+  private resolveCapability(name: string): MCPCapabilityDescriptor | null {
+    return this.capabilityByName.get(name) ?? null;
+  }
+
+  private indexCapability(capability: MCPCapabilityDescriptor): void {
+    const spec = normalizeMCPToolSpec(capability);
+    const keys = [spec.id, spec.name, capability.name, capability.capabilityId].filter(
+      (value): value is string => typeof value === 'string' && value.length > 0
+    );
+    for (const key of keys) {
+      if (!this.capabilityByName.has(key)) {
+        this.capabilityByName.set(key, capability);
+      }
+    }
+  }
+
+  private asObjectInputSchema(schema: HyphaToolSpec['inputSchema']): ToolDefinition['inputSchema'] {
+    return {
+      ...(schema as Record<string, any>),
+      type: 'object',
+      properties: schema.properties as Record<string, any> | undefined,
+      required: schema.required,
+    };
   }
 }
 
@@ -428,24 +654,21 @@ export class ToolManager {
       };
     }
 
-    for (const client of this.mcpClients.values()) {
-      if (client.status !== 'connected') continue;
-      const tool = client.tools.find((candidate) => candidate.name === name);
-      if (tool) {
-        const normalized = this.normalizeMCPTool(client, tool);
-        return {
-          id: normalized.id,
-          name: normalized.name ?? tool.name,
-          description: normalized.description,
-          inputSchema: this.asObjectInputSchema(normalized.inputSchema),
-          outputSchema: normalized.outputSchema,
-          source: 'mcp',
-          sideEffectLevel: normalized.sideEffectLevel,
-          permissionScope: normalized.permissionScope,
-          serverId: normalized.sourceRef?.serverId,
-          capabilityId: normalized.sourceRef?.capabilityId,
-        };
-      }
+    const mcpTool = this.findMCPToolByName(name);
+    if (mcpTool) {
+      const normalized = mcpTool.spec;
+      return {
+        id: normalized.id,
+        name: normalized.id,
+        description: normalized.description,
+        inputSchema: this.asObjectInputSchema(normalized.inputSchema),
+        outputSchema: normalized.outputSchema,
+        source: 'mcp',
+        sideEffectLevel: normalized.sideEffectLevel,
+        permissionScope: normalized.permissionScope,
+        serverId: normalized.sourceRef?.serverId,
+        capabilityId: normalized.sourceRef?.capabilityId,
+      };
     }
 
     return null;
@@ -459,13 +682,9 @@ export class ToolManager {
     }
 
     // Then check MCP tools
-    for (const client of this.mcpClients.values()) {
-      if (client.status === 'connected') {
-        const tool = client.tools.find((t) => t.name === name);
-        if (tool) {
-          return client.callTool(name, params);
-        }
-      }
+    const mcpTool = this.findMCPToolByName(name);
+    if (mcpTool) {
+      return mcpTool.client.callTool(mcpTool.tool.name, params);
     }
 
     return { success: false, error: `Tool not found: ${name}` };
@@ -473,7 +692,11 @@ export class ToolManager {
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
     const client =
-      config.mode === 'local' ? new LocalMCPClient(config) : new RemoteMCPClient(config);
+      config.mode === 'local'
+        ? new LocalMCPClient(config)
+        : config.mode === 'remote'
+          ? new RemoteMCPClient(config)
+          : new FixtureMCPClient(config);
 
     this.mcpClients.set(config.id, client);
 
@@ -536,34 +759,63 @@ export class ToolManager {
     return normalizeMCPToolSpec(this.toMCPCapabilityDescriptor(client, tool));
   }
 
+  private findMCPToolByName(name: string): MCPToolResolution | null {
+    for (const client of this.mcpClients.values()) {
+      if (client.status !== 'connected') continue;
+      for (const tool of client.tools) {
+        const spec = this.normalizeMCPTool(client, tool);
+        const candidateNames = new Set([tool.name, spec.id, spec.name].filter(Boolean));
+        if (candidateNames.has(name)) {
+          return { client, tool, spec };
+        }
+      }
+    }
+    return null;
+  }
+
   private toMCPCapabilityDescriptor(
     client: MCPClient,
     tool: ToolDefinition
   ): MCPCapabilityDescriptor {
+    const metadata = (tool.metadata ?? {}) as MCPToolMetadata;
+    const sourceRef = metadata.sourceRef ?? {};
+    const serverId = sourceRef.serverId ?? client.id;
+    const capabilityId = sourceRef.capabilityId ?? tool.name;
+    const publicName = `${serverId}.${capabilityId}`;
     return {
-      id: `${client.id}.${tool.name}`,
-      version: '0.0.0',
-      serverId: client.id,
-      capabilityId: tool.name,
+      id: publicName,
+      version: metadata.version ?? '0.0.0',
+      serverId,
+      capabilityId,
       type: 'tool',
-      name: tool.name,
+      name: publicName,
       description: tool.description,
       inputSchema: tool.inputSchema,
-      sideEffectLevel: 'read',
-      trustLevel: 'reviewed',
+      outputSchema: tool.outputSchema,
+      sideEffectLevel: metadata.sideEffectLevel ?? 'read',
+      permissionScope: metadata.permissionScope,
+      trustLevel: metadata.trustLevel ?? 'reviewed',
     };
   }
 
   private toolSpecToDefinition(spec: HyphaToolSpec): ToolDefinition {
     return {
-      name: spec.name ?? spec.id,
+      name: spec.source === 'mcp' ? spec.id : spec.name ?? spec.id,
       description: spec.description,
       inputSchema: this.asObjectInputSchema(spec.inputSchema),
+      outputSchema: spec.outputSchema as Record<string, any> | undefined,
+      metadata: {
+        source: spec.source,
+        sourceRef: spec.sourceRef,
+        sideEffectLevel: spec.sideEffectLevel,
+        permissionScope: spec.permissionScope,
+      },
     };
   }
 
   private asObjectInputSchema(schema: HyphaToolSpec['inputSchema']): ToolDefinition['inputSchema'] {
     return {
+      ...(schema as Record<string, any>),
       type: 'object',
       properties: schema.properties as Record<string, any> | undefined,
       required: schema.required,
