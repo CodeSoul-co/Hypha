@@ -15,7 +15,7 @@ Session is not part of DomainPack. DomainPack may declare `sessionProfiles`, but
 
 ## Event Flow
 
-A normal run records:
+A run can record events such as:
 
 ```text
 session.created
@@ -24,6 +24,7 @@ run.started
 fsm.state.entered
 fsm.transition.accepted
 context.build.completed
+context.compacted
 skill.selected
 skill.loaded
 skill.completed
@@ -36,6 +37,9 @@ tool.call.requested
 tool.policy.checked
 tool.call.completed
 memory.write.committed
+human.review.requested
+human.review.approved
+human.review.rejected
 fsm.state.entered
 run.completed
 ```
@@ -77,6 +81,12 @@ runtime code still derives all check inputs from events and contracts.
 `RegressionRunner.runSpecAndRecord()` emits `regression.started`,
 `regression.completed`, or `regression.failed`.
 
+Local event stores can export and import trace streams as newline-delimited JSON
+through `SQLiteEventStore.exportJsonl(filePath, filter?)` and
+`SQLiteEventStore.importJsonl(filePath)`. JSONL exports are intended for replay
+fixtures, audits, regression snapshots, and moving local traces between
+environments without exposing app-specific session state.
+
 ## FSM and Guards
 
 `WorkflowSpec` compiles to `FSMProcessSpec`. FSM states define process meaning; transitions define allowed movement. Guards are deterministic expressions evaluated against `input`, `variables`, and `metadata`.
@@ -102,7 +112,8 @@ Transitions may be rejected by missing transitions, guard failure, policy denial
 
 ```text
 Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
-  -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying -> Completed
+  -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying
+  -> MemorySync -> Completed
 ```
 
 ## ReAct Execution

@@ -575,6 +575,7 @@ export class RunManager {
     payload: Record<string, unknown> = {},
     timestamp?: string
   ): Promise<FrameworkEvent> {
+    await this.recordHumanReviewRequested(context, payload, timestamp);
     return this.runtime.appendRunEvent({
       id: this.nextEventId(context.runId, 'run.waiting_human'),
       type: 'run.waiting_human',
@@ -584,6 +585,91 @@ export class RunManager {
       agentId: context.agentId,
       timestamp,
       payload,
+    });
+  }
+
+  async recordHumanReviewRequested(
+    context: RunExecutionContext,
+    payload: Record<string, unknown> = {},
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'human.review.requested'),
+      type: 'human.review.requested',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload,
+    });
+  }
+
+  async recordHumanReviewApproved(
+    context: RunExecutionContext,
+    payload: Record<string, unknown> = {},
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'human.review.approved'),
+      type: 'human.review.approved',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload: { ...payload, decision: 'approved' },
+    });
+  }
+
+  async recordHumanReviewRejected(
+    context: RunExecutionContext,
+    payload: Record<string, unknown> = {},
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'human.review.rejected'),
+      type: 'human.review.rejected',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload: { ...payload, decision: 'rejected' },
+    });
+  }
+
+  async recordContextCompacted(
+    context: RunExecutionContext,
+    payload: Record<string, unknown> = {},
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'context.compacted'),
+      type: 'context.compacted',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload,
+    });
+  }
+
+  async cancelRun(
+    context: RunExecutionContext,
+    reason?: string,
+    timestamp?: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'run.cancelled'),
+      type: 'run.cancelled',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      timestamp,
+      payload: { reason },
     });
   }
 
@@ -904,8 +990,9 @@ function stateForReActStep(step: ReActStep): string | null {
       return 'Failed';
     case 'human_review':
       return 'HumanReview';
-    case 'observe':
     case 'memory_sync':
+      return 'MemorySync';
+    case 'observe':
       return null;
   }
 }

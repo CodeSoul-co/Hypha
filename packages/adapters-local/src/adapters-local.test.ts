@@ -76,6 +76,48 @@ describe('@hypha/adapters-local reference providers', () => {
     ]);
   });
 
+  it('exports and imports framework event traces as JSONL', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-event-jsonl-'));
+    const jsonlFile = path.join(root, 'traces', 'run_jsonl.events.jsonl');
+    const events = new SQLiteEventStore({
+      filename: path.join(root, 'events.sqlite'),
+      mode: 'json',
+    });
+    await events.append(
+      createFrameworkEvent({
+        id: 'run_jsonl:started',
+        type: 'run.started',
+        runId: 'run_jsonl',
+        sessionId: 'session_jsonl',
+        timestamp: '2026-07-03T00:00:00.000Z',
+        payload: { input: 'hello' },
+      })
+    );
+    await events.append(
+      createFrameworkEvent({
+        id: 'run_jsonl:review:approved',
+        type: 'human.review.approved',
+        runId: 'run_jsonl',
+        sessionId: 'session_jsonl',
+        timestamp: '2026-07-03T00:00:01.000Z',
+        payload: { reviewerId: 'owner' },
+      })
+    );
+
+    await expect(events.exportJsonl(jsonlFile, { runId: 'run_jsonl' })).resolves.toBe(2);
+    expect(fs.readFileSync(jsonlFile, 'utf-8').trim().split('\n')).toHaveLength(2);
+
+    const imported = new SQLiteEventStore({
+      filename: path.join(root, 'imported.sqlite'),
+      mode: 'json',
+    });
+    await expect(imported.importJsonl(jsonlFile)).resolves.toBe(2);
+    await expect(imported.list({ runId: 'run_jsonl' })).resolves.toMatchObject([
+      { id: 'run_jsonl:started', type: 'run.started' },
+      { id: 'run_jsonl:review:approved', type: 'human.review.approved' },
+    ]);
+  });
+
   it('uses JSON fallback storage when node:sqlite is unavailable or disabled', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-json-adapters-'));
     const structured = new SQLiteStructuredStore({

@@ -138,11 +138,11 @@ regression, and deployment.
 
 `FrameworkEvent` fields include `id`, `type`, `runId`, optional `workspaceId`, `sessionId`, `stepId`, `agentId`, `fsmState`, `timestamp`, `payload`, and `metadata`.
 
-Common event types include `session.created`, `run.created`, `run.started`, `run.waiting_human`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `eval.completed`, `replay.completed`, and `regression.completed`.
+Common event types include `session.created`, `run.created`, `run.started`, `run.waiting_human`, `run.cancelled`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `context.compacted`, `human.review.requested`, `human.review.approved`, `human.review.rejected`, `eval.completed`, `replay.completed`, and `regression.completed`.
 
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
-`RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, marks human-review waits with `run.waiting_human`, and finalizes runs with `run.completed` or `run.failed`.
+`RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, marks human-review waits with `human.review.requested` and `run.waiting_human`, records human-review decisions and context compaction, and finalizes runs with `run.completed`, `run.failed`, or `run.cancelled`.
 
 ## Evaluation, Replay, and Regression
 
@@ -198,13 +198,14 @@ building fails before model inference.
 
 FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and `matches(path, pattern)`. Transitions can be rejected by guards, policy, or human-review requirements.
 
-`FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, and `getSnapshot()`. Runtime callbacks `onTransition` and `onStateEntered` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
+`FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, `cancel(options)`, and `getSnapshot()`. Runtime callbacks `onTransition` and `onStateEntered` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
 
 `defaultReActFSMProcessSpec` declares the minimal agent closure:
 
 ```text
 Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
-  -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying -> Completed
+  -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying
+  -> MemorySync -> Completed
 ```
 
 ## ReAct Kernel
@@ -403,3 +404,5 @@ await manager.write(scope, record, {
 | `MockEmbeddingProvider`    | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.
+
+`SQLiteEventStore.exportJsonl(filePath, filter?)` writes filtered events as newline-delimited JSON and returns the exported count. `SQLiteEventStore.importJsonl(filePath)` appends those events into the configured event store and returns the imported count. Use these APIs for replay fixtures, audit snapshots, and regression traces.

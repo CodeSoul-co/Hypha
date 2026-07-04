@@ -10,6 +10,7 @@ data/
     events/
       hypha-runtime-events.sqlite
       hypha-runtime-events.sqlite.json
+      *.events.jsonl
     structured/
       hypha-structured.sqlite
   storage/
@@ -42,4 +43,4 @@ HYPHA_STORAGE_ARTIFACT_ROOT=./data/storage/artifacts
 HYPHA_SYSTEM_LOG_PATH=./data/logs/system.log
 ```
 
-Do not commit `data/`. If a local record must become a reproducible fixture, export it into `tests/fixtures/` or a documented package test artifact instead.
+Do not commit `data/`. If a local record must become a reproducible fixture, export the run as JSONL and move a sanitized copy into `tests/fixtures/` or a documented package test artifact instead.

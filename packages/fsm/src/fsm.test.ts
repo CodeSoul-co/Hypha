@@ -167,12 +167,37 @@ describe('@hypha/fsm runtime contracts', () => {
       'PolicyChecked->Acting',
       'Acting->ObservationRecorded',
       'ObservationRecorded->Verifying',
-      'Verifying->Completed',
+      'Verifying->MemorySync',
+      'MemorySync->Completed',
     ]);
     expect(runtime.getSnapshot()).toMatchObject({
       currentState: 'Completed',
       status: 'completed',
       statePath: [...REACT_FSM_STATE_PATH],
+    });
+  });
+
+  it('supports explicit cancellation as a terminal FSM transition', async () => {
+    const transitions: string[] = [];
+    const runtime = new FSMRuntime(defaultReActFSMProcessSpec, 'run_cancel', {
+      now: () => '2026-07-03T00:00:00.000Z',
+      onTransition(record) {
+        transitions.push(`${record.from}->${record.to}`);
+      },
+    });
+
+    await runtime.start();
+    const record = await runtime.cancel({ reason: 'user requested stop' });
+
+    expect(record.metadata).toMatchObject({
+      phase: 'cancel',
+      reason: 'user requested stop',
+    });
+    expect(transitions).toEqual(['Idle->Cancelled']);
+    expect(runtime.getSnapshot()).toMatchObject({
+      currentState: 'Cancelled',
+      status: 'cancelled',
+      statePath: ['Idle', 'Cancelled'],
     });
   });
 });

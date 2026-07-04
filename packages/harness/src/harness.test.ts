@@ -469,11 +469,48 @@ describe('@hypha/harness contracts', () => {
     expect(result.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'run.waiting_human' }),
+        expect.objectContaining({ type: 'human.review.requested' }),
         expect.objectContaining({ type: 'fsm.state.entered', fsmState: 'HumanReview' }),
       ])
     );
     await expect(runManager.projectRun('run_stage4_human')).resolves.toMatchObject({
       status: 'waiting_human',
+    });
+  });
+
+  it('records human-review decisions, context compaction, and cancellation as events', async () => {
+    const runManager = new RunManager();
+    await runManager.createRun({
+      id: 'run_operational_events',
+      sessionId: 'session_operational_events',
+      userId: 'owner',
+      timestamp: '2026-07-03T00:00:00.000Z',
+    });
+    const context = {
+      runId: 'run_operational_events',
+      sessionId: 'session_operational_events',
+      userId: 'owner',
+      agentId: 'agent.operational',
+    };
+
+    await runManager.recordContextCompacted(context, {
+      previousTokenCount: 2048,
+      nextTokenCount: 512,
+    });
+    await runManager.recordHumanReviewApproved(context, { reviewerId: 'owner' });
+    await runManager.recordHumanReviewRejected(context, { reviewerId: 'owner' });
+    await runManager.cancelRun(context, 'operator stopped run');
+
+    await expect(runManager.projectRun('run_operational_events')).resolves.toMatchObject({
+      status: 'cancelled',
+    });
+    await expect(runManager.projectReplay('run_operational_events')).resolves.toMatchObject({
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: 'context.compacted' }),
+        expect.objectContaining({ type: 'human.review.approved' }),
+        expect.objectContaining({ type: 'human.review.rejected' }),
+        expect.objectContaining({ type: 'run.cancelled' }),
+      ]),
     });
   });
 

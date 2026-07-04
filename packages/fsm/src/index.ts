@@ -105,6 +105,10 @@ export interface FSMRuntimeTransitionOptions extends FSMTransitionOptions {
   metadata?: Record<string, unknown>;
 }
 
+export interface FSMRuntimeCancelOptions extends FSMRuntimeTransitionOptions {
+  reason?: string;
+}
+
 export interface FSMStateEnteredRecord {
   processId: string;
   runId: string;
@@ -210,6 +214,7 @@ export const REACT_FSM_STATE_PATH = [
   'Acting',
   'ObservationRecorded',
   'Verifying',
+  'MemorySync',
   'Completed',
 ] as const;
 
@@ -229,6 +234,7 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { id: 'Acting', kind: 'acting', traceEvents: ['fsm.state.entered'] },
     { id: 'ObservationRecorded', kind: 'observation_recorded', traceEvents: ['fsm.state.entered'] },
     { id: 'Verifying', kind: 'verifying', traceEvents: ['fsm.state.entered'] },
+    { id: 'MemorySync', kind: 'memory_sync', traceEvents: ['fsm.state.entered'] },
     { id: 'HumanReview', kind: 'human_review', traceEvents: ['fsm.state.entered'] },
     { id: 'Completed', kind: 'completed', traceEvents: ['fsm.state.entered'] },
     { id: 'Failed', kind: 'failed', traceEvents: ['fsm.state.entered'] },
@@ -245,12 +251,22 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { from: 'Acting', to: 'ObservationRecorded', traceEvent: 'fsm.transition.accepted' },
     { from: 'ObservationRecorded', to: 'Verifying', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'MemorySync', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'ContextBuilt', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'PolicyChecked', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
     { from: 'ActionSelected', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
     { from: 'PolicyChecked', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
     { from: 'Acting', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
     { from: 'ObservationRecorded', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'HumanReview', to: 'Acting', traceEvent: 'fsm.transition.accepted' },
+    { from: 'HumanReview', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
+    { from: 'HumanReview', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'HumanReview', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'Idle', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'RunInitialized', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'ContextBuilt', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
@@ -260,6 +276,18 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { from: 'Acting', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'ObservationRecorded', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Idle', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'RunInitialized', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ContextBuilt', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Reasoning', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ActionSelected', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'PolicyChecked', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Acting', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'ObservationRecorded', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'MemorySync', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'HumanReview', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
   ],
   terminalStates: ['Completed', 'Failed', 'Cancelled'],
 };
@@ -336,6 +364,17 @@ export class FSMRuntime {
       records.push(await this.transition(state, options));
     }
     return records;
+  }
+
+  async cancel(options: FSMRuntimeCancelOptions = {}): Promise<StateTransition> {
+    return this.transition('Cancelled', {
+      ...options,
+      metadata: {
+        ...options.metadata,
+        phase: options.metadata?.phase ?? 'cancel',
+        reason: options.reason,
+      },
+    });
   }
 
   private async emitStateEntered(input: {

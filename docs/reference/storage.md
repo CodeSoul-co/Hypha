@@ -27,6 +27,21 @@ const storage = createLocalStorageBackbone({
 
 `sqliteMode: "auto"` uses a real SQLite engine (`node:sqlite` when available, otherwise `better-sqlite3`) and falls back to JSON sidecar files only when no SQLite engine can be loaded. Use `"sqlite"` when SQLite is required and `"json"` for deterministic test fixtures. `"node-sqlite"` is accepted as a compatibility alias for required SQLite mode.
 
+`SQLiteEventStore` also supports trace exchange as JSONL:
+
+```ts
+const count = await storage.eventStore.exportJsonl(
+  './data/runtime/events/run_1.events.jsonl',
+  { runId: 'run_1' }
+);
+
+await storage.eventStore.importJsonl('./data/runtime/events/run_1.events.jsonl');
+```
+
+Use JSONL exports for replay fixtures, audits, regression snapshots, and local
+debugging. The event log remains the source of truth; exported files are
+portable snapshots.
+
 ## Storage Provider Profile
 
 `StorageProviderProfile` declares:

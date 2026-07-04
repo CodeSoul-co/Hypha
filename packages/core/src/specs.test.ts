@@ -53,8 +53,32 @@ describe('@hypha/core contracts', () => {
         payload: { userId: 'owner' },
       })
     );
+    await store.append(
+      createFrameworkEvent({
+        id: 'event_2',
+        type: 'context.compacted',
+        runId: 'run_1',
+        sessionId: 'session_1',
+        payload: { previousTokenCount: 4096, nextTokenCount: 1024 },
+      })
+    );
+    await store.append(
+      createFrameworkEvent({
+        id: 'event_3',
+        type: 'human.review.approved',
+        runId: 'run_1',
+        sessionId: 'session_1',
+        payload: { reviewerId: 'owner' },
+      })
+    );
 
-    await expect(store.list({ sessionId: 'session_1' })).resolves.toHaveLength(1);
+    await expect(store.list({ sessionId: 'session_1' })).resolves.toHaveLength(3);
+    await expect(store.list({ type: 'context.compacted' })).resolves.toMatchObject([
+      { id: 'event_2', payload: { nextTokenCount: 1024 } },
+    ]);
+    await expect(store.list({ type: 'human.review.approved' })).resolves.toMatchObject([
+      { id: 'event_3', payload: { reviewerId: 'owner' } },
+    ]);
   });
 
   it('denies external side effects by default', async () => {

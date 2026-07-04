@@ -170,6 +170,20 @@ export class SQLiteEventStore implements EventStore, TraceRecorder {
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     return this.backend.list(filter);
   }
+
+  async exportJsonl(filename: string, filter: EventFilter = {}): Promise<number> {
+    const events = await this.list(filter);
+    writeEventJsonlFile(filename, events);
+    return events.length;
+  }
+
+  async importJsonl(filename: string): Promise<number> {
+    const events = readEventJsonlFile(filename);
+    for (const event of events) {
+      await this.append(event);
+    }
+    return events.length;
+  }
 }
 
 export interface SQLiteStructuredStoreOptions {
@@ -227,6 +241,15 @@ class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
         'type TEXT NOT NULL, ' +
         'timestamp TEXT NOT NULL, ' +
         'event TEXT NOT NULL)'
+    );
+    this.db.exec(
+      [
+        'CREATE INDEX IF NOT EXISTS idx_framework_events_run_id ON framework_events(run_id)',
+        'CREATE INDEX IF NOT EXISTS idx_framework_events_session_id ON framework_events(session_id)',
+        'CREATE INDEX IF NOT EXISTS idx_framework_events_type ON framework_events(type)',
+        'CREATE INDEX IF NOT EXISTS idx_framework_events_timestamp ON framework_events(timestamp)',
+        'CREATE INDEX IF NOT EXISTS idx_framework_events_workspace_id ON framework_events(workspace_id)',
+      ].join('; ')
     );
   }
 
@@ -651,6 +674,21 @@ function writeJsonFile(filename: string, value: unknown): void {
   const tempFile = `${filename}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(value, null, 2));
   fs.renameSync(tempFile, filename);
+}
+
+function writeEventJsonlFile(filename: string, events: FrameworkEvent[]): void {
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  const content = events.map((event) => JSON.stringify(event)).join('\n');
+  fs.writeFileSync(filename, content ? `${content}\n` : '');
+}
+
+function readEventJsonlFile(filename: string): FrameworkEvent[] {
+  if (!fs.existsSync(filename)) return [];
+  return fs
+    .readFileSync(filename, 'utf-8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as FrameworkEvent);
 }
 
 function validateIdentifier(identifier: string): void {
