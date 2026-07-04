@@ -177,6 +177,18 @@ reasoningProfiles:
     maxSteps: 4
     persist: summary_only
 defaultReasoningProfile: reasoning.local
+businessRules:
+  - id: rule.output-contract
+    version: 0.0.0
+    scope: output
+    effect: postcondition
+    description: Final output should satisfy the declared output contract.
+    outputContractRef: output.minimal
+    policyRefs:
+      - policy.readonly
+    evaluationRefs:
+      - eval.output-contract
+    severity: low
 policies:
   - id: policy.readonly
     version: 0.0.0

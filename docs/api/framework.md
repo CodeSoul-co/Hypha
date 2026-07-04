@@ -57,24 +57,25 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `Outp
 
 `DomainPackSpec` declares domain-level capabilities and contracts.
 
-| Field                            | Type                   | Description                                     |
-| -------------------------------- | ---------------------- | ----------------------------------------------- |
-| `id`, `version`, `name`          | string                 | Stable identity and display name.               |
-| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.       |
-| `workflows`                      | `WorkflowSpec[]`       | Domain workflows that can compile to FSM specs. |
-| `defaultWorkflow`                | string                 | Workflow id used when none is specified.        |
-| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.     |
-| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                    |
-| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                  |
-| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.            |
-| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.             |
-| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.             |
-| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.            |
-| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.         |
-| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.  |
-| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                           |
-| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                               |
-| `metadata`                       | object                 | Domain-specific metadata.                       |
+| Field                            | Type                   | Description                                                   |
+| -------------------------------- | ---------------------- | ------------------------------------------------------------- |
+| `id`, `version`, `name`          | string                 | Stable identity and display name.                             |
+| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.                     |
+| `workflows`                      | `WorkflowSpec[]`       | Domain workflows that can compile to FSM specs.               |
+| `defaultWorkflow`                | string                 | Workflow id used when none is specified.                      |
+| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.                   |
+| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                                  |
+| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                                |
+| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.                          |
+| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.                           |
+| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.                           |
+| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.                          |
+| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.                       |
+| `businessRules`                  | `BusinessRuleSpec[]`   | Abstract domain rules bound to output/policy/evaluation refs. |
+| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.                |
+| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                                         |
+| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                                             |
+| `metadata`                       | object                 | Domain-specific metadata.                                     |
 
 `SessionProfileSpec` may define `metadataSchema`, `defaultMetadata`, and default references for memory, context, tool, MCP, skill, and policy profiles.
 
@@ -89,12 +90,15 @@ Domain pack loading and compilation APIs:
 | `extendDomainPack(base, overlay)`        | Upserts predefined customizations by `id` while preserving the base pack.                       |
 | `compileWorkflowToFSM(domainPack, opts)` | Compiles one `WorkflowSpec` to `FSMProcessSpec`.                                                |
 | `compileDomainPackToHarnessedSystem()`   | Resolves task/profile/tool/skill/policy bindings and returns FSM, system spec, and agent patch. |
+| `applyDomainAgentPatch(agent, patch)`    | Applies DomainPack-derived skill/tool/memory/context/policy refs to an AgentSpec-shaped object. |
 
 `compileDomainPackToHarnessedSystem(domainPack, options)` returns `bindings`,
 `fsmProcess`, `harnessedSystem`, `agentPatch`, and `sessionInitialization`.
-Use `agentPatch` to apply selected `skillRefs`, `toolRefs`,
-`memoryProfileRef`, `contextSpecRef`, and `policyRefs` to an agent without
-coupling DomainPack declarations to a concrete app surface.
+Use `agentPatch` or `applyDomainAgentPatch()` to apply selected `skillRefs`,
+`toolRefs`, `memoryProfileRef`, `contextSpecRef`, and `policyRefs` to an agent
+without coupling DomainPack declarations to a concrete app surface. MCP and
+reasoning profile refs remain in the patch metadata for runtime adapters that
+need them.
 
 ## Session, Run, and Event
 

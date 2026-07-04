@@ -59,6 +59,7 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   contextProfiles?: ContextSpec[];
   reasoningProfiles?: ReasoningSpec[];
   defaultReasoningProfile?: string;
+  businessRules?: BusinessRuleSpec[];
   policies?: PolicySpec[];
   evaluationProfiles?: EvaluationSpec[];
   regressionCases?: RegressionSpec[];
@@ -113,9 +114,26 @@ export interface DomainAgentPatch {
   skillRefs: SkillRef[];
   toolRefs: string[];
   memoryProfileRef?: string;
+  mcpProfileRef?: string;
   contextSpecRef?: SpecRef;
+  reasoningProfileRef?: string;
   policyRefs?: string[];
   metadata: Record<string, unknown>;
+}
+
+export interface DomainAgentPatchTarget {
+  [key: string]: unknown;
+  id?: string;
+  version?: string;
+  name?: string;
+  modelAlias?: string;
+  systemInstructions?: string;
+  skillRefs?: SkillRef[];
+  toolRefs?: string[];
+  memoryProfileRef?: string;
+  contextSpecRef?: SpecRef;
+  policyRefs?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface WorkflowStateBinding {
@@ -142,6 +160,7 @@ export interface DomainBindingResolution {
   policies: PolicySpec[];
   evaluations: EvaluationSpec[];
   regressionCases: RegressionSpec[];
+  businessRules: BusinessRuleSpec[];
   tools: ToolSpec[];
   allowedSkills: SkillRef[];
   defaultSkills: SkillRef[];
@@ -205,6 +224,28 @@ export interface ReasoningSpec extends VersionedSpec, SpecMetadata {
   plannerRef?: string;
   reasonerRef?: string;
   metadataSchema?: JsonSchema;
+  metadata?: Record<string, unknown>;
+}
+
+export type BusinessRuleScope =
+  | 'domain'
+  | 'task'
+  | 'workflow'
+  | 'state'
+  | 'tool'
+  | 'memory'
+  | 'output';
+export type BusinessRuleEffect = 'constraint' | 'precondition' | 'postcondition' | 'guidance';
+
+export interface BusinessRuleSpec extends VersionedSpec, SpecMetadata {
+  scope: BusinessRuleScope;
+  effect: BusinessRuleEffect;
+  expression?: string;
+  inputSchema?: JsonSchema;
+  outputContractRef?: string;
+  policyRefs?: string[];
+  evaluationRefs?: string[];
+  severity?: RiskLevel;
   metadata?: Record<string, unknown>;
 }
 
@@ -484,6 +525,7 @@ export function extendDomainPack(base: DomainPackSpec, overlay: DomainPackOverla
     memoryProfiles: upsertById(base.memoryProfiles, overlay.memoryProfiles),
     contextProfiles: upsertById(base.contextProfiles, overlay.contextProfiles),
     reasoningProfiles: upsertById(base.reasoningProfiles, overlay.reasoningProfiles),
+    businessRules: upsertById(base.businessRules, overlay.businessRules),
     policies: upsertById(base.policies, overlay.policies),
     evaluationProfiles: upsertById(base.evaluationProfiles, overlay.evaluationProfiles),
     regressionCases: upsertById(base.regressionCases, overlay.regressionCases),
@@ -586,7 +628,9 @@ export function compileDomainPackToHarnessedSystem(
     skillRefs: selectedSkillRefs,
     toolRefs: selectedToolIds,
     memoryProfileRef: memoryProfile?.id,
+    mcpProfileRef: mcpProfile?.id,
     contextSpecRef: toOptionalSpecRef(contextProfile),
+    reasoningProfileRef: reasoningProfile?.id,
     policyRefs: policyIds.length ? policyIds : undefined,
     metadata: {
       ...(options.metadata ?? {}),
@@ -615,6 +659,7 @@ export function compileDomainPackToHarnessedSystem(
       policies: selectSpecsByIds(domainPack.policies, policyIds),
       evaluations: selectSpecsByIds(domainPack.evaluationProfiles, evaluationIds),
       regressionCases: domainPack.regressionCases ?? [],
+      businessRules: domainPack.businessRules ?? [],
       tools: selectSpecsByIds(domainPack.tools, selectedToolIds),
       allowedSkills: domainPack.allowedSkills ?? selectedSkillRefs,
       defaultSkills: selectedSkillRefs,
@@ -625,6 +670,27 @@ export function compileDomainPackToHarnessedSystem(
     harnessedSystem,
     agentPatch,
     sessionInitialization,
+  };
+}
+
+export function applyDomainAgentPatch<TAgent extends DomainAgentPatchTarget>(
+  agent: TAgent,
+  patch: DomainAgentPatch
+): TAgent {
+  const policyRefs = mergeStrings(agent.policyRefs, patch.policyRefs);
+  return {
+    ...agent,
+    skillRefs: mergeSkillRefs(agent.skillRefs, patch.skillRefs),
+    toolRefs: mergeStrings(agent.toolRefs, patch.toolRefs),
+    memoryProfileRef: patch.memoryProfileRef ?? agent.memoryProfileRef,
+    contextSpecRef: patch.contextSpecRef ?? agent.contextSpecRef,
+    policyRefs: policyRefs.length ? policyRefs : undefined,
+    metadata: {
+      ...(agent.metadata ?? {}),
+      ...patch.metadata,
+      mcpProfileRef: patch.mcpProfileRef,
+      reasoningProfileRef: patch.reasoningProfileRef,
+    },
   };
 }
 
@@ -797,6 +863,21 @@ export const riskProfileSpecSchema = z.object({
 export const domainThinkingModeSchema = z.enum(['none', 'summary', 'structured']);
 export const domainAgenticReasoningModeSchema = z.enum(['react', 'fsm_react', 'tot', 'critique']);
 export const domainReasoningPersistenceSchema = z.enum(['summary_only', 'events_only']);
+export const businessRuleScopeSchema = z.enum([
+  'domain',
+  'task',
+  'workflow',
+  'state',
+  'tool',
+  'memory',
+  'output',
+]);
+export const businessRuleEffectSchema = z.enum([
+  'constraint',
+  'precondition',
+  'postcondition',
+  'guidance',
+]);
 export const reasoningSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
   thinkingMode: domainThinkingModeSchema,
   agenticMode: domainAgenticReasoningModeSchema,
@@ -807,6 +888,18 @@ export const reasoningSpecSchema = versionedSpecSchema.merge(specMetadataSchema)
   metadataSchema: jsonSchemaSchema.optional(),
   metadata: z.record(z.unknown()).optional(),
 }) satisfies ZodType<ReasoningSpec>;
+
+export const businessRuleSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  scope: businessRuleScopeSchema,
+  effect: businessRuleEffectSchema,
+  expression: z.string().optional(),
+  inputSchema: jsonSchemaSchema.optional(),
+  outputContractRef: z.string().optional(),
+  policyRefs: z.array(z.string()).optional(),
+  evaluationRefs: z.array(z.string()).optional(),
+  severity: riskLevelSchema.optional(),
+  metadata: z.record(z.unknown()).optional(),
+}) satisfies ZodType<BusinessRuleSpec>;
 
 export const sessionProfileSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
   metadataSchema: jsonSchemaSchema.optional(),
@@ -890,6 +983,7 @@ export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   contextProfiles: z.array(contextSpecSchema).optional(),
   reasoningProfiles: z.array(reasoningSpecSchema).optional(),
   defaultReasoningProfile: z.string().optional(),
+  businessRules: z.array(businessRuleSpecSchema).optional(),
   policies: z.array(policySpecSchema).optional(),
   evaluationProfiles: z.array(evaluationSpecSchema).optional(),
   regressionCases: z.array(regressionSpecSchema).optional(),
@@ -961,6 +1055,27 @@ export const reasoningSpecJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+export const businessRuleSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'scope', 'effect'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    scope: { enum: ['domain', 'task', 'workflow', 'state', 'tool', 'memory', 'output'] },
+    effect: { enum: ['constraint', 'precondition', 'postcondition', 'guidance'] },
+    expression: { type: 'string' },
+    inputSchema: { type: 'object' },
+    outputContractRef: { type: 'string' },
+    policyRefs: { type: 'array', items: { type: 'string' } },
+    evaluationRefs: { type: 'array', items: { type: 'string' } },
+    severity: { enum: ['low', 'medium', 'high', 'critical'] },
+    metadata: { type: 'object' },
+  },
+  additionalProperties: false,
+};
+
 export const domainPackSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'name', 'taskSchemas', 'workflows'],
@@ -983,6 +1098,7 @@ export const domainPackSpecJsonSchema: JsonSchema = {
     contextProfiles: { type: 'array', items: { type: 'object' } },
     reasoningProfiles: { type: 'array', items: reasoningSpecJsonSchema },
     defaultReasoningProfile: { type: 'string' },
+    businessRules: { type: 'array', items: businessRuleSpecJsonSchema },
     policies: { type: 'array', items: { type: 'object' } },
     evaluationProfiles: { type: 'array', items: { type: 'object' } },
     regressionCases: { type: 'array', items: { type: 'object' } },
@@ -1030,6 +1146,18 @@ export const reasoningSpecExample: ReasoningSpec = {
   agenticMode: 'fsm_react',
   maxSteps: 4,
   persist: 'summary_only',
+};
+
+export const businessRuleSpecExample: BusinessRuleSpec = {
+  id: 'rule.output-contract',
+  version: '0.0.0',
+  name: 'Output Contract Rule',
+  scope: 'output',
+  effect: 'postcondition',
+  outputContractRef: 'output.default',
+  policyRefs: ['policy.default'],
+  evaluationRefs: ['eval.output-schema'],
+  severity: 'low',
 };
 
 export const domainPackSpecExample: DomainPackSpec = {
@@ -1153,6 +1281,7 @@ export const domainPackSpecExample: DomainPackSpec = {
   ],
   reasoningProfiles: [reasoningSpecExample],
   defaultReasoningProfile: reasoningSpecExample.id,
+  businessRules: [businessRuleSpecExample],
   policies: [
     {
       id: 'policy.default',
@@ -1206,6 +1335,13 @@ export const reasoningSpecDefinition = defineSpecSchema<ReasoningSpec>({
   example: reasoningSpecExample,
 });
 
+export const businessRuleSpecDefinition = defineSpecSchema<BusinessRuleSpec>({
+  id: 'BusinessRuleSpec',
+  zod: businessRuleSpecSchema,
+  jsonSchema: businessRuleSpecJsonSchema,
+  example: businessRuleSpecExample,
+});
+
 export const domainPackSpecDefinition = defineSpecSchema<DomainPackSpec>({
   id: 'DomainPackSpec',
   zod: domainPackSpecSchema,
@@ -1216,6 +1352,7 @@ export const domainPackSpecDefinition = defineSpecSchema<DomainPackSpec>({
 export const domainSpecDefinitions = [
   workflowSpecDefinition,
   reasoningSpecDefinition,
+  businessRuleSpecDefinition,
   domainPackSpecDefinition,
 ] as const;
 export const domainSpecJsonSchemas = exportSpecJsonSchemas(domainSpecDefinitions);
@@ -1300,6 +1437,21 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
       policyIds,
       evaluationIds,
     });
+  }
+
+  for (const rule of domainPack.businessRules ?? []) {
+    assertKnownId(
+      rule.outputContractRef,
+      outputContractIds,
+      'Business rule output contract',
+      rule.id
+    );
+    for (const policyRef of rule.policyRefs ?? []) {
+      assertKnownId(policyRef, policyIds, 'Business rule policy', rule.id);
+    }
+    for (const evaluationRef of rule.evaluationRefs ?? []) {
+      assertKnownId(evaluationRef, evaluationIds, 'Business rule evaluation', rule.id);
+    }
   }
 
   for (const skillPolicy of domainPack.skillPolicies ?? []) {

@@ -54,7 +54,11 @@ export const domainPack: DomainPackSpec = {
 Validate and compile a pack before using it:
 
 ```ts
-import { compileDomainPackToHarnessedSystem, validateDomainPackSpec } from '@hypha/domain';
+import {
+  applyDomainAgentPatch,
+  compileDomainPackToHarnessedSystem,
+  validateDomainPackSpec,
+} from '@hypha/domain';
 
 const validPack = validateDomainPackSpec(domainPack);
 const compiled = compileDomainPackToHarnessedSystem(validPack, {
@@ -64,11 +68,19 @@ const compiled = compileDomainPackToHarnessedSystem(validPack, {
 compiled.fsmProcess; // FSMProcessSpec
 compiled.harnessedSystem; // HarnessedAgentSystemSpec
 compiled.agentPatch; // skill/tool/memory/context refs for an AgentSpec
+
+const baseAgent = {
+  id: 'agent.default',
+  version: '0.0.0',
+  name: 'Default Agent',
+  modelAlias: 'default-chat',
+};
+const agent = applyDomainAgentPatch(baseAgent, compiled.agentPatch);
 ```
 
 `configs/domain-packs/minimal.domain.yaml` is a loadable local example that
-includes task, output, workflow, skill, tool, MCP, memory, context, policy,
-evaluation, regression, and deployment bindings.
+includes task, output, workflow, skill, tool, MCP, memory, context, business
+rule, policy, evaluation, regression, and deployment bindings.
 
 ## Field Contracts
 
@@ -86,6 +98,7 @@ evaluation, regression, and deployment bindings.
 | `mcpProfiles`                    | no       | Declares MCP server and capability import policy.                                    |
 | `memoryProfiles`                 | no       | Declares memory provider, type, provenance, privacy, and retrieval policy.           |
 | `contextProfiles`                | no       | Declares context sources, token budget, provenance, and instruction boundaries.      |
+| `businessRules`                  | no       | Declares abstract domain rules with output-contract, policy, and evaluation refs.    |
 | `policies`                       | no       | Declares permission or review policies.                                              |
 | `evaluationProfiles`             | no       | Declares schema, process, cost, latency, human, or regression evaluations.           |
 | `regressionCases`                | no       | Declares event-derived regression cases.                                             |
@@ -158,7 +171,8 @@ merged `metadata`, and default memory/context/tool/MCP/skill/policy refs.
 
 `compileDomainPackToHarnessedSystem()` resolves a selected task, workflow,
 session profile, memory profile, MCP profile, context profile, reasoning
-profile, policy refs, evaluation refs, skills, and tools. It returns:
+profile, business rules, policy refs, evaluation refs, skills, and tools. It
+returns:
 
 | Field                   | Purpose                                                                            |
 | ----------------------- | ---------------------------------------------------------------------------------- |
@@ -171,5 +185,6 @@ profile, policy refs, evaluation refs, skills, and tools. It returns:
 
 All internal references are checked during validation: task output contracts,
 workflow state transitions, session profile refs, state tool/MCP/reasoning
-bindings, policy refs, evaluation refs, and skill policies must resolve inside
-the same DomainPack unless they are explicitly passed as runtime compile options.
+bindings, business rule refs, policy refs, evaluation refs, and skill policies
+must resolve inside the same DomainPack unless they are explicitly passed as
+runtime compile options.

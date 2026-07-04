@@ -35,7 +35,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 loads predefined packs, `DomainPackRegistry` stores validated versions,
 `extendDomainPack()` applies user or deployment overlays, and
 `compileDomainPackToHarnessedSystem()` resolves task, workflow, profile, tool,
-skill, policy, and evaluation refs into an `FSMProcessSpec`,
+skill, business rule, policy, and evaluation refs into an `FSMProcessSpec`,
 `HarnessedAgentSystemSpec`, and agent-facing patch.
 
 ## Dependency Direction

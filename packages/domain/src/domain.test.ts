@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
+  applyDomainAgentPatch,
+  businessRuleSpecDefinition,
   compileWorkflowToFSM,
   compileDomainPackToHarnessedSystem,
   DomainPackRegistry,
@@ -111,9 +113,13 @@ describe('@hypha/domain workflow compiler', () => {
     expect(reasoningSpecDefinition.parse(reasoningSpecDefinition.example).id).toBe(
       'reasoning.default'
     );
+    expect(businessRuleSpecDefinition.parse(businessRuleSpecDefinition.example).id).toBe(
+      'rule.output-contract'
+    );
     expect(validateDomainPackSpec(domainPackSpecDefinition.example).id).toBe('domain.default');
     expect(domainSpecJsonSchemas.WorkflowSpec.required).toContain('states');
     expect(domainSpecJsonSchemas.ReasoningSpec.required).toContain('thinkingMode');
+    expect(domainSpecJsonSchemas.BusinessRuleSpec.required).toContain('scope');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
     expect(domainSpecJsonSchemas.DomainPackSpec.properties).toMatchObject({
       allowedSkills: { type: 'array' },
@@ -124,6 +130,7 @@ describe('@hypha/domain workflow compiler', () => {
       memoryProfiles: { type: 'array' },
       contextProfiles: { type: 'array' },
       reasoningProfiles: { type: 'array' },
+      businessRules: { type: 'array' },
       evaluationProfiles: { type: 'array' },
       regressionCases: { type: 'array' },
       deploymentProfile: { type: 'object' },
@@ -264,13 +271,36 @@ describe('@hypha/domain workflow compiler', () => {
       skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
       toolRefs: ['tool.search'],
       memoryProfileRef: 'memory.default',
+      mcpProfileRef: 'mcp.default',
       contextSpecRef: { id: 'context.default', version: '0.0.0' },
+      reasoningProfileRef: 'reasoning.default',
       policyRefs: ['policy.default'],
     });
     expect(compiled.bindings).toMatchObject({
       outputContract: { id: 'output.default' },
       mcpProfile: { id: 'mcp.default' },
       reasoningProfile: { id: 'reasoning.default' },
+      businessRules: [{ id: 'rule.output-contract' }],
+    });
+    const patchedAgent = applyDomainAgentPatch(
+      {
+        id: 'agent.default',
+        version: '0.0.0',
+        name: 'Default Agent',
+        modelAlias: 'default-chat',
+      },
+      compiled.agentPatch
+    );
+    expect(patchedAgent).toMatchObject({
+      skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      toolRefs: ['tool.search'],
+      memoryProfileRef: 'memory.default',
+      contextSpecRef: { id: 'context.default', version: '0.0.0' },
+      policyRefs: ['policy.default'],
+      metadata: {
+        mcpProfileRef: 'mcp.default',
+        reasoningProfileRef: 'reasoning.default',
+      },
     });
     expect(
       compiled.bindings.workflowStates.find((state) => state.stateId === 'Reasoning')
@@ -301,6 +331,15 @@ describe('@hypha/domain workflow compiler', () => {
           sideEffectLevel: 'read',
         },
       ],
+      businessRules: [
+        {
+          id: 'rule.custom',
+          version: '0.0.0',
+          scope: 'domain',
+          effect: 'guidance',
+          description: 'Custom domain guidance.',
+        },
+      ],
     });
 
     const compiled = compileDomainPackToHarnessedSystem(extended, {
@@ -315,6 +354,7 @@ describe('@hypha/domain workflow compiler', () => {
       'skill.custom',
     ]);
     expect(compiled.agentPatch.toolRefs).toContain('tool.custom');
+    expect(compiled.bindings.businessRules.map((rule) => rule.id)).toContain('rule.custom');
   });
 
   it('loads local DomainPack files into a registry', async () => {
@@ -406,5 +446,17 @@ defaultWorkflow: workflow.file
         ],
       })
     ).toThrow(/Session default context profile not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        businessRules: [
+          {
+            ...domainPackSpecDefinition.example.businessRules![0],
+            outputContractRef: 'missing-output',
+          },
+        ],
+      })
+    ).toThrow(/Business rule output contract not found/);
   });
 });
