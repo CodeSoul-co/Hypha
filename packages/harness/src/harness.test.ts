@@ -123,6 +123,54 @@ describe('@hypha/harness contracts', () => {
     ]);
   });
 
+  it('dead-letters expired messages without blocking the recipient queue', async () => {
+    const trace = new InMemoryTraceRecorder();
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => '2026-07-04T00:00:10.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    const common = {
+      userId: 'owner',
+      sessionId: 'session_messages',
+      runId: 'run_messages',
+      from: { kind: 'workflow' as const, id: 'workflow.default' },
+      to: recipient,
+    };
+
+    await bus.publish({
+      ...common,
+      id: 'msg_expired',
+      type: 'workflow.input',
+      expiresAt: '2026-07-04T00:00:00.000Z',
+      payload: { text: 'old' },
+    });
+    await bus.publish({
+      ...common,
+      id: 'msg_fresh',
+      type: 'workflow.input',
+      payload: { text: 'fresh' },
+    });
+
+    await expect(
+      bus.pull({
+        userId: 'owner',
+        sessionId: 'session_messages',
+        runId: 'run_messages',
+        to: recipient,
+      })
+    ).resolves.toMatchObject({ id: 'msg_fresh', status: 'delivered' });
+    await expect(bus.list({ status: 'dead_lettered' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_expired' }),
+    ]);
+    expect((await trace.list({ runId: 'run_messages' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.enqueued',
+      'message.dead_lettered',
+      'message.delivered',
+    ]);
+  });
+
   it('derives session, run, replay, audit, and regression state from events', async () => {
     const runtime = new EventFirstRuntime();
     await runtime.createSession({
