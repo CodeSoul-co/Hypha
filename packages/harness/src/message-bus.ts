@@ -201,6 +201,7 @@ export class InMemoryMessageBus implements MessageBus {
   async acknowledge(input: MessageAckInput): Promise<RuntimeMessage | null> {
     const message = this.requireOwnedMessage(input.id, input.userId, input.sessionId, input.runId);
     if (!message) return null;
+    this.removeQueuedMessage(message);
     const acknowledged = this.update(message, {
       status: 'acknowledged',
       updatedAt: input.timestamp ?? this.now(),
@@ -213,6 +214,7 @@ export class InMemoryMessageBus implements MessageBus {
   async fail(input: MessageFailInput): Promise<RuntimeMessage | null> {
     const message = this.requireOwnedMessage(input.id, input.userId, input.sessionId, input.runId);
     if (!message) return null;
+    this.removeQueuedMessage(message);
     return this.markFailed(message, input);
   }
 
@@ -292,6 +294,18 @@ export class InMemoryMessageBus implements MessageBus {
       this.queues.delete(key);
     } else {
       this.queues.set(key, queue);
+    }
+  }
+
+  private removeQueuedMessage(message: RuntimeMessage): void {
+    const key = queueKey(message.userId, message.sessionId, message.to);
+    const queue = this.queues.get(key);
+    if (!queue) return;
+    const next = queue.filter((id) => id !== message.id);
+    if (next.length === 0) {
+      this.queues.delete(key);
+    } else {
+      this.queues.set(key, next);
     }
   }
 
