@@ -65,6 +65,17 @@ export interface OpenAIChatCompletionResponse {
   model?: string;
 }
 
+interface OpenAICompatibleToolNameMap {
+  toProviderName: Map<string, string>;
+  toOriginalName: Map<string, string>;
+}
+
+interface OpenAIChatCompletionNormalizationContext {
+  providerId?: string;
+  providerModel?: string;
+  toolNameMap?: OpenAICompatibleToolNameMap;
+}
+
 export class FetchModelTransport implements ModelTransport {
   async postJson<TResponse>(
     url: string,
@@ -184,16 +195,18 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
     const instructions =
       [request.cache?.prefixContent, request.instructions].filter(Boolean).join('\n\n') ||
       undefined;
+    const toolNameMap = createOpenAICompatibleToolNameMap(request.tools);
     try {
       const response = await this.transport.postJson<OpenAIChatCompletionResponse>(
         this.chatCompletionsUrl(),
-        this.buildChatRequest(request, providerModel, instructions, false),
+        this.buildChatRequest(request, providerModel, instructions, false, toolNameMap),
         this.headers(),
         this.config.timeoutMs
       );
       return normalizeOpenAIChatResponse(response, {
         providerId: this.id,
         providerModel,
+        toolNameMap,
       });
     } catch (error) {
       throw normalizeModelProviderError(error, {
@@ -218,11 +231,12 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
     const instructions =
       [request.cache?.prefixContent, request.instructions].filter(Boolean).join('\n\n') ||
       undefined;
+    const toolNameMap = createOpenAICompatibleToolNameMap(request.tools);
     try {
       let yieldedDone = false;
       for await (const event of this.transport.streamSse(
         this.chatCompletionsUrl(),
-        this.buildChatRequest(request, providerModel, instructions, true),
+        this.buildChatRequest(request, providerModel, instructions, true, toolNameMap),
         this.headers(),
         this.config.timeoutMs
       )) {
@@ -231,7 +245,7 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
           yield { type: 'done' };
           continue;
         }
-        for (const normalized of normalizeOpenAIStreamEvent(event)) {
+        for (const normalized of normalizeOpenAIStreamEvent(event, toolNameMap)) {
           if (normalized.type === 'done') yieldedDone = true;
           yield normalized;
         }
@@ -272,7 +286,8 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
     request: ModelRequest,
     providerModel: string,
     instructions: string | undefined,
-    stream: boolean
+    stream: boolean,
+    toolNameMap: OpenAICompatibleToolNameMap
   ): Record<string, unknown> {
     return compactObject({
       model: providerModel,
@@ -280,7 +295,7 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
       tools: request.tools?.map((tool) => ({
         type: 'function',
         function: {
-          name: tool.name,
+          name: toolNameMap.toProviderName.get(tool.name) ?? tool.name,
           description: tool.description,
           parameters: tool.inputSchema,
         },
@@ -338,7 +353,7 @@ export function providerSpecFromConfig(config: OpenAICompatibleProviderConfig): 
 
 export function normalizeOpenAIChatResponse(
   response: OpenAIChatCompletionResponse,
-  context: { providerId?: string; providerModel?: string } = {}
+  context: OpenAIChatCompletionNormalizationContext = {}
 ): ModelResponse {
   const choice = response.choices[0];
   return {
@@ -346,7 +361,7 @@ export function normalizeOpenAIChatResponse(
     providerId: context.providerId,
     model: response.model ?? context.providerModel,
     content: choice?.message?.content ?? '',
-    toolCalls: normalizeToolCalls(choice?.message?.tool_calls),
+    toolCalls: normalizeToolCalls(choice?.message?.tool_calls, context.toolNameMap),
     usage: normalizeUsage(response.usage),
     raw: response,
   };
@@ -374,7 +389,10 @@ function normalizeUsage(usage: OpenAIChatCompletionResponse['usage']): ModelUsag
   };
 }
 
-function normalizeOpenAIStreamEvent(event: string): ModelStreamEvent[] {
+function normalizeOpenAIStreamEvent(
+  event: string,
+  toolNameMap?: OpenAICompatibleToolNameMap
+): ModelStreamEvent[] {
   const parsed = safeParseJson<{
     choices?: Array<{
       delta?: {
@@ -395,7 +413,7 @@ function normalizeOpenAIStreamEvent(event: string): ModelStreamEvent[] {
   if (choice?.delta?.content) {
     events.push({ type: 'delta', content: choice.delta.content });
   }
-  for (const toolCall of normalizeToolCalls(choice?.delta?.tool_calls) ?? []) {
+  for (const toolCall of normalizeToolCalls(choice?.delta?.tool_calls, toolNameMap) ?? []) {
     events.push({ type: 'tool_call', toolCall });
   }
   if (parsed.usage) {
@@ -408,16 +426,73 @@ function normalizeOpenAIStreamEvent(event: string): ModelStreamEvent[] {
 }
 
 function normalizeToolCalls(
-  toolCalls: NonNullable<OpenAIChatCompletionResponse['choices'][number]['message']>['tool_calls']
+  toolCalls: NonNullable<OpenAIChatCompletionResponse['choices'][number]['message']>['tool_calls'],
+  toolNameMap?: OpenAICompatibleToolNameMap
 ): NormalizedToolCall[] | undefined {
   if (!toolCalls?.length) return undefined;
   return toolCalls.map(
-    (toolCall): NormalizedToolCall => ({
-      id: toolCall.id,
-      toolId: toolCall.function?.name ?? toolCall.id,
-      arguments: parseToolArguments(toolCall.function?.arguments),
-    })
+    (toolCall): NormalizedToolCall => {
+      const providerName = toolCall.function?.name ?? toolCall.id;
+      return {
+        id: toolCall.id,
+        toolId: toolNameMap?.toOriginalName.get(providerName) ?? providerName,
+        arguments: parseToolArguments(toolCall.function?.arguments),
+      };
+    }
   );
+}
+
+function createOpenAICompatibleToolNameMap(
+  tools: ModelRequest['tools'] = []
+): OpenAICompatibleToolNameMap {
+  const toProviderName = new Map<string, string>();
+  const toOriginalName = new Map<string, string>();
+
+  tools.forEach((tool, index) => {
+    const originalName = tool.id || tool.name;
+    const providerName = uniqueOpenAICompatibleToolName(tool.name, index, toOriginalName);
+    toProviderName.set(tool.name, providerName);
+    toOriginalName.set(providerName, originalName);
+  });
+
+  return { toProviderName, toOriginalName };
+}
+
+function uniqueOpenAICompatibleToolName(
+  name: string,
+  index: number,
+  used: Map<string, string>
+): string {
+  const sanitized = sanitizeOpenAICompatibleToolName(name) || `tool_${index + 1}`;
+  let candidate = truncateToolName(sanitized);
+  if (!used.has(candidate)) return candidate;
+
+  const hashSuffix = `_${stableToolNameHash(name)}`;
+  candidate = `${truncateToolName(sanitized, 64 - hashSuffix.length)}${hashSuffix}`;
+  let collision = 2;
+  while (used.has(candidate)) {
+    const collisionSuffix = `${hashSuffix}_${collision}`;
+    candidate = `${truncateToolName(sanitized, 64 - collisionSuffix.length)}${collisionSuffix}`;
+    collision += 1;
+  }
+  return candidate;
+}
+
+function sanitizeOpenAICompatibleToolName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function truncateToolName(name: string, maxLength = 64): string {
+  return name.slice(0, Math.max(1, maxLength));
+}
+
+function stableToolNameHash(name: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < name.length; index += 1) {
+    hash ^= name.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).slice(0, 8);
 }
 
 function parseToolArguments(value: string | undefined): unknown {

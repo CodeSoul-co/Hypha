@@ -71,7 +71,7 @@ describe('@hypha/models provider contracts', () => {
                 tool_calls: [
                   {
                     id: 'call_1',
-                    function: { name: 'search', arguments: '{"q":"hypha"}' },
+                    function: { name: 'baidu_web_search', arguments: '{"q":"hypha"}' },
                   },
                 ],
               },
@@ -103,6 +103,18 @@ describe('@hypha/models provider contracts', () => {
         instructions: 'system instructions',
         input: [{ role: 'user', content: 'hello' }],
         cache: { prefixContent: 'cached prefix' },
+        tools: [
+          {
+            id: 'baidu.web_search',
+            name: 'baidu.web_search',
+            description: 'Baidu MCP search',
+            inputSchema: {
+              type: 'object',
+              required: ['query'],
+              properties: { query: { type: 'string' } },
+            },
+          },
+        ],
         responseFormat: { type: 'object', properties: { ok: { type: 'boolean' } } },
         reasoning: { effort: 'medium' },
       })
@@ -110,7 +122,7 @@ describe('@hypha/models provider contracts', () => {
       providerId: 'compatible',
       model: 'provider-model-id',
       content: 'ok',
-      toolCalls: [{ id: 'call_1', toolId: 'search', arguments: { q: 'hypha' } }],
+      toolCalls: [{ id: 'call_1', toolId: 'baidu.web_search', arguments: { q: 'hypha' } }],
       usage: { totalTokens: 3, cacheHitTokens: 1 },
     });
     expect(requests[0].url).toBe('https://example.invalid/v1/chat/completions');
@@ -118,11 +130,13 @@ describe('@hypha/models provider contracts', () => {
       messages?: Array<{ role: string; content: string }>;
       response_format?: { type: string };
       reasoning_effort?: string;
+      tools?: Array<{ function?: { name?: string } }>;
     };
     expect(requestBody.messages?.[0]).toEqual({
       role: 'system',
       content: 'cached prefix\n\nsystem instructions',
     });
+    expect(requestBody.tools?.[0]?.function?.name).toBe('baidu_web_search');
     expect(requestBody.response_format?.type).toBe('json_schema');
     expect(requestBody.reasoning_effort).toBe('medium');
   });
