@@ -17,6 +17,7 @@ import {
   reasoningSpecDefinition,
   validateDomainPackSpec,
   validateWorkflowSpec,
+  WorkflowCompiler,
   workflowSpecDefinition,
   type DomainPackSpec,
 } from './index';
@@ -72,6 +73,9 @@ describe('@hypha/domain workflow compiler', () => {
       retryPolicy: { maxAttempts: 2 },
     });
     expect(fsm.transitions[1]).toMatchObject({ from: 'ReasonAct', to: 'Finalize' });
+    expect(new WorkflowCompiler().compile(domainPack).id).toBe(
+      'minimal.intake-reason-finalize.fsm'
+    );
   });
 
   it('initializes runtime session metadata from DomainPack SessionProfile without embedding Session', () => {
@@ -265,6 +269,11 @@ describe('@hypha/domain workflow compiler', () => {
       memoryRefs: [{ id: 'memory.default', version: '0.0.0' }],
       toolRefs: [{ id: 'tool.search', version: '0.0.0' }],
       skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      mcpRefs: [{ id: 'mcp.default', version: '0.0.0' }],
+      contextRefs: [{ id: 'context.default', version: '0.0.0' }],
+      reasoningRefs: [{ id: 'reasoning.default', version: '0.0.0' }],
+      outputContractRefs: [{ id: 'output.default', version: '0.0.0' }],
+      businessRuleRefs: [{ id: 'rule.output-contract', version: '0.0.0' }],
       deploymentRef: { id: 'deployment.local', version: '0.0.0' },
     });
     expect(compiled.agentPatch).toMatchObject({
@@ -299,7 +308,9 @@ describe('@hypha/domain workflow compiler', () => {
       policyRefs: ['policy.default'],
       metadata: {
         mcpProfileRef: 'mcp.default',
+        mcpProfileSpecRef: { id: 'mcp.default', version: '0.0.0' },
         reasoningProfileRef: 'reasoning.default',
+        reasoningProfileSpecRef: { id: 'reasoning.default', version: '0.0.0' },
       },
     });
     expect(
@@ -458,5 +469,50 @@ defaultWorkflow: workflow.file
         ],
       })
     ).toThrow(/Business rule output contract not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state, index) =>
+              index === 1
+                ? { ...state, id: domainPackSpecDefinition.example.workflows[0].states[0].id }
+                : state
+            ),
+          },
+        ],
+      })
+    ).toThrow(/Workflow workflow.default states contains duplicate id/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        taskSchemas: [
+          {
+            ...domainPackSpecDefinition.example.taskSchemas[0],
+            riskProfile: {
+              defaultRiskLevel: 'high',
+              escalationPolicyRef: 'missing-policy',
+            },
+          },
+        ],
+      })
+    ).toThrow(/Task risk escalation policy not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state, index) =>
+              index === 0 ? { ...state, memoryPolicyRef: 'missing-policy' } : state
+            ),
+          },
+        ],
+      })
+    ).toThrow(/Workflow state memory policy not found/);
   });
 });

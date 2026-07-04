@@ -459,6 +459,12 @@ export class DomainCompiler {
   }
 }
 
+export class WorkflowCompiler {
+  compile(domainPack: DomainPackSpec, options: WorkflowCompileOptions = {}): FSMProcessSpec {
+    return compileWorkflowToFSM(domainPack, options);
+  }
+}
+
 export async function loadDomainPackFile(filePath: string): Promise<DomainPackSpec> {
   const raw = await fs.readFile(filePath, 'utf-8');
   return parseDomainPackDocument(raw, filePath);
@@ -617,6 +623,11 @@ export function compileDomainPackToHarnessedSystem(
     memoryRefs: memoryProfile ? [toSpecRef(memoryProfile)] : undefined,
     toolRefs: idsToRefs(selectedToolIds, domainPack.tools),
     skillRefs: selectedSkillRefs.length ? selectedSkillRefs : undefined,
+    mcpRefs: mcpProfile ? [toSpecRef(mcpProfile)] : undefined,
+    contextRefs: contextProfile ? [toSpecRef(contextProfile)] : undefined,
+    reasoningRefs: reasoningProfile ? [toSpecRef(reasoningProfile)] : undefined,
+    outputContractRefs: outputContract ? [toSpecRef(outputContract)] : undefined,
+    businessRuleRefs: domainPack.businessRules?.map(toSpecRef),
     modelProfileRef: options.modelProfileRef,
     evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles),
     replayRef: options.replayRef,
@@ -638,8 +649,8 @@ export function compileDomainPackToHarnessedSystem(
       workflowRef: toSpecRef(workflow),
       taskSchemaRef: toOptionalSpecRef(taskSchema),
       outputContractRef: toOptionalSpecRef(outputContract),
-      mcpProfileRef: toOptionalSpecRef(mcpProfile),
-      reasoningProfileRef: toOptionalSpecRef(reasoningProfile),
+      mcpProfileSpecRef: toOptionalSpecRef(mcpProfile),
+      reasoningProfileSpecRef: toOptionalSpecRef(reasoningProfile),
       workflowStateBindings,
     },
   };
@@ -678,6 +689,10 @@ export function applyDomainAgentPatch<TAgent extends DomainAgentPatchTarget>(
   patch: DomainAgentPatch
 ): TAgent {
   const policyRefs = mergeStrings(agent.policyRefs, patch.policyRefs);
+  const runtimeProfileRefs = compactRecord({
+    mcpProfileRef: patch.mcpProfileRef,
+    reasoningProfileRef: patch.reasoningProfileRef,
+  });
   return {
     ...agent,
     skillRefs: mergeSkillRefs(agent.skillRefs, patch.skillRefs),
@@ -688,8 +703,7 @@ export function applyDomainAgentPatch<TAgent extends DomainAgentPatchTarget>(
     metadata: {
       ...(agent.metadata ?? {}),
       ...patch.metadata,
-      mcpProfileRef: patch.mcpProfileRef,
-      reasoningProfileRef: patch.reasoningProfileRef,
+      ...runtimeProfileRefs,
     },
   };
 }
@@ -823,6 +837,12 @@ function toSpecRef(spec: VersionedSpec): SpecRef {
 
 function toOptionalSpecRef(spec: VersionedSpec | undefined): SpecRef | undefined {
   return spec ? toSpecRef(spec) : undefined;
+}
+
+function compactRecord(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined)
+  ) as Record<string, unknown>;
 }
 
 function selectWorkflow(domainPack: DomainPackSpec, workflowId?: string): WorkflowSpec {
@@ -1369,6 +1389,7 @@ export function validateDomainPackSpec(input: unknown): DomainPackSpec {
 }
 
 function validateDomainReferences(domainPack: DomainPackSpec): void {
+  validateUniqueDomainIds(domainPack);
   const workflowIds = idSet(domainPack.workflows);
   const outputContractIds = idSet(domainPack.outputContracts);
   const memoryProfileIds = idSet(domainPack.memoryProfiles);
@@ -1391,6 +1412,12 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
   for (const task of domainPack.taskSchemas) {
     assertKnownId(task.outputContractRef, outputContractIds, 'Task output contract', task.id);
     assertKnownId(task.defaultWorkflowRef, workflowIds, 'Task default workflow', task.id);
+    assertKnownId(
+      task.riskProfile?.escalationPolicyRef,
+      policyIds,
+      'Task risk escalation policy',
+      task.id
+    );
   }
 
   for (const sessionProfile of domainPack.sessionProfiles ?? []) {
@@ -1494,6 +1521,7 @@ function validateWorkflowReferences(
     for (const toolRef of state.allowedTools ?? []) {
       assertKnownId(toolRef, refs.toolIds, 'Workflow state tool', state.id);
     }
+    assertKnownId(state.memoryPolicyRef, refs.policyIds, 'Workflow state memory policy', state.id);
     for (const mcpProfileRef of state.allowedMCPProfiles ?? []) {
       assertKnownId(mcpProfileRef, refs.mcpProfileIds, 'Workflow state MCP profile', state.id);
     }
@@ -1509,6 +1537,28 @@ function validateWorkflowReferences(
     for (const evaluationRef of state.evaluationRefs ?? []) {
       assertKnownId(evaluationRef, refs.evaluationIds, 'Workflow state evaluation', state.id);
     }
+  }
+}
+
+function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
+  assertUniqueIds(domainPack.taskSchemas, 'DomainPack taskSchemas');
+  assertUniqueIds(domainPack.outputContracts, 'DomainPack outputContracts');
+  assertUniqueIds(domainPack.sessionProfiles, 'DomainPack sessionProfiles');
+  assertUniqueIds(domainPack.workflows, 'DomainPack workflows');
+  assertUniqueIds(domainPack.allowedSkills, 'DomainPack allowedSkills');
+  assertUniqueIds(domainPack.defaultSkills, 'DomainPack defaultSkills');
+  assertUniqueIds(domainPack.skillPolicies, 'DomainPack skillPolicies');
+  assertUniqueIds(domainPack.tools, 'DomainPack tools');
+  assertUniqueIds(domainPack.mcpProfiles, 'DomainPack mcpProfiles');
+  assertUniqueIds(domainPack.memoryProfiles, 'DomainPack memoryProfiles');
+  assertUniqueIds(domainPack.contextProfiles, 'DomainPack contextProfiles');
+  assertUniqueIds(domainPack.reasoningProfiles, 'DomainPack reasoningProfiles');
+  assertUniqueIds(domainPack.businessRules, 'DomainPack businessRules');
+  assertUniqueIds(domainPack.policies, 'DomainPack policies');
+  assertUniqueIds(domainPack.evaluationProfiles, 'DomainPack evaluationProfiles');
+  assertUniqueIds(domainPack.regressionCases, 'DomainPack regressionCases');
+  for (const workflow of domainPack.workflows) {
+    assertUniqueIds(workflow.states, `Workflow ${workflow.id} states`);
   }
 }
 
@@ -1545,6 +1595,16 @@ function validateDomainSkillBindings(domainPack: DomainPackSpec): void {
 
 function idSet(items: Array<{ id: string }> | undefined): Set<string> {
   return new Set((items ?? []).map((item) => item.id));
+}
+
+function assertUniqueIds(items: Array<{ id: string }> | undefined, label: string): void {
+  const seen = new Set<string>();
+  for (const item of items ?? []) {
+    if (seen.has(item.id)) {
+      throw new Error(`${label} contains duplicate id: ${item.id}`);
+    }
+    seen.add(item.id);
+  }
 }
 
 function assertKnownId(

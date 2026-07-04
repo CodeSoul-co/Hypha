@@ -89,6 +89,7 @@ Domain pack loading and compilation APIs:
 | `DomainPackRegistry`                     | Registers validated packs by `id` and `version`, with latest-by-id lookup.                      |
 | `extendDomainPack(base, overlay)`        | Upserts predefined customizations by `id` while preserving the base pack.                       |
 | `compileWorkflowToFSM(domainPack, opts)` | Compiles one `WorkflowSpec` to `FSMProcessSpec`.                                                |
+| `WorkflowCompiler`                       | Class wrapper for workflow-to-FSM compilation when an injectable compiler object is preferred.  |
 | `compileDomainPackToHarnessedSystem()`   | Resolves task/profile/tool/skill/policy bindings and returns FSM, system spec, and agent patch. |
 | `applyDomainAgentPatch(agent, patch)`    | Applies DomainPack-derived skill/tool/memory/context/policy refs to an AgentSpec-shaped object. |
 
@@ -99,6 +100,11 @@ Use `agentPatch` or `applyDomainAgentPatch()` to apply selected `skillRefs`,
 without coupling DomainPack declarations to a concrete app surface. MCP and
 reasoning profile refs remain in the patch metadata for runtime adapters that
 need them.
+
+`HarnessedAgentSystemSpec` can carry the compiled system refs for `policyRefs`,
+`memoryRefs`, `toolRefs`, `skillRefs`, `mcpRefs`, `contextRefs`,
+`reasoningRefs`, `outputContractRefs`, `businessRuleRefs`, evaluation, replay,
+regression, and deployment.
 
 ## Session, Run, and Event
 

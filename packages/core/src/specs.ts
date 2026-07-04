@@ -231,6 +231,11 @@ export interface HarnessedAgentSystemSpec extends VersionedSpec, SpecMetadata {
   memoryRefs?: SpecRef[];
   toolRefs?: SpecRef[];
   skillRefs?: SpecRef[];
+  mcpRefs?: SpecRef[];
+  contextRefs?: SpecRef[];
+  reasoningRefs?: SpecRef[];
+  outputContractRefs?: SpecRef[];
+  businessRuleRefs?: SpecRef[];
   modelProfileRef?: SpecRef;
   evaluationRefs?: SpecRef[];
   replayRef?: SpecRef;

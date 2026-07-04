@@ -174,14 +174,14 @@ session profile, memory profile, MCP profile, context profile, reasoning
 profile, business rules, policy refs, evaluation refs, skills, and tools. It
 returns:
 
-| Field                   | Purpose                                                                            |
-| ----------------------- | ---------------------------------------------------------------------------------- |
-| `domainPack`            | Validated `DomainPackSpec`.                                                        |
-| `bindings`              | Resolved task, profiles, policies, tools, skills, and workflow state restrictions. |
-| `fsmProcess`            | Compiled `FSMProcessSpec` from the selected workflow.                              |
-| `harnessedSystem`       | `HarnessedAgentSystemSpec` tying agent, FSM, trace, policy, memory, tools, skills. |
-| `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.      |
-| `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.           |
+| Field                   | Purpose                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `domainPack`            | Validated `DomainPackSpec`.                                                                                     |
+| `bindings`              | Resolved task, profiles, policies, tools, skills, and workflow state restrictions.                              |
+| `fsmProcess`            | Compiled `FSMProcessSpec` from the selected workflow.                                                           |
+| `harnessedSystem`       | `HarnessedAgentSystemSpec` tying agent, FSM, trace, policy, memory, MCP, context, tools, skills, and contracts. |
+| `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.                                   |
+| `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.                                        |
 
 All internal references are checked during validation: task output contracts,
 workflow state transitions, session profile refs, state tool/MCP/reasoning

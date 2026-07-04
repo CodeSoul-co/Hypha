@@ -124,7 +124,7 @@ describe('@hypha/core contracts', () => {
     });
   });
 
-  it('exports parseable Stage1 core spec schemas and examples', () => {
+  it('exports parseable core spec schemas and examples', () => {
     expect(validatePolicySpec(policySpecDefinition.example).id).toBe('policy.default');
     expect(validateOutputContractSpec(outputContractSpecDefinition.example).id).toBe(
       'output.default'
@@ -144,8 +144,20 @@ describe('@hypha/core contracts', () => {
         agentRef: { id: 'agent.default' },
         fsmProcessRef: { id: 'fsm.react.default' },
         traceRef: { id: 'trace.default' },
+        mcpRefs: [{ id: 'mcp.default' }],
+        contextRefs: [{ id: 'context.default' }],
+        reasoningRefs: [{ id: 'reasoning.default' }],
+        outputContractRefs: [{ id: 'output.default' }],
+        businessRuleRefs: [{ id: 'rule.output-contract' }],
       })
-    ).toMatchObject({ id: 'system.default' });
+    ).toMatchObject({
+      id: 'system.default',
+      mcpRefs: [{ id: 'mcp.default' }],
+      contextRefs: [{ id: 'context.default' }],
+      reasoningRefs: [{ id: 'reasoning.default' }],
+      outputContractRefs: [{ id: 'output.default' }],
+      businessRuleRefs: [{ id: 'rule.output-contract' }],
+    });
     expect(coreSpecJsonSchemas.PolicySpec.required).toContain('rules');
     expect(coreSpecJsonSchemas.OutputContractSpec.required).toContain('schema');
     expect(coreSpecJsonSchemas.ContextSpec.required).toContain('sources');
@@ -155,6 +167,13 @@ describe('@hypha/core contracts', () => {
     expect(coreSpecJsonSchemas.RegressionSpec.required).toContain('requiredChecks');
     expect(coreSpecJsonSchemas.DeploymentSpec.required).toContain('mode');
     expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.required).toContain('agentRef');
+    expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.properties).toMatchObject({
+      mcpRefs: { type: 'array' },
+      contextRefs: { type: 'array' },
+      reasoningRefs: { type: 'array' },
+      outputContractRefs: { type: 'array' },
+      businessRuleRefs: { type: 'array' },
+    });
   });
 
   it('detects spec JSON schema/example drift for required fields', () => {
