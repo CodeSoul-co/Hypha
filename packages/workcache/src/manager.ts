@@ -1,13 +1,17 @@
 import type { FrameworkEvent } from '@hypha/core';
+import { WorkGraphIndex } from './graph';
 import { hashStableJson } from './key';
 import { fallbackAuditIdentity, sameValidity } from './materializers';
 import { normalizeWorkCachePolicy } from './policies';
 import { createDefaultRuntimeTypeRegistry } from './registry';
 import { TypedCacheForest } from './forest';
+import { HotIndexedWorkCacheStore } from './stores/hot-index-store';
 import type {
   CacheBlock,
   CacheTreeType,
+  DemandSignal,
   PromptPrefixMaterialization,
+  WorkGraph,
   WorkCacheAuditEvent,
   WorkCacheAuditEventType,
   WorkCacheAuditPayload,
@@ -16,6 +20,8 @@ import type {
   WorkCacheManagerOptions,
   WorkCachePolicy,
   WorkCacheStore,
+  WorkGraphIndexLike,
+  WorkGraphUpdate,
 } from './types';
 
 export class WorkCacheManager {
@@ -23,11 +29,15 @@ export class WorkCacheManager {
   readonly forest: TypedCacheForest;
   private readonly store: WorkCacheStore;
   private readonly registry: NonNullable<WorkCacheManagerOptions['registry']>;
+  private readonly workGraph: WorkGraphIndexLike;
   private readonly now: () => number;
 
   constructor(options: WorkCacheManagerOptions) {
     this.policy = normalizeWorkCachePolicy(options.policy);
-    this.store = options.store;
+    this.store =
+      options.hotIndex === false
+        ? options.store
+        : new HotIndexedWorkCacheStore(options.store, { maxEntries: this.maxHotEntries() });
     this.registry =
       options.registry ??
       createDefaultRuntimeTypeRegistry({
@@ -35,6 +45,7 @@ export class WorkCacheManager {
         unknownEventPolicy: this.policy.unknownEventPolicy,
       });
     this.now = options.now ?? Date.now;
+    this.workGraph = options.workGraph ?? new WorkGraphIndex({ now: this.now });
     this.forest = new TypedCacheForest(this.store);
   }
 
@@ -68,6 +79,7 @@ export class WorkCacheManager {
 
     const definition = this.registry.getDefinition(event.type);
     const blocks = definition ? definition.materialize(normalized) : [];
+    const graphUpdate = this.workGraph.ingest(normalized, blocks);
     if (!blocks.length) {
       const fallback = fallbackAuditIdentity(
         event,
@@ -88,7 +100,9 @@ export class WorkCacheManager {
 
     const events: WorkCacheAuditEvent[] = [];
     for (const block of blocks) {
-      const normalizedBlock = this.applyTreePolicy(block);
+      const normalizedBlock = this.applyTreePolicy(
+        this.applyDemandToBlock(block, graphUpdate)
+      );
       events.push(
         this.auditEvent('workcache.lookup', event, {
           treeType: normalizedBlock.treeType,
@@ -157,6 +171,7 @@ export class WorkCacheManager {
       }
 
       await this.store.touch?.(existing.id, this.now());
+      await this.applyDemandToExistingBlock(existing, graphUpdate);
       events.push(
         this.auditEvent('workcache.hit', event, {
           treeType: existing.treeType,
@@ -168,6 +183,14 @@ export class WorkCacheManager {
       );
     }
     return events;
+  }
+
+  getWorkGraph(runId: string): WorkGraph | null {
+    return this.workGraph.getGraph(runId);
+  }
+
+  listDemandSignals(runId?: string): DemandSignal[] {
+    return this.workGraph.listDemandSignals(runId);
   }
 
   async lookup<T = unknown>(query: WorkCacheLookupQuery): Promise<WorkCacheLookupResult<T>> {
@@ -245,6 +268,32 @@ export class WorkCacheManager {
     };
   }
 
+  private applyDemandToBlock<T>(block: CacheBlock<T>, graphUpdate: WorkGraphUpdate): CacheBlock<T> {
+    const demand = demandForBlock(block, graphUpdate.demandSignals);
+    if (!demand) return block;
+    return {
+      ...block,
+      utility: mergeDemand(block.utility, demand),
+      metadata: {
+        ...block.metadata,
+        workGraph: {
+          nodeId: graphUpdate.node.id,
+          demandScore: demand.demandScore,
+          stepsToUse: demand.stepsToUse,
+        },
+      },
+    };
+  }
+
+  private async applyDemandToExistingBlock(
+    block: CacheBlock,
+    graphUpdate: WorkGraphUpdate
+  ): Promise<void> {
+    const demand = demandForBlock(block, graphUpdate.demandSignals);
+    if (!demand) return;
+    await this.store.updateUtility?.(block.id, mergeDemand(block.utility, demand), this.now());
+  }
+
   private isExpired(block: CacheBlock): boolean {
     return block.expiresAt !== undefined && block.expiresAt <= this.now();
   }
@@ -277,8 +326,53 @@ export class WorkCacheManager {
       },
     };
   }
+
+  private maxHotEntries(): number {
+    return Object.values(this.policy.trees).reduce(
+      (sum, tree) => sum + (tree.maxEntries ?? 0),
+      0
+    );
+  }
 }
 
 function isWorkCacheEvent(type: string): boolean {
   return type.startsWith('workcache.');
+}
+
+function demandForBlock(block: CacheBlock, signals: DemandSignal[]): DemandSignal | undefined {
+  return signals
+    .filter(
+      (signal) =>
+        signal.targetTreeType === block.treeType &&
+        (signal.targetBlockId === block.id || signal.targetKey === block.cacheKey)
+    )
+    .sort((left, right) => right.demandScore - left.demandScore)[0];
+}
+
+function mergeDemand(
+  utility: CacheBlock['utility'],
+  signal: DemandSignal
+): CacheBlock['utility'] {
+  const downstreamFanout =
+    typeof signal.metadata?.downstreamFanout === 'number'
+      ? signal.metadata.downstreamFanout
+      : utility.downstreamFanout;
+  return {
+    ...utility,
+    score: Math.max(utility.score ?? 0, signal.demandScore),
+    futureDemand: Math.max(utility.futureDemand ?? 0, signal.demandScore),
+    downstreamFanout,
+    recomputeCost:
+      typeof signal.metadata?.recomputeCost === 'number'
+        ? signal.metadata.recomputeCost
+        : utility.recomputeCost,
+    staleRisk:
+      typeof signal.metadata?.stalenessRisk === 'number'
+        ? signal.metadata.stalenessRisk
+        : utility.staleRisk,
+    validationCost:
+      typeof signal.metadata?.validationCost === 'number'
+        ? signal.metadata.validationCost
+        : utility.validationCost,
+  };
 }

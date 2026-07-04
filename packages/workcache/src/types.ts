@@ -71,9 +71,29 @@ export interface NormalizedWorkEvent<TPayload = unknown> {
 }
 
 export interface WorkGraphNode {
+  nodeId: string;
   id: string;
-  type: WorkNodeType;
-  treeType: CacheTreeType;
+  runId: string;
+  sessionId?: string;
+  projectId?: string;
+  agentId?: string;
+  eventType: FrameworkEventType;
+  nodeType: WorkNodeType;
+  primaryTreeType: CacheTreeType;
+  operation: string;
+  inputRefs: string[];
+  outputBlockIds: string[];
+  stepIndex: number;
+  status: WorkNodeStatus;
+  estimatedCost?: CostProfile;
+  recomputeCost?: number;
+  validationCost?: number;
+  stepsToExecution?: number;
+  futureDemand?: number;
+  branchProbability?: number;
+  criticality?: number;
+  environmentDeps?: DependencyRef[];
+  cacheDeps?: string[];
   sourceEventId: string;
   sourceEventType: FrameworkEventType;
   cacheKey?: string;
@@ -81,11 +101,63 @@ export interface WorkGraphNode {
 }
 
 export interface WorkGraphEdge {
+  edgeId: string;
   id: string;
-  fromNodeId: string;
-  toNodeId: string;
-  type: 'depends_on' | 'invalidates' | 'materializes' | 'verifies';
+  from: string;
+  to: string;
+  edgeType: WorkEdgeType;
+  weight?: number;
+  condition?: string;
   metadata?: Record<string, unknown>;
+}
+
+export type WorkNodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+
+export type WorkEdgeType = 'control' | 'data' | 'cache' | 'environment' | 'agent';
+
+export interface CostProfile {
+  llmCost?: number;
+  tokenCost?: number;
+  toolCost?: number;
+  latencyMs?: number;
+  validationCost?: number;
+}
+
+export interface DependencyRef {
+  depType: 'file' | 'repo' | 'db' | 'web' | 'env' | 'tool' | 'prompt' | 'block';
+  key: string;
+  version?: string;
+  hash?: string;
+}
+
+export interface WorkGraph {
+  graphId: string;
+  runId: string;
+  sessionId?: string;
+  nodes: Map<string, WorkGraphNode>;
+  edges: Map<string, WorkGraphEdge>;
+  activeNodeIds: string[];
+  frontierNodeIds: string[];
+}
+
+export interface DemandSignal {
+  signalId: string;
+  sourceNodeId: string;
+  targetTreeType: CacheTreeType;
+  targetKey?: string;
+  targetBlockId?: string;
+  stepsToUse: number;
+  demandScore: number;
+  reason: string;
+  expiresAt?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkGraphUpdate {
+  graph: WorkGraph;
+  node: WorkGraphNode;
+  edges: WorkGraphEdge[];
+  demandSignals: DemandSignal[];
 }
 
 export interface CacheBlockValidity {
@@ -102,6 +174,8 @@ export interface CacheBlockUtility {
   recomputeCost?: number;
   staleRisk?: number;
   futureDemand?: number;
+  downstreamFanout?: number;
+  validationCost?: number;
 }
 
 export interface CacheBlock<T = unknown> {
@@ -138,6 +212,11 @@ export interface WorkCacheStore {
   list<T = unknown>(treeType?: CacheTreeType): Promise<Array<CacheBlock<T>>>;
   clear?(): Promise<void>;
   touch?(blockId: string, timestamp: number): Promise<void>;
+  updateUtility?(
+    blockId: string,
+    utility: Partial<CacheBlockUtility>,
+    timestamp: number
+  ): Promise<void>;
 }
 
 export interface WorkCacheTreePolicy {
@@ -159,6 +238,8 @@ export interface WorkCacheManagerOptions {
   store: WorkCacheStore;
   policy?: PartialWorkCachePolicy;
   registry?: RuntimeTypeRegistryLike;
+  workGraph?: WorkGraphIndexLike;
+  hotIndex?: boolean;
   now?: () => number;
 }
 
@@ -174,6 +255,12 @@ export interface RuntimeTypeRegistryLike {
     event: FrameworkEvent<TPayload>,
     options?: { unknownEventPolicy?: WorkCacheUnknownEventPolicy }
   ): NormalizedWorkEvent<TPayload> | null;
+}
+
+export interface WorkGraphIndexLike {
+  ingest(event: NormalizedWorkEvent, blocks: CacheBlock[]): WorkGraphUpdate;
+  getGraph(runId: string): WorkGraph | null;
+  listDemandSignals(runId?: string): DemandSignal[];
 }
 
 export interface WorkCacheLookupQuery {

@@ -1,4 +1,4 @@
-import type { CacheBlock, CacheTreeType, WorkCacheStore } from '../types';
+import type { CacheBlock, CacheBlockUtility, CacheTreeType, WorkCacheStore } from '../types';
 
 export class NoopWorkCacheStore implements WorkCacheStore {
   async get<T = unknown>(): Promise<CacheBlock<T> | null> {
@@ -64,6 +64,23 @@ export class MemoryWorkCacheStore implements WorkCacheStore {
       utility: {
         ...block.utility,
         reuseCount: (block.utility.reuseCount ?? 0) + 1,
+      },
+    });
+  }
+
+  async updateUtility(
+    blockId: string,
+    utility: Partial<CacheBlockUtility>,
+    timestamp: number
+  ): Promise<void> {
+    const block = this.blocks.get(blockId);
+    if (!block) return;
+    this.blocks.set(blockId, {
+      ...block,
+      updatedAt: timestamp,
+      utility: {
+        ...block.utility,
+        ...utility,
       },
     });
   }

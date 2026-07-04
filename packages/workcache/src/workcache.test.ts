@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
 import { createLLMCacheKey } from '@hypha/serving-cache';
 import { createWorkCacheKey } from './key';
+import { WorkGraphIndex } from './graph';
 import { WorkCacheManager } from './manager';
 import { DEFAULT_RUNTIME_TYPE_DEFINITIONS, RuntimeTypeRegistry } from './registry';
+import { HotIndexedWorkCacheStore } from './stores/hot-index-store';
 import { MemoryWorkCacheStore } from './stores/memory-store';
 import { SQLiteWorkCacheStore } from './stores/sqlite-store';
-import type { CacheTreeType, WorkCacheAuditEvent } from './types';
+import type { CacheBlock, CacheTreeType, WorkCacheAuditEvent } from './types';
 
 describe('@hypha/workcache registry', () => {
   it('maps current FrameworkEventType values to exactly one primary tree', () => {
@@ -110,6 +112,90 @@ describe('@hypha/workcache stores and manager', () => {
       })
     );
     expect(block?.validity.sourceHashes).toEqual({ 'file:/repo/README.md': 'hash-1' });
+  });
+
+  it('uses a CPU hot index over the backing store', async () => {
+    const backing = new CountingMemoryWorkCacheStore();
+    const hot = new HotIndexedWorkCacheStore(backing);
+    const block = cacheBlockFixture();
+
+    await hot.set(block);
+    expect(backing.cacheKeyReads).toBe(0);
+    expect(await hot.getByCacheKey('ToolTree', block.cacheKey)).toMatchObject({ id: block.id });
+    expect(backing.cacheKeyReads).toBe(0);
+
+    const coldHot = new HotIndexedWorkCacheStore(backing);
+    expect(await coldHot.getByCacheKey('ToolTree', block.cacheKey)).toMatchObject({ id: block.id });
+    expect(backing.cacheKeyReads).toBe(1);
+    expect(await coldHot.getByCacheKey('ToolTree', block.cacheKey)).toMatchObject({ id: block.id });
+    expect(backing.cacheKeyReads).toBe(1);
+  });
+});
+
+describe('@hypha/workcache graph-derived demand', () => {
+  it('builds typed WorkGraph nodes, dependency edges, and demand signals from source events', async () => {
+    const graph = new WorkGraphIndex({ now: () => 1000 });
+    const manager = new WorkCacheManager({
+      store: new MemoryWorkCacheStore(),
+      workGraph: graph,
+      now: () => 1000,
+      policy: { enabled: true, store: 'memory' },
+    });
+    await manager.ingest(observationEvent('hash-graph'));
+
+    const snapshot = manager.getWorkGraph('run_1');
+    expect(snapshot?.nodes.size).toBe(1);
+    const node = Array.from(snapshot?.nodes.values() ?? [])[0];
+    expect(node).toMatchObject({
+      eventType: 'context.build.completed',
+      nodeType: 'observation',
+      primaryTreeType: 'ObservationTree',
+      operation: 'context.build.completed',
+      status: 'done',
+    });
+    expect(node?.environmentDeps?.[0]).toMatchObject({
+      depType: 'file',
+      key: '/repo/README.md',
+      hash: 'hash-graph',
+    });
+    expect(Array.from(snapshot?.edges.values() ?? []).map((edge) => edge.edgeType)).toContain(
+      'cache'
+    );
+
+    const signals = manager.listDemandSignals('run_1');
+    expect(signals[0]).toMatchObject({
+      sourceNodeId: node?.id,
+      targetTreeType: 'ObservationTree',
+      stepsToUse: 0,
+      reason: 'source_event_materialized',
+    });
+    expect(signals[0]?.demandScore).toBeGreaterThan(0);
+  });
+
+  it('routes WorkGraph demand into tree-local block utility', async () => {
+    const manager = managerWithMemory();
+    await manager.ingest(reusableToolEvent());
+    const lookup = await manager.lookup({
+      treeType: 'ToolTree',
+      cacheKey: createWorkCacheKey({
+        treeType: 'ToolTree',
+        nodeType: 'tool',
+        identity: {
+          toolId: 'search.web',
+          stableArgs: { query: 'hypha' },
+          permissionScope: ['web.search'],
+        },
+      }),
+    });
+
+    expect(lookup.hit).toBe(true);
+    if (lookup.hit) {
+      expect(lookup.block.utility.futureDemand).toBeGreaterThan(0);
+      expect(lookup.block.utility.score).toBeGreaterThan(0);
+      expect(lookup.block.metadata?.workGraph).toMatchObject({
+        stepsToUse: 0,
+      });
+    }
   });
 });
 
@@ -303,4 +389,32 @@ function event(
     payload: overrides.payload ?? {},
     metadata: overrides.metadata,
   };
+}
+
+function cacheBlockFixture(): CacheBlock {
+  return {
+    id: 'workcache:block:fixture',
+    treeType: 'ToolTree',
+    nodeType: 'tool',
+    cacheKey: 'workcache:ToolTree:tool:fixture',
+    value: { ok: true },
+    createdAt: 1000,
+    updatedAt: 1000,
+    sourceEventId: 'event_1',
+    sourceEventType: 'tool.call.completed',
+    validity: { status: 'valid', sourceHashes: { args: 'hash' } },
+    utility: { score: 1 },
+  };
+}
+
+class CountingMemoryWorkCacheStore extends MemoryWorkCacheStore {
+  cacheKeyReads = 0;
+
+  override async getByCacheKey<T = unknown>(
+    treeType: CacheTreeType,
+    cacheKey: string
+  ): Promise<CacheBlock<T> | null> {
+    this.cacheKeyReads += 1;
+    return super.getByCacheKey<T>(treeType, cacheKey);
+  }
 }

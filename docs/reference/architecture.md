@@ -14,7 +14,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.          | Provider-specific request types in public kernel contracts.        |
 | `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.  | Agent loop, workflow semantics, or app-specific model preferences. |
 | `@hypha/serving-cache`  | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.         | Semantic cache, WorkCache graph scheduling, or agent loop changes. |
-| `@hypha/workcache`      | Event-derived typed runtime cache blocks, runtime type registry, typed cache forest, memory/SQLite stores, and audit events.     | Source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
+| `@hypha/workcache`      | Event-derived typed runtime cache blocks, WorkGraph scheduling view, hot-indexed typed cache forest, memory/SQLite stores, and audit events. | Source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
 | `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.            | Direct execution bypassing policy.                                 |
 | `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.      | Provider SDK lifecycle as framework core.                          |
 | `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                      | App session storage rules.                                         |
@@ -89,12 +89,22 @@ or provider KV cache.
 ## WorkCache
 
 `@hypha/workcache` consumes existing runtime events and materializes typed
-`CacheBlock` records in a `TypedCacheForest`. Its default registry aligns only
-current Hypha events to primary trees: planning/reasoning events to
+`CacheBlock` records in a hot-indexed `TypedCacheForest`. Its default registry
+aligns only current Hypha events to primary trees: planning/reasoning events to
 `PlanTree`, model/inference completions to `ComputationTree`, tool and MCP
 completions to `ToolTree`, context events to `ObservationTree`, evaluation and
 regression completions to `VerificationTree`, memory events to `MemoryTree`,
 and serving-cache prefix metadata on `llm.cache.write` to `PromptPrefixTree`.
+
+WorkCache also maintains a rebuildable `WorkGraph` from source events. Each
+normalized event becomes one typed work node, dependency edges are derived from
+input refs, provenance, environment deps, and cache links, and `DemandSignal`
+records update tree-local block utility. The cache tree runtime model is a
+three-layer structure: source events as the rebuildable log, CPU memory for the
+current WorkGraph plus hot cache index, and memory/SQLite as the backing store.
+Current-run updates are synchronous for immediate reuse; heavier pruning or
+rebuild work belongs behind the same graph/store interfaces and should not
+block an agent step.
 
 The server enables it with `HYPHA_WORKCACHE=memory` or `sqlite`; `off` is the
 default. Derived audit events are `workcache.lookup`, `workcache.hit`,

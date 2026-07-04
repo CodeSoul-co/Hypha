@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { CacheBlock, CacheTreeType, WorkCacheStore } from '../types';
+import type { CacheBlock, CacheBlockUtility, CacheTreeType, WorkCacheStore } from '../types';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
@@ -122,6 +122,23 @@ export class SQLiteWorkCacheStore implements WorkCacheStore {
       utility: {
         ...block.utility,
         reuseCount: (block.utility.reuseCount ?? 0) + 1,
+      },
+    });
+  }
+
+  async updateUtility(
+    blockId: string,
+    utility: Partial<CacheBlockUtility>,
+    timestamp: number
+  ): Promise<void> {
+    const block = await this.get(blockId);
+    if (!block) return;
+    await this.set({
+      ...block,
+      updatedAt: timestamp,
+      utility: {
+        ...block.utility,
+        ...utility,
       },
     });
   }

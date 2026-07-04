@@ -31,17 +31,49 @@ materializes stable prefix content; it does not manage provider KV cache.
 | --- | --- |
 | `RuntimeTypeDefinition` | Source event to work node/tree alignment plus materializer. |
 | `NormalizedWorkEvent` | Event payload normalized for a primary tree. |
-| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency metadata. |
+| `WorkGraphNode`, `WorkGraphEdge`, `WorkGraph`, `DemandSignal` | Event-derived scheduling graph, typed dependencies, and cache demand signals. |
 | `CacheBlock<T>` | Typed cache artifact with validity, provenance, utility, and source event linkage. |
 | `CacheTree<T>`, `TypedCacheForest` | Tree lookup/write/invalidation over a shared store. |
 | `WorkCacheManager` | Ingests events, enforces TTL/validity, and emits audit events. |
 | `WorkCachePolicy` | Store mode, prompt budget, unknown-event behavior, and per-tree TTLs. |
+
+## Work Graph and Tree Updates
+
+WorkCache updates follow three rules:
+
+- `event-first`: source runtime events are recorded before WorkCache ingests them.
+- `graph-derived`: each normalized source event becomes a typed `WorkGraphNode`, dependency `WorkGraphEdge` records are derived from payload references/provenance/cache links, and `DemandSignal` scores are computed from proximity, recompute cost, fanout, criticality, staleness risk, and validation cost.
+- `tree-local`: each `CacheTree` only updates blocks in its own tree. Demand signals update block utility and hot-index priority; they do not mutate source events or agent state.
+
+The graph is a scheduling view over events, computations, and cache blocks. It
+is rebuildable by replaying source events through `WorkCacheManager.ingest()`.
+It is not a second event log and it does not introduce additional runtime
+event names.
 
 ## Stores
 
 `MemoryWorkCacheStore` is for local runs and tests. `SQLiteWorkCacheStore`
 persists `workcache_blocks` with `id`, `tree_type`, `node_type`, `cache_key`,
 serialized block JSON, timestamps, expiry, and source event linkage.
+`HotIndexedWorkCacheStore` wraps either store and keeps an in-process index by
+block id and tree/cache key. Runtime lookup checks the hot index first, writes
+through to the backing store, and evicts low-utility entries by demand score and
+last update time.
+
+The intended runtime layout is:
+
+```text
+source events in event log
+  -> WorkGraphIndex and DemandSignal in CPU memory
+  -> HotIndexedWorkCacheStore in CPU memory
+  -> MemoryWorkCacheStore or SQLiteWorkCacheStore backing store
+```
+
+SQLite mode gives persistent cache trees; the event log remains the rebuild
+source of truth. Current-run graph and tree updates happen synchronously so a
+fresh block can be reused immediately. More expensive maintenance such as
+global pruning, graph compaction, or cross-run rebuilds should run behind the
+same store and graph interfaces without blocking an agent step.
 
 Configure the server with:
 
