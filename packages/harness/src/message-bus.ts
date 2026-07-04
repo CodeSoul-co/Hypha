@@ -201,6 +201,7 @@ export class InMemoryMessageBus implements MessageBus {
   async acknowledge(input: MessageAckInput): Promise<RuntimeMessage | null> {
     const message = this.requireOwnedMessage(input.id, input.userId, input.sessionId, input.runId);
     if (!message) return null;
+    if (isTerminal(message.status)) return message;
     this.removeQueuedMessage(message);
     const acknowledged = this.update(message, {
       status: 'acknowledged',
@@ -214,6 +215,7 @@ export class InMemoryMessageBus implements MessageBus {
   async fail(input: MessageFailInput): Promise<RuntimeMessage | null> {
     const message = this.requireOwnedMessage(input.id, input.userId, input.sessionId, input.runId);
     if (!message) return null;
+    if (isTerminal(message.status)) return message;
     this.removeQueuedMessage(message);
     return this.markFailed(message, input);
   }
@@ -316,7 +318,7 @@ export class InMemoryMessageBus implements MessageBus {
   ): Promise<void> {
     await this.options.trace?.record(
       createFrameworkEvent({
-        id: `${message.id}:${type}:${message.updatedAt}`,
+        id: `${message.id}:${type}:${message.status}:${message.updatedAt}`,
         type,
         runId: message.runId,
         sessionId: message.sessionId,
@@ -348,4 +350,8 @@ function assertRequired(value: string | undefined, field: string): void {
     message: `Message requires ${field}`,
     context: { field },
   });
+}
+
+function isTerminal(status: MessageStatus): boolean {
+  return status === 'acknowledged' || status === 'failed' || status === 'dead_lettered';
 }
