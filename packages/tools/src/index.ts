@@ -307,6 +307,7 @@ export class GovernedToolRunner implements ToolRunner {
               sessionId: request.context.sessionId,
               payload: {
                 ...basePayload,
+                input: request.input,
                 serverId: spec.sourceRef?.serverId,
                 capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
                 output,
@@ -346,7 +347,7 @@ export class GovernedToolRunner implements ToolRunner {
             runId: request.context.runId,
             stepId: request.context.stepId,
             sessionId: request.context.sessionId,
-            payload: { ...basePayload, output, attempts: attempt },
+            payload: { ...basePayload, input: request.input, output, attempts: attempt },
           })
         );
         return { toolId: request.toolId, status: 'completed', output };

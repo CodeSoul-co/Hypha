@@ -334,17 +334,28 @@ function verificationProofFrom(payload: Record<string, unknown>): Record<string,
 }
 
 function validityFromRecord(payload: Record<string, unknown>): CacheBlockValidity | null {
-  const validity = recordFromUnknown(payload.validity);
-  const proof = recordFromUnknown(payload.validityProof ?? validity.proof);
+  const output = recordFromUnknown(payload.output);
+  const outputProvenance = recordFromUnknown(output.provenance);
+  const validity = recordFromUnknown(payload.validity ?? output.validity);
+  const proof = recordFromUnknown(payload.validityProof ?? output.validityProof ?? validity.proof);
   const sourceHashes = recordStringMap(
-    payload.sourceHashes ?? validity.sourceHashes ?? recordFromUnknown(payload.provenance).sourceHashes
+    payload.sourceHashes ??
+      output.sourceHashes ??
+      validity.sourceHashes ??
+      recordFromUnknown(payload.provenance).sourceHashes ??
+      outputProvenance.sourceHashes
   );
   const hash =
     stringValue(payload.hash) ??
     stringValue(payload.contentHash) ??
     stringValue(payload.sourceHash) ??
+    stringValue(output.hash) ??
+    stringValue(output.contentHash) ??
+    stringValue(output.sourceHash) ??
     stringValue(recordFromUnknown(payload.provenance).hash) ??
-    stringValue(recordFromUnknown(payload.provenance).sourceHash);
+    stringValue(recordFromUnknown(payload.provenance).sourceHash) ??
+    stringValue(outputProvenance.hash) ??
+    stringValue(outputProvenance.sourceHash);
   if (!Object.keys(proof).length && !Object.keys(sourceHashes).length && !hash) return null;
   return {
     status:

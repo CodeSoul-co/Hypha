@@ -5,6 +5,7 @@ import {
   type FrameworkEvent,
   type FrameworkEventType,
   type SpecRef,
+  type TraceRecorder,
 } from '@hypha/core';
 import { EventFirstRuntime } from '@hypha/harness';
 import {
@@ -803,7 +804,7 @@ class EventRuntimeService {
       },
       async () => input.handler()
     );
-    const runner = new GovernedToolRunner(registry, this.events);
+    const runner = new GovernedToolRunner(registry, this.createWorkCacheAwareTraceRecorder());
     const result = await runner.run({
       toolId: input.toolId,
       input: input.params,
@@ -1701,6 +1702,15 @@ class EventRuntimeService {
         cacheKey: event.payload.cacheKey,
       },
     });
+  }
+
+  private createWorkCacheAwareTraceRecorder(): TraceRecorder {
+    return {
+      record: async (event) => {
+        await this.events.record(event);
+        await this.recordWorkCacheEvents(event);
+      },
+    };
   }
 
   private requireRun(runId: string): RuntimeRunContext {
