@@ -1,5 +1,6 @@
 import { validateDomainPackSpec } from '@hypha/domain';
 import { getEventRuntime } from '../../services/EventRuntime';
+import { normalizeWorkflowExecutionContext } from './context';
 import { WorkflowEngine } from './WorkflowEngine';
 import type { WorkflowDefinition, WorkflowExecutionContext } from './types';
 
@@ -108,5 +109,67 @@ describe('WorkflowEngine conditional execution', () => {
       defaultWorkflowRef: 'runtime-contract',
     });
     expect(runtimeSpec.fsm.initialState).toBe('prepare');
+  });
+});
+
+describe('workflow context normalization', () => {
+  const workflow: WorkflowDefinition = {
+    name: 'context-normalization',
+    version: '1.0.0',
+    variables: { defaultModel: 'model-from-workflow' },
+    stages: [{ id: 'llm', type: 'llm' }],
+  };
+
+  it('derives a user message from object input when messages are omitted', () => {
+    const context = normalizeWorkflowExecutionContext(
+      workflow,
+      {
+        sessionId: 'session_object_input',
+        input: { message: 'hello from object input' },
+        variables: { defaultModel: 'model-from-request' },
+      },
+      'user_test'
+    );
+
+    expect(context.messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: 'hello from object input',
+      }),
+    ]);
+    expect(context.variables.defaultModel).toBe('model-from-request');
+  });
+
+  it('derives a user message from top-level message and preserves explicit messages', () => {
+    const fromMessage = normalizeWorkflowExecutionContext(
+      workflow,
+      { message: 'hello from top-level message' },
+      'user_test'
+    );
+    expect(fromMessage.messages[0]).toEqual(
+      expect.objectContaining({
+        role: 'user',
+        content: 'hello from top-level message',
+      })
+    );
+
+    const explicit = normalizeWorkflowExecutionContext(
+      workflow,
+      {
+        message: 'ignored',
+        messages: [{ role: 'user', content: 'explicit message' }],
+      },
+      'user_test'
+    );
+    expect(explicit.messages).toEqual([{ role: 'user', content: 'explicit message' }]);
+
+    const nested = normalizeWorkflowExecutionContext(
+      workflow,
+      {
+        input: { messages: [{ role: 'user', content: 'nested explicit message' }] },
+      },
+      'user_test'
+    );
+    expect(nested.messages).toEqual([{ role: 'user', content: 'nested explicit message' }]);
   });
 });

@@ -53,6 +53,10 @@ import type {
   WorkflowStage,
 } from '../core/workflow/types';
 import {
+  normalizeWorkflowExecutionContext,
+  type WorkflowContextInput,
+} from '../core/workflow/context';
+import {
   createLLMManagerModelProvider,
   getLLMManager,
   modelResponseToChatResponse,
@@ -1013,7 +1017,7 @@ class EventRuntimeService {
     runId: string;
     userId: string;
     workflow: WorkflowDefinition;
-    context: Partial<WorkflowExecutionContext> & { input?: unknown };
+    context: WorkflowContextInput;
   }): Promise<WorkflowExecution> {
     const workflow = input.workflow;
     const execution: WorkflowExecution = {
@@ -1451,29 +1455,10 @@ class EventRuntimeService {
 
   private normalizeWorkflowContext(
     workflow: WorkflowDefinition,
-    context: Partial<WorkflowExecutionContext> & { input?: unknown },
+    context: WorkflowContextInput,
     userId: string
   ): WorkflowExecutionContext {
-    const normalized: WorkflowExecutionContext = {
-      userId,
-      sessionId: context.sessionId || generateId(),
-      conversationId: context.conversationId,
-      messages: Array.isArray(context.messages) ? context.messages : [],
-      variables: {
-        ...(workflow.variables ?? {}),
-        ...(context.variables ?? {}),
-      },
-      metadata: context.metadata ?? {},
-    };
-    if (typeof context.input === 'string' && normalized.messages.length === 0) {
-      normalized.messages.push({
-        id: generateId(),
-        role: 'user',
-        content: context.input,
-        timestamp: now(),
-      });
-    }
-    return normalized;
+    return normalizeWorkflowExecutionContext(workflow, context, userId);
   }
 
   private nextWorkflowStage(

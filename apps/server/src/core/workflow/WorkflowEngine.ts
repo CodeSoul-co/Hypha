@@ -7,9 +7,10 @@ import {
   WorkflowExecutionContext,
   IWorkflowEngine,
 } from './types';
+import { normalizeWorkflowExecutionContext } from './context';
 import { getEventRuntime } from '../../services/EventRuntime';
 import { logger } from '../../utils/logger';
-import { generateId, now } from '../../utils/helpers';
+import { now } from '../../utils/helpers';
 
 export class WorkflowEngine implements IWorkflowEngine {
   private workflows: Map<string, WorkflowDefinition> = new Map();
@@ -29,7 +30,7 @@ export class WorkflowEngine implements IWorkflowEngine {
     if (this.autoReload) {
       // Set up file watcher for auto-reload in production
       this.reloadInterval = setInterval(() => {
-        this.loadWorkflowsFromDir(true).catch(err => {
+        this.loadWorkflowsFromDir(true).catch((err) => {
           logger.error('Failed to reload workflows:', err);
         });
       }, 60000); // Check every minute
@@ -99,27 +100,11 @@ export class WorkflowEngine implements IWorkflowEngine {
       throw new Error(`Workflow not found: ${workflowName}`);
     }
 
-    const normalizedContext: WorkflowExecutionContext = {
-      userId: context.userId || 'anonymous',
-      sessionId: context.sessionId || generateId(),
-      conversationId: context.conversationId,
-      messages: Array.isArray(context.messages) ? context.messages : [],
-      variables: {
-        ...workflow.variables,
-        ...(context.variables || {}),
-      },
-      metadata: context.metadata || {},
-    };
-
-    const rawInput = (context as unknown as { input?: unknown }).input;
-    if (typeof rawInput === 'string' && normalizedContext.messages.length === 0) {
-      normalizedContext.messages.push({
-        id: generateId(),
-        role: 'user',
-        content: rawInput,
-        timestamp: now(),
-      });
-    }
+    const normalizedContext = normalizeWorkflowExecutionContext(
+      workflow,
+      context as Parameters<typeof normalizeWorkflowExecutionContext>[1],
+      context.userId || 'anonymous'
+    );
 
     const runtime = getEventRuntime();
     const runtimeSpec = runtime.createRuntimeSpecFromWorkflow(workflow);
@@ -165,7 +150,9 @@ export class WorkflowEngine implements IWorkflowEngine {
         return;
       }
 
-      const files = fs.readdirSync(this.workflowDir).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
+      const files = fs
+        .readdirSync(this.workflowDir)
+        .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
 
       for (const file of files) {
         try {
