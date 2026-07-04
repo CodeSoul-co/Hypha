@@ -1,3 +1,6 @@
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   createFrameworkEvent,
@@ -10,6 +13,7 @@ import {
   assertEventTypes,
   assertStatePath,
   DeterministicEvaluator,
+  FileReplayFixtureStore,
   InMemoryReplayFixtureStore,
   OutputContractValidator,
   RegressionRunner,
@@ -92,7 +96,12 @@ describe('@hypha/testing golden helpers', () => {
   it('captures a run, replays it, and reports trace diffs', async () => {
     const store = new InMemoryEventStore();
     const fixtureStore = new InMemoryReplayFixtureStore();
-    const replay = new ReplayEngine({ eventStore: store, fixtureStore, now: fixedNow });
+    const replay = new ReplayEngine({
+      eventStore: store,
+      fixtureStore,
+      trace: store,
+      now: fixedNow,
+    });
     const events = createCompletedRunEvents();
     for (const frameworkEvent of events) {
       await store.append(frameworkEvent);
@@ -106,6 +115,7 @@ describe('@hypha/testing golden helpers', () => {
     });
 
     expect(fixture.statePath).toEqual(['Intake', 'Completed']);
+    expect(fixture.modelCalls).toEqual([]);
     expect(replay.replay(fixture).projection).toMatchObject({
       finalOutput: { answer: 'ok' },
       policyDecisions: [expect.stringContaining('tool.search')],
@@ -123,6 +133,36 @@ describe('@hypha/testing golden helpers', () => {
     expect(diff.eventTypes.passed).toBe(true);
     expect(diff.statePath.passed).toBe(true);
     expect(diff.output.passed).toBe(false);
+    await expect(store.list({ type: 'replay.completed' })).resolves.toHaveLength(1);
+  });
+
+  it('persists replay fixtures to the local filesystem and rejects mismatched runs', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-replay-fixtures-'));
+    const fixtureStore = new FileReplayFixtureStore({ directory });
+    const replay = new ReplayEngine({ fixtureStore, now: fixedNow });
+
+    const fixture = await replay.capture({
+      id: 'fixture.local.persisted',
+      version: '0.0.0',
+      runId: 'run_replay',
+      events: createCompletedRunEvents(),
+      outputContract: createAnswerContract(),
+    });
+
+    await expect(fixtureStore.get('fixture.local.persisted')).resolves.toMatchObject({
+      id: fixture.id,
+      runId: 'run_replay',
+      finalOutput: { answer: 'ok' },
+    });
+    await expect(replay.listFixtures()).resolves.toHaveLength(1);
+    await expect(
+      replay.capture({
+        id: 'fixture.bad',
+        version: '0.0.0',
+        runId: 'different_run',
+        events: createCompletedRunEvents(),
+      })
+    ).rejects.toThrow(/not different_run/);
   });
 
   it('runs a minimal DomainPack regression case from a replay fixture', async () => {
@@ -148,9 +188,15 @@ describe('@hypha/testing golden helpers', () => {
       outputContract: contract,
     });
 
-    const result = new RegressionRunner({ replayEngine: replay, now: fixedNow }).runSpec({
+    const trace = new InMemoryEventStore();
+    const result = await new RegressionRunner({
+      replayEngine: replay,
+      trace,
+      now: fixedNow,
+    }).runSpecAndRecord({
       spec: domainPack.regressionCases![0],
       fixtures: [fixture],
+      runId: 'run_regression',
     });
 
     expect(result).toMatchObject({
@@ -162,6 +208,7 @@ describe('@hypha/testing golden helpers', () => {
       runId: 'run_replay',
       events: fixture.events,
       outputContracts: [contract],
+      evaluationSpecs: domainPack.evaluationProfiles,
       traceSpecs: [
         {
           id: 'trace.replay',
@@ -171,6 +218,62 @@ describe('@hypha/testing golden helpers', () => {
       ],
     });
     expect(deterministic.status).toBe('passed');
+    await expect(trace.list({ type: 'regression.completed' })).resolves.toHaveLength(1);
+  });
+
+  it('records deterministic evaluation lifecycle events', async () => {
+    const trace = new InMemoryEventStore();
+    const summary = await new DeterministicEvaluator({ trace, now: fixedNow }).evaluateAndRecord({
+      runId: 'run_eval_recorded',
+      events: createCompletedRunEvents().map((frameworkEvent) => ({
+        ...frameworkEvent,
+        runId: 'run_eval_recorded',
+      })),
+      outputContracts: [createAnswerContract()],
+    });
+
+    expect(summary.status).toBe('passed');
+    await expect(trace.list({ type: 'eval.started' })).resolves.toHaveLength(1);
+    await expect(trace.list({ type: 'eval.completed' })).resolves.toMatchObject([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          summary: expect.objectContaining({ status: 'passed' }),
+        }),
+      }),
+    ]);
+  });
+
+  it('fails unsupported or under-specified deterministic evaluation specs explicitly', () => {
+    const summary = new DeterministicEvaluator({ now: fixedNow }).evaluate({
+      runId: 'run_eval_specs',
+      events: createCompletedRunEvents(),
+      evaluationSpecs: [
+        {
+          id: 'eval.schema.missing-rubric',
+          version: '0.0.0',
+          type: 'schema',
+          deterministic: true,
+        },
+        {
+          id: 'eval.human',
+          version: '0.0.0',
+          type: 'human',
+          deterministic: false,
+        },
+      ],
+    });
+
+    expect(summary.status).toBe('failed');
+    expect(summary.results).toEqual([
+      expect.objectContaining({
+        id: 'eval.schema.missing-rubric',
+        status: 'failed',
+      }),
+      expect.objectContaining({
+        id: 'eval.human',
+        status: 'failed',
+      }),
+    ]);
   });
 });
 

@@ -1,10 +1,12 @@
-import type {
-  EvaluationSpec,
-  FrameworkEvent,
-  FrameworkEventType,
-  JsonSchema,
-  OutputContractSpec,
-  TraceSpec,
+import {
+  createFrameworkEvent,
+  type EvaluationSpec,
+  type FrameworkEvent,
+  type FrameworkEventType,
+  type JsonSchema,
+  type OutputContractSpec,
+  type TraceRecorder,
+  type TraceSpec,
 } from '@hypha/core';
 
 export type EvaluationStatus = 'passed' | 'failed';
@@ -69,6 +71,12 @@ export interface DeterministicEvaluatorOptions {
   now?: () => string;
   outputValidator?: OutputContractValidator;
   traceEvaluator?: TraceCompletenessEvaluator;
+  trace?: TraceRecorder;
+  eventRunId?: string;
+  sessionId?: string;
+  workspaceId?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DeterministicEvaluationInput {
@@ -81,11 +89,19 @@ export interface DeterministicEvaluationInput {
   metadata?: Record<string, unknown>;
 }
 
-interface SchemaValidationIssue {
+export interface JsonSchemaValidationIssue {
   path: string;
   message: string;
   expected?: unknown;
   actual?: unknown;
+}
+
+export interface EvaluationEventContext {
+  runId: string;
+  sessionId?: string;
+  workspaceId?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 const DEFAULT_NOW = (): string => new Date().toISOString();
@@ -190,6 +206,13 @@ export class DeterministicEvaluator {
   private readonly now: () => string;
   private readonly outputValidator: OutputContractValidator;
   private readonly traceEvaluator: TraceCompletenessEvaluator;
+  private readonly trace?: TraceRecorder;
+  private readonly eventRunId?: string;
+  private readonly sessionId?: string;
+  private readonly workspaceId?: string;
+  private readonly agentId?: string;
+  private readonly metadata?: Record<string, unknown>;
+  private lifecycleEventCount = 0;
 
   constructor(options: DeterministicEvaluatorOptions = {}) {
     this.now = options.now ?? DEFAULT_NOW;
@@ -197,6 +220,12 @@ export class DeterministicEvaluator {
       options.outputValidator ?? new OutputContractValidator({ now: this.now });
     this.traceEvaluator =
       options.traceEvaluator ?? new TraceCompletenessEvaluator({ now: this.now });
+    this.trace = options.trace;
+    this.eventRunId = options.eventRunId;
+    this.sessionId = options.sessionId;
+    this.workspaceId = options.workspaceId;
+    this.agentId = options.agentId;
+    this.metadata = options.metadata;
   }
 
   evaluate(input: DeterministicEvaluationInput): EvaluationSummary {
@@ -245,6 +274,27 @@ export class DeterministicEvaluator {
     };
   }
 
+  async evaluateAndRecord(input: DeterministicEvaluationInput): Promise<EvaluationSummary> {
+    const context = this.requireEventContext(input.runId, input.metadata);
+    await this.recordLifecycleEvent('eval.started', context, {
+      outputContractCount: input.outputContracts?.length ?? 0,
+      traceSpecCount: input.traceSpecs?.length ?? 0,
+      evaluationSpecCount: input.evaluationSpecs?.length ?? 0,
+    });
+    try {
+      const summary = this.evaluate(input);
+      await this.recordLifecycleEvent('eval.completed', context, {
+        summary: summarizeEvaluation(summary),
+      });
+      return summary;
+    } catch (error) {
+      await this.recordLifecycleEvent('eval.failed', context, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
   private evaluateSpec(
     spec: EvaluationSpec,
     input: DeterministicEvaluationInput,
@@ -267,6 +317,29 @@ export class DeterministicEvaluator {
         }),
       ];
     }
+    if (spec.type === 'schema') {
+      return [this.failedSpecResult(spec, input, 'EvaluationSpec type schema requires rubric.')];
+    }
+    if (spec.type === 'output_contract') {
+      if (!(input.outputContracts?.length ?? 0)) {
+        return [
+          this.failedSpecResult(
+            spec,
+            input,
+            'EvaluationSpec requires an OutputContractSpec, but none was supplied.'
+          ),
+        ];
+      }
+      return input.outputContracts!.map((contract) =>
+        this.outputValidator.validate({
+          contract,
+          output,
+          runId: input.runId,
+          evaluationId: `${spec.id}:${contract.id}`,
+          metadata: input.metadata,
+        })
+      );
+    }
     if (
       spec.type === 'tool_trace' ||
       spec.type === 'policy' ||
@@ -282,27 +355,81 @@ export class DeterministicEvaluator {
         }),
       ];
     }
-    if (spec.type === 'output_contract' && !(input.outputContracts?.length ?? 0)) {
-      return [
-        createEvaluationResult({
-          id: spec.id,
-          evaluatorId: 'deterministic-evaluator',
-          type: spec.type,
-          runId: input.runId,
-          startedAt: this.now(),
-          completedAt: this.now(),
-          checks: [
-            {
-              id: `${spec.id}:contract-ref`,
-              status: 'failed',
-              message: 'EvaluationSpec requires an OutputContractSpec, but none was supplied.',
-            },
-          ],
-          metadata: input.metadata,
-        }),
-      ];
+    return [
+      this.failedSpecResult(
+        spec,
+        input,
+        `EvaluationSpec type ${spec.type} is not deterministic without an external evaluator.`
+      ),
+    ];
+  }
+
+  private failedSpecResult(
+    spec: EvaluationSpec,
+    input: DeterministicEvaluationInput,
+    message: string
+  ): EvaluationResult {
+    return createEvaluationResult({
+      id: spec.id,
+      evaluatorId: 'deterministic-evaluator',
+      type: spec.type,
+      runId: input.runId,
+      startedAt: this.now(),
+      completedAt: this.now(),
+      checks: [
+        {
+          id: `${spec.id}:unsupported`,
+          status: 'failed',
+          message,
+        },
+      ],
+      metadata: input.metadata,
+    });
+  }
+
+  private requireEventContext(
+    runId?: string,
+    metadata?: Record<string, unknown>
+  ): EvaluationEventContext {
+    if (!this.trace) {
+      throw new Error('DeterministicEvaluator.evaluateAndRecord requires a TraceRecorder.');
     }
-    return [];
+    const eventRunId = runId ?? this.eventRunId;
+    if (!eventRunId) {
+      throw new Error('DeterministicEvaluator.evaluateAndRecord requires a runId.');
+    }
+    return {
+      runId: eventRunId,
+      sessionId: this.sessionId,
+      workspaceId: this.workspaceId,
+      agentId: this.agentId,
+      metadata: { ...this.metadata, ...metadata },
+    };
+  }
+
+  private async recordLifecycleEvent(
+    type: 'eval.started' | 'eval.completed' | 'eval.failed',
+    context: EvaluationEventContext,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    await this.trace!.record(
+      createFrameworkEvent({
+        id: this.nextLifecycleEventId(context.runId, type),
+        type,
+        runId: context.runId,
+        sessionId: context.sessionId,
+        workspaceId: context.workspaceId,
+        agentId: context.agentId,
+        timestamp: this.now(),
+        payload,
+        metadata: context.metadata,
+      })
+    );
+  }
+
+  private nextLifecycleEventId(runId: string, type: FrameworkEventType): string {
+    this.lifecycleEventCount += 1;
+    return `${runId}:${type}:${this.lifecycleEventCount}`;
   }
 }
 
@@ -310,8 +437,8 @@ export function validateJsonSchemaValue(
   value: unknown,
   schema: JsonSchema,
   path = '$'
-): SchemaValidationIssue[] {
-  const issues: SchemaValidationIssue[] = [];
+): JsonSchemaValidationIssue[] {
+  const issues: JsonSchemaValidationIssue[] = [];
   if (
     schema.enum &&
     !schema.enum.some((candidate) => stableStringify(candidate) === stableStringify(value))
@@ -560,8 +687,8 @@ function validateScalarBounds(
   value: unknown,
   schema: JsonSchema,
   path: string
-): SchemaValidationIssue[] {
-  const issues: SchemaValidationIssue[] = [];
+): JsonSchemaValidationIssue[] {
+  const issues: JsonSchemaValidationIssue[] = [];
   const minLength = numberKeyword(schema, 'minLength');
   const maxLength = numberKeyword(schema, 'maxLength');
   const minimum = numberKeyword(schema, 'minimum');
@@ -651,6 +778,17 @@ function stringKeyword(schema: JsonSchema, key: string): string | undefined {
 
 function stableStringify(value: unknown): string {
   return JSON.stringify(sortJson(value));
+}
+
+function summarizeEvaluation(summary: EvaluationSummary): Record<string, unknown> {
+  return {
+    id: summary.id,
+    runId: summary.runId,
+    status: summary.status,
+    score: summary.score,
+    resultCount: summary.results.length,
+    failedResultCount: summary.results.filter((result) => result.status === 'failed').length,
+  };
 }
 
 function sortJson(value: unknown): unknown {

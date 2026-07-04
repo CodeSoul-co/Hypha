@@ -1,9 +1,13 @@
-import type {
-  EventStore,
-  FrameworkEvent,
-  OutputContractSpec,
-  ReplaySpec,
-  SpecRef,
+import fs from 'fs/promises';
+import path from 'path';
+import {
+  createFrameworkEvent,
+  type EventStore,
+  type FrameworkEvent,
+  type OutputContractSpec,
+  type ReplaySpec,
+  type SpecRef,
+  type TraceRecorder,
 } from '@hypha/core';
 
 export interface ReplayFixture {
@@ -17,6 +21,7 @@ export interface ReplayFixture {
   statePath: string[];
   finalOutput?: unknown;
   toolCalls: string[];
+  modelCalls: string[];
   policyDecisions: string[];
   memoryReadSet: string[];
   outputContract?: OutputContractSpec;
@@ -81,6 +86,11 @@ export interface ReplayEngineOptions {
   eventStore?: EventStore;
   fixtureStore?: ReplayFixtureStore;
   now?: () => string;
+  trace?: TraceRecorder;
+  sessionId?: string;
+  workspaceId?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ReplayFixtureStore {
@@ -109,45 +119,126 @@ export class InMemoryReplayFixtureStore implements ReplayFixtureStore {
   }
 }
 
+export interface FileReplayFixtureStoreOptions {
+  directory: string;
+  extension?: string;
+}
+
+export class FileReplayFixtureStore implements ReplayFixtureStore {
+  private readonly directory: string;
+  private readonly extension: string;
+
+  constructor(options: FileReplayFixtureStoreOptions) {
+    this.directory = path.resolve(options.directory);
+    this.extension = options.extension ?? '.replay.json';
+  }
+
+  async save(fixture: ReplayFixture): Promise<void> {
+    await fs.mkdir(this.directory, { recursive: true });
+    await fs.writeFile(this.filePath(fixture.id), `${JSON.stringify(fixture, null, 2)}\n`, 'utf-8');
+  }
+
+  async get(id: string): Promise<ReplayFixture | null> {
+    try {
+      return JSON.parse(await fs.readFile(this.filePath(id), 'utf-8')) as ReplayFixture;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  async list(): Promise<ReplayFixture[]> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const fixtures: ReplayFixture[] = [];
+    for (const entry of entries.filter((file) => file.endsWith(this.extension)).sort()) {
+      fixtures.push(JSON.parse(await fs.readFile(path.join(this.directory, entry), 'utf-8')));
+    }
+    return fixtures;
+  }
+
+  private filePath(id: string): string {
+    return path.join(this.directory, `${safeFixtureFileName(id)}${this.extension}`);
+  }
+}
+
 export class ReplayEngine {
   private readonly eventStore?: EventStore;
   private readonly fixtureStore?: ReplayFixtureStore;
   private readonly now: () => string;
+  private readonly trace?: TraceRecorder;
+  private readonly sessionId?: string;
+  private readonly workspaceId?: string;
+  private readonly agentId?: string;
+  private readonly metadata?: Record<string, unknown>;
+  private lifecycleEventCount = 0;
 
   constructor(options: ReplayEngineOptions = {}) {
     this.eventStore = options.eventStore;
     this.fixtureStore = options.fixtureStore;
     this.now = options.now ?? DEFAULT_NOW;
+    this.trace = options.trace;
+    this.sessionId = options.sessionId;
+    this.workspaceId = options.workspaceId;
+    this.agentId = options.agentId;
+    this.metadata = options.metadata;
   }
 
   async capture(input: ReplayCaptureInput): Promise<ReplayFixture> {
-    const capturedEvents = applyReplayCapturePolicy(
-      normalizeEvents(
-        input.events ?? (await this.requireEventStore().list({ runId: input.runId }))
-      ),
-      input.replaySpec
-    );
-    const projection = projectReplay(capturedEvents);
-    const fixture: ReplayFixture = {
-      id: input.id,
-      version: input.version,
-      runId: input.runId,
-      createdAt: this.now(),
+    await this.recordLifecycleEvent(input.runId, 'replay.started', {
+      fixtureId: input.id,
       replaySpecRef: input.replaySpec
         ? { id: input.replaySpec.id, version: input.replaySpec.version }
         : undefined,
-      events: capturedEvents,
-      eventTypes: projection.eventTypes,
-      statePath: projection.statePath,
-      finalOutput: projection.finalOutput,
-      toolCalls: projection.toolCalls,
-      policyDecisions: projection.policyDecisions,
-      memoryReadSet: projection.memoryReadSet,
-      outputContract: input.outputContract,
-      metadata: input.metadata,
-    };
-    await this.fixtureStore?.save(fixture);
-    return fixture;
+    });
+    try {
+      const sourceEvents = normalizeEvents(
+        input.events ?? (await this.requireEventStore().list({ runId: input.runId }))
+      );
+      assertReplaySourceEvents(input.runId, sourceEvents);
+      const capturedEvents = applyReplayCapturePolicy(sourceEvents, input.replaySpec);
+      const projection = projectReplay(capturedEvents);
+      const fixture: ReplayFixture = {
+        id: input.id,
+        version: input.version,
+        runId: input.runId,
+        createdAt: this.now(),
+        replaySpecRef: input.replaySpec
+          ? { id: input.replaySpec.id, version: input.replaySpec.version }
+          : undefined,
+        events: capturedEvents,
+        eventTypes: projection.eventTypes,
+        statePath: projection.statePath,
+        finalOutput: projection.finalOutput,
+        toolCalls: projection.toolCalls,
+        modelCalls: projection.modelCalls,
+        policyDecisions: projection.policyDecisions,
+        memoryReadSet: projection.memoryReadSet,
+        outputContract: input.outputContract,
+        metadata: input.metadata,
+      };
+      await this.fixtureStore?.save(fixture);
+      await this.recordLifecycleEvent(input.runId, 'replay.completed', {
+        fixtureId: fixture.id,
+        eventCount: fixture.events.length,
+        statePath: fixture.statePath,
+        toolCallCount: fixture.toolCalls.length,
+        modelCallCount: fixture.modelCalls.length,
+        policyDecisionCount: fixture.policyDecisions.length,
+      });
+      return fixture;
+    } catch (error) {
+      await this.recordLifecycleEvent(input.runId, 'replay.failed', {
+        fixtureId: input.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   replay(fixture: ReplayFixture): ReplayResult {
@@ -212,6 +303,41 @@ export class ReplayEngine {
       throw new Error('ReplayEngine.capture requires events or an EventStore.');
     }
     return this.eventStore;
+  }
+
+  async getFixture(id: string): Promise<ReplayFixture | null> {
+    if (!this.fixtureStore) return null;
+    return this.fixtureStore.get(id);
+  }
+
+  async listFixtures(): Promise<ReplayFixture[]> {
+    return this.fixtureStore?.list() ?? [];
+  }
+
+  private async recordLifecycleEvent(
+    runId: string,
+    type: 'replay.started' | 'replay.completed' | 'replay.failed',
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.trace) return;
+    await this.trace.record(
+      createFrameworkEvent({
+        id: this.nextLifecycleEventId(runId, type),
+        type,
+        runId,
+        sessionId: this.sessionId,
+        workspaceId: this.workspaceId,
+        agentId: this.agentId,
+        timestamp: this.now(),
+        payload,
+        metadata: { ...this.metadata },
+      })
+    );
+  }
+
+  private nextLifecycleEventId(runId: string, type: FrameworkEvent['type']): string {
+    this.lifecycleEventCount += 1;
+    return `${runId}:${type}:${this.lifecycleEventCount}`;
   }
 }
 
@@ -279,14 +405,33 @@ function applyReplayCapturePolicy(
   events: FrameworkEvent[],
   replaySpec?: ReplaySpec
 ): FrameworkEvent[] {
-  if (!replaySpec) return events;
   return events.filter((event) => {
+    if (
+      event.type.startsWith('eval.') ||
+      event.type.startsWith('replay.') ||
+      event.type.startsWith('regression.')
+    ) {
+      return false;
+    }
+    if (!replaySpec) return true;
     if (!replaySpec.captureModelIO && event.type.startsWith('model.call.')) return false;
     if (!replaySpec.captureToolIO && event.type.startsWith('tool.call.')) return false;
     if (!replaySpec.captureMemoryReadSet && event.type.startsWith('memory.read.')) return false;
     if (!replaySpec.capturePolicyDecisions && event.type.includes('policy')) return false;
     return true;
   });
+}
+
+function assertReplaySourceEvents(runId: string, events: FrameworkEvent[]): void {
+  if (events.length === 0) {
+    throw new Error(`Replay source run has no events: ${runId}`);
+  }
+  const mismatched = events.find((event) => event.runId !== runId);
+  if (mismatched) {
+    throw new Error(
+      `Replay source event ${mismatched.id} belongs to run ${mismatched.runId}, not ${runId}.`
+    );
+  }
 }
 
 function toolCallSignature(event: FrameworkEvent): string {
@@ -365,4 +510,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function safeFixtureFileName(id: string): string {
+  return id.replace(/[^A-Za-z0-9._-]/g, '_');
 }

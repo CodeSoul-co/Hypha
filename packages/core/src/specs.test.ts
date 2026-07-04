@@ -163,8 +163,12 @@ describe('@hypha/core contracts', () => {
     expect(coreSpecJsonSchemas.ContextSpec.required).toContain('sources');
     expect(coreSpecJsonSchemas.TraceSpec.required).toContain('eventTypes');
     expect(coreSpecJsonSchemas.EvaluationSpec.required).toContain('type');
+    expect(coreSpecJsonSchemas.EvaluationSpec.allOf).toBeDefined();
     expect(coreSpecJsonSchemas.ReplaySpec.required).toEqual(['id', 'version']);
     expect(coreSpecJsonSchemas.RegressionSpec.required).toContain('requiredChecks');
+    expect(coreSpecJsonSchemas.RegressionSpec.properties?.fixtureRefs).toMatchObject({
+      minItems: 1,
+    });
     expect(coreSpecJsonSchemas.DeploymentSpec.required).toContain('mode');
     expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.required).toContain('agentRef');
     expect(coreSpecJsonSchemas.HarnessedAgentSystemSpec.properties).toMatchObject({
@@ -190,5 +194,25 @@ describe('@hypha/core contracts', () => {
         },
       })
     ).toThrow(/missing required property/);
+  });
+
+  it('rejects underspecified deterministic evaluation and regression specs', () => {
+    expect(() =>
+      validateEvaluationSpec({
+        id: 'eval.schema',
+        version: '0.0.0',
+        type: 'schema',
+        deterministic: true,
+      })
+    ).toThrow(/requires rubric/);
+
+    expect(() =>
+      validateRegressionSpec({
+        id: 'regression.empty',
+        version: '0.0.0',
+        fixtureRefs: [],
+        requiredChecks: [],
+      })
+    ).toThrow();
   });
 });

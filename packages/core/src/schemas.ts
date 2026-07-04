@@ -176,21 +176,32 @@ export const traceSpecSchema = versionedSpecSchema.merge(specMetadataSchema).ext
   redactionPolicy: z.string().optional(),
 }) satisfies ZodType<TraceSpec>;
 
-export const evaluationSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
-  type: z.enum([
-    'schema',
-    'output_contract',
-    'tool_trace',
-    'policy',
-    'process',
-    'cost',
-    'latency',
-    'regression',
-    'human',
-  ]),
-  rubric: jsonSchemaSchema.optional(),
-  deterministic: z.boolean().optional(),
-}) satisfies ZodType<EvaluationSpec>;
+export const evaluationSpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    type: z.enum([
+      'schema',
+      'output_contract',
+      'tool_trace',
+      'policy',
+      'process',
+      'cost',
+      'latency',
+      'regression',
+      'human',
+    ]),
+    rubric: jsonSchemaSchema.optional(),
+    deterministic: z.boolean().optional(),
+  })
+  .superRefine((spec, ctx) => {
+    if (spec.type === 'schema' && !spec.rubric) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rubric'],
+        message: 'EvaluationSpec type schema requires rubric',
+      });
+    }
+  }) satisfies ZodType<EvaluationSpec>;
 
 export const replaySpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
   captureModelIO: z.boolean().optional(),
@@ -201,10 +212,12 @@ export const replaySpecSchema = versionedSpecSchema.merge(specMetadataSchema).ex
 }) satisfies ZodType<ReplaySpec>;
 
 export const regressionSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
-  fixtureRefs: z.array(specRefSchema),
-  requiredChecks: z.array(
-    z.enum(['event_types', 'state_path', 'tool_calls', 'policy_decisions', 'output_contract'])
-  ),
+  fixtureRefs: z.array(specRefSchema).min(1),
+  requiredChecks: z
+    .array(
+      z.enum(['event_types', 'state_path', 'tool_calls', 'policy_decisions', 'output_contract'])
+    )
+    .min(1),
 }) satisfies ZodType<RegressionSpec>;
 
 export const deploymentSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
@@ -318,24 +331,32 @@ export const traceSpecJsonSchema = versionedJsonSchema(['eventTypes'], {
   redactionPolicy: { type: 'string' },
 });
 
-export const evaluationSpecJsonSchema = versionedJsonSchema(['type'], {
-  type: {
-    type: 'string',
-    enum: [
-      'schema',
-      'output_contract',
-      'tool_trace',
-      'policy',
-      'process',
-      'cost',
-      'latency',
-      'regression',
-      'human',
-    ],
-  },
-  rubric: jsonSchemaJsonSchema,
-  deterministic: { type: 'boolean' },
-});
+export const evaluationSpecJsonSchema = {
+  ...versionedJsonSchema(['type'], {
+    type: {
+      type: 'string',
+      enum: [
+        'schema',
+        'output_contract',
+        'tool_trace',
+        'policy',
+        'process',
+        'cost',
+        'latency',
+        'regression',
+        'human',
+      ],
+    },
+    rubric: jsonSchemaJsonSchema,
+    deterministic: { type: 'boolean' },
+  }),
+  allOf: [
+    {
+      if: { properties: { type: { const: 'schema' } } },
+      then: { required: ['rubric'] },
+    },
+  ],
+};
 
 export const replaySpecJsonSchema = versionedJsonSchema([], {
   captureModelIO: { type: 'boolean' },
@@ -346,9 +367,10 @@ export const replaySpecJsonSchema = versionedJsonSchema([], {
 });
 
 export const regressionSpecJsonSchema = versionedJsonSchema(['fixtureRefs', 'requiredChecks'], {
-  fixtureRefs: { type: 'array', items: specRefJsonSchema },
+  fixtureRefs: { type: 'array', minItems: 1, items: specRefJsonSchema },
   requiredChecks: {
     type: 'array',
+    minItems: 1,
     items: {
       type: 'string',
       enum: ['event_types', 'state_path', 'tool_calls', 'policy_decisions', 'output_contract'],

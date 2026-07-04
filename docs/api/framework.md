@@ -148,25 +148,33 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 
 `@hypha/testing` provides deterministic runtime verification APIs. These APIs derive results from events and supplied contracts; they do not call models, tools, or MCP servers during evaluation.
 
-| API                          | Description                                                                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `OutputContractValidator`    | Validates a terminal output against an `OutputContractSpec.schema` using deterministic JSON Schema subset checks.                 |
-| `TraceCompletenessEvaluator` | Checks event envelopes, required `TraceSpec.eventTypes`, terminal run events, and lifecycle start/end pairs.                      |
-| `DeterministicEvaluator`     | Runs output contract, trace, schema, process, tool trace, policy, and regression checks as one summary.                           |
-| `ReplayEngine.capture()`     | Captures a run into a `ReplayFixture` from supplied events or an `EventStore`, applying `ReplaySpec` capture flags.               |
-| `ReplayEngine.replay()`      | Reconstructs replay projection from fixture events only.                                                                          |
-| `ReplayEngine.compare()`     | Produces trace diffs for event type sequence, state path, model calls, tool calls, policy decisions, memory read set, and output. |
-| `RegressionRunner.runSpec()` | Resolves `RegressionSpec.fixtureRefs` and runs required checks against replay fixtures and optional actual events.                |
+| API                          | Description                                                                                                                                                          |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OutputContractValidator`    | Validates a terminal output against an `OutputContractSpec.schema` using deterministic JSON Schema subset checks.                                                    |
+| `TraceCompletenessEvaluator` | Checks event envelopes, required `TraceSpec.eventTypes`, terminal run events, and lifecycle start/end pairs.                                                         |
+| `DeterministicEvaluator`     | Runs output contract, trace, schema, process, tool trace, policy, and regression checks as one summary. `evaluateAndRecord()` emits `eval.*` events.                 |
+| `ReplayEngine.capture()`     | Captures a run into a `ReplayFixture` from supplied events or an `EventStore`, applying `ReplaySpec` capture flags and optional `replay.*` events.                   |
+| `ReplayEngine.replay()`      | Reconstructs replay projection from fixture events only.                                                                                                             |
+| `ReplayEngine.compare()`     | Produces trace diffs for event type sequence, state path, model calls, tool calls, policy decisions, memory read set, and output.                                    |
+| `InMemoryReplayFixtureStore` | Stores fixtures in process for tests and local harness checks.                                                                                                       |
+| `FileReplayFixtureStore`     | Persists fixtures as JSON files under a configured directory.                                                                                                        |
+| `RegressionRunner.runSpec()` | Resolves `RegressionSpec.fixtureRefs` and runs required checks against replay fixtures and optional actual events. `runSpecAndRecord()` emits `regression.*` events. |
 
 `ReplayFixture` fields include `id`, `version`, `runId`, `createdAt`,
 `events`, `eventTypes`, `statePath`, optional `finalOutput`, `toolCalls`,
-`policyDecisions`, `memoryReadSet`, optional `outputContract`, and optional
-metadata. Use fixture ids that match `RegressionSpec.fixtureRefs`.
+`modelCalls`, `policyDecisions`, `memoryReadSet`, optional `outputContract`,
+and optional metadata. Use fixture ids that match `RegressionSpec.fixtureRefs`.
+Replay capture rejects empty event sets or events whose `runId` differs from the
+captured run.
 
 `RegressionSpec.requiredChecks` supports `event_types`, `state_path`,
 `tool_calls`, `policy_decisions`, and `output_contract`. If a fixture carries an
 `outputContract`, `output_contract` validates the actual replay output against
 that contract; otherwise it compares expected and actual final outputs.
+Unsupported deterministic `EvaluationSpec` types fail explicitly instead of
+being skipped. `EvaluationSpec` with `type: "schema"` must include `rubric`.
+`RegressionSpec.fixtureRefs` and `RegressionSpec.requiredChecks` must each
+contain at least one item.
 
 ## Workflow and FSM
 

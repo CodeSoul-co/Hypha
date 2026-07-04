@@ -1,4 +1,10 @@
-import type { FrameworkEvent, OutputContractSpec, RegressionSpec } from '@hypha/core';
+import {
+  createFrameworkEvent,
+  type FrameworkEvent,
+  type OutputContractSpec,
+  type RegressionSpec,
+  type TraceRecorder,
+} from '@hypha/core';
 import {
   OutputContractValidator,
   type EvaluationCheckResult,
@@ -52,6 +58,12 @@ export interface RegressionRunnerOptions {
   replayEngine?: ReplayEngine;
   outputValidator?: OutputContractValidator;
   now?: () => string;
+  trace?: TraceRecorder;
+  eventRunId?: string;
+  sessionId?: string;
+  workspaceId?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RegressionSpecRunInput {
@@ -59,6 +71,11 @@ export interface RegressionSpecRunInput {
   fixtures: ReplayFixture[] | Map<string, ReplayFixture>;
   actualEventsByFixtureId?: Map<string, FrameworkEvent[]>;
   outputContractsByFixtureId?: Map<string, OutputContractSpec>;
+  runId?: string;
+  sessionId?: string;
+  workspaceId?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 const DEFAULT_NOW = (): string => new Date().toISOString();
@@ -67,12 +84,25 @@ export class RegressionRunner {
   private readonly replayEngine: ReplayEngine;
   private readonly outputValidator: OutputContractValidator;
   private readonly now: () => string;
+  private readonly trace?: TraceRecorder;
+  private readonly eventRunId?: string;
+  private readonly sessionId?: string;
+  private readonly workspaceId?: string;
+  private readonly agentId?: string;
+  private readonly metadata?: Record<string, unknown>;
+  private lifecycleEventCount = 0;
 
   constructor(options: RegressionRunnerOptions = {}) {
     this.now = options.now ?? DEFAULT_NOW;
     this.replayEngine = options.replayEngine ?? new ReplayEngine({ now: this.now });
     this.outputValidator =
       options.outputValidator ?? new OutputContractValidator({ now: this.now });
+    this.trace = options.trace;
+    this.eventRunId = options.eventRunId;
+    this.sessionId = options.sessionId;
+    this.workspaceId = options.workspaceId;
+    this.agentId = options.agentId;
+    this.metadata = options.metadata;
   }
 
   runCase(regressionCase: RegressionCase): RegressionCaseResult {
@@ -165,6 +195,84 @@ export class RegressionRunner {
         failed,
       },
     };
+  }
+
+  async runSpecAndRecord(input: RegressionSpecRunInput): Promise<RegressionRunResult> {
+    const context = this.requireEventContext(input);
+    await this.recordLifecycleEvent('regression.started', context, {
+      specRef: { id: input.spec.id, version: input.spec.version },
+      fixtureRefs: input.spec.fixtureRefs,
+      requiredChecks: input.spec.requiredChecks,
+    });
+    try {
+      const result = this.runSpec(input);
+      await this.recordLifecycleEvent('regression.completed', context, {
+        summary: result.summary,
+        status: result.status,
+        caseCount: result.cases.length,
+      });
+      return result;
+    } catch (error) {
+      await this.recordLifecycleEvent('regression.failed', context, {
+        specRef: { id: input.spec.id, version: input.spec.version },
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  private requireEventContext(input: RegressionSpecRunInput): {
+    runId: string;
+    sessionId?: string;
+    workspaceId?: string;
+    agentId?: string;
+    metadata?: Record<string, unknown>;
+  } {
+    if (!this.trace) {
+      throw new Error('RegressionRunner.runSpecAndRecord requires a TraceRecorder.');
+    }
+    const runId = input.runId ?? this.eventRunId;
+    if (!runId) {
+      throw new Error('RegressionRunner.runSpecAndRecord requires a runId.');
+    }
+    return {
+      runId,
+      sessionId: input.sessionId ?? this.sessionId,
+      workspaceId: input.workspaceId ?? this.workspaceId,
+      agentId: input.agentId ?? this.agentId,
+      metadata: { ...this.metadata, ...input.metadata },
+    };
+  }
+
+  private async recordLifecycleEvent(
+    type: 'regression.started' | 'regression.completed' | 'regression.failed',
+    context: {
+      runId: string;
+      sessionId?: string;
+      workspaceId?: string;
+      agentId?: string;
+      metadata?: Record<string, unknown>;
+    },
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    await this.trace!.record(
+      createFrameworkEvent({
+        id: this.nextLifecycleEventId(context.runId, type),
+        type,
+        runId: context.runId,
+        sessionId: context.sessionId,
+        workspaceId: context.workspaceId,
+        agentId: context.agentId,
+        timestamp: this.now(),
+        payload,
+        metadata: context.metadata,
+      })
+    );
+  }
+
+  private nextLifecycleEventId(runId: string, type: FrameworkEvent['type']): string {
+    this.lifecycleEventCount += 1;
+    return `${runId}:${type}:${this.lifecycleEventCount}`;
   }
 }
 

@@ -1400,7 +1400,7 @@ export const domainPackSpecExample: DomainPackSpec = {
     {
       id: 'eval.output-schema',
       version: '0.0.0',
-      type: 'schema',
+      type: 'output_contract',
       deterministic: true,
     },
   ],

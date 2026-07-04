@@ -51,9 +51,12 @@ models, tools, memory writers, or MCP servers while validating a completed run.
 
 `ReplayEngine.capture()` stores a `ReplayFixture` from an event list or
 `EventStore`. The fixture records the source events, event type sequence, FSM
-state path, final output, tool call signatures, policy decision signatures, and
-memory read set. `ReplaySpec` controls whether model I/O, tool I/O, memory read
-sets, and policy decisions are captured.
+state path, final output, model call signatures, tool call signatures, policy
+decision signatures, and memory read set. `ReplaySpec` controls whether model
+I/O, tool I/O, memory read sets, and policy decisions are captured. Capture
+rejects empty event sets or events from a different `runId`; evaluation,
+replay, and regression lifecycle events are excluded from source replay
+fixtures.
 
 `ReplayEngine.replay()` reconstructs a replay projection from fixture events.
 `ReplayEngine.compare()` compares a fixture against new events and returns a
@@ -65,10 +68,14 @@ decisions, memory reads, and final output.
 required trace event types, terminal run status, and lifecycle pairs such as
 `model.call.started -> model.call.completed|model.call.failed` and
 `memory.write.requested -> memory.write.committed|memory.write.rejected`.
+`DeterministicEvaluator.evaluateAndRecord()` emits `eval.started`,
+`eval.completed`, or `eval.failed` through a `TraceRecorder`.
 
 `RegressionRunner` executes `RegressionSpec.requiredChecks` against replay
 fixtures. Domain Packs can reference fixtures with `RegressionSpec.fixtureRefs`;
 runtime code still derives all check inputs from events and contracts.
+`RegressionRunner.runSpecAndRecord()` emits `regression.started`,
+`regression.completed`, or `regression.failed`.
 
 ## FSM and Guards
 

@@ -279,7 +279,7 @@ describe('@hypha/domain workflow compiler', () => {
           {
             id: 'eval.output-schema',
             version: '0.0.0',
-            type: 'schema',
+            type: 'output_contract',
             deterministic: true,
           },
         ],

@@ -3,6 +3,8 @@ import {
   InMemoryEventStore,
   type EventFilter,
   type FrameworkEvent,
+  type OutputContractSpec,
+  type SpecRef,
   type TraceRecorder,
 } from '@hypha/core';
 import type { FSMSnapshot } from '@hypha/fsm';
@@ -34,17 +36,29 @@ export interface ReplayFixture {
   id: string;
   version: string;
   runId: string;
-  statePath: string[];
+  createdAt?: string;
+  replaySpecRef?: SpecRef;
   events: FrameworkEvent[];
-  memoryReadSet?: unknown[];
-  policyDecisions?: unknown[];
+  eventTypes?: string[];
+  statePath: string[];
+  finalOutput?: unknown;
+  toolCalls?: string[];
+  modelCalls?: string[];
+  policyDecisions?: string[];
+  memoryReadSet?: string[];
+  outputContract?: OutputContractSpec;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RegressionCase {
   id: string;
   fixture: ReplayFixture;
-  expectedEventTypes?: string[];
-  expectedStatePath?: string[];
+  actualEvents?: FrameworkEvent[];
+  requiredChecks?: Array<
+    'event_types' | 'state_path' | 'tool_calls' | 'policy_decisions' | 'output_contract'
+  >;
+  outputContract?: OutputContractSpec;
+  metadata?: Record<string, unknown>;
 }
 
 export class InMemoryTraceRecorder implements TraceRecorder {
