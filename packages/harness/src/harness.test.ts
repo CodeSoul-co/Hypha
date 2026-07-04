@@ -8,6 +8,7 @@ import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
 import {
   EventFirstRuntime,
   HarnessedReActFSMRunner,
+  InMemoryMessageBus,
   InMemoryTraceRecorder,
   RunManager,
   SessionProjector,
@@ -42,6 +43,84 @@ describe('@hypha/harness contracts', () => {
     expect(queue.dequeue('user-a', 'same')?.id).toBe('a1');
     expect(queue.dequeue('user-b', 'same')?.id).toBe('b1');
     expect(queue.dequeue('user-a', 'same')?.id).toBe('a2');
+  });
+
+  it('routes runtime messages by user, session, recipient, and FSM state', async () => {
+    const trace = new InMemoryTraceRecorder();
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+
+    await bus.publish({
+      id: 'msg_a',
+      type: 'workflow.input',
+      userId: 'user-a',
+      sessionId: 'shared',
+      runId: 'run_a',
+      fsmState: 'Reasoning',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'hello a' },
+    });
+    await bus.publish({
+      id: 'msg_b',
+      type: 'workflow.input',
+      userId: 'user-b',
+      sessionId: 'shared',
+      runId: 'run_b',
+      fsmState: 'Reasoning',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'hello b' },
+    });
+
+    const delivered = await bus.pull({
+      userId: 'user-a',
+      sessionId: 'shared',
+      runId: 'run_a',
+      fsmState: 'Reasoning',
+      to: recipient,
+    });
+    expect(delivered).toMatchObject({
+      id: 'msg_a',
+      status: 'delivered',
+      runId: 'run_a',
+      fsmState: 'Reasoning',
+    });
+    await bus.acknowledge({
+      id: 'msg_a',
+      userId: 'user-a',
+      sessionId: 'shared',
+      runId: 'run_a',
+      handledBy: recipient,
+    });
+
+    expect(
+      await bus.pull({
+        userId: 'user-a',
+        sessionId: 'shared',
+        runId: 'run_a',
+        fsmState: 'Reasoning',
+        to: recipient,
+      })
+    ).toBeNull();
+    await expect(
+      bus.pull({
+        userId: 'user-b',
+        sessionId: 'shared',
+        runId: 'run_b',
+        fsmState: 'Reasoning',
+        to: recipient,
+      })
+    ).resolves.toMatchObject({ id: 'msg_b' });
+
+    expect((await trace.list({ runId: 'run_a' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.delivered',
+      'message.acknowledged',
+    ]);
   });
 
   it('derives session, run, replay, audit, and regression state from events', async () => {

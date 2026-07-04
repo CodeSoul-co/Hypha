@@ -25,7 +25,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
 | `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                         |
-| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, queues, replay/audit/regression projections.                    |
+| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, message bus, queues, replay/audit/regression projections.       |
 | `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
 | `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                |
 
@@ -144,6 +144,16 @@ Common event types include `session.created`, `run.created`, `run.started`, `run
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
 `RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, marks human-review waits with `human.review.requested` and `run.waiting_human`, records human-review decisions and context compaction, and finalizes runs with `run.completed`, `run.failed`, or `run.cancelled`.
+
+`MessageBus` is the harness transport contract for future asynchronous
+handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
+`runId`, `from`, `to`, `payload`, `status`, timestamps, optional `stepId`,
+`agentId`, `fsmState`, `correlationId`, `causationId`, `availableAt`,
+`expiresAt`, and metadata. `InMemoryMessageBus.publish()`, `pull()`,
+`acknowledge()`, `fail()`, and `list()` keep messages scoped by
+`userId + sessionId + recipient`; traced buses emit `message.enqueued`,
+`message.delivered`, `message.acknowledged`, `message.failed`, and
+`message.dead_lettered`.
 
 ## Evaluation, Replay, and Regression
 
