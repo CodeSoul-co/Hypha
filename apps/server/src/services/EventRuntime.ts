@@ -978,6 +978,7 @@ class EventRuntimeService {
       version: workflow.version,
       name: workflow.name,
       taskSchemas: [],
+      outputContracts: [],
       workflows: [workflowSpec],
       defaultWorkflow: workflowSpec.id,
     };
@@ -1650,6 +1651,7 @@ function createDefaultDomainPack(): DomainPackSpec {
     version: '1.0.0',
     name: 'hypha Default Runtime',
     taskSchemas: [],
+    outputContracts: [],
     workflows: [
       {
         id: 'react-fsm-runtime',

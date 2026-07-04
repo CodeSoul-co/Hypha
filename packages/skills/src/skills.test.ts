@@ -45,6 +45,39 @@ describe('@hypha/skills resolver', () => {
     });
   });
 
+  it('activates required skills even when activation policy does not match', () => {
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'required-review',
+      version: '0.0.0',
+      description: 'Review output',
+      activationPolicy: { mode: 'keyword', patterns: ['review'] },
+    });
+
+    const selector = new SkillSelector(registry);
+    const selected = selector.select({
+      agentSkillRefs: [{ id: 'required-review' }],
+      inputText: 'plain request',
+      allowedSkills: ['required-review'],
+      requiredSkills: ['required-review', 'missing-required'],
+    });
+
+    expect(selected.selected).toEqual([
+      expect.objectContaining({
+        spec: expect.objectContaining({ id: 'required-review' }),
+        reason: 'Skill is required by the current scope.',
+      }),
+    ]);
+    expect(selected.rejected).toEqual(
+      expect.arrayContaining([
+        {
+          skillId: 'missing-required',
+          reason: 'Required skill is not attached to the agent.',
+        },
+      ])
+    );
+  });
+
   it('loads a real local markdown skill and activates it progressively', async () => {
     const registry = new SkillRegistry();
     const loader = new LocalSkillLoader({

@@ -87,7 +87,7 @@ Domain pack loading and compilation APIs:
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `LocalDomainPackLoader`                  | Loads `.domain.json`, `.domain.yaml`, and `.domain.yml` files from configured directories.      |
 | `DomainPackRegistry`                     | Registers validated packs by `id` and `version`, with latest-by-id lookup.                      |
-| `extendDomainPack(base, overlay)`        | Upserts predefined customizations by `id` while preserving the base pack.                       |
+| `extendDomainPack(base, overlay)`        | Upserts or removes predefined customizations by `id` while preserving the base pack.            |
 | `compileWorkflowToFSM(domainPack, opts)` | Compiles one `WorkflowSpec` to `FSMProcessSpec`.                                                |
 | `WorkflowCompiler`                       | Class wrapper for workflow-to-FSM compilation when an injectable compiler object is preferred.  |
 | `compileDomainPackToHarnessedSystem()`   | Resolves task/profile/tool/skill/policy bindings and returns FSM, system spec, and agent patch. |
@@ -155,6 +155,11 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 
 `compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, and `terminalStates`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, and `updatedAt`.
 
+`WorkflowStateSpec.allowedSkills` narrows which agent-bound skills may activate
+in that state. `requiredSkills` declares skills that must be attached to the
+compiled agent patch and treated as mandatory state activations; when a state
+also declares `allowedSkills`, every required skill must be included there.
+
 FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and `matches(path, pattern)`. Transitions can be rejected by guards, policy, or human-review requirements.
 
 `FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, and `getSnapshot()`. Runtime callbacks `onTransition` and `onStateEntered` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
@@ -176,7 +181,7 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
 
 `ReActAgentRunner` wires `DefaultContextBuilder`, `BasicReActAgentRuntime`, `DefaultVerifier`, `InferenceProvider`, and `ToolRunner` into a runnable agent. Use `MockToolRunner` for package tests and local examples; production tools should use `GovernedToolRunner`.
 
-`SkillContextBuilder` can wrap any `ContextBuilder` to resolve agent-bound skills before ReAct execution. It uses `SkillSelector` to select active skills from `agent.skillRefs`, applies `allowedSkills` from explicit options or `metadata.workflowState.allowedSkills`, checks activation through `SkillPolicy`, and loads only activated skill instructions through `SkillContextLoader`. Loaded skills are attached to `BuiltAgentContext.activeSkills`, emitted as tagged system context, and forwarded inside the model request context.
+`SkillContextBuilder` can wrap any `ContextBuilder` to resolve agent-bound skills before ReAct execution. It uses `SkillSelector` to select active skills from `agent.skillRefs`, applies `allowedSkills` from explicit options or `metadata.workflowState.allowedSkills`, applies mandatory `requiredSkills` from explicit options or `metadata.workflowState.requiredSkills`, checks activation through `SkillPolicy`, and loads only activated skill instructions through `SkillContextLoader`. Loaded skills are attached to `BuiltAgentContext.activeSkills`, emitted as tagged system context, and forwarded inside the model request context.
 
 `ReasoningContextBuilder` can wrap any `ContextBuilder` to add structured thinking and agentic deliberation before ReAct execution. `ThinkingPlanner` produces a `ThinkingPlan` with intent, constraints, success criteria, plan steps, risks, and a summary. `AgenticReasoner` produces an `AgenticReasoningDecision` with mode, recommended phase, action type, tool candidates, verification strategy, and rationale. These are structured summaries only; raw hidden chain-of-thought is not exposed or persisted.
 

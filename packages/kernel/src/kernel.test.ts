@@ -349,6 +349,50 @@ describe('@hypha/kernel ReAct contracts', () => {
     });
   });
 
+  it('loads workflow-state required skills even without activation keyword matches', async () => {
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'skill.required',
+      version: '0.0.0',
+      description: 'Required workflow skill',
+      activationPolicy: { mode: 'keyword', patterns: ['never-match'] },
+      instructions: 'Must run for this workflow state.',
+      trustLevel: 'reviewed',
+    });
+
+    const builder = new SkillContextBuilder({
+      baseBuilder: new DefaultContextBuilder(),
+      registry,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const context = await builder.build({
+      runId: 'run_required_skill_context',
+      stepId: 'react',
+      sessionId: 'session_required_skill_context',
+      userId: 'owner',
+      agent: {
+        ...reactAgentSpecDefinition.example,
+        skillRefs: [{ id: 'skill.required' }],
+      },
+      input: 'plain request',
+      metadata: {
+        workflowState: {
+          allowedSkills: ['skill.required'],
+          requiredSkills: ['skill.required'],
+        },
+      },
+    });
+
+    expect(context.activeSkills).toEqual([
+      expect.objectContaining({
+        id: 'skill.required',
+        activation: expect.objectContaining({
+          reason: 'Skill is required by the current scope.',
+        }),
+      }),
+    ]);
+  });
+
   it('builds structured thinking and agentic decisions before inference', async () => {
     const builder = new ReasoningContextBuilder({
       baseBuilder: new DefaultContextBuilder(),

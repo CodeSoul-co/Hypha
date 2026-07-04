@@ -241,6 +241,12 @@ export interface SkillContextBuilderOptions {
         input: ContextBuildInput,
         base: BuiltAgentContext
       ) => string[] | undefined | Promise<string[] | undefined>);
+  requiredSkills?:
+    | string[]
+    | ((
+        input: ContextBuildInput,
+        base: BuiltAgentContext
+      ) => string[] | undefined | Promise<string[] | undefined>);
   availableToolRefs?:
     | string[]
     | ((input: ContextBuildInput, base: BuiltAgentContext) => string[] | Promise<string[]>);
@@ -293,6 +299,7 @@ export interface ReActAgentRunnerOptions extends Omit<ReActRunnerOptions, 'toolR
   skillContextLoader?: SkillContextLoader;
   skillPolicy?: SkillPolicy;
   allowedSkills?: SkillContextBuilderOptions['allowedSkills'];
+  requiredSkills?: SkillContextBuilderOptions['requiredSkills'];
 }
 
 export interface ReActRunResult {
@@ -475,6 +482,7 @@ export class SkillContextBuilder implements ContextBuilder {
     }
 
     const allowedSkills = await resolveAllowedSkills(input, base, this.options.allowedSkills);
+    const requiredSkills = await resolveRequiredSkills(input, base, this.options.requiredSkills);
     const availableToolRefs = await resolveAvailableToolRefs(
       input,
       base,
@@ -485,6 +493,7 @@ export class SkillContextBuilder implements ContextBuilder {
       inputText: latestUserText(base.messages) ?? stringifyInput(base.sourceInput),
       intent: stringMetadata(input.metadata, 'intent') ?? stringMetadata(base.metadata, 'intent'),
       allowedSkills,
+      requiredSkills,
       manualSkillIds: stringArrayMetadata(input.metadata, 'manualSkillIds'),
       availableToolRefs,
       metadata: input.metadata,
@@ -501,6 +510,7 @@ export class SkillContextBuilder implements ContextBuilder {
           intent:
             stringMetadata(input.metadata, 'intent') ?? stringMetadata(base.metadata, 'intent'),
           allowedSkills,
+          requiredSkills,
           availableToolRefs,
           metadata: input.metadata,
         },
@@ -981,6 +991,7 @@ export class ReActAgentRunner {
         contextLoader: options.skillContextLoader,
         policy: options.skillPolicy,
         allowedSkills: options.allowedSkills,
+        requiredSkills: options.requiredSkills,
       });
     }
     this.contextBuilder =
@@ -1134,6 +1145,21 @@ async function resolveAllowedSkills(
     stringArrayMetadata(base.metadata, 'allowedSkills') ??
     stringArrayMetadata(recordMetadata(input.metadata, 'workflowState'), 'allowedSkills') ??
     stringArrayMetadata(recordMetadata(base.metadata, 'workflowState'), 'allowedSkills')
+  );
+}
+
+async function resolveRequiredSkills(
+  input: ContextBuildInput,
+  base: BuiltAgentContext,
+  configured?: SkillContextBuilderOptions['requiredSkills']
+): Promise<string[] | undefined> {
+  if (Array.isArray(configured)) return configured;
+  if (typeof configured === 'function') return configured(input, base);
+  return (
+    stringArrayMetadata(input.metadata, 'requiredSkills') ??
+    stringArrayMetadata(base.metadata, 'requiredSkills') ??
+    stringArrayMetadata(recordMetadata(input.metadata, 'workflowState'), 'requiredSkills') ??
+    stringArrayMetadata(recordMetadata(base.metadata, 'workflowState'), 'requiredSkills')
   );
 }
 

@@ -163,6 +163,7 @@ export interface HarnessedReActFSMRunnerOptions {
   skillContextLoader?: SkillContextLoader;
   skillPolicy?: SkillPolicy;
   allowedSkills?: string[];
+  requiredSkills?: string[];
   thinkingPlanner?: ThinkingPlanner;
   agenticReasoner?: AgenticReasoner;
   reasoningConfig?: ReasoningConfig;
@@ -655,6 +656,7 @@ export class HarnessedReActFSMRunner {
         contextLoader: options.skillContextLoader,
         policy: options.skillPolicy,
         allowedSkills: options.allowedSkills,
+        requiredSkills: options.requiredSkills,
         now: options.now,
       });
     }

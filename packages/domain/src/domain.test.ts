@@ -84,6 +84,7 @@ describe('@hypha/domain workflow compiler', () => {
       version: '0.0.0',
       name: 'Minimal',
       taskSchemas: [],
+      outputContracts: [],
       workflows: [],
       sessionProfiles: [
         {
@@ -125,6 +126,10 @@ describe('@hypha/domain workflow compiler', () => {
     expect(domainSpecJsonSchemas.ReasoningSpec.required).toContain('thinkingMode');
     expect(domainSpecJsonSchemas.BusinessRuleSpec.required).toContain('scope');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
+    expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('outputContracts');
+    const workflowStateProperties =
+      domainSpecJsonSchemas.WorkflowSpec.properties?.states?.items?.properties ?? {};
+    expect(workflowStateProperties.requiredSkills).toMatchObject({ type: 'array' });
     expect(domainSpecJsonSchemas.DomainPackSpec.properties).toMatchObject({
       allowedSkills: { type: 'array' },
       defaultSkills: { type: 'array' },
@@ -185,6 +190,43 @@ describe('@hypha/domain workflow compiler', () => {
         ],
       })
     ).toThrow(/allows unknown skill/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        allowedSkills: [{ id: 'skill.allowed', version: '0.0.0' }],
+        defaultSkills: [],
+        skillPolicies: [],
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state, index) =>
+              index === 0 ? { ...state, requiredSkills: ['skill.missing'] } : state
+            ),
+          },
+        ],
+      })
+    ).toThrow(/requires unknown skill/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state, index) =>
+              index === 1
+                ? {
+                    ...state,
+                    allowedSkills: [],
+                    requiredSkills: ['skill.context-enrichment'],
+                  }
+                : state
+            ),
+          },
+        ],
+      })
+    ).toThrow(/requires skill outside state allowedSkills/);
   });
 
   it('validates nested profile specs instead of accepting arbitrary objects', () => {
@@ -318,6 +360,7 @@ describe('@hypha/domain workflow compiler', () => {
     ).toMatchObject({
       allowedTools: ['tool.search'],
       allowedSkills: ['skill.context-enrichment'],
+      requiredSkills: ['skill.context-enrichment'],
       allowedMCPProfiles: ['mcp.default'],
       policyRefs: ['policy.default'],
       evaluationRefs: ['eval.output-schema'],
@@ -366,6 +409,11 @@ describe('@hypha/domain workflow compiler', () => {
     ]);
     expect(compiled.agentPatch.toolRefs).toContain('tool.custom');
     expect(compiled.bindings.businessRules.map((rule) => rule.id)).toContain('rule.custom');
+
+    const withoutRegression = extendDomainPack(domainPackSpecDefinition.example, {
+      remove: { regressionCases: ['regression.event-contract'] },
+    });
+    expect(withoutRegression.regressionCases).toEqual([]);
   });
 
   it('loads local DomainPack files into a registry', async () => {

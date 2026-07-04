@@ -54,6 +54,8 @@ workflows:
           - tool.search
         allowedSkills:
           - skill.context-enrichment
+        requiredSkills:
+          - skill.context-enrichment
         allowedMCPProfiles:
           - mcp.local
         reasoningProfileRef: reasoning.local

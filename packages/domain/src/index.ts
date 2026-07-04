@@ -46,7 +46,7 @@ import { toolSpecSchema, type ToolSpec } from '@hypha/tools';
 export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   name: string;
   taskSchemas: TaskSchemaSpec[];
-  outputContracts?: OutputContractSpec[];
+  outputContracts: OutputContractSpec[];
   sessionProfiles?: SessionProfileSpec[];
   workflows: WorkflowSpec[];
   defaultWorkflow?: string;
@@ -140,6 +140,7 @@ export interface WorkflowStateBinding {
   stateId: string;
   allowedTools: string[];
   allowedSkills: string[];
+  requiredSkills: string[];
   allowedMCPProfiles: string[];
   memoryPolicyRef?: string;
   reasoningProfileRef?: string;
@@ -177,6 +178,26 @@ export interface DomainCompilationResult {
   sessionInitialization: DomainSessionInitialization;
 }
 
+export type DomainPackOverlayCollection =
+  | 'taskSchemas'
+  | 'outputContracts'
+  | 'sessionProfiles'
+  | 'workflows'
+  | 'allowedSkills'
+  | 'defaultSkills'
+  | 'skillPolicies'
+  | 'tools'
+  | 'mcpProfiles'
+  | 'memoryProfiles'
+  | 'contextProfiles'
+  | 'reasoningProfiles'
+  | 'businessRules'
+  | 'policies'
+  | 'evaluationProfiles'
+  | 'regressionCases';
+
+export type DomainPackOverlayRemovals = Partial<Record<DomainPackOverlayCollection, string[]>>;
+
 export type DomainPackOverlay = Partial<
   Omit<DomainPackSpec, 'id' | 'version' | 'name' | 'taskSchemas' | 'workflows'>
 > & {
@@ -185,6 +206,7 @@ export type DomainPackOverlay = Partial<
   name?: string;
   taskSchemas?: TaskSchemaSpec[];
   workflows?: WorkflowSpec[];
+  remove?: DomainPackOverlayRemovals;
 };
 
 export interface SessionProfileSpec extends VersionedSpec, SpecMetadata {
@@ -290,6 +312,7 @@ export interface WorkflowStateSpec extends SpecMetadata {
   outputContract?: JsonSchema;
   allowedTools?: string[];
   allowedSkills?: string[];
+  requiredSkills?: string[];
   allowedMCPProfiles?: string[];
   memoryPolicyRef?: string;
   reasoningProfileRef?: string;
@@ -513,32 +536,56 @@ export async function listLocalDomainPackFiles(
 }
 
 export function extendDomainPack(base: DomainPackSpec, overlay: DomainPackOverlay): DomainPackSpec {
+  const { remove, ...patch } = overlay;
   return validateDomainPackSpec({
     ...base,
-    ...overlay,
-    id: overlay.id ?? base.id,
-    version: overlay.version ?? base.version,
-    name: overlay.name ?? base.name,
-    taskSchemas: upsertById(base.taskSchemas, overlay.taskSchemas) ?? base.taskSchemas,
-    outputContracts: upsertById(base.outputContracts, overlay.outputContracts),
-    sessionProfiles: upsertById(base.sessionProfiles, overlay.sessionProfiles),
-    workflows: upsertById(base.workflows, overlay.workflows) ?? base.workflows,
-    allowedSkills: upsertById(base.allowedSkills, overlay.allowedSkills),
-    defaultSkills: upsertById(base.defaultSkills, overlay.defaultSkills),
-    skillPolicies: upsertById(base.skillPolicies, overlay.skillPolicies),
-    tools: upsertById(base.tools, overlay.tools),
-    mcpProfiles: upsertById(base.mcpProfiles, overlay.mcpProfiles),
-    memoryProfiles: upsertById(base.memoryProfiles, overlay.memoryProfiles),
-    contextProfiles: upsertById(base.contextProfiles, overlay.contextProfiles),
-    reasoningProfiles: upsertById(base.reasoningProfiles, overlay.reasoningProfiles),
-    businessRules: upsertById(base.businessRules, overlay.businessRules),
-    policies: upsertById(base.policies, overlay.policies),
-    evaluationProfiles: upsertById(base.evaluationProfiles, overlay.evaluationProfiles),
-    regressionCases: upsertById(base.regressionCases, overlay.regressionCases),
-    deploymentProfile: overlay.deploymentProfile ?? base.deploymentProfile,
+    ...patch,
+    id: patch.id ?? base.id,
+    version: patch.version ?? base.version,
+    name: patch.name ?? base.name,
+    taskSchemas:
+      upsertById(base.taskSchemas, patch.taskSchemas, remove?.taskSchemas) ?? base.taskSchemas,
+    outputContracts:
+      upsertById(base.outputContracts, patch.outputContracts, remove?.outputContracts) ??
+      base.outputContracts,
+    sessionProfiles: upsertById(
+      base.sessionProfiles,
+      patch.sessionProfiles,
+      remove?.sessionProfiles
+    ),
+    workflows: upsertById(base.workflows, patch.workflows, remove?.workflows) ?? base.workflows,
+    allowedSkills: upsertById(base.allowedSkills, patch.allowedSkills, remove?.allowedSkills),
+    defaultSkills: upsertById(base.defaultSkills, patch.defaultSkills, remove?.defaultSkills),
+    skillPolicies: upsertById(base.skillPolicies, patch.skillPolicies, remove?.skillPolicies),
+    tools: upsertById(base.tools, patch.tools, remove?.tools),
+    mcpProfiles: upsertById(base.mcpProfiles, patch.mcpProfiles, remove?.mcpProfiles),
+    memoryProfiles: upsertById(base.memoryProfiles, patch.memoryProfiles, remove?.memoryProfiles),
+    contextProfiles: upsertById(
+      base.contextProfiles,
+      patch.contextProfiles,
+      remove?.contextProfiles
+    ),
+    reasoningProfiles: upsertById(
+      base.reasoningProfiles,
+      patch.reasoningProfiles,
+      remove?.reasoningProfiles
+    ),
+    businessRules: upsertById(base.businessRules, patch.businessRules, remove?.businessRules),
+    policies: upsertById(base.policies, patch.policies, remove?.policies),
+    evaluationProfiles: upsertById(
+      base.evaluationProfiles,
+      patch.evaluationProfiles,
+      remove?.evaluationProfiles
+    ),
+    regressionCases: upsertById(
+      base.regressionCases,
+      patch.regressionCases,
+      remove?.regressionCases
+    ),
+    deploymentProfile: patch.deploymentProfile ?? base.deploymentProfile,
     metadata: {
       ...(base.metadata ?? {}),
-      ...(overlay.metadata ?? {}),
+      ...(patch.metadata ?? {}),
     },
   });
 }
@@ -581,10 +628,15 @@ export function compileDomainPackToHarnessedSystem(
     'Reasoning profile'
   );
   const workflowStateBindings = workflow.states.map((state) => resolveWorkflowStateBinding(state));
+  const requiredSkillRefs = resolveSkillRefsByIds(
+    workflowStateBindings.flatMap((state) => state.requiredSkills),
+    domainPack.allowedSkills
+  );
   const selectedSkillRefs = mergeSkillRefs(
     options.agentSkillRefs,
     domainPack.defaultSkills,
-    taskSchema?.defaultSkillRefs
+    taskSchema?.defaultSkillRefs,
+    requiredSkillRefs
   );
   assertSkillsAllowed(selectedSkillRefs, domainPack.allowedSkills, 'Agent skill');
   const selectedToolIds = mergeStrings(
@@ -754,6 +806,7 @@ function resolveWorkflowStateBinding(state: WorkflowStateSpec): WorkflowStateBin
     stateId: state.id,
     allowedTools: state.allowedTools ?? [],
     allowedSkills: state.allowedSkills ?? [],
+    requiredSkills: state.requiredSkills ?? [],
     allowedMCPProfiles: state.allowedMCPProfiles ?? [],
     memoryPolicyRef: state.memoryPolicyRef,
     reasoningProfileRef: state.reasoningProfileRef,
@@ -764,17 +817,26 @@ function resolveWorkflowStateBinding(state: WorkflowStateSpec): WorkflowStateBin
 
 function upsertById<TSpec extends { id: string }>(
   base: TSpec[] | undefined,
-  overlay: TSpec[] | undefined
+  overlay: TSpec[] | undefined,
+  removeIds: string[] | undefined = undefined
 ): TSpec[] | undefined {
-  if (!base && !overlay) return undefined;
+  if (!base && !overlay && !removeIds?.length) return undefined;
+  const removed = new Set(removeIds ?? []);
   const merged = new Map<string, TSpec>();
   for (const item of base ?? []) {
+    if (removed.has(item.id)) continue;
     merged.set(item.id, item);
   }
   for (const item of overlay ?? []) {
     merged.set(item.id, item);
   }
   return Array.from(merged.values());
+}
+
+function resolveSkillRefsByIds(ids: string[], allowedSkills: SkillRef[] | undefined): SkillRef[] {
+  if (!ids.length) return [];
+  const allowed = new Map((allowedSkills ?? []).map((skill) => [skill.id, skill]));
+  return Array.from(new Set(ids)).map((id) => allowed.get(id) ?? { id });
 }
 
 function mergeSkillRefs(...groups: Array<SkillRef[] | undefined>): SkillRef[] {
@@ -960,6 +1022,7 @@ export const workflowStateSpecSchema = specMetadataSchema.extend({
   outputContract: jsonSchemaSchema.optional(),
   allowedTools: z.array(z.string()).optional(),
   allowedSkills: z.array(z.string()).optional(),
+  requiredSkills: z.array(z.string()).optional(),
   allowedMCPProfiles: z.array(z.string()).optional(),
   memoryPolicyRef: z.string().optional(),
   reasoningProfileRef: z.string().optional(),
@@ -989,8 +1052,8 @@ export const workflowSpecSchema = versionedSpecSchema.merge(specMetadataSchema).
 
 export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
   name: z.string().min(1),
-  taskSchemas: z.array(taskSchemaSpecSchema),
-  outputContracts: z.array(outputContractSpecSchema).optional(),
+  taskSchemas: z.array(taskSchemaSpecSchema).min(1),
+  outputContracts: z.array(outputContractSpecSchema).min(1),
   sessionProfiles: z.array(sessionProfileSpecSchema).optional(),
   workflows: z.array(workflowSpecSchema).min(1),
   defaultWorkflow: z.string().optional(),
@@ -1031,6 +1094,7 @@ export const workflowSpecJsonSchema: JsonSchema = {
           goal: { type: 'string' },
           allowedTools: { type: 'array', items: { type: 'string' } },
           allowedSkills: { type: 'array', items: { type: 'string' } },
+          requiredSkills: { type: 'array', items: { type: 'string' } },
           reasoningProfileRef: { type: 'string' },
           policyRefs: { type: 'array', items: { type: 'string' } },
           humanReviewPolicy: { type: 'object' },
@@ -1098,7 +1162,7 @@ export const businessRuleSpecJsonSchema: JsonSchema = {
 
 export const domainPackSpecJsonSchema: JsonSchema = {
   type: 'object',
-  required: ['id', 'version', 'name', 'taskSchemas', 'workflows'],
+  required: ['id', 'version', 'name', 'taskSchemas', 'outputContracts', 'workflows'],
   properties: {
     id: { type: 'string' },
     version: { type: 'string' },
@@ -1141,6 +1205,7 @@ export const workflowSpecExample: WorkflowSpec = {
       goal: 'Reason and select the next action.',
       allowedTools: ['tool.search'],
       allowedSkills: ['skill.context-enrichment'],
+      requiredSkills: ['skill.context-enrichment'],
       allowedMCPProfiles: ['mcp.default'],
       reasoningProfileRef: 'reasoning.default',
       policyRefs: ['policy.default'],
@@ -1563,16 +1628,16 @@ function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
 }
 
 function validateDomainSkillBindings(domainPack: DomainPackSpec): void {
-  if (!domainPack.allowedSkills?.length) return;
-  const allowed = new Set(domainPack.allowedSkills.map((skill) => skill.id));
+  const allowed = new Set((domainPack.allowedSkills ?? []).map((skill) => skill.id));
+  const hasDomainAllowedSkills = allowed.size > 0;
   for (const skill of domainPack.defaultSkills ?? []) {
-    if (!allowed.has(skill.id)) {
+    if (hasDomainAllowedSkills && !allowed.has(skill.id)) {
       throw new Error(`Default skill is not allowed in domain pack: ${skill.id}`);
     }
   }
   for (const task of domainPack.taskSchemas) {
     for (const skill of task.defaultSkillRefs ?? []) {
-      if (!allowed.has(skill.id)) {
+      if (hasDomainAllowedSkills && !allowed.has(skill.id)) {
         throw new Error(`Task default skill is not allowed in domain pack: ${skill.id}`);
       }
     }
@@ -1580,14 +1645,25 @@ function validateDomainSkillBindings(domainPack: DomainPackSpec): void {
   for (const workflow of domainPack.workflows) {
     for (const state of workflow.states) {
       for (const skillId of state.allowedSkills ?? []) {
-        if (!allowed.has(skillId)) {
+        if (hasDomainAllowedSkills && !allowed.has(skillId)) {
           throw new Error(`Workflow state ${state.id} allows unknown skill: ${skillId}`);
+        }
+      }
+      const stateAllowed = new Set(state.allowedSkills ?? []);
+      for (const skillId of state.requiredSkills ?? []) {
+        if (hasDomainAllowedSkills && !allowed.has(skillId)) {
+          throw new Error(`Workflow state ${state.id} requires unknown skill: ${skillId}`);
+        }
+        if (state.allowedSkills && !stateAllowed.has(skillId)) {
+          throw new Error(
+            `Workflow state ${state.id} requires skill outside state allowedSkills: ${skillId}`
+          );
         }
       }
     }
   }
   for (const skillPolicy of domainPack.skillPolicies ?? []) {
-    if (!allowed.has(skillPolicy.skillRef.id)) {
+    if (hasDomainAllowedSkills && !allowed.has(skillPolicy.skillRef.id)) {
       throw new Error(`Skill policy references unknown skill: ${skillPolicy.skillRef.id}`);
     }
   }

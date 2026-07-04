@@ -88,7 +88,7 @@ rule, policy, evaluation, regression, and deployment bindings.
 | -------------------------------- | -------- | ------------------------------------------------------------------------------------ |
 | `id`, `version`, `name`          | yes      | Stable spec identity and display name.                                               |
 | `taskSchemas`                    | yes      | Declares task types, input schema, acceptance constraints, and output contract refs. |
-| `outputContracts`                | no       | Declares structured output schemas used by tasks and evaluations.                    |
+| `outputContracts`                | yes      | Declares structured output schemas used by tasks and evaluations.                    |
 | `sessionProfiles`                | no       | Declares default metadata and profile refs for runtime Session initialization.       |
 | `workflows`                      | yes      | Declares workflow states and transitions.                                            |
 | `defaultWorkflow`                | no       | Selects the workflow used when no workflow id is provided.                           |
@@ -107,7 +107,7 @@ rule, policy, evaluation, regression, and deployment bindings.
 
 ## Workflow Rules
 
-Workflow states are declarative. They may reference allowed tools, skills, MCP profiles, memory policy, policy refs, human review, timeout, retry, input contract, and output contract.
+Workflow states are declarative. They may reference allowed tools, allowed or required skills, MCP profiles, memory policy, policy refs, human review, timeout, retry, input contract, and output contract.
 
 Workflow transitions should use deterministic guards. Avoid provider-specific prompts or business-specific side effects inside core workflow declarations. If a domain needs specialized behavior, express it as a DomainPack example or as an adapter outside framework core.
 
@@ -128,30 +128,37 @@ if (!base) throw new Error('DomainPack not found: domain.minimal');
 
 const customized = extendDomainPack(base, {
   version: '0.0.1',
+  remove: { regressionCases: ['regression.minimal'] },
   defaultSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
 });
 ```
 
 `extendDomainPack()` upserts array fields by `id`, so a predefined pack can be
-customized without copying every task, workflow, tool, profile, or policy.
+customized without copying every task, workflow, tool, profile, or policy. Use
+`remove` to delete inherited entries by `id`; the resulting pack is still fully
+validated, so deleting a referenced item must be paired with a replacement or
+reference update.
 
 ## Skill Binding Rules
 
-Domain Packs may declare `allowedSkills` and `defaultSkills`, but skills still attach to agents through `ReActAgentSpec.skillRefs`. Workflow states can narrow the active set with `allowedSkills`.
+Domain Packs may declare `allowedSkills` and `defaultSkills`, but skills still attach to agents through `ReActAgentSpec.skillRefs`. Workflow states can narrow the active set with `allowedSkills` and force state-scoped capabilities with `requiredSkills`.
 
 ```ts
 const state = {
   id: 'Reasoning',
   goal: 'Reason and select the next action.',
   allowedSkills: ['skill.context-enrichment'],
+  requiredSkills: ['skill.context-enrichment'],
 };
 ```
 
 `validateDomainPackSpec()` rejects `defaultSkills`, task default skills, skill
 policies, or workflow state `allowedSkills` that are outside the DomainPack
-`allowedSkills` list. At runtime, pass the selected state as
+`allowedSkills` list. A state `requiredSkills` entry must also be present in
+that state's `allowedSkills` when the state provides an explicit allow-list. At
+runtime, pass the selected state as
 `metadata.workflowState`; `SkillContextBuilder` uses that allow-list before
-loading skill instructions.
+loading skill instructions and treats `requiredSkills` as mandatory activations.
 
 ## Session Initialization
 
@@ -183,8 +190,9 @@ returns:
 | `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.                                   |
 | `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.                                        |
 
-All internal references are checked during validation: task output contracts,
-workflow state transitions, session profile refs, state tool/MCP/reasoning
-bindings, business rule refs, policy refs, evaluation refs, and skill policies
-must resolve inside the same DomainPack unless they are explicitly passed as
-runtime compile options.
+All DomainPack-internal references are checked during validation: task output
+contracts, workflow state transitions, session profile refs, state
+tool/MCP/reasoning bindings, business rule refs, policy refs, evaluation refs,
+and skill policies must resolve inside the same DomainPack. Runtime compile
+options may add agent/system refs, but they do not repair broken internal
+DomainPack references.

@@ -61,6 +61,7 @@ export interface SkillResolutionContext {
   intent?: string;
   inputText?: string;
   allowedSkills?: string[];
+  requiredSkills?: string[];
   manualSkillIds?: string[];
   availableToolRefs?: string[];
   metadata?: Record<string, unknown>;
@@ -220,6 +221,8 @@ export class SkillSelector {
 
   select(context: SkillResolutionContext): SkillSelectionResult {
     const allowed = context.allowedSkills ? new Set(context.allowedSkills) : null;
+    const required = new Set(context.requiredSkills ?? []);
+    const attached = new Set(context.agentSkillRefs.map((ref) => ref.id));
     const rejected: SkillSelectionRejection[] = [];
     const selected: SkillSelection[] = [];
 
@@ -245,17 +248,24 @@ export class SkillSelector {
         continue;
       }
 
+      const isRequired = required.has(spec.id);
       const activation = evaluateSkillActivation(spec, context);
-      if (!activation.active) {
+      if (!activation.active && !isRequired) {
         rejected.push({ skillId: spec.id, reason: activation.reason });
         continue;
       }
       selected.push({
         spec,
-        reason: activation.reason,
+        reason: isRequired ? 'Skill is required by the current scope.' : activation.reason,
         matchedPatterns: activation.matchedPatterns,
         priority: spec.priority ?? 0,
       });
+    }
+
+    for (const skillId of required) {
+      if (!attached.has(skillId)) {
+        rejected.push({ skillId, reason: 'Required skill is not attached to the agent.' });
+      }
     }
 
     return {
