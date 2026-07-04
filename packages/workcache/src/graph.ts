@@ -50,13 +50,14 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       stepIndex: graph.nodes.size,
       status: statusFrom(source.type),
       estimatedCost: costProfileFrom(payload),
-      recomputeCost: numberValue(payload.recomputeCost),
-      validationCost: numberValue(payload.validationCost),
+      recomputeCost: nonNegativeNumber(payload.recomputeCost),
+      validationCost: nonNegativeNumber(payload.validationCost),
       stepsToExecution:
-        numberValue(payload.stepsToExecution ?? payload.stepsToUse ?? payload.stepsToCacheUse) ?? 0,
-      futureDemand: numberValue(payload.futureDemand),
-      branchProbability: numberValue(payload.branchProbability) ?? 1,
-      criticality: numberValue(payload.criticality) ?? 1,
+        nonNegativeNumber(payload.stepsToExecution ?? payload.stepsToUse ?? payload.stepsToCacheUse) ??
+        0,
+      futureDemand: nonNegativeNumber(payload.futureDemand),
+      branchProbability: probabilityValue(payload.branchProbability) ?? 1,
+      criticality: nonNegativeNumber(payload.criticality) ?? 1,
       environmentDeps: dependencyRefsFrom(payload),
       cacheDeps: cacheDepsFrom(payload),
       sourceEventId: source.id,
@@ -147,14 +148,15 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
     ).length;
     const recomputeCost =
       node.recomputeCost ??
-      block.utility.recomputeCost ??
+      nonNegativeNumber(block.utility.recomputeCost) ??
       costToRecomputeScore(node.estimatedCost);
-    const stalenessRisk = block.utility.staleRisk ?? staleRiskFrom(block);
-    const validationCost = node.validationCost ?? block.utility.validationCost ?? 0;
+    const stalenessRisk = nonNegativeNumber(block.utility.staleRisk) ?? staleRiskFrom(block);
+    const validationCost = node.validationCost ?? nonNegativeNumber(block.utility.validationCost) ?? 0;
     const branchProbability = node.branchProbability ?? 1;
     const criticality = node.criticality ?? 1;
     const stepsToUse = node.stepsToExecution ?? 0;
-    const explicitFutureDemand = node.futureDemand ?? block.utility.futureDemand ?? 0;
+    const explicitFutureDemand =
+      node.futureDemand ?? nonNegativeNumber(block.utility.futureDemand) ?? 0;
     const proximity = 100 / (1 + stepsToUse);
     const demandScore = Math.max(
       0,
@@ -361,4 +363,16 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  const number = numberValue(value);
+  if (number === undefined) return undefined;
+  return Math.max(0, number);
+}
+
+function probabilityValue(value: unknown): number | undefined {
+  const number = numberValue(value);
+  if (number === undefined) return undefined;
+  return Math.min(1, Math.max(0, number));
 }

@@ -209,6 +209,36 @@ describe('@hypha/workcache graph-derived demand', () => {
       futureDemand: 40,
     });
   });
+
+  it('clamps malformed demand hints to finite safe ranges', async () => {
+    const manager = managerWithMemory();
+    await manager.ingest(
+      reusableToolEvent({
+        id: 'run_1:tool_malformed_demand',
+        payload: {
+          input: { query: 'malformed' },
+          stepsToUse: -1,
+          futureDemand: -10,
+          branchProbability: 7,
+          criticality: -3,
+          recomputeCost: -5,
+          validationCost: -2,
+        },
+      })
+    );
+    const graphNode = manager.getWorkGraph('run_1')?.nodes.values().next().value;
+    expect(graphNode).toMatchObject({
+      stepsToExecution: 0,
+      futureDemand: 0,
+      branchProbability: 1,
+      criticality: 0,
+      recomputeCost: 0,
+      validationCost: 0,
+    });
+    const signal = manager.listDemandSignals('run_1')[0];
+    expect(signal.demandScore).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(signal.demandScore)).toBe(true);
+  });
 });
 
 describe('@hypha/workcache tree safety rules', () => {
