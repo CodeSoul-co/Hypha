@@ -393,6 +393,63 @@ describe('@hypha/kernel ReAct contracts', () => {
     ]);
   });
 
+  it('fails context build when required skills are missing or policy-denied', async () => {
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'skill.denied',
+      version: '0.0.0',
+      description: 'Denied workflow skill',
+      activationPolicy: { mode: 'always' },
+      trustLevel: 'untrusted',
+    });
+
+    const builder = new SkillContextBuilder({
+      baseBuilder: new DefaultContextBuilder(),
+      registry,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    await expect(
+      builder.build({
+        runId: 'run_missing_required_skill',
+        stepId: 'react',
+        sessionId: 'session_missing_required_skill',
+        userId: 'owner',
+        agent: {
+          ...reactAgentSpecDefinition.example,
+          skillRefs: [],
+        },
+        input: 'plain request',
+        metadata: {
+          workflowState: {
+            requiredSkills: ['skill.required'],
+          },
+        },
+      })
+    ).rejects.toThrow(
+      /Required skills failed to load: skill.required \(Required skill is not attached to the agent\.\)/
+    );
+
+    await expect(
+      builder.build({
+        runId: 'run_denied_required_skill',
+        stepId: 'react',
+        sessionId: 'session_denied_required_skill',
+        userId: 'owner',
+        agent: {
+          ...reactAgentSpecDefinition.example,
+          skillRefs: [{ id: 'skill.denied' }],
+        },
+        input: 'plain request',
+        metadata: {
+          workflowState: {
+            requiredSkills: ['skill.denied'],
+          },
+        },
+      })
+    ).rejects.toThrow(/Required skills failed to load: skill.denied \(Skill skill.denied/);
+  });
+
   it('builds structured thinking and agentic decisions before inference', async () => {
     const builder = new ReasoningContextBuilder({
       baseBuilder: new DefaultContextBuilder(),

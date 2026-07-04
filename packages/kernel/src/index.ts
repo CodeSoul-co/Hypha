@@ -472,17 +472,22 @@ export class SkillContextBuilder implements ContextBuilder {
 
   async build(input: ContextBuildInput): Promise<BuiltAgentContext> {
     const base = await this.baseBuilder.build(input);
+    const allowedSkills = await resolveAllowedSkills(input, base, this.options.allowedSkills);
+    const requiredSkills = await resolveRequiredSkills(input, base, this.options.requiredSkills);
     if (!base.agent.skillRefs?.length) {
+      const rejectedSkills = (requiredSkills ?? []).map((skillId) => ({
+        skillId,
+        reason: 'Required skill is not attached to the agent.',
+      }));
+      assertRequiredSkillsLoaded(requiredSkills, [], rejectedSkills);
       return {
         ...base,
         activeSkills: [],
-        rejectedSkills: [],
-        metadata: withSkillMetadata(base.metadata, [], []),
+        rejectedSkills,
+        metadata: withSkillMetadata(base.metadata, [], rejectedSkills),
       };
     }
 
-    const allowedSkills = await resolveAllowedSkills(input, base, this.options.allowedSkills);
-    const requiredSkills = await resolveRequiredSkills(input, base, this.options.requiredSkills);
     const availableToolRefs = await resolveAvailableToolRefs(
       input,
       base,
@@ -530,6 +535,8 @@ export class SkillContextBuilder implements ContextBuilder {
         })
       );
     }
+
+    assertRequiredSkillsLoaded(requiredSkills, activeSkills, rejectedSkills);
 
     const skillMessages = activeSkills
       .map(formatSkillContextMessage)
@@ -1197,6 +1204,29 @@ function withSkillMetadata(
       rejected: rejectedSkills,
     },
   };
+}
+
+function assertRequiredSkillsLoaded(
+  requiredSkills: string[] | undefined,
+  activeSkills: LoadedSkillContext[],
+  rejectedSkills: Array<{ skillId: string; reason: string }>
+): void {
+  const required = Array.from(new Set(requiredSkills ?? []));
+  if (!required.length) return;
+  const active = new Set(activeSkills.map((skill) => skill.id));
+  const rejectedById = new Map<string, string>();
+  for (const rejection of rejectedSkills) {
+    if (!rejectedById.has(rejection.skillId)) {
+      rejectedById.set(rejection.skillId, rejection.reason);
+    }
+  }
+  const failures = required.filter((skillId) => !active.has(skillId));
+  if (!failures.length) return;
+  throw new Error(
+    `Required skills failed to load: ${failures
+      .map((skillId) => `${skillId} (${rejectedById.get(skillId) ?? 'Skill did not activate.'})`)
+      .join(', ')}`
+  );
 }
 
 function formatSkillContextMessage(skill: LoadedSkillContext): ModelMessage | null {

@@ -159,6 +159,8 @@ that state's `allowedSkills` when the state provides an explicit allow-list. At
 runtime, pass the selected state as
 `metadata.workflowState`; `SkillContextBuilder` uses that allow-list before
 loading skill instructions and treats `requiredSkills` as mandatory activations.
+If any required skill is not attached to the agent, not registered, disallowed,
+or policy-denied, context building fails before model inference.
 
 ## Session Initialization
 

@@ -100,7 +100,7 @@ ContextBuilder
   -> model request context
 ```
 
-`SkillContextBuilder` only injects skills that are bound to the agent and allowed by the current scope. Workflow state restrictions can be supplied as `metadata.workflowState.allowedSkills` or as runner options. Mandatory state skills can be supplied as `metadata.workflowState.requiredSkills`; they still pass policy checks but bypass keyword/manual activation checks. Skill instructions and `on_activation` references are loaded after activation, while scripts and assets remain metadata unless a governed tool later uses them.
+`SkillContextBuilder` only injects skills that are bound to the agent and allowed by the current scope. Workflow state restrictions can be supplied as `metadata.workflowState.allowedSkills` or as runner options. Mandatory state skills can be supplied as `metadata.workflowState.requiredSkills`; they still pass policy checks but bypass keyword/manual activation checks. If a mandatory skill cannot load, context building fails before inference. Skill instructions and `on_activation` references are loaded after activation, while scripts and assets remain metadata unless a governed tool later uses them.
 
 Harnessed runs emit:
 

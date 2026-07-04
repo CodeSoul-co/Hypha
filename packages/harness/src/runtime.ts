@@ -29,6 +29,7 @@ import {
   type ReActRunResult,
   type ReActStep,
   type ReasoningConfig,
+  type SkillContextBuilderOptions,
   type ThinkingPlanner,
   type Verifier,
 } from '@hypha/kernel';
@@ -162,8 +163,8 @@ export interface HarnessedReActFSMRunnerOptions {
   skillSelector?: SkillSelector;
   skillContextLoader?: SkillContextLoader;
   skillPolicy?: SkillPolicy;
-  allowedSkills?: string[];
-  requiredSkills?: string[];
+  allowedSkills?: SkillContextBuilderOptions['allowedSkills'];
+  requiredSkills?: SkillContextBuilderOptions['requiredSkills'];
   thinkingPlanner?: ThinkingPlanner;
   agenticReasoner?: AgenticReasoner;
   reasoningConfig?: ReasoningConfig;

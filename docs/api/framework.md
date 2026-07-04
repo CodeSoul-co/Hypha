@@ -158,7 +158,9 @@ Side-effecting runtime operations also emit phase events. Tool execution records
 `WorkflowStateSpec.allowedSkills` narrows which agent-bound skills may activate
 in that state. `requiredSkills` declares skills that must be attached to the
 compiled agent patch and treated as mandatory state activations; when a state
-also declares `allowedSkills`, every required skill must be included there.
+also declares `allowedSkills`, every required skill must be included there. If
+a required skill is missing, unavailable, or denied by skill policy, context
+building fails before model inference.
 
 FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and `matches(path, pattern)`. Transitions can be rejected by guards, policy, or human-review requirements.
 
@@ -181,7 +183,7 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
 
 `ReActAgentRunner` wires `DefaultContextBuilder`, `BasicReActAgentRuntime`, `DefaultVerifier`, `InferenceProvider`, and `ToolRunner` into a runnable agent. Use `MockToolRunner` for package tests and local examples; production tools should use `GovernedToolRunner`.
 
-`SkillContextBuilder` can wrap any `ContextBuilder` to resolve agent-bound skills before ReAct execution. It uses `SkillSelector` to select active skills from `agent.skillRefs`, applies `allowedSkills` from explicit options or `metadata.workflowState.allowedSkills`, applies mandatory `requiredSkills` from explicit options or `metadata.workflowState.requiredSkills`, checks activation through `SkillPolicy`, and loads only activated skill instructions through `SkillContextLoader`. Loaded skills are attached to `BuiltAgentContext.activeSkills`, emitted as tagged system context, and forwarded inside the model request context.
+`SkillContextBuilder` can wrap any `ContextBuilder` to resolve agent-bound skills before ReAct execution. It uses `SkillSelector` to select active skills from `agent.skillRefs`, applies `allowedSkills` from explicit options or `metadata.workflowState.allowedSkills`, applies mandatory `requiredSkills` from explicit options or `metadata.workflowState.requiredSkills`, checks activation through `SkillPolicy`, and loads only activated skill instructions through `SkillContextLoader`. Required skills bypass keyword/manual activation checks but still must be attached, registered, allowed, and policy-approved. Loaded skills are attached to `BuiltAgentContext.activeSkills`, emitted as tagged system context, and forwarded inside the model request context.
 
 `ReasoningContextBuilder` can wrap any `ContextBuilder` to add structured thinking and agentic deliberation before ReAct execution. `ThinkingPlanner` produces a `ThinkingPlan` with intent, constraints, success criteria, plan steps, risks, and a summary. `AgenticReasoner` produces an `AgenticReasoningDecision` with mode, recommended phase, action type, tool candidates, verification strategy, and rationale. These are structured summaries only; raw hidden chain-of-thought is not exposed or persisted.
 

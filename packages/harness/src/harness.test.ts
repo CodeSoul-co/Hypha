@@ -270,7 +270,7 @@ describe('@hypha/harness contracts', () => {
       id: 'skill.context',
       version: '0.0.0',
       description: 'Context procedure',
-      activationPolicy: { mode: 'always' },
+      activationPolicy: { mode: 'keyword', patterns: ['never-match'] },
       instructions: 'Use this skill to add concise procedural context.',
       allowedTools: ['tool.mock'],
       trustLevel: 'reviewed',
@@ -291,6 +291,7 @@ describe('@hypha/harness contracts', () => {
       runManager,
       skillRegistry: registry,
       allowedSkills: ['skill.context'],
+      requiredSkills: ['skill.context'],
       now: () => '2026-07-04T00:00:00.000Z',
     });
 
@@ -317,6 +318,9 @@ describe('@hypha/harness contracts', () => {
           expect.objectContaining({
             id: 'skill.context',
             allowedTools: ['tool.mock'],
+            activation: expect.objectContaining({
+              reason: 'Skill is required by the current scope.',
+            }),
           }),
         ],
       },

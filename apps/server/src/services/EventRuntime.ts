@@ -977,8 +977,23 @@ class EventRuntimeService {
       id: `app.workflow.${workflow.name}`,
       version: workflow.version,
       name: workflow.name,
-      taskSchemas: [],
-      outputContracts: [],
+      taskSchemas: [
+        {
+          id: `task.${workflow.name}`,
+          version: workflow.version,
+          taskType: workflow.name,
+          inputSchema: { type: 'object', additionalProperties: true },
+          outputContractRef: `output.${workflow.name}`,
+          defaultWorkflowRef: workflowSpec.id,
+        },
+      ],
+      outputContracts: [
+        {
+          id: `output.${workflow.name}`,
+          version: workflow.version,
+          schema: { type: 'object', additionalProperties: true },
+        },
+      ],
       workflows: [workflowSpec],
       defaultWorkflow: workflowSpec.id,
     };
@@ -1650,8 +1665,23 @@ function createDefaultDomainPack(): DomainPackSpec {
     id: 'hypha.default',
     version: '1.0.0',
     name: 'hypha Default Runtime',
-    taskSchemas: [],
-    outputContracts: [],
+    taskSchemas: [
+      {
+        id: 'task.runtime',
+        version: '1.0.0',
+        taskType: 'runtime',
+        inputSchema: { type: 'object', additionalProperties: true },
+        outputContractRef: 'output.runtime',
+        defaultWorkflowRef: 'react-fsm-runtime',
+      },
+    ],
+    outputContracts: [
+      {
+        id: 'output.runtime',
+        version: '1.0.0',
+        schema: { type: 'object', additionalProperties: true },
+      },
+    ],
     workflows: [
       {
         id: 'react-fsm-runtime',
