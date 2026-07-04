@@ -10,6 +10,7 @@ import {
 import type { FSMSnapshot } from '@hypha/fsm';
 
 export * from './runtime';
+export * from './message-bus';
 
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;
