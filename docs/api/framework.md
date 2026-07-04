@@ -294,8 +294,8 @@ Core exports:
 `domainPackId`.
 
 Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
-`llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass cache by
-default.
+`llm.cache.write`, and `llm.cache.bypass`. Streaming requests always bypass
+cache in the first version.
 
 ## Inference
 

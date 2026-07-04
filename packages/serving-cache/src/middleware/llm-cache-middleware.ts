@@ -192,7 +192,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
     if (!this.policy.enabled || this.policy.mode === 'off') return 'disabled';
     if (control?.mode === 'off') return 'mode_off';
     if (this.policy.respectNoCache !== false && control?.noCache) return 'no_cache';
-    if (!this.policy.cacheStreaming && isStreamingRequest(request)) return 'streaming';
+    if (isStreamingRequest(request)) return 'streaming';
     return null;
   }
 

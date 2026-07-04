@@ -164,6 +164,32 @@ describe('@hypha/serving-cache', () => {
     expect(events).toMatchObject([{ type: 'llm.cache.bypass', reason: 'streaming' }]);
   });
 
+  it('bypasses streaming-marked generate requests even if cacheStreaming is enabled', async () => {
+    const inner = new CountingProvider();
+    const provider = new CachedLLMProvider(
+      inner,
+      new ServingCacheManager({
+        store: new MemoryCacheStore(),
+        policy: { enabled: true, mode: 'readwrite', cacheStreaming: true },
+      }),
+      {
+        policy: { enabled: true, mode: 'readwrite', cacheStreaming: true },
+      }
+    );
+    const request: ModelRequest = {
+      runId: 'run_1',
+      stepId: 'stream-marked',
+      modelAlias: 'default-fast',
+      input: 'hello',
+      metadata: { streaming: true },
+    };
+
+    await provider.generate(request);
+    await provider.generate(request);
+
+    expect(inner.calls).toBe(2);
+  });
+
   it('persists entries in sqlite store', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-serving-cache-'));
     const filename = path.join(dir, 'cache.sqlite');

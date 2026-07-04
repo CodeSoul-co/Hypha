@@ -78,6 +78,7 @@ interface RuntimeRunContext {
   userId: string;
   sessionId: string;
   clientSessionId: string;
+  domainPackId: string;
   fsm: FSMProcessSpec;
   snapshot: FSMSnapshot;
 }
@@ -308,6 +309,7 @@ class EventRuntimeService {
       userId: input.userId,
       sessionId: runtimeSessionId,
       clientSessionId: input.sessionId,
+      domainPackId: domainPack.id,
       fsm,
       snapshot,
     });
@@ -414,7 +416,7 @@ class EventRuntimeService {
           sessionId: runContext?.clientSessionId,
           runtimeSessionId: runContext?.sessionId,
           provider: resolved.provider,
-          domainPackId: runContext?.fsm.id,
+          domainPackId: runContext?.domainPackId,
         },
       });
       const chat = response.output as ChatResponse;
@@ -642,7 +644,7 @@ class EventRuntimeService {
           sessionId: runContext?.clientSessionId,
           runtimeSessionId: runContext?.sessionId,
           provider: resolved.provider,
-          domainPackId: runContext?.fsm.id,
+          domainPackId: runContext?.domainPackId,
         },
       })) {
         const chunk = response.output as StreamChunk;

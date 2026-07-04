@@ -50,7 +50,7 @@ keys are sorted, and tool schemas are sorted by stable id/name before hashing.
 | `mode`           | `readwrite` | One of `off`, `read`, `write`, or `readwrite`. |
 | `ttlMs`          | `86400000`  | Entry TTL. Omit for no expiration.             |
 | `cacheErrors`    | `false`     | Reserved; provider errors are not cached.      |
-| `cacheStreaming` | `false`     | Streaming requests bypass cache by default.    |
+| `cacheStreaming` | `false`     | Reserved; streaming always bypasses in v1.     |
 | `respectNoCache` | `true`      | Honors per-request no-cache metadata.          |
 
 Configure the server with:
