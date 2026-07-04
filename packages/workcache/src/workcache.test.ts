@@ -350,6 +350,91 @@ describe('@hypha/workcache graph-derived demand', () => {
     );
     expect(manager.getWorkGraph('run_1')?.nodes.size).toBe(sources.length);
   });
+
+  it('links WorkGraph hit nodes to the reused stored block instead of ghost candidates', async () => {
+    const manager = managerWithMemory();
+    const first = reusableToolEvent({ id: 'run_1:tool_first' });
+    const second = reusableToolEvent({ id: 'run_1:tool_second' });
+
+    await manager.ingest(first);
+    const hit = await manager.ingest(second);
+
+    expect(hit.map((item) => item.type)).toEqual(['workcache.lookup', 'workcache.hit']);
+    const blocks = await manager.forest.list('ToolTree');
+    expect(blocks).toHaveLength(1);
+    const graph = manager.getWorkGraph('run_1');
+    const secondNode = Array.from(graph?.nodes.values() ?? []).find(
+      (node) => node.sourceEventId === 'run_1:tool_second'
+    );
+    expect(secondNode?.outputBlockIds).toEqual([blocks[0]?.id]);
+    expect(Array.from(graph?.edges.values() ?? [])).toContainEqual(
+      expect.objectContaining({
+        edgeType: 'cache',
+        from: secondNode?.id,
+        to: blocks[0]?.id,
+      })
+    );
+  });
+
+  it.each(treeHitCases())(
+    'hits existing %s blocks for equivalent later events',
+    async (treeType, first, second) => {
+      const manager = managerWithMemory();
+
+      expect((await manager.ingest(first)).map((item) => item.type)).toContain('workcache.write');
+      const hit = await manager.ingest(second);
+
+      expect(hit.map((item) => item.type)).toEqual(['workcache.lookup', 'workcache.hit']);
+      expect(await manager.forest.list(treeType)).toHaveLength(1);
+      const block = (await manager.forest.list(treeType))[0];
+      expect(block?.utility.reuseCount).toBe(1);
+      const secondNode = Array.from(manager.getWorkGraph('run_1')?.nodes.values() ?? []).find(
+        (node) => node.sourceEventId === second.id
+      );
+      expect(secondNode?.primaryTreeType).toBe(treeType);
+      expect(secondNode?.outputBlockIds).toEqual([block?.id]);
+    }
+  );
+
+  it.each(stableKeyUpdateCases())(
+    'invalidates and rewrites %s when validity changes under a stable key',
+    async (treeType, first, second) => {
+      const manager = managerWithMemory();
+
+      await manager.ingest(first);
+      const update = await manager.ingest(second);
+
+      expect(update.map((item) => item.type)).toEqual([
+        'workcache.lookup',
+        'workcache.invalidate',
+        'workcache.write',
+      ]);
+      const blocks = await manager.forest.list(treeType);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]?.sourceEventId).toBe(second.id);
+      const secondNode = Array.from(manager.getWorkGraph('run_1')?.nodes.values() ?? []).find(
+        (node) => node.sourceEventId === second.id
+      );
+      expect(secondNode?.outputBlockIds).toEqual([blocks[0]?.id]);
+    }
+  );
+
+  it.each(payloadKeyUpdateCases())(
+    'writes a distinct %s block when payload-hash identity changes',
+    async (treeType, first, second) => {
+      const manager = managerWithMemory();
+
+      await manager.ingest(first);
+      const update = await manager.ingest(second);
+
+      expect(update.map((item) => item.type)).toEqual([
+        'workcache.lookup',
+        'workcache.miss',
+        'workcache.write',
+      ]);
+      expect(await manager.forest.list(treeType)).toHaveLength(2);
+    }
+  );
 });
 
 describe('@hypha/workcache tree safety rules', () => {
@@ -505,6 +590,14 @@ function observationEvent(hash: string, id = 'run_1:context_1'): FrameworkEvent 
 }
 
 function prefixEvent(id: string, order: string[]): FrameworkEvent {
+  return prefixEventWithMetadata(id, order);
+}
+
+function prefixEventWithMetadata(
+  id: string,
+  order: string[],
+  metadataOverrides: Record<string, unknown> = {}
+): FrameworkEvent {
   const blocks = order.map((type) => ({
     id: type === 'tool-schema' ? 'tools' : type,
     type,
@@ -523,58 +616,165 @@ function prefixEvent(id: string, order: string[]): FrameworkEvent {
         toolSchemaHash: 'tools-hash',
         domainPackHash: 'domain-hash',
         blocks,
+        ...metadataOverrides,
       },
     },
   });
 }
 
-function planEvent(): FrameworkEvent {
+function planEvent(overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
   return event('agent.reasoning.completed', {
-    id: 'run_1:plan_1',
+    id: overrides.id ?? 'run_1:plan_1',
     payload: {
       planId: 'plan_1',
       output: { steps: ['inspect', 'act'] },
       validity: { sourceHashes: { prompt: 'prompt-hash' } },
+      ...(overrides.payload as Record<string, unknown> | undefined),
     },
   });
 }
 
-function computationEvent(): FrameworkEvent {
+function computationEvent(overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
   return event('model.call.completed', {
-    id: 'run_1:model_1',
+    id: overrides.id ?? 'run_1:model_1',
     payload: {
       provider: 'deepseek',
       model: 'deepseek-chat',
       output: { content: 'ok' },
       usage: { totalTokens: 12, latencyMs: 20 },
       requestHash: 'request-hash',
+      ...(overrides.payload as Record<string, unknown> | undefined),
     },
   });
 }
 
-function verificationEvent(): FrameworkEvent {
+function verificationEvent(overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
   return event('eval.completed', {
-    id: 'run_1:eval_1',
+    id: overrides.id ?? 'run_1:eval_1',
     payload: {
       target: 'unit',
       output: { ok: true },
       sourceHash: 'src-hash',
       testHash: 'test-hash',
       envHash: 'env-hash',
+      ...(overrides.payload as Record<string, unknown> | undefined),
     },
   });
 }
 
-function memoryEvent(): FrameworkEvent {
+function memoryEvent(overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
   return event('memory.write.committed', {
-    id: 'run_1:memory_1',
+    id: overrides.id ?? 'run_1:memory_1',
     payload: {
       memoryId: 'mem_1',
       scope: { userId: 'owner' },
       record: { text: 'remembered' },
       validity: { sourceHashes: { memory: 'memory-hash' } },
+      ...(overrides.payload as Record<string, unknown> | undefined),
     },
   });
+}
+
+function treeHitCases(): Array<[CacheTreeType, FrameworkEvent, FrameworkEvent]> {
+  return [
+    [
+      'PlanTree',
+      planEvent({ id: 'run_1:plan_hit_1' }),
+      planEvent({ id: 'run_1:plan_hit_2' }),
+    ],
+    [
+      'ComputationTree',
+      computationEvent({ id: 'run_1:model_hit_1' }),
+      computationEvent({ id: 'run_1:model_hit_2' }),
+    ],
+    [
+      'ToolTree',
+      reusableToolEvent({ id: 'run_1:tool_hit_1' }),
+      reusableToolEvent({ id: 'run_1:tool_hit_2' }),
+    ],
+    [
+      'ObservationTree',
+      observationEvent('hash-hit', 'run_1:observation_hit_1'),
+      observationEvent('hash-hit', 'run_1:observation_hit_2'),
+    ],
+    [
+      'VerificationTree',
+      verificationEvent({ id: 'run_1:verification_hit_1' }),
+      verificationEvent({ id: 'run_1:verification_hit_2' }),
+    ],
+    [
+      'MemoryTree',
+      memoryEvent({ id: 'run_1:memory_hit_1' }),
+      memoryEvent({ id: 'run_1:memory_hit_2' }),
+    ],
+    [
+      'PromptPrefixTree',
+      prefixEvent('run_1:prefix_hit_1', ['system', 'tool-schema']),
+      prefixEvent('run_1:prefix_hit_2', ['tool-schema', 'system']),
+    ],
+  ];
+}
+
+function stableKeyUpdateCases(): Array<[CacheTreeType, FrameworkEvent, FrameworkEvent]> {
+  return [
+    [
+      'ToolTree',
+      reusableToolEvent({ id: 'run_1:tool_update_1' }),
+      reusableToolEvent({
+        id: 'run_1:tool_update_2',
+        payload: { validity: { sourceHashes: { query: 'query-hash-v2' } } },
+      }),
+    ],
+    [
+      'ObservationTree',
+      observationEvent('hash-update-1', 'run_1:observation_update_1'),
+      observationEvent('hash-update-2', 'run_1:observation_update_2'),
+    ],
+    [
+      'VerificationTree',
+      verificationEvent({ id: 'run_1:verification_update_1' }),
+      verificationEvent({
+        id: 'run_1:verification_update_2',
+        payload: { sourceHash: 'src-hash-v2' },
+      }),
+    ],
+    [
+      'MemoryTree',
+      memoryEvent({ id: 'run_1:memory_update_1' }),
+      memoryEvent({
+        id: 'run_1:memory_update_2',
+        payload: { validity: { sourceHashes: { memory: 'memory-hash-v2' } } },
+      }),
+    ],
+    [
+      'PromptPrefixTree',
+      prefixEvent('run_1:prefix_update_1', ['system', 'tool-schema']),
+      prefixEventWithMetadata('run_1:prefix_update_2', ['tool-schema', 'system'], {
+        dynamicSuffixHash: 'dynamic-v2',
+      }),
+    ],
+  ];
+}
+
+function payloadKeyUpdateCases(): Array<[CacheTreeType, FrameworkEvent, FrameworkEvent]> {
+  return [
+    [
+      'PlanTree',
+      planEvent({ id: 'run_1:plan_update_1' }),
+      planEvent({
+        id: 'run_1:plan_update_2',
+        payload: { output: { steps: ['inspect', 'act', 'verify'] } },
+      }),
+    ],
+    [
+      'ComputationTree',
+      computationEvent({ id: 'run_1:model_update_1' }),
+      computationEvent({
+        id: 'run_1:model_update_2',
+        payload: { output: { content: 'changed' } },
+      }),
+    ],
+  ];
 }
 
 function messageEvent(

@@ -79,8 +79,8 @@ export class WorkCacheManager {
 
     const definition = this.registry.getDefinition(event.type);
     const blocks = definition ? definition.materialize(normalized) : [];
-    const graphUpdate = this.workGraph.ingest(normalized, blocks);
     if (!blocks.length) {
+      this.workGraph.ingest(normalized, []);
       const fallback = fallbackAuditIdentity(
         event,
         normalized.treeType,
@@ -99,20 +99,21 @@ export class WorkCacheManager {
     }
 
     const events: WorkCacheAuditEvent[] = [];
+    const operations: WorkCacheBlockOperation[] = [];
     for (const block of blocks) {
-      const normalizedBlock = this.applyTreePolicy(
-        this.applyDemandToBlock(block, graphUpdate)
-      );
+      const normalizedBlock = this.applyTreePolicy(block);
+      const existing = await this.forest.lookup(normalizedBlock.treeType, normalizedBlock.cacheKey);
+
+      const lookupBlock = existing && !this.isExpired(existing) ? existing : normalizedBlock;
       events.push(
         this.auditEvent('workcache.lookup', event, {
-          treeType: normalizedBlock.treeType,
-          nodeType: normalizedBlock.nodeType,
-          blockId: normalizedBlock.id,
-          cacheKey: normalizedBlock.cacheKey,
+          treeType: lookupBlock.treeType,
+          nodeType: lookupBlock.nodeType,
+          blockId: lookupBlock.id,
+          cacheKey: lookupBlock.cacheKey,
         })
       );
 
-      const existing = await this.forest.lookup(normalizedBlock.treeType, normalizedBlock.cacheKey);
       if (!existing) {
         events.push(
           this.auditEvent('workcache.miss', event, {
@@ -123,8 +124,7 @@ export class WorkCacheManager {
             reason: 'not_found',
           })
         );
-        await this.forest.write(normalizedBlock);
-        events.push(this.writeEvent(event, normalizedBlock));
+        operations.push({ type: 'write', block: normalizedBlock });
         continue;
       }
 
@@ -149,8 +149,7 @@ export class WorkCacheManager {
             reason: expired ? 'expired' : 'invalid',
           })
         );
-        await this.forest.write(normalizedBlock);
-        events.push(this.writeEvent(event, normalizedBlock));
+        operations.push({ type: 'write', block: normalizedBlock });
         continue;
       }
 
@@ -165,20 +164,34 @@ export class WorkCacheManager {
             reason: 'validity_changed',
           })
         );
-        await this.forest.write(normalizedBlock);
-        events.push(this.writeEvent(event, normalizedBlock));
+        operations.push({ type: 'write', block: normalizedBlock });
         continue;
       }
 
-      await this.store.touch?.(existing.id, this.now());
-      await this.applyDemandToExistingBlock(existing, graphUpdate);
+      operations.push({ type: 'hit', block: existing });
+    }
+
+    const graphUpdate = this.workGraph.ingest(
+      normalized,
+      operations.map((operation) => operation.block)
+    );
+    for (const operation of operations) {
+      if (operation.type === 'write') {
+        const block = this.applyDemandToBlock(operation.block, graphUpdate);
+        await this.forest.write(block);
+        events.push(this.writeEvent(event, block));
+        continue;
+      }
+
+      await this.store.touch?.(operation.block.id, this.now());
+      await this.applyDemandToExistingBlock(operation.block, graphUpdate);
       events.push(
         this.auditEvent('workcache.hit', event, {
-          treeType: existing.treeType,
-          nodeType: existing.nodeType,
-          blockId: existing.id,
-          cacheKey: existing.cacheKey,
-          ageMs: Math.max(0, this.now() - existing.createdAt),
+          treeType: operation.block.treeType,
+          nodeType: operation.block.nodeType,
+          blockId: operation.block.id,
+          cacheKey: operation.block.cacheKey,
+          ageMs: Math.max(0, this.now() - operation.block.createdAt),
         })
       );
     }
@@ -333,6 +346,11 @@ export class WorkCacheManager {
       0
     );
   }
+}
+
+interface WorkCacheBlockOperation {
+  type: 'write' | 'hit';
+  block: CacheBlock;
 }
 
 function isWorkCacheEvent(type: string): boolean {
