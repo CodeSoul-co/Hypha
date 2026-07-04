@@ -21,6 +21,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
 | `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.               |
+| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.           |
 | `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
@@ -296,6 +297,49 @@ Core exports:
 Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
 `llm.cache.write`, and `llm.cache.bypass`. Streaming requests always bypass
 cache in the first version.
+
+## WorkCache
+
+`@hypha/workcache` exposes an event-derived typed runtime cache. It consumes
+existing `FrameworkEvent` records and writes `CacheBlock<T>` entries into
+primary trees without changing Session, Run, Event, DomainPack, or Serving
+Cache contracts.
+
+Core exports:
+
+| Export | Purpose |
+| --- | --- |
+| `RuntimeTypeDefinition` | Declares source event types, work node type, primary tree, and materializer. |
+| `NormalizedWorkEvent` | Source event plus normalized tree/node metadata. |
+| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records. |
+| `CacheBlock<T>` | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key. |
+| `CacheTree<T>` | Tree interface for lookup, write, invalidate, and list. |
+| `TypedCacheForest` | Store-backed collection of typed cache trees. |
+| `WorkCacheManager` | Ingests events, enforces TTL/validity rules, and returns derived audit events. |
+| `WorkCachePolicy` | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
+| `MemoryWorkCacheStore` | In-memory store. |
+| `SQLiteWorkCacheStore` | Persistent store backed by `workcache_blocks`. |
+
+Default source event alignment:
+
+| Source event group | Primary tree |
+| --- | --- |
+| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree` |
+| `inference.completed`, `model.call.completed` | `ComputationTree` |
+| `tool.call.completed`, `mcp.call.completed` | `ToolTree` |
+| `context.build.completed`, `context.compacted` | `ObservationTree` |
+| `eval.completed`, `regression.completed` | `VerificationTree` |
+| `memory.read.completed`, `memory.write.committed` | `MemoryTree` |
+| `llm.cache.write` with prefix metadata | `PromptPrefixTree` |
+
+Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
+`HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
+per-tree TTL fields under `workCache.trees` in `config.yaml`.
+
+Derived audit events are `workcache.lookup`, `workcache.hit`,
+`workcache.miss`, `workcache.write`, `workcache.invalidate`,
+`workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
+`sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
 
 ## Inference
 

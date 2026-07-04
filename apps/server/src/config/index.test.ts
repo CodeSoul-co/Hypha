@@ -1,4 +1,11 @@
-import { dbConfig, inferenceConfig, redisConfig, reloadConfig, storageConfig } from './index';
+import {
+  dbConfig,
+  inferenceConfig,
+  redisConfig,
+  reloadConfig,
+  storageConfig,
+  workCacheConfig,
+} from './index';
 
 const trackedEnv = [
   'MONGODB_URI',
@@ -16,6 +23,9 @@ const trackedEnv = [
   'VLLM_BASE_URL',
   'LLAMA_CPP_BASE_URL',
   'OPENAI_INFERENCE_BASE_URL',
+  'HYPHA_WORKCACHE',
+  'HYPHA_WORKCACHE_SQLITE_PATH',
+  'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -107,6 +117,26 @@ describe('configuration storage taxonomy', () => {
     expect(inferenceConfig().plasmod.reusePolicy).toMatchObject({
       allowCrossSession: false,
       requireExactHash: true,
+    });
+  });
+
+  it('keeps WorkCache disabled by default and enables configured stores from env', () => {
+    reloadConfig();
+    expect(workCacheConfig()).toMatchObject({
+      enabled: false,
+      store: 'off',
+      promptBudgetTokens: 4096,
+    });
+
+    process.env.HYPHA_WORKCACHE = 'sqlite';
+    process.env.HYPHA_WORKCACHE_SQLITE_PATH = './data/runtime/cache/test-workcache.sqlite';
+    process.env.HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS = '2048';
+
+    expect(workCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'sqlite',
+      promptBudgetTokens: 2048,
+      sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
     });
   });
 });

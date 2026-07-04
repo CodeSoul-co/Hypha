@@ -239,6 +239,46 @@ servingCache:
   sqlite:
     path: "${HYPHA_SERVING_CACHE_SQLITE_PATH:./data/runtime/cache/hypha-serving-cache.sqlite}"
 
+workCache:
+  # Event-derived typed runtime cache. Default off keeps source events and
+  # runtime behavior unchanged. This is separate from exact LLM Serving Cache.
+  enabled: "${HYPHA_WORKCACHE_ENABLED:false}"
+  store: "${HYPHA_WORKCACHE:off}"
+  promptBudgetTokens: "${HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS:4096}"
+  unknownEventPolicy: "${HYPHA_WORKCACHE_UNKNOWN_EVENT_POLICY:ignore}"
+  allowExtensionEvents: "${HYPHA_WORKCACHE_ALLOW_EXTENSION_EVENTS:false}"
+  sqlite:
+    path: "${HYPHA_WORKCACHE_SQLITE_PATH:./data/runtime/cache/hypha-workcache.sqlite}"
+  trees:
+    PlanTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_PLAN_TTL_MS:86400000}"
+      maxEntries: 1000
+    ComputationTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_COMPUTATION_TTL_MS:21600000}"
+      maxEntries: 1000
+    ToolTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_TOOL_TTL_MS:3600000}"
+      maxEntries: 1000
+    ObservationTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_OBSERVATION_TTL_MS:3600000}"
+      maxEntries: 1000
+    VerificationTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_VERIFICATION_TTL_MS:3600000}"
+      maxEntries: 1000
+    MemoryTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_MEMORY_TTL_MS:86400000}"
+      maxEntries: 1000
+    PromptPrefixTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_PROMPT_PREFIX_TTL_MS:86400000}"
+      maxEntries: 1000
+
 llm:
   defaultProvider: "${HYPHA_LLM_DEFAULT_PROVIDER:openai}"
   defaultModel: "${HYPHA_LLM_DEFAULT_MODEL:gpt-4o-mini}"

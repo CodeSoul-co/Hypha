@@ -120,6 +120,7 @@ export type ServingCacheEvent =
       provider: string;
       model: string;
       scope?: CacheScope;
+      prefixMetadata?: PromptPrefixMetadata;
       runId?: string;
       stepId?: string;
     }

@@ -67,7 +67,15 @@ import {
   type ServingCacheEvent,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
-import { storageConfig } from '../config';
+import {
+  MemoryWorkCacheStore,
+  NoopWorkCacheStore,
+  SQLiteWorkCacheStore,
+  WorkCacheManager,
+  type WorkCacheAuditEvent,
+  type WorkCacheStore,
+} from '@hypha/workcache';
+import { storageConfig, workCacheConfig } from '../config';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
@@ -253,6 +261,7 @@ class EventRuntimeService {
   private readonly knownSessions = new Set<string>();
   private readonly inference: InferenceManager;
   private readonly reasoning: ReasoningOrchestrator;
+  private readonly workCache: WorkCacheManager;
   private readonly defaultDomainPack = createDefaultDomainPack();
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
 
@@ -265,6 +274,7 @@ class EventRuntimeService {
       mode: sqliteStorage.sqliteMode,
     });
     this.runtime = new EventFirstRuntime(this.events);
+    this.workCache = createWorkCacheManager();
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
@@ -1642,7 +1652,7 @@ class EventRuntimeService {
     options: { stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = this.requireRun(runId);
-    await this.runtime.appendRunEvent({
+    const event = await this.runtime.appendRunEvent({
       id: `${runId}:${type}:${generateId()}`,
       type,
       runId,
@@ -1657,6 +1667,38 @@ class EventRuntimeService {
         clientSessionId: context.clientSessionId,
         ...(options.stepId ? { stepId: options.stepId } : {}),
         ...(options.fsmState ? { fsmState: options.fsmState } : {}),
+      },
+    });
+    await this.recordWorkCacheEvents(event);
+  }
+
+  private async recordWorkCacheEvents(sourceEvent: FrameworkEvent): Promise<void> {
+    if (sourceEvent.type.startsWith('workcache.')) return;
+    const derivedEvents = await this.workCache.ingest(sourceEvent);
+    for (const event of derivedEvents) {
+      await this.appendWorkCacheEvent(event);
+    }
+  }
+
+  private async appendWorkCacheEvent(event: WorkCacheAuditEvent): Promise<void> {
+    const context = this.requireRun(event.runId);
+    await this.runtime.appendRunEvent({
+      id: `${event.runId}:${event.type}:${generateId()}`,
+      type: event.type,
+      runId: event.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      payload: event.payload,
+      stepId: event.stepId,
+      timestamp: event.timestamp,
+      metadata: {
+        userId: context.userId,
+        clientSessionId: context.clientSessionId,
+        sourceEventId: event.payload.sourceEventId,
+        sourceEventType: event.payload.sourceEventType,
+        treeType: event.payload.treeType,
+        blockId: event.payload.blockId,
+        cacheKey: event.payload.cacheKey,
       },
     });
   }
@@ -1809,6 +1851,46 @@ function inferFailedState(fsm: FSMProcessSpec): string {
 
 function resolveRuntimePath(filePath: string): string {
   return path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+}
+
+let sharedMemoryWorkCacheStore: MemoryWorkCacheStore | undefined;
+const sharedSQLiteWorkCacheStores = new Map<string, SQLiteWorkCacheStore>();
+
+function createWorkCacheManager(): WorkCacheManager {
+  const config = workCacheConfig();
+  return new WorkCacheManager({
+    store: createWorkCacheStore(config.store, config.sqlite.path),
+    policy: {
+      enabled: config.enabled,
+      store: config.store,
+      promptBudgetTokens: config.promptBudgetTokens,
+      unknownEventPolicy: config.unknownEventPolicy,
+      allowExtensionEvents: config.allowExtensionEvents,
+      trees: config.trees,
+    },
+  });
+}
+
+function createWorkCacheStore(
+  store: ReturnType<typeof workCacheConfig>['store'],
+  sqlitePath: string
+): WorkCacheStore {
+  switch (store) {
+    case 'memory':
+      sharedMemoryWorkCacheStore = sharedMemoryWorkCacheStore ?? new MemoryWorkCacheStore();
+      return sharedMemoryWorkCacheStore;
+    case 'sqlite': {
+      const filename = resolveRuntimePath(sqlitePath);
+      const existing = sharedSQLiteWorkCacheStores.get(filename);
+      if (existing) return existing;
+      const next = new SQLiteWorkCacheStore({ filename });
+      sharedSQLiteWorkCacheStores.set(filename, next);
+      return next;
+    }
+    case 'off':
+    default:
+      return new NoopWorkCacheStore();
+  }
 }
 
 function summarizeValue(value: unknown): Record<string, unknown> {

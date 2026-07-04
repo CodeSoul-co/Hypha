@@ -148,6 +148,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         provider,
         model,
         scope,
+        prefixMetadata,
         runId: request.runId,
         stepId: request.stepId,
       });

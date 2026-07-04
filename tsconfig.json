@@ -9,6 +9,7 @@
     { "path": "packages/harness" },
     { "path": "packages/models" },
     { "path": "packages/serving-cache" },
+    { "path": "packages/workcache" },
     { "path": "packages/memory" },
     { "path": "packages/tools" },
     { "path": "packages/mcp" },

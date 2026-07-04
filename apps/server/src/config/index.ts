@@ -132,6 +132,7 @@ const inferenceConfigSchema = z
 
 const servingCacheStoreSchema = z.enum(['off', 'noop', 'memory', 'sqlite']);
 const servingCacheModeSchema = z.enum(['off', 'read', 'write', 'readwrite']);
+const workCacheStoreSchema = z.enum(['off', 'memory', 'sqlite']);
 
 const servingCacheConfigSchema = z
   .object({
@@ -145,6 +146,68 @@ const servingCacheConfigSchema = z
     sqlite: z
       .object({
         path: z.string().default('./data/runtime/cache/hypha-serving-cache.sqlite'),
+      })
+      .default({}),
+  })
+  .default({});
+
+const workCacheTreeConfigSchema = z
+  .object({
+    enabled: booleanishSchema.default(true),
+    ttlMs: z.coerce.number().optional(),
+    maxEntries: z.coerce.number().default(1000),
+  })
+  .default({});
+
+const workCacheConfigSchema = z
+  .object({
+    enabled: booleanishSchema.default(false),
+    store: workCacheStoreSchema.default('off'),
+    promptBudgetTokens: z.coerce.number().default(4096),
+    unknownEventPolicy: z.enum(['ignore', 'reject']).default('ignore'),
+    allowExtensionEvents: booleanishSchema.default(false),
+    sqlite: z
+      .object({
+        path: z.string().default('./data/runtime/cache/hypha-workcache.sqlite'),
+      })
+      .default({}),
+    trees: z
+      .object({
+        PlanTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60 * 24,
+          maxEntries: 1000,
+        }),
+        ComputationTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60 * 6,
+          maxEntries: 1000,
+        }),
+        ToolTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60,
+          maxEntries: 1000,
+        }),
+        ObservationTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60,
+          maxEntries: 1000,
+        }),
+        VerificationTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60,
+          maxEntries: 1000,
+        }),
+        MemoryTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60 * 24,
+          maxEntries: 1000,
+        }),
+        PromptPrefixTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60 * 24,
+          maxEntries: 1000,
+        }),
       })
       .default({}),
   })
@@ -300,6 +363,7 @@ const configSchema = z.object({
   redis: redisStorageConfigSchema.optional(),
   inference: inferenceConfigSchema,
   servingCache: servingCacheConfigSchema,
+  workCache: workCacheConfigSchema,
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),
     defaultModel: z.string().default('claude-3-5-sonnet-20241022'),
@@ -625,6 +689,23 @@ export const servingCacheConfig = () => {
     enabled: raw.enabled || (store !== 'off' && store !== 'noop' && mode !== 'off'),
   };
 };
+export const workCacheConfig = () => {
+  const raw = getConfig().workCache;
+  const envStore = process.env.HYPHA_WORKCACHE;
+  const store = normalizeWorkCacheStore(envStore ?? raw.store);
+  return {
+    ...raw,
+    store,
+    promptBudgetTokens: process.env.HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS
+      ? Number(process.env.HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS)
+      : raw.promptBudgetTokens,
+    sqlite: {
+      ...raw.sqlite,
+      path: process.env.HYPHA_WORKCACHE_SQLITE_PATH ?? raw.sqlite.path,
+    },
+    enabled: raw.enabled || store !== 'off',
+  };
+};
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
 export const authConfig = () => getConfig().auth;
@@ -656,5 +737,12 @@ function normalizeServingCacheStore(value: unknown): Config['servingCache']['sto
   if (normalized === 'memory' || normalized === 'sqlite' || normalized === 'noop') {
     return normalized;
   }
+  return 'off';
+}
+
+function normalizeWorkCacheStore(value: unknown): Config['workCache']['store'] {
+  if (typeof value !== 'string') return 'off';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'memory' || normalized === 'sqlite') return normalized;
   return 'off';
 }
