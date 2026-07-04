@@ -1,5 +1,9 @@
 import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
 
+export * from './evaluation';
+export * from './replay';
+export * from './regression';
+
 export interface GoldenTraceFixture {
   id: string;
   version: string;

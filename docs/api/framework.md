@@ -26,7 +26,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                         |
 | `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, queues, replay/audit/regression projections.                    |
 | `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
-| `@hypha/testing`        | Event and spec test helpers.                                                                                               |
+| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                |
 
 Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
 
@@ -143,6 +143,30 @@ Common event types include `session.created`, `run.created`, `run.started`, `run
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
 `RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, marks human-review waits with `run.waiting_human`, and finalizes runs with `run.completed` or `run.failed`.
+
+## Evaluation, Replay, and Regression
+
+`@hypha/testing` provides deterministic runtime verification APIs. These APIs derive results from events and supplied contracts; they do not call models, tools, or MCP servers during evaluation.
+
+| API                          | Description                                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `OutputContractValidator`    | Validates a terminal output against an `OutputContractSpec.schema` using deterministic JSON Schema subset checks.                 |
+| `TraceCompletenessEvaluator` | Checks event envelopes, required `TraceSpec.eventTypes`, terminal run events, and lifecycle start/end pairs.                      |
+| `DeterministicEvaluator`     | Runs output contract, trace, schema, process, tool trace, policy, and regression checks as one summary.                           |
+| `ReplayEngine.capture()`     | Captures a run into a `ReplayFixture` from supplied events or an `EventStore`, applying `ReplaySpec` capture flags.               |
+| `ReplayEngine.replay()`      | Reconstructs replay projection from fixture events only.                                                                          |
+| `ReplayEngine.compare()`     | Produces trace diffs for event type sequence, state path, model calls, tool calls, policy decisions, memory read set, and output. |
+| `RegressionRunner.runSpec()` | Resolves `RegressionSpec.fixtureRefs` and runs required checks against replay fixtures and optional actual events.                |
+
+`ReplayFixture` fields include `id`, `version`, `runId`, `createdAt`,
+`events`, `eventTypes`, `statePath`, optional `finalOutput`, `toolCalls`,
+`policyDecisions`, `memoryReadSet`, optional `outputContract`, and optional
+metadata. Use fixture ids that match `RegressionSpec.fixtureRefs`.
+
+`RegressionSpec.requiredChecks` supports `event_types`, `state_path`,
+`tool_calls`, `policy_decisions`, and `output_contract`. If a fixture carries an
+`outputContract`, `output_contract` validates the actual replay output against
+that contract; otherwise it compares expected and actual final outputs.
 
 ## Workflow and FSM
 

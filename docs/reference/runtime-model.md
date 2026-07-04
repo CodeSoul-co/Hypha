@@ -44,6 +44,32 @@ The exact event sequence depends on the route, workflow, tools, memory writes, p
 
 `RunManager` is the canonical package-level writer for run lifecycle events. It records run start/completion/failure, human-review waits, FSM transition acceptance, FSM state entry, context build events, and ReAct step completion. Application surfaces should call runtime APIs instead of constructing ad hoc run state.
 
+## Evaluation, Replay, and Regression
+
+Replay and evaluation are deterministic views over events. They must not call
+models, tools, memory writers, or MCP servers while validating a completed run.
+
+`ReplayEngine.capture()` stores a `ReplayFixture` from an event list or
+`EventStore`. The fixture records the source events, event type sequence, FSM
+state path, final output, tool call signatures, policy decision signatures, and
+memory read set. `ReplaySpec` controls whether model I/O, tool I/O, memory read
+sets, and policy decisions are captured.
+
+`ReplayEngine.replay()` reconstructs a replay projection from fixture events.
+`ReplayEngine.compare()` compares a fixture against new events and returns a
+trace diff for event types, state path, model calls, tool calls, policy
+decisions, memory reads, and final output.
+
+`OutputContractValidator` checks a terminal output against
+`OutputContractSpec.schema`. `TraceCompletenessEvaluator` checks event envelopes,
+required trace event types, terminal run status, and lifecycle pairs such as
+`model.call.started -> model.call.completed|model.call.failed` and
+`memory.write.requested -> memory.write.committed|memory.write.rejected`.
+
+`RegressionRunner` executes `RegressionSpec.requiredChecks` against replay
+fixtures. Domain Packs can reference fixtures with `RegressionSpec.fixtureRefs`;
+runtime code still derives all check inputs from events and contracts.
+
 ## FSM and Guards
 
 `WorkflowSpec` compiles to `FSMProcessSpec`. FSM states define process meaning; transitions define allowed movement. Guards are deterministic expressions evaluated against `input`, `variables`, and `metadata`.

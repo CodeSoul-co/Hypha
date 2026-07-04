@@ -19,7 +19,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                         | Workflow replacement logic or direct tool execution.               |
 | `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, skill/reasoning trace events, queues, replay/audit/regression.  | FSM internals or app-specific state.                               |
 | `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                         | Framework spec definitions.                                        |
-| `@hypha/testing`        | Fixtures and test helpers for event/spec/runtime contracts.                                                                      | Production runtime behavior.                                       |
+| `@hypha/testing`        | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                 | Production runtime behavior or live model/tool execution.          |
 
 ## Harness, Runtime, and FSM
 
