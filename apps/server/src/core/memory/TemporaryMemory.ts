@@ -255,6 +255,10 @@ export class TemporaryMemory implements TempMemoryOptions {
     const config = memoryConfig();
     const interval = config.temporary.cleanupInterval * 1000;
 
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+
     this.cleanupInterval = setInterval(async () => {
       await this.cleanupExpiredSessions();
     }, interval);

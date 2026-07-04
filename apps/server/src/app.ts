@@ -421,6 +421,7 @@ class Application {
     }
 
     // Cleanup services
+    await getTemporaryMemory().stopCleanup();
     await destroyLLM();
     await destroySkillManager();
     await destroyToolManager();

@@ -361,10 +361,10 @@ router.post(
             completionTokens: response.usage.outputTokens,
             totalTokens: response.usage.totalTokens,
             endpoint: '/chat',
-              requestType: 'chat',
-              responseTimeMs: totalDuration,
-            })
-            .catch((err) => logger.error('Failed to record token usage:', err));
+            requestType: 'chat',
+            responseTimeMs: totalDuration,
+          })
+          .catch((err) => logger.error('Failed to record token usage:', err));
       }
       await runtime.completeRun(runId, {
         messageId: response.id,
