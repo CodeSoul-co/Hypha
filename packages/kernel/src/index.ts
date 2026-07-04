@@ -256,7 +256,7 @@ export class MemoryContextBuilder implements ContextBuilder {
       };
     }
 
-    const results = await this.options.memory.search(memoryScope, query);
+    const results = await this.searchMemory(memoryScope, query, budget);
     const memoryContext = selectMemoryContext(results, budget);
     const contextProvenance = [
       ...memoryContext.map((item): ContextProvenance => ({
@@ -331,6 +331,37 @@ export class MemoryContextBuilder implements ContextBuilder {
       query.vector = vector;
     }
     return query;
+  }
+
+  private async searchMemory(
+    scope: MemoryScope,
+    query: MemorySearchQuery,
+    budget: ContextBudget
+  ): Promise<MemorySearchResult[]> {
+    const topK = query.topK ?? budget.maxMemoryItems ?? 5;
+    const memoryTypes = this.resolveMemoryTypes(query.type);
+    if (memoryTypes === undefined) {
+      return this.options.memory.search(scope, { ...query, topK });
+    }
+    if (memoryTypes.length === 0) {
+      return [];
+    }
+
+    const results = await Promise.all(
+      memoryTypes.map((type) => this.options.memory.search(scope, { ...query, type, topK }))
+    );
+    return mergeMemorySearchResults(results.flat()).slice(0, topK);
+  }
+
+  private resolveMemoryTypes(requestedType?: MemoryType): MemoryType[] | undefined {
+    const allowedTypes = uniqueMemoryTypes(this.options.memoryTypes);
+    if (requestedType) {
+      if (allowedTypes && !allowedTypes.includes(requestedType)) {
+        return [];
+      }
+      return [requestedType];
+    }
+    return allowedTypes;
   }
 }
 
@@ -735,6 +766,39 @@ function selectMemoryContext(
   }
 
   return selected;
+}
+
+function uniqueMemoryTypes(types?: MemoryType[]): MemoryType[] | undefined {
+  if (!types?.length) return undefined;
+  return Array.from(new Set(types));
+}
+
+function mergeMemorySearchResults(results: MemorySearchResult[]): MemorySearchResult[] {
+  const merged = new Map<string, MemorySearchResult & { rankScore: number }>();
+  for (const result of results) {
+    const existing = merged.get(result.record.id);
+    if (!existing) {
+      merged.set(result.record.id, {
+        ...result,
+        rankScore: result.score ?? 0,
+      });
+      continue;
+    }
+    existing.rankScore += result.score ?? 0;
+    existing.score = Math.max(existing.score ?? 0, result.score ?? 0);
+    existing.provenance = {
+      ...result.provenance,
+      ...existing.provenance,
+    };
+  }
+  return Array.from(merged.values())
+    .sort(
+      (left, right) =>
+        right.rankScore - left.rankScore ||
+        (right.score ?? 0) - (left.score ?? 0) ||
+        left.record.id.localeCompare(right.record.id)
+    )
+    .map(({ rankScore: _rankScore, ...result }) => result);
 }
 
 function formatMemoryContext(items: MemoryContextItem[], contextSpec?: ContextSpec): string {

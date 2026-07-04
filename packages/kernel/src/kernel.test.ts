@@ -322,6 +322,61 @@ describe('@hypha/kernel ReAct contracts', () => {
     });
   });
 
+  it('restricts memory context retrieval to configured memory types', async () => {
+    const embeddings: EmbeddingProvider = {
+      embed: async () => [[1, 0]],
+    };
+    const manager = new MemoryManager(
+      new HybridMemoryProvider({
+        structured: new InMemoryStructuredStore(),
+        vector: new InMemoryVectorIndexProvider(),
+        embeddings,
+      })
+    );
+    const scope = { userId: 'owner', sessionId: 'session_memory_types' };
+
+    for (const record of [
+      { id: 'semantic_allowed', type: 'semantic' as const, value: 'semantic memory allowed' },
+      { id: 'procedural_allowed', type: 'procedural' as const, value: 'procedural memory allowed' },
+      { id: 'episodic_denied', type: 'episodic' as const, value: 'episodic memory must not appear' },
+    ]) {
+      await manager.write(
+        scope,
+        {
+          ...record,
+          provenance: { eventId: `event_${record.id}` },
+          createdAt: '2026-07-04T00:00:00.000Z',
+        },
+        { requireProvenance: true, allowLongTerm: true }
+      );
+    }
+
+    const builder = new MemoryContextBuilder({
+      memory: manager,
+      embeddings,
+      memoryTypes: ['semantic', 'procedural'],
+      budget: { maxMemoryItems: 3, maxMemoryChars: 400, maxTotalChars: 1000 },
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const context = await builder.build({
+      runId: 'run_context_types',
+      stepId: 'react',
+      sessionId: 'session_memory_types',
+      userId: 'owner',
+      agent: reactAgentSpecDefinition.example,
+      input: 'Which memory is allowed?',
+    });
+
+    expect(context.memoryContext?.map((item) => item.id).sort()).toEqual([
+      'procedural_allowed',
+      'semantic_allowed',
+    ]);
+    expect(context.messages[0].content).toContain('semantic memory allowed');
+    expect(context.messages[0].content).toContain('procedural memory allowed');
+    expect(context.messages[0].content).not.toContain('episodic memory must not appear');
+  });
+
   it('syncs ReAct observations into episodic memory through MemoryManager', async () => {
     const manager = new MemoryManager(
       new HybridMemoryProvider({

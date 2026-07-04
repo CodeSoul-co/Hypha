@@ -122,6 +122,52 @@ describe('@hypha/memory manager contract', () => {
     ]);
   });
 
+  it('merges vector and text candidates for hybrid memory search', async () => {
+    const vectors: Record<string, number[]> = {
+      'vector-near primary': [1, 0],
+      'vector-near secondary': [0.9, 0.1],
+      'lexical-only compliance phrase': [0, 1],
+    };
+    const embeddings: EmbeddingProvider = {
+      embed: async (input) => input.map((value) => vectors[value] ?? [0, 1]),
+    };
+    const provider = new HybridMemoryProvider({
+      structured: new InMemoryStructuredStore(),
+      vector: new InMemoryVectorIndexProvider(),
+      embeddings,
+    });
+    const scope = { userId: 'owner', sessionId: 'session_hybrid' };
+
+    for (const record of [
+      { id: 'semantic_primary', value: 'vector-near primary' },
+      { id: 'semantic_secondary', value: 'vector-near secondary' },
+      { id: 'semantic_text', value: 'lexical-only compliance phrase' },
+    ]) {
+      await provider.write(
+        scope,
+        {
+          ...record,
+          type: 'semantic',
+          provenance: { eventId: `event_${record.id}` },
+          createdAt: '2026-07-04T00:00:00.000Z',
+        },
+        { requireProvenance: true, allowLongTerm: true }
+      );
+    }
+
+    await expect(
+      provider.search(scope, {
+        vector: [1, 0],
+        text: 'compliance phrase',
+        type: 'semantic',
+        topK: 2,
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({ record: expect.objectContaining({ id: 'semantic_primary' }) }),
+      expect.objectContaining({ record: expect.objectContaining({ id: 'semantic_text' }) }),
+    ]);
+  });
+
   it('traces memory writes, searches, and reads through MemoryManager', async () => {
     const trace = new InMemoryEventStore();
     const embeddings: EmbeddingProvider = {
@@ -167,6 +213,48 @@ describe('@hypha/memory manager contract', () => {
       count: 1,
       recordIds: ['semantic_trace'],
     });
+  });
+
+  it('traces rejected memory writes before provider side effects', async () => {
+    const trace = new InMemoryEventStore();
+    let writes = 0;
+    const provider: MemoryProvider = {
+      read: async () => [],
+      search: async () => [],
+      write: async (_scope, record) => {
+        writes += 1;
+        return { recordId: record.id };
+      },
+      update: async () => {},
+      invalidate: async () => {},
+      summarize: async (scope) => ({ scope, recordCount: 0, types: {} }),
+      audit: async (scope) => ({ scope, recordsChecked: 0, missingProvenance: [] }),
+    };
+    const manager = new MemoryManager(provider, {
+      trace,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const scope = { userId: 'owner', runId: 'run_rejected_memory' };
+
+    await expect(
+      manager.write(
+        scope,
+        {
+          id: 'semantic_rejected',
+          type: 'semantic',
+          value: 'blocked',
+          provenance: {},
+          createdAt: '2026-07-04T00:00:00.000Z',
+        },
+        { requireProvenance: true, allowLongTerm: true }
+      )
+    ).rejects.toThrow(/requires provenance/);
+
+    expect(writes).toBe(0);
+    await expect(trace.list({ runId: 'run_rejected_memory' })).resolves.toMatchObject([
+      { type: 'memory.write.requested' },
+      { type: 'memory.write.rejected' },
+    ]);
   });
 
   it('exports Stage1 MemorySpec schema and minimal example', () => {

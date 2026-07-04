@@ -144,7 +144,7 @@ retrievalPolicy
 writePolicyConfig
 ```
 
-The current `HybridMemoryProvider` is intentionally simple: it writes scoped records to structured storage, embeds indexable memory types, writes vectors when a vector provider is configured, and reads back full records from structured storage after vector search. This keeps the memory layer easy to replace with richer policies later.
+The current `HybridMemoryProvider` writes scoped records to structured storage, embeds indexable memory types, writes vectors when a vector provider is configured, and reads back full records from structured storage after vector search. Search merges vector candidates with text matches from structured storage, deduplicates by record id, and returns the highest-ranked bounded result set.
 
 Use `MemoryManager` above a provider when agent code reads or writes memory. The manager applies `MemoryWritePolicy` and records memory events when a trace recorder is provided:
 
@@ -153,4 +153,4 @@ const storage = createLocalStorageBackbone({ rootPath: './data/storage' });
 const memory = new MemoryManager(storage.memory, { trace: storage.eventStore });
 ```
 
-`MemoryContextBuilder` is the kernel-level bridge from memory to model context. It searches memory by text or vector, applies budget limits, records provenance for each selected item, and injects memory as tagged context data rather than executable instructions.
+`MemoryContextBuilder` is the kernel-level bridge from memory to model context. It searches memory by text or vector, enforces configured memory type filters, applies budget limits, records provenance for each selected item, and injects memory as tagged context data rather than executable instructions.
