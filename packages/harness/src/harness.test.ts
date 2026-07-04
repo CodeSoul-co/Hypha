@@ -208,6 +208,55 @@ describe('@hypha/harness contracts', () => {
     ]);
   });
 
+  it('keeps terminal message transitions idempotent in the event stream', async () => {
+    const trace = new InMemoryTraceRecorder();
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    await bus.publish({
+      id: 'msg_terminal',
+      type: 'workflow.input',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'terminal' },
+    });
+
+    await bus.acknowledge({
+      id: 'msg_terminal',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      handledBy: recipient,
+    });
+    await bus.fail({
+      id: 'msg_terminal',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      reason: 'late_failure',
+    });
+    await bus.acknowledge({
+      id: 'msg_terminal',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      handledBy: recipient,
+    });
+
+    await expect(bus.list({ runId: 'run_terminal' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_terminal', status: 'acknowledged' }),
+    ]);
+    expect((await trace.list({ runId: 'run_terminal' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.acknowledged',
+    ]);
+  });
+
   it('derives session, run, replay, audit, and regression state from events', async () => {
     const runtime = new EventFirstRuntime();
     await runtime.createSession({
