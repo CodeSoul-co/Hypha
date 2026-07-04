@@ -130,6 +130,26 @@ const inferenceConfigSchema = z
   })
   .default({});
 
+const servingCacheStoreSchema = z.enum(['off', 'noop', 'memory', 'sqlite']);
+const servingCacheModeSchema = z.enum(['off', 'read', 'write', 'readwrite']);
+
+const servingCacheConfigSchema = z
+  .object({
+    enabled: booleanishSchema.default(false),
+    store: servingCacheStoreSchema.default('off'),
+    mode: servingCacheModeSchema.default('readwrite'),
+    ttlMs: z.coerce.number().default(1000 * 60 * 60 * 24),
+    cacheErrors: booleanishSchema.default(false),
+    cacheStreaming: booleanishSchema.default(false),
+    respectNoCache: booleanishSchema.default(true),
+    sqlite: z
+      .object({
+        path: z.string().default('./data/runtime/cache/hypha-serving-cache.sqlite'),
+      })
+      .default({}),
+  })
+  .default({});
+
 const mongoStorageConfigSchema = z.object({
   uri: optionalStringSchema,
   uriEnv: z.string().default('MONGODB_URI'),
@@ -279,6 +299,7 @@ const configSchema = z.object({
     .optional(),
   redis: redisStorageConfigSchema.optional(),
   inference: inferenceConfigSchema,
+  servingCache: servingCacheConfigSchema,
   llm: z.object({
     defaultProvider: z.string().default('anthropic'),
     defaultModel: z.string().default('claude-3-5-sonnet-20241022'),
@@ -592,6 +613,18 @@ export const redisConfig = () => {
 };
 export const storageConfig = () => getConfig().storage;
 export const inferenceConfig = () => getConfig().inference;
+export const servingCacheConfig = () => {
+  const raw = getConfig().servingCache;
+  const envStore = process.env.HYPHA_SERVING_CACHE ?? process.env.HYHPA_SERVING_CACHE;
+  const store = normalizeServingCacheStore(envStore ?? raw.store);
+  const mode = store === 'off' ? 'off' : raw.mode;
+  return {
+    ...raw,
+    store,
+    mode,
+    enabled: raw.enabled || (store !== 'off' && store !== 'noop' && mode !== 'off'),
+  };
+};
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
 export const authConfig = () => getConfig().auth;
@@ -616,3 +649,12 @@ export function getDefaultModel(provider: string): ModelConfig | undefined {
 }
 
 export default getConfig;
+
+function normalizeServingCacheStore(value: unknown): Config['servingCache']['store'] {
+  if (typeof value !== 'string') return 'off';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'memory' || normalized === 'sqlite' || normalized === 'noop') {
+    return normalized;
+  }
+  return 'off';
+}

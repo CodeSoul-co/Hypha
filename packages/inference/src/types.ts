@@ -83,6 +83,7 @@ export interface InferenceCachePolicy {
 export interface InferenceCacheUsage {
   prefixHit?: boolean;
   kvCacheHit?: boolean;
+  servingCache?: Record<string, unknown>;
   prefixRef?: PrefixCacheRef;
   kvCacheRef?: KvCacheRef;
   kvCacheMissReason?: InferenceCacheMissReason;

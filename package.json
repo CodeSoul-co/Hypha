@@ -15,7 +15,7 @@
   "scripts": {
     "dev": "npm run build:packages && ts-node -r dotenv/config -P apps/server/tsconfig.json apps/server/src/app.ts",
     "build": "npm run build:packages && npm run build:server && npm run build:cli",
-    "build:packages": "tsc -b packages/core packages/storage packages/inference packages/fsm packages/kernel packages/harness packages/models packages/memory packages/tools packages/mcp packages/skills packages/domain packages/adapters-local packages/testing",
+    "build:packages": "tsc -b packages/core packages/storage packages/inference packages/fsm packages/kernel packages/harness packages/models packages/serving-cache packages/memory packages/tools packages/mcp packages/skills packages/domain packages/adapters-local packages/testing",
     "build:server": "tsc -p apps/server/tsconfig.json",
     "build:cli": "tsc -p apps/cli/tsconfig.json && chmod +x dist/apps/cli/index.js",
     "start": "node dist/apps/server/app.js",

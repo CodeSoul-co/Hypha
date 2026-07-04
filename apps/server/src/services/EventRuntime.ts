@@ -62,6 +62,11 @@ import {
   modelResponseToChatResponse,
   modelStreamEventToStreamChunk,
 } from '../core/llm/LLMFactory';
+import {
+  servingCacheResponseMetadata,
+  type ServingCacheEvent,
+  type ServingCacheTraceSink,
+} from '@hypha/serving-cache';
 import { storageConfig } from '../config';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
@@ -120,8 +125,15 @@ interface LLMInferenceInput {
 
 class ServerLLMInferenceProvider implements InferenceProvider {
   readonly id = 'server-llm';
+  private readonly modelProvider: ModelProvider;
 
-  constructor(private readonly modelProvider: ModelProvider = createLLMManagerModelProvider()) {}
+  constructor(options: { modelProvider?: ModelProvider; trace?: ServingCacheTraceSink } = {}) {
+    this.modelProvider =
+      options.modelProvider ??
+      createLLMManagerModelProvider(getLLMManager(), {
+        servingCacheTrace: options.trace,
+      });
+  }
 
   async infer(
     request: InferenceRequest<LLMInferenceInput>
@@ -148,10 +160,13 @@ class ServerLLMInferenceProvider implements InferenceProvider {
         request.input.options?.model ?? request.modelAlias
       ),
     });
+    const servingCache = servingCacheResponseMetadata(modelResponse);
     return {
       id: response.id,
       output: response,
       usage: response.usage,
+      cache: servingCache ? { servingCache } : undefined,
+      metadata: servingCache ? { servingCache } : undefined,
       nextKvCacheValue: extractNextKvCacheValue(modelResponse.raw),
       raw: modelResponse.raw,
     };
@@ -253,7 +268,11 @@ class EventRuntimeService {
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
     });
-    this.inference.register(new ServerLLMInferenceProvider());
+    this.inference.register(
+      new ServerLLMInferenceProvider({
+        trace: (event) => this.recordServingCacheEvent(event),
+      })
+    );
     this.reasoning = new ReasoningOrchestrator({
       id: 'server-inference-router',
       infer: (request) => this.inference.infer('server-llm', request),
@@ -353,6 +372,7 @@ class EventRuntimeService {
 
   async inferChat(input: ChatInferenceInput): Promise<ChatResponse> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
+    const runContext = this.runs.get(input.runId);
     await this.append(
       input.runId,
       'inference.requested',
@@ -378,6 +398,7 @@ class EventRuntimeService {
       const response = await this.reasoning.infer({
         runId: input.runId,
         stepId: input.stepId,
+        sessionId: runContext?.clientSessionId,
         modelAlias: resolved.model,
         cachePolicy: input.cachePolicy,
         input: {
@@ -388,6 +409,13 @@ class EventRuntimeService {
           },
         },
         reasoning: input.reasoning,
+        metadata: {
+          userId: runContext?.userId,
+          sessionId: runContext?.clientSessionId,
+          runtimeSessionId: runContext?.sessionId,
+          provider: resolved.provider,
+          domainPackId: runContext?.fsm.id,
+        },
       });
       const chat = response.output as ChatResponse;
       await this.append(
@@ -570,6 +598,7 @@ class EventRuntimeService {
 
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
+    const runContext = this.runs.get(input.runId);
     await this.append(
       input.runId,
       'inference.requested',
@@ -597,6 +626,7 @@ class EventRuntimeService {
       for await (const response of this.inference.stream('server-llm', {
         runId: input.runId,
         stepId: input.stepId,
+        sessionId: runContext?.clientSessionId,
         modelAlias: resolved.model,
         cachePolicy: input.cachePolicy,
         input: {
@@ -606,7 +636,14 @@ class EventRuntimeService {
             model: input.options?.model ?? resolved.model,
           },
         },
-        metadata: { stream: true },
+        metadata: {
+          stream: true,
+          userId: runContext?.userId,
+          sessionId: runContext?.clientSessionId,
+          runtimeSessionId: runContext?.sessionId,
+          provider: resolved.provider,
+          domainPackId: runContext?.fsm.id,
+        },
       })) {
         const chunk = response.output as StreamChunk;
         if (chunk.type === 'error') {
@@ -945,6 +982,12 @@ class EventRuntimeService {
       );
       throw error;
     }
+  }
+
+  private async recordServingCacheEvent(event: ServingCacheEvent): Promise<void> {
+    if (!event.runId || !this.runs.has(event.runId)) return;
+    const { type, runId, stepId, ...payload } = event;
+    await this.append(runId, type, payload, undefined, { stepId });
   }
 
   async record(

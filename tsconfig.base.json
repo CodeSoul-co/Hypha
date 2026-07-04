@@ -26,6 +26,8 @@
       "@hypha/harness/*": ["packages/harness/src/*"],
       "@hypha/models": ["packages/models/src"],
       "@hypha/models/*": ["packages/models/src/*"],
+      "@hypha/serving-cache": ["packages/serving-cache/src"],
+      "@hypha/serving-cache/*": ["packages/serving-cache/src/*"],
       "@hypha/memory": ["packages/memory/src"],
       "@hypha/memory/*": ["packages/memory/src/*"],
       "@hypha/tools": ["packages/tools/src"],

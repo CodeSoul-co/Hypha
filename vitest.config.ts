@@ -10,6 +10,7 @@ export default defineConfig({
       '@hypha/kernel': path.resolve(__dirname, 'packages/kernel/src'),
       '@hypha/harness': path.resolve(__dirname, 'packages/harness/src'),
       '@hypha/models': path.resolve(__dirname, 'packages/models/src'),
+      '@hypha/serving-cache': path.resolve(__dirname, 'packages/serving-cache/src'),
       '@hypha/memory': path.resolve(__dirname, 'packages/memory/src'),
       '@hypha/tools': path.resolve(__dirname, 'packages/tools/src'),
       '@hypha/mcp': path.resolve(__dirname, 'packages/mcp/src'),

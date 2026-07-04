@@ -20,6 +20,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                              |
 | `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
+| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.               |
 | `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
@@ -267,6 +268,34 @@ Provider errors are normalized as `ModelProviderError` with `code`, `providerId`
 OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `type`, `baseUrl`, `apiKey` or `apiKeyEnv`, `providerModelByAlias`, `capabilities`, and `timeoutMs`. `OpenAIModelProvider` is the OpenAI reference implementation. `createDeepSeekProvider()` configures DeepSeek through the same OpenAI-compatible adapter path.
 
 `ModelStreamEvent` normalizes streaming provider output as `delta`, `tool_call`, `usage`, `done`, or `error` events. OpenAI-compatible SSE chunks are parsed into this envelope before they reach the agent kernel or HTTP surface.
+
+## Serving Cache
+
+`@hypha/serving-cache` provides exact request-level caching for
+`ModelProvider.generate()` calls. It does not change the agent runtime,
+DomainPack schema, or tool/MCP execution contracts.
+
+Core exports:
+
+| Export                | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `CacheStore`          | Minimal async store interface: `get`, `set`, `delete`, `clear`.  |
+| `CacheEntry`          | Persisted `key`, `value`, timestamps, optional metadata.         |
+| `CacheMetadata`       | Provider/model/cache type, request hash, tool hash, prefix data. |
+| `CachePolicy`         | `enabled`, `mode`, TTL, error/stream/no-cache behavior.          |
+| `ServingCacheManager` | Key generation, lookup, expiry enforcement, and writes.          |
+| `CachedLLMProvider`   | Provider wrapper that applies exact cache policy.                |
+| `MemoryCacheStore`    | In-memory store for tests and local experiments.                 |
+| `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
+
+`LLMCacheKeyInput` fields are `provider`, `model`, `messages`, optional
+`system`, optional `tools`, optional `params`, and optional `cacheScope`.
+`CacheScope` may include `tenantId`, `userId`, `projectId`, `sessionId`, and
+`domainPackId`.
+
+Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
+`llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass cache by
+default.
 
 ## Inference
 

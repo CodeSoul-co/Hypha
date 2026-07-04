@@ -13,6 +13,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/kernel`         | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                           | Concrete model providers, direct tool side effects.                |
 | `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.          | Provider-specific request types in public kernel contracts.        |
 | `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.  | Agent loop, workflow semantics, or app-specific model preferences. |
+| `@hypha/serving-cache`  | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.         | Semantic cache, WorkCache graph scheduling, or agent loop changes. |
 | `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.            | Direct execution bypassing policy.                                 |
 | `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.      | Provider SDK lifecycle as framework core.                          |
 | `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                      | App session storage rules.                                         |
@@ -47,6 +48,7 @@ Allowed examples:
 ```text
 apps/server -> @hypha/domain -> @hypha/fsm -> @hypha/core
 apps/server -> @hypha/kernel -> @hypha/inference -> @hypha/models
+apps/server -> @hypha/serving-cache -> @hypha/models
 apps/server -> @hypha/tools -> @hypha/core
 apps/server -> @hypha/storage -> @hypha/core
 ```
@@ -67,6 +69,20 @@ agent kernel -> provider-specific model request or response type
 Agent inference is a packages-layer pipeline: `PromptCompiler` normalizes runtime input, `PrefixSegmenter` separates stable prefix segments from dynamic content, `PlasmodHotLayer` tracks prefix registry/cache metadata/session state/invalidation graph/reuse policy, and `InferenceBackend` adapters call physical backends.
 
 `sglang` is the default backend. `vllm`, `llama.cpp`, and `openai-api` are registered through the same backend interface. Backends may expose physical KV cache handles through `InferenceBackendResponse.physicalKvCache`; the pipeline returns that handle as `InferenceResponse.nextKvCacheValue` so `InferenceManager` can persist it through `cachePolicy.writeKvCache`.
+
+## Serving Cache
+
+`@hypha/serving-cache` wraps `ModelProvider.generate()` when
+`HYPHA_SERVING_CACHE=memory` or `sqlite`. It computes an exact request key from
+provider, model, system/prefix content, messages, tools, generation params, and
+scope metadata. Fresh hits return the cached `ModelResponse`; misses call the
+inner provider and may write the response. Streaming requests bypass cache in
+the first version.
+
+The layer records prompt prefix metadata and emits `llm.cache.lookup`,
+`llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`
+events through the runtime trace bridge. It is not a semantic cache, WorkCache,
+or provider KV cache.
 
 ## Extension Boundaries
 

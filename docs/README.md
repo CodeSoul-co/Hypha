@@ -11,6 +11,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [Framework API](api/framework.md): TypeScript package contracts and field-level spec references.
 - [HTTP API](api/http.md): REST endpoints, authentication, request bodies, response shapes, and SSE behavior.
 - [Architecture Notes](architecture/README.md): subsystem-level architecture notes.
+- [Serving Cache](architecture/serving-cache.md): exact LLM response cache middleware, key fields, policies, stores, and trace events.
 - [ADRs](adr/README.md): accepted architecture decisions.
 - [RFCs](rfc/README.md): proposed designs and extension plans.
 

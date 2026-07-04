@@ -1,3 +1,4 @@
+import path from 'path';
 import {
   ILLMAdapter,
   LLMProvider,
@@ -24,10 +25,21 @@ import {
   OpenAIModelProvider,
   createDeepSeekProvider,
 } from '@hypha/models';
+import {
+  CachedLLMProvider,
+  MemoryCacheStore,
+  NoopCacheStore,
+  ServingCacheManager,
+  SQLiteCacheStore,
+  type CachePolicy,
+  type CacheScope,
+  type CacheStore,
+  type ServingCacheTraceSink,
+} from '@hypha/serving-cache';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
 import { GeminiAdapter } from './adapters/GeminiAdapter';
 import { OllamaAdapter } from './adapters/OllamaAdapter';
-import { llmConfig, getConfig } from '../../config';
+import { llmConfig, getConfig, servingCacheConfig } from '../../config';
 import { logger } from '../../utils/logger';
 
 // OpenAI compatible provider configurations
@@ -614,10 +626,107 @@ export class LLMManagerModelProvider implements HyphaModelProvider<
   }
 }
 
+export interface CreateLLMManagerModelProviderOptions {
+  servingCacheTrace?: ServingCacheTraceSink;
+}
+
 export function createLLMManagerModelProvider(
-  manager: LLMManager = getLLMManager()
+  manager: LLMManager = getLLMManager(),
+  options: CreateLLMManagerModelProviderOptions = {}
 ): HyphaModelProvider<HyphaModelRequest, HyphaModelResponse> {
-  return new LLMManagerModelProvider(manager);
+  const provider = new LLMManagerModelProvider(manager);
+  return wrapWithServingCache(provider, manager, options.servingCacheTrace);
+}
+
+let sharedMemoryServingCacheStore: MemoryCacheStore | undefined;
+const sharedSQLiteServingCacheStores = new Map<string, SQLiteCacheStore>();
+
+function wrapWithServingCache(
+  provider: HyphaModelProvider<HyphaModelRequest, HyphaModelResponse>,
+  manager: LLMManager,
+  trace?: ServingCacheTraceSink
+): HyphaModelProvider<HyphaModelRequest, HyphaModelResponse> {
+  const config = servingCacheConfig();
+  if (!config.enabled || config.mode === 'off' || config.store === 'off') {
+    return provider;
+  }
+  const policy: CachePolicy = {
+    enabled: true,
+    mode: config.mode,
+    ttlMs: config.ttlMs,
+    cacheErrors: config.cacheErrors,
+    cacheStreaming: config.cacheStreaming,
+    respectNoCache: config.respectNoCache,
+  };
+  const cache = new ServingCacheManager({
+    store: createServingCacheStore(config.store, config.sqlite.path),
+    policy,
+  });
+  return new CachedLLMProvider(provider, cache, {
+    policy,
+    trace,
+    providerResolver: (request) =>
+      stringFromRecord(request.metadata, 'provider') ??
+      manager.getProviderFromModel(request.modelAlias || manager.getDefaultModel()),
+    modelResolver: (request) => request.modelAlias || manager.getDefaultModel(),
+    scopeResolver: (request) => servingCacheScopeForRequest(request),
+    paramsResolver: (request) => ({
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+      responseFormat: request.responseFormat,
+      reasoning: request.reasoning,
+    }),
+  });
+}
+
+function createServingCacheStore(
+  store: ReturnType<typeof servingCacheConfig>['store'],
+  sqlitePath: string
+): CacheStore {
+  switch (store) {
+    case 'memory':
+      sharedMemoryServingCacheStore = sharedMemoryServingCacheStore ?? new MemoryCacheStore();
+      return sharedMemoryServingCacheStore;
+    case 'sqlite': {
+      const filename = path.resolve(process.cwd(), sqlitePath);
+      const existing = sharedSQLiteServingCacheStores.get(filename);
+      if (existing) return existing;
+      const next = new SQLiteCacheStore({ filename });
+      sharedSQLiteServingCacheStores.set(filename, next);
+      return next;
+    }
+    case 'noop':
+    case 'off':
+    default:
+      return new NoopCacheStore();
+  }
+}
+
+function servingCacheScopeForRequest(request: HyphaModelRequest): CacheScope {
+  const metadata = {
+    ...recordFromUnknown(request.cache?.metadata),
+    ...recordFromUnknown(request.metadata),
+  };
+  return {
+    tenantId: stringFromRecord(metadata, 'tenantId'),
+    userId: stringFromRecord(metadata, 'userId'),
+    projectId: stringFromRecord(metadata, 'projectId'),
+    sessionId: stringFromRecord(metadata, 'sessionId') ?? request.runId,
+    domainPackId: stringFromRecord(metadata, 'domainPackId'),
+  };
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function stringFromRecord(
+  record: Record<string, unknown> | undefined,
+  key: string
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 export function chatResponseToModelResponse(response: ChatResponse): HyphaModelResponse {

@@ -226,6 +226,19 @@ inference:
       apiKeyEnv: "OPENAI_API_KEY"
       timeoutMs: "${OPENAI_INFERENCE_TIMEOUT_MS:60000}"
 
+servingCache:
+  # API-level LLM response cache. Default off keeps provider behavior unchanged.
+  # Set HYPHA_SERVING_CACHE=memory or sqlite to enable exact request caching.
+  enabled: "${HYPHA_SERVING_CACHE_ENABLED:false}"
+  store: "${HYPHA_SERVING_CACHE:off}"
+  mode: "${HYPHA_SERVING_CACHE_MODE:readwrite}"
+  ttlMs: "${HYPHA_SERVING_CACHE_TTL_MS:86400000}"
+  cacheErrors: "${HYPHA_SERVING_CACHE_ERRORS:false}"
+  cacheStreaming: "${HYPHA_SERVING_CACHE_STREAMING:false}"
+  respectNoCache: "${HYPHA_SERVING_CACHE_RESPECT_NO_CACHE:true}"
+  sqlite:
+    path: "${HYPHA_SERVING_CACHE_SQLITE_PATH:./data/runtime/cache/hypha-serving-cache.sqlite}"
+
 llm:
   defaultProvider: "${HYPHA_LLM_DEFAULT_PROVIDER:openai}"
   defaultModel: "${HYPHA_LLM_DEFAULT_MODEL:gpt-4o-mini}"
