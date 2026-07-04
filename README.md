@@ -68,7 +68,7 @@ Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`
 
 `@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
 
-Enable it with `HYPHA_WORKCACHE=memory` or `HYPHA_WORKCACHE=sqlite`; the default `off` mode appends no `workcache.*` events. SQLite uses `HYPHA_WORKCACHE_SQLITE_PATH`, and `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
+On `cache-base`, WorkCache defaults to `HYPHA_WORKCACHE=memory` so event-derived blocks are available during real runtime checks. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
 
 WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes.
 

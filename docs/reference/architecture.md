@@ -100,9 +100,10 @@ or provider KV cache.
 `CacheBlock` records in a hot-indexed `TypedCacheForest`. Its default registry
 aligns only current Hypha events to primary trees: planning/reasoning events to
 `PlanTree`, model/inference completions to `ComputationTree`, tool and MCP
-completions to `ToolTree`, context events to `ObservationTree`, evaluation and
-regression completions to `VerificationTree`, memory events to `MemoryTree`,
-and serving-cache prefix metadata on `llm.cache.write` to `PromptPrefixTree`.
+completions to `ToolTree`, context and message bus events to
+`ObservationTree`, evaluation and regression completions to
+`VerificationTree`, memory events to `MemoryTree`, and serving-cache prefix
+metadata on `llm.cache.write` to `PromptPrefixTree`.
 
 WorkCache also maintains a rebuildable `WorkGraph` from source events. Each
 normalized event becomes one typed work node, dependency edges are derived from
@@ -114,8 +115,9 @@ Current-run updates are synchronous for immediate reuse; heavier pruning or
 rebuild work belongs behind the same graph/store interfaces and should not
 block an agent step.
 
-The server enables it with `HYPHA_WORKCACHE=memory` or `sqlite`; `off` is the
-default. Derived audit events are `workcache.lookup`, `workcache.hit`,
+cache-base enables it with `HYPHA_WORKCACHE=memory` by default. Set
+`HYPHA_WORKCACHE=off` to disable it or `HYPHA_WORKCACHE=sqlite` to persist
+cache blocks. Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.miss`, `workcache.write`, `workcache.invalidate`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each event links back
 to the source event id/type, tree type, block id, and cache key.

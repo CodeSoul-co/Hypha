@@ -18,6 +18,7 @@ enabled.
 | `inference.completed`, `model.call.completed` | `computation` | `ComputationTree` |
 | `tool.call.completed`, `mcp.call.completed` | `tool` | `ToolTree` |
 | `context.build.completed`, `context.compacted` | `observation` | `ObservationTree` |
+| `message.enqueued`, `message.delivered`, `message.acknowledged`, `message.failed`, `message.dead_lettered` | `observation` | `ObservationTree` |
 | `eval.completed`, `regression.completed` | `verification` | `VerificationTree` |
 | `memory.read.completed`, `memory.write.committed` | `memory` | `MemoryTree` |
 | `llm.cache.write` with prompt prefix metadata | `prompt_prefix` | `PromptPrefixTree` |
@@ -79,7 +80,7 @@ Configure the server with:
 
 ```bash
 HYPHA_WORKCACHE=off
-HYPHA_WORKCACHE=memory
+HYPHA_WORKCACHE=memory  # cache-base default
 HYPHA_WORKCACHE=sqlite
 HYPHA_WORKCACHE_SQLITE_PATH=./data/runtime/cache/hypha-workcache.sqlite
 HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS=4096

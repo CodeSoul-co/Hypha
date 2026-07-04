@@ -50,7 +50,10 @@ describe('@hypha/workcache registry', () => {
       unknownEventPolicy: 'ignore',
     });
     expect(registry.normalize(event('artifact.created'), { unknownEventPolicy: 'ignore' })).toBeNull();
-    expect(registry.normalize(event('message.enqueued'), { unknownEventPolicy: 'ignore' })).toBeNull();
+    expect(registry.normalize(messageEvent('message.enqueued'), { unknownEventPolicy: 'ignore' })).toMatchObject({
+      nodeType: 'observation',
+      treeType: 'ObservationTree',
+    });
     expect(() =>
       registry.normalize(event('artifact.created'), { unknownEventPolicy: 'reject' })
     ).toThrow(/unregistered source event/);
@@ -239,6 +242,114 @@ describe('@hypha/workcache graph-derived demand', () => {
     expect(signal.demandScore).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(signal.demandScore)).toBe(true);
   });
+
+  it('maps message bus events into ObservationTree and WorkGraph agent edges', async () => {
+    const manager = managerWithMemory();
+    const source = messageEvent('message.enqueued');
+
+    const audits = await manager.ingest(source);
+    expect(audits.map((item) => item.type)).toEqual([
+      'workcache.lookup',
+      'workcache.miss',
+      'workcache.write',
+    ]);
+
+    const snapshot = manager.getWorkGraph('run_1');
+    const node = Array.from(snapshot?.nodes.values() ?? [])[0];
+    expect(node).toMatchObject({
+      eventType: 'message.enqueued',
+      nodeType: 'observation',
+      primaryTreeType: 'ObservationTree',
+      operation: 'workflow.input',
+      inputRefs: expect.arrayContaining(['corr_1', 'cause_1']),
+    });
+    expect(Array.from(snapshot?.edges.values() ?? [])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          edgeType: 'agent',
+          from: 'address:workflow:workflow.default',
+          to: node?.id,
+          metadata: { role: 'message.from' },
+        }),
+        expect.objectContaining({
+          edgeType: 'agent',
+          from: node?.id,
+          to: 'address:agent:agent.default',
+          metadata: { role: 'message.to' },
+        }),
+      ])
+    );
+
+    const lookup = await manager.lookup({
+      treeType: 'ObservationTree',
+      cacheKey: createWorkCacheKey({
+        treeType: 'ObservationTree',
+        nodeType: 'observation',
+        identity: {
+          sourceEventType: 'message.enqueued',
+          messageId: 'msg_1',
+          status: 'queued',
+        },
+      }),
+    });
+    expect(lookup.hit).toBe(true);
+    if (lookup.hit) {
+      expect(lookup.block.tags).toContain('message-bus');
+      expect(lookup.block.provenance).toMatchObject({
+        correlationId: 'corr_1',
+        causationId: 'cause_1',
+      });
+    }
+  });
+
+  it('collects every V1 managed tree from aligned source events', async () => {
+    const manager = managerWithMemory();
+    const sources = [
+      planEvent(),
+      reusableToolEvent(),
+      observationEvent('hash-all'),
+      verificationEvent(),
+      memoryEvent(),
+      computationEvent(),
+      prefixEvent('run_1:prefix_all', ['system', 'tool-schema']),
+      messageEvent('message.delivered', {
+        id: 'run_1:message_delivered',
+        payload: {
+          message: runtimeMessageFixture({ status: 'delivered' }),
+        },
+      }),
+    ];
+
+    const writes: WorkCacheAuditEvent[] = [];
+    for (const source of sources) {
+      writes.push(...(await manager.ingest(source)).filter((item) => item.type === 'workcache.write'));
+    }
+
+    expect(new Set(writes.map((item) => item.payload.treeType))).toEqual(
+      new Set<CacheTreeType>([
+        'PlanTree',
+        'ToolTree',
+        'ObservationTree',
+        'VerificationTree',
+        'MemoryTree',
+        'ComputationTree',
+        'PromptPrefixTree',
+      ])
+    );
+    const blocks = await manager.forest.list();
+    expect(new Set(blocks.map((block) => block.treeType))).toEqual(
+      new Set<CacheTreeType>([
+        'PlanTree',
+        'ToolTree',
+        'ObservationTree',
+        'VerificationTree',
+        'MemoryTree',
+        'ComputationTree',
+        'PromptPrefixTree',
+      ])
+    );
+    expect(manager.getWorkGraph('run_1')?.nodes.size).toBe(sources.length);
+  });
 });
 
 describe('@hypha/workcache tree safety rules', () => {
@@ -415,6 +526,97 @@ function prefixEvent(id: string, order: string[]): FrameworkEvent {
       },
     },
   });
+}
+
+function planEvent(): FrameworkEvent {
+  return event('agent.reasoning.completed', {
+    id: 'run_1:plan_1',
+    payload: {
+      planId: 'plan_1',
+      output: { steps: ['inspect', 'act'] },
+      validity: { sourceHashes: { prompt: 'prompt-hash' } },
+    },
+  });
+}
+
+function computationEvent(): FrameworkEvent {
+  return event('model.call.completed', {
+    id: 'run_1:model_1',
+    payload: {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      output: { content: 'ok' },
+      usage: { totalTokens: 12, latencyMs: 20 },
+      requestHash: 'request-hash',
+    },
+  });
+}
+
+function verificationEvent(): FrameworkEvent {
+  return event('eval.completed', {
+    id: 'run_1:eval_1',
+    payload: {
+      target: 'unit',
+      output: { ok: true },
+      sourceHash: 'src-hash',
+      testHash: 'test-hash',
+      envHash: 'env-hash',
+    },
+  });
+}
+
+function memoryEvent(): FrameworkEvent {
+  return event('memory.write.committed', {
+    id: 'run_1:memory_1',
+    payload: {
+      memoryId: 'mem_1',
+      scope: { userId: 'owner' },
+      record: { text: 'remembered' },
+      validity: { sourceHashes: { memory: 'memory-hash' } },
+    },
+  });
+}
+
+function messageEvent(
+  type: Extract<
+    FrameworkEventType,
+    | 'message.enqueued'
+    | 'message.delivered'
+    | 'message.acknowledged'
+    | 'message.failed'
+    | 'message.dead_lettered'
+  >,
+  overrides: Partial<FrameworkEvent> = {}
+): FrameworkEvent {
+  return event(type, {
+    id: overrides.id ?? `run_1:${type}:msg_1`,
+    payload: {
+      message: runtimeMessageFixture(),
+      ...(overrides.payload as Record<string, unknown> | undefined),
+    },
+  });
+}
+
+function runtimeMessageFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    id: 'msg_1',
+    type: 'workflow.input',
+    userId: 'owner',
+    sessionId: 'session_1',
+    runId: 'run_1',
+    from: { kind: 'workflow', id: 'workflow.default' },
+    to: { kind: 'agent', id: 'agent.default' },
+    payload: { text: 'hello' },
+    status: 'queued',
+    createdAt: '2026-07-04T00:00:00.000Z',
+    updatedAt: '2026-07-04T00:00:00.000Z',
+    correlationId: 'corr_1',
+    causationId: 'cause_1',
+    attemptCount: 0,
+    ...overrides,
+  };
 }
 
 function event(

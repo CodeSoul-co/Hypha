@@ -69,7 +69,7 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       },
     };
 
-    const edges = this.createEdges(graph, node, blocks);
+    const edges = this.createEdges(graph, node, blocks, payload);
     graph.nodes.set(nodeId, node);
     for (const edge of edges) {
       graph.edges.set(edge.id, edge);
@@ -115,7 +115,12 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
     return graph;
   }
 
-  private createEdges(graph: WorkGraph, node: WorkGraphNode, blocks: CacheBlock[]): WorkGraphEdge[] {
+  private createEdges(
+    graph: WorkGraph,
+    node: WorkGraphNode,
+    blocks: CacheBlock[],
+    payload: Record<string, unknown>
+  ): WorkGraphEdge[] {
     const edges: WorkGraphEdge[] = [];
     const previousNodeId = graph.frontierNodeIds[graph.frontierNodeIds.length - 1];
     if (previousNodeId) {
@@ -131,6 +136,9 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       edges.push(edge('environment', `${dependency.depType}:${dependency.key}`, node.id, {
         dependency,
       }));
+    }
+    for (const messageEdge of messageAgentEdges(node, payload)) {
+      edges.push(messageEdge);
     }
     for (const block of blocks) {
       edges.push(edge('cache', node.id, block.id, { cacheKey: block.cacheKey }));
@@ -210,8 +218,10 @@ function edge(
 }
 
 function operationFrom(eventType: string, payload: Record<string, unknown>): string {
+  const message = recordFromUnknown(payload.message);
   return (
     stringValue(payload.operation) ??
+    stringValue(message.type) ??
     stringValue(payload.toolId) ??
     stringValue(payload.capabilityId) ??
     stringValue(payload.action) ??
@@ -248,11 +258,14 @@ function costProfileFrom(payload: Record<string, unknown>): CostProfile | undefi
 }
 
 function inputRefsFrom(payload: Record<string, unknown>): string[] {
+  const message = recordFromUnknown(payload.message);
   return uniqueStrings([
     ...stringArray(payload.inputRefs),
     ...stringArray(payload.upstreamEventIds),
     ...stringArray(payload.dependsOn),
     stringValue(payload.inputRef),
+    stringValue(message.causationId),
+    stringValue(message.correlationId),
   ]);
 }
 
@@ -294,6 +307,26 @@ function dependencyRefsFrom(payload: Record<string, unknown>): DependencyRef[] {
     if (hash) refs.push({ depType: 'file', key, hash });
   }
   return dedupeDependencies(refs);
+}
+
+function messageAgentEdges(
+  node: WorkGraphNode,
+  payload: Record<string, unknown>
+): WorkGraphEdge[] {
+  const message = recordFromUnknown(payload.message);
+  const from = addressKey(recordFromUnknown(message.from));
+  const to = addressKey(recordFromUnknown(message.to));
+  const edges: WorkGraphEdge[] = [];
+  if (from) edges.push(edge('agent', from, node.id, { role: 'message.from' }));
+  if (to) edges.push(edge('agent', node.id, to, { role: 'message.to' }));
+  return edges;
+}
+
+function addressKey(address: Record<string, unknown>): string | undefined {
+  const kind = stringValue(address.kind);
+  const id = stringValue(address.id);
+  if (!kind || !id) return undefined;
+  return `address:${kind}:${id}`;
 }
 
 function costToRecomputeScore(cost?: CostProfile): number {

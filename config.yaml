@@ -240,10 +240,10 @@ servingCache:
     path: "${HYPHA_SERVING_CACHE_SQLITE_PATH:./data/runtime/cache/hypha-serving-cache.sqlite}"
 
 workCache:
-  # Event-derived typed runtime cache. Default off keeps source events and
-  # runtime behavior unchanged. This is separate from exact LLM Serving Cache.
-  enabled: "${HYPHA_WORKCACHE_ENABLED:false}"
-  store: "${HYPHA_WORKCACHE:off}"
+  # Event-derived typed runtime cache. cache-base defaults to memory so tree
+  # and WorkGraph updates are collected without extra environment flags.
+  enabled: "${HYPHA_WORKCACHE_ENABLED:true}"
+  store: "${HYPHA_WORKCACHE:memory}"
   promptBudgetTokens: "${HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS:4096}"
   unknownEventPolicy: "${HYPHA_WORKCACHE_UNKNOWN_EVENT_POLICY:ignore}"
   allowExtensionEvents: "${HYPHA_WORKCACHE_ALLOW_EXTENSION_EVENTS:false}"

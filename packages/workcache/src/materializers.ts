@@ -165,6 +165,52 @@ export function materializeMemoryBlock(event: NormalizedWorkEvent): CacheBlock[]
   ];
 }
 
+export function materializeMessageBlock(event: NormalizedWorkEvent): CacheBlock[] {
+  const payload = recordFromUnknown(event.payload);
+  const message = recordFromUnknown(payload.message);
+  const messageId =
+    stringValue(message.id) ??
+    stringValue(payload.messageId) ??
+    stringValue(payload.id) ??
+    event.sourceEventId;
+  const status = stringValue(message.status) ?? stringValue(payload.status) ?? event.sourceEventType;
+  return [
+    createBlock(event, {
+      identity: {
+        sourceEventType: event.sourceEventType,
+        messageId,
+        status,
+      },
+      value: {
+        message: Object.keys(message).length ? message : payload,
+        eventType: event.sourceEventType,
+      },
+      validity: {
+        status: 'valid',
+        provenanceHash: hashStableJson({
+          sourceEventId: event.sourceEventId,
+          sourceEventType: event.sourceEventType,
+          messageId,
+          status,
+        }),
+      },
+      provenance: {
+        messageId,
+        status,
+        from: message.from,
+        to: message.to,
+        correlationId: message.correlationId,
+        causationId: message.causationId,
+      },
+      metadata: {
+        messageType: stringValue(message.type) ?? stringValue(payload.messageType),
+        messageStatus: status,
+      },
+      tags: ['message-bus'],
+    }),
+  ];
+}
+
 export function materializePromptPrefixBlock(event: NormalizedWorkEvent): CacheBlock[] {
   const payload = recordFromUnknown(event.payload);
   const prefixMetadata = promptPrefixMetadataFrom(payload, event.sourceEvent);

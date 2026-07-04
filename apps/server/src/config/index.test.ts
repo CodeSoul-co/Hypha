@@ -120,11 +120,11 @@ describe('configuration storage taxonomy', () => {
     });
   });
 
-  it('keeps WorkCache disabled by default and enables configured stores from env', () => {
+  it('keeps WorkCache enabled by default on cache-base and switches configured stores from env', () => {
     reloadConfig();
     expect(workCacheConfig()).toMatchObject({
-      enabled: false,
-      store: 'off',
+      enabled: true,
+      store: 'memory',
       promptBudgetTokens: 4096,
     });
 
