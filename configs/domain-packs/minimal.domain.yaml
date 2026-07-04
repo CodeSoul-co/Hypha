@@ -1,0 +1,210 @@
+id: domain.minimal
+version: 0.0.0
+name: Minimal Domain Pack
+description: Minimal reusable domain pack for local agent runs.
+taskSchemas:
+  - id: task.minimal
+    version: 0.0.0
+    taskType: generic
+    inputSchema:
+      type: object
+      additionalProperties: true
+    outputContractRef: output.minimal
+    defaultWorkflowRef: workflow.minimal
+    defaultSkillRefs:
+      - id: skill.context-enrichment
+        version: 0.0.0
+outputContracts:
+  - id: output.minimal
+    version: 0.0.0
+    schema:
+      type: object
+      required:
+        - answer
+      properties:
+        answer:
+          type: string
+      additionalProperties: true
+sessionProfiles:
+  - id: session.local
+    version: 0.0.0
+    defaultMetadata:
+      runtimeMode: single-user
+    defaultMemoryProfileRef: memory.local
+    defaultContextProfileRef: context.local
+    defaultMCPProfileRef: mcp.local
+    defaultReasoningProfileRef: reasoning.local
+    defaultPolicyRefs:
+      - policy.readonly
+workflows:
+  - id: workflow.minimal
+    version: 0.0.0
+    initialState: Intake
+    terminalStates:
+      - Completed
+      - Failed
+    states:
+      - id: Intake
+        goal: Normalize task input.
+        policyRefs:
+          - policy.readonly
+      - id: Reasoning
+        goal: Build context, reason, and choose the next action.
+        allowedTools:
+          - tool.search
+        allowedSkills:
+          - skill.context-enrichment
+        allowedMCPProfiles:
+          - mcp.local
+        reasoningProfileRef: reasoning.local
+        policyRefs:
+          - policy.readonly
+        evaluationRefs:
+          - eval.output-contract
+        timeoutPolicy:
+          timeoutMs: 30000
+          onTimeout: fail
+        retryPolicy:
+          maxAttempts: 2
+      - id: Completed
+        goal: Return final output that matches the output contract.
+      - id: Failed
+        goal: Record failure and stop execution.
+    transitions:
+      - from: Intake
+        to: Reasoning
+        guard: input.ready == true
+      - from: Reasoning
+        to: Completed
+      - from: Reasoning
+        to: Failed
+defaultWorkflow: workflow.minimal
+allowedSkills:
+  - id: skill.context-enrichment
+    version: 0.0.0
+defaultSkills:
+  - id: skill.context-enrichment
+    version: 0.0.0
+skillPolicies:
+  - id: skill-policy.context-enrichment
+    version: 0.0.0
+    skillRef:
+      id: skill.context-enrichment
+      version: 0.0.0
+    policyRefs:
+      - policy.readonly
+    allowedTools:
+      - tool.search
+    trustLevel: reviewed
+tools:
+  - id: tool.search
+    version: 0.0.0
+    description: Search local or network-readable references.
+    inputSchema:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+      additionalProperties: false
+    sideEffectLevel: read
+    source: local
+mcpProfiles:
+  - id: mcp.local
+    version: 0.0.0
+    servers:
+      - id: classic
+        mode: local
+        command: mcp-server-classic
+    allowedCapabilities:
+      - read_file
+      - fetch
+      - web_search
+    trustPolicy: read-only reviewed capabilities
+    importPolicy: tools-only
+    toolPolicy: read-only
+    versionPinning: true
+    capabilityHashing: true
+memoryProfiles:
+  - id: memory.local
+    version: 0.0.0
+    providers:
+      - id: structured
+        type: structured
+        providerRef: storage.sqlite.local
+      - id: vector
+        type: vector
+        providerRef: vector.local
+    memoryTypes:
+      - working
+      - episodic
+      - semantic
+    structuredStoreRef: storage.sqlite.local
+    vectorIndexRef: vector.local
+    provenancePolicy: required
+    retrievalPolicy:
+      defaultTopK: 5
+      requireScope: true
+    writePolicyConfig:
+      allowLongTerm: false
+      requireProvenance: true
+contextProfiles:
+  - id: context.local
+    version: 0.0.0
+    sources:
+      - id: context.source.user
+        version: 0.0.0
+        type: user_input
+      - id: context.source.memory
+        version: 0.0.0
+        type: memory
+        provenanceRequired: true
+        trustLevel: reviewed
+      - id: context.source.skill
+        version: 0.0.0
+        type: skill
+        provenanceRequired: true
+        trustLevel: reviewed
+    tokenBudget: 8000
+    provenancePolicy: required
+    instructionBoundaryPolicy: tagged
+reasoningProfiles:
+  - id: reasoning.local
+    version: 0.0.0
+    thinkingMode: structured
+    agenticMode: fsm_react
+    maxSteps: 4
+    persist: summary_only
+defaultReasoningProfile: reasoning.local
+policies:
+  - id: policy.readonly
+    version: 0.0.0
+    defaultEffect: deny
+    rules:
+      - id: policy.rule.read
+        version: 0.0.0
+        effect: allow
+        sideEffectLevels:
+          - none
+          - read
+evaluationProfiles:
+  - id: eval.output-contract
+    version: 0.0.0
+    type: output_contract
+    deterministic: true
+regressionCases:
+  - id: regression.minimal
+    version: 0.0.0
+    fixtureRefs:
+      - id: fixture.minimal
+        version: 0.0.0
+    requiredChecks:
+      - event_types
+      - state_path
+      - output_contract
+deploymentProfile:
+  id: deployment.local
+  version: 0.0.0
+  mode: local
+  runtimeMode: single-user

@@ -15,7 +15,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `@hypha/core`           | Spec primitives, schema definitions, events, errors, policy interfaces.                                                    |
 | `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, `compileWorkflowToFSM`.                                            |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.           |
 | `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, timeout/retry/human-review helpers.                    |
 | `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                              |
 | `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
@@ -64,19 +64,37 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `Outp
 | `workflows`                      | `WorkflowSpec[]`       | Domain workflows that can compile to FSM specs. |
 | `defaultWorkflow`                | string                 | Workflow id used when none is specified.        |
 | `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.     |
+| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                    |
+| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                  |
+| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.            |
 | `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.             |
 | `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.             |
 | `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.            |
-| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                  |
+| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.         |
 | `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.  |
 | `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                           |
 | `regressionCases`                | `RegressionSpec[]`     | Regression cases.                               |
-| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                    |
 | `metadata`                       | object                 | Domain-specific metadata.                       |
 
-`SessionProfileSpec` may define `metadataSchema`, `defaultMetadata`, and default references for memory, tool, MCP, skill, and policy profiles.
+`SessionProfileSpec` may define `metadataSchema`, `defaultMetadata`, and default references for memory, context, tool, MCP, skill, and policy profiles.
 
 `initializeDomainSession(domainPack, options)` returns a `DomainSessionInitialization` with merged metadata and selected profile references.
+
+Domain pack loading and compilation APIs:
+
+| API                                      | Description                                                                                     |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `LocalDomainPackLoader`                  | Loads `.domain.json`, `.domain.yaml`, and `.domain.yml` files from configured directories.      |
+| `DomainPackRegistry`                     | Registers validated packs by `id` and `version`, with latest-by-id lookup.                      |
+| `extendDomainPack(base, overlay)`        | Upserts predefined customizations by `id` while preserving the base pack.                       |
+| `compileWorkflowToFSM(domainPack, opts)` | Compiles one `WorkflowSpec` to `FSMProcessSpec`.                                                |
+| `compileDomainPackToHarnessedSystem()`   | Resolves task/profile/tool/skill/policy bindings and returns FSM, system spec, and agent patch. |
+
+`compileDomainPackToHarnessedSystem(domainPack, options)` returns `bindings`,
+`fsmProcess`, `harnessedSystem`, `agentPatch`, and `sessionInitialization`.
+Use `agentPatch` to apply selected `skillRefs`, `toolRefs`,
+`memoryProfileRef`, `contextSpecRef`, and `policyRefs` to an agent without
+coupling DomainPack declarations to a concrete app surface.
 
 ## Session, Run, and Event
 

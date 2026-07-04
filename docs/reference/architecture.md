@@ -4,22 +4,22 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 
 ## Package Map
 
-| Package                 | Responsibility                                                                                                                  | Should Not Contain                                                 |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `@hypha/core`           | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces.                                                 | Provider SDKs, database clients, HTTP server code.                 |
-| `@hypha/storage`        | Storage provider profiles, topology specs, connection resolution, cloud/local profile helpers.                                  | Concrete database clients or memory behavior.                      |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `ReasoningSpec`, session profile initialization, workflow-to-FSM compilation.                 | Business-specific workflows or app routes.                         |
-| `@hypha/fsm`            | FSM process spec, `FSMRuntime`, guarded transitions, timeout/retry/human-review semantics.                                      | Tool handlers, model calls, storage adapters.                      |
-| `@hypha/kernel`         | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                          | Concrete model providers, direct tool side effects.                |
-| `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.         | Provider-specific request types in public kernel contracts.        |
-| `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters. | Agent loop, workflow semantics, or app-specific model preferences. |
-| `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.           | Direct execution bypassing policy.                                 |
-| `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.     | Provider SDK lifecycle as framework core.                          |
-| `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                     | App session storage rules.                                         |
-| `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                        | Workflow replacement logic or direct tool execution.               |
-| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, skill/reasoning trace events, queues, replay/audit/regression. | FSM internals or app-specific state.                               |
-| `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                        | Framework spec definitions.                                        |
-| `@hypha/testing`        | Fixtures and test helpers for event/spec/runtime contracts.                                                                     | Production runtime behavior.                                       |
+| Package                 | Responsibility                                                                                                                   | Should Not Contain                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `@hypha/core`           | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces.                                                  | Provider SDKs, database clients, HTTP server code.                 |
+| `@hypha/storage`        | Storage provider profiles, topology specs, connection resolution, cloud/local profile helpers.                                   | Concrete database clients or memory behavior.                      |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `ReasoningSpec`, session initialization, local pack loading, overlays, registry, and compiler. | Business-specific workflows or app routes.                         |
+| `@hypha/fsm`            | FSM process spec, `FSMRuntime`, guarded transitions, timeout/retry/human-review semantics.                                       | Tool handlers, model calls, storage adapters.                      |
+| `@hypha/kernel`         | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                           | Concrete model providers, direct tool side effects.                |
+| `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.          | Provider-specific request types in public kernel contracts.        |
+| `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.  | Agent loop, workflow semantics, or app-specific model preferences. |
+| `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.            | Direct execution bypassing policy.                                 |
+| `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.      | Provider SDK lifecycle as framework core.                          |
+| `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                      | App session storage rules.                                         |
+| `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                         | Workflow replacement logic or direct tool execution.               |
+| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, skill/reasoning trace events, queues, replay/audit/regression.  | FSM internals or app-specific state.                               |
+| `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                         | Framework spec definitions.                                        |
+| `@hypha/testing`        | Fixtures and test helpers for event/spec/runtime contracts.                                                                      | Production runtime behavior.                                       |
 
 ## Harness, Runtime, and FSM
 
@@ -30,6 +30,13 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 `fsm` remains a separate package because FSM is a reusable process language. Domain workflows compile into `FSMProcessSpec`, and the ReAct runtime uses FSM transitions without coupling domain declarations to HTTP, storage, or provider adapters.
 
 `RunManager` and `HarnessedReActFSMRunner` live in `@hypha/harness` because they coordinate event recording, run lifecycle, ReAct execution, and FSM callbacks. They do not define FSM semantics; they consume `FSMRuntime` and record the resulting state and transition facts as events.
+
+`@hypha/domain` owns the declaration-to-runtime binding step. `LocalDomainPackLoader`
+loads predefined packs, `DomainPackRegistry` stores validated versions,
+`extendDomainPack()` applies user or deployment overlays, and
+`compileDomainPackToHarnessedSystem()` resolves task, workflow, profile, tool,
+skill, policy, and evaluation refs into an `FSMProcessSpec`,
+`HarnessedAgentSystemSpec`, and agent-facing patch.
 
 ## Dependency Direction
 

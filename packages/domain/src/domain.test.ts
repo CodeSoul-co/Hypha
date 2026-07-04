@@ -1,9 +1,17 @@
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   compileWorkflowToFSM,
+  compileDomainPackToHarnessedSystem,
+  DomainPackRegistry,
   domainPackSpecDefinition,
   domainSpecJsonSchemas,
+  extendDomainPack,
   initializeDomainSession,
+  LocalDomainPackLoader,
+  parseDomainPackDocument,
   reasoningSpecDefinition,
   validateDomainPackSpec,
   validateWorkflowSpec,
@@ -26,6 +34,7 @@ describe('@hypha/domain workflow compiler', () => {
           outputContractRef: 'answer',
         },
       ],
+      outputContracts: [{ id: 'answer', version: '0.0.0', schema: { type: 'object' } }],
       workflows: [
         {
           id: 'intake-reason-finalize',
@@ -76,6 +85,7 @@ describe('@hypha/domain workflow compiler', () => {
           version: '0.0.0',
           defaultMetadata: { locale: 'en' },
           defaultMemoryProfileRef: 'local-memory',
+          defaultContextProfileRef: 'local-context',
           defaultReasoningProfileRef: 'structured-reasoning',
         },
       ],
@@ -91,11 +101,12 @@ describe('@hypha/domain workflow compiler', () => {
       sessionProfileRef: { id: 'default', version: '0.0.0' },
       metadata: { locale: 'en', requestId: 'req_1' },
       memoryProfileRef: 'local-memory',
+      contextProfileRef: 'local-context',
       reasoningProfileRef: 'structured-reasoning',
     });
   });
 
-  it('exports Stage1 DomainPack and Workflow spec schemas with minimal examples', () => {
+  it('exports DomainPack and Workflow spec schemas with reusable examples', () => {
     expect(validateWorkflowSpec(workflowSpecDefinition.example).id).toBe('workflow.default');
     expect(reasoningSpecDefinition.parse(reasoningSpecDefinition.example).id).toBe(
       'reasoning.default'
@@ -107,6 +118,11 @@ describe('@hypha/domain workflow compiler', () => {
     expect(domainSpecJsonSchemas.DomainPackSpec.properties).toMatchObject({
       allowedSkills: { type: 'array' },
       defaultSkills: { type: 'array' },
+      skillPolicies: { type: 'array' },
+      tools: { type: 'array' },
+      mcpProfiles: { type: 'array' },
+      memoryProfiles: { type: 'array' },
+      contextProfiles: { type: 'array' },
       reasoningProfiles: { type: 'array' },
       evaluationProfiles: { type: 'array' },
       regressionCases: { type: 'array' },
@@ -138,6 +154,7 @@ describe('@hypha/domain workflow compiler', () => {
         ...domainPackSpecDefinition.example,
         allowedSkills: [{ id: 'skill.allowed', version: '0.0.0' }],
         defaultSkills: [{ id: 'skill.missing', version: '0.0.0' }],
+        skillPolicies: [],
       })
     ).toThrow(/Default skill is not allowed/);
 
@@ -146,15 +163,13 @@ describe('@hypha/domain workflow compiler', () => {
         ...domainPackSpecDefinition.example,
         allowedSkills: [{ id: 'skill.allowed', version: '0.0.0' }],
         defaultSkills: [],
+        skillPolicies: [],
         workflows: [
           {
             ...domainPackSpecDefinition.example.workflows[0],
-            states: [
-              {
-                ...domainPackSpecDefinition.example.workflows[0].states[0],
-                allowedSkills: ['skill.missing'],
-              },
-            ],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state, index) =>
+              index === 0 ? { ...state, allowedSkills: ['skill.missing'] } : state
+            ),
           },
         ],
       })
@@ -183,14 +198,14 @@ describe('@hypha/domain workflow compiler', () => {
         ],
         mcpProfiles: [
           {
-            id: 'mcp.local',
+            id: 'mcp.default',
             version: '0.0.0',
             servers: [{ id: 'local', mode: 'local' }],
           },
         ],
         memoryProfiles: [
           {
-            id: 'memory.local',
+            id: 'memory.default',
             version: '0.0.0',
             providers: [{ id: 'structured', type: 'structured', providerRef: 'local' }],
             memoryTypes: ['working'],
@@ -198,7 +213,7 @@ describe('@hypha/domain workflow compiler', () => {
         ],
         reasoningProfiles: [
           {
-            id: 'reasoning.local',
+            id: 'reasoning.default',
             version: '0.0.0',
             thinkingMode: 'structured',
             agenticMode: 'react',
@@ -206,10 +221,10 @@ describe('@hypha/domain workflow compiler', () => {
             persist: 'summary_only',
           },
         ],
-        defaultReasoningProfile: 'reasoning.local',
+        defaultReasoningProfile: 'reasoning.default',
         evaluationProfiles: [
           {
-            id: 'eval.schema',
+            id: 'eval.output-schema',
             version: '0.0.0',
             type: 'schema',
             deterministic: true,
@@ -223,5 +238,173 @@ describe('@hypha/domain workflow compiler', () => {
         },
       }).id
     ).toBe('domain.default');
+  });
+
+  it('compiles a DomainPack into FSM, harness system, and Agent patch bindings', () => {
+    const compiled = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      metadata: { requestSource: 'test' },
+    });
+
+    expect(compiled.fsmProcess).toMatchObject({
+      id: 'domain.default.workflow.default.fsm',
+      initialState: 'Intake',
+      terminalStates: ['Completed', 'Failed'],
+    });
+    expect(compiled.harnessedSystem).toMatchObject({
+      id: 'domain.default.workflow.default.system',
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      fsmProcessRef: { id: 'domain.default.workflow.default.fsm', version: '0.0.0' },
+      memoryRefs: [{ id: 'memory.default', version: '0.0.0' }],
+      toolRefs: [{ id: 'tool.search', version: '0.0.0' }],
+      skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      deploymentRef: { id: 'deployment.local', version: '0.0.0' },
+    });
+    expect(compiled.agentPatch).toMatchObject({
+      skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      toolRefs: ['tool.search'],
+      memoryProfileRef: 'memory.default',
+      contextSpecRef: { id: 'context.default', version: '0.0.0' },
+      policyRefs: ['policy.default'],
+    });
+    expect(compiled.bindings).toMatchObject({
+      outputContract: { id: 'output.default' },
+      mcpProfile: { id: 'mcp.default' },
+      reasoningProfile: { id: 'reasoning.default' },
+    });
+    expect(
+      compiled.bindings.workflowStates.find((state) => state.stateId === 'Reasoning')
+    ).toMatchObject({
+      allowedTools: ['tool.search'],
+      allowedSkills: ['skill.context-enrichment'],
+      allowedMCPProfiles: ['mcp.default'],
+      policyRefs: ['policy.default'],
+      evaluationRefs: ['eval.output-schema'],
+    });
+  });
+
+  it('supports overlays for predefined DomainPack customization', () => {
+    const extended = extendDomainPack(domainPackSpecDefinition.example, {
+      version: '0.0.1',
+      metadata: { preset: 'custom' },
+      allowedSkills: [
+        { id: 'skill.context-enrichment', version: '0.0.0' },
+        { id: 'skill.custom', version: '0.0.0' },
+      ],
+      defaultSkills: [{ id: 'skill.custom', version: '0.0.0' }],
+      tools: [
+        {
+          id: 'tool.custom',
+          version: '0.0.0',
+          description: 'Custom read-only tool.',
+          inputSchema: { type: 'object' },
+          sideEffectLevel: 'read',
+        },
+      ],
+    });
+
+    const compiled = compileDomainPackToHarnessedSystem(extended, {
+      agentRef: { id: 'agent.custom', version: '0.0.0' },
+      agentToolRefs: ['tool.custom'],
+    });
+
+    expect(extended.version).toBe('0.0.1');
+    expect(extended.metadata).toMatchObject({ preset: 'custom' });
+    expect(compiled.agentPatch.skillRefs.map((skill) => skill.id)).toEqual([
+      'skill.context-enrichment',
+      'skill.custom',
+    ]);
+    expect(compiled.agentPatch.toolRefs).toContain('tool.custom');
+  });
+
+  it('loads local DomainPack files into a registry', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-domain-'));
+    try {
+      const filePath = path.join(tempDir, 'minimal.domain.yaml');
+      await fs.writeFile(
+        filePath,
+        `
+id: domain.file
+version: 0.0.0
+name: File Domain
+taskSchemas:
+  - id: task.file
+    version: 0.0.0
+    taskType: generic
+    inputSchema:
+      type: object
+    outputContractRef: output.file
+    defaultWorkflowRef: workflow.file
+outputContracts:
+  - id: output.file
+    version: 0.0.0
+    schema:
+      type: object
+workflows:
+  - id: workflow.file
+    version: 0.0.0
+    initialState: Start
+    terminalStates: [Done]
+    states:
+      - id: Start
+        goal: Read input
+      - id: Done
+        goal: Return output
+    transitions:
+      - from: Start
+        to: Done
+defaultWorkflow: workflow.file
+`,
+        'utf-8'
+      );
+
+      const registry = new DomainPackRegistry();
+      const loaded = await new LocalDomainPackLoader({ directories: [tempDir] }).loadInto(registry);
+      const parsed = parseDomainPackDocument(await fs.readFile(filePath, 'utf-8'), filePath);
+
+      expect(loaded.map((domainPack) => domainPack.id)).toEqual(['domain.file']);
+      expect(registry.get('domain.file')?.id).toBe('domain.file');
+      expect(parsed.id).toBe('domain.file');
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects broken internal DomainPack references', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        taskSchemas: [
+          {
+            ...domainPackSpecDefinition.example.taskSchemas[0],
+            outputContractRef: 'missing-output',
+          },
+        ],
+      })
+    ).toThrow(/Task output contract not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            transitions: [{ from: 'Intake', to: 'Missing' }],
+          },
+        ],
+      })
+    ).toThrow(/Workflow transition to state not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        sessionProfiles: [
+          {
+            ...domainPackSpecDefinition.example.sessionProfiles![0],
+            defaultContextProfileRef: 'missing-context',
+          },
+        ],
+      })
+    ).toThrow(/Session default context profile not found/);
   });
 });

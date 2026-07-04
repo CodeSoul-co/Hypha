@@ -51,14 +51,24 @@ export const domainPack: DomainPackSpec = {
 };
 ```
 
-Validate a pack before using it:
+Validate and compile a pack before using it:
 
 ```ts
-import { validateDomainPackSpec, compileWorkflowToFSM } from '@hypha/domain';
+import { compileDomainPackToHarnessedSystem, validateDomainPackSpec } from '@hypha/domain';
 
 const validPack = validateDomainPackSpec(domainPack);
-const fsm = compileWorkflowToFSM(validPack);
+const compiled = compileDomainPackToHarnessedSystem(validPack, {
+  agentRef: { id: 'agent.default', version: '0.0.0' },
+});
+
+compiled.fsmProcess; // FSMProcessSpec
+compiled.harnessedSystem; // HarnessedAgentSystemSpec
+compiled.agentPatch; // skill/tool/memory/context refs for an AgentSpec
 ```
+
+`configs/domain-packs/minimal.domain.yaml` is a loadable local example that
+includes task, output, workflow, skill, tool, MCP, memory, context, policy,
+evaluation, regression, and deployment bindings.
 
 ## Field Contracts
 
@@ -71,9 +81,11 @@ const fsm = compileWorkflowToFSM(validPack);
 | `workflows`                      | yes      | Declares workflow states and transitions.                                            |
 | `defaultWorkflow`                | no       | Selects the workflow used when no workflow id is provided.                           |
 | `allowedSkills`, `defaultSkills` | no       | Declares which agent skills are permitted or enabled by default.                     |
+| `skillPolicies`                  | no       | Binds skills to policy refs, tool allow-lists, required tools, and trust level.      |
 | `tools`                          | no       | Embeds local or normalized `ToolSpec` contracts.                                     |
 | `mcpProfiles`                    | no       | Declares MCP server and capability import policy.                                    |
 | `memoryProfiles`                 | no       | Declares memory provider, type, provenance, privacy, and retrieval policy.           |
+| `contextProfiles`                | no       | Declares context sources, token budget, provenance, and instruction boundaries.      |
 | `policies`                       | no       | Declares permission or review policies.                                              |
 | `evaluationProfiles`             | no       | Declares schema, process, cost, latency, human, or regression evaluations.           |
 | `regressionCases`                | no       | Declares event-derived regression cases.                                             |
@@ -85,6 +97,30 @@ const fsm = compileWorkflowToFSM(validPack);
 Workflow states are declarative. They may reference allowed tools, skills, MCP profiles, memory policy, policy refs, human review, timeout, retry, input contract, and output contract.
 
 Workflow transitions should use deterministic guards. Avoid provider-specific prompts or business-specific side effects inside core workflow declarations. If a domain needs specialized behavior, express it as a DomainPack example or as an adapter outside framework core.
+
+## Loading, Overlays, and Registry
+
+Use the local loader for predefined or user-edited packs:
+
+```ts
+import { DomainPackRegistry, LocalDomainPackLoader, extendDomainPack } from '@hypha/domain';
+
+const registry = new DomainPackRegistry();
+await new LocalDomainPackLoader({
+  directories: ['configs/domain-packs'],
+}).loadInto(registry);
+
+const base = registry.get('domain.minimal');
+if (!base) throw new Error('DomainPack not found: domain.minimal');
+
+const customized = extendDomainPack(base, {
+  version: '0.0.1',
+  defaultSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+});
+```
+
+`extendDomainPack()` upserts array fields by `id`, so a predefined pack can be
+customized without copying every task, workflow, tool, profile, or policy.
 
 ## Skill Binding Rules
 
@@ -98,7 +134,11 @@ const state = {
 };
 ```
 
-`validateDomainPackSpec()` rejects `defaultSkills`, task default skills, or workflow state `allowedSkills` that are outside the DomainPack `allowedSkills` list. At runtime, pass the selected state as `metadata.workflowState`; `SkillContextBuilder` uses that allow-list before loading skill instructions.
+`validateDomainPackSpec()` rejects `defaultSkills`, task default skills, skill
+policies, or workflow state `allowedSkills` that are outside the DomainPack
+`allowedSkills` list. At runtime, pass the selected state as
+`metadata.workflowState`; `SkillContextBuilder` uses that allow-list before
+loading skill instructions.
 
 ## Session Initialization
 
@@ -111,4 +151,25 @@ const sessionInit = initializeDomainSession(domainPack, {
 });
 ```
 
-The returned object contains `domainPackRef`, optional `sessionProfileRef`, merged `metadata`, and default memory/tool/MCP/skill/policy refs.
+The returned object contains `domainPackRef`, optional `sessionProfileRef`,
+merged `metadata`, and default memory/context/tool/MCP/skill/policy refs.
+
+## Compilation Result
+
+`compileDomainPackToHarnessedSystem()` resolves a selected task, workflow,
+session profile, memory profile, MCP profile, context profile, reasoning
+profile, policy refs, evaluation refs, skills, and tools. It returns:
+
+| Field                   | Purpose                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| `domainPack`            | Validated `DomainPackSpec`.                                                        |
+| `bindings`              | Resolved task, profiles, policies, tools, skills, and workflow state restrictions. |
+| `fsmProcess`            | Compiled `FSMProcessSpec` from the selected workflow.                              |
+| `harnessedSystem`       | `HarnessedAgentSystemSpec` tying agent, FSM, trace, policy, memory, tools, skills. |
+| `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.      |
+| `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.           |
+
+All internal references are checked during validation: task output contracts,
+workflow state transitions, session profile refs, state tool/MCP/reasoning
+bindings, policy refs, evaluation refs, and skill policies must resolve inside
+the same DomainPack unless they are explicitly passed as runtime compile options.
