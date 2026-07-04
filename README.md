@@ -58,7 +58,11 @@ Configure the default backend and endpoints in `config.yaml` or `.env`, for exam
 
 Hypha Serving Cache is a lightweight middleware for LLM provider calls. It provides exact request-level caching, deterministic cache keys, pluggable stores, cache policies, prompt prefix metadata, and trace events without changing the agent runtime or Domain Pack interfaces.
 
-Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`. The default `off` mode keeps provider calls on the original path. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
+The exact cache key is derived from the resolved provider, model, system or prefix content, messages, tools/function schemas, generation params, and optional scope fields such as `userId`, `sessionId`, `projectId`, and `domainPackId`. Request ids, timestamps, and undefined values are excluded before hashing.
+
+Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`; the default `off` mode keeps provider calls on the original path. `HYPHA_SERVING_CACHE_MODE` supports `off`, `read`, `write`, and `readwrite`, and `HYPHA_SERVING_CACHE_TTL_MS` controls expiry. SQLite entries use `HYPHA_SERVING_CACHE_SQLITE_PATH`.
+
+Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
 
 ## Development Commands
 

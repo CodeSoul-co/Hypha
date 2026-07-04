@@ -56,6 +56,16 @@ Agent inference 由 `@hypha/inference` 提供：prompt 编译、prefix 分段、
 
 默认 backend 与 endpoint 在 `config.yaml` 或 `.env` 中配置，例如 `HYPHA_INFERENCE_DEFAULT_BACKEND=sglang` 和 `SGLANG_BASE_URL=http://localhost:30000`。
 
+## Serving Cache
+
+Hypha Serving Cache 是 LLM provider 调用前后的轻量 middleware。它提供 exact request-level cache、确定性 cache key、可插拔 store、cache policy、prompt prefix metadata 和 trace event，不改变 agent runtime 或 Domain Pack 接口。
+
+exact cache key 来自已解析的 provider、model、system 或 prefix content、messages、tools/function schema、生成参数，以及可选 scope 字段，例如 `userId`、`sessionId`、`projectId` 和 `domainPackId`。`requestId`、timestamp 和 `undefined` 值不会进入 key。
+
+通过 `HYPHA_SERVING_CACHE=memory` 或 `HYPHA_SERVING_CACHE=sqlite` 开启；默认 `off` 会保持 provider 原路径。`HYPHA_SERVING_CACHE_MODE` 支持 `off`、`read`、`write` 和 `readwrite`，`HYPHA_SERVING_CACHE_TTL_MS` 控制过期时间，SQLite 文件路径由 `HYPHA_SERVING_CACHE_SQLITE_PATH` 设置。
+
+运行时 trace 可能包含 `llm.cache.lookup`、`llm.cache.hit`、`llm.cache.miss`、`llm.cache.write` 和 `llm.cache.bypass`。当前版本中 streaming request 会 bypass cache。本层不实现 semantic cache、cache tree、WorkCache 调度、provider KV cache 管理或 CPU/GPU cache migration。
+
 ## 开发命令
 
 ```bash
