@@ -18,12 +18,17 @@ import {
   BasicReActAgentRuntime,
   DefaultContextBuilder,
   DefaultVerifier,
+  ReasoningContextBuilder,
   ReActRunner,
+  type BuiltAgentContext,
   type ContextBuildInput,
   type ContextBuilder,
+  type AgenticReasoner,
   type ReActAgentRuntime,
   type ReActRunResult,
   type ReActStep,
+  type ReasoningConfig,
+  type ThinkingPlanner,
   type Verifier,
 } from '@hypha/kernel';
 import { MockToolRunner, type ToolRunner } from '@hypha/tools';
@@ -95,10 +100,12 @@ export interface ReplayProjection {
   toolCallEventIds: string[];
   policyDecisionEventIds: string[];
   memoryEventIds: string[];
+  reasoningEventIds: string[];
   modelCalls: FrameworkEvent[];
   toolCalls: FrameworkEvent[];
   memoryReads: FrameworkEvent[];
   memoryWrites: FrameworkEvent[];
+  reasoningEvents: FrameworkEvent[];
   policyDecisions: FrameworkEvent[];
   finalOutput?: unknown;
 }
@@ -108,6 +115,7 @@ export interface AuditProjection {
   eventCount: number;
   policyDecisionCount: number;
   memoryWriteCount: number;
+  reasoningDecisionCount: number;
   toolCallCount: number;
   missingRunIds: string[];
 }
@@ -118,6 +126,7 @@ export interface RegressionProjection {
   statePath: string[];
   toolCalls: Array<{ toolId?: unknown; status: string }>;
   memoryWriteCount: number;
+  reasoningDecisionCount: number;
   finalOutput?: unknown;
 }
 
@@ -138,6 +147,9 @@ export interface HarnessedReActFSMRunnerOptions {
   runManager?: RunManager;
   fsmSpec?: FSMProcessSpec;
   contextBuilder?: ContextBuilder;
+  thinkingPlanner?: ThinkingPlanner;
+  agenticReasoner?: AgenticReasoner;
+  reasoningConfig?: ReasoningConfig;
   verifier?: Verifier;
   reactRuntime?: ReActAgentRuntime;
   maxIterations?: number;
@@ -268,6 +280,9 @@ export class EventFirstRuntime {
         status: event.type,
       })),
       memoryWriteCount: replay.memoryWrites.length,
+      reasoningDecisionCount: replay.reasoningEvents.filter(
+        (event) => event.type === 'reasoning.decision.recorded'
+      ).length,
       finalOutput: replay.finalOutput,
     };
   }
@@ -385,10 +400,82 @@ export class RunManager {
     });
   }
 
-  async recordReactStep(
+  async recordThinkingStarted(
     context: RunExecutionContext,
-    step: ReActStep
+    payload: Record<string, unknown>
   ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'thinking.started'),
+      type: 'thinking.started',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordThinkingCompleted(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'thinking.completed'),
+      type: 'thinking.completed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordAgentDeliberationStarted(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'agent.deliberation.started'),
+      type: 'agent.deliberation.started',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordAgentDeliberationCompleted(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'agent.deliberation.completed'),
+      type: 'agent.deliberation.completed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordReasoningDecision(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'reasoning.decision.recorded'),
+      type: 'reasoning.decision.recorded',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordReactStep(context: RunExecutionContext, step: ReActStep): Promise<FrameworkEvent> {
     return this.runtime.appendRunEvent({
       id: this.nextEventId(context.runId, `react.step.${step.phase}`),
       type: 'react.step.completed',
@@ -496,7 +583,17 @@ export class HarnessedReActFSMRunner {
   constructor(private readonly options: HarnessedReActFSMRunnerOptions) {
     this.runManager = options.runManager ?? new RunManager();
     this.fsmSpec = options.fsmSpec ?? defaultReActFSMProcessSpec;
-    this.contextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    const baseContextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    this.contextBuilder =
+      options.thinkingPlanner || options.agenticReasoner || options.reasoningConfig
+        ? new ReasoningContextBuilder({
+            baseBuilder: baseContextBuilder,
+            planner: options.thinkingPlanner,
+            reasoner: options.agenticReasoner,
+            config: options.reasoningConfig,
+            now: options.now,
+          })
+        : baseContextBuilder;
     this.verifier = options.verifier ?? new DefaultVerifier();
     this.toolRunner = options.toolRunner ?? new MockToolRunner();
     this.reactRuntime = options.reactRuntime;
@@ -555,7 +652,11 @@ export class HarnessedReActFSMRunner {
         memoryContextCount: context.memoryContext?.length ?? 0,
         contextBudget: context.contextBudget,
         contextProvenance: context.contextProvenance,
+        reasoningConfig: context.reasoningConfig,
+        thinkingPlanId: context.thinkingPlan?.id,
+        reasoningDecisionId: context.reasoningDecision?.id,
       });
+      await this.recordReasoningEvents(runContext, context);
       await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
 
       const reactRuntime =
@@ -636,6 +737,36 @@ export class HarnessedReActFSMRunner {
       // A failed transition should not prevent the run.failed fact from being recorded.
     }
   }
+
+  private async recordReasoningEvents(
+    context: RunExecutionContext,
+    builtContext: BuiltAgentContext
+  ): Promise<void> {
+    if (builtContext.thinkingPlan) {
+      await this.runManager.recordThinkingStarted(context, {
+        config: builtContext.reasoningConfig,
+        plannerRef: builtContext.reasoningConfig?.plannerRef,
+      });
+      await this.runManager.recordThinkingCompleted(context, {
+        thinkingPlan: builtContext.thinkingPlan,
+      });
+    }
+    if (builtContext.reasoningDecision) {
+      await this.runManager.recordAgentDeliberationStarted(context, {
+        config: builtContext.reasoningConfig,
+        reasonerRef: builtContext.reasoningConfig?.reasonerRef,
+        thinkingPlanId: builtContext.thinkingPlan?.id,
+      });
+      await this.runManager.recordAgentDeliberationCompleted(context, {
+        decisionId: builtContext.reasoningDecision.id,
+        mode: builtContext.reasoningDecision.mode,
+        recommendedPhase: builtContext.reasoningDecision.recommendedPhase,
+      });
+      await this.runManager.recordReasoningDecision(context, {
+        reasoningDecision: builtContext.reasoningDecision,
+      });
+    }
+  }
 }
 
 function stateForReActStep(step: ReActStep): string | null {
@@ -685,9 +816,7 @@ export function projectRun(events: FrameworkEvent[]): RuntimeRun | null {
   const terminal = [...events]
     .reverse()
     .find((event) => ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type));
-  const waitingHuman = [...events]
-    .reverse()
-    .find((event) => event.type === 'run.waiting_human');
+  const waitingHuman = [...events].reverse().find((event) => event.type === 'run.waiting_human');
   return {
     ...run,
     status: terminal
@@ -721,12 +850,16 @@ export function projectReplay(events: FrameworkEvent[]): ReplayProjection {
     memoryEventIds: events
       .filter((event) => event.type.startsWith('memory.'))
       .map((event) => event.id),
+    reasoningEventIds: events
+      .filter((event) => isReasoningEventType(event.type))
+      .map((event) => event.id),
     modelCalls: events.filter((event) => event.type.startsWith('model.call.')),
     toolCalls: events.filter((event) =>
       ['tool.call.completed', 'tool.call.failed', 'tool.call.rejected'].includes(event.type)
     ),
     memoryReads: events.filter((event) => event.type.startsWith('memory.read.')),
     memoryWrites: events.filter((event) => event.type.startsWith('memory.write.')),
+    reasoningEvents: events.filter((event) => isReasoningEventType(event.type)),
     policyDecisions: events.filter((event) => event.type.includes('policy')),
     finalOutput: terminal ? (terminal.payload as Record<string, unknown>).output : undefined,
   };
@@ -739,9 +872,21 @@ export function projectAudit(events: FrameworkEvent[]): AuditProjection {
     eventCount: events.length,
     policyDecisionCount: events.filter((event) => event.type.includes('policy')).length,
     memoryWriteCount: events.filter((event) => event.type === 'memory.write.committed').length,
+    reasoningDecisionCount: events.filter((event) => event.type === 'reasoning.decision.recorded')
+      .length,
     toolCallCount: events.filter((event) => event.type === 'tool.call.completed').length,
     missingRunIds: events.filter((event) => !event.runId).map((event) => event.id),
   };
+}
+
+function isReasoningEventType(type: FrameworkEvent['type']): boolean {
+  return (
+    type === 'thinking.started' ||
+    type === 'thinking.completed' ||
+    type === 'agent.deliberation.started' ||
+    type === 'agent.deliberation.completed' ||
+    type === 'reasoning.decision.recorded'
+  );
 }
 
 function statusFromEvents(

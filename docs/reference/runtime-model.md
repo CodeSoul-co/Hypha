@@ -82,6 +82,22 @@ Tool actions must use a `ToolRunner`. Model calls must use an `InferenceProvider
 
 `ReActAgentRunner` provides the default package-level wiring for `ContextBuilder`, `ReActAgentRuntime`, `Verifier`, inference, and tools. `HarnessedReActFSMRunner` composes that ReAct execution with `FSMRuntime` and `RunManager` so every FSM state is traceable and replayable from events.
 
+## Thinking and Agentic Reasoning
+
+Reasoning is explicit and structured. `ReasoningContextBuilder` runs after normal context construction and before ReAct execution. It attaches `ThinkingPlan` and `AgenticReasoningDecision` to `BuiltAgentContext`, and `BasicReActAgentRuntime` forwards those summaries inside the model request context.
+
+Harnessed runs emit:
+
+```text
+thinking.started
+thinking.completed
+agent.deliberation.started
+agent.deliberation.completed
+reasoning.decision.recorded
+```
+
+These events contain summaries and decisions, not raw hidden chain-of-thought. Replay and audit projections expose reasoning event ids and reasoning decision counts. Domain Packs may declare `ReasoningSpec` profiles and reference them from session profiles or workflow states.
+
 ## Context and Memory
 
 Memory is persisted state; context is the bounded model-call view built for one run. `MemoryContextBuilder` resolves the active `MemoryScope`, searches the configured semantic, episodic, procedural, or other memory types, applies `ContextBudget`, and injects selected records into the model request as tagged system context. Each included memory item carries `ContextProvenance` with record id, type, score, original provenance, and inclusion time.

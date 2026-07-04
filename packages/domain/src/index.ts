@@ -49,6 +49,8 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   tools?: ToolSpec[];
   mcpProfiles?: MCPIntegrationSpec[];
   memoryProfiles?: MemorySpec[];
+  reasoningProfiles?: ReasoningSpec[];
+  defaultReasoningProfile?: string;
   policies?: PolicySpec[];
   evaluationProfiles?: EvaluationSpec[];
   regressionCases?: RegressionSpec[];
@@ -60,6 +62,7 @@ export interface SessionProfileSpec extends VersionedSpec, SpecMetadata {
   metadataSchema?: JsonSchema;
   defaultMetadata?: Record<string, unknown>;
   defaultMemoryProfileRef?: string;
+  defaultReasoningProfileRef?: string;
   defaultToolProfileRef?: string;
   defaultMCPProfileRef?: string;
   defaultSkillPolicyRef?: string;
@@ -71,10 +74,26 @@ export interface DomainSessionInitialization {
   sessionProfileRef?: SpecRef;
   metadata: Record<string, unknown>;
   memoryProfileRef?: string;
+  reasoningProfileRef?: string;
   toolProfileRef?: string;
   mcpProfileRef?: string;
   skillPolicyRef?: string;
   policyRefs?: string[];
+}
+
+export type DomainThinkingMode = 'none' | 'summary' | 'structured';
+export type DomainAgenticReasoningMode = 'react' | 'fsm_react' | 'tot' | 'critique';
+export type DomainReasoningPersistence = 'summary_only' | 'events_only';
+
+export interface ReasoningSpec extends VersionedSpec, SpecMetadata {
+  thinkingMode: DomainThinkingMode;
+  agenticMode: DomainAgenticReasoningMode;
+  maxSteps?: number;
+  persist?: DomainReasoningPersistence;
+  plannerRef?: string;
+  reasonerRef?: string;
+  metadataSchema?: JsonSchema;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TaskSchemaSpec extends VersionedSpec, SpecMetadata {
@@ -120,6 +139,7 @@ export interface WorkflowStateSpec extends SpecMetadata {
   allowedSkills?: string[];
   allowedMCPProfiles?: string[];
   memoryPolicyRef?: string;
+  reasoningProfileRef?: string;
   policyRefs?: string[];
   evaluationRefs?: string[];
   humanReviewRef?: string;
@@ -161,6 +181,7 @@ export function initializeDomainSession(
       ...(options.metadata ?? {}),
     },
     memoryProfileRef: profile?.defaultMemoryProfileRef,
+    reasoningProfileRef: profile?.defaultReasoningProfileRef,
     toolProfileRef: profile?.defaultToolProfileRef,
     mcpProfileRef: profile?.defaultMCPProfileRef,
     skillPolicyRef: profile?.defaultSkillPolicyRef,
@@ -178,7 +199,9 @@ export function compileWorkflowToFSM(
     name: state.name,
     description: state.description ?? state.goal,
     kind: workflow.terminalStates.includes(state.id) ? inferTerminalKind(state.id) : 'domain',
-    timeoutPolicy: state.timeoutPolicy ?? (state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined),
+    timeoutPolicy:
+      state.timeoutPolicy ??
+      (state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined),
     retryPolicy: state.retryPolicy,
     humanReviewPolicy: state.humanReviewPolicy,
     policyRefs: state.policyRefs,
@@ -240,30 +263,41 @@ export const riskProfileSpecSchema = z.object({
   escalationPolicyRef: z.string().optional(),
 });
 
-export const sessionProfileSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    metadataSchema: jsonSchemaSchema.optional(),
-    defaultMetadata: z.record(z.unknown()).optional(),
-    defaultMemoryProfileRef: z.string().optional(),
-    defaultToolProfileRef: z.string().optional(),
-    defaultMCPProfileRef: z.string().optional(),
-    defaultSkillPolicyRef: z.string().optional(),
-    defaultPolicyRefs: z.array(z.string()).optional(),
-  }) satisfies ZodType<SessionProfileSpec>;
+export const domainThinkingModeSchema = z.enum(['none', 'summary', 'structured']);
+export const domainAgenticReasoningModeSchema = z.enum(['react', 'fsm_react', 'tot', 'critique']);
+export const domainReasoningPersistenceSchema = z.enum(['summary_only', 'events_only']);
+export const reasoningSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  thinkingMode: domainThinkingModeSchema,
+  agenticMode: domainAgenticReasoningModeSchema,
+  maxSteps: z.number().int().positive().optional(),
+  persist: domainReasoningPersistenceSchema.optional(),
+  plannerRef: z.string().optional(),
+  reasonerRef: z.string().optional(),
+  metadataSchema: jsonSchemaSchema.optional(),
+  metadata: z.record(z.unknown()).optional(),
+}) satisfies ZodType<ReasoningSpec>;
 
-export const taskSchemaSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    taskType: z.string().min(1),
-    inputSchema: jsonSchemaSchema,
-    constraintsSchema: jsonSchemaSchema.optional(),
-    acceptanceCriteriaSchema: jsonSchemaSchema.optional(),
-    outputContractRef: z.string().min(1),
-    riskProfile: riskProfileSpecSchema.optional(),
-    defaultWorkflowRef: z.string().optional(),
-    defaultSkillRefs: z.array(specRefSchema).optional(),
-  }) satisfies ZodType<TaskSchemaSpec>;
+export const sessionProfileSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  metadataSchema: jsonSchemaSchema.optional(),
+  defaultMetadata: z.record(z.unknown()).optional(),
+  defaultMemoryProfileRef: z.string().optional(),
+  defaultReasoningProfileRef: z.string().optional(),
+  defaultToolProfileRef: z.string().optional(),
+  defaultMCPProfileRef: z.string().optional(),
+  defaultSkillPolicyRef: z.string().optional(),
+  defaultPolicyRefs: z.array(z.string()).optional(),
+}) satisfies ZodType<SessionProfileSpec>;
+
+export const taskSchemaSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  taskType: z.string().min(1),
+  inputSchema: jsonSchemaSchema,
+  constraintsSchema: jsonSchemaSchema.optional(),
+  acceptanceCriteriaSchema: jsonSchemaSchema.optional(),
+  outputContractRef: z.string().min(1),
+  riskProfile: riskProfileSpecSchema.optional(),
+  defaultWorkflowRef: z.string().optional(),
+  defaultSkillRefs: z.array(specRefSchema).optional(),
+}) satisfies ZodType<TaskSchemaSpec>;
 
 export const workflowStateSpecSchema = specMetadataSchema.extend({
   id: z.string().min(1),
@@ -274,6 +308,7 @@ export const workflowStateSpecSchema = specMetadataSchema.extend({
   allowedSkills: z.array(z.string()).optional(),
   allowedMCPProfiles: z.array(z.string()).optional(),
   memoryPolicyRef: z.string().optional(),
+  reasoningProfileRef: z.string().optional(),
   policyRefs: z.array(z.string()).optional(),
   evaluationRefs: z.array(z.string()).optional(),
   humanReviewRef: z.string().optional(),
@@ -291,35 +326,33 @@ export const workflowTransitionSpecSchema = z.object({
   description: z.string().optional(),
 });
 
-export const workflowSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    initialState: z.string().min(1),
-    terminalStates: z.array(z.string().min(1)).min(1),
-    states: z.array(workflowStateSpecSchema).min(1),
-    transitions: z.array(workflowTransitionSpecSchema),
-  }) satisfies ZodType<WorkflowSpec>;
+export const workflowSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  initialState: z.string().min(1),
+  terminalStates: z.array(z.string().min(1)).min(1),
+  states: z.array(workflowStateSpecSchema).min(1),
+  transitions: z.array(workflowTransitionSpecSchema),
+}) satisfies ZodType<WorkflowSpec>;
 
-export const domainPackSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    name: z.string().min(1),
-    taskSchemas: z.array(taskSchemaSpecSchema),
-    outputContracts: z.array(outputContractSpecSchema).optional(),
-    sessionProfiles: z.array(sessionProfileSpecSchema).optional(),
-    workflows: z.array(workflowSpecSchema).min(1),
-    defaultWorkflow: z.string().optional(),
-    allowedSkills: z.array(specRefSchema).optional(),
-    defaultSkills: z.array(specRefSchema).optional(),
-    tools: z.array(toolSpecSchema).optional(),
-    mcpProfiles: z.array(mcpIntegrationSpecSchema).optional(),
-    memoryProfiles: z.array(memorySpecSchema).optional(),
-    policies: z.array(policySpecSchema).optional(),
-    evaluationProfiles: z.array(evaluationSpecSchema).optional(),
-    regressionCases: z.array(regressionSpecSchema).optional(),
-    deploymentProfile: deploymentSpecSchema.optional(),
-    metadata: z.record(z.unknown()).optional(),
-  }) satisfies ZodType<DomainPackSpec>;
+export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  name: z.string().min(1),
+  taskSchemas: z.array(taskSchemaSpecSchema),
+  outputContracts: z.array(outputContractSpecSchema).optional(),
+  sessionProfiles: z.array(sessionProfileSpecSchema).optional(),
+  workflows: z.array(workflowSpecSchema).min(1),
+  defaultWorkflow: z.string().optional(),
+  allowedSkills: z.array(specRefSchema).optional(),
+  defaultSkills: z.array(specRefSchema).optional(),
+  tools: z.array(toolSpecSchema).optional(),
+  mcpProfiles: z.array(mcpIntegrationSpecSchema).optional(),
+  memoryProfiles: z.array(memorySpecSchema).optional(),
+  reasoningProfiles: z.array(reasoningSpecSchema).optional(),
+  defaultReasoningProfile: z.string().optional(),
+  policies: z.array(policySpecSchema).optional(),
+  evaluationProfiles: z.array(evaluationSpecSchema).optional(),
+  regressionCases: z.array(regressionSpecSchema).optional(),
+  deploymentProfile: deploymentSpecSchema.optional(),
+  metadata: z.record(z.unknown()).optional(),
+}) satisfies ZodType<DomainPackSpec>;
 
 export const workflowSpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -341,6 +374,7 @@ export const workflowSpecJsonSchema: JsonSchema = {
           goal: { type: 'string' },
           allowedTools: { type: 'array', items: { type: 'string' } },
           allowedSkills: { type: 'array', items: { type: 'string' } },
+          reasoningProfileRef: { type: 'string' },
           policyRefs: { type: 'array', items: { type: 'string' } },
           humanReviewPolicy: { type: 'object' },
           timeoutPolicy: { type: 'object' },
@@ -364,6 +398,26 @@ export const workflowSpecJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+export const reasoningSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'version', 'thinkingMode', 'agenticMode'],
+  properties: {
+    id: { type: 'string' },
+    version: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    thinkingMode: { enum: ['none', 'summary', 'structured'] },
+    agenticMode: { enum: ['react', 'fsm_react', 'tot', 'critique'] },
+    maxSteps: { type: 'integer', minimum: 1 },
+    persist: { enum: ['summary_only', 'events_only'] },
+    plannerRef: { type: 'string' },
+    reasonerRef: { type: 'string' },
+    metadataSchema: { type: 'object' },
+    metadata: { type: 'object' },
+  },
+  additionalProperties: false,
+};
+
 export const domainPackSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'name', 'taskSchemas', 'workflows'],
@@ -382,6 +436,8 @@ export const domainPackSpecJsonSchema: JsonSchema = {
     tools: { type: 'array', items: { type: 'object' } },
     mcpProfiles: { type: 'array', items: { type: 'object' } },
     memoryProfiles: { type: 'array', items: { type: 'object' } },
+    reasoningProfiles: { type: 'array', items: reasoningSpecJsonSchema },
+    defaultReasoningProfile: { type: 'string' },
     policies: { type: 'array', items: { type: 'object' } },
     evaluationProfiles: { type: 'array', items: { type: 'object' } },
     regressionCases: { type: 'array', items: { type: 'object' } },
@@ -415,6 +471,16 @@ export const workflowSpecExample: WorkflowSpec = {
   ],
 };
 
+export const reasoningSpecExample: ReasoningSpec = {
+  id: 'reasoning.default',
+  version: '0.0.0',
+  name: 'Default Structured Reasoning',
+  thinkingMode: 'structured',
+  agenticMode: 'fsm_react',
+  maxSteps: 4,
+  persist: 'summary_only',
+};
+
 export const domainPackSpecExample: DomainPackSpec = {
   id: 'domain.default',
   version: '0.0.0',
@@ -441,10 +507,13 @@ export const domainPackSpecExample: DomainPackSpec = {
       id: 'session.default',
       version: '0.0.0',
       defaultMetadata: { mode: 'single-user' },
+      defaultReasoningProfileRef: reasoningSpecExample.id,
     },
   ],
   workflows: [workflowSpecExample],
   defaultWorkflow: workflowSpecExample.id,
+  reasoningProfiles: [reasoningSpecExample],
+  defaultReasoningProfile: reasoningSpecExample.id,
   evaluationProfiles: [
     {
       id: 'eval.output-schema',
@@ -476,6 +545,13 @@ export const workflowSpecDefinition = defineSpecSchema<WorkflowSpec>({
   example: workflowSpecExample,
 });
 
+export const reasoningSpecDefinition = defineSpecSchema<ReasoningSpec>({
+  id: 'ReasoningSpec',
+  zod: reasoningSpecSchema,
+  jsonSchema: reasoningSpecJsonSchema,
+  example: reasoningSpecExample,
+});
+
 export const domainPackSpecDefinition = defineSpecSchema<DomainPackSpec>({
   id: 'DomainPackSpec',
   zod: domainPackSpecSchema,
@@ -483,7 +559,11 @@ export const domainPackSpecDefinition = defineSpecSchema<DomainPackSpec>({
   example: domainPackSpecExample,
 });
 
-export const domainSpecDefinitions = [workflowSpecDefinition, domainPackSpecDefinition] as const;
+export const domainSpecDefinitions = [
+  workflowSpecDefinition,
+  reasoningSpecDefinition,
+  domainPackSpecDefinition,
+] as const;
 export const domainSpecJsonSchemas = exportSpecJsonSchemas(domainSpecDefinitions);
 
 export function validateWorkflowSpec(input: unknown): WorkflowSpec {
@@ -492,8 +572,21 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
 
 export function validateDomainPackSpec(input: unknown): DomainPackSpec {
   const domainPack = domainPackSpecDefinition.parse(input);
-  if (domainPack.defaultWorkflow && !domainPack.workflows.some((workflow) => workflow.id === domainPack.defaultWorkflow)) {
+  if (
+    domainPack.defaultWorkflow &&
+    !domainPack.workflows.some((workflow) => workflow.id === domainPack.defaultWorkflow)
+  ) {
     throw new Error(`Default workflow not found in domain pack: ${domainPack.defaultWorkflow}`);
+  }
+  if (
+    domainPack.defaultReasoningProfile &&
+    !domainPack.reasoningProfiles?.some(
+      (profile) => profile.id === domainPack.defaultReasoningProfile
+    )
+  ) {
+    throw new Error(
+      `Default reasoning profile not found in domain pack: ${domainPack.defaultReasoningProfile}`
+    );
   }
   return domainPack;
 }

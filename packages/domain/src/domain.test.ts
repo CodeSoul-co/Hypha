@@ -4,6 +4,7 @@ import {
   domainPackSpecDefinition,
   domainSpecJsonSchemas,
   initializeDomainSession,
+  reasoningSpecDefinition,
   validateDomainPackSpec,
   validateWorkflowSpec,
   workflowSpecDefinition,
@@ -75,6 +76,7 @@ describe('@hypha/domain workflow compiler', () => {
           version: '0.0.0',
           defaultMetadata: { locale: 'en' },
           defaultMemoryProfileRef: 'local-memory',
+          defaultReasoningProfileRef: 'structured-reasoning',
         },
       ],
     };
@@ -89,15 +91,21 @@ describe('@hypha/domain workflow compiler', () => {
       sessionProfileRef: { id: 'default', version: '0.0.0' },
       metadata: { locale: 'en', requestId: 'req_1' },
       memoryProfileRef: 'local-memory',
+      reasoningProfileRef: 'structured-reasoning',
     });
   });
 
   it('exports Stage1 DomainPack and Workflow spec schemas with minimal examples', () => {
     expect(validateWorkflowSpec(workflowSpecDefinition.example).id).toBe('workflow.default');
+    expect(reasoningSpecDefinition.parse(reasoningSpecDefinition.example).id).toBe(
+      'reasoning.default'
+    );
     expect(validateDomainPackSpec(domainPackSpecDefinition.example).id).toBe('domain.default');
     expect(domainSpecJsonSchemas.WorkflowSpec.required).toContain('states');
+    expect(domainSpecJsonSchemas.ReasoningSpec.required).toContain('thinkingMode');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
     expect(domainSpecJsonSchemas.DomainPackSpec.properties).toMatchObject({
+      reasoningProfiles: { type: 'array' },
       evaluationProfiles: { type: 'array' },
       regressionCases: { type: 'array' },
       deploymentProfile: { type: 'object' },
@@ -111,6 +119,15 @@ describe('@hypha/domain workflow compiler', () => {
         defaultWorkflow: 'missing',
       })
     ).toThrow(/Default workflow not found/);
+  });
+
+  it('rejects a DomainPack whose default reasoning profile is not declared', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        defaultReasoningProfile: 'missing-reasoning',
+      })
+    ).toThrow(/Default reasoning profile not found/);
   });
 
   it('validates nested profile specs instead of accepting arbitrary objects', () => {
@@ -148,6 +165,17 @@ describe('@hypha/domain workflow compiler', () => {
             memoryTypes: ['working'],
           },
         ],
+        reasoningProfiles: [
+          {
+            id: 'reasoning.local',
+            version: '0.0.0',
+            thinkingMode: 'structured',
+            agenticMode: 'react',
+            maxSteps: 3,
+            persist: 'summary_only',
+          },
+        ],
+        defaultReasoningProfile: 'reasoning.local',
         evaluationProfiles: [
           {
             id: 'eval.schema',

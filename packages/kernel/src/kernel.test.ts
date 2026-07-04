@@ -9,11 +9,13 @@ import {
   DefaultContextBuilder,
   kernelSpecJsonSchemas,
   MemoryContextBuilder,
+  ReasoningContextBuilder,
   ReActAgentRunner,
   ReActRunner,
   reactAgentSpecDefinition,
   REACT_PHASE_ORDER,
   validateReActAgentSpec,
+  validateReasoningConfig,
   type ReActAgentRuntime,
   type ReActAgentSpec,
 } from './index';
@@ -231,6 +233,90 @@ describe('@hypha/kernel ReAct contracts', () => {
     ]);
   });
 
+  it('builds structured thinking and agentic decisions before inference', async () => {
+    const builder = new ReasoningContextBuilder({
+      baseBuilder: new DefaultContextBuilder(),
+      config: {
+        thinkingMode: 'structured',
+        agenticMode: 'fsm_react',
+        maxSteps: 3,
+        persist: 'summary_only',
+      },
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const context = await builder.build({
+      runId: 'run_reasoning_context',
+      stepId: 'react',
+      sessionId: 'session_reasoning',
+      userId: 'owner',
+      agent: {
+        ...reactAgentSpecDefinition.example,
+        toolRefs: ['tool.search'],
+      },
+      input: 'Plan a safe answer.',
+    });
+
+    expect(context.thinkingPlan).toMatchObject({
+      mode: 'structured',
+      intent: 'Plan a safe answer.',
+      plan: expect.arrayContaining([
+        expect.stringContaining('Interpret the task'),
+        expect.stringContaining('Select the next ReAct phase'),
+      ]),
+    });
+    expect(context.reasoningDecision).toMatchObject({
+      mode: 'fsm_react',
+      recommendedPhase: 'select_action',
+      actionType: 'tool',
+      toolCandidates: ['tool.search'],
+    });
+    expect(context.metadata?.reasoning).toMatchObject({
+      config: expect.objectContaining({ persist: 'summary_only' }),
+      thinkingPlan: expect.objectContaining({ id: 'run_reasoning_context:thinking:react' }),
+      reasoningDecision: expect.objectContaining({ id: 'run_reasoning_context:reasoning:react' }),
+    });
+  });
+
+  it('passes reasoning summaries into the model request context', async () => {
+    let capturedRequest: InferenceRequest | undefined;
+    const runner = new ReActAgentRunner({
+      reasoningConfig: {
+        thinkingMode: 'summary',
+        agenticMode: 'critique',
+        maxSteps: 2,
+        persist: 'summary_only',
+      },
+      inference: {
+        id: 'capture-inference',
+        async infer(request) {
+          capturedRequest = request;
+          return { id: 'reasoning-response', output: 'ok' };
+        },
+      },
+    });
+
+    await runner.run({
+      runId: 'run_reasoning_agent',
+      stepId: 'react',
+      sessionId: 'session_reasoning_agent',
+      userId: 'owner',
+      agent: reactAgentSpecDefinition.example,
+      input: 'Use structured reasoning.',
+    });
+
+    expect(capturedRequest?.input).toMatchObject({
+      context: {
+        reasoningConfig: expect.objectContaining({
+          thinkingMode: 'summary',
+          agenticMode: 'critique',
+        }),
+        thinkingPlan: expect.objectContaining({ mode: 'summary' }),
+        reasoningDecision: expect.objectContaining({ mode: 'critique' }),
+      },
+    });
+  });
+
   it('builds model context from semantic memory with budget and provenance', async () => {
     const embeddings: EmbeddingProvider = {
       embed: async () => [[1, 0]],
@@ -338,7 +424,11 @@ describe('@hypha/kernel ReAct contracts', () => {
     for (const record of [
       { id: 'semantic_allowed', type: 'semantic' as const, value: 'semantic memory allowed' },
       { id: 'procedural_allowed', type: 'procedural' as const, value: 'procedural memory allowed' },
-      { id: 'episodic_denied', type: 'episodic' as const, value: 'episodic memory must not appear' },
+      {
+        id: 'episodic_denied',
+        type: 'episodic' as const,
+        value: 'episodic memory must not appear',
+      },
     ]) {
       await manager.write(
         scope,
@@ -442,5 +532,15 @@ describe('@hypha/kernel ReAct contracts', () => {
   it('exports Stage1 ReActAgentSpec schema and minimal example', () => {
     expect(validateReActAgentSpec(reactAgentSpecDefinition.example).id).toBe('agent.default');
     expect(kernelSpecJsonSchemas.ReActAgentSpec.required).toContain('modelAlias');
+    expect(
+      validateReasoningConfig({ thinkingMode: 'structured', agenticMode: 'tot' })
+    ).toMatchObject({
+      thinkingMode: 'structured',
+      agenticMode: 'tot',
+    });
+    expect(kernelSpecJsonSchemas.ReasoningConfig.properties).toMatchObject({
+      thinkingMode: { enum: ['none', 'summary', 'structured'] },
+      agenticMode: { enum: ['react', 'fsm_react', 'tot', 'critique'] },
+    });
   });
 });

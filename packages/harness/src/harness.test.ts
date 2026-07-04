@@ -185,6 +185,83 @@ describe('@hypha/harness contracts', () => {
     });
   });
 
+  it('records thinking and agentic deliberation before ReAct execution when reasoning is enabled', async () => {
+    let capturedRequest: InferenceRequest | undefined;
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        capturedRequest = request;
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: 'reasoned output',
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      reasoningConfig: {
+        thinkingMode: 'structured',
+        agenticMode: 'fsm_react',
+        maxSteps: 3,
+        persist: 'summary_only',
+      },
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_reasoning_harness',
+      stepId: 'react',
+      sessionId: 'session_reasoning_harness',
+      userId: 'owner',
+      agent: {
+        id: 'agent.reasoning',
+        version: '0.0.0',
+        name: 'Reasoning Agent',
+        modelAlias: 'default-chat',
+      },
+      input: 'think first, then act',
+    });
+
+    expect(result.react.status).toBe('completed');
+    expect(capturedRequest?.input).toMatchObject({
+      context: {
+        thinkingPlan: expect.objectContaining({ intent: 'think first, then act' }),
+        reasoningDecision: expect.objectContaining({ mode: 'fsm_react' }),
+      },
+    });
+    expect(result.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        'thinking.started',
+        'thinking.completed',
+        'agent.deliberation.started',
+        'agent.deliberation.completed',
+        'reasoning.decision.recorded',
+        'react.step.completed',
+      ])
+    );
+    await expect(runManager.projectReplay('run_reasoning_harness')).resolves.toMatchObject({
+      reasoningEventIds: expect.arrayContaining([
+        expect.stringContaining('thinking.started'),
+        expect.stringContaining('reasoning.decision.recorded'),
+      ]),
+      reasoningEvents: [
+        expect.objectContaining({ type: 'thinking.started' }),
+        expect.objectContaining({ type: 'thinking.completed' }),
+        expect.objectContaining({ type: 'agent.deliberation.started' }),
+        expect.objectContaining({ type: 'agent.deliberation.completed' }),
+        expect.objectContaining({ type: 'reasoning.decision.recorded' }),
+      ],
+    });
+    await expect(runManager.projectAudit('run_reasoning_harness')).resolves.toMatchObject({
+      reasoningDecisionCount: 1,
+    });
+    await expect(runManager.projectRegression('run_reasoning_harness')).resolves.toMatchObject({
+      reasoningDecisionCount: 1,
+    });
+  });
+
   it('projects human-review runs from events instead of leaving them running', async () => {
     const inference: InferenceProvider = {
       id: 'mock-inference',

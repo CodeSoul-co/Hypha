@@ -140,13 +140,26 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
 
 ## ReAct Kernel
 
-`ReActAgentSpec` defines an agent's model alias, instructions, skill refs, tool refs, memory profile, policy refs, and optional context spec.
+`ReActAgentSpec` defines an agent's model alias, instructions, skill refs, tool refs, memory profile, policy refs, optional context spec, and optional reasoning config.
 
 `ReActRunner` executes an explicit loop through observe, reason, model inference, action selection, policy check, tool action, observation, verification, memory sync, and terminal completion or human review. The runner requires an `InferenceProvider`, can use a `ToolRunner`, and uses an explicit `maxIterations` limit.
 
 `ContextBuilder` builds `ReActRunContext` from runtime input, messages, agent spec, memory scope, and metadata. `DefaultContextBuilder` is the local skeleton implementation. `Verifier` checks observations and returns the next `ReActAction`; `DefaultVerifier` completes with the observation value unless the observation requires human review.
 
 `ReActAgentRunner` wires `DefaultContextBuilder`, `BasicReActAgentRuntime`, `DefaultVerifier`, `InferenceProvider`, and `ToolRunner` into a runnable agent. Use `MockToolRunner` for package tests and local examples; production tools should use `GovernedToolRunner`.
+
+`ReasoningContextBuilder` can wrap any `ContextBuilder` to add structured thinking and agentic deliberation before ReAct execution. `ThinkingPlanner` produces a `ThinkingPlan` with intent, constraints, success criteria, plan steps, risks, and a summary. `AgenticReasoner` produces an `AgenticReasoningDecision` with mode, recommended phase, action type, tool candidates, verification strategy, and rationale. These are structured summaries only; raw hidden chain-of-thought is not exposed or persisted.
+
+`ReasoningConfig` fields:
+
+| Field          | Values                                  | Description                                      |
+| -------------- | --------------------------------------- | ------------------------------------------------ |
+| `thinkingMode` | `none`, `summary`, `structured`         | Controls whether and how planning is summarized. |
+| `agenticMode`  | `react`, `fsm_react`, `tot`, `critique` | Declares the deliberation strategy.              |
+| `maxSteps`     | positive integer                        | Bounds generated plan steps.                     |
+| `persist`      | `summary_only`, `events_only`           | Controls persisted reasoning material.           |
+| `plannerRef`   | string                                  | Optional planner implementation reference.       |
+| `reasonerRef`  | string                                  | Optional reasoner implementation reference.      |
 
 `HarnessedReActFSMRunner` from `@hypha/harness` composes `RunManager`, `FSMRuntime`, and `ReActRunner`. It records a trace event for every FSM state and projects run/replay state from events.
 
