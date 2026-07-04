@@ -171,6 +171,8 @@ export class InMemoryMessageBus implements MessageBus {
       if (filter.fsmState && message.fsmState !== filter.fsmState) continue;
       if (message.availableAt && message.availableAt > now) continue;
       if (message.expiresAt && message.expiresAt <= now) {
+        queue.splice(index, 1);
+        index -= 1;
         await this.markFailed(message, {
           id: message.id,
           userId: message.userId,
@@ -183,6 +185,7 @@ export class InMemoryMessageBus implements MessageBus {
         continue;
       }
       queue.splice(index, 1);
+      this.setQueue(filter.userId, filter.sessionId, filter.to, queue);
       const delivered = this.update(message, {
         status: 'delivered',
         updatedAt: now,
