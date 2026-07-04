@@ -26,6 +26,7 @@ describe('EventRuntime WorkCache integration', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     for (const key of trackedEnv) {
       const value = originalEnv[key];
       if (value === undefined) {
@@ -81,5 +82,25 @@ describe('EventRuntime WorkCache integration', () => {
       sourceEventType: 'tool.call.completed',
       treeType: 'ToolTree',
     });
+  });
+
+  it('keeps event projection order stable when events share the same wall-clock tick', async () => {
+    jest.useFakeTimers({ now: new Date('2026-07-04T00:00:00.000Z') });
+    const { getEventRuntime } = await import('./EventRuntime');
+    const runtime = getEventRuntime();
+    const handle = await runtime.startRun({
+      userId: 'workcache-user',
+      sessionId: 'workcache-session',
+      input: { purpose: 'event-order-test' },
+    });
+
+    await runtime.record(handle.runId, 'context.build.completed', { order: 1 }, 'order-1');
+    await runtime.record(handle.runId, 'context.build.completed', { order: 2 }, 'order-2');
+
+    const ordered = (await runtime.listEvents(handle.runId)).filter(
+      (event) => event.type === 'context.build.completed'
+    );
+    expect(ordered.map((event) => event.stepId)).toEqual(['order-1', 'order-2']);
+    expect(Date.parse(ordered[1].timestamp)).toBeGreaterThan(Date.parse(ordered[0].timestamp));
   });
 });

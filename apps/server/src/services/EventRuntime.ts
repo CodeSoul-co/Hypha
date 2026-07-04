@@ -148,6 +148,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   async infer(
     request: InferenceRequest<LLMInferenceInput>
   ): Promise<InferenceResponse<ChatResponse>> {
+    await getLLMManager().ensureReady();
     const systemPrompt =
       [request.resolvedPrefixContent, request.input.options?.systemPrompt]
         .filter(Boolean)
@@ -185,6 +186,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   async *stream(
     request: InferenceRequest<LLMInferenceInput>
   ): AsyncIterable<InferenceResponse<StreamChunk>> {
+    await getLLMManager().ensureReady();
     const systemPrompt =
       [request.resolvedPrefixContent, request.input.options?.systemPrompt]
         .filter(Boolean)
@@ -263,6 +265,7 @@ class EventRuntimeService {
   private readonly inference: InferenceManager;
   private readonly reasoning: ReasoningOrchestrator;
   private readonly workCache: WorkCacheManager;
+  private readonly runEventClock = new Map<string, number>();
   private readonly defaultDomainPack = createDefaultDomainPack();
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
 
@@ -1662,7 +1665,7 @@ class EventRuntimeService {
       payload,
       stepId: options.stepId,
       fsmState: options.fsmState,
-      timestamp,
+      timestamp: this.nextEventTimestamp(runId, timestamp),
       metadata: {
         userId: context.userId,
         clientSessionId: context.clientSessionId,
@@ -1691,7 +1694,7 @@ class EventRuntimeService {
       userId: context.userId,
       payload: event.payload,
       stepId: event.stepId,
-      timestamp: event.timestamp,
+      timestamp: this.nextEventTimestamp(event.runId, event.timestamp),
       metadata: {
         userId: context.userId,
         clientSessionId: context.clientSessionId,
@@ -1702,6 +1705,15 @@ class EventRuntimeService {
         cacheKey: event.payload.cacheKey,
       },
     });
+  }
+
+  private nextEventTimestamp(runId: string, timestamp?: string): string {
+    const parsed = timestamp ? Date.parse(timestamp) : NaN;
+    const requested = Number.isFinite(parsed) ? parsed : Date.now();
+    const previous = this.runEventClock.get(runId) ?? 0;
+    const next = Math.max(requested, previous + 1);
+    this.runEventClock.set(runId, next);
+    return new Date(next).toISOString();
   }
 
   private createWorkCacheAwareTraceRecorder(): TraceRecorder {
