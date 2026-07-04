@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/adapters-local';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
 import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@hypha/memory';
+import { SkillRegistry } from '@hypha/skills';
 import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 import {
   createEpisodicMemorySync,
@@ -14,6 +15,7 @@ import {
   ReActRunner,
   reactAgentSpecDefinition,
   REACT_PHASE_ORDER,
+  SkillContextBuilder,
   validateReActAgentSpec,
   validateReasoningConfig,
   type ReActAgentRuntime,
@@ -231,6 +233,120 @@ describe('@hypha/kernel ReAct contracts', () => {
       'memory_sync',
       'complete',
     ]);
+  });
+
+  it('loads active skill context only after selection and workflow-state allow rules', async () => {
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'skill.review',
+      version: '0.0.0',
+      name: 'Review Skill',
+      description: 'Review task outputs',
+      activationPolicy: { mode: 'keyword', patterns: ['review'] },
+      instructions: 'Check correctness and cite concrete evidence.',
+      allowedTools: ['tool.search'],
+      trustLevel: 'reviewed',
+    });
+    registry.register({
+      id: 'skill.blocked',
+      version: '0.0.0',
+      description: 'Blocked skill',
+      activationPolicy: { mode: 'always' },
+      instructions: 'Should not load.',
+      trustLevel: 'reviewed',
+    });
+
+    const builder = new SkillContextBuilder({
+      baseBuilder: new DefaultContextBuilder(),
+      registry,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const context = await builder.build({
+      runId: 'run_skill_context',
+      stepId: 'react',
+      sessionId: 'session_skill_context',
+      userId: 'owner',
+      agent: {
+        ...reactAgentSpecDefinition.example,
+        skillRefs: [{ id: 'skill.review' }, { id: 'skill.blocked' }],
+        toolRefs: ['tool.search'],
+      },
+      input: 'please review this answer',
+      metadata: {
+        workflowState: {
+          allowedSkills: ['skill.review'],
+        },
+      },
+    });
+
+    expect(context.activeSkills).toEqual([
+      expect.objectContaining({
+        id: 'skill.review',
+        instructions: 'Check correctness and cite concrete evidence.',
+        allowedTools: ['tool.search'],
+      }),
+    ]);
+    expect(context.rejectedSkills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          skillId: 'skill.blocked',
+          reason: 'Skill is not allowed by the current scope.',
+        }),
+      ])
+    );
+    expect(context.messages[0]).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('[skill:skill.review version=0.0.0]'),
+    });
+    expect(context.contextProvenance).toEqual(
+      expect.arrayContaining([expect.objectContaining({ source: 'skill', id: 'skill.review' })])
+    );
+  });
+
+  it('passes active skills into the model request context', async () => {
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'skill.context',
+      version: '0.0.0',
+      description: 'Context procedure',
+      activationPolicy: { mode: 'always' },
+      instructions: 'Add concise context before answering.',
+      trustLevel: 'reviewed',
+    });
+    let capturedRequest: InferenceRequest | undefined;
+    const runner = new ReActAgentRunner({
+      skillRegistry: registry,
+      inference: {
+        id: 'capture-inference',
+        async infer(request) {
+          capturedRequest = request;
+          return { id: 'skill-response', output: 'ok' };
+        },
+      },
+    });
+
+    await runner.run({
+      runId: 'run_skill_agent',
+      stepId: 'react',
+      sessionId: 'session_skill_agent',
+      userId: 'owner',
+      agent: {
+        ...reactAgentSpecDefinition.example,
+        skillRefs: [{ id: 'skill.context' }],
+      },
+      input: 'answer with context',
+    });
+
+    expect(capturedRequest?.input).toMatchObject({
+      context: {
+        activeSkills: [
+          expect.objectContaining({
+            id: 'skill.context',
+            instructions: 'Add concise context before answering.',
+          }),
+        ],
+      },
+    });
   });
 
   it('builds structured thinking and agentic decisions before inference', async () => {

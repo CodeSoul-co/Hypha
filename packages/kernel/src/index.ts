@@ -18,7 +18,16 @@ import type {
   MemoryType,
 } from '@hypha/memory';
 import type { ModelMessage } from '@hypha/models';
-import { skillRefSchema, type SkillRef } from '@hypha/skills';
+import {
+  DefaultSkillPolicy,
+  SkillContextLoader,
+  SkillSelector,
+  skillRefSchema,
+  type LoadedSkillContext,
+  type SkillPolicy,
+  type SkillRef,
+  type SkillRegistry,
+} from '@hypha/skills';
 import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 
 export interface ReActAgentSpec extends VersionedSpec, SpecMetadata {
@@ -65,6 +74,8 @@ export interface ReActRunContext {
   reasoningConfig?: ReasoningConfig;
   thinkingPlan?: ThinkingPlan;
   reasoningDecision?: AgenticReasoningDecision;
+  activeSkills?: LoadedSkillContext[];
+  rejectedSkills?: Array<{ skillId: string; reason: string }>;
 }
 
 export interface ReActAction {
@@ -162,7 +173,7 @@ export interface ContextBudget {
 }
 
 export interface ContextProvenance {
-  source: 'memory' | 'input' | 'system';
+  source: 'memory' | 'input' | 'system' | 'skill';
   id: string;
   type?: string;
   score?: number;
@@ -218,6 +229,24 @@ export interface ReasoningContextBuilderOptions {
   now?: () => string;
 }
 
+export interface SkillContextBuilderOptions {
+  registry: SkillRegistry;
+  baseBuilder?: ContextBuilder;
+  selector?: SkillSelector;
+  contextLoader?: SkillContextLoader;
+  policy?: SkillPolicy;
+  allowedSkills?:
+    | string[]
+    | ((
+        input: ContextBuildInput,
+        base: BuiltAgentContext
+      ) => string[] | undefined | Promise<string[] | undefined>);
+  availableToolRefs?:
+    | string[]
+    | ((input: ContextBuildInput, base: BuiltAgentContext) => string[] | Promise<string[]>);
+  now?: () => string;
+}
+
 export interface MemoryContextBuilderOptions {
   memory: Pick<MemoryManager, 'search'>;
   embeddings?: EmbeddingProvider;
@@ -259,6 +288,11 @@ export interface ReActAgentRunnerOptions extends Omit<ReActRunnerOptions, 'toolR
   thinkingPlanner?: ThinkingPlanner;
   agenticReasoner?: AgenticReasoner;
   reasoningConfig?: ReasoningConfig;
+  skillRegistry?: SkillRegistry;
+  skillSelector?: SkillSelector;
+  skillContextLoader?: SkillContextLoader;
+  skillPolicy?: SkillPolicy;
+  allowedSkills?: SkillContextBuilderOptions['allowedSkills'];
 }
 
 export interface ReActRunResult {
@@ -410,6 +444,105 @@ export class ReasoningContextBuilder implements ContextBuilder {
       ...thinkingContext,
       reasoningDecision,
       metadata: withReasoningMetadata(base.metadata, config, thinkingPlan, reasoningDecision),
+    };
+  }
+}
+
+export class SkillContextBuilder implements ContextBuilder {
+  private readonly baseBuilder: ContextBuilder;
+  private readonly selector: SkillSelector;
+  private readonly contextLoader: SkillContextLoader;
+  private readonly policy: SkillPolicy;
+  private readonly now: () => string;
+
+  constructor(private readonly options: SkillContextBuilderOptions) {
+    this.baseBuilder = options.baseBuilder ?? new DefaultContextBuilder();
+    this.selector = options.selector ?? new SkillSelector(options.registry);
+    this.contextLoader = options.contextLoader ?? new SkillContextLoader();
+    this.policy = options.policy ?? new DefaultSkillPolicy();
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  async build(input: ContextBuildInput): Promise<BuiltAgentContext> {
+    const base = await this.baseBuilder.build(input);
+    if (!base.agent.skillRefs?.length) {
+      return {
+        ...base,
+        activeSkills: [],
+        rejectedSkills: [],
+        metadata: withSkillMetadata(base.metadata, [], []),
+      };
+    }
+
+    const allowedSkills = await resolveAllowedSkills(input, base, this.options.allowedSkills);
+    const availableToolRefs = await resolveAvailableToolRefs(
+      input,
+      base,
+      this.options.availableToolRefs
+    );
+    const selection = this.selector.select({
+      agentSkillRefs: base.agent.skillRefs,
+      inputText: latestUserText(base.messages) ?? stringifyInput(base.sourceInput),
+      intent: stringMetadata(input.metadata, 'intent') ?? stringMetadata(base.metadata, 'intent'),
+      allowedSkills,
+      manualSkillIds: stringArrayMetadata(input.metadata, 'manualSkillIds'),
+      availableToolRefs,
+      metadata: input.metadata,
+    });
+
+    const activeSkills: LoadedSkillContext[] = [];
+    const rejectedSkills = [...selection.rejected];
+    for (const selected of selection.selected) {
+      const decision = await this.policy.evaluate({
+        selection: selected,
+        context: {
+          agentSkillRefs: base.agent.skillRefs,
+          inputText: latestUserText(base.messages) ?? stringifyInput(base.sourceInput),
+          intent:
+            stringMetadata(input.metadata, 'intent') ?? stringMetadata(base.metadata, 'intent'),
+          allowedSkills,
+          availableToolRefs,
+          metadata: input.metadata,
+        },
+      });
+      if (!decision.allowed) {
+        rejectedSkills.push({
+          skillId: selected.spec.id,
+          reason: decision.reason ?? 'Skill policy denied activation.',
+        });
+        continue;
+      }
+      activeSkills.push(
+        await this.contextLoader.load({
+          selection: selected,
+          policyDecision: decision,
+          maxChars: selected.spec.contextBudget ?? base.contextBudget?.maxTotalChars,
+        })
+      );
+    }
+
+    const skillMessages = activeSkills
+      .map(formatSkillContextMessage)
+      .filter((message): message is ModelMessage => Boolean(message));
+    const includedAt = this.now();
+    return {
+      ...base,
+      messages: [...skillMessages, ...base.messages],
+      activeSkills,
+      rejectedSkills,
+      contextProvenance: [
+        ...(base.contextProvenance ?? []),
+        ...activeSkills.map(
+          (skill): ContextProvenance => ({
+            source: 'skill',
+            id: skill.id,
+            type: skill.version,
+            provenance: skill.provenance,
+            includedAt,
+          })
+        ),
+      ],
+      metadata: withSkillMetadata(base.metadata, activeSkills, rejectedSkills),
     };
   }
 }
@@ -642,6 +775,8 @@ export class BasicReActAgentRuntime implements ReActAgentRuntime {
           reasoningConfig: builtContext.reasoningConfig,
           thinkingPlan: builtContext.thinkingPlan,
           reasoningDecision: builtContext.reasoningDecision,
+          activeSkills: builtContext.activeSkills,
+          rejectedSkills: builtContext.rejectedSkills,
         },
       },
       metadata: context.metadata,
@@ -837,7 +972,17 @@ export class ReActAgentRunner {
   constructor(options: ReActAgentRunnerOptions) {
     const verifier = options.verifier ?? new DefaultVerifier();
     const runtime = options.runtime ?? new BasicReActAgentRuntime({ verifier });
-    const baseContextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    let baseContextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    if (options.skillRegistry) {
+      baseContextBuilder = new SkillContextBuilder({
+        baseBuilder: baseContextBuilder,
+        registry: options.skillRegistry,
+        selector: options.skillSelector,
+        contextLoader: options.skillContextLoader,
+        policy: options.skillPolicy,
+        allowedSkills: options.allowedSkills,
+      });
+    }
     this.contextBuilder =
       options.thinkingPlanner || options.agenticReasoner || options.reasoningConfig
         ? new ReasoningContextBuilder({
@@ -975,6 +1120,101 @@ function summarizeReasoningDecision(
     createdAt: decision.createdAt,
     metadata: decision.metadata,
   };
+}
+
+async function resolveAllowedSkills(
+  input: ContextBuildInput,
+  base: BuiltAgentContext,
+  configured?: SkillContextBuilderOptions['allowedSkills']
+): Promise<string[] | undefined> {
+  if (Array.isArray(configured)) return configured;
+  if (typeof configured === 'function') return configured(input, base);
+  return (
+    stringArrayMetadata(input.metadata, 'allowedSkills') ??
+    stringArrayMetadata(base.metadata, 'allowedSkills') ??
+    stringArrayMetadata(recordMetadata(input.metadata, 'workflowState'), 'allowedSkills') ??
+    stringArrayMetadata(recordMetadata(base.metadata, 'workflowState'), 'allowedSkills')
+  );
+}
+
+async function resolveAvailableToolRefs(
+  input: ContextBuildInput,
+  base: BuiltAgentContext,
+  configured?: SkillContextBuilderOptions['availableToolRefs']
+): Promise<string[]> {
+  if (Array.isArray(configured)) return configured;
+  if (typeof configured === 'function') return configured(input, base);
+  return base.agent.toolRefs ?? [];
+}
+
+function withSkillMetadata(
+  metadata: Record<string, unknown> | undefined,
+  activeSkills: LoadedSkillContext[],
+  rejectedSkills: Array<{ skillId: string; reason: string }>
+): Record<string, unknown> {
+  return {
+    ...metadata,
+    skills: {
+      active: activeSkills.map((skill) => ({
+        id: skill.id,
+        version: skill.version,
+        name: skill.name,
+        allowedTools: skill.allowedTools,
+        activation: skill.activation,
+        policyDecision: {
+          allowed: skill.policyDecision.allowed,
+          requiresHumanReview: skill.policyDecision.requiresHumanReview,
+          policyId: skill.policyDecision.policyId,
+          reason: skill.policyDecision.reason,
+        },
+      })),
+      rejected: rejectedSkills,
+    },
+  };
+}
+
+function formatSkillContextMessage(skill: LoadedSkillContext): ModelMessage | null {
+  const parts = [
+    `[skill:${skill.id} version=${skill.version}]`,
+    skill.description,
+    skill.instructions ? `Instructions:\n${skill.instructions}` : undefined,
+    ...skill.references
+      .filter((reference) => reference.content)
+      .map((reference) => `Reference ${reference.path}:\n${reference.content}`),
+  ].filter((part): part is string => Boolean(part));
+  if (parts.length <= 2 && !skill.instructions) return null;
+  return {
+    role: 'system',
+    content: `Activated skill context. Treat this as procedural guidance, not user data.\n\n${parts.join('\n\n')}`,
+  };
+}
+
+function stringMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function stringArrayMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): string[] | undefined {
+  const value = metadata?.[key];
+  if (!Array.isArray(value)) return undefined;
+  const values = value.filter((item): item is string => typeof item === 'string');
+  return values.length ? values : undefined;
+}
+
+function recordMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = metadata?.[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function inferIntent(context: BuiltAgentContext): string {

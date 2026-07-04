@@ -16,8 +16,8 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.           | Direct execution bypassing policy.                                 |
 | `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.     | Provider SDK lifecycle as framework core.                          |
 | `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                     | App session storage rules.                                         |
-| `@hypha/skills`         | Skill specs, refs, activation policy, instruction/assets metadata.                                                              | Workflow replacement logic.                                        |
-| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, reasoning trace events, queues, replay/audit/regression.       | FSM internals or app-specific state.                               |
+| `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                        | Workflow replacement logic or direct tool execution.               |
+| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, skill/reasoning trace events, queues, replay/audit/regression. | FSM internals or app-specific state.                               |
 | `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                        | Framework spec definitions.                                        |
 | `@hypha/testing`        | Fixtures and test helpers for event/spec/runtime contracts.                                                                     | Production runtime behavior.                                       |
 

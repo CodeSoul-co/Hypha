@@ -458,6 +458,7 @@ export const workflowSpecExample: WorkflowSpec = {
     {
       id: 'Reasoning',
       goal: 'Reason and select the next action.',
+      allowedSkills: ['skill.context-enrichment'],
       timeoutPolicy: { timeoutMs: 30000, onTimeout: 'fail' },
       retryPolicy: { maxAttempts: 2 },
     },
@@ -512,6 +513,8 @@ export const domainPackSpecExample: DomainPackSpec = {
   ],
   workflows: [workflowSpecExample],
   defaultWorkflow: workflowSpecExample.id,
+  allowedSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+  defaultSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
   reasoningProfiles: [reasoningSpecExample],
   defaultReasoningProfile: reasoningSpecExample.id,
   evaluationProfiles: [
@@ -588,5 +591,32 @@ export function validateDomainPackSpec(input: unknown): DomainPackSpec {
       `Default reasoning profile not found in domain pack: ${domainPack.defaultReasoningProfile}`
     );
   }
+  validateDomainSkillBindings(domainPack);
   return domainPack;
+}
+
+function validateDomainSkillBindings(domainPack: DomainPackSpec): void {
+  if (!domainPack.allowedSkills?.length) return;
+  const allowed = new Set(domainPack.allowedSkills.map((skill) => skill.id));
+  for (const skill of domainPack.defaultSkills ?? []) {
+    if (!allowed.has(skill.id)) {
+      throw new Error(`Default skill is not allowed in domain pack: ${skill.id}`);
+    }
+  }
+  for (const task of domainPack.taskSchemas) {
+    for (const skill of task.defaultSkillRefs ?? []) {
+      if (!allowed.has(skill.id)) {
+        throw new Error(`Task default skill is not allowed in domain pack: ${skill.id}`);
+      }
+    }
+  }
+  for (const workflow of domainPack.workflows) {
+    for (const state of workflow.states) {
+      for (const skillId of state.allowedSkills ?? []) {
+        if (!allowed.has(skillId)) {
+          throw new Error(`Workflow state ${state.id} allows unknown skill: ${skillId}`);
+        }
+      }
+    }
+  }
 }

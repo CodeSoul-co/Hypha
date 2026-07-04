@@ -1,3 +1,6 @@
+import fs from 'fs/promises';
+import path from 'path';
+import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import {
   defineSpecSchema,
@@ -15,8 +18,10 @@ export interface SkillRef {
   version?: string;
 }
 
+export type SkillActivationMode = 'always' | 'keyword' | 'regex' | 'intent' | 'manual';
+
 export interface SkillActivationPolicy {
-  mode: 'always' | 'keyword' | 'intent' | 'manual';
+  mode: SkillActivationMode;
   patterns?: string[];
 }
 
@@ -31,6 +36,8 @@ export interface SkillSpec extends VersionedSpec, SpecMetadata {
   version: string;
   name?: string;
   description: string;
+  enabled?: boolean;
+  priority?: number;
   activationPolicy?: SkillActivationPolicy;
   instructions?: string;
   references?: SkillAssetRef[];
@@ -54,6 +61,9 @@ export interface SkillResolutionContext {
   intent?: string;
   inputText?: string;
   allowedSkills?: string[];
+  manualSkillIds?: string[];
+  availableToolRefs?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface ResolvedSkill {
@@ -62,11 +72,102 @@ export interface ResolvedSkill {
   loadedReferences: SkillAssetRef[];
 }
 
+export interface SkillSelection {
+  spec: SkillSpec;
+  reason: string;
+  matchedPatterns: string[];
+  priority: number;
+}
+
+export interface SkillSelectionRejection {
+  skillId: string;
+  reason: string;
+}
+
+export interface SkillSelectionResult {
+  selected: SkillSelection[];
+  rejected: SkillSelectionRejection[];
+}
+
+export interface SkillPolicyInput {
+  selection: SkillSelection;
+  context: SkillResolutionContext;
+}
+
+export interface SkillPolicyDecision {
+  allowed: boolean;
+  reason?: string;
+  requiresHumanReview?: boolean;
+  allowedTools: string[];
+  policyId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SkillPolicy {
+  evaluate(input: SkillPolicyInput): Promise<SkillPolicyDecision>;
+}
+
+export interface LoadedSkillAsset extends SkillAssetRef {
+  absolutePath?: string;
+  content?: string;
+  truncated?: boolean;
+}
+
+export interface LoadedSkillContext {
+  id: string;
+  version: string;
+  name?: string;
+  description: string;
+  instructions?: string;
+  references: LoadedSkillAsset[];
+  allowedTools: string[];
+  requiredTools: string[];
+  trustLevel?: SkillSpec['trustLevel'];
+  provenance?: Record<string, unknown>;
+  policyDecision: SkillPolicyDecision;
+  activation: {
+    reason: string;
+    matchedPatterns: string[];
+  };
+  metadata?: Record<string, unknown>;
+}
+
+export interface SkillContextLoadInput {
+  selection: SkillSelection;
+  policyDecision: SkillPolicyDecision;
+  maxChars?: number;
+}
+
+export interface SkillLoader {
+  load(): Promise<SkillSpec[]>;
+}
+
+export interface LocalSkillLoaderOptions {
+  directories: string[];
+  recursive?: boolean;
+  includeDisabled?: boolean;
+}
+
+export interface ParsedSkillMarkdown {
+  filePath: string;
+  slug: string;
+  spec: SkillSpec;
+}
+
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+
 export class SkillRegistry {
   private readonly skills = new Map<string, SkillSpec>();
 
   register(skill: SkillSpec): void {
-    this.skills.set(skill.id, skill);
+    const parsed = validateSkillSpec(skill);
+    this.skills.set(parsed.id, parsed);
+  }
+
+  registerMany(skills: SkillSpec[]): void {
+    for (const skill of skills) {
+      this.register(skill);
+    }
   }
 
   get(skillId: string): SkillSpec | null {
@@ -74,41 +175,527 @@ export class SkillRegistry {
   }
 
   list(): SkillSpec[] {
-    return Array.from(this.skills.values());
+    return Array.from(this.skills.values()).sort(
+      (left, right) =>
+        (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id)
+    );
+  }
+}
+
+export class LocalSkillLoader implements SkillLoader {
+  constructor(private readonly options: LocalSkillLoaderOptions) {}
+
+  async load(): Promise<SkillSpec[]> {
+    const files = await this.listFiles();
+    const loaded: SkillSpec[] = [];
+    for (const file of files) {
+      const parsed = await loadSkillMarkdownFile(file);
+      if (this.options.includeDisabled || parsed.spec.enabled !== false) {
+        loaded.push(parsed.spec);
+      }
+    }
+    return loaded.sort(
+      (left, right) =>
+        (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id)
+    );
+  }
+
+  async loadInto(registry: SkillRegistry): Promise<SkillSpec[]> {
+    const skills = await this.load();
+    registry.registerMany(skills);
+    return skills;
+  }
+
+  private async listFiles(): Promise<string[]> {
+    const allFiles: string[] = [];
+    for (const directory of this.options.directories) {
+      allFiles.push(...(await listLocalSkillFiles(directory, this.options.recursive ?? true)));
+    }
+    return Array.from(new Set(allFiles)).sort();
+  }
+}
+
+export class SkillSelector {
+  constructor(private readonly registry: SkillRegistry) {}
+
+  select(context: SkillResolutionContext): SkillSelectionResult {
+    const allowed = context.allowedSkills ? new Set(context.allowedSkills) : null;
+    const rejected: SkillSelectionRejection[] = [];
+    const selected: SkillSelection[] = [];
+
+    for (const ref of context.agentSkillRefs) {
+      const spec = this.registry.get(ref.id);
+      if (!spec) {
+        rejected.push({ skillId: ref.id, reason: 'Skill is not registered.' });
+        continue;
+      }
+      if (ref.version && ref.version !== spec.version) {
+        rejected.push({
+          skillId: ref.id,
+          reason: `Skill version mismatch: requested ${ref.version}, found ${spec.version}.`,
+        });
+        continue;
+      }
+      if (spec.enabled === false) {
+        rejected.push({ skillId: spec.id, reason: 'Skill is disabled.' });
+        continue;
+      }
+      if (allowed && !allowed.has(spec.id)) {
+        rejected.push({ skillId: spec.id, reason: 'Skill is not allowed by the current scope.' });
+        continue;
+      }
+
+      const activation = evaluateSkillActivation(spec, context);
+      if (!activation.active) {
+        rejected.push({ skillId: spec.id, reason: activation.reason });
+        continue;
+      }
+      selected.push({
+        spec,
+        reason: activation.reason,
+        matchedPatterns: activation.matchedPatterns,
+        priority: spec.priority ?? 0,
+      });
+    }
+
+    return {
+      selected: selected.sort(
+        (left, right) => right.priority - left.priority || left.spec.id.localeCompare(right.spec.id)
+      ),
+      rejected,
+    };
+  }
+}
+
+export class DefaultSkillPolicy implements SkillPolicy {
+  constructor(
+    private readonly options: {
+      allowedTrustLevels?: Array<NonNullable<SkillSpec['trustLevel']>>;
+      requireRegisteredTools?: boolean;
+    } = {}
+  ) {}
+
+  async evaluate(input: SkillPolicyInput): Promise<SkillPolicyDecision> {
+    const { selection, context } = input;
+    const skill = selection.spec;
+    const trustLevel = skill.trustLevel ?? 'reviewed';
+    const allowedTrustLevels = this.options.allowedTrustLevels ?? ['trusted', 'reviewed'];
+    if (!allowedTrustLevels.includes(trustLevel)) {
+      return {
+        allowed: false,
+        allowedTools: [],
+        policyId: 'skill.default-policy',
+        reason: `Skill ${skill.id} trustLevel=${trustLevel} is not allowed.`,
+      };
+    }
+
+    const availableTools = new Set(context.availableToolRefs ?? []);
+    const requiredTools = skill.requiredTools ?? [];
+    const missingRequiredTools = requiredTools.filter((toolId) => !availableTools.has(toolId));
+    if (missingRequiredTools.length > 0) {
+      return {
+        allowed: false,
+        allowedTools: [],
+        policyId: 'skill.default-policy',
+        reason: `Skill ${skill.id} requires unavailable tools: ${missingRequiredTools.join(', ')}.`,
+      };
+    }
+
+    if (
+      this.options.requireRegisteredTools &&
+      skill.allowedTools?.some((toolId) => !availableTools.has(toolId))
+    ) {
+      const missingAllowedTools = skill.allowedTools.filter(
+        (toolId) => !availableTools.has(toolId)
+      );
+      return {
+        allowed: false,
+        allowedTools: [],
+        policyId: 'skill.default-policy',
+        reason: `Skill ${skill.id} declares tools outside the current scope: ${missingAllowedTools.join(', ')}.`,
+      };
+    }
+
+    const allowedTools = skill.allowedTools
+      ? skill.allowedTools.filter((toolId) => availableTools.has(toolId))
+      : Array.from(availableTools);
+    return {
+      allowed: true,
+      allowedTools,
+      requiresHumanReview: skill.sideEffectPolicy === 'human_review',
+      policyId: 'skill.default-policy',
+      metadata: {
+        trustLevel,
+        requiredTools,
+      },
+    };
+  }
+}
+
+export class SkillContextLoader {
+  constructor(private readonly options: { defaultMaxChars?: number } = {}) {}
+
+  async load(input: SkillContextLoadInput): Promise<LoadedSkillContext> {
+    const maxChars = Math.max(
+      1,
+      input.maxChars ?? input.selection.spec.contextBudget ?? this.options.defaultMaxChars ?? 4000
+    );
+    let remaining = maxChars;
+    const instructions = truncateToBudget(input.selection.spec.instructions, remaining);
+    remaining -= instructions?.length ?? 0;
+    const references = await this.loadActivationReferences(input.selection.spec, remaining);
+
+    return {
+      id: input.selection.spec.id,
+      version: input.selection.spec.version,
+      name: input.selection.spec.name,
+      description: input.selection.spec.description,
+      instructions,
+      references,
+      allowedTools: input.policyDecision.allowedTools,
+      requiredTools: input.selection.spec.requiredTools ?? [],
+      trustLevel: input.selection.spec.trustLevel,
+      provenance: input.selection.spec.provenance,
+      policyDecision: input.policyDecision,
+      activation: {
+        reason: input.selection.reason,
+        matchedPatterns: input.selection.matchedPatterns,
+      },
+      metadata: {
+        contextBudget: maxChars,
+        loadedReferenceCount: references.filter((reference) => reference.content).length,
+      },
+    };
+  }
+
+  private async loadActivationReferences(
+    skill: SkillSpec,
+    remainingChars: number
+  ): Promise<LoadedSkillAsset[]> {
+    const refs = [
+      ...(skill.references ?? []),
+      ...(skill.scripts ?? []),
+      ...(skill.assets ?? []),
+    ].filter((asset) => asset.loadPolicy === 'on_activation');
+    const filePath =
+      typeof skill.provenance?.filePath === 'string' ? skill.provenance.filePath : undefined;
+    const baseDir = filePath ? path.dirname(filePath) : undefined;
+    const loaded: LoadedSkillAsset[] = [];
+    let remaining = remainingChars;
+
+    for (const ref of refs) {
+      const asset: LoadedSkillAsset = { ...ref };
+      if (remaining > 0 && ref.type === 'reference' && baseDir) {
+        const absolutePath = path.resolve(baseDir, ref.path);
+        asset.absolutePath = absolutePath;
+        try {
+          const content = await fs.readFile(absolutePath, 'utf-8');
+          const truncated = truncateToBudget(content, remaining) ?? '';
+          asset.content = truncated;
+          asset.truncated = truncated.length < content.length;
+          remaining -= truncated.length;
+        } catch {
+          asset.truncated = true;
+        }
+      }
+      loaded.push(asset);
+    }
+    return loaded;
   }
 }
 
 export class SkillResolver {
-  constructor(private readonly registry: SkillRegistry) {}
+  private readonly selector: SkillSelector;
+
+  constructor(private readonly registry: SkillRegistry) {
+    this.selector = new SkillSelector(registry);
+  }
 
   resolve(context: SkillResolutionContext): ResolvedSkill[] {
-    const allowed = context.allowedSkills ? new Set(context.allowedSkills) : null;
-    return context.agentSkillRefs
-      .map((ref) => this.registry.get(ref.id))
-      .filter((skill): skill is SkillSpec => Boolean(skill))
-      .filter((skill) => !allowed || allowed.has(skill.id))
-      .filter((skill) => shouldActivate(skill, context))
-      .map((skill) => ({
-        spec: skill,
-        loadedInstructions: skill.instructions,
-        loadedReferences: [
-          ...(skill.references ?? []),
-          ...(skill.scripts ?? []),
-          ...(skill.assets ?? []),
-        ].filter((asset) => asset.loadPolicy === 'on_activation'),
-      }));
+    return this.selector.select(context).selected.map((selection) => ({
+      spec: selection.spec,
+      loadedInstructions: selection.spec.instructions,
+      loadedReferences: [
+        ...(selection.spec.references ?? []),
+        ...(selection.spec.scripts ?? []),
+        ...(selection.spec.assets ?? []),
+      ].filter((asset) => asset.loadPolicy === 'on_activation'),
+    }));
   }
 }
 
-function shouldActivate(skill: SkillSpec, context: SkillResolutionContext): boolean {
-  const policy = skill.activationPolicy;
-  if (!policy || policy.mode === 'always') return true;
-  if (policy.mode === 'manual') return false;
-  if (policy.mode === 'intent') {
-    return Boolean(context.intent && policy.patterns?.includes(context.intent));
+export async function loadSkillMarkdownFile(filePath: string): Promise<ParsedSkillMarkdown> {
+  const raw = await fs.readFile(filePath, 'utf-8');
+  return parseSkillMarkdown(raw, filePath);
+}
+
+export function parseSkillMarkdown(raw: string, filePath: string): ParsedSkillMarkdown {
+  const match = raw.match(FRONTMATTER_RE);
+  if (!match) {
+    throw new Error(`Skill file missing YAML frontmatter: ${filePath}`);
   }
-  const input = context.inputText?.toLowerCase() ?? '';
-  return Boolean(policy.patterns?.some((pattern) => input.includes(pattern.toLowerCase())));
+  const [, frontmatterRaw, bodyRaw] = match;
+  const parsed = parseYaml(frontmatterRaw) as Record<string, unknown> | null;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Skill frontmatter is empty or not a mapping: ${filePath}`);
+  }
+
+  const slug =
+    path.basename(path.dirname(filePath)) === 'skills'
+      ? path.basename(filePath, path.extname(filePath))
+      : path.basename(path.dirname(filePath));
+  const id = stringField(parsed, 'id') ?? slug;
+  const version = stringField(parsed, 'version');
+  const description = stringField(parsed, 'description');
+  if (!version || !description) {
+    throw new Error(`Skill ${filePath} must declare version and description.`);
+  }
+
+  const body = bodyRaw.trim();
+  const spec: SkillSpec = {
+    id,
+    version,
+    name: stringField(parsed, 'name'),
+    description,
+    enabled: booleanField(parsed, 'enabled') ?? true,
+    priority: numberField(parsed, 'priority'),
+    activationPolicy: activationPolicyFromFrontmatter(parsed),
+    instructions: stringField(parsed, 'instructions') ?? (body ? body : undefined),
+    references: assetRefsFromFrontmatter(parsed.references, 'reference'),
+    scripts: assetRefsFromFrontmatter(parsed.scripts, 'script'),
+    assets: assetRefsFromFrontmatter(parsed.assets, 'asset'),
+    allowedTools: stringArrayField(parsed, 'allowedTools'),
+    requiredTools: stringArrayField(parsed, 'requiredTools'),
+    requiredMCPServers: stringArrayField(parsed, 'requiredMCPServers'),
+    memoryAccessPolicy: stringField(parsed, 'memoryAccessPolicy'),
+    sideEffectPolicy: stringField(parsed, 'sideEffectPolicy'),
+    contextBudget: numberField(parsed, 'contextBudget'),
+    inputSchema: schemaField(parsed, 'inputSchema'),
+    outputContract: schemaField(parsed, 'outputContract'),
+    evaluationCases: stringArrayField(parsed, 'evaluationCases'),
+    provenance: {
+      ...(recordField(parsed, 'provenance') ?? {}),
+      source: 'local-skill',
+      filePath,
+      slug,
+    },
+    trustLevel: trustLevelField(parsed, 'trustLevel') ?? 'reviewed',
+  };
+  return { filePath, slug, spec: validateSkillSpec(spec) };
+}
+
+export async function listLocalSkillFiles(directory: string, recursive = true): Promise<string[]> {
+  const root = path.resolve(directory);
+  const files: string[] = [];
+
+  async function visit(current: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (recursive) await visit(fullPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith('.md')) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  await visit(root);
+  return files.sort();
+}
+
+function evaluateSkillActivation(
+  skill: SkillSpec,
+  context: SkillResolutionContext
+): { active: boolean; reason: string; matchedPatterns: string[] } {
+  const policy = skill.activationPolicy;
+  if (!policy || policy.mode === 'always') {
+    return { active: true, reason: 'Activation policy is always.', matchedPatterns: [] };
+  }
+  if (policy.mode === 'manual') {
+    const active = Boolean(context.manualSkillIds?.includes(skill.id));
+    return {
+      active,
+      reason: active ? 'Skill was manually selected.' : 'Manual skill was not requested.',
+      matchedPatterns: active ? [skill.id] : [],
+    };
+  }
+  if (policy.mode === 'intent') {
+    const matchedPatterns = (policy.patterns ?? []).filter((pattern) => pattern === context.intent);
+    return {
+      active: matchedPatterns.length > 0,
+      reason:
+        matchedPatterns.length > 0
+          ? `Intent matched: ${matchedPatterns.join(', ')}.`
+          : 'Intent did not match activation policy.',
+      matchedPatterns,
+    };
+  }
+
+  const input = context.inputText ?? '';
+  if (policy.mode === 'regex') {
+    const matchedPatterns = (policy.patterns ?? []).filter((pattern) => {
+      try {
+        return new RegExp(pattern, 'i').test(input);
+      } catch {
+        return false;
+      }
+    });
+    return {
+      active: matchedPatterns.length > 0,
+      reason:
+        matchedPatterns.length > 0
+          ? `Regex matched: ${matchedPatterns.join(', ')}.`
+          : 'Regex did not match activation policy.',
+      matchedPatterns,
+    };
+  }
+
+  const normalizedInput = input.toLowerCase();
+  const matchedPatterns = (policy.patterns ?? []).filter((pattern) =>
+    normalizedInput.includes(pattern.toLowerCase())
+  );
+  return {
+    active: matchedPatterns.length > 0,
+    reason:
+      matchedPatterns.length > 0
+        ? `Keyword matched: ${matchedPatterns.join(', ')}.`
+        : 'Keyword did not match activation policy.',
+    matchedPatterns,
+  };
+}
+
+function activationPolicyFromFrontmatter(
+  parsed: Record<string, unknown>
+): SkillActivationPolicy | undefined {
+  const policy = recordField(parsed, 'activationPolicy');
+  if (policy) {
+    const mode = stringField(policy, 'mode') as SkillActivationMode | undefined;
+    if (mode) return { mode, patterns: stringArrayField(policy, 'patterns') };
+  }
+
+  const triggers = Array.isArray(parsed.triggers) ? parsed.triggers : undefined;
+  if (!triggers?.length) return undefined;
+  if (triggers.some((trigger) => recordFieldValue(trigger, 'type') === 'always')) {
+    return { mode: 'always' };
+  }
+
+  const first = triggers.find((trigger) => {
+    const type = recordFieldValue(trigger, 'type');
+    return type === 'keyword' || type === 'regex' || type === 'intent' || type === 'manual';
+  });
+  const mode = recordFieldValue(first, 'type') as SkillActivationMode | undefined;
+  if (!mode) return undefined;
+  const patterns = triggers
+    .filter((trigger) => recordFieldValue(trigger, 'type') === mode)
+    .map((trigger) => recordFieldValue(trigger, 'pattern'))
+    .filter((pattern): pattern is string => Boolean(pattern));
+  return { mode, patterns: patterns.length ? patterns : undefined };
+}
+
+function assetRefsFromFrontmatter(
+  value: unknown,
+  defaultType: SkillAssetRef['type']
+): SkillAssetRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const refs = value
+    .map((item): SkillAssetRef | null => {
+      if (typeof item === 'string') {
+        return {
+          path: item,
+          type: defaultType,
+          loadPolicy: defaultType === 'reference' ? 'on_activation' : 'never',
+        };
+      }
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const record = item as Record<string, unknown>;
+      const itemPath = stringField(record, 'path');
+      if (!itemPath) return null;
+      const type =
+        (stringField(record, 'type') as SkillAssetRef['type'] | undefined) ?? defaultType;
+      const loadPolicy = stringField(record, 'loadPolicy') as
+        | SkillAssetRef['loadPolicy']
+        | undefined;
+      return { path: itemPath, type, loadPolicy };
+    })
+    .filter((ref): ref is SkillAssetRef => Boolean(ref));
+  return refs.length ? refs : undefined;
+}
+
+function truncateToBudget(value: string | undefined, maxChars: number): string | undefined {
+  if (!value || maxChars <= 0) return undefined;
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 20) return value.slice(0, maxChars);
+  return `${value.slice(0, maxChars - 13)}...[truncated]`;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return undefined;
+}
+
+function booleanField(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function numberField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function stringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
+  const value = record[key];
+  if (!Array.isArray(value)) return undefined;
+  const values = value.filter((item): item is string => typeof item === 'string');
+  return values.length ? values : undefined;
+}
+
+function schemaField(record: Record<string, unknown>, key: string): JsonSchema | undefined {
+  const value = record[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as JsonSchema)
+    : undefined;
+}
+
+function recordField(
+  record: Record<string, unknown>,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = record[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function recordFieldValue(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return stringField(value as Record<string, unknown>, key);
+}
+
+function trustLevelField(
+  record: Record<string, unknown>,
+  key: string
+): SkillSpec['trustLevel'] | undefined {
+  const value = stringField(record, key);
+  if (value === 'trusted' || value === 'reviewed' || value === 'untrusted') return value;
+  return undefined;
 }
 
 export const skillRefSchema = z.object({
@@ -117,7 +704,7 @@ export const skillRefSchema = z.object({
 });
 
 export const skillActivationPolicySchema = z.object({
-  mode: z.enum(['always', 'keyword', 'intent', 'manual']),
+  mode: z.enum(['always', 'keyword', 'regex', 'intent', 'manual']),
   patterns: z.array(z.string()).optional(),
 });
 
@@ -127,27 +714,27 @@ export const skillAssetRefSchema = z.object({
   loadPolicy: z.enum(['frontmatter_only', 'on_activation', 'never']).optional(),
 });
 
-export const skillSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    description: z.string().min(1),
-    activationPolicy: skillActivationPolicySchema.optional(),
-    instructions: z.string().optional(),
-    references: z.array(skillAssetRefSchema).optional(),
-    scripts: z.array(skillAssetRefSchema).optional(),
-    assets: z.array(skillAssetRefSchema).optional(),
-    allowedTools: z.array(z.string()).optional(),
-    requiredTools: z.array(z.string()).optional(),
-    requiredMCPServers: z.array(z.string()).optional(),
-    memoryAccessPolicy: z.string().optional(),
-    sideEffectPolicy: z.string().optional(),
-    contextBudget: z.number().int().positive().optional(),
-    inputSchema: jsonSchemaSchema.optional(),
-    outputContract: jsonSchemaSchema.optional(),
-    evaluationCases: z.array(z.string()).optional(),
-    provenance: z.record(z.unknown()).optional(),
-    trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
-  }) satisfies ZodType<SkillSpec>;
+export const skillSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  description: z.string().min(1),
+  enabled: z.boolean().optional(),
+  priority: z.number().optional(),
+  activationPolicy: skillActivationPolicySchema.optional(),
+  instructions: z.string().optional(),
+  references: z.array(skillAssetRefSchema).optional(),
+  scripts: z.array(skillAssetRefSchema).optional(),
+  assets: z.array(skillAssetRefSchema).optional(),
+  allowedTools: z.array(z.string()).optional(),
+  requiredTools: z.array(z.string()).optional(),
+  requiredMCPServers: z.array(z.string()).optional(),
+  memoryAccessPolicy: z.string().optional(),
+  sideEffectPolicy: z.string().optional(),
+  contextBudget: z.number().int().positive().optional(),
+  inputSchema: jsonSchemaSchema.optional(),
+  outputContract: jsonSchemaSchema.optional(),
+  evaluationCases: z.array(z.string()).optional(),
+  provenance: z.record(z.unknown()).optional(),
+  trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
+}) satisfies ZodType<SkillSpec>;
 
 export const skillSpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -157,7 +744,16 @@ export const skillSpecJsonSchema: JsonSchema = {
     version: { type: 'string' },
     name: { type: 'string' },
     description: { type: 'string' },
-    activationPolicy: { type: 'object' },
+    enabled: { type: 'boolean' },
+    priority: { type: 'number' },
+    activationPolicy: {
+      type: 'object',
+      properties: {
+        mode: { enum: ['always', 'keyword', 'regex', 'intent', 'manual'] },
+        patterns: { type: 'array', items: { type: 'string' } },
+      },
+      additionalProperties: false,
+    },
     instructions: { type: 'string' },
     references: { type: 'array', items: { type: 'object' } },
     scripts: { type: 'array', items: { type: 'object' } },
@@ -182,6 +778,8 @@ export const skillSpecExample: SkillSpec = {
   version: '0.0.0',
   name: 'Context Enrichment',
   description: 'Adds relevant context before reasoning.',
+  enabled: true,
+  priority: 10,
   activationPolicy: { mode: 'always' },
   allowedTools: ['tool.search'],
   contextBudget: 2000,

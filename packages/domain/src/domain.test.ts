@@ -105,6 +105,8 @@ describe('@hypha/domain workflow compiler', () => {
     expect(domainSpecJsonSchemas.ReasoningSpec.required).toContain('thinkingMode');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
     expect(domainSpecJsonSchemas.DomainPackSpec.properties).toMatchObject({
+      allowedSkills: { type: 'array' },
+      defaultSkills: { type: 'array' },
       reasoningProfiles: { type: 'array' },
       evaluationProfiles: { type: 'array' },
       regressionCases: { type: 'array' },
@@ -128,6 +130,35 @@ describe('@hypha/domain workflow compiler', () => {
         defaultReasoningProfile: 'missing-reasoning',
       })
     ).toThrow(/Default reasoning profile not found/);
+  });
+
+  it('rejects DomainPack skill bindings outside allowedSkills', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        allowedSkills: [{ id: 'skill.allowed', version: '0.0.0' }],
+        defaultSkills: [{ id: 'skill.missing', version: '0.0.0' }],
+      })
+    ).toThrow(/Default skill is not allowed/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        allowedSkills: [{ id: 'skill.allowed', version: '0.0.0' }],
+        defaultSkills: [],
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: [
+              {
+                ...domainPackSpecDefinition.example.workflows[0].states[0],
+                allowedSkills: ['skill.missing'],
+              },
+            ],
+          },
+        ],
+      })
+    ).toThrow(/allows unknown skill/);
   });
 
   it('validates nested profile specs instead of accepting arbitrary objects', () => {

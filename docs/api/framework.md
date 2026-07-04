@@ -23,7 +23,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
-| `@hypha/skills`         | `SkillSpec`, skill refs, activation and side-effect policy fields.                                                         |
+| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                         |
 | `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, queues, replay/audit/regression projections.                    |
 | `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
 | `@hypha/testing`        | Event and spec test helpers.                                                                                               |
@@ -148,6 +148,8 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
 
 `ReActAgentRunner` wires `DefaultContextBuilder`, `BasicReActAgentRuntime`, `DefaultVerifier`, `InferenceProvider`, and `ToolRunner` into a runnable agent. Use `MockToolRunner` for package tests and local examples; production tools should use `GovernedToolRunner`.
 
+`SkillContextBuilder` can wrap any `ContextBuilder` to resolve agent-bound skills before ReAct execution. It uses `SkillSelector` to select active skills from `agent.skillRefs`, applies `allowedSkills` from explicit options or `metadata.workflowState.allowedSkills`, checks activation through `SkillPolicy`, and loads only activated skill instructions through `SkillContextLoader`. Loaded skills are attached to `BuiltAgentContext.activeSkills`, emitted as tagged system context, and forwarded inside the model request context.
+
 `ReasoningContextBuilder` can wrap any `ContextBuilder` to add structured thinking and agentic deliberation before ReAct execution. `ThinkingPlanner` produces a `ThinkingPlan` with intent, constraints, success criteria, plan steps, risks, and a summary. `AgenticReasoner` produces an `AgenticReasoningDecision` with mode, recommended phase, action type, tool candidates, verification strategy, and rationale. These are structured summaries only; raw hidden chain-of-thought is not exposed or persisted.
 
 `ReasoningConfig` fields:
@@ -268,6 +270,39 @@ published through `/tools`, `/tools/mcp/tools`, ReAct chat, workflow stages, and
 `POST /tools/execute` using normalized names such as `search.web_search`.
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
+
+Skill system APIs:
+
+| API                   | Purpose                                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `SkillRegistry`       | Stores validated `SkillSpec` objects by id.                                                                                |
+| `LocalSkillLoader`    | Loads local markdown skills from `*.md` and nested `SKILL.md` files with YAML frontmatter.                                 |
+| `SkillSelector`       | Selects registered skills bound to `agent.skillRefs` using `always`, `keyword`, `regex`, `intent`, or `manual` activation. |
+| `DefaultSkillPolicy`  | Denies untrusted skills and skills whose required tools are outside the active tool scope.                                 |
+| `SkillContextLoader`  | Loads activated instructions and `on_activation` references within `contextBudget`; scripts and assets are metadata only.  |
+| `SkillContextBuilder` | Injects selected skill context into `BuiltAgentContext` and model request context.                                         |
+
+Markdown local skills use this shape:
+
+```markdown
+---
+id: context-enrichment
+name: Context Enrichment
+description: Adds derived context signals before reasoning
+version: 1.0.0
+priority: 10
+enabled: true
+triggers:
+  - type: always
+allowedTools:
+  - tool.search
+trustLevel: reviewed
+---
+
+Skill instructions loaded only after activation.
+```
+
+Harnessed runs record `skill.selected`, `skill.loaded`, and `skill.completed` for activated skills. Skill-provided tools are not executed directly; tool actions still go through `ToolRunner` and the same policy/trace path as non-skill tool calls.
 
 ## Memory and Context
 

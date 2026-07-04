@@ -24,6 +24,9 @@ run.started
 fsm.state.entered
 fsm.transition.accepted
 context.build.completed
+skill.selected
+skill.loaded
+skill.completed
 agent.reasoning.started
 model.call.started
 model.call.completed
@@ -81,6 +84,33 @@ observe -> reason -> select_action -> policy_check -> act
 Tool actions must use a `ToolRunner`. Model calls must use an `InferenceProvider`. Memory synchronization must keep scope, provenance, policy, and trace behavior explicit.
 
 `ReActAgentRunner` provides the default package-level wiring for `ContextBuilder`, `ReActAgentRuntime`, `Verifier`, inference, and tools. `HarnessedReActFSMRunner` composes that ReAct execution with `FSMRuntime` and `RunManager` so every FSM state is traceable and replayable from events.
+
+## Skill Activation
+
+Skills are reusable procedural capability packages bound to an agent with `agent.skillRefs`. They are not workflows and they do not bypass tool governance.
+
+The package-level activation path is:
+
+```text
+ContextBuilder
+  -> SkillSelector
+  -> SkillPolicy
+  -> SkillContextLoader
+  -> BuiltAgentContext.activeSkills
+  -> model request context
+```
+
+`SkillContextBuilder` only injects skills that are both bound to the agent and allowed by the current scope. Workflow state restrictions can be supplied as `metadata.workflowState.allowedSkills` or as runner options. Skill instructions and `on_activation` references are loaded after activation, while scripts and assets remain metadata unless a governed tool later uses them.
+
+Harnessed runs emit:
+
+```text
+skill.selected
+skill.loaded
+skill.completed
+```
+
+Replay projections expose `skillEventIds` and `skillEvents`; audit and regression projections expose `skillActivationCount`.
 
 ## Thinking and Agentic Reasoning
 

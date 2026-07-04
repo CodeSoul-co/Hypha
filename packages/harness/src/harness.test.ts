@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '@hypha/core';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
 import type { ContextBuilder } from '@hypha/kernel';
-import { MockToolRunner } from '@hypha/tools';
+import { SkillRegistry } from '@hypha/skills';
+import { GovernedToolRunner, MockToolRunner, ToolRegistry } from '@hypha/tools';
 import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
 import {
   EventFirstRuntime,
@@ -260,6 +261,169 @@ describe('@hypha/harness contracts', () => {
     await expect(runManager.projectRegression('run_reasoning_harness')).resolves.toMatchObject({
       reasoningDecisionCount: 1,
     });
+  });
+
+  it('records skill activation events before ReAct execution when skills are enabled', async () => {
+    let capturedRequest: InferenceRequest | undefined;
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'skill.context',
+      version: '0.0.0',
+      description: 'Context procedure',
+      activationPolicy: { mode: 'always' },
+      instructions: 'Use this skill to add concise procedural context.',
+      allowedTools: ['tool.mock'],
+      trustLevel: 'reviewed',
+    });
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        capturedRequest = request;
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: 'skill output',
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      skillRegistry: registry,
+      allowedSkills: ['skill.context'],
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_skill_harness',
+      stepId: 'react',
+      sessionId: 'session_skill_harness',
+      userId: 'owner',
+      agent: {
+        id: 'agent.skill',
+        version: '0.0.0',
+        name: 'Skill Agent',
+        modelAlias: 'default-chat',
+        skillRefs: [{ id: 'skill.context' }],
+        toolRefs: ['tool.mock'],
+      },
+      input: 'activate skill',
+    });
+
+    expect(result.react.status).toBe('completed');
+    expect(capturedRequest?.input).toMatchObject({
+      context: {
+        activeSkills: [
+          expect.objectContaining({
+            id: 'skill.context',
+            allowedTools: ['tool.mock'],
+          }),
+        ],
+      },
+    });
+    expect(result.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(['skill.selected', 'skill.loaded', 'skill.completed'])
+    );
+    await expect(runManager.projectReplay('run_skill_harness')).resolves.toMatchObject({
+      skillEventIds: expect.arrayContaining([
+        expect.stringContaining('skill.selected'),
+        expect.stringContaining('skill.completed'),
+      ]),
+      skillEvents: [
+        expect.objectContaining({ type: 'skill.selected' }),
+        expect.objectContaining({ type: 'skill.loaded' }),
+        expect.objectContaining({ type: 'skill.completed' }),
+      ],
+    });
+    await expect(runManager.projectAudit('run_skill_harness')).resolves.toMatchObject({
+      skillActivationCount: 1,
+    });
+    await expect(runManager.projectRegression('run_skill_harness')).resolves.toMatchObject({
+      skillActivationCount: 1,
+    });
+  });
+
+  it('keeps skill-selected tool use behind GovernedToolRunner policy', async () => {
+    const registry = new SkillRegistry();
+    registry.register({
+      id: 'skill.external-tool',
+      version: '0.0.0',
+      description: 'Procedure that may use an external tool',
+      activationPolicy: { mode: 'always' },
+      instructions: 'Use tool.danger only if policy allows it.',
+      allowedTools: ['tool.danger'],
+      requiredTools: ['tool.danger'],
+      trustLevel: 'reviewed',
+    });
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(
+      {
+        id: 'tool.danger',
+        version: '0.0.0',
+        description: 'External effect test tool',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'external_effect',
+      },
+      async () => ({ ok: true })
+    );
+    const toolTrace = new InMemoryTraceRecorder();
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        expect(request.input).toMatchObject({
+          context: {
+            activeSkills: [expect.objectContaining({ id: 'skill.external-tool' })],
+          },
+        });
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'tool',
+            toolId: 'tool.danger',
+            input: { ok: true },
+          },
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      skillRegistry: registry,
+      toolRunner: new GovernedToolRunner(toolRegistry, toolTrace),
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_skill_tool_policy',
+      stepId: 'react',
+      sessionId: 'session_skill_tool_policy',
+      userId: 'owner',
+      agent: {
+        id: 'agent.skill-tool-policy',
+        version: '0.0.0',
+        name: 'Skill Tool Policy Agent',
+        modelAlias: 'default-chat',
+        skillRefs: [{ id: 'skill.external-tool' }],
+        toolRefs: ['tool.danger'],
+      },
+      input: 'use dangerous tool',
+    });
+
+    expect(result.react).toMatchObject({
+      status: 'completed',
+      output: {
+        toolId: 'tool.danger',
+        status: 'denied',
+        error: expect.stringContaining('requires an explicit policy override'),
+      },
+    });
+    expect(result.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(['skill.completed', 'react.step.completed'])
+    );
+    expect((await toolTrace.list()).map((event) => event.type)).toEqual(
+      expect.arrayContaining(['tool.call.requested', 'tool.policy.checked', 'tool.call.rejected'])
+    );
   });
 
   it('projects human-review runs from events instead of leaving them running', async () => {

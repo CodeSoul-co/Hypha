@@ -20,6 +20,7 @@ import {
   DefaultVerifier,
   ReasoningContextBuilder,
   ReActRunner,
+  SkillContextBuilder,
   type BuiltAgentContext,
   type ContextBuildInput,
   type ContextBuilder,
@@ -31,6 +32,12 @@ import {
   type ThinkingPlanner,
   type Verifier,
 } from '@hypha/kernel';
+import {
+  type SkillPolicy,
+  type SkillRegistry,
+  SkillContextLoader,
+  SkillSelector,
+} from '@hypha/skills';
 import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 
 export interface RuntimeSession {
@@ -101,11 +108,13 @@ export interface ReplayProjection {
   policyDecisionEventIds: string[];
   memoryEventIds: string[];
   reasoningEventIds: string[];
+  skillEventIds: string[];
   modelCalls: FrameworkEvent[];
   toolCalls: FrameworkEvent[];
   memoryReads: FrameworkEvent[];
   memoryWrites: FrameworkEvent[];
   reasoningEvents: FrameworkEvent[];
+  skillEvents: FrameworkEvent[];
   policyDecisions: FrameworkEvent[];
   finalOutput?: unknown;
 }
@@ -116,6 +125,7 @@ export interface AuditProjection {
   policyDecisionCount: number;
   memoryWriteCount: number;
   reasoningDecisionCount: number;
+  skillActivationCount: number;
   toolCallCount: number;
   missingRunIds: string[];
 }
@@ -127,6 +137,7 @@ export interface RegressionProjection {
   toolCalls: Array<{ toolId?: unknown; status: string }>;
   memoryWriteCount: number;
   reasoningDecisionCount: number;
+  skillActivationCount: number;
   finalOutput?: unknown;
 }
 
@@ -147,6 +158,11 @@ export interface HarnessedReActFSMRunnerOptions {
   runManager?: RunManager;
   fsmSpec?: FSMProcessSpec;
   contextBuilder?: ContextBuilder;
+  skillRegistry?: SkillRegistry;
+  skillSelector?: SkillSelector;
+  skillContextLoader?: SkillContextLoader;
+  skillPolicy?: SkillPolicy;
+  allowedSkills?: string[];
   thinkingPlanner?: ThinkingPlanner;
   agenticReasoner?: AgenticReasoner;
   reasoningConfig?: ReasoningConfig;
@@ -283,6 +299,8 @@ export class EventFirstRuntime {
       reasoningDecisionCount: replay.reasoningEvents.filter(
         (event) => event.type === 'reasoning.decision.recorded'
       ).length,
+      skillActivationCount: replay.skillEvents.filter((event) => event.type === 'skill.completed')
+        .length,
       finalOutput: replay.finalOutput,
     };
   }
@@ -392,6 +410,51 @@ export class RunManager {
     return this.runtime.appendRunEvent({
       id: this.nextEventId(context.runId, 'context.build.completed'),
       type: 'context.build.completed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordSkillSelected(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'skill.selected'),
+      type: 'skill.selected',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordSkillLoaded(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'skill.loaded'),
+      type: 'skill.loaded',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      agentId: context.agentId,
+      payload,
+    });
+  }
+
+  async recordSkillCompleted(
+    context: RunExecutionContext,
+    payload: Record<string, unknown>
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'skill.completed'),
+      type: 'skill.completed',
       runId: context.runId,
       sessionId: context.sessionId,
       userId: context.userId,
@@ -583,7 +646,18 @@ export class HarnessedReActFSMRunner {
   constructor(private readonly options: HarnessedReActFSMRunnerOptions) {
     this.runManager = options.runManager ?? new RunManager();
     this.fsmSpec = options.fsmSpec ?? defaultReActFSMProcessSpec;
-    const baseContextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    let baseContextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
+    if (options.skillRegistry) {
+      baseContextBuilder = new SkillContextBuilder({
+        baseBuilder: baseContextBuilder,
+        registry: options.skillRegistry,
+        selector: options.skillSelector,
+        contextLoader: options.skillContextLoader,
+        policy: options.skillPolicy,
+        allowedSkills: options.allowedSkills,
+        now: options.now,
+      });
+    }
     this.contextBuilder =
       options.thinkingPlanner || options.agenticReasoner || options.reasoningConfig
         ? new ReasoningContextBuilder({
@@ -655,7 +729,10 @@ export class HarnessedReActFSMRunner {
         reasoningConfig: context.reasoningConfig,
         thinkingPlanId: context.thinkingPlan?.id,
         reasoningDecisionId: context.reasoningDecision?.id,
+        activeSkillIds: context.activeSkills?.map((skill) => skill.id) ?? [],
+        rejectedSkills: context.rejectedSkills ?? [],
       });
+      await this.recordSkillEvents(runContext, context);
       await this.recordReasoningEvents(runContext, context);
       await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
 
@@ -767,6 +844,41 @@ export class HarnessedReActFSMRunner {
       });
     }
   }
+
+  private async recordSkillEvents(
+    context: RunExecutionContext,
+    builtContext: BuiltAgentContext
+  ): Promise<void> {
+    for (const skill of builtContext.activeSkills ?? []) {
+      await this.runManager.recordSkillSelected(context, {
+        skillId: skill.id,
+        version: skill.version,
+        activation: skill.activation,
+        policyDecision: {
+          allowed: skill.policyDecision.allowed,
+          requiresHumanReview: skill.policyDecision.requiresHumanReview,
+          policyId: skill.policyDecision.policyId,
+          reason: skill.policyDecision.reason,
+        },
+      });
+      await this.runManager.recordSkillLoaded(context, {
+        skillId: skill.id,
+        version: skill.version,
+        loadedInstructions: Boolean(skill.instructions),
+        loadedReferences: skill.references.map((reference) => ({
+          path: reference.path,
+          type: reference.type,
+          loaded: Boolean(reference.content),
+          truncated: reference.truncated,
+        })),
+      });
+      await this.runManager.recordSkillCompleted(context, {
+        skillId: skill.id,
+        version: skill.version,
+        allowedTools: skill.allowedTools,
+      });
+    }
+  }
 }
 
 function stateForReActStep(step: ReActStep): string | null {
@@ -853,6 +965,7 @@ export function projectReplay(events: FrameworkEvent[]): ReplayProjection {
     reasoningEventIds: events
       .filter((event) => isReasoningEventType(event.type))
       .map((event) => event.id),
+    skillEventIds: events.filter((event) => isSkillEventType(event.type)).map((event) => event.id),
     modelCalls: events.filter((event) => event.type.startsWith('model.call.')),
     toolCalls: events.filter((event) =>
       ['tool.call.completed', 'tool.call.failed', 'tool.call.rejected'].includes(event.type)
@@ -860,6 +973,7 @@ export function projectReplay(events: FrameworkEvent[]): ReplayProjection {
     memoryReads: events.filter((event) => event.type.startsWith('memory.read.')),
     memoryWrites: events.filter((event) => event.type.startsWith('memory.write.')),
     reasoningEvents: events.filter((event) => isReasoningEventType(event.type)),
+    skillEvents: events.filter((event) => isSkillEventType(event.type)),
     policyDecisions: events.filter((event) => event.type.includes('policy')),
     finalOutput: terminal ? (terminal.payload as Record<string, unknown>).output : undefined,
   };
@@ -874,6 +988,7 @@ export function projectAudit(events: FrameworkEvent[]): AuditProjection {
     memoryWriteCount: events.filter((event) => event.type === 'memory.write.committed').length,
     reasoningDecisionCount: events.filter((event) => event.type === 'reasoning.decision.recorded')
       .length,
+    skillActivationCount: events.filter((event) => event.type === 'skill.completed').length,
     toolCallCount: events.filter((event) => event.type === 'tool.call.completed').length,
     missingRunIds: events.filter((event) => !event.runId).map((event) => event.id),
   };
@@ -886,6 +1001,16 @@ function isReasoningEventType(type: FrameworkEvent['type']): boolean {
     type === 'agent.deliberation.started' ||
     type === 'agent.deliberation.completed' ||
     type === 'reasoning.decision.recorded'
+  );
+}
+
+function isSkillEventType(type: FrameworkEvent['type']): boolean {
+  return (
+    type === 'skill.selected' ||
+    type === 'skill.loaded' ||
+    type === 'skill.executed' ||
+    type === 'skill.completed' ||
+    type === 'skill.failed'
   );
 }
 
