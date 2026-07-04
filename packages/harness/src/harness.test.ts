@@ -171,6 +171,43 @@ describe('@hypha/harness contracts', () => {
     ]);
   });
 
+  it('removes queued messages from delivery indexes when they are failed directly', async () => {
+    const bus = new InMemoryMessageBus({
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    const common = {
+      userId: 'owner',
+      sessionId: 'session_direct_fail',
+      runId: 'run_direct_fail',
+      from: { kind: 'workflow' as const, id: 'workflow.default' },
+      to: recipient,
+      type: 'workflow.input',
+    };
+
+    await bus.publish({ ...common, id: 'msg_failed_queued', payload: { text: 'old' } });
+    await bus.publish({ ...common, id: 'msg_after_fail', payload: { text: 'next' } });
+    await bus.fail({
+      id: 'msg_failed_queued',
+      userId: 'owner',
+      sessionId: 'session_direct_fail',
+      runId: 'run_direct_fail',
+      reason: 'cancelled_before_delivery',
+    });
+
+    await expect(
+      bus.pull({
+        userId: 'owner',
+        sessionId: 'session_direct_fail',
+        runId: 'run_direct_fail',
+        to: recipient,
+      })
+    ).resolves.toMatchObject({ id: 'msg_after_fail', status: 'delivered' });
+    await expect(bus.list({ status: 'failed' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_failed_queued' }),
+    ]);
+  });
+
   it('derives session, run, replay, audit, and regression state from events', async () => {
     const runtime = new EventFirstRuntime();
     await runtime.createSession({
