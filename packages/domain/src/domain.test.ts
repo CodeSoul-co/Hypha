@@ -367,6 +367,68 @@ describe('@hypha/domain workflow compiler', () => {
     });
   });
 
+  it('projects state-scoped MCP and reasoning profiles into compiled system refs', () => {
+    const domainPack = validateDomainPackSpec({
+      ...domainPackSpecDefinition.example,
+      mcpProfiles: [
+        ...domainPackSpecDefinition.example.mcpProfiles!,
+        {
+          ...domainPackSpecDefinition.example.mcpProfiles![0],
+          id: 'mcp.research',
+          servers: [{ id: 'research', mode: 'local', command: 'mcp-server-research' }],
+        },
+      ],
+      reasoningProfiles: [
+        ...domainPackSpecDefinition.example.reasoningProfiles!,
+        {
+          id: 'reasoning.critique',
+          version: '0.0.0',
+          thinkingMode: 'structured',
+          agenticMode: 'critique',
+          maxSteps: 2,
+          persist: 'summary_only',
+        },
+      ],
+      workflows: [
+        {
+          ...domainPackSpecDefinition.example.workflows[0],
+          states: domainPackSpecDefinition.example.workflows[0].states.map((state) =>
+            state.id === 'Reasoning'
+              ? {
+                  ...state,
+                  allowedMCPProfiles: ['mcp.research'],
+                  reasoningProfileRef: 'reasoning.critique',
+                }
+              : state
+          ),
+        },
+      ],
+    });
+
+    const compiled = compileDomainPackToHarnessedSystem(domainPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+    });
+
+    expect(compiled.harnessedSystem.mcpRefs).toEqual([
+      { id: 'mcp.default', version: '0.0.0' },
+      { id: 'mcp.research', version: '0.0.0' },
+    ]);
+    expect(compiled.harnessedSystem.reasoningRefs).toEqual([
+      { id: 'reasoning.default', version: '0.0.0' },
+      { id: 'reasoning.critique', version: '0.0.0' },
+    ]);
+    expect(compiled.bindings.mcpProfile).toMatchObject({ id: 'mcp.default' });
+    expect(compiled.bindings.reasoningProfile).toMatchObject({ id: 'reasoning.default' });
+    expect(compiled.bindings.mcpProfiles.map((profile) => profile.id)).toEqual([
+      'mcp.default',
+      'mcp.research',
+    ]);
+    expect(compiled.bindings.reasoningProfiles.map((profile) => profile.id)).toEqual([
+      'reasoning.default',
+      'reasoning.critique',
+    ]);
+  });
+
   it('supports overlays for predefined DomainPack customization', () => {
     const extended = extendDomainPack(domainPackSpecDefinition.example, {
       version: '0.0.1',

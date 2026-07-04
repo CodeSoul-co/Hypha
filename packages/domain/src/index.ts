@@ -158,6 +158,8 @@ export interface DomainBindingResolution {
   mcpProfile?: MCPIntegrationSpec;
   contextProfile?: ContextSpec;
   reasoningProfile?: ReasoningSpec;
+  mcpProfiles: MCPIntegrationSpec[];
+  reasoningProfiles: ReasoningSpec[];
   policies: PolicySpec[];
   evaluations: EvaluationSpec[];
   regressionCases: RegressionSpec[];
@@ -655,6 +657,16 @@ export function compileDomainPackToHarnessedSystem(
     domainPack.evaluationProfiles?.map((evaluation) => evaluation.id),
     workflowStateBindings.flatMap((state) => state.evaluationRefs)
   );
+  const mcpProfileIds = mergeStrings(
+    mcpProfile ? [mcpProfile.id] : undefined,
+    workflowStateBindings.flatMap((state) => state.allowedMCPProfiles)
+  );
+  const reasoningProfileIds = mergeStrings(
+    reasoningProfile ? [reasoningProfile.id] : undefined,
+    workflowStateBindings
+      .map((state) => state.reasoningProfileRef)
+      .filter((id): id is string => Boolean(id))
+  );
   const fsmProcess = compileWorkflowToFSM(domainPack, {
     workflowId: workflow.id,
     fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
@@ -675,9 +687,9 @@ export function compileDomainPackToHarnessedSystem(
     memoryRefs: memoryProfile ? [toSpecRef(memoryProfile)] : undefined,
     toolRefs: idsToRefs(selectedToolIds, domainPack.tools),
     skillRefs: selectedSkillRefs.length ? selectedSkillRefs : undefined,
-    mcpRefs: mcpProfile ? [toSpecRef(mcpProfile)] : undefined,
+    mcpRefs: idsToRefs(mcpProfileIds, domainPack.mcpProfiles),
     contextRefs: contextProfile ? [toSpecRef(contextProfile)] : undefined,
-    reasoningRefs: reasoningProfile ? [toSpecRef(reasoningProfile)] : undefined,
+    reasoningRefs: idsToRefs(reasoningProfileIds, domainPack.reasoningProfiles),
     outputContractRefs: outputContract ? [toSpecRef(outputContract)] : undefined,
     businessRuleRefs: domainPack.businessRules?.map(toSpecRef),
     modelProfileRef: options.modelProfileRef,
@@ -719,6 +731,8 @@ export function compileDomainPackToHarnessedSystem(
       mcpProfile,
       contextProfile,
       reasoningProfile,
+      mcpProfiles: selectSpecsByIds(domainPack.mcpProfiles, mcpProfileIds),
+      reasoningProfiles: selectSpecsByIds(domainPack.reasoningProfiles, reasoningProfileIds),
       policies: selectSpecsByIds(domainPack.policies, policyIds),
       evaluations: selectSpecsByIds(domainPack.evaluationProfiles, evaluationIds),
       regressionCases: domainPack.regressionCases ?? [],

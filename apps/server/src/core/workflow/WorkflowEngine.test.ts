@@ -1,3 +1,5 @@
+import { validateDomainPackSpec } from '@hypha/domain';
+import { getEventRuntime } from '../../services/EventRuntime';
 import { WorkflowEngine } from './WorkflowEngine';
 import type { WorkflowDefinition, WorkflowExecutionContext } from './types';
 
@@ -68,5 +70,43 @@ describe('WorkflowEngine conditional execution', () => {
     expect(execution.status).toBe('completed');
     expect(execution.stageResults.has('allowed')).toBe(true);
     expect(execution.stageResults.has('blocked')).toBe(false);
+  });
+
+  it('adapts workflow definitions into valid DomainPack runtime specs', () => {
+    const workflow: WorkflowDefinition = {
+      name: 'runtime-contract',
+      version: '1.0.0',
+      stages: [
+        {
+          id: 'prepare',
+          type: 'preprocessor',
+          skills: ['context-enrichment'],
+          next: 'search',
+        },
+        {
+          id: 'search',
+          type: 'tool-call',
+          tools: ['search'],
+          next: 'end',
+        },
+      ],
+    };
+
+    const runtimeSpec = getEventRuntime().createRuntimeSpecFromWorkflow(workflow);
+    const domainPack = validateDomainPackSpec(runtimeSpec.domainPack);
+
+    expect(domainPack.allowedSkills).toEqual([{ id: 'context-enrichment' }]);
+    expect(domainPack.tools).toEqual([
+      expect.objectContaining({
+        id: 'search',
+        sideEffectLevel: 'read',
+        source: 'local',
+      }),
+    ]);
+    expect(domainPack.taskSchemas[0]).toMatchObject({
+      outputContractRef: 'output.runtime-contract',
+      defaultWorkflowRef: 'runtime-contract',
+    });
+    expect(runtimeSpec.fsm.initialState).toBe('prepare');
   });
 });

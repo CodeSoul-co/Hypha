@@ -192,6 +192,11 @@ returns:
 | `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.                                   |
 | `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.                                        |
 
+The selected default MCP/reasoning profiles remain available on `agentPatch`
+metadata. The compiled `harnessedSystem.mcpRefs` and `reasoningRefs` include
+both selected defaults and workflow state-scoped refs, so downstream runtime
+assemblers can load every profile used by the workflow.
+
 All DomainPack-internal references are checked during validation: task output
 contracts, workflow state transitions, session profile refs, state
 tool/MCP/reasoning bindings, business rule refs, policy refs, evaluation refs,

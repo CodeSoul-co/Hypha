@@ -7,7 +7,12 @@ import {
   type SpecRef,
 } from '@hypha/core';
 import { EventFirstRuntime } from '@hypha/harness';
-import { compileWorkflowToFSM, type DomainPackSpec, type WorkflowSpec } from '@hypha/domain';
+import {
+  compileWorkflowToFSM,
+  validateDomainPackSpec,
+  type DomainPackSpec,
+  type WorkflowSpec,
+} from '@hypha/domain';
 import {
   applyTransitionWithRuntimePolicy,
   createInitialSnapshot,
@@ -973,7 +978,9 @@ class EventRuntimeService {
     fsm: FSMProcessSpec;
   } {
     const workflowSpec = workflowDefinitionToWorkflowSpec(workflow);
-    const domainPack: DomainPackSpec = {
+    const skillIds = uniqueStageRefs(workflow.stages.flatMap((stage) => stage.skills ?? []));
+    const toolIds = uniqueStageRefs(workflow.stages.flatMap((stage) => stage.tools ?? []));
+    const domainPack = validateDomainPackSpec({
       id: `app.workflow.${workflow.name}`,
       version: workflow.version,
       name: workflow.name,
@@ -996,7 +1003,9 @@ class EventRuntimeService {
       ],
       workflows: [workflowSpec],
       defaultWorkflow: workflowSpec.id,
-    };
+      allowedSkills: skillIds.map((id) => ({ id })),
+      tools: toolIds.map((id): ToolSpec => createWorkflowToolSpec(id, workflow.version)),
+    });
     return { domainPack, fsm: compileWorkflowToFSM(domainPack) };
   }
 
@@ -1661,7 +1670,7 @@ function createDefaultDomainPack(): DomainPackSpec {
       .filter((state) => state !== 'Completed' && state !== 'Failed')
       .map((from) => ({ from, to: 'Failed', description: `${from} failed` }))
   );
-  return {
+  return validateDomainPackSpec({
     id: 'hypha.default',
     version: '1.0.0',
     name: 'hypha Default Runtime',
@@ -1693,7 +1702,7 @@ function createDefaultDomainPack(): DomainPackSpec {
       },
     ],
     defaultWorkflow: 'react-fsm-runtime',
-  };
+  });
 }
 
 function workflowDefinitionToWorkflowSpec(workflow: WorkflowDefinition): WorkflowSpec {
@@ -1734,6 +1743,23 @@ function workflowDefinitionToWorkflowSpec(workflow: WorkflowDefinition): Workflo
     terminalStates: ['Completed', 'Failed'],
     states,
     transitions,
+  };
+}
+
+function uniqueStageRefs(values: string[]): string[] {
+  return Array.from(
+    new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))
+  );
+}
+
+function createWorkflowToolSpec(id: string, version: string): ToolSpec {
+  return {
+    id,
+    version,
+    description: `Workflow tool ${id}.`,
+    inputSchema: { type: 'object', additionalProperties: true },
+    sideEffectLevel: 'read',
+    source: 'local',
   };
 }
 

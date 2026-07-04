@@ -99,7 +99,9 @@ Use `agentPatch` or `applyDomainAgentPatch()` to apply selected `skillRefs`,
 `toolRefs`, `memoryProfileRef`, `contextSpecRef`, and `policyRefs` to an agent
 without coupling DomainPack declarations to a concrete app surface. MCP and
 reasoning profile refs remain in the patch metadata for runtime adapters that
-need them.
+need the selected default profile. `HarnessedAgentSystemSpec.mcpRefs` and
+`reasoningRefs` include both the selected default profile and any workflow
+state-scoped profile refs.
 
 `HarnessedAgentSystemSpec` can carry the compiled system refs for `policyRefs`,
 `memoryRefs`, `toolRefs`, `skillRefs`, `mcpRefs`, `contextRefs`,
