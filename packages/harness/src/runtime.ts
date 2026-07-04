@@ -552,6 +552,9 @@ export class HarnessedReActFSMRunner {
       await this.runManager.recordContextBuildCompleted(runContext, {
         messageCount: context.messages.length,
         memoryScope: context.memoryScope,
+        memoryContextCount: context.memoryContext?.length ?? 0,
+        contextBudget: context.contextBudget,
+        contextProvenance: context.contextProvenance,
       });
       await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
 

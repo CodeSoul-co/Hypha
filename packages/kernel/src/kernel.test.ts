@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/adapters-local';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
+import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@hypha/memory';
 import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 import {
+  createEpisodicMemorySync,
   createReActStep,
   DefaultContextBuilder,
   kernelSpecJsonSchemas,
+  MemoryContextBuilder,
   ReActAgentRunner,
   ReActRunner,
   reactAgentSpecDefinition,
@@ -224,6 +228,159 @@ describe('@hypha/kernel ReAct contracts', () => {
       'verify',
       'memory_sync',
       'complete',
+    ]);
+  });
+
+  it('builds model context from semantic memory with budget and provenance', async () => {
+    const embeddings: EmbeddingProvider = {
+      embed: async () => [[1, 0]],
+    };
+    const manager = new MemoryManager(
+      new HybridMemoryProvider({
+        structured: new InMemoryStructuredStore(),
+        vector: new InMemoryVectorIndexProvider(),
+        embeddings,
+      })
+    );
+    await manager.write(
+      { userId: 'owner', sessionId: 'session_memory', runId: 'run_seed' },
+      {
+        id: 'semantic_hypha',
+        type: 'semantic',
+        value: 'Hypha uses event-first runtime memory.',
+        provenance: { eventId: 'event_seed' },
+        createdAt: '2026-07-04T00:00:00.000Z',
+      },
+      { requireProvenance: true, allowLongTerm: true }
+    );
+
+    const builder = new MemoryContextBuilder({
+      memory: manager,
+      embeddings,
+      budget: { maxMemoryItems: 1, maxMemoryChars: 200, maxTotalChars: 1000 },
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const context = await builder.build({
+      runId: 'run_context',
+      stepId: 'react',
+      sessionId: 'session_memory',
+      userId: 'owner',
+      agent: reactAgentSpecDefinition.example,
+      input: 'What does Hypha use for runtime memory?',
+    });
+
+    expect(context.messages[0]).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('Hypha uses event-first runtime memory.'),
+    });
+    expect(context.memoryContext).toEqual([
+      expect.objectContaining({ id: 'semantic_hypha', type: 'semantic' }),
+    ]);
+    expect(context.contextProvenance).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'memory',
+          id: 'semantic_hypha',
+          provenance: { eventId: 'event_seed' },
+        }),
+      ])
+    );
+    expect(context.metadata).toMatchObject({
+      memoryContextCount: 1,
+      contextBudget: expect.objectContaining({ maxMemoryItems: 1 }),
+    });
+
+    let capturedRequest: InferenceRequest | undefined;
+    const runner = new ReActAgentRunner({
+      contextBuilder: builder,
+      inference: {
+        id: 'capture-inference',
+        async infer(request) {
+          capturedRequest = request;
+          return { id: 'response_context', output: 'ok' };
+        },
+      },
+    });
+    await runner.run({
+      runId: 'run_context_agent',
+      stepId: 'react',
+      sessionId: 'session_memory',
+      userId: 'owner',
+      agent: reactAgentSpecDefinition.example,
+      input: 'What does Hypha use for runtime memory?',
+    });
+
+    expect(capturedRequest?.input).toMatchObject({
+      messages: [
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('Hypha uses event-first runtime memory.'),
+        }),
+        expect.objectContaining({ role: 'user' }),
+      ],
+    });
+  });
+
+  it('syncs ReAct observations into episodic memory through MemoryManager', async () => {
+    const manager = new MemoryManager(
+      new HybridMemoryProvider({
+        structured: new InMemoryStructuredStore(),
+        vector: new InMemoryVectorIndexProvider(),
+        embeddings: { embed: async () => [[1, 0]] },
+      })
+    );
+    const provider: InferenceProvider = {
+      id: 'test-provider',
+      async infer(): Promise<InferenceResponse> {
+        return { id: 'response_memory_sync', output: 'episodic answer' };
+      },
+    };
+    const runtime: ReActAgentRuntime = {
+      async reason(context) {
+        return {
+          runId: context.runId,
+          stepId: context.stepId,
+          modelAlias: context.agent.modelAlias,
+          input: context.messages,
+        };
+      },
+      async selectAction(response) {
+        return { type: 'finish', input: response.output };
+      },
+      async verify(_context, observation) {
+        return { type: 'finish', input: observation.value };
+      },
+    };
+    const runner = new ReActRunner(runtime, {
+      inference: provider,
+      syncMemory: createEpisodicMemorySync({
+        memory: manager,
+        now: () => '2026-07-04T00:00:00.000Z',
+      }),
+    });
+
+    await expect(
+      runner.run({
+        runId: 'run_memory_sync',
+        stepId: 'react',
+        agent: reactAgentSpecDefinition.example,
+        messages: [{ role: 'user', content: 'remember this' }],
+        memoryScope: { userId: 'owner', sessionId: 'session_memory_sync' },
+      })
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    await expect(
+      manager.read(
+        { userId: 'owner', sessionId: 'session_memory_sync', runId: 'run_memory_sync' },
+        { type: 'episodic' }
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: 'episodic:run_memory_sync:1',
+        type: 'episodic',
+        provenance: expect.objectContaining({ runId: 'run_memory_sync' }),
+      }),
     ]);
   });
 

@@ -256,6 +256,23 @@ published through `/tools`, `/tools/mcp/tools`, ReAct chat, workflow stages, and
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
 
+## Memory and Context
+
+`@hypha/memory` exposes `MemoryManager` over any `MemoryProvider`. The manager enforces write policy before provider side effects and can record standard trace events when constructed with a `TraceRecorder`:
+
+```ts
+const manager = new MemoryManager(storage.memory, { trace: storage.eventStore });
+
+await manager.write(scope, record, {
+  requireProvenance: true,
+  allowLongTerm: true,
+});
+```
+
+`MemoryRecord` requires `id`, `type`, `value`, `provenance`, and `createdAt`. Long-term records such as `episodic`, `semantic`, and `procedural` require `allowLongTerm: true`; `requireProvenance: true` rejects records without provenance. Reads and searches emit `memory.read.requested` and `memory.read.completed`; writes emit `memory.write.requested`, `memory.write.validated`, and `memory.write.committed` or `memory.write.rejected`.
+
+`@hypha/kernel` provides `MemoryContextBuilder` for model context construction. It retrieves memory through `MemoryManager.search()`, applies `ContextBudget` (`maxMessages`, `maxMemoryItems`, `maxMemoryChars`, `maxTotalChars`), tags each included record with `ContextProvenance`, and prepends a system context message with clear data/instruction boundaries. Use `createEpisodicMemorySync()` with `ReActRunner` when verified observations should become episodic memory.
+
 ## Local Adapters
 
 `@hypha/adapters-local` provides development and self-hosted adapters:

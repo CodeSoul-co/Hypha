@@ -82,6 +82,12 @@ Tool actions must use a `ToolRunner`. Model calls must use an `InferenceProvider
 
 `ReActAgentRunner` provides the default package-level wiring for `ContextBuilder`, `ReActAgentRuntime`, `Verifier`, inference, and tools. `HarnessedReActFSMRunner` composes that ReAct execution with `FSMRuntime` and `RunManager` so every FSM state is traceable and replayable from events.
 
+## Context and Memory
+
+Memory is persisted state; context is the bounded model-call view built for one run. `MemoryContextBuilder` resolves the active `MemoryScope`, searches semantic or episodic memory, applies `ContextBudget`, and injects selected records into the model request as tagged system context. Each included memory item carries `ContextProvenance` with record id, type, score, original provenance, and inclusion time.
+
+Memory writes should use `MemoryManager.write()` with explicit `MemoryWritePolicy`. Long-term records require provenance and an explicit long-term allowance. `createEpisodicMemorySync()` can be attached to `ReActRunner` so verified observations become episodic memory through the same policy and trace path.
+
 ## Side Effects
 
 Side effects are governed capabilities. Tool calls, MCP calls, memory writes, file writes, and external writes must pass through policy and event recording.

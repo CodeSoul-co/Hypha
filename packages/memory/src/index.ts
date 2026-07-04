@@ -1,10 +1,13 @@
 import { z, type ZodType } from 'zod';
 import {
+  createFrameworkEvent,
   defineSpecSchema,
   exportSpecJsonSchemas,
   FrameworkError,
+  type FrameworkEventType,
   jsonSchemaSchema,
   specMetadataSchema,
+  type TraceRecorder,
   versionedSpecSchema,
   type JsonSchema,
   type PolicyDecision,
@@ -191,15 +194,76 @@ export interface MemoryProvider {
   audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport>;
 }
 
-export class MemoryManager {
-  constructor(private readonly provider: MemoryProvider) {}
+export interface MemoryTraceContext {
+  runId?: string;
+  stepId?: string;
+  sessionId?: string;
+  userId?: string;
+  agentId?: string;
+  workspaceId?: string;
+  metadata?: Record<string, unknown>;
+}
 
-  read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]> {
-    return this.provider.read(scope, query);
+export interface MemoryManagerOptions {
+  trace?: TraceRecorder;
+  traceContext?: MemoryTraceContext;
+  now?: () => string;
+}
+
+export class MemoryManager {
+  private sequence = 0;
+
+  constructor(
+    private readonly provider: MemoryProvider,
+    private readonly options: MemoryManagerOptions = {}
+  ) {}
+
+  async read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]> {
+    await this.recordTrace(scope, 'memory.read.requested', {
+      operation: 'read',
+      query,
+    });
+    try {
+      const records = await this.provider.read(scope, query);
+      await this.recordTrace(scope, 'memory.read.completed', {
+        operation: 'read',
+        count: records.length,
+        recordIds: records.map((record) => record.id),
+      });
+      return records;
+    } catch (error) {
+      await this.recordTrace(scope, 'memory.read.failed', {
+        operation: 'read',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
-  search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]> {
-    return this.provider.search(scope, query);
+  async search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]> {
+    await this.recordTrace(scope, 'memory.read.requested', {
+      operation: 'search',
+      query: {
+        ...query,
+        vector: query.vector ? { dimensions: query.vector.length } : undefined,
+      },
+    });
+    try {
+      const results = await this.provider.search(scope, query);
+      await this.recordTrace(scope, 'memory.read.completed', {
+        operation: 'search',
+        count: results.length,
+        recordIds: results.map((result) => result.record.id),
+        scores: results.map((result) => result.score).filter((score) => score !== undefined),
+      });
+      return results;
+    } catch (error) {
+      await this.recordTrace(scope, 'memory.read.failed', {
+        operation: 'search',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   async write(
@@ -207,9 +271,104 @@ export class MemoryManager {
     record: MemoryRecord,
     policy: MemoryWritePolicy
   ): Promise<MemoryWriteResult> {
-    validateMemoryWrite(scope, record, policy);
-    return this.provider.write(scope, record, policy);
+    await this.recordTrace(scope, 'memory.write.requested', {
+      recordId: record.id,
+      type: record.type,
+      source: record.source,
+      visibility: record.visibility,
+      expiresAt: record.expiresAt,
+      policy: summarizeWritePolicy(policy),
+    });
+    try {
+      validateMemoryWrite(scope, record, policy);
+      await this.recordTrace(scope, 'memory.write.validated', {
+        recordId: record.id,
+        type: record.type,
+      });
+      const result = await this.provider.write(scope, record, policy);
+      await this.recordTrace(scope, 'memory.write.committed', {
+        recordId: result.recordId,
+        type: record.type,
+        vectorIndexed: result.vectorIndexed,
+        artifactRef: result.artifactRef,
+      });
+      return result;
+    } catch (error) {
+      await this.recordTrace(scope, 'memory.write.rejected', {
+        recordId: record.id,
+        type: record.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
+
+  update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void> {
+    return this.provider.update(scope, recordId, patch);
+  }
+
+  invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void> {
+    return this.provider.invalidate(scope, recordId, reason);
+  }
+
+  summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary> {
+    return this.provider.summarize(scope, options);
+  }
+
+  audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport> {
+    return this.provider.audit(scope, options);
+  }
+
+  private async recordTrace(
+    scope: MemoryScope,
+    type: FrameworkEventType,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.options.trace) return;
+    const context = this.options.traceContext ?? {};
+    const runId = scope.runId ?? context.runId ?? 'memory-runtime';
+    const sessionId = scope.sessionId ?? context.sessionId;
+    const userId = scope.userId ?? context.userId;
+    const workspaceId = scope.workspaceId ?? context.workspaceId;
+    this.sequence += 1;
+    const sequenceId = String(this.sequence).padStart(6, '0');
+    await this.options.trace.record(
+      createFrameworkEvent({
+        id: `${runId}:memory:${sequenceId}:${type}`,
+        type,
+        runId,
+        sessionId,
+        workspaceId,
+        stepId: context.stepId,
+        agentId: context.agentId,
+        timestamp: this.options.now?.(),
+        payload: {
+          ...payload,
+          scope,
+        },
+        metadata: {
+          ...context.metadata,
+          userId,
+        },
+      })
+    );
+  }
+}
+
+function summarizeWritePolicy(policy: MemoryWritePolicy): Record<string, unknown> {
+  return {
+    allowLongTerm: policy.allowLongTerm,
+    requireProvenance: policy.requireProvenance,
+    decision: policy.decision
+      ? {
+          allowed: policy.decision.allowed,
+          requiresHumanReview: policy.decision.requiresHumanReview,
+          policyId: policy.decision.policyId,
+          ruleId: policy.decision.ruleId,
+          reason: policy.decision.reason,
+        }
+      : undefined,
+  };
 }
 
 function validateMemoryWrite(
