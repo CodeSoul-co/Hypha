@@ -4,7 +4,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import type { ModelProvider, ModelRequest, ModelResponse } from '@hypha/models';
 import { ServingCacheManager } from './cache-manager';
-import { createLLMCacheKey } from './key';
+import { buildPromptPrefixMetadata, createLLMCacheKey } from './key';
 import { CachedLLMProvider } from './middleware/llm-cache-middleware';
 import { MemoryCacheStore } from './stores/memory-store';
 import { SQLiteCacheStore } from './stores/sqlite-store';
@@ -61,6 +61,48 @@ describe('@hypha/serving-cache', () => {
       system: 'system',
     });
     expect(left).toBe(right);
+  });
+
+  it('exports prompt template blocks as prefix metadata without changing exact keys', () => {
+    const request = {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      system: 'rendered system prompt',
+      messages: [{ role: 'user', content: 'hello' }],
+      params: { temperature: 0 },
+    };
+    const keyWithoutBlocks = createLLMCacheKey(request);
+    const metadata = buildPromptPrefixMetadata({
+      ...request,
+      promptBlocks: [
+        {
+          id: 'template.default-agent',
+          type: 'prompt-template',
+          content: 'rendered system prompt',
+          hash: 'template-hash',
+          order: 0,
+          templateId: 'default-agent',
+          templateVersion: '1.0.0',
+        },
+      ],
+    });
+
+    expect(createLLMCacheKey({ ...request, promptBlocks: metadata.blocks })).toBe(
+      keyWithoutBlocks
+    );
+    expect(metadata.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'template.default-agent',
+          type: 'prompt-template',
+          content: 'rendered system prompt',
+          hash: 'template-hash',
+          templateId: 'default-agent',
+          templateVersion: '1.0.0',
+        }),
+      ])
+    );
+    expect(metadata.blocks.map((block) => block.type)).not.toContain('system');
   });
 
   it('writes on miss and reuses exact responses on hit', async () => {

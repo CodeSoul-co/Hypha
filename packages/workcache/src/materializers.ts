@@ -5,6 +5,7 @@ import type {
   CacheBlockValidity,
   CacheTreeType,
   NormalizedWorkEvent,
+  PromptPrefixBlockValue,
   WorkNodeType,
 } from './types';
 
@@ -217,66 +218,88 @@ export function materializePromptPrefixBlock(event: NormalizedWorkEvent): CacheB
   if (!prefixMetadata) return [];
 
   const blocks = arrayFromUnknown(prefixMetadata.blocks)
-    .map((block) => recordFromUnknown(block))
+    .map((block, index) => normalizePromptPrefixBlock(block, index))
+    .filter((block): block is PromptPrefixBlockValue => Boolean(block))
     .filter((block) => block.stable === true)
     .sort((left, right) => {
-      const leftKey = `${stringValue(left.type) ?? ''}:${stringValue(left.id) ?? ''}`;
-      const rightKey = `${stringValue(right.type) ?? ''}:${stringValue(right.id) ?? ''}`;
+      const order = left.order - right.order;
+      if (order !== 0) return order;
+      const leftKey = `${left.type}:${left.id}`;
+      const rightKey = `${right.type}:${right.id}`;
       return leftKey.localeCompare(rightKey);
     });
   if (!blocks.length) return [];
 
-  const prefixContent =
-    stringValue(prefixMetadata.prefixContent) ??
-    blocks
-      .map((block) =>
-        stableJson({
-          id: block.id,
-          type: block.type,
-          hash: block.hash,
-        })
-      )
-      .join('\n');
   const prefixHash = stringValue(prefixMetadata.prefixHash) ?? hashStableJson(blocks);
-  const tokenEstimate = numberValue(prefixMetadata.prefixTokenEstimate);
+  const requestHash = stringValue(prefixMetadata.requestHash);
+  const toolSchemaHash = stringValue(prefixMetadata.toolSchemaHash);
+  const domainPackHash = stringValue(prefixMetadata.domainPackHash);
+  const dynamicSuffixHash = stringValue(prefixMetadata.dynamicSuffixHash);
 
-  return [
-    createBlock(event, {
+  return blocks.map((block, index) =>
+    createBlock<PromptPrefixBlockValue>(event, {
       identity: {
         prefixHash,
-        blockOrder: blocks.map((block) => `${stringValue(block.type)}:${stringValue(block.id)}`),
+        blockId: block.id,
+        blockType: block.type,
+        blockHash: block.hash,
       },
       value: {
-        content: prefixContent,
+        ...block,
         prefixHash,
-        blocks,
-        tokenEstimate,
+        order: block.order ?? index,
       },
       validity: {
         status: 'valid',
         proof: {
-          prefixHash,
-          requestHash: stringValue(prefixMetadata.requestHash),
-          toolSchemaHash: stringValue(prefixMetadata.toolSchemaHash),
-          domainPackHash: stringValue(prefixMetadata.domainPackHash),
+          blockHash: block.hash,
+          blockId: block.id,
+          blockType: block.type,
+          templateId: block.templateId,
+          templateVersion: block.templateVersion,
         },
         sourceHashes: {
-          prefix: prefixHash,
-          ...(stringValue(prefixMetadata.dynamicSuffixHash)
-            ? { dynamicSuffix: stringValue(prefixMetadata.dynamicSuffixHash) as string }
-            : {}),
+          [`prompt:${block.type}:${block.id}`]: block.hash,
         },
+        provenanceHash: hashStableJson({
+          id: block.id,
+          type: block.type,
+          hash: block.hash,
+          templateId: block.templateId,
+          templateVersion: block.templateVersion,
+        }),
+      },
+      provenance: {
+        prefixHash,
+        blockId: block.id,
+        blockType: block.type,
+        blockHash: block.hash,
+        source: block.source,
+        templateId: block.templateId,
+        templateVersion: block.templateVersion,
       },
       metadata: {
         prefixHash,
-        requestHash: stringValue(prefixMetadata.requestHash),
-        toolSchemaHash: stringValue(prefixMetadata.toolSchemaHash),
-        domainPackHash: stringValue(prefixMetadata.domainPackHash),
-        prefixTokenEstimate: tokenEstimate,
+        requestHash,
+        toolSchemaHash,
+        domainPackHash,
+        dynamicSuffixHash,
+        blockId: block.id,
+        blockType: block.type,
+        blockHash: block.hash,
+        blockOrder: block.order ?? index,
+        prefixBlockCount: blocks.length,
+        source: block.source,
+        templateId: block.templateId,
+        templateVersion: block.templateVersion,
       },
-      tags: ['prompt-prefix'],
-    }),
-  ];
+      tags: [
+        'prompt-prefix-block',
+        `prompt-block:${block.type}`,
+        ...(block.templateId ? ['prompt-template'] : []),
+      ],
+    })
+  );
 }
 
 export function createBlock<T = unknown>(
@@ -361,6 +384,36 @@ function promptPrefixMetadataFrom(
   return null;
 }
 
+function normalizePromptPrefixBlock(value: unknown, index: number): PromptPrefixBlockValue | null {
+  const block = recordFromUnknown(value);
+  const id = stringValue(block.id);
+  const type = stringValue(block.type);
+  if (!id || !type) return null;
+  const content =
+    stringValue(block.content) ??
+    stringValue(block.prompt) ??
+    stableJson({
+      id,
+      type,
+      hash: block.hash,
+    });
+  const hash = stringValue(block.hash) ?? hashStableJson(content);
+  return {
+    id,
+    type,
+    hash,
+    stable: block.stable !== false,
+    content,
+    tokenEstimate: numberValue(block.tokenEstimate),
+    order: numberValue(block.order) ?? index,
+    prefixHash: '',
+    source: stringValue(block.source),
+    templateId: stringValue(block.templateId),
+    templateVersion: stringValue(block.templateVersion),
+    metadata: recordWithValues(block.metadata),
+  };
+}
+
 function verificationProofFrom(payload: Record<string, unknown>): Record<string, string> | null {
   const proof = recordFromUnknown(payload.validityProof ?? payload.proof);
   const sourceHash =
@@ -435,6 +488,11 @@ function recordStringMap(value: unknown): Record<string, string> {
     if (typeof candidate === 'string') output[key] = candidate;
   }
   return output;
+}
+
+function recordWithValues(value: unknown): Record<string, unknown> | undefined {
+  const record = recordFromUnknown(value);
+  return Object.keys(record).length ? record : undefined;
 }
 
 function recordFromUnknown(value: unknown): Record<string, unknown> {

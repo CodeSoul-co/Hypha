@@ -23,8 +23,9 @@ enabled.
 | `memory.read.completed`, `memory.write.committed` | `memory` | `MemoryTree` |
 | `llm.cache.write` with prompt prefix metadata | `prompt_prefix` | `PromptPrefixTree` |
 
-`MessageTree` and `KVPrefixTree` are not V1 roots. PromptPrefixTree only
-materializes stable prefix content; it does not manage provider KV cache.
+`MessageTree` and `KVPrefixTree` are not V1 roots. PromptPrefixTree stores
+stable prompt blocks and can materialize a logical prefix string; it does not
+manage provider KV cache.
 
 ## Core Exports
 
@@ -93,6 +94,14 @@ event declares read-only side effects, stable args, permission scope, and
 validity or provenance hashes. Verification blocks require source, test, and
 environment hashes or an equivalent validity proof. Observation blocks
 invalidate when provenance or content hashes change.
+
+PromptPrefixTree reuse is block-level. `llm.cache.write` prefix metadata is
+split into stable blocks such as `system`, `tool-schema`, `prompt-template`,
+`project-context`, `domain-pack`, and `memory`. Each block is keyed by
+`prefixHash`, block type/id, and block hash, and stores the block content plus
+ordering/template metadata. Dynamic suffix hashes and request ids are trace
+metadata only; they do not invalidate stable prefix blocks. A template content
+or version change should produce a new block hash and therefore a new block.
 
 ## Audit Events
 

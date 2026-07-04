@@ -300,7 +300,12 @@ Core exports:
 | `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
 
 `LLMCacheKeyInput` fields are `provider`, `model`, `messages`, optional
-`system`, optional `tools`, optional `params`, and optional `cacheScope`.
+`system`, optional `tools`, optional `params`, optional `cacheScope`, and
+optional `promptBlocks`. `promptBlocks` describes already-rendered stable
+prompt components such as prompt templates, system blocks, tool schemas,
+project context, DomainPack context, or memory. It is prefix metadata for
+WorkCache and does not change the exact response cache key unless the rendered
+content also changes in `system`, `messages`, `tools`, or params.
 `CacheScope` may include `tenantId`, `userId`, `projectId`, `sessionId`, and
 `domainPackId`.
 
@@ -345,6 +350,14 @@ Default source event alignment:
 Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
 per-tree TTL fields under `workCache.trees` in `config.yaml`.
+
+`PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
+prompt block. A block value contains `id`, `type`, `hash`, `content`,
+`tokenEstimate`, `order`, `prefixHash`, optional template fields, and metadata.
+It does not store the complete `llm.cache.write` event or a full prompt event
+payload. `WorkCacheManager.materializePromptPrefix()` selects the requested or
+latest `prefixHash`, orders its blocks, applies the prompt token budget, and
+assembles the runtime prefix string.
 
 Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.miss`, `workcache.write`, `workcache.invalidate`,

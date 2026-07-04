@@ -115,6 +115,14 @@ Current-run updates are synchronous for immediate reuse; heavier pruning or
 rebuild work belongs behind the same graph/store interfaces and should not
 block an agent step.
 
+PromptPrefixTree is managed at prompt-block granularity. Serving Cache
+`llm.cache.write` metadata is split into stable `system`, `tool-schema`,
+`prompt-template`, `project-context`, `domain-pack`, or `memory` blocks. The
+tree stores each block's content, hash, order, prefix hash, and template
+metadata; it does not store the complete source event payload. Prefix
+materialization selects a prefix group and assembles ordered blocks under the
+configured token budget.
+
 cache-base enables it with `HYPHA_WORKCACHE=memory` by default. Set
 `HYPHA_WORKCACHE=off` to disable it or `HYPHA_WORKCACHE=sqlite` to persist
 cache blocks. Derived audit events are `workcache.lookup`, `workcache.hit`,

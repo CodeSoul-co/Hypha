@@ -275,5 +275,20 @@ export type WorkCacheLookupResult<T = unknown> =
 export interface PromptPrefixMaterialization {
   prefix: string;
   prefixHash: string;
-  blocks: Array<CacheBlock<{ content: string; tokenEstimate?: number }>>;
+  blocks: Array<CacheBlock<PromptPrefixBlockValue>>;
+}
+
+export interface PromptPrefixBlockValue {
+  id: string;
+  type: string;
+  hash: string;
+  stable: boolean;
+  content: string;
+  tokenEstimate?: number;
+  order: number;
+  prefixHash: string;
+  source?: string;
+  templateId?: string;
+  templateVersion?: string;
+  metadata?: Record<string, unknown>;
 }

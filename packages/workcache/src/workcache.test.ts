@@ -505,15 +505,97 @@ describe('@hypha/workcache tree safety rules', () => {
   it('materializes PromptPrefixTree blocks in deterministic order', async () => {
     const left = managerWithMemory();
     const right = managerWithMemory();
-    await left.ingest(prefixEvent('run_1:prefix_left', ['tool-schema', 'system', 'memory']));
-    await right.ingest(prefixEvent('run_1:prefix_right', ['memory', 'system', 'tool-schema']));
+    await left.ingest(
+      prefixEventWithBlocks('run_1:prefix_left', [
+        promptBlock('tool-schema', { id: 'tools', order: 20 }),
+        promptBlock('system', { id: 'system', order: 10 }),
+        promptBlock('memory', { id: 'memory', order: 30 }),
+      ])
+    );
+    await right.ingest(
+      prefixEventWithBlocks('run_1:prefix_right', [
+        promptBlock('memory', { id: 'memory', order: 30 }),
+        promptBlock('system', { id: 'system', order: 10 }),
+        promptBlock('tool-schema', { id: 'tools', order: 20 }),
+      ])
+    );
 
     const leftPrefix = await left.materializePromptPrefix();
     const rightPrefix = await right.materializePromptPrefix();
 
     expect(leftPrefix.materialization.prefixHash).toBe(rightPrefix.materialization.prefixHash);
     expect(leftPrefix.materialization.prefix).toBe(rightPrefix.materialization.prefix);
-    expect(leftPrefix.materialization.blocks[0]?.treeType).toBe('PromptPrefixTree');
+    expect(leftPrefix.materialization.prefix).toBe(
+      ['system content', 'tool-schema content', 'memory content'].join('\n\n')
+    );
+    expect(leftPrefix.materialization.blocks).toHaveLength(3);
+    expect(leftPrefix.materialization.blocks[0]).toMatchObject({
+      treeType: 'PromptPrefixTree',
+      value: { id: 'system', type: 'system', content: 'system content' },
+      tags: expect.arrayContaining(['prompt-prefix-block', 'prompt-block:system']),
+    });
+    expect(leftPrefix.materialization.blocks[0]?.value).not.toHaveProperty('blocks');
+  });
+
+  it('stores prompt template prefix blocks as block values and ignores dynamic suffix churn', async () => {
+    const manager = managerWithMemory();
+    const first = prefixEventWithBlocks(
+      'run_1:template_prefix_1',
+      [
+        promptBlock('prompt-template', {
+          id: 'template.default-agent',
+          content: 'You are Hypha.',
+          hash: 'template-hash',
+          order: 0,
+          templateId: 'default-agent',
+          templateVersion: '1.0.0',
+        }),
+      ],
+      { dynamicSuffixHash: 'suffix-a' }
+    );
+    const second = prefixEventWithBlocks(
+      'run_1:template_prefix_2',
+      [
+        promptBlock('prompt-template', {
+          id: 'template.default-agent',
+          content: 'You are Hypha.',
+          hash: 'template-hash',
+          order: 0,
+          templateId: 'default-agent',
+          templateVersion: '1.0.0',
+        }),
+      ],
+      { dynamicSuffixHash: 'suffix-b' }
+    );
+
+    expect((await manager.ingest(first)).map((item) => item.type)).toEqual([
+      'workcache.lookup',
+      'workcache.miss',
+      'workcache.write',
+    ]);
+    expect((await manager.ingest(second)).map((item) => item.type)).toEqual([
+      'workcache.lookup',
+      'workcache.hit',
+    ]);
+    const blocks = await manager.forest.list('PromptPrefixTree');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      value: {
+        id: 'template.default-agent',
+        type: 'prompt-template',
+        content: 'You are Hypha.',
+        templateId: 'default-agent',
+        templateVersion: '1.0.0',
+      },
+      metadata: {
+        dynamicSuffixHash: 'suffix-a',
+        templateId: 'default-agent',
+      },
+      tags: expect.arrayContaining(['prompt-prefix-block', 'prompt-template']),
+    });
+
+    const materialized = await manager.materializePromptPrefix(second);
+    expect(materialized.materialization.prefix).toBe('You are Hypha.');
   });
 
   it('keeps WorkCache and Serving Cache keys separate', async () => {
@@ -598,12 +680,20 @@ function prefixEventWithMetadata(
   order: string[],
   metadataOverrides: Record<string, unknown> = {}
 ): FrameworkEvent {
-  const blocks = order.map((type) => ({
-    id: type === 'tool-schema' ? 'tools' : type,
-    type,
-    hash: `${type}-hash`,
-    stable: true,
-  }));
+  const blocks = order.map((type, index) =>
+    promptBlock(type, {
+      id: type === 'tool-schema' ? 'tools' : type,
+      order: index * 10,
+    })
+  );
+  return prefixEventWithBlocks(id, blocks, metadataOverrides);
+}
+
+function prefixEventWithBlocks(
+  id: string,
+  blocks: Array<Record<string, unknown>>,
+  metadataOverrides: Record<string, unknown> = {}
+): FrameworkEvent {
   return event('llm.cache.write', {
     id,
     payload: {
@@ -620,6 +710,24 @@ function prefixEventWithMetadata(
       },
     },
   });
+}
+
+function promptBlock(
+  type: string,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const id = typeof overrides.id === 'string' ? overrides.id : type;
+  const content =
+    typeof overrides.content === 'string' ? overrides.content : `${type} content`;
+  return {
+    id,
+    type,
+    hash: `${type}-hash`,
+    stable: true,
+    content,
+    tokenEstimate: Math.max(1, Math.ceil(content.length / 4)),
+    ...overrides,
+  };
 }
 
 function planEvent(overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
@@ -709,8 +817,8 @@ function treeHitCases(): Array<[CacheTreeType, FrameworkEvent, FrameworkEvent]> 
     ],
     [
       'PromptPrefixTree',
-      prefixEvent('run_1:prefix_hit_1', ['system', 'tool-schema']),
-      prefixEvent('run_1:prefix_hit_2', ['tool-schema', 'system']),
+      prefixEvent('run_1:prefix_hit_1', ['system']),
+      prefixEvent('run_1:prefix_hit_2', ['system']),
     ],
   ];
 }
@@ -744,13 +852,6 @@ function stableKeyUpdateCases(): Array<[CacheTreeType, FrameworkEvent, Framework
       memoryEvent({
         id: 'run_1:memory_update_2',
         payload: { validity: { sourceHashes: { memory: 'memory-hash-v2' } } },
-      }),
-    ],
-    [
-      'PromptPrefixTree',
-      prefixEvent('run_1:prefix_update_1', ['system', 'tool-schema']),
-      prefixEventWithMetadata('run_1:prefix_update_2', ['tool-schema', 'system'], {
-        dynamicSuffixHash: 'dynamic-v2',
       }),
     ],
   ];

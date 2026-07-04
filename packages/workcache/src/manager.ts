@@ -10,6 +10,7 @@ import type {
   CacheBlock,
   CacheTreeType,
   DemandSignal,
+  PromptPrefixBlockValue,
   PromptPrefixMaterialization,
   WorkGraph,
   WorkCacheAuditEvent,
@@ -224,22 +225,25 @@ export class WorkCacheManager {
   async materializePromptPrefix(
     sourceEvent?: FrameworkEvent
   ): Promise<{ materialization: PromptPrefixMaterialization; event?: WorkCacheAuditEvent }> {
-    const blocks = (await this.forest.list<{ content: string; tokenEstimate?: number }>(
-      'PromptPrefixTree'
-    ))
+    const allBlocks = (await this.forest.list<PromptPrefixBlockValue>('PromptPrefixTree'))
       .filter((block) => !this.isExpired(block) && block.validity.status === 'valid')
-      .sort((left, right) => {
-        const leftKey = `${left.metadata?.prefixHash ?? ''}:${left.id}`;
-        const rightKey = `${right.metadata?.prefixHash ?? ''}:${right.id}`;
-        return leftKey.localeCompare(rightKey);
-      });
-    const selected: Array<CacheBlock<{ content: string; tokenEstimate?: number }>> = [];
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+    const targetPrefixHash = prefixHashFromEvent(sourceEvent) ?? latestPrefixHash(allBlocks);
+    const candidateBlocks = targetPrefixHash
+      ? allBlocks.filter((block) => block.value.prefixHash === targetPrefixHash)
+      : allBlocks;
+    const blocks = latestPromptBlocks(candidateBlocks).sort((left, right) => {
+      const order = left.value.order - right.value.order;
+      if (order !== 0) return order;
+      return `${left.value.type}:${left.value.id}`.localeCompare(
+        `${right.value.type}:${right.value.id}`
+      );
+    });
+
+    const selected: Array<CacheBlock<PromptPrefixBlockValue>> = [];
     let usedTokens = 0;
     for (const block of blocks) {
-      const estimate =
-        typeof block.value.tokenEstimate === 'number'
-          ? block.value.tokenEstimate
-          : Math.ceil(block.value.content.length / 4);
+      const estimate = block.value.tokenEstimate ?? Math.ceil(block.value.content.length / 4);
       if (usedTokens + estimate > this.policy.promptBudgetTokens) continue;
       selected.push(block);
       usedTokens += estimate;
@@ -249,6 +253,7 @@ export class WorkCacheManager {
       blocks: selected.map((block) => ({
         cacheKey: block.cacheKey,
         validity: block.validity,
+        order: block.value.order,
       })),
       prefix,
     });
@@ -346,6 +351,47 @@ export class WorkCacheManager {
       0
     );
   }
+}
+
+function latestPromptBlocks(
+  blocks: Array<CacheBlock<PromptPrefixBlockValue>>
+): Array<CacheBlock<PromptPrefixBlockValue>> {
+  const byBlockKey = new Map<string, CacheBlock<PromptPrefixBlockValue>>();
+  for (const block of blocks) {
+    const key = `${block.value.prefixHash}:${block.value.type}:${block.value.id}`;
+    const existing = byBlockKey.get(key);
+    if (!existing || block.updatedAt > existing.updatedAt) {
+      byBlockKey.set(key, block);
+    }
+  }
+  return Array.from(byBlockKey.values());
+}
+
+function latestPrefixHash(blocks: Array<CacheBlock<PromptPrefixBlockValue>>): string | undefined {
+  return blocks[0]?.value.prefixHash;
+}
+
+function prefixHashFromEvent(event?: FrameworkEvent): string | undefined {
+  if (!event) return undefined;
+  const payload = recordFromUnknown(event.payload);
+  const candidates = [
+    payload.prefixHash,
+    recordFromUnknown(payload.prefixMetadata).prefixHash,
+    recordFromUnknown(payload.metadata).prefixHash,
+    recordFromUnknown(recordFromUnknown(payload.metadata).prefixMetadata).prefixHash,
+    recordFromUnknown(event.metadata).prefixHash,
+    recordFromUnknown(recordFromUnknown(event.metadata).prefixMetadata).prefixHash,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  return undefined;
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 interface WorkCacheBlockOperation {

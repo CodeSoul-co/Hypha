@@ -15,6 +15,7 @@ import type {
   CacheScope,
   LLMCacheKeyInput,
   ModelRequestCacheControl,
+  PromptPrefixBlockInput,
   ServingCacheEvent,
   ServingCacheMissReason,
   ServingCacheTraceSink,
@@ -37,12 +38,16 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
     this.modelResolver = options.modelResolver ?? defaultModelResolver;
     this.scopeResolver = options.scopeResolver ?? defaultScopeResolver;
     this.paramsResolver = options.paramsResolver ?? defaultParamsResolver;
+    this.promptBlocksResolver = options.promptBlocksResolver ?? defaultPromptBlocksResolver;
   }
 
   private readonly providerResolver: NonNullable<CachedLLMProviderOptions['providerResolver']>;
   private readonly modelResolver: NonNullable<CachedLLMProviderOptions['modelResolver']>;
   private readonly scopeResolver: NonNullable<CachedLLMProviderOptions['scopeResolver']>;
   private readonly paramsResolver: NonNullable<CachedLLMProviderOptions['paramsResolver']>;
+  private readonly promptBlocksResolver: NonNullable<
+    CachedLLMProviderOptions['promptBlocksResolver']
+  >;
 
   capabilities(): ReturnType<ModelProvider['capabilities']> {
     return this.inner.capabilities();
@@ -213,6 +218,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
       tools: request.tools,
       params: this.paramsResolver(request),
       cacheScope: scope,
+      promptBlocks: this.promptBlocksResolver(request),
     };
   }
 
@@ -256,6 +262,25 @@ function defaultParamsResolver(request: ModelRequest): Record<string, unknown> {
   };
 }
 
+function defaultPromptBlocksResolver(request: ModelRequest): PromptPrefixBlockInput[] | undefined {
+  const cacheMetadata = recordFromUnknown(request.cache?.metadata);
+  const requestMetadata = recordFromUnknown(request.metadata);
+  const promptMetadata = recordFromUnknown(requestMetadata?.prompt);
+  const metadataCandidates = [
+    cacheMetadata?.promptBlocks,
+    requestMetadata?.promptBlocks,
+    promptMetadata?.blocks,
+  ];
+  for (const candidate of metadataCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate
+        .filter((item): item is PromptPrefixBlockInput => isPromptBlockInput(item))
+        .map((item) => ({ ...item }));
+    }
+  }
+  return undefined;
+}
+
 function resolveRequestCacheControl(request: ModelRequest): ModelRequestCacheControl | undefined {
   const structural = request as ModelRequest & { cacheControl?: ModelRequestCacheControl };
   const direct = structural.cacheControl;
@@ -272,6 +297,12 @@ function isStreamingRequest(request: ModelRequest): boolean {
   const input = recordFromUnknown(request.input);
   const options = recordFromUnknown(input?.options);
   return Boolean(request.metadata?.streaming || input?.stream || options?.stream);
+}
+
+function isPromptBlockInput(value: unknown): value is PromptPrefixBlockInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string' && typeof record.type === 'string';
 }
 
 function attachServingCacheMetadata(
