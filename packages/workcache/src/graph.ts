@@ -52,7 +52,8 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       estimatedCost: costProfileFrom(payload),
       recomputeCost: numberValue(payload.recomputeCost),
       validationCost: numberValue(payload.validationCost),
-      stepsToExecution: 0,
+      stepsToExecution:
+        numberValue(payload.stepsToExecution ?? payload.stepsToUse ?? payload.stepsToCacheUse) ?? 0,
       futureDemand: numberValue(payload.futureDemand),
       branchProbability: numberValue(payload.branchProbability) ?? 1,
       criticality: numberValue(payload.criticality) ?? 1,
@@ -153,10 +154,12 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
     const branchProbability = node.branchProbability ?? 1;
     const criticality = node.criticality ?? 1;
     const stepsToUse = node.stepsToExecution ?? 0;
+    const explicitFutureDemand = node.futureDemand ?? block.utility.futureDemand ?? 0;
     const proximity = 100 / (1 + stepsToUse);
     const demandScore = Math.max(
       0,
       proximity * branchProbability +
+        explicitFutureDemand +
         recomputeCost +
         downstreamFanout * 5 +
         criticality * 10 -
@@ -182,6 +185,9 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
         recomputeCost,
         stalenessRisk,
         validationCost,
+        futureDemand: explicitFutureDemand,
+        branchProbability,
+        criticality,
       },
     };
   }

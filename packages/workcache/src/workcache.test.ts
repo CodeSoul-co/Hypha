@@ -50,6 +50,7 @@ describe('@hypha/workcache registry', () => {
       unknownEventPolicy: 'ignore',
     });
     expect(registry.normalize(event('artifact.created'), { unknownEventPolicy: 'ignore' })).toBeNull();
+    expect(registry.normalize(event('message.enqueued'), { unknownEventPolicy: 'ignore' })).toBeNull();
     expect(() =>
       registry.normalize(event('artifact.created'), { unknownEventPolicy: 'reject' })
     ).toThrow(/unregistered source event/);
@@ -174,7 +175,14 @@ describe('@hypha/workcache graph-derived demand', () => {
 
   it('routes WorkGraph demand into tree-local block utility', async () => {
     const manager = managerWithMemory();
-    await manager.ingest(reusableToolEvent());
+    await manager.ingest(
+      reusableToolEvent({
+        payload: {
+          stepsToUse: 2,
+          futureDemand: 40,
+        },
+      })
+    );
     const lookup = await manager.lookup({
       treeType: 'ToolTree',
       cacheKey: createWorkCacheKey({
@@ -190,12 +198,16 @@ describe('@hypha/workcache graph-derived demand', () => {
 
     expect(lookup.hit).toBe(true);
     if (lookup.hit) {
-      expect(lookup.block.utility.futureDemand).toBeGreaterThan(0);
+      expect(lookup.block.utility.futureDemand).toBeGreaterThan(40);
       expect(lookup.block.utility.score).toBeGreaterThan(0);
       expect(lookup.block.metadata?.workGraph).toMatchObject({
-        stepsToUse: 0,
+        stepsToUse: 2,
       });
     }
+    expect(manager.getWorkGraph('run_1')?.nodes.values().next().value).toMatchObject({
+      stepsToExecution: 2,
+      futureDemand: 40,
+    });
   });
 });
 
