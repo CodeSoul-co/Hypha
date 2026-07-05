@@ -296,6 +296,7 @@ Core exports:
 | `CachePolicy`         | `enabled`, `mode`, TTL, error/stream/no-cache behavior.          |
 | `ServingCacheManager` | Key generation, lookup, expiry enforcement, and writes.          |
 | `CachedLLMProvider`   | Provider wrapper that applies exact cache policy.                |
+| `PrefixCacheShapeTracker` | Compares stable prefix shape per provider/model/scope and reports changed reasons. |
 | `MemoryCacheStore`    | In-memory store for tests and local experiments.                 |
 | `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
 
@@ -308,6 +309,14 @@ WorkCache and does not change the exact response cache key unless the rendered
 content also changes in `system`, `messages`, `tools`, or params.
 `CacheScope` may include `tenantId`, `userId`, `projectId`, `sessionId`, and
 `domainPackId`.
+
+Trace payloads may include `prefixCache`, with `prefixHash`,
+`toolSchemaHash`, `domainPackHash`, `dynamicSuffixHash`,
+`stablePrefixChanged`, `dynamicSuffixChanged`, and `changedReasons`. Provider
+usage may include `cacheHitTokens` and `cacheMissTokens`; DeepSeek
+`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` and OpenAI-compatible
+`prompt_tokens_details.cached_tokens` are normalized into these fields. This is
+provider-side prefix cache observability, not a local KV cache.
 
 Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
 `llm.cache.write`, and `llm.cache.bypass`. Streaming requests always bypass

@@ -94,6 +94,12 @@ The layer records prompt prefix metadata and emits `llm.cache.lookup`,
 events through the runtime trace bridge. It is not a semantic cache, WorkCache,
 or provider KV cache.
 
+For provider-side prefix cache, the layer keeps request shape stable by sorting
+tool schemas and tracking stable prefix hashes per provider/model/scope. It
+records `prefixCache.changedReasons` and provider usage `cacheHitTokens` /
+`cacheMissTokens` when available, but the physical prefix cache remains inside
+the model provider.
+
 ## WorkCache
 
 `@hypha/workcache` consumes existing runtime events and materializes typed

@@ -34,6 +34,25 @@ class CountingProvider implements ModelProvider<ModelRequest, ModelResponse> {
   }
 }
 
+class PrefixUsageProvider extends CountingProvider {
+  async generate(request: ModelRequest): Promise<ModelResponse> {
+    this.calls += 1;
+    return {
+      id: `${request.runId}:${request.stepId}:usage-response:${this.calls}`,
+      providerId: 'prefix-usage',
+      model: request.modelAlias,
+      content: `usage content ${this.calls}`,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 1,
+        totalTokens: 11,
+        cacheHitTokens: 6,
+        cacheMissTokens: 4,
+      },
+    };
+  }
+}
+
 describe('@hypha/serving-cache', () => {
   it('builds deterministic exact request keys', () => {
     const left = createLLMCacheKey({
@@ -149,6 +168,77 @@ describe('@hypha/serving-cache', () => {
       'llm.cache.lookup',
       'llm.cache.hit',
     ]);
+  });
+
+  it('tracks provider-side prefix shape and cache token usage separately from exact cache', async () => {
+    const events: ServingCacheEvent[] = [];
+    const inner = new PrefixUsageProvider();
+    const provider = new CachedLLMProvider(
+      inner,
+      new ServingCacheManager({
+        store: new MemoryCacheStore(),
+        policy: { enabled: true, mode: 'readwrite', ttlMs: 1000 },
+      }),
+      {
+        policy: { enabled: true, mode: 'readwrite', ttlMs: 1000 },
+        trace: (event) => {
+          events.push(event);
+        },
+      }
+    );
+
+    const baseRequest: ModelRequest = {
+      runId: 'run_shape',
+      stepId: 'step_1',
+      modelAlias: 'default-fast',
+      instructions: 'stable system',
+      input: [{ role: 'user', content: 'hello' }],
+      temperature: 0,
+      metadata: { provider: 'mock', sessionId: 'session_shape' },
+    };
+    const first = await provider.generate(baseRequest);
+    const second = await provider.generate({
+      ...baseRequest,
+      stepId: 'step_2',
+      input: [{ role: 'user', content: 'different dynamic suffix' }],
+    });
+
+    expect(inner.calls).toBe(2);
+    expect(first.metadata?.servingCache).toMatchObject({
+      providerPrefixCache: {
+        source: 'provider-usage',
+        hitTokens: 6,
+        missTokens: 4,
+        hitRate: 0.6,
+      },
+      prefixCache: {
+        stablePrefixChanged: true,
+        changedReasons: ['first_request'],
+      },
+    });
+    expect(second.metadata?.servingCache).toMatchObject({
+      providerPrefixCache: {
+        hitTokens: 6,
+        missTokens: 4,
+      },
+      prefixCache: {
+        stablePrefixChanged: false,
+        dynamicSuffixChanged: true,
+        changedReasons: ['dynamic_suffix_changed'],
+      },
+    });
+    const writes = events.filter((event) => event.type === 'llm.cache.write');
+    expect(writes[0]).toMatchObject({
+      providerPrefixCache: { hitTokens: 6, missTokens: 4 },
+      prefixCache: { changedReasons: ['first_request'] },
+    });
+    expect(writes[1]).toMatchObject({
+      providerPrefixCache: { hitTokens: 6, missTokens: 4 },
+      prefixCache: {
+        stablePrefixChanged: false,
+        dynamicSuffixChanged: true,
+      },
+    });
   });
 
   it('expires entries by ttl before reusing them', async () => {

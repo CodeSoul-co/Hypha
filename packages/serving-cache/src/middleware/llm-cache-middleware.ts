@@ -7,6 +7,7 @@ import type {
 } from '@hypha/models';
 import { buildPromptPrefixMetadata, hashStableJson } from '../key';
 import { cacheModeAllowsRead, cacheModeAllowsWrite, normalizeCachePolicy } from '../policies';
+import { PrefixCacheShapeTracker } from '../prefix-shape';
 import { ServingCacheManager } from '../cache-manager';
 import type {
   CachedLLMProviderOptions,
@@ -16,6 +17,7 @@ import type {
   LLMCacheKeyInput,
   ModelRequestCacheControl,
   PromptPrefixBlockInput,
+  ProviderPrefixCacheUsage,
   ServingCacheEvent,
   ServingCacheMissReason,
   ServingCacheTraceSink,
@@ -25,6 +27,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
   readonly id: string;
   private readonly policy: CachePolicy;
   private readonly trace?: ServingCacheTraceSink;
+  private readonly prefixShapeTracker = new PrefixCacheShapeTracker();
 
   constructor(
     private readonly inner: ModelProvider<ModelRequest, ModelResponse>,
@@ -79,12 +82,20 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
 
     const keyInput = this.keyInputFor(request, provider, model, scope);
     const key = this.cache.keyFor(keyInput);
+    const prefixMetadata = buildPromptPrefixMetadata(keyInput);
+    const prefixCache = this.prefixShapeTracker.observe({
+      provider,
+      model,
+      scope,
+      prefixMetadata,
+    });
     await this.emit({
       type: 'llm.cache.lookup',
       key,
       provider,
       model,
       scope,
+      prefixCache,
       runId: request.runId,
       stepId: request.stepId,
     });
@@ -99,6 +110,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
           provider,
           model,
           scope,
+          prefixCache,
           runId: request.runId,
           stepId: request.stepId,
         });
@@ -107,6 +119,8 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
           key,
           source: 'hypha-serving-cache',
           ageMs: cached.ageMs,
+          prefixCache,
+          providerPrefixCache: { source: 'hypha-serving-cache' },
         });
       }
       await this.emit({
@@ -116,6 +130,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         provider,
         model,
         scope,
+        prefixCache,
         runId: request.runId,
         stepId: request.stepId,
       });
@@ -127,6 +142,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         provider,
         model,
         scope,
+        prefixCache,
         runId: request.runId,
         stepId: request.stepId,
       });
@@ -135,7 +151,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
     const response = await this.inner.generate(request);
 
     if (cacheModeAllowsWrite(this.policy.mode)) {
-      const prefixMetadata = buildPromptPrefixMetadata(keyInput);
+      const providerPrefixCache = providerPrefixCacheUsage(response);
       const metadata: CacheMetadata = {
         provider,
         model,
@@ -154,6 +170,8 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         model,
         scope,
         prefixMetadata,
+        prefixCache,
+        providerPrefixCache,
         runId: request.runId,
         stepId: request.stepId,
       });
@@ -163,6 +181,8 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
       hit: false,
       key,
       source: 'provider',
+      prefixCache,
+      providerPrefixCache: providerPrefixCacheUsage(response),
     });
   }
 
@@ -315,6 +335,33 @@ function attachServingCacheMetadata(
       ...response.metadata,
       servingCache,
     },
+  };
+}
+
+function providerPrefixCacheUsage(response: ModelResponse): ProviderPrefixCacheUsage {
+  const inputTokens = response.usage?.inputTokens;
+  const hitTokens = response.usage?.cacheHitTokens;
+  const missTokens =
+    response.usage?.cacheMissTokens ??
+    (typeof inputTokens === 'number' && typeof hitTokens === 'number'
+      ? Math.max(0, inputTokens - hitTokens)
+      : undefined);
+  const denominator =
+    typeof hitTokens === 'number' && typeof missTokens === 'number'
+      ? hitTokens + missTokens
+      : inputTokens;
+  return {
+    source:
+      typeof hitTokens === 'number' || typeof missTokens === 'number'
+        ? 'provider-usage'
+        : 'unknown',
+    inputTokens,
+    hitTokens,
+    missTokens,
+    hitRate:
+      typeof denominator === 'number' && denominator > 0 && typeof hitTokens === 'number'
+        ? hitTokens / denominator
+        : undefined,
   };
 }
 

@@ -81,7 +81,8 @@ describe('@hypha/models provider contracts', () => {
             prompt_tokens: 2,
             completion_tokens: 1,
             total_tokens: 3,
-            prompt_tokens_details: { cached_tokens: 1 },
+            prompt_cache_hit_tokens: 1,
+            prompt_cache_miss_tokens: 1,
           },
           body,
         } as TResponse;
@@ -105,6 +106,15 @@ describe('@hypha/models provider contracts', () => {
         cache: { prefixContent: 'cached prefix' },
         tools: [
           {
+            id: 'zeta.tool',
+            name: 'zeta.tool',
+            description: 'Zeta tool',
+            inputSchema: {
+              type: 'object',
+              properties: { value: { type: 'string' } },
+            },
+          },
+          {
             id: 'baidu.web_search',
             name: 'baidu.web_search',
             description: 'Baidu MCP search',
@@ -123,7 +133,7 @@ describe('@hypha/models provider contracts', () => {
       model: 'provider-model-id',
       content: 'ok',
       toolCalls: [{ id: 'call_1', toolId: 'baidu.web_search', arguments: { q: 'hypha' } }],
-      usage: { totalTokens: 3, cacheHitTokens: 1 },
+      usage: { totalTokens: 3, cacheHitTokens: 1, cacheMissTokens: 1 },
     });
     expect(requests[0].url).toBe('https://example.invalid/v1/chat/completions');
     const requestBody = requests[0].body as {
@@ -136,7 +146,10 @@ describe('@hypha/models provider contracts', () => {
       role: 'system',
       content: 'cached prefix\n\nsystem instructions',
     });
-    expect(requestBody.tools?.[0]?.function?.name).toBe('baidu_web_search');
+    expect(requestBody.tools?.map((tool) => tool.function?.name)).toEqual([
+      'baidu_web_search',
+      'zeta_tool',
+    ]);
     expect(requestBody.response_format?.type).toBe('json_schema');
     expect(requestBody.reasoning_effort).toBe('medium');
   });
@@ -193,11 +206,23 @@ describe('@hypha/models provider contracts', () => {
       { type: 'delta', content: 'llo' },
       {
         type: 'usage',
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheHitTokens: undefined },
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          cacheHitTokens: undefined,
+          cacheMissTokens: undefined,
+        },
       },
       {
         type: 'done',
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheHitTokens: undefined },
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          cacheHitTokens: undefined,
+          cacheMissTokens: undefined,
+        },
       },
     ]);
   });

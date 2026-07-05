@@ -787,6 +787,8 @@ export function modelResponseToChatResponse(
           inputTokens: response.usage.inputTokens ?? 0,
           outputTokens: response.usage.outputTokens ?? 0,
           totalTokens: response.usage.totalTokens ?? 0,
+          cacheHitTokens: response.usage.cacheHitTokens,
+          cacheMissTokens: response.usage.cacheMissTokens,
         }
       : undefined,
     toolCalls: response.toolCalls?.map((toolCall) => ({
@@ -1031,6 +1033,8 @@ function legacyUsageToModelUsage(usage: NonNullable<ChatResponse['usage']>): Mod
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens,
+    cacheHitTokens: usage.cacheHitTokens,
+    cacheMissTokens: usage.cacheMissTokens,
   };
 }
 
@@ -1039,6 +1043,8 @@ function modelUsageToLegacyUsage(usage: ModelUsage): NonNullable<ChatResponse['u
     inputTokens: usage.inputTokens ?? 0,
     outputTokens: usage.outputTokens ?? 0,
     totalTokens: usage.totalTokens ?? 0,
+    cacheHitTokens: usage.cacheHitTokens,
+    cacheMissTokens: usage.cacheMissTokens,
   };
 }
 
