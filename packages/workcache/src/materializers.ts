@@ -25,6 +25,79 @@ export function materializeGenericBlock(event: NormalizedWorkEvent): CacheBlock[
   ];
 }
 
+export function materializeComputationBlock(event: NormalizedWorkEvent): CacheBlock[] {
+  const payload = recordFromUnknown(event.payload);
+  const provider = stringValue(payload.provider);
+  const model = stringValue(payload.model);
+  const requestHash =
+    stringValue(payload.requestHash) ??
+    stringValue(payload.promptHash) ??
+    stringValue(payload.inputHash) ??
+    hashFromKnownInput(payload.request ?? payload.input ?? payload.messages);
+  if (!provider || !model || !requestHash) return [];
+
+  const paramsHash =
+    stringValue(payload.paramsHash) ??
+    stringValue(payload.parametersHash) ??
+    hashFromKnownInput(payload.params ?? payload.parameters);
+  const toolSchemaHash =
+    stringValue(payload.toolSchemaHash) ??
+    stringValue(payload.toolsHash) ??
+    hashFromKnownInput(payload.tools ?? payload.toolSchemas);
+  const environmentHash =
+    stringValue(payload.envHash) ??
+    stringValue(payload.environmentHash) ??
+    stringValue(recordFromUnknown(payload.validity).envHash);
+  const identity = {
+    sourceEventType: event.sourceEventType,
+    provider,
+    model,
+    requestHash,
+    ...(paramsHash ? { paramsHash } : {}),
+    ...(toolSchemaHash ? { toolSchemaHash } : {}),
+    ...(environmentHash ? { environmentHash } : {}),
+  };
+
+  return [
+    createBlock(event, {
+      identity,
+      value: {
+        provider,
+        model,
+        output: payload.output ?? payload.response ?? payload.result,
+        usage: payload.usage,
+        finishReason: payload.finishReason ?? payload.finish_reason,
+      },
+      validity: validityFromRecord(payload) ?? {
+        status: 'valid',
+        sourceHashes: {
+          request: requestHash,
+          ...(paramsHash ? { params: paramsHash } : {}),
+          ...(toolSchemaHash ? { toolSchema: toolSchemaHash } : {}),
+          ...(environmentHash ? { environment: environmentHash } : {}),
+        },
+        provenanceHash: hashStableJson(identity),
+      },
+      provenance: {
+        provider,
+        model,
+        requestHash,
+        paramsHash,
+        toolSchemaHash,
+        environmentHash,
+      },
+      metadata: {
+        requestHash,
+        paramsHash,
+        toolSchemaHash,
+        environmentHash,
+        latencyMs: numberValue(recordFromUnknown(payload.usage).latencyMs ?? payload.latencyMs),
+      },
+      tags: ['model-computation'],
+    }),
+  ];
+}
+
 export function materializeToolBlock(event: NormalizedWorkEvent): CacheBlock[] {
   const payload = recordFromUnknown(event.payload);
   if (!isReadOnlySideEffect(payload.sideEffectLevel)) return [];
@@ -174,7 +247,8 @@ export function materializeMessageBlock(event: NormalizedWorkEvent): CacheBlock[
     stringValue(payload.messageId) ??
     stringValue(payload.id) ??
     event.sourceEventId;
-  const status = stringValue(message.status) ?? stringValue(payload.status) ?? event.sourceEventType;
+  const status =
+    stringValue(message.status) ?? stringValue(payload.status) ?? event.sourceEventType;
   return [
     createBlock(event, {
       identity: {
@@ -488,6 +562,11 @@ function recordStringMap(value: unknown): Record<string, string> {
     if (typeof candidate === 'string') output[key] = candidate;
   }
   return output;
+}
+
+function hashFromKnownInput(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return hashStableJson(value);
 }
 
 function recordWithValues(value: unknown): Record<string, unknown> | undefined {

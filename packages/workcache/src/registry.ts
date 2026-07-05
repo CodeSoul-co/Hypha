@@ -1,5 +1,6 @@
 import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
 import {
+  materializeComputationBlock,
   materializeGenericBlock,
   materializeMemoryBlock,
   materializeMessageBlock,
@@ -98,7 +99,7 @@ export const DEFAULT_RUNTIME_TYPE_DEFINITIONS: RuntimeTypeDefinition[] = [
     sourceEventTypes: ['inference.completed', 'model.call.completed'],
     nodeType: 'computation',
     treeType: 'ComputationTree',
-    materialize: materializeGenericBlock,
+    materialize: materializeComputationBlock,
   },
   {
     id: 'prompt-prefix.serving-cache',

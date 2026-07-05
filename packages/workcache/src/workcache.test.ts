@@ -49,8 +49,12 @@ describe('@hypha/workcache registry', () => {
     const registry = new RuntimeTypeRegistry({
       unknownEventPolicy: 'ignore',
     });
-    expect(registry.normalize(event('artifact.created'), { unknownEventPolicy: 'ignore' })).toBeNull();
-    expect(registry.normalize(messageEvent('message.enqueued'), { unknownEventPolicy: 'ignore' })).toMatchObject({
+    expect(
+      registry.normalize(event('artifact.created'), { unknownEventPolicy: 'ignore' })
+    ).toBeNull();
+    expect(
+      registry.normalize(messageEvent('message.enqueued'), { unknownEventPolicy: 'ignore' })
+    ).toMatchObject({
       nodeType: 'observation',
       treeType: 'ObservationTree',
     });
@@ -322,7 +326,9 @@ describe('@hypha/workcache graph-derived demand', () => {
 
     const writes: WorkCacheAuditEvent[] = [];
     for (const source of sources) {
-      writes.push(...(await manager.ingest(source)).filter((item) => item.type === 'workcache.write'));
+      writes.push(
+        ...(await manager.ingest(source)).filter((item) => item.type === 'workcache.write')
+      );
     }
 
     expect(new Set(writes.map((item) => item.payload.treeType))).toEqual(
@@ -395,6 +401,41 @@ describe('@hypha/workcache graph-derived demand', () => {
       expect(secondNode?.outputBlockIds).toEqual([block?.id]);
     }
   );
+
+  it('keys ComputationTree by stable model request identity instead of generated output', async () => {
+    const manager = managerWithMemory();
+    const first = computationEvent({
+      id: 'run_1:model_request_first',
+      payload: {
+        requestHash: 'request-hash',
+        output: { content: 'first' },
+      },
+    });
+    const second = computationEvent({
+      id: 'run_1:model_request_second',
+      payload: {
+        requestHash: 'request-hash',
+        output: { content: 'second' },
+      },
+    });
+
+    expect((await manager.ingest(first)).map((item) => item.type)).toEqual([
+      'workcache.lookup',
+      'workcache.miss',
+      'workcache.write',
+    ]);
+    const hit = await manager.ingest(second);
+
+    expect(hit.map((item) => item.type)).toEqual(['workcache.lookup', 'workcache.hit']);
+    const blocks = await manager.forest.list('ComputationTree');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.sourceEventId).toBe(first.id);
+    expect(blocks[0]?.value).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      output: { content: 'first' },
+    });
+  });
 
   it.each(stableKeyUpdateCases())(
     'invalidates and rewrites %s when validity changes under a stable key',
@@ -608,7 +649,12 @@ describe('@hypha/workcache tree safety rules', () => {
     const workKey = createWorkCacheKey({
       treeType: 'ComputationTree',
       nodeType: 'computation',
-      identity: { sourceEventType: 'model.call.completed', payloadHash: 'abc' },
+      identity: {
+        sourceEventType: 'model.call.completed',
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        requestHash: 'abc',
+      },
     });
 
     expect(llmKey.startsWith('llm:')).toBe(true);
@@ -717,8 +763,7 @@ function promptBlock(
   overrides: Record<string, unknown> = {}
 ): Record<string, unknown> {
   const id = typeof overrides.id === 'string' ? overrides.id : type;
-  const content =
-    typeof overrides.content === 'string' ? overrides.content : `${type} content`;
+  const content = typeof overrides.content === 'string' ? overrides.content : `${type} content`;
   return {
     id,
     type,
@@ -785,11 +830,7 @@ function memoryEvent(overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
 
 function treeHitCases(): Array<[CacheTreeType, FrameworkEvent, FrameworkEvent]> {
   return [
-    [
-      'PlanTree',
-      planEvent({ id: 'run_1:plan_hit_1' }),
-      planEvent({ id: 'run_1:plan_hit_2' }),
-    ],
+    ['PlanTree', planEvent({ id: 'run_1:plan_hit_1' }), planEvent({ id: 'run_1:plan_hit_2' })],
     [
       'ComputationTree',
       computationEvent({ id: 'run_1:model_hit_1' }),
@@ -872,7 +913,7 @@ function payloadKeyUpdateCases(): Array<[CacheTreeType, FrameworkEvent, Framewor
       computationEvent({ id: 'run_1:model_update_1' }),
       computationEvent({
         id: 'run_1:model_update_2',
-        payload: { output: { content: 'changed' } },
+        payload: { requestHash: 'request-hash-v2', output: { content: 'changed' } },
       }),
     ],
   ];
@@ -898,9 +939,7 @@ function messageEvent(
   });
 }
 
-function runtimeMessageFixture(
-  overrides: Record<string, unknown> = {}
-): Record<string, unknown> {
+function runtimeMessageFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'msg_1',
     type: 'workflow.input',
@@ -920,10 +959,7 @@ function runtimeMessageFixture(
   };
 }
 
-function event(
-  type: FrameworkEventType,
-  overrides: Partial<FrameworkEvent> = {}
-): FrameworkEvent {
+function event(type: FrameworkEventType, overrides: Partial<FrameworkEvent> = {}): FrameworkEvent {
   return {
     id: overrides.id ?? `run_1:${type}:event`,
     type,
