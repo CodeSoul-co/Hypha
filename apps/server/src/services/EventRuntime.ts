@@ -62,6 +62,7 @@ import {
   modelResponseToChatResponse,
   modelStreamEventToStreamChunk,
 } from '../core/llm/LLMFactory';
+import { getPromptManager } from '../core/prompts/PromptManager';
 import {
   servingCacheResponseMetadata,
   type ServingCacheEvent,
@@ -72,6 +73,7 @@ import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
+import { logger } from '../utils/logger';
 
 interface RuntimeRunContext {
   runId: string;
@@ -88,6 +90,10 @@ export interface EventRunHandle {
   sessionId: string;
   runtimeSessionId: string;
 }
+
+type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
+  metadata?: Record<string, unknown>;
+};
 
 export interface StartRunInput {
   userId: string;
@@ -108,6 +114,7 @@ export interface ChatInferenceInput {
   options?: ChatOptions;
   reasoning?: ReasoningOptions;
   cachePolicy?: InferenceCachePolicy;
+  agentSpec?: RuntimeAgentSpecInput;
 }
 
 interface ChatCachePolicyBuildInput {
@@ -455,6 +462,82 @@ class EventRuntimeService {
     }
   }
 
+  private async resolveChatAgent(
+    input: ChatInferenceInput & {
+      agentId?: string;
+    },
+    userId: string,
+    sessionId: string
+  ): Promise<ReActAgentSpec> {
+    const spec = input.agentSpec ?? {};
+    const id = spec.id ?? input.agentId ?? 'agent.default';
+    const name = spec.name ?? input.agentId ?? 'Default Runtime Agent';
+    const explicitInstructions = mergeSystemPrompts(
+      spec.systemInstructions,
+      input.options?.systemPrompt
+    );
+    const systemInstructions =
+      explicitInstructions ??
+      (await this.renderAgentSystemInstructions({
+        agentId: id,
+        agentName: name,
+        userId,
+        sessionId,
+        templateId: stringValue(asRecord(spec.metadata)?.promptTemplateId),
+      }));
+
+    return {
+      ...spec,
+      id,
+      version: spec.version ?? '0.0.0',
+      name,
+      modelAlias:
+        spec.modelAlias ??
+        input.modelAlias ??
+        input.options?.model ??
+        this.resolveChatModel().model,
+      systemInstructions,
+      toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
+    };
+  }
+
+  private async renderAgentSystemInstructions(input: {
+    agentId: string;
+    agentName: string;
+    userId: string;
+    sessionId: string;
+    templateId?: string;
+  }): Promise<string | undefined> {
+    const templateIds = input.templateId ? [input.templateId, 'default-agent'] : ['default-agent'];
+    const variables = {
+      agent_id: input.agentId,
+      agent_name: input.agentName,
+      user_id: input.userId,
+      user_name: input.userId,
+      session_id: input.sessionId,
+      current_date: new Date().toISOString(),
+    };
+
+    try {
+      const promptManager = getPromptManager();
+      await promptManager.ensureInitialized();
+      for (const templateId of templateIds) {
+        const rendered = promptManager.renderWithValidation(templateId, variables, 'system');
+        if (rendered.success) return rendered.result;
+        logger.warn('Agent prompt template render failed', {
+          templateId,
+          errors: rendered.errors,
+        });
+      }
+    } catch (error) {
+      logger.warn('Agent prompt template resolution failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return `You are ${input.agentName}. Be helpful, harmless, and honest.`;
+  }
+
   async runReActChat(
     input: ChatInferenceInput & {
       agentId?: string;
@@ -462,16 +545,11 @@ class EventRuntimeService {
       sessionId?: string;
     }
   ): Promise<ChatResponse> {
-    const agent: ReActAgentSpec = {
-      id: input.agentId ?? 'agent.default',
-      version: '0.0.0',
-      name: input.agentId ?? 'Default Runtime Agent',
-      modelAlias: input.modelAlias || input.options?.model || this.resolveChatModel().model,
-      toolRefs: input.options?.tools?.map((tool) => tool.name),
-    };
     const runContext = this.runs.get(input.runId);
     const userId = input.userId ?? runContext?.userId ?? 'single-user';
     const sessionId = input.sessionId ?? runContext?.clientSessionId ?? input.runId;
+    const agent = await this.resolveChatAgent(input, userId, sessionId);
+    const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     let chatResponse: ChatResponse | undefined;
     let nextToolCallIndex = 0;
     const toolObservations: Array<Record<string, unknown>> = [];
@@ -492,7 +570,7 @@ class EventRuntimeService {
           modelAlias: context.agent.modelAlias,
           input: {
             messages: context.messages as LLMMessage[],
-            options: input.options,
+            options: chatOptions,
           },
           cachePolicy: input.cachePolicy,
           metadata: {
@@ -565,7 +643,7 @@ class EventRuntimeService {
     const runner = new ReActRunner(reactRuntime, {
       inference: reactInference,
       toolRunner: this.createReActToolRunner(input.runId, userId, sessionId),
-      maxIterations: Math.max(4, (input.options?.tools?.length ?? 0) + 2),
+      maxIterations: Math.max(4, (chatOptions?.tools?.length ?? 0) + 2),
       onStep: async (step) => {
         await this.record(
           input.runId,
@@ -601,6 +679,16 @@ class EventRuntimeService {
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
     const runContext = this.runs.get(input.runId);
+    const systemPrompt =
+      input.options?.systemPrompt ??
+      (await this.renderAgentSystemInstructions({
+        agentId: input.agentSpec?.id ?? 'agent.default',
+        agentName: input.agentSpec?.name ?? 'Default Runtime Agent',
+        userId: runContext?.userId ?? 'single-user',
+        sessionId: runContext?.clientSessionId ?? input.runId,
+        templateId: stringValue(asRecord(input.agentSpec?.metadata)?.promptTemplateId),
+      }));
+    const chatOptions = withSystemPrompt(input.options, systemPrompt);
     await this.append(
       input.runId,
       'inference.requested',
@@ -634,7 +722,7 @@ class EventRuntimeService {
         input: {
           messages: input.messages,
           options: {
-            ...input.options,
+            ...chatOptions,
             model: input.options?.model ?? resolved.model,
           },
         },
@@ -2004,6 +2092,31 @@ function parseExpiresAt(record: Record<string, unknown>): string | undefined {
 
 function stringValue(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
+}
+
+function mergeSystemPrompts(...prompts: Array<string | undefined>): string | undefined {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const prompt of prompts) {
+    const normalized = stringValue(prompt);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    parts.push(normalized);
+  }
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
+function withSystemPrompt(
+  options: ChatOptions | undefined,
+  systemPrompt: string | undefined
+): ChatOptions | undefined {
+  const resolved = mergeSystemPrompts(systemPrompt);
+  if (!resolved) return options;
+  if (options?.systemPrompt === resolved) return options;
+  return {
+    ...options,
+    systemPrompt: resolved,
+  };
 }
 
 function numberValue(input: unknown): number | undefined {

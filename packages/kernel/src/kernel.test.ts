@@ -5,6 +5,7 @@ import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@hy
 import { SkillRegistry } from '@hypha/skills';
 import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 import {
+  BasicReActAgentRuntime,
   createEpisodicMemorySync,
   createReActStep,
   DefaultContextBuilder,
@@ -35,6 +36,27 @@ describe('@hypha/kernel ReAct contracts', () => {
     expect(agent.skillRefs?.[0]).toEqual({ id: 'review' });
     expect(REACT_PHASE_ORDER).toContain('policy_check');
     expect(createReActStep('step_1', 'reason')).toMatchObject({ phase: 'reason' });
+  });
+
+  it('passes agent system instructions into inference requests', async () => {
+    const runtime = new BasicReActAgentRuntime();
+    const request = await runtime.reason({
+      runId: 'run_prompt',
+      stepId: 'reason',
+      agent: {
+        id: 'agent.prompt',
+        version: '0.0.0',
+        name: 'Prompted Agent',
+        modelAlias: 'default-reasoning',
+        systemInstructions: 'Use the configured agent instructions.',
+      },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(request.input).toMatchObject({
+      instructions: 'Use the configured agent instructions.',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
   });
 
   it('runs an executable ReAct loop through model inference to completion', async () => {
