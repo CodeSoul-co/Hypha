@@ -29,6 +29,7 @@ export class PromptManager {
   private templateDir: string;
   private cacheEnabled: boolean;
   private cache: Map<string, string> = new Map();
+  private initialized = false;
 
   constructor(templateDir?: string, cacheEnabled?: boolean) {
     this.templateDir = templateDir || path.resolve(process.cwd(), 'apps/server/src/prompts');
@@ -37,12 +38,19 @@ export class PromptManager {
 
   async initialize(): Promise<void> {
     await this.loadTemplatesFromDir();
+    this.initialized = true;
     logger.info('PromptManager initialized', { templateCount: this.templates.size });
+  }
+
+  async ensureInitialized(): Promise<void> {
+    if (this.initialized) return;
+    await this.initialize();
   }
 
   async destroy(): Promise<void> {
     this.templates.clear();
     this.cache.clear();
+    this.initialized = false;
     logger.info('PromptManager destroyed');
   }
 
@@ -82,28 +90,24 @@ export class PromptManager {
   render(id: string, variables: Record<string, any>, category?: string): string {
     const key = this.getTemplateKey(id, category || 'common');
 
-    // Check cache first
-    if (this.cacheEnabled && this.cache.has(key)) {
-      return this.replaceVariables(this.cache.get(key)!, variables);
-    }
-
     const template = this.templates.get(key);
     if (!template) {
       throw new Error(`Prompt template not found: ${id}`);
     }
 
-    // Cache the rendered result if caching is enabled
-    if (this.cacheEnabled) {
+    if (this.cacheEnabled && !this.cache.has(key)) {
       this.cache.set(key, template.content);
     }
 
-    return this.replaceVariables(template.content, {
-      ...this.getDefaultVariables(template),
-      ...variables,
-    });
+    const content = this.cacheEnabled ? this.cache.get(key)! : template.content;
+    return this.replaceVariables(content, this.getRenderVariables(template, variables));
   }
 
-  renderWithValidation(id: string, variables: Record<string, any>, category?: string): {
+  renderWithValidation(
+    id: string,
+    variables: Record<string, any>,
+    category?: string
+  ): {
     success: boolean;
     result?: string;
     errors?: string[];
@@ -115,12 +119,16 @@ export class PromptManager {
       return { success: false, errors: [`Template not found: ${id}`] };
     }
 
-    // Validate required variables
+    const renderVariables = this.getRenderVariables(template, variables);
+
     for (const variable of template.variables) {
-      if (variable.required && (variables[variable.name] === undefined || variables[variable.name] === null)) {
-        if (variable.default === undefined) {
-          errors.push(`Required variable missing: ${variable.name}`);
-        }
+      if (
+        variable.required &&
+        (renderVariables[variable.name] === undefined ||
+          renderVariables[variable.name] === null ||
+          renderVariables[variable.name] === '')
+      ) {
+        errors.push(`Required variable missing: ${variable.name}`);
       }
     }
 
@@ -129,7 +137,14 @@ export class PromptManager {
     }
 
     try {
-      const result = this.render(id, variables, category);
+      const result = this.replaceVariables(template.content, renderVariables);
+      const unresolved = this.findUnresolvedVariables(result);
+      if (unresolved.length > 0) {
+        return {
+          success: false,
+          errors: unresolved.map((name) => `Unresolved variable: ${name}`),
+        };
+      }
       return { success: true, result };
     } catch (error) {
       return { success: false, errors: [error instanceof Error ? error.message : String(error)] };
@@ -145,21 +160,51 @@ export class PromptManager {
         const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
         // Handle {{variable}} format
-        result = result.replace(new RegExp(`\\{\\{${name}\\}\\}`, 'g'), stringValue);
+        const escapedName = escapeRegExp(name);
+        result = result.replace(new RegExp(`\\{\\{\\s*${escapedName}\\s*\\}\\}`, 'g'), stringValue);
 
         // Handle ${variable} format
-        result = result.replace(new RegExp(`\\$\\{${name}\\}`, 'g'), stringValue);
+        result = result.replace(new RegExp(`\\$\\{\\s*${escapedName}\\s*\\}`, 'g'), stringValue);
 
         // Handle $variable format (simple)
-        result = result.replace(new RegExp(`\\$${name}\\b`, 'g'), stringValue);
+        result = result.replace(new RegExp(`\\$${escapedName}\\b`, 'g'), stringValue);
       }
     }
 
-    // Remove any remaining unresolved variables (optional)
-    result = result.replace(/\{\{[^}]+\}\}/g, '');
-    result = result.replace(/\$\{[^}]+\}/g, '');
-
     return result;
+  }
+
+  private getRenderVariables(
+    template: PromptTemplate,
+    variables: Record<string, any>
+  ): Record<string, any> {
+    const resolved = {
+      ...this.getDefaultVariables(template),
+      ...variables,
+    };
+
+    for (const variable of template.variables) {
+      if (
+        !variable.required &&
+        resolved[variable.name] === undefined &&
+        variable.default === undefined
+      ) {
+        resolved[variable.name] = '';
+      }
+    }
+
+    return resolved;
+  }
+
+  private findUnresolvedVariables(rendered: string): string[] {
+    const names = new Set<string>();
+    for (const match of rendered.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) {
+      names.add(match[1].trim());
+    }
+    for (const match of rendered.matchAll(/\$\{\s*([^}]+?)\s*\}/g)) {
+      names.add(match[1].trim());
+    }
+    return Array.from(names).sort();
   }
 
   private getDefaultVariables(template: PromptTemplate): Record<string, any> {
@@ -189,7 +234,9 @@ export class PromptManager {
           continue;
         }
 
-        const files = fs.readdirSync(categoryDir).filter(f => f.endsWith('.yaml') || f.endsWith('.yml') || f.endsWith('.md'));
+        const files = fs
+          .readdirSync(categoryDir)
+          .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml') || f.endsWith('.md'));
 
         for (const file of files) {
           try {
@@ -257,6 +304,10 @@ export async function destroyPromptManager(): Promise<void> {
     await promptManagerInstance.destroy();
     promptManagerInstance = null;
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export default PromptManager;
