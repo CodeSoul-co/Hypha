@@ -1,5 +1,6 @@
 import {
   dbConfig,
+  filesystemToolConfig,
   inferenceConfig,
   redisConfig,
   reloadConfig,
@@ -26,6 +27,14 @@ const trackedEnv = [
   'HYPHA_WORKCACHE',
   'HYPHA_WORKCACHE_SQLITE_PATH',
   'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
+  'HYPHA_FILESYSTEM_WORKING_DIRECTORY',
+  'HYPHA_FILESYSTEM_READ_PATHS',
+  'HYPHA_FILESYSTEM_WRITE_PATHS',
+  'HYPHA_FILESYSTEM_EXECUTE_PATHS',
+  'HYPHA_FILESYSTEM_EXECUTION_ENABLED',
+  'HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS',
+  'HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES',
+  'FILESYSTEM_TOOL_ROOT',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -137,6 +146,42 @@ describe('configuration storage taxonomy', () => {
       store: 'sqlite',
       promptBudgetTokens: 2048,
       sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
+    });
+  });
+
+  it('loads separate filesystem read, write, and execute path policies', () => {
+    process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY = './workspace';
+    process.env.HYPHA_FILESYSTEM_READ_PATHS = './workspace,./shared';
+    process.env.HYPHA_FILESYSTEM_WRITE_PATHS = './workspace/output';
+    process.env.HYPHA_FILESYSTEM_EXECUTE_PATHS = './workspace/bin';
+    process.env.HYPHA_FILESYSTEM_EXECUTION_ENABLED = 'false';
+    process.env.HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS = '2500';
+    process.env.HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES = '8192';
+
+    reloadConfig();
+
+    expect(filesystemToolConfig()).toEqual({
+      workingDirectory: './workspace',
+      readPaths: ['./workspace', './shared'],
+      writePaths: ['./workspace/output'],
+      executePaths: ['./workspace/bin'],
+      execution: {
+        enabled: false,
+        timeoutMs: 2500,
+        maxOutputBytes: 8192,
+      },
+    });
+  });
+
+  it('keeps FILESYSTEM_TOOL_ROOT as a legacy read-write fallback', () => {
+    process.env.FILESYSTEM_TOOL_ROOT = './legacy-workspace';
+
+    reloadConfig();
+
+    expect(filesystemToolConfig()).toMatchObject({
+      workingDirectory: './legacy-workspace',
+      readPaths: ['./legacy-workspace'],
+      writePaths: ['./legacy-workspace'],
     });
   });
 });

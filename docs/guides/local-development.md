@@ -74,6 +74,28 @@ The server exposes configured aliases such as `default-chat`, `default-fast`, an
 
 ## Tools and MCP Fixtures
 
+The built-in `filesystem` tool uses independent allowlists for reading,
+writing, and executing files. Multiple paths are comma-separated. Request
+paths are resolved from `HYPHA_FILESYSTEM_WORKING_DIRECTORY`; absolute paths
+are accepted only when they remain inside the corresponding allowlist.
+
+```bash
+HYPHA_FILESYSTEM_WORKING_DIRECTORY=.
+HYPHA_FILESYSTEM_READ_PATHS=.,./shared
+HYPHA_FILESYSTEM_WRITE_PATHS=./data/workspace
+HYPHA_FILESYSTEM_EXECUTE_PATHS=./data/workspace/bin
+HYPHA_FILESYSTEM_EXECUTION_ENABLED=false
+HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS=30000
+HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES=1048576
+```
+
+Execution calls an allowlisted executable directly without a shell. To write
+and then run a script, write it under both the write and execute paths with
+`"executable": true`, then explicitly enable execution. Arguments must be
+supplied through `args`. Filesystem calls still pass through normal tool policy
+and event tracing. The path allowlist is not an OS process sandbox; use a
+container or dedicated worker when executing untrusted code.
+
 The built-in `search` tool is available without network access by default:
 
 ```bash

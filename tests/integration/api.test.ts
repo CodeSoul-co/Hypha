@@ -12,6 +12,8 @@
  *   bug 10 — /workflows/:name/execute does not crash on minimal context
  */
 import request from 'supertest';
+import fs from 'fs/promises';
+import path from 'path';
 import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
@@ -203,6 +205,64 @@ describe('GET /api/v1/tools (bug 9)', () => {
     expect(r.status).toBe(200);
     const names = (r.body.data || []).map((t: any) => t.name);
     expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
+  });
+
+  it('writes and executes an allowlisted file through governed runtime events', async () => {
+    const scriptPath = 'data/workspace/bin/hypha-integration-print.sh';
+    try {
+      const write = await request(app)
+        .post('/api/v1/tools/execute')
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({
+          name: 'filesystem',
+          params: {
+            operation: 'write',
+            path: scriptPath,
+            content: '#!/bin/sh\nprintf "%s" "$1"\n',
+            executable: true,
+          },
+        });
+      expect(write.status).toBe(200);
+      expect(write.body.data).toMatchObject({ executable: true });
+
+      const execute = await request(app)
+        .post('/api/v1/tools/execute')
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({
+          name: 'filesystem',
+          params: {
+            operation: 'execute',
+            path: scriptPath,
+            args: ['hypha; echo unsafe'],
+            cwd: 'data/workspace',
+          },
+        });
+      expect(execute.status).toBe(200);
+      expect(execute.body.data).toMatchObject({
+        stdout: 'hypha; echo unsafe',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const events = await request(app)
+        .get(`/api/v1/runtime/runs/${execute.body.runId}/events`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(events.status).toBe(200);
+      expect(events.body.data || []).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool.policy.checked',
+            payload: expect.objectContaining({ sideEffectLevel: 'write' }),
+          }),
+          expect.objectContaining({
+            type: 'tool.call.completed',
+            payload: expect.objectContaining({ sideEffectLevel: 'write' }),
+          }),
+        ])
+      );
+    } finally {
+      await fs.rm(path.resolve(scriptPath), { force: true });
+    }
   });
 });
 

@@ -656,6 +656,17 @@ skills:
 
 tools:
   configPath: "./configs/tools.yaml"
+  filesystem:
+    # Relative paths resolve from workingDirectory. Lists are comma-separated
+    # when supplied through environment variables.
+    workingDirectory: "${HYPHA_FILESYSTEM_WORKING_DIRECTORY:.}"
+    readPaths: "${HYPHA_FILESYSTEM_READ_PATHS:.}"
+    writePaths: "${HYPHA_FILESYSTEM_WRITE_PATHS:./data/workspace}"
+    executePaths: "${HYPHA_FILESYSTEM_EXECUTE_PATHS:./data/workspace/bin}"
+    execution:
+      enabled: "${HYPHA_FILESYSTEM_EXECUTION_ENABLED:false}"
+      timeoutMs: "${HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS:30000}"
+      maxOutputBytes: "${HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES:1048576}"
   # The fixture gateway keeps MCP calls locally verifiable without requiring
   # external MCP binaries. Replace or extend this list with local/remote MCP
   # servers for deployment.
