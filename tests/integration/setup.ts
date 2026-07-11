@@ -7,6 +7,8 @@ dotenv.config();
 // (DevAuth seeding skips, dev token endpoint disables); 'test' keeps dev wiring.
 process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'integration-test-jwt-secret';
-process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'integration-test-refresh-secret';
+process.env.JWT_REFRESH_SECRET =
+  process.env.JWT_REFRESH_SECRET || 'integration-test-refresh-secret';
+process.env.HYPHA_FILESYSTEM_EXECUTION_ENABLED = 'true';
 
 jest.setTimeout(30000);

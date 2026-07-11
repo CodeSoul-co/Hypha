@@ -1,18 +1,28 @@
 tools:
   - id: filesystem
     name: Filesystem
-    description: Read and write files to the local filesystem
+    description: Read, write, list, and execute files in configured local filesystem paths
     enabled: true
     schema:
       type: object
       properties:
         operation:
           type: string
-          enum: [read, write, list]
+          enum: [read, write, list, execute]
         path:
           type: string
         content:
           type: string
+        args:
+          type: array
+          items:
+            type: string
+        cwd:
+          type: string
+        timeoutMs:
+          type: number
+        executable:
+          type: boolean
 
   - id: search
     name: Web Search

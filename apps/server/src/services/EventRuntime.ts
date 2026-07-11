@@ -2135,7 +2135,7 @@ function inferToolSideEffect(
 ): 'none' | 'read' | 'write' | 'external_effect' | 'irreversible' {
   if (name === 'filesystem' && params && typeof params === 'object') {
     const operation = (params as Record<string, unknown>).operation;
-    if (operation === 'write') return 'write';
+    if (operation === 'write' || operation === 'execute') return 'write';
     if (operation === 'delete') return 'irreversible';
     return 'read';
   }

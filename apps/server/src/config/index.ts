@@ -49,6 +49,16 @@ function parseBooleanish(value: unknown): unknown {
 }
 
 const booleanishSchema = z.preprocess(parseBooleanish, z.boolean());
+const pathListSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== 'string') return value;
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  },
+  z.array(z.string().min(1))
+);
 const optionalBooleanishSchema = z.preprocess((value) => {
   if (typeof value === 'string' && value.trim() === '') return undefined;
   return parseBooleanish(value);
@@ -406,6 +416,21 @@ const configSchema = z.object({
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
+    filesystem: z
+      .object({
+        workingDirectory: z.string().default('.'),
+        readPaths: pathListSchema.default(['.']),
+        writePaths: pathListSchema.default(['./data/workspace']),
+        executePaths: pathListSchema.default(['./data/workspace/bin']),
+        execution: z
+          .object({
+            enabled: booleanishSchema.default(false),
+            timeoutMs: z.coerce.number().int().positive().default(30000),
+            maxOutputBytes: z.coerce.number().int().positive().default(1048576),
+          })
+          .default({}),
+      })
+      .default({}),
     mcpServers: z
       .array(
         z.object({
@@ -629,6 +654,20 @@ export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;
+export const filesystemToolConfig = () => {
+  const raw = getConfig().tools.filesystem;
+  const legacyRoot = process.env.FILESYSTEM_TOOL_ROOT?.trim();
+  if (!legacyRoot) return raw;
+
+  return {
+    ...raw,
+    workingDirectory: process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY
+      ? raw.workingDirectory
+      : legacyRoot,
+    readPaths: process.env.HYPHA_FILESYSTEM_READ_PATHS ? raw.readPaths : [legacyRoot],
+    writePaths: process.env.HYPHA_FILESYSTEM_WRITE_PATHS ? raw.writePaths : [legacyRoot],
+  };
+};
 
 // Get enabled models for a provider
 export function getEnabledModels(provider: string): ModelConfig[] {
