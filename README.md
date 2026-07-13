@@ -64,6 +64,16 @@ Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`; the
 
 Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
 
+For provider-side prefix cache, Hypha keeps request shape stable by canonicalizing tool schemas and tracking stable prefix hashes per provider/model/scope. Provider usage fields include `cacheHitTokens` and `cacheMissTokens` when the upstream API reports cached or missed prompt tokens. These metrics describe provider prefix-cache reuse; they are separate from Hypha's local exact response cache.
+
+## WorkCache
+
+`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
+
+On `cache-base`, WorkCache defaults to `HYPHA_WORKCACHE=memory` so event-derived blocks are available during real runtime checks. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
+
+WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes.
+
 ## Development Commands
 
 ```bash

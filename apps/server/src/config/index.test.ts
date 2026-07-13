@@ -5,6 +5,7 @@ import {
   redisConfig,
   reloadConfig,
   storageConfig,
+  workCacheConfig,
 } from './index';
 
 const trackedEnv = [
@@ -23,6 +24,9 @@ const trackedEnv = [
   'VLLM_BASE_URL',
   'LLAMA_CPP_BASE_URL',
   'OPENAI_INFERENCE_BASE_URL',
+  'HYPHA_WORKCACHE',
+  'HYPHA_WORKCACHE_SQLITE_PATH',
+  'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
   'HYPHA_FILESYSTEM_WORKING_DIRECTORY',
   'HYPHA_FILESYSTEM_READ_PATHS',
   'HYPHA_FILESYSTEM_WRITE_PATHS',
@@ -124,6 +128,26 @@ describe('configuration storage taxonomy', () => {
       requireExactHash: true,
     });
   });
+  it('keeps WorkCache enabled on the cache integration line and switches configured stores from env', () => {
+    reloadConfig();
+    expect(workCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'memory',
+      promptBudgetTokens: 4096,
+    });
+
+    process.env.HYPHA_WORKCACHE = 'sqlite';
+    process.env.HYPHA_WORKCACHE_SQLITE_PATH = './data/runtime/cache/test-workcache.sqlite';
+    process.env.HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS = '2048';
+
+    expect(workCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'sqlite',
+      promptBudgetTokens: 2048,
+      sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
+    });
+  });
+
   it('loads separate filesystem read, write, and execute path policies', () => {
     process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY = './workspace';
     process.env.HYPHA_FILESYSTEM_READ_PATHS = './workspace,./shared';

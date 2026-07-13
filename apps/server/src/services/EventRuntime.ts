@@ -5,6 +5,7 @@ import {
   type FrameworkEvent,
   type FrameworkEventType,
   type SpecRef,
+  type TraceRecorder,
 } from '@hypha/core';
 import { EventFirstRuntime } from '@hypha/harness';
 import {
@@ -68,7 +69,15 @@ import {
   type ServingCacheEvent,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
-import { storageConfig } from '../config';
+import {
+  MemoryWorkCacheStore,
+  NoopWorkCacheStore,
+  SQLiteWorkCacheStore,
+  WorkCacheManager,
+  type WorkCacheAuditEvent,
+  type WorkCacheStore,
+} from '@hypha/workcache';
+import { storageConfig, workCacheConfig } from '../config';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
@@ -146,6 +155,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   async infer(
     request: InferenceRequest<LLMInferenceInput>
   ): Promise<InferenceResponse<ChatResponse>> {
+    await getLLMManager().ensureReady();
     const systemPrompt =
       [request.resolvedPrefixContent, request.input.options?.systemPrompt]
         .filter(Boolean)
@@ -183,6 +193,7 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   async *stream(
     request: InferenceRequest<LLMInferenceInput>
   ): AsyncIterable<InferenceResponse<StreamChunk>> {
+    await getLLMManager().ensureReady();
     const systemPrompt =
       [request.resolvedPrefixContent, request.input.options?.systemPrompt]
         .filter(Boolean)
@@ -260,6 +271,8 @@ class EventRuntimeService {
   private readonly knownSessions = new Set<string>();
   private readonly inference: InferenceManager;
   private readonly reasoning: ReasoningOrchestrator;
+  private readonly workCache: WorkCacheManager;
+  private readonly runEventClock = new Map<string, number>();
   private readonly defaultDomainPack = createDefaultDomainPack();
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
 
@@ -272,6 +285,7 @@ class EventRuntimeService {
       mode: sqliteStorage.sqliteMode,
     });
     this.runtime = new EventFirstRuntime(this.events);
+    this.workCache = createWorkCacheManager();
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
@@ -881,7 +895,7 @@ class EventRuntimeService {
       },
       async () => input.handler()
     );
-    const runner = new GovernedToolRunner(registry, this.events);
+    const runner = new GovernedToolRunner(registry, this.createWorkCacheAwareTraceRecorder());
     const result = await runner.run({
       toolId: input.toolId,
       input: input.params,
@@ -1730,7 +1744,7 @@ class EventRuntimeService {
     options: { stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = this.requireRun(runId);
-    await this.runtime.appendRunEvent({
+    const event = await this.runtime.appendRunEvent({
       id: `${runId}:${type}:${generateId()}`,
       type,
       runId,
@@ -1739,7 +1753,7 @@ class EventRuntimeService {
       payload,
       stepId: options.stepId,
       fsmState: options.fsmState,
-      timestamp,
+      timestamp: this.nextEventTimestamp(runId, timestamp),
       metadata: {
         userId: context.userId,
         clientSessionId: context.clientSessionId,
@@ -1747,6 +1761,56 @@ class EventRuntimeService {
         ...(options.fsmState ? { fsmState: options.fsmState } : {}),
       },
     });
+    await this.recordWorkCacheEvents(event);
+  }
+
+  private async recordWorkCacheEvents(sourceEvent: FrameworkEvent): Promise<void> {
+    if (sourceEvent.type.startsWith('workcache.')) return;
+    const derivedEvents = await this.workCache.ingest(sourceEvent);
+    for (const event of derivedEvents) {
+      await this.appendWorkCacheEvent(event);
+    }
+  }
+
+  private async appendWorkCacheEvent(event: WorkCacheAuditEvent): Promise<void> {
+    const context = this.requireRun(event.runId);
+    await this.runtime.appendRunEvent({
+      id: `${event.runId}:${event.type}:${generateId()}`,
+      type: event.type,
+      runId: event.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      payload: event.payload,
+      stepId: event.stepId,
+      timestamp: this.nextEventTimestamp(event.runId, event.timestamp),
+      metadata: {
+        userId: context.userId,
+        clientSessionId: context.clientSessionId,
+        sourceEventId: event.payload.sourceEventId,
+        sourceEventType: event.payload.sourceEventType,
+        treeType: event.payload.treeType,
+        blockId: event.payload.blockId,
+        cacheKey: event.payload.cacheKey,
+      },
+    });
+  }
+
+  private nextEventTimestamp(runId: string, timestamp?: string): string {
+    const parsed = timestamp ? Date.parse(timestamp) : NaN;
+    const requested = Number.isFinite(parsed) ? parsed : Date.now();
+    const previous = this.runEventClock.get(runId) ?? 0;
+    const next = Math.max(requested, previous + 1);
+    this.runEventClock.set(runId, next);
+    return new Date(next).toISOString();
+  }
+
+  private createWorkCacheAwareTraceRecorder(): TraceRecorder {
+    return {
+      record: async (event) => {
+        await this.events.record(event);
+        await this.recordWorkCacheEvents(event);
+      },
+    };
   }
 
   private requireRun(runId: string): RuntimeRunContext {
@@ -1897,6 +1961,46 @@ function inferFailedState(fsm: FSMProcessSpec): string {
 
 function resolveRuntimePath(filePath: string): string {
   return path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+}
+
+let sharedMemoryWorkCacheStore: MemoryWorkCacheStore | undefined;
+const sharedSQLiteWorkCacheStores = new Map<string, SQLiteWorkCacheStore>();
+
+function createWorkCacheManager(): WorkCacheManager {
+  const config = workCacheConfig();
+  return new WorkCacheManager({
+    store: createWorkCacheStore(config.store, config.sqlite.path),
+    policy: {
+      enabled: config.enabled,
+      store: config.store,
+      promptBudgetTokens: config.promptBudgetTokens,
+      unknownEventPolicy: config.unknownEventPolicy,
+      allowExtensionEvents: config.allowExtensionEvents,
+      trees: config.trees,
+    },
+  });
+}
+
+function createWorkCacheStore(
+  store: ReturnType<typeof workCacheConfig>['store'],
+  sqlitePath: string
+): WorkCacheStore {
+  switch (store) {
+    case 'memory':
+      sharedMemoryWorkCacheStore = sharedMemoryWorkCacheStore ?? new MemoryWorkCacheStore();
+      return sharedMemoryWorkCacheStore;
+    case 'sqlite': {
+      const filename = resolveRuntimePath(sqlitePath);
+      const existing = sharedSQLiteWorkCacheStores.get(filename);
+      if (existing) return existing;
+      const next = new SQLiteWorkCacheStore({ filename });
+      sharedSQLiteWorkCacheStores.set(filename, next);
+      return next;
+    }
+    case 'off':
+    default:
+      return new NoopWorkCacheStore();
+  }
 }
 
 function summarizeValue(value: unknown): Record<string, unknown> {

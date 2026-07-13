@@ -12,6 +12,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [HTTP API](api/http.md): REST endpoints, authentication, request bodies, response shapes, and SSE behavior.
 - [Architecture Notes](architecture/README.md): subsystem-level architecture notes.
 - [Serving Cache](architecture/serving-cache.md): exact LLM response cache middleware, key fields, policies, stores, and trace events.
+- [WorkCache](architecture/workcache.md): event-derived typed runtime cache, tree alignments, policies, stores, and audit events.
 - [ADRs](adr/README.md): accepted architecture decisions.
 - [RFCs](rfc/README.md): proposed designs and extension plans.
 

@@ -79,6 +79,8 @@ export interface ChatResponse {
      *  (e.g. DeepSeek's `prompt_tokens_details.cached_tokens`). Defaults to 0
      *  when the provider doesn't break the count down. */
     cacheHitTokens?: number;
+    /** Provider-reported prompt tokens that missed the provider-side prefix cache. */
+    cacheMissTokens?: number;
   };
   toolCalls?: ToolCall[];
   raw?: any;
@@ -103,6 +105,7 @@ export interface StreamChunk {
     outputTokens: number;
     totalTokens: number;
     cacheHitTokens?: number;
+    cacheMissTokens?: number;
   };
 }
 

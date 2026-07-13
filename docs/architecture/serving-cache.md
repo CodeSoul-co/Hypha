@@ -4,6 +4,11 @@ Hypha Serving Cache is a lightweight middleware around `ModelProvider.generate()
 It caches exact LLM API responses and records prompt prefix metadata without
 changing ReAct, FSM, DomainPack, Session, Run, or Event semantics.
 
+It also records provider-side prefix cache shape. Hypha does not own the
+physical provider prefix cache; it keeps the rendered prefix stable, canonicalizes
+tool schemas, and records provider-reported cached/missed prompt tokens when the
+provider exposes them.
+
 ## Placement
 
 ```text
@@ -39,6 +44,28 @@ Exact response keys are deterministic hashes over:
 
 `undefined`, timestamps, request ids, and random values are excluded. Object
 keys are sorted, and tool schemas are sorted by stable id/name before hashing.
+OpenAI-compatible provider requests also export tool schemas in sorted provider
+name order so the byte shape sent to the model is stable.
+
+## Provider Prefix Cache Shape
+
+`PrefixCacheShapeTracker` compares the current stable prefix with the previous
+request for the same provider/model/scope. Trace payloads may include:
+
+| Field | Description |
+| --- | --- |
+| `prefixHash` | Hash of stable prompt blocks. |
+| `toolSchemaHash` | Hash of canonicalized tool schemas. |
+| `domainPackHash` | Hash of DomainPack scope when present. |
+| `dynamicSuffixHash` | Hash of current turn messages/input. |
+| `stablePrefixChanged` | Whether provider-side prefix reuse is likely reset. |
+| `dynamicSuffixChanged` | Whether only the dynamic suffix changed. |
+| `changedReasons` | `first_request`, `prefix_changed`, `tool_schema_changed`, `domain_pack_changed`, `dynamic_suffix_changed`, or `unchanged`. |
+
+Provider usage is normalized into `cacheHitTokens` and `cacheMissTokens`.
+DeepSeek-style `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`, plus
+OpenAI-style `prompt_tokens_details.cached_tokens`, are mapped into Hypha usage
+fields and surfaced under `servingCache.providerPrefixCache`.
 
 ## Policy
 
