@@ -80,6 +80,7 @@ export interface ReActRunContext {
 
 export interface ReActAction {
   type: 'tool' | 'model' | 'finish' | 'human_review';
+  toolCallId?: string;
   target?: string;
   input?: unknown;
   reason?: string;
@@ -193,6 +194,7 @@ export interface ReActRunnerOptions {
   inference: InferenceProvider;
   toolRunner?: ToolRunner;
   maxIterations?: number;
+  continueAfterTool?: boolean;
   onStep?: (step: ReActStep) => Promise<void> | void;
   syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
 }
@@ -838,7 +840,7 @@ export class ReActRunner {
       const inferenceRequest = await this.runtime.reason(context);
       await pushStep('reason', { modelAlias: inferenceRequest.modelAlias }, inferenceRequest);
 
-      const response = await this.options.inference.infer(inferenceRequest);
+      let response = await this.options.inference.infer(inferenceRequest);
       let action = await this.runtime.selectAction(response);
       await pushStep('select_action', response, action);
 
@@ -919,6 +921,19 @@ export class ReActRunner {
             finalAction: action,
           };
         }
+        if (action.type === 'model' && this.options.continueAfterTool) {
+          this.appendToolObservation(context, actionFromStep(steps), observation);
+          const nextRequest = await this.runtime.reason(context);
+          await pushStep(
+            'reason',
+            { modelAlias: nextRequest.modelAlias, afterObservation: true },
+            nextRequest
+          );
+          response = await this.options.inference.infer(nextRequest);
+          action = await this.runtime.selectAction(response);
+          await pushStep('select_action', response, action);
+          continue;
+        }
         if (action.type === 'finish' || action.type === 'model') {
           const output = action.input ?? observation.value;
           await pushStep('complete', action, output);
@@ -942,6 +957,28 @@ export class ReActRunner {
         error,
       };
     }
+  }
+
+  private appendToolObservation(
+    context: ReActRunContext,
+    action: ReActAction,
+    observation: ReActObservation
+  ): void {
+    context.messages.push({
+      role: 'assistant',
+      content: stringifyReActMessage({
+        type: 'tool_call',
+        id: action.toolCallId,
+        tool: action.target,
+        input: action.input,
+      }),
+    });
+    context.messages.push({
+      role: 'tool',
+      name: action.target,
+      toolCallId: action.toolCallId,
+      content: stringifyReActMessage(observation.value),
+    });
   }
 
   private async executeAction(
@@ -982,6 +1019,25 @@ export class ReActRunner {
   }
 }
 
+function actionFromStep(steps: ReActStep[]): ReActAction {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step.phase === 'act' && step.input && typeof step.input === 'object') {
+      return step.input as ReActAction;
+    }
+  }
+  throw new Error('ReAct tool observation is missing its action step.');
+}
+
+function stringifyReActMessage(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 export class ReActAgentRunner {
   private readonly contextBuilder: ContextBuilder;
   private readonly runner: ReActRunner;
@@ -1014,6 +1070,7 @@ export class ReActAgentRunner {
       inference: options.inference,
       toolRunner: options.toolRunner ?? new MockToolRunner(),
       maxIterations: options.maxIterations,
+      continueAfterTool: options.continueAfterTool,
       onStep: options.onStep,
       syncMemory: options.syncMemory,
     });
