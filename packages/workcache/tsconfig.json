@@ -3,5 +3,5 @@
   "compilerOptions": { "composite": true, "rootDir": "./src", "outDir": "./dist" },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "node_modules", "dist"],
-  "references": [{ "path": "../core" }]
+  "references": [{ "path": "../core" }, { "path": "../inference" }]
 }
