@@ -191,6 +191,22 @@ describe('@hypha/inference', () => {
     });
     expect(resolved.blocks[0]?.hash).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('rejects undeclared agent prompt variables instead of silently erasing them', () => {
+    const registry = new AgentPromptRegistry();
+    registry.register({
+      id: 'agent.invalid',
+      version: '1.0.0',
+      name: 'Invalid prompt',
+      role: 'system',
+      template: 'Known {{known}} unknown {{unknown}}.',
+      variables: [{ name: 'known', type: 'string', required: true }],
+    });
+
+    expect(() =>
+      registry.resolve([{ id: 'agent.invalid', required: true }], { known: 'value' })
+    ).toThrow('Undeclared agent prompt variables: agent.invalid.unknown');
+  });
   it('routes inference requests through registered providers', async () => {
     const manager = new InferenceManager();
     const provider: InferenceProvider = {
