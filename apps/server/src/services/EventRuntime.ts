@@ -82,6 +82,8 @@ import {
   MemoryWorkCacheStore,
   NoopWorkCacheStore,
   SQLiteWorkCacheStore,
+  ThinkingCache,
+  ThinkingCachedReasoningProvider,
   WorkCachedInferenceProvider,
   WorkCacheManager,
   type WorkCacheAuditEvent,
@@ -488,6 +490,7 @@ class EventRuntimeService {
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
   private readonly reasoning: ReasoningOrchestrator;
+  private readonly reasoningInference: ThinkingCachedReasoningProvider;
   private readonly workCache: WorkCacheManager;
   private readonly runEventClock = new Map<string, number>();
   private readonly defaultDomainPack = createDefaultDomainPack();
@@ -510,10 +513,13 @@ class EventRuntimeService {
     const runtimeInferenceProvider = createRuntimeInferenceProvider((event) =>
       this.recordServingCacheEvent(event)
     );
-    const inferenceProvider = new WorkCachedInferenceProvider({
-      provider: runtimeInferenceProvider,
+    const thinkingCache = new ThinkingCache({
       manager: this.workCache,
       trace: (event) => this.appendWorkCacheEvent(event),
+    });
+    const inferenceProvider = new WorkCachedInferenceProvider({
+      provider: runtimeInferenceProvider,
+      thinkingCache,
     });
     this.inferenceProviderId = inferenceProvider.id;
     this.inference.register(inferenceProvider);
@@ -521,6 +527,11 @@ class EventRuntimeService {
       id: 'server-inference-router',
       infer: (request) => this.inference.infer(this.inferenceProviderId, request),
       stream: (request) => this.inference.stream(this.inferenceProviderId, request),
+    });
+    this.reasoningInference = new ThinkingCachedReasoningProvider({
+      provider: this.reasoning,
+      thinkingCache,
+      resolveStrategy: (id) => this.reasoning.registry.get(id)?.descriptor,
     });
   }
 
@@ -671,7 +682,7 @@ class EventRuntimeService {
     );
 
     try {
-      const response = await this.reasoning.infer({
+      const response = await this.reasoningInference.infer({
         runId: input.runId,
         stepId: input.stepId,
         sessionId: runContext?.clientSessionId,
@@ -1040,7 +1051,7 @@ class EventRuntimeService {
         reasoning.method === 'got' ||
         reasoning.method === 'self_consistency'
       ) {
-        const response = await this.reasoning.infer({ ...inferenceRequest, reasoning });
+        const response = await this.reasoningInference.infer({ ...inferenceRequest, reasoning });
         const chat = response.output as ChatResponse;
         if (chat.content) yield { type: 'content', content: chat.content };
         yield { type: 'done', usage: chat.usage };
@@ -1066,7 +1077,7 @@ class EventRuntimeService {
         return;
       }
 
-      for await (const response of this.reasoning.stream({
+      for await (const response of this.reasoningInference.stream!({
         ...inferenceRequest,
         reasoning,
       })) {
