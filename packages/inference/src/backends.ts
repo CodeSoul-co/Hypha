@@ -299,6 +299,7 @@ export class OllamaInferenceBackend extends HttpInferenceBackend {
     return {
       model: resolveBackendModel(request),
       messages: toOpenAIChatMessages(request.compiledPrompt.messages),
+      tools: openAICompatibleTools(request),
       stream,
       options: removeUndefined({
         temperature: request.options?.temperature,
@@ -383,6 +384,7 @@ export class VLLMInferenceBackend extends HttpInferenceBackend {
       model: resolveBackendModel(request),
       messages: toOpenAIChatMessages(request.compiledPrompt.messages),
       stream,
+      tools: openAICompatibleTools(request),
       ...openAICompletionOptions(request.options),
       cache: backendCacheEnvelope(request),
       ...backendExtra(request.options, 'vllm'),
@@ -461,6 +463,7 @@ export class OpenAIAPIInferenceBackend extends HttpInferenceBackend {
       model: resolveBackendModel(request),
       messages: toOpenAIChatMessages(request.compiledPrompt.messages),
       stream,
+      tools: openAICompatibleTools(request),
       ...openAICompletionOptions(request.options),
       ...backendExtra(request.options, 'openaiApi'),
     };
@@ -563,6 +566,20 @@ function toOpenAIChatMessages(messages: PromptMessage[]): Array<Record<string, s
       name: message.name,
     }) as Record<string, string>;
   });
+}
+
+function openAICompatibleTools(
+  request: InferenceBackendRequest
+): Array<Record<string, unknown>> | undefined {
+  if (!request.tools?.length) return undefined;
+  return request.tools.map((tool) => ({
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.inputSchema,
+    },
+  }));
 }
 
 function normalizeOpenAICompatibleResponse(
