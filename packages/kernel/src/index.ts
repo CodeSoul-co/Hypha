@@ -7,7 +7,13 @@ import {
   specRefSchema,
   versionedSpecSchema,
 } from '@hypha/core';
-import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
+import {
+  agentPromptRefSchema,
+  type AgentPromptRef,
+  type InferenceProvider,
+  type InferenceRequest,
+  type InferenceResponse,
+} from '@hypha/inference';
 import type {
   EmbeddingProvider,
   MemoryManager,
@@ -34,6 +40,7 @@ export interface ReActAgentSpec extends VersionedSpec, SpecMetadata {
   name: string;
   modelAlias: string;
   systemInstructions?: string;
+  promptRefs?: AgentPromptRef[];
   skillRefs?: SkillRef[];
   toolRefs?: string[];
   memoryProfileRef?: string;
@@ -1573,6 +1580,7 @@ export const reactAgentSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   name: z.string().min(1),
   modelAlias: z.string().min(1),
   systemInstructions: z.string().optional(),
+  promptRefs: z.array(agentPromptRefSchema).optional(),
   skillRefs: z.array(skillRefSchema).optional(),
   toolRefs: z.array(z.string()).optional(),
   memoryProfileRef: z.string().optional(),
@@ -1591,6 +1599,7 @@ export const reactAgentSpecJsonSchema: JsonSchema = {
     description: { type: 'string' },
     modelAlias: { type: 'string' },
     systemInstructions: { type: 'string' },
+    promptRefs: { type: 'array', items: { type: 'object' } },
     skillRefs: { type: 'array', items: { type: 'object' } },
     toolRefs: { type: 'array', items: { type: 'string' } },
     memoryProfileRef: { type: 'string' },
