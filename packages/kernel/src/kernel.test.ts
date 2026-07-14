@@ -150,6 +150,63 @@ describe('@hypha/kernel ReAct contracts', () => {
     expect(result.output).toEqual({ result: 'hypha' });
   });
 
+  it('feeds tool observations back into a new model turn when multi-turn ReAct is enabled', async () => {
+    const inferenceInputs: unknown[] = [];
+    const provider: InferenceProvider = {
+      id: 'test-provider',
+      async infer(request): Promise<InferenceResponse> {
+        inferenceInputs.push(request.input);
+        return inferenceInputs.length === 1
+          ? {
+              id: 'response_tool',
+              output: { action: 'tool', toolId: 'tool.search', input: { query: 'hypha' } },
+            }
+          : { id: 'response_final', output: { action: 'finish', output: 'grounded answer' } };
+      },
+    };
+    const toolRunner: ToolRunner = {
+      async run() {
+        return { toolId: 'tool.search', status: 'completed', output: { result: 'evidence' } };
+      },
+    };
+    const runtime = new BasicReActAgentRuntime({
+      verifier: {
+        async verify(_context, observation) {
+          return observation.source === 'tool'
+            ? { type: 'model', reason: 'continue-after-observation' }
+            : { type: 'finish', input: observation.value };
+        },
+      },
+    });
+    const context = {
+      runId: 'run_multiturn',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user' as const, content: 'search and answer' }],
+    };
+    const runner = new ReActRunner(runtime, {
+      inference: provider,
+      toolRunner,
+      continueAfterTool: true,
+      maxIterations: 3,
+    });
+
+    await expect(runner.run(context)).resolves.toMatchObject({
+      status: 'completed',
+      output: 'grounded answer',
+    });
+    expect(inferenceInputs).toHaveLength(2);
+    expect(context.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'assistant',
+          content: expect.stringContaining('tool_call'),
+        }),
+        expect.objectContaining({ role: 'tool', content: '{"result":"evidence"}' }),
+      ])
+    );
+  });
+
   it('stops the ReAct loop when a tool action requires human review', async () => {
     const provider: InferenceProvider = {
       id: 'test-provider',

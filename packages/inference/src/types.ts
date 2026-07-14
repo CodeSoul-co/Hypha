@@ -254,7 +254,7 @@ export interface PlasmodHotLayer {
   getCacheMetadata(segmentId: string): PlasmodCacheMetadata | null;
 }
 
-export type InferenceBackendKind = 'sglang' | 'vllm' | 'llama.cpp' | 'openai-api';
+export type InferenceBackendKind = 'ollama' | 'sglang' | 'vllm' | 'llama.cpp' | 'openai-api';
 
 export interface InferenceBackendCapabilities {
   streaming: boolean;
