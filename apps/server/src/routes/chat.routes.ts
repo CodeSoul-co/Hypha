@@ -10,7 +10,12 @@ import { getEventRuntime } from '../services/EventRuntime';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
-import type { ReasoningMethod, ReasoningOptions } from '@hypha/inference';
+import {
+  agentPromptRefSchema,
+  type AgentPromptRef,
+  type ReasoningMethod,
+  type ReasoningOptions,
+} from '@hypha/inference';
 
 const router = Router();
 
@@ -27,7 +32,7 @@ const sessionLocks = new Map<string, Promise<void>>();
 
 function acquireSessionLock(
   sessionId: string,
-  userId: string,
+  userId: string
 ): { release: () => void; wait: () => Promise<void> } {
   const lockKey = `${userId}:${sessionId}`;
   let currentLock = sessionLocks.get(lockKey);
@@ -66,14 +71,10 @@ function sendSSEError(
   res: Response,
   errorCode: string,
   errorMessage: string,
-  sessionId?: string,
+  sessionId?: string
 ): void {
-  logger.warn(
-    `[SSE Error] ${errorCode}: ${errorMessage} | sessionId: ${sessionId || 'none'}`,
-  );
-  res.write(
-    `data: ${JSON.stringify({ type: 'error', error: errorMessage, code: errorCode })}\n\n`,
-  );
+  logger.warn(`[SSE Error] ${errorCode}: ${errorMessage} | sessionId: ${sessionId || 'none'}`);
+  res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage, code: errorCode })}\n\n`);
   res.end();
 }
 
@@ -83,8 +84,7 @@ function sendSSEError(
 router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const { sessionId, message, model, provider, agentId, cache, reasoning } =
-      req.body;
+    const { sessionId, message, model, provider, agentId, promptRefs, cache, reasoning } = req.body;
     const userId = req.user?.userId || req.apiKey?.userId;
 
     if (!userId) {
@@ -135,9 +135,7 @@ router.post(
 
       logger.debug(`[Chat] Request started`, {
         sessionId: session,
-        messagePreview:
-          trimmedMessage.substring(0, 50) +
-          (trimmedMessage.length > 50 ? '...' : ''),
+        messagePreview: trimmedMessage.substring(0, 50) + (trimmedMessage.length > 50 ? '...' : ''),
         model: model || 'default',
         provider,
       });
@@ -185,7 +183,7 @@ router.post(
           source: 'temporary-memory',
           messageCount: history.length,
         },
-        'context',
+        'context'
       );
       logger.debug(`[Chat] Redis: getMessages done`, {
         durationMs: Date.now() - t2,
@@ -229,7 +227,7 @@ router.post(
             agentId,
             variableKeys: Object.keys(contextVariables),
           },
-          'skills',
+          'skills'
         );
 
         // Update the last message if modified
@@ -262,12 +260,15 @@ router.post(
         {
           modelAlias: resolvedChatModel.model,
         },
-        'reason',
+        'reason'
       );
       const response = await runtime.runReActChat({
         runId,
         stepId: 'reason',
         agentId,
+        agentSpec: parseAgentPromptRefs(promptRefs)
+          ? { promptRefs: parseAgentPromptRefs(promptRefs) }
+          : undefined,
         userId,
         sessionId: session,
         modelAlias: resolvedChatModel.model,
@@ -286,7 +287,7 @@ router.post(
           responseId: response.id,
           finishReason: response.finishReason,
         },
-        'reason',
+        'reason'
       );
       await runtime.transition(runId, 'ActionSelected', {
         finishReason: response.finishReason,
@@ -299,7 +300,7 @@ router.post(
           finishReason: response.finishReason,
           toolCalls: response.toolCalls,
         },
-        'action',
+        'action'
       );
       await runtime.transition(runId, 'PolicyChecked');
       await runtime.transition(runId, 'Acting');
@@ -308,8 +309,7 @@ router.post(
         model: response.model,
         provider: response.provider,
         responsePreview:
-          response.content.substring(0, 50) +
-          (response.content.length > 50 ? '...' : ''),
+          response.content.substring(0, 50) + (response.content.length > 50 ? '...' : ''),
         usage: response.usage,
       });
 
@@ -345,8 +345,7 @@ router.post(
           sessionId: session,
           operation: 'getConversationBySessionId',
         },
-        reader: () =>
-          permanentMemory.getConversationBySessionId(session, userId),
+        reader: () => permanentMemory.getConversationBySessionId(session, userId),
       });
       if (conversation) {
         await runtime.recordMemoryWrite({
@@ -430,15 +429,13 @@ router.post(
       if (runId) {
         await runtime
           .failRun(runId, error)
-          .catch((err) =>
-            logger.error('Failed to record event runtime run failure:', err),
-          );
+          .catch((err) => logger.error('Failed to record event runtime run failure:', err));
       }
       throw error;
     } finally {
       lock.release();
     }
-  }),
+  })
 );
 
 // ============================================================
@@ -450,7 +447,7 @@ router.post(
 // Bug 3 Fix: Empty/whitespace message returns SSE error
 // ============================================================
 router.post('/stream', async (req: Request, res: Response) => {
-  const { sessionId, message, model, provider, cache, reasoning } = req.body;
+  const { sessionId, message, model, provider, agentId, promptRefs, cache, reasoning } = req.body;
   const userId = req.user?.userId || req.apiKey?.userId;
 
   // Bug 3 Fix: Must set SSE headers BEFORE any validation
@@ -468,13 +465,13 @@ router.post('/stream', async (req: Request, res: Response) => {
   const trimmedMessage = typeof message === 'string' ? message.trim() : '';
   if (!trimmedMessage) {
     logger.warn(
-      `[SSE] Empty/whitespace message rejected | userId: ${userId} | sessionId: ${sessionId || 'new'}`,
+      `[SSE] Empty/whitespace message rejected | userId: ${userId} | sessionId: ${sessionId || 'new'}`
     );
     sendSSEError(
       res,
       'INVALID_MESSAGE',
       'Message is required and cannot be empty or whitespace only',
-      sessionId,
+      sessionId
     );
     return;
   }
@@ -494,9 +491,7 @@ router.post('/stream', async (req: Request, res: Response) => {
 
   logger.debug(`[SSE] Stream request started`, {
     sessionId: session,
-    messagePreview:
-      trimmedMessage.substring(0, 50) +
-      (trimmedMessage.length > 50 ? '...' : ''),
+    messagePreview: trimmedMessage.substring(0, 50) + (trimmedMessage.length > 50 ? '...' : ''),
     model: model || 'default',
   });
 
@@ -533,7 +528,7 @@ router.post('/stream', async (req: Request, res: Response) => {
         source: 'temporary-memory',
         messageCount: history.length,
       },
-      'context',
+      'context'
     );
     logger.debug(`[SSE] Redis: getMessages done`, {
       durationMs: Date.now() - t1,
@@ -568,13 +563,17 @@ router.post('/stream', async (req: Request, res: Response) => {
         modelAlias: resolvedModel,
         stream: true,
       },
-      'reason',
+      'reason'
     );
 
     for await (const chunk of runtime.streamChat({
       runId,
       stepId: 'reason',
       modelAlias: resolvedModel,
+      agentSpec: {
+        id: typeof agentId === 'string' ? agentId : undefined,
+        promptRefs: parseAgentPromptRefs(promptRefs),
+      },
       messages: llmMessages,
       options: { model },
       cachePolicy,
@@ -590,15 +589,13 @@ router.post('/stream', async (req: Request, res: Response) => {
             {
               type: 'stream-content',
             },
-            'action',
+            'action'
           );
           await runtime.transition(runId, 'PolicyChecked');
           await runtime.transition(runId, 'Acting');
           streamActionEntered = true;
         }
-        res.write(
-          `data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`,
-        );
+        res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'done' && !completed) {
         completed = true;
         if (!streamActionEntered) {
@@ -613,7 +610,7 @@ router.post('/stream', async (req: Request, res: Response) => {
               type: 'stream-completion',
               emptyContent: fullContent.length === 0,
             },
-            'action',
+            'action'
           );
           await runtime.transition(runId, 'PolicyChecked');
           await runtime.transition(runId, 'Acting');
@@ -666,9 +663,7 @@ router.post('/stream', async (req: Request, res: Response) => {
               requestType: 'stream',
               responseTimeMs: Date.now() - startTime,
             })
-            .catch((err) =>
-              logger.error('Failed to record stream token usage:', err),
-            );
+            .catch((err) => logger.error('Failed to record stream token usage:', err));
         }
 
         // Send usage stats with done event
@@ -683,7 +678,7 @@ router.post('/stream', async (req: Request, res: Response) => {
             provider: resolvedProvider,
             usage: chunk.usage,
             runId,
-          })}\n\n`,
+          })}\n\n`
         );
         await runtime.completeRun(runId, {
           content: fullContent,
@@ -703,7 +698,7 @@ router.post('/stream', async (req: Request, res: Response) => {
           await runtime.failRun(runId, chunk.error ?? 'LLM stream error');
         }
         res.write(
-          `data: ${JSON.stringify({ type: 'error', error: chunk.error, code: 'LLM_ERROR' })}\n\n`,
+          `data: ${JSON.stringify({ type: 'error', error: chunk.error, code: 'LLM_ERROR' })}\n\n`
         );
       }
     }
@@ -712,18 +707,15 @@ router.post('/stream', async (req: Request, res: Response) => {
     if (runId) {
       await runtime
         .failRun(runId, error)
-        .catch((err) =>
-          logger.error('Failed to record event runtime stream failure:', err),
-        );
+        .catch((err) => logger.error('Failed to record event runtime stream failure:', err));
     }
     // Bug 1 Fix: All errors sent as SSE, not thrown
     res.write(
       `data: ${JSON.stringify({
         type: 'error',
-        error:
-          error instanceof Error ? error.message : 'Stream processing failed',
+        error: error instanceof Error ? error.message : 'Stream processing failed',
         code: 'INTERNAL_ERROR',
-      })}\n\n`,
+      })}\n\n`
     );
   } finally {
     // Bug 2 Fix: Always release lock
@@ -752,14 +744,14 @@ router.get(
     const messages = await tempMemory.getMessages(
       sessionId,
       limit ? parseInt(limit as string) : undefined,
-      userId,
+      userId
     );
 
     res.json({
       success: true,
       data: messages,
     });
-  }),
+  })
 );
 
 // Clear chat (temporary memory)
@@ -783,7 +775,7 @@ router.post(
       success: true,
       message: 'Chat cleared',
     });
-  }),
+  })
 );
 
 // Delete session
@@ -807,10 +799,7 @@ router.delete(
     await tempMemory.clearMessages(sessionId, userId);
 
     // Delete from permanent memory
-    const conversation = await permanentMemory.getConversationBySessionId(
-      sessionId,
-      userId,
-    );
+    const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId);
     if (conversation) {
       await permanentMemory.deleteConversation(conversation.id);
     }
@@ -819,7 +808,7 @@ router.delete(
       success: true,
       message: 'Session deleted',
     });
-  }),
+  })
 );
 
 export default router;
@@ -828,21 +817,19 @@ function parseReasoningOptions(input: unknown): ReasoningOptions | undefined {
   if (typeof input === 'string') {
     return isReasoningMethod(input) ? { method: input } : undefined;
   }
-  if (!input || typeof input !== 'object' || Array.isArray(input))
-    return undefined;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const record = input as Record<string, unknown>;
   if (!isReasoningMethod(record.method)) return undefined;
   const budget = asNumberRecord(record.budget);
   return {
     method: record.method,
+    strategyRef: typeof record.strategyRef === 'string' ? record.strategyRef : undefined,
     branches: positiveNumber(record.branches),
     maxDepth: positiveNumber(record.maxDepth),
     beamWidth: positiveNumber(record.beamWidth),
     maxNodes: positiveNumber(record.maxNodes),
     revealReasoning:
-      typeof record.revealReasoning === 'boolean'
-        ? record.revealReasoning
-        : undefined,
+      typeof record.revealReasoning === 'boolean' ? record.revealReasoning : undefined,
     aggregation:
       record.aggregation === 'first' ||
       record.aggregation === 'majority_vote' ||
@@ -850,12 +837,9 @@ function parseReasoningOptions(input: unknown): ReasoningOptions | undefined {
       record.aggregation === 'llm_judge'
         ? record.aggregation
         : undefined,
-    evaluatorRef:
-      typeof record.evaluatorRef === 'string' ? record.evaluatorRef : undefined,
+    evaluatorRef: typeof record.evaluatorRef === 'string' ? record.evaluatorRef : undefined,
     strategyVersion:
-      typeof record.strategyVersion === 'string'
-        ? record.strategyVersion
-        : undefined,
+      typeof record.strategyVersion === 'string' ? record.strategyVersion : undefined,
     budget: budget
       ? {
           maxModelCalls: positiveNumber(budget.maxModelCalls),
@@ -864,6 +848,15 @@ function parseReasoningOptions(input: unknown): ReasoningOptions | undefined {
         }
       : undefined,
   };
+}
+
+function parseAgentPromptRefs(input: unknown): AgentPromptRef[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const refs = input.flatMap((item) => {
+    const parsed = agentPromptRefSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+  return refs.length ? refs : undefined;
 }
 
 function isReasoningMethod(value: unknown): value is ReasoningMethod {
@@ -877,9 +870,7 @@ function isReasoningMethod(value: unknown): value is ReasoningMethod {
 }
 
 function positiveNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : undefined;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function asNumberRecord(value: unknown): Record<string, unknown> | undefined {

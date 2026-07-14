@@ -29,6 +29,9 @@ import {
   InMemoryKvCacheProvider,
   InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
+  type AgentPromptRef,
+  type AgentPromptResolution,
+  type AgentPromptSpec,
   type InferenceCachePolicy,
   type InferenceProvider,
   type InferenceRequest,
@@ -39,6 +42,8 @@ import {
   type KvCacheWriteMode,
   type PrefixCacheRef,
   type ReasoningOptions,
+  type ReasoningStrategy,
+  type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
@@ -99,6 +104,10 @@ type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
   metadata?: Record<string, unknown>;
 };
 
+type ResolvedRuntimeAgentSpec = ReActAgentSpec & {
+  promptResolution?: AgentPromptResolution;
+};
+
 export interface StartRunInput {
   userId: string;
   sessionId: string;
@@ -119,6 +128,7 @@ export interface ChatInferenceInput {
   reasoning?: ReasoningOptions;
   cachePolicy?: InferenceCachePolicy;
   agentSpec?: RuntimeAgentSpecInput;
+  metadata?: Record<string, unknown>;
 }
 
 interface ChatCachePolicyBuildInput {
@@ -492,6 +502,36 @@ class EventRuntimeService {
     });
   }
 
+  listReasoningStrategies(): ReasoningStrategyDescriptor[] {
+    return this.reasoning.registry.list();
+  }
+
+  registerReasoningStrategy(strategy: ReasoningStrategy, replace = false): void {
+    this.reasoning.registry.register(strategy, { replace });
+  }
+
+  unregisterReasoningStrategy(id: string): boolean {
+    return this.reasoning.registry.unregister(id);
+  }
+
+  async listAgentPrompts(): Promise<AgentPromptSpec[]> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    return manager.listAgentPrompts();
+  }
+
+  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    manager.registerAgentPrompt(spec);
+  }
+
+  async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    return manager.unregisterAgentPrompt(id, version);
+  }
+
   async startRun(input: StartRunInput): Promise<EventRunHandle> {
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
@@ -635,6 +675,7 @@ class EventRuntimeService {
           },
         },
         metadata: {
+          ...input.metadata,
           userId: runContext?.userId,
           sessionId: runContext?.clientSessionId,
           runtimeSessionId: runContext?.sessionId,
@@ -684,7 +725,7 @@ class EventRuntimeService {
     },
     userId: string,
     sessionId: string
-  ): Promise<ReActAgentSpec> {
+  ): Promise<ResolvedRuntimeAgentSpec> {
     const spec = input.agentSpec ?? {};
     const id = spec.id ?? input.agentId ?? 'agent.default';
     const name = spec.name ?? input.agentId ?? 'Default Runtime Agent';
@@ -692,39 +733,51 @@ class EventRuntimeService {
       spec.systemInstructions,
       input.options?.systemPrompt
     );
+    const promptRefs = this.resolveAgentPromptRefs(spec);
+    const promptResolution = explicitInstructions
+      ? undefined
+      : await this.resolveAgentPromptInstructions({
+          agentId: id,
+          agentName: name,
+          userId,
+          sessionId,
+          promptRefs,
+        });
     const systemInstructions =
       explicitInstructions ??
-      (await this.renderAgentSystemInstructions({
-        agentId: id,
-        agentName: name,
-        userId,
-        sessionId,
-        templateId: stringValue(asRecord(spec.metadata)?.promptTemplateId),
-      }));
+      promptResolution?.instructions ??
+      `You are ${name}. Be helpful, harmless, and honest.`;
 
     return {
       ...spec,
       id,
       version: spec.version ?? '0.0.0',
       name,
+      promptRefs,
       modelAlias:
         spec.modelAlias ??
         input.modelAlias ??
         input.options?.model ??
         this.resolveChatModel().model,
       systemInstructions,
+      promptResolution,
       toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
     };
   }
 
-  private async renderAgentSystemInstructions(input: {
+  private resolveAgentPromptRefs(spec: RuntimeAgentSpecInput): AgentPromptRef[] {
+    if (spec.promptRefs?.length) return spec.promptRefs;
+    const legacyTemplateId = stringValue(asRecord(spec.metadata)?.promptTemplateId);
+    return [{ id: legacyTemplateId ?? 'default-agent', required: true, priority: 0 }];
+  }
+
+  private async resolveAgentPromptInstructions(input: {
     agentId: string;
     agentName: string;
     userId: string;
     sessionId: string;
-    templateId?: string;
-  }): Promise<string | undefined> {
-    const templateIds = input.templateId ? [input.templateId, 'default-agent'] : ['default-agent'];
+    promptRefs: AgentPromptRef[];
+  }): Promise<AgentPromptResolution | undefined> {
     const variables = {
       agent_id: input.agentId,
       agent_name: input.agentName,
@@ -737,21 +790,14 @@ class EventRuntimeService {
     try {
       const promptManager = getPromptManager();
       await promptManager.ensureInitialized();
-      for (const templateId of templateIds) {
-        const rendered = promptManager.renderWithValidation(templateId, variables, 'system');
-        if (rendered.success) return rendered.result;
-        logger.warn('Agent prompt template render failed', {
-          templateId,
-          errors: rendered.errors,
-        });
-      }
+      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
     } catch (error) {
       logger.warn('Agent prompt template resolution failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
 
-    return `You are ${input.agentName}. Be helpful, harmless, and honest.`;
+    return undefined;
   }
 
   async runReActChat(
@@ -832,6 +878,7 @@ class EventRuntimeService {
           options: requestInput.options,
           reasoning: input.reasoning,
           cachePolicy: request.cachePolicy ?? input.cachePolicy,
+          metadata: request.metadata,
         });
         return {
           id: response.id,
@@ -870,6 +917,15 @@ class EventRuntimeService {
       agent,
       messages: input.messages,
       memoryScope: { userId, sessionId },
+      metadata: {
+        prompt: agent.promptResolution
+          ? {
+              refs: agent.promptRefs,
+              blocks: agent.promptResolution.blocks,
+              missing: agent.promptResolution.missing,
+            }
+          : asRecord(input.agentSpec?.metadata)?.prompt,
+      },
     });
     if (result.status !== 'completed') {
       throw new Error(
@@ -885,16 +941,12 @@ class EventRuntimeService {
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
     const runContext = this.runs.get(input.runId);
-    const systemPrompt =
-      input.options?.systemPrompt ??
-      (await this.renderAgentSystemInstructions({
-        agentId: input.agentSpec?.id ?? 'agent.default',
-        agentName: input.agentSpec?.name ?? 'Default Runtime Agent',
-        userId: runContext?.userId ?? 'single-user',
-        sessionId: runContext?.clientSessionId ?? input.runId,
-        templateId: stringValue(asRecord(input.agentSpec?.metadata)?.promptTemplateId),
-      }));
-    const chatOptions = withSystemPrompt(input.options, systemPrompt);
+    const agent = await this.resolveChatAgent(
+      input,
+      runContext?.userId ?? 'single-user',
+      runContext?.clientSessionId ?? input.runId
+    );
+    const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     await this.append(
       input.runId,
       'inference.requested',
@@ -931,6 +983,14 @@ class EventRuntimeService {
         },
       },
       metadata: {
+        ...input.metadata,
+        prompt: agent.promptResolution
+          ? {
+              refs: agent.promptRefs,
+              blocks: agent.promptResolution.blocks,
+              missing: agent.promptResolution.missing,
+            }
+          : asRecord(input.agentSpec?.metadata)?.prompt,
         stream: true,
         userId: runContext?.userId,
         sessionId: runContext?.clientSessionId,
