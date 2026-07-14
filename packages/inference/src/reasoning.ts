@@ -1,4 +1,10 @@
 import { hashContent } from './cache';
+import {
+  ReasoningStrategyRegistry,
+  type ReasoningStrategy,
+  type ReasoningStrategyContext,
+} from './reasoning-registry';
+import { BUILT_IN_REASONING_STRATEGY_DESCRIPTORS } from './reasoning-sources';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from './types';
 
 export type ReasoningMethod = 'direct' | 'cot' | 'tot' | 'got' | 'self_consistency';
@@ -12,6 +18,7 @@ export interface ReasoningBudget {
 
 export interface ReasoningOptions {
   method: ReasoningMethod;
+  strategyRef?: string;
   branches?: number;
   maxDepth?: number;
   beamWidth?: number;
@@ -60,13 +67,19 @@ export interface ThoughtGraph {
 }
 
 export type ReasoningTraceEvent =
-  | { type: 'reasoning.strategy.started'; method: ReasoningMethod; requestId: string }
+  | {
+      type: 'reasoning.strategy.started';
+      method: ReasoningMethod;
+      strategyId?: string;
+      requestId: string;
+    }
   | { type: 'reasoning.node.generated'; method: ReasoningMethod; node: ThoughtNode }
   | { type: 'reasoning.node.evaluated'; method: ReasoningMethod; node: ThoughtNode }
   | { type: 'reasoning.node.selected'; method: ReasoningMethod; node: ThoughtNode }
   | {
       type: 'reasoning.strategy.completed';
       method: ReasoningMethod;
+      strategyId?: string;
       requestId: string;
       modelCalls: number;
       nodeCount: number;
@@ -91,46 +104,39 @@ const DEFAULT_STRATEGY_VERSION = '1';
 
 export class ReasoningOrchestrator implements InferenceProvider {
   readonly id: string;
+  readonly registry: ReasoningStrategyRegistry;
 
   constructor(
     private readonly provider: InferenceProvider,
-    id = 'reasoning-orchestrator'
+    id = 'reasoning-orchestrator',
+    registry = new ReasoningStrategyRegistry()
   ) {
     this.id = id;
+    this.registry = registry;
+    this.registerBuiltInStrategies();
   }
 
   async infer(request: ReasoningRequest): Promise<InferenceResponse> {
-    const options = request.reasoning ?? { method: 'direct' as const };
+    const requestedOptions = request.reasoning ?? { method: 'direct' as const };
+    const strategy = this.registry.require(requestedOptions.strategyRef ?? requestedOptions.method);
+    const options: ReasoningOptions = {
+      ...requestedOptions,
+      method: strategy.descriptor.method,
+      strategyRef: strategy.descriptor.id,
+    };
     const requestId = `${request.runId}:${request.stepId}`;
     await options.trace?.({
       type: 'reasoning.strategy.started',
       method: options.method,
+      strategyId: strategy.descriptor.id,
       requestId,
     });
     const state = this.createExecutionState(options);
-    let response: InferenceResponse;
-    switch (options.method) {
-      case 'direct':
-        response = await this.callProvider(request, options, state, {
-          reasoningMethod: 'direct',
-        });
-        break;
-      case 'cot':
-        response = await this.runChainOfThought(request, options, state);
-        break;
-      case 'tot':
-        response = await this.runGraphSearch(request, options, state, 'tot');
-        break;
-      case 'got':
-        response = await this.runGraphSearch(request, options, state, 'got');
-        break;
-      case 'self_consistency':
-        response = await this.runSelfConsistency(request, options, state);
-        break;
-    }
+    const response = await strategy.execute(this.createStrategyContext(request, options, state));
     await options.trace?.({
       type: 'reasoning.strategy.completed',
       method: options.method,
+      strategyId: strategy.descriptor.id,
       requestId,
       modelCalls: state.modelCalls,
       nodeCount: numberFromReasoningMetadata(response.metadata, 'nodeCount') ?? 0,
@@ -139,20 +145,95 @@ export class ReasoningOrchestrator implements InferenceProvider {
   }
 
   async *stream(request: ReasoningRequest): AsyncIterable<InferenceResponse> {
-    const method = request.reasoning?.method ?? 'direct';
+    const requestedOptions = request.reasoning ?? { method: 'direct' as const };
+    const strategy = this.registry.require(requestedOptions.strategyRef ?? requestedOptions.method);
+    const method = strategy.descriptor.method;
+    const options: ReasoningOptions = {
+      ...requestedOptions,
+      method,
+      strategyRef: strategy.descriptor.id,
+    };
+    if (strategy.stream) {
+      yield* strategy.stream(
+        this.createStrategyContext(request, options, this.createExecutionState(options))
+      );
+      return;
+    }
     if (method !== 'direct' && method !== 'cot') {
-      yield await this.infer(request);
+      yield await this.infer({ ...request, reasoning: options });
       return;
     }
     if (!this.provider.stream) {
       yield await this.infer(request);
       return;
     }
-    const metadata = this.strategyMetadata(request.reasoning ?? { method }, {
+    const metadata = this.strategyMetadata(options, {
       reasoningMethod: method,
       reasoningInstruction: method === 'cot' ? cotInstruction(request.reasoning) : undefined,
     });
     yield* this.provider.stream({ ...request, metadata: { ...request.metadata, ...metadata } });
+  }
+
+  private registerBuiltInStrategies(): void {
+    const executeByMethod: Record<ReasoningMethod, ReasoningStrategy['execute']> = {
+      direct: async ({ request, options, runtime }) =>
+        runtime.callProvider({ reasoningMethod: 'direct' }),
+      cot: async ({ request, options }) =>
+        this.runChainOfThought(request, options, this.strategyState(request, options)),
+      tot: async ({ request, options }) =>
+        this.runGraphSearch(request, options, this.strategyState(request, options), 'tot'),
+      got: async ({ request, options }) =>
+        this.runGraphSearch(request, options, this.strategyState(request, options), 'got'),
+      self_consistency: async ({ request, options }) =>
+        this.runSelfConsistency(request, options, this.strategyState(request, options)),
+    };
+    for (const descriptor of BUILT_IN_REASONING_STRATEGY_DESCRIPTORS) {
+      if (this.registry.has(descriptor.id)) continue;
+      this.registry.register({ descriptor, execute: executeByMethod[descriptor.method] });
+    }
+  }
+
+  private readonly activeStates = new WeakMap<ReasoningRequest, ExecutionState>();
+
+  private strategyState(request: ReasoningRequest, options: ReasoningOptions): ExecutionState {
+    const state = this.activeStates.get(request);
+    if (state) return state;
+    const created = this.createExecutionState(options);
+    this.activeStates.set(request, created);
+    return created;
+  }
+
+  private createStrategyContext(
+    request: ReasoningRequest,
+    options: ReasoningOptions,
+    state: ExecutionState
+  ): ReasoningStrategyContext {
+    this.activeStates.set(request, state);
+    return {
+      request,
+      options,
+      runtime: {
+        callProvider: (metadata) => this.callProvider(request, options, state, metadata),
+        aggregate: (responses, defaultAggregation) =>
+          this.aggregate(responses, {
+            ...options,
+            aggregation: options.aggregation ?? defaultAggregation,
+          }),
+        score: (response, node) => this.score(response, node, options),
+        withReasoningMetadata: (response, reasoning) =>
+          this.withReasoningMetadata(response, options, reasoning),
+        trace: async (event) => {
+          await options.trace?.(event);
+        },
+        assertBudget: (nodeCount = 0) => this.assertBudget(state, nodeCount),
+        get modelCalls() {
+          return state.modelCalls;
+        },
+        get maxNodes() {
+          return state.maxNodes;
+        },
+      },
+    };
   }
 
   private async runChainOfThought(
@@ -355,9 +436,12 @@ export class ReasoningOrchestrator implements InferenceProvider {
     options: ReasoningOptions,
     metadata: Record<string, unknown>
   ): Record<string, unknown> {
+    const descriptor = this.registry.get(options.strategyRef ?? options.method)?.descriptor;
     return {
       ...metadata,
       reasoningStrategy: {
+        id: descriptor?.id ?? options.strategyRef,
+        definitionVersion: descriptor?.version,
         method: options.method,
         version: options.strategyVersion ?? DEFAULT_STRATEGY_VERSION,
         branches: options.branches,
@@ -365,6 +449,13 @@ export class ReasoningOrchestrator implements InferenceProvider {
         beamWidth: options.beamWidth,
         aggregation: options.aggregation,
         evaluatorRef: options.evaluatorRef,
+        references: descriptor?.references.map((reference) => ({
+          kind: reference.kind,
+          url: reference.url,
+          repository: reference.repository,
+          revision: reference.revision,
+          usage: reference.usage,
+        })),
       },
       reasoningCacheIdentity: hashContent(
         JSON.stringify({
@@ -432,6 +523,7 @@ export class ReasoningOrchestrator implements InferenceProvider {
       metadata: {
         ...response.metadata,
         reasoning: {
+          strategyId: options.strategyRef,
           method: options.method,
           strategyVersion: options.strategyVersion ?? DEFAULT_STRATEGY_VERSION,
           aggregation: options.aggregation ?? 'first',
