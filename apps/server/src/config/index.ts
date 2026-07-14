@@ -63,6 +63,10 @@ const optionalBooleanishSchema = z.preprocess((value) => {
   if (typeof value === 'string' && value.trim() === '') return undefined;
   return parseBooleanish(value);
 }, z.boolean().optional());
+const optionalPositiveIntSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.coerce.number().int().positive().optional()
+);
 
 // Provider API config schema
 const providerConfigSchema = z.object({
@@ -71,7 +75,7 @@ const providerConfigSchema = z.object({
   timeout: z.number().default(60000),
 });
 
-const inferenceBackendIdSchema = z.enum(['sglang', 'vllm', 'llama.cpp', 'openai-api']);
+const inferenceBackendIdSchema = z.enum(['ollama', 'sglang', 'vllm', 'llama.cpp', 'openai-api']);
 
 const inferenceHttpBackendConfigSchema = z.object({
   enabled: booleanishSchema.default(true),
@@ -83,7 +87,24 @@ const inferenceHttpBackendConfigSchema = z.object({
 
 const inferenceConfigSchema = z
   .object({
+    runtimeProvider: z.enum(['model-provider', 'backend']).default('model-provider'),
     defaultBackend: inferenceBackendIdSchema.default('sglang'),
+    local: z
+      .object({
+        enabled: booleanishSchema.default(false),
+        engine: z.enum(['ollama', 'sglang', 'vllm']).default('ollama'),
+        mode: z.enum(['connect', 'managed']).default('connect'),
+        autoStart: booleanishSchema.default(false),
+        model: optionalStringSchema,
+        host: z.string().default('127.0.0.1'),
+        port: optionalPositiveIntSchema,
+        command: optionalStringSchema,
+        args: pathListSchema.optional(),
+        cwd: optionalStringSchema,
+        startupTimeoutMs: z.coerce.number().int().positive().default(120000),
+        healthPollMs: z.coerce.number().int().positive().default(500),
+      })
+      .default({}),
     promptCompiler: z
       .object({
         enabled: booleanishSchema.default(true),
@@ -110,6 +131,12 @@ const inferenceConfigSchema = z
       .default({}),
     backends: z
       .object({
+        ollama: inferenceHttpBackendConfigSchema.default({
+          enabled: true,
+          baseUrl: 'http://localhost:11434',
+          endpoint: '/api/chat',
+          timeoutMs: 60000,
+        }),
         sglang: inferenceHttpBackendConfigSchema.default({
           enabled: true,
           baseUrl: 'http://localhost:30000',
