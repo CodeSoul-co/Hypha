@@ -10,6 +10,7 @@ import { getEventRuntime } from '../services/EventRuntime';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
+import type { ReasoningMethod, ReasoningOptions } from '@hypha/inference';
 
 const router = Router();
 
@@ -82,7 +83,8 @@ function sendSSEError(
 router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const { sessionId, message, model, provider, agentId, cache } = req.body;
+    const { sessionId, message, model, provider, agentId, cache, reasoning } =
+      req.body;
     const userId = req.user?.userId || req.apiKey?.userId;
 
     if (!userId) {
@@ -115,7 +117,13 @@ router.post(
         userId,
         sessionId: session,
         agentId,
-        input: { message: trimmedMessage, model, provider, agentId, cacheEnabled: Boolean(cache) },
+        input: {
+          message: trimmedMessage,
+          model,
+          provider,
+          agentId,
+          cacheEnabled: Boolean(cache),
+        },
         metadata: { surface: 'http.chat', cacheEnabled: Boolean(cache) },
       });
       runId = runtimeRun.runId;
@@ -167,11 +175,18 @@ router.post(
         details: { sessionId: session },
         reader: () => tempMemory.getMessages(session, undefined, userId),
       });
-      await runtime.transition(runId, 'ContextBuilt', { messageCount: history.length });
-      await runtime.record(runId, 'context.build.completed', {
-        source: 'temporary-memory',
+      await runtime.transition(runId, 'ContextBuilt', {
         messageCount: history.length,
-      }, 'context');
+      });
+      await runtime.record(
+        runId,
+        'context.build.completed',
+        {
+          source: 'temporary-memory',
+          messageCount: history.length,
+        },
+        'context',
+      );
       logger.debug(`[Chat] Redis: getMessages done`, {
         durationMs: Date.now() - t2,
         sessionId: session,
@@ -207,10 +222,15 @@ router.post(
 
         const processedContext = await skillManager.executeSkills(skillContext);
         contextVariables = processedContext.variables || {};
-        await runtime.record(runId, 'skill.selected', {
-          agentId,
-          variableKeys: Object.keys(contextVariables),
-        }, 'skills');
+        await runtime.record(
+          runId,
+          'skill.selected',
+          {
+            agentId,
+            variableKeys: Object.keys(contextVariables),
+          },
+          'skills',
+        );
 
         // Update the last message if modified
         if (processedContext.currentMessage.content !== trimmedMessage) {
@@ -236,9 +256,14 @@ router.post(
       // Call LLM
       const t3 = Date.now();
       await runtime.transition(runId, 'Reasoning');
-      await runtime.record(runId, 'agent.reasoning.started', {
-        modelAlias: resolvedChatModel.model,
-      }, 'reason');
+      await runtime.record(
+        runId,
+        'agent.reasoning.started',
+        {
+          modelAlias: resolvedChatModel.model,
+        },
+        'reason',
+      );
       const response = await runtime.runReActChat({
         runId,
         stepId: 'reason',
@@ -252,19 +277,30 @@ router.post(
           tools: tools.length > 0 ? tools : undefined,
         },
         cachePolicy,
+        reasoning: parseReasoningOptions(reasoning),
       });
-      await runtime.record(runId, 'agent.reasoning.completed', {
-        responseId: response.id,
-        finishReason: response.finishReason,
-      }, 'reason');
+      await runtime.record(
+        runId,
+        'agent.reasoning.completed',
+        {
+          responseId: response.id,
+          finishReason: response.finishReason,
+        },
+        'reason',
+      );
       await runtime.transition(runId, 'ActionSelected', {
         finishReason: response.finishReason,
         toolCallCount: response.toolCalls?.length ?? 0,
       });
-      await runtime.record(runId, 'agent.action.selected', {
-        finishReason: response.finishReason,
-        toolCalls: response.toolCalls,
-      }, 'action');
+      await runtime.record(
+        runId,
+        'agent.action.selected',
+        {
+          finishReason: response.finishReason,
+          toolCalls: response.toolCalls,
+        },
+        'action',
+      );
       await runtime.transition(runId, 'PolicyChecked');
       await runtime.transition(runId, 'Acting');
       logger.debug(`[Chat] LLM call done`, {
@@ -294,7 +330,9 @@ router.post(
         details: { role: 'assistant', responseId: response.id },
         writer: () => tempMemory.addMessage(session, assistantMsg),
       });
-      await runtime.transition(runId, 'ObservationRecorded', { responseId: response.id });
+      await runtime.transition(runId, 'ObservationRecorded', {
+        responseId: response.id,
+      });
       await runtime.transition(runId, 'Verifying');
 
       // Save to permanent memory (if conversation exists)
@@ -303,11 +341,12 @@ router.post(
         runId,
         stepId: 'memory:permanent',
         target: 'permanent',
-        details: { sessionId: session, operation: 'getConversationBySessionId' },
-        reader: () => permanentMemory.getConversationBySessionId(
-          session,
-          userId,
-        ),
+        details: {
+          sessionId: session,
+          operation: 'getConversationBySessionId',
+        },
+        reader: () =>
+          permanentMemory.getConversationBySessionId(session, userId),
       });
       if (conversation) {
         await runtime.recordMemoryWrite({
@@ -315,20 +354,21 @@ router.post(
           stepId: 'memory:permanent',
           target: 'permanent',
           details: { conversationId: conversation.id },
-          writer: () => Promise.all([
-            permanentMemory.addMessage(conversation.id, {
-              role: 'user',
-              content: trimmedMessage,
-              modelId: model,
-              modelProvider: provider,
-            }),
-            permanentMemory.addMessage(conversation.id, {
-              role: 'assistant',
-              content: response.content,
-              modelId: response.model,
-              modelProvider: response.provider,
-            }),
-          ]),
+          writer: () =>
+            Promise.all([
+              permanentMemory.addMessage(conversation.id, {
+                role: 'user',
+                content: trimmedMessage,
+                modelId: model,
+                modelProvider: provider,
+              }),
+              permanentMemory.addMessage(conversation.id, {
+                role: 'assistant',
+                content: response.content,
+                modelId: response.model,
+                modelProvider: response.provider,
+              }),
+            ]),
         });
       }
       await runtime.transition(runId, 'MemorySync');
@@ -388,9 +428,11 @@ router.post(
       });
     } catch (error) {
       if (runId) {
-        await runtime.failRun(runId, error).catch((err) =>
-          logger.error('Failed to record event runtime run failure:', err),
-        );
+        await runtime
+          .failRun(runId, error)
+          .catch((err) =>
+            logger.error('Failed to record event runtime run failure:', err),
+          );
       }
       throw error;
     } finally {
@@ -408,7 +450,7 @@ router.post(
 // Bug 3 Fix: Empty/whitespace message returns SSE error
 // ============================================================
 router.post('/stream', async (req: Request, res: Response) => {
-  const { sessionId, message, model, provider, cache } = req.body;
+  const { sessionId, message, model, provider, cache, reasoning } = req.body;
   const userId = req.user?.userId || req.apiKey?.userId;
 
   // Bug 3 Fix: Must set SSE headers BEFORE any validation
@@ -462,7 +504,13 @@ router.post('/stream', async (req: Request, res: Response) => {
     const runtimeRun = await runtime.startRun({
       userId,
       sessionId: session,
-      input: { message: trimmedMessage, model, provider, stream: true, cacheEnabled: Boolean(cache) },
+      input: {
+        message: trimmedMessage,
+        model,
+        provider,
+        stream: true,
+        cacheEnabled: Boolean(cache),
+      },
       metadata: { surface: 'http.chat.stream', cacheEnabled: Boolean(cache) },
     });
     runId = runtimeRun.runId;
@@ -475,11 +523,18 @@ router.post('/stream', async (req: Request, res: Response) => {
       details: { sessionId: session, stream: true },
       reader: () => tempMemory.getMessages(session, undefined, userId),
     });
-    await runtime.transition(runId, 'ContextBuilt', { messageCount: history.length });
-    await runtime.record(runId, 'context.build.completed', {
-      source: 'temporary-memory',
+    await runtime.transition(runId, 'ContextBuilt', {
       messageCount: history.length,
-    }, 'context');
+    });
+    await runtime.record(
+      runId,
+      'context.build.completed',
+      {
+        source: 'temporary-memory',
+        messageCount: history.length,
+      },
+      'context',
+    );
     logger.debug(`[SSE] Redis: getMessages done`, {
       durationMs: Date.now() - t1,
       historyCount: history.length,
@@ -506,10 +561,15 @@ router.post('/stream', async (req: Request, res: Response) => {
       cache,
     });
     await runtime.transition(runId, 'Reasoning');
-    await runtime.record(runId, 'agent.reasoning.started', {
-      modelAlias: resolvedModel,
-      stream: true,
-    }, 'reason');
+    await runtime.record(
+      runId,
+      'agent.reasoning.started',
+      {
+        modelAlias: resolvedModel,
+        stream: true,
+      },
+      'reason',
+    );
 
     for await (const chunk of runtime.streamChat({
       runId,
@@ -518,14 +578,20 @@ router.post('/stream', async (req: Request, res: Response) => {
       messages: llmMessages,
       options: { model },
       cachePolicy,
+      reasoning: parseReasoningOptions(reasoning),
     })) {
       if (chunk.type === 'content' && chunk.content) {
         fullContent += chunk.content;
         if (!streamActionEntered) {
           await runtime.transition(runId, 'ActionSelected', { stream: true });
-          await runtime.record(runId, 'agent.action.selected', {
-            type: 'stream-content',
-          }, 'action');
+          await runtime.record(
+            runId,
+            'agent.action.selected',
+            {
+              type: 'stream-content',
+            },
+            'action',
+          );
           await runtime.transition(runId, 'PolicyChecked');
           await runtime.transition(runId, 'Acting');
           streamActionEntered = true;
@@ -536,11 +602,19 @@ router.post('/stream', async (req: Request, res: Response) => {
       } else if (chunk.type === 'done' && !completed) {
         completed = true;
         if (!streamActionEntered) {
-          await runtime.transition(runId, 'ActionSelected', { stream: true, emptyContent: true });
-          await runtime.record(runId, 'agent.action.selected', {
-            type: 'stream-completion',
-            emptyContent: fullContent.length === 0,
-          }, 'action');
+          await runtime.transition(runId, 'ActionSelected', {
+            stream: true,
+            emptyContent: true,
+          });
+          await runtime.record(
+            runId,
+            'agent.action.selected',
+            {
+              type: 'stream-completion',
+              emptyContent: fullContent.length === 0,
+            },
+            'action',
+          );
           await runtime.transition(runId, 'PolicyChecked');
           await runtime.transition(runId, 'Acting');
           streamActionEntered = true;
@@ -551,24 +625,27 @@ router.post('/stream', async (req: Request, res: Response) => {
           stepId: 'memory:stream',
           target: 'temporary',
           details: { roles: ['user', 'assistant'], stream: true },
-          writer: () => Promise.all([
-            tempMemory.addMessage(session, {
-              userId,
-              sessionId: session,
-              role: 'user',
-              content: trimmedMessage,
-            }),
-            tempMemory.addMessage(session, {
-              userId,
-              sessionId: session,
-              role: 'assistant',
-              content: fullContent,
-              modelId: resolvedModel,
-              modelProvider: resolvedProvider,
-            }),
-          ]),
+          writer: () =>
+            Promise.all([
+              tempMemory.addMessage(session, {
+                userId,
+                sessionId: session,
+                role: 'user',
+                content: trimmedMessage,
+              }),
+              tempMemory.addMessage(session, {
+                userId,
+                sessionId: session,
+                role: 'assistant',
+                content: fullContent,
+                modelId: resolvedModel,
+                modelProvider: resolvedProvider,
+              }),
+            ]),
         });
-        await runtime.transition(runId, 'ObservationRecorded', { stream: true });
+        await runtime.transition(runId, 'ObservationRecorded', {
+          stream: true,
+        });
         await runtime.transition(runId, 'Verifying');
         await runtime.transition(runId, 'MemorySync');
 
@@ -633,9 +710,11 @@ router.post('/stream', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('[SSE] Stream error:', error);
     if (runId) {
-      await runtime.failRun(runId, error).catch((err) =>
-        logger.error('Failed to record event runtime stream failure:', err),
-      );
+      await runtime
+        .failRun(runId, error)
+        .catch((err) =>
+          logger.error('Failed to record event runtime stream failure:', err),
+        );
     }
     // Bug 1 Fix: All errors sent as SSE, not thrown
     res.write(
@@ -744,3 +823,67 @@ router.delete(
 );
 
 export default router;
+
+function parseReasoningOptions(input: unknown): ReasoningOptions | undefined {
+  if (typeof input === 'string') {
+    return isReasoningMethod(input) ? { method: input } : undefined;
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    return undefined;
+  const record = input as Record<string, unknown>;
+  if (!isReasoningMethod(record.method)) return undefined;
+  const budget = asNumberRecord(record.budget);
+  return {
+    method: record.method,
+    branches: positiveNumber(record.branches),
+    maxDepth: positiveNumber(record.maxDepth),
+    beamWidth: positiveNumber(record.beamWidth),
+    maxNodes: positiveNumber(record.maxNodes),
+    revealReasoning:
+      typeof record.revealReasoning === 'boolean'
+        ? record.revealReasoning
+        : undefined,
+    aggregation:
+      record.aggregation === 'first' ||
+      record.aggregation === 'majority_vote' ||
+      record.aggregation === 'score' ||
+      record.aggregation === 'llm_judge'
+        ? record.aggregation
+        : undefined,
+    evaluatorRef:
+      typeof record.evaluatorRef === 'string' ? record.evaluatorRef : undefined,
+    strategyVersion:
+      typeof record.strategyVersion === 'string'
+        ? record.strategyVersion
+        : undefined,
+    budget: budget
+      ? {
+          maxModelCalls: positiveNumber(budget.maxModelCalls),
+          maxNodes: positiveNumber(budget.maxNodes),
+          timeoutMs: positiveNumber(budget.timeoutMs),
+        }
+      : undefined,
+  };
+}
+
+function isReasoningMethod(value: unknown): value is ReasoningMethod {
+  return (
+    value === 'direct' ||
+    value === 'cot' ||
+    value === 'tot' ||
+    value === 'got' ||
+    value === 'self_consistency'
+  );
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function asNumberRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
