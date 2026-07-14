@@ -20,6 +20,14 @@ const trackedEnv = [
   'HYPHA_SYSTEM_LOG_PATH',
   'KAFKA_ENABLED',
   'HYPHA_INFERENCE_DEFAULT_BACKEND',
+  'HYPHA_INFERENCE_RUNTIME_PROVIDER',
+  'HYPHA_LOCAL_INFERENCE_ENABLED',
+  'HYPHA_LOCAL_INFERENCE_ENGINE',
+  'HYPHA_LOCAL_INFERENCE_MODE',
+  'HYPHA_LOCAL_INFERENCE_AUTO_START',
+  'HYPHA_LOCAL_INFERENCE_MODEL',
+  'HYPHA_LOCAL_INFERENCE_PORT',
+  'OLLAMA_INFERENCE_BASE_URL',
   'SGLANG_BASE_URL',
   'VLLM_BASE_URL',
   'LLAMA_CPP_BASE_URL',
@@ -146,6 +154,34 @@ describe('configuration storage taxonomy', () => {
       store: 'sqlite',
       promptBudgetTokens: 2048,
       sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
+    });
+  });
+
+  it('loads a managed local Ollama runtime without changing the provider default', () => {
+    process.env.HYPHA_INFERENCE_RUNTIME_PROVIDER = 'backend';
+    process.env.HYPHA_LOCAL_INFERENCE_ENABLED = 'true';
+    process.env.HYPHA_LOCAL_INFERENCE_ENGINE = 'ollama';
+    process.env.HYPHA_LOCAL_INFERENCE_MODE = 'managed';
+    process.env.HYPHA_LOCAL_INFERENCE_AUTO_START = 'true';
+    process.env.HYPHA_LOCAL_INFERENCE_MODEL = 'qwen3:8b';
+    process.env.HYPHA_LOCAL_INFERENCE_PORT = '11435';
+    process.env.OLLAMA_INFERENCE_BASE_URL = 'http://ollama.local:11435';
+
+    reloadConfig();
+
+    expect(inferenceConfig()).toMatchObject({
+      runtimeProvider: 'backend',
+      local: {
+        enabled: true,
+        engine: 'ollama',
+        mode: 'managed',
+        autoStart: true,
+        model: 'qwen3:8b',
+        port: 11435,
+      },
+      backends: {
+        ollama: { baseUrl: 'http://ollama.local:11435' },
+      },
     });
   });
 
