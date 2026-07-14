@@ -53,6 +53,59 @@ describe('GET /api/v1/health', () => {
   });
 });
 
+describe('runtime reasoning and agent prompt registries', () => {
+  it('lists registered reasoning strategies with official source metadata', async () => {
+    const r = await request(app)
+      .get('/api/v1/runtime/reasoning/strategies')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(r.status).toBe(200);
+    expect(r.body.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'reasoning.tot',
+          references: expect.arrayContaining([
+            expect.objectContaining({
+              repository: 'princeton-nlp/tree-of-thought-llm',
+              official: true,
+            }),
+          ]),
+        }),
+        expect.objectContaining({ id: 'reasoning.got' }),
+      ])
+    );
+  });
+
+  it('registers, lists, and unregisters versioned agent prompts', async () => {
+    const id = `integration-agent-prompt-${Date.now()}`;
+    const spec = {
+      id,
+      version: '1.0.0',
+      name: 'Integration Agent Prompt',
+      role: 'system',
+      template: 'You are {{agent_name}}.',
+      variables: [{ name: 'agent_name', type: 'string', required: true }],
+      stable: true,
+      cacheable: true,
+    };
+    const created = await request(app)
+      .post('/api/v1/runtime/agent-prompts')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send(spec);
+    expect(created.status).toBe(201);
+
+    const listed = await request(app)
+      .get('/api/v1/runtime/agent-prompts')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id })]));
+
+    const removed = await request(app)
+      .delete(`/api/v1/runtime/agent-prompts/${id}?version=1.0.0`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(removed.status).toBe(200);
+  });
+});
+
 describe('GET /api/v1/models', () => {
   it('lists at least one model and DeepSeek models carry provider=deepseek (bug 2)', async () => {
     const r = await request(app).get('/api/v1/models').set('Authorization', `Bearer ${devToken}`);
