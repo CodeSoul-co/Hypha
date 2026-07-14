@@ -190,7 +190,23 @@ storage:
       consistency: "strong"
 
 inference:
+  # model-provider preserves the existing cloud/provider path. Set backend to
+  # route through @hypha/inference and the configured local/API backend.
+  runtimeProvider: "${HYPHA_INFERENCE_RUNTIME_PROVIDER:model-provider}"
   defaultBackend: "${HYPHA_INFERENCE_DEFAULT_BACKEND:sglang}"
+  local:
+    enabled: "${HYPHA_LOCAL_INFERENCE_ENABLED:false}"
+    engine: "${HYPHA_LOCAL_INFERENCE_ENGINE:ollama}"
+    mode: "${HYPHA_LOCAL_INFERENCE_MODE:connect}"
+    autoStart: "${HYPHA_LOCAL_INFERENCE_AUTO_START:false}"
+    model: "${HYPHA_LOCAL_INFERENCE_MODEL:}"
+    host: "${HYPHA_LOCAL_INFERENCE_HOST:127.0.0.1}"
+    port: "${HYPHA_LOCAL_INFERENCE_PORT:}"
+    command: "${HYPHA_LOCAL_INFERENCE_COMMAND:}"
+    args: "${HYPHA_LOCAL_INFERENCE_ARGS:}"
+    cwd: "${HYPHA_LOCAL_INFERENCE_CWD:}"
+    startupTimeoutMs: "${HYPHA_LOCAL_INFERENCE_STARTUP_TIMEOUT_MS:120000}"
+    healthPollMs: "${HYPHA_LOCAL_INFERENCE_HEALTH_POLL_MS:500}"
   promptCompiler:
     enabled: true
   prefixSegmenter:
@@ -204,6 +220,11 @@ inference:
       requireExactHash: true
       maxPrefixRefs: "${HYPHA_INFERENCE_MAX_PREFIX_REFS:32}"
   backends:
+    ollama:
+      enabled: "${OLLAMA_INFERENCE_ENABLED:true}"
+      baseUrl: "${OLLAMA_INFERENCE_BASE_URL:http://localhost:11434}"
+      endpoint: "${OLLAMA_INFERENCE_ENDPOINT:/api/chat}"
+      timeoutMs: "${OLLAMA_INFERENCE_TIMEOUT_MS:60000}"
     sglang:
       enabled: "${SGLANG_ENABLED:true}"
       baseUrl: "${SGLANG_BASE_URL:http://localhost:30000}"
@@ -611,7 +632,7 @@ skills:
   # Builtins (apps/server/src/core/skills/builtins) are always scanned last as a
   # fallback so the default behaviour is preserved.
   dirs:
-    - "~/.hypha/skills"   # user-installed skills
+    - "~/.hypha/skills" # user-installed skills
   autoLoad: true
 
 tools:
