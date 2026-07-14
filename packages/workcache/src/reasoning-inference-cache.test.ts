@@ -7,9 +7,106 @@ import {
 import { WorkCacheManager } from './manager';
 import { WorkCachedInferenceProvider } from './reasoning-inference-cache';
 import { MemoryWorkCacheStore } from './stores/memory-store';
+import { ThinkingCache } from './thinking-cache';
+import { ThinkingCachedReasoningProvider } from './thinking-reasoning-cache';
 import type { WorkCacheAuditEvent } from './types';
 
 describe('WorkCachedInferenceProvider', () => {
+  it('reuses a complete ToT path across runs through the unified ThinkingCache', async () => {
+    let providerCalls = 0;
+    const store = new MemoryWorkCacheStore();
+    const manager = new WorkCacheManager({
+      store,
+      policy: { enabled: true, store: 'memory' },
+    });
+    const thinkingCache = new ThinkingCache({ manager });
+    const provider: InferenceProvider = {
+      id: 'path-provider',
+      infer: async (input) => ({
+        id: `response-${++providerCalls}`,
+        output: { content: `${input.metadata?.depth}:${input.metadata?.branchIndex}` },
+      }),
+    };
+    const reasoning = new ReasoningOrchestrator(
+      new WorkCachedInferenceProvider({ provider, thinkingCache })
+    );
+    const cachedReasoning = new ThinkingCachedReasoningProvider({
+      provider: reasoning,
+      thinkingCache,
+      resolveStrategy: (id) => reasoning.registry.get(id)?.descriptor,
+    });
+
+    const first = await cachedReasoning.infer(request('run-1', 'step-1', 'session-1'));
+    const callsAfterFirstRun = providerCalls;
+    const second = await cachedReasoning.infer(request('run-2', 'step-2', 'session-1'));
+
+    expect(callsAfterFirstRun).toBeGreaterThan(0);
+    expect(providerCalls).toBe(callsAfterFirstRun);
+    expect(first.metadata?.reasoning).toMatchObject({ method: 'tot' });
+    expect(second.metadata?.thinkingCache).toMatchObject({ hit: true, kind: 'path' });
+    const blocks = await store.list('ComputationTree');
+    expect(blocks.some((block) => block.tags?.includes('thinking-path'))).toBe(true);
+    expect(blocks.some((block) => block.tags?.includes('thinking-node'))).toBe(true);
+  });
+
+  it('stores GoT results as subgraphs and includes prompt hashes in identity', async () => {
+    let providerCalls = 0;
+    const store = new MemoryWorkCacheStore();
+    const manager = new WorkCacheManager({
+      store,
+      policy: { enabled: true, store: 'memory' },
+    });
+    const thinkingCache = new ThinkingCache({ manager });
+    const provider: InferenceProvider = {
+      id: 'graph-provider',
+      infer: async () => ({
+        id: `response-${++providerCalls}`,
+        output: { content: 'candidate' },
+      }),
+    };
+    const reasoning = new ReasoningOrchestrator(
+      new WorkCachedInferenceProvider({ provider, thinkingCache })
+    );
+    const cachedReasoning = new ThinkingCachedReasoningProvider({
+      provider: reasoning,
+      thinkingCache,
+      resolveStrategy: (id) => reasoning.registry.get(id)?.descriptor,
+    });
+    const base = {
+      ...request('run-1', 'step-1', 'session-1'),
+      reasoning: {
+        method: 'got' as const,
+        branches: 2,
+        maxDepth: 1,
+        beamWidth: 1,
+        strategyVersion: '1',
+      },
+      metadata: {
+        userId: 'user-1',
+        sessionId: 'session-1',
+        prompt: { blocks: [{ id: 'agent.default', version: '1', hash: 'prompt-a' }] },
+      },
+    };
+    await cachedReasoning.infer(base);
+    const callsAfterFirst = providerCalls;
+    const reused = await cachedReasoning.infer({ ...base, runId: 'run-2', stepId: 'step-2' });
+    expect(providerCalls).toBe(callsAfterFirst);
+    expect(reused.metadata?.thinkingCache).toMatchObject({ hit: true, kind: 'subgraph' });
+
+    await cachedReasoning.infer({
+      ...base,
+      runId: 'run-3',
+      stepId: 'step-3',
+      metadata: {
+        ...base.metadata,
+        prompt: { blocks: [{ id: 'agent.default', version: '1', hash: 'prompt-b' }] },
+      },
+    });
+    expect(providerCalls).toBeGreaterThan(callsAfterFirst);
+    const blocks = await store.list('ComputationTree');
+    expect(blocks.filter((block) => block.tags?.includes('thinking-subgraph'))).toHaveLength(2);
+  });
+
   it('reuses ToT nodes across runs while preserving user and session boundaries', async () => {
     let providerCalls = 0;
     const events: WorkCacheAuditEvent[] = [];
