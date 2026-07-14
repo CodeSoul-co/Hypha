@@ -174,6 +174,16 @@ export function renderAgentPrompt(
   variables: Record<string, unknown>
 ): string {
   const resolved = { ...promptDefaults(spec.variables), ...variables };
+  const declaredVariables = new Set((spec.variables ?? []).map((variable) => variable.name));
+  const placeholders = Array.from(spec.template.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)).map((match) =>
+    match[1].trim()
+  );
+  const undeclared = Array.from(
+    new Set(placeholders.filter((name) => !declaredVariables.has(name)))
+  );
+  if (undeclared.length) {
+    throw new Error(`Undeclared agent prompt variables: ${spec.id}.${undeclared.join(', ')}`);
+  }
   for (const variable of spec.variables ?? []) {
     if (variable.required && isMissing(resolved[variable.name])) {
       throw new Error(`Required agent prompt variable missing: ${spec.id}.${variable.name}`);
@@ -183,11 +193,6 @@ export function renderAgentPrompt(
     const value = resolved[name.trim()];
     return value === undefined || value === null ? '' : stringifyVariable(value);
   });
-  const unresolved = Array.from(rendered.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)).map(
-    (match) => match[1]
-  );
-  if (unresolved.length)
-    throw new Error(`Unresolved agent prompt variables: ${unresolved.join(', ')}`);
   return rendered;
 }
 
