@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import {
+  AgentPromptRegistry,
+  type AgentPromptRef,
+  type AgentPromptResolution,
+  type AgentPromptSpec,
+} from '@hypha/inference';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 
@@ -26,6 +32,7 @@ export interface PromptVariable {
 // Prompt manager
 export class PromptManager {
   private templates: Map<string, PromptTemplate> = new Map();
+  private readonly agentPrompts = new AgentPromptRegistry();
   private templateDir: string;
   private cacheEnabled: boolean;
   private cache: Map<string, string> = new Map();
@@ -49,6 +56,9 @@ export class PromptManager {
 
   async destroy(): Promise<void> {
     this.templates.clear();
+    for (const prompt of this.agentPrompts.list()) {
+      this.agentPrompts.unregister(prompt.id, prompt.version);
+    }
     this.cache.clear();
     this.initialized = false;
     logger.info('PromptManager destroyed');
@@ -57,6 +67,8 @@ export class PromptManager {
   register(template: PromptTemplate): void {
     const key = this.getTemplateKey(template.id, template.category);
     this.templates.set(key, template);
+    const agentPrompt = toAgentPromptSpec(template);
+    if (agentPrompt) this.agentPrompts.register(agentPrompt, { replace: true });
     logger.info(`Prompt template registered: ${template.id} (${template.category})`);
   }
 
@@ -66,6 +78,7 @@ export class PromptManager {
 
     // Also clear from cache
     this.cache.delete(key);
+    this.agentPrompts.unregister(id);
 
     return result;
   }
@@ -85,6 +98,25 @@ export class PromptManager {
     }
 
     return templates;
+  }
+
+  registerAgentPrompt(spec: AgentPromptSpec): void {
+    this.agentPrompts.register(spec);
+  }
+
+  unregisterAgentPrompt(id: string, version?: string): boolean {
+    return this.agentPrompts.unregister(id, version);
+  }
+
+  listAgentPrompts(): AgentPromptSpec[] {
+    return this.agentPrompts.list();
+  }
+
+  resolveAgentPrompts(
+    refs: AgentPromptRef[],
+    variables: Record<string, unknown>
+  ): AgentPromptResolution {
+    return this.agentPrompts.resolve(refs, variables);
   }
 
   render(id: string, variables: Record<string, any>, category?: string): string {
@@ -274,9 +306,35 @@ export class PromptManager {
   async reload(): Promise<void> {
     this.templates.clear();
     this.cache.clear();
+    for (const prompt of this.agentPrompts.list()) {
+      this.agentPrompts.unregister(prompt.id, prompt.version);
+    }
     await this.loadTemplatesFromDir();
     logger.info('Prompt templates reloaded');
   }
+}
+
+function toAgentPromptSpec(template: PromptTemplate): AgentPromptSpec | null {
+  if (template.category !== 'system' && template.category !== 'common') return null;
+  const metadata = template.metadata ?? {};
+  return {
+    id: template.id,
+    version: typeof metadata.version === 'string' ? metadata.version : '1.0.0',
+    name: template.name,
+    description: template.description,
+    role: template.category === 'system' ? 'system' : 'developer',
+    template: template.content,
+    variables: template.variables.map((variable) => ({
+      name: variable.name,
+      type: variable.type,
+      description: variable.description,
+      required: variable.required,
+      default: variable.default,
+    })),
+    stable: typeof metadata.stable === 'boolean' ? metadata.stable : true,
+    cacheable: typeof metadata.cacheable === 'boolean' ? metadata.cacheable : true,
+    metadata,
+  };
 }
 
 // Singleton instance
