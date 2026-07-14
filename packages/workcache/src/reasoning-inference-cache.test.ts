@@ -87,6 +87,39 @@ describe('WorkCachedInferenceProvider', () => {
 
     expect(providerCalls).toBe(2);
   });
+
+  it('fails open without reading or writing when WorkCache is disabled', async () => {
+    let providerCalls = 0;
+    const store = new MemoryWorkCacheStore();
+    const provider: InferenceProvider = {
+      id: 'uncached-provider',
+      infer: async () => ({
+        id: `response-${++providerCalls}`,
+        output: { content: 'answer' },
+      }),
+    };
+    const reasoning = new ReasoningOrchestrator(
+      new WorkCachedInferenceProvider({
+        provider,
+        manager: new WorkCacheManager({
+          store,
+          policy: { enabled: false, store: 'off' },
+        }),
+      })
+    );
+
+    await reasoning.infer({
+      ...request('run-1', 'step-1', 'session-1'),
+      reasoning: { method: 'direct' },
+    });
+    await reasoning.infer({
+      ...request('run-2', 'step-2', 'session-1'),
+      reasoning: { method: 'direct' },
+    });
+
+    expect(providerCalls).toBe(2);
+    expect(await store.list()).toEqual([]);
+  });
 });
 
 function request(
