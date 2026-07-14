@@ -6,6 +6,7 @@ export * from './policies';
 export * from './graph';
 export * from './forest';
 export * from './manager';
+export * from './reasoning-inference-cache';
 export * from './stores/memory-store';
 export * from './stores/sqlite-store';
 export * from './stores/hot-index-store';

@@ -77,6 +77,7 @@ import {
   MemoryWorkCacheStore,
   NoopWorkCacheStore,
   SQLiteWorkCacheStore,
+  WorkCachedInferenceProvider,
   WorkCacheManager,
   type WorkCacheAuditEvent,
   type WorkCacheStore,
@@ -232,14 +233,16 @@ class ServerLLMInferenceProvider implements InferenceProvider {
 }
 
 class PipelineChatInferenceProvider implements InferenceProvider {
-  readonly id = 'server-inference-backend';
+  readonly id: string;
 
   constructor(
     private readonly pipeline: HyphaInferencePipeline,
     private readonly backendId: string,
     private readonly driver?: LocalInferenceDriver,
     private readonly autoStart = false
-  ) {}
+  ) {
+    this.id = `server-inference-backend:${backendId}`;
+  }
 
   async infer(
     request: InferenceRequest<LLMInferenceInput>
@@ -494,9 +497,14 @@ class EventRuntimeService {
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
     });
-    const inferenceProvider = createRuntimeInferenceProvider((event) =>
+    const runtimeInferenceProvider = createRuntimeInferenceProvider((event) =>
       this.recordServingCacheEvent(event)
     );
+    const inferenceProvider = new WorkCachedInferenceProvider({
+      provider: runtimeInferenceProvider,
+      manager: this.workCache,
+      trace: (event) => this.appendWorkCacheEvent(event),
+    });
     this.inferenceProviderId = inferenceProvider.id;
     this.inference.register(inferenceProvider);
     this.reasoning = new ReasoningOrchestrator({
