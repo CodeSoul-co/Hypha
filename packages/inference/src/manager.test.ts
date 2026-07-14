@@ -405,8 +405,23 @@ describe('@hypha/inference', () => {
         input: 'branch',
         reasoning: { method: 'tot', branches: 2 },
       })
-    ).resolves.toMatchObject({ id: 'response_2' });
-    expect(calls).toHaveLength(3);
+    ).resolves.toMatchObject({
+      id: 'response_4',
+      metadata: { reasoning: { method: 'tot', nodeCount: 6 } },
+    });
+    expect(calls).toHaveLength(7);
+
+    await expect(
+      orchestrator.infer({
+        runId: 'run_1',
+        stepId: 'step_3',
+        modelAlias: 'default',
+        input: 'merge candidates',
+        reasoning: { method: 'got', branches: 2, maxDepth: 1 },
+      })
+    ).resolves.toMatchObject({
+      metadata: { reasoning: { method: 'got', nodeCount: 3 } },
+    });
   });
 
   it('compiles prompts and segments stable prefixes from dynamic input', async () => {
@@ -504,7 +519,7 @@ describe('@hypha/inference', () => {
         .list()
         .map((entry) => entry.id)
         .sort()
-    ).toEqual(['llama.cpp', 'openai-api', 'sglang', 'vllm']);
+    ).toEqual(['llama.cpp', 'ollama', 'openai-api', 'sglang', 'vllm']);
   });
 
   it('normalizes concrete backend request and response shapes', async () => {

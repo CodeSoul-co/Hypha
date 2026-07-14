@@ -120,6 +120,7 @@ export class HyphaInferencePipeline implements InferenceProvider {
         resolvedKvCacheValue: request.resolvedKvCacheValue,
         physicalKvCache: hotLayerResult.physicalKvCache,
         options: request.options,
+        tools: request.tools,
         metadata: {
           ...request.metadata,
           backendId: backend.id,
