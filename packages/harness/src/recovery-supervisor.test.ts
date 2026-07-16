@@ -113,8 +113,22 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
       degradedParticipants: ['memory'],
     });
     expect(fsm.getSnapshot().currentState).toBe('Reasoning');
-    expect((await trace.list({ runId: 'run_coordinated' })).map((event) => event.type)).toContain(
-      'recovery.case.resolved'
+    const events = await trace.list({ runId: 'run_coordinated' });
+    expect(events.map((event) => event.type)).toContain('recovery.case.resolved');
+    expect(
+      events
+        .filter((event) => event.type === 'recovery.attempt.completed')
+        .map((event) => event.payload)
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          knowledge: expect.objectContaining({
+            strategy: 'degrade',
+            outcome: 'degraded',
+            validation: { status: 'verified' },
+          }),
+        }),
+      ])
     );
   });
 
