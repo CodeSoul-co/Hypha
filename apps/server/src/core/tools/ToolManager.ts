@@ -82,11 +82,7 @@ class LocalMCPClient implements MCPClient {
           name: 'hypha',
           version: '1.0.0',
         },
-        {
-          capabilities: {
-            tools: {},
-          },
-        }
+        { capabilities: {} }
       );
 
       await this.client.connect(transport);
@@ -797,7 +793,7 @@ export class ToolManager {
 
   private toolSpecToDefinition(spec: HyphaToolSpec): ToolDefinition {
     return {
-      name: spec.source === 'mcp' ? spec.id : spec.name ?? spec.id,
+      name: spec.source === 'mcp' ? spec.id : (spec.name ?? spec.id),
       description: spec.description,
       inputSchema: this.asObjectInputSchema(spec.inputSchema),
       outputSchema: spec.outputSchema as Record<string, any> | undefined,
