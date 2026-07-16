@@ -16,6 +16,7 @@ mapping is:
 | ------------------------------- | --------------------------------------------------- |
 | Execution/Sandbox shared types  | `packages/core/src/contracts/sandbox.ts`            |
 | Environment Spec and validation | `packages/core/src/modules/execution-environment/*` |
+| Sandbox lifecycle validation    | `packages/core/src/modules/sandbox/*`               |
 | Future local providers          | `packages/adapters-local/src/execution/*`           |
 
 No npm package, provider implementation, Runtime scheduler, Tool entry point, Cache store, Domain
@@ -32,10 +33,14 @@ This RFC covers the engineering specification's policy contracts:
 - `SandboxSecurityPolicySpec`;
 - `SecretInjectionPolicySpec`;
 - `ExecutionLoggingPolicySpec`;
-- `SandboxLifecyclePolicySpec`.
+- `SandboxLifecyclePolicySpec`;
+- `SandboxProviderCapabilities`, `SandboxStatus`, and `SandboxRecord`;
+- governed create, start, status, terminate, and cleanup request contracts.
 
-`SandboxProvider`, `SandboxRecord`, command execution, process-tree implementation, Docker/remote
-integration, Artifact capture, and Event emission remain deferred.
+`SandboxProvider`, command execution, process-tree implementation, Docker/remote integration,
+Artifact capture, and Event emission remain deferred. The Provider port is intentionally deferred
+until `CommandExecutionRequest` and `CommandExecutionResult` exist, so it does not expose an
+incomplete or temporary execution method.
 
 ## Missing Engineering-Spec Types
 
@@ -66,6 +71,31 @@ export interface ExecutionLoggingPolicySpec {
 Tmpfs fields align with the mount security flags already required by the specification. Logging
 contains policy and limits only; it does not contain output, credentials, or provider-specific
 logger configuration.
+
+## Lifecycle Request Contract Proposal
+
+The engineering specification names `SandboxCreateRequest` and uses scalar arguments for other
+Provider lifecycle methods, but it does not define the create fields or governed lifecycle request
+boundaries. This RFC proposes the minimum provider-neutral requests needed before a Provider port:
+
+- create binds the complete validated `ExecutionEnvironmentSpec`, its immutable revision, the
+  Workspace and Run identity, the owning user/tenant boundary, an `ExecutionPrincipal`, and an
+  optional idempotency key;
+- start, terminate, and cleanup carry `operationId`, `sandboxId`, `ExecutionPrincipal`,
+  `expectedRevision`, and an optional idempotency key;
+- status carries `sandboxId` and `ExecutionPrincipal` because reads are governed capabilities too;
+- terminate and cleanup may include a non-secret reason for audit and trace use.
+
+The explicit `expectedRevision` prevents a stale caller from racing execute, terminate, or cleanup.
+The create validator rejects a declared principal user or tenant that does not match the requested
+owner boundary. These contracts do not execute side effects and do not define policy decisions or
+Event emission on behalf of Runtime/Harness owners.
+
+`SandboxRecord` follows the engineering specification. Runtime validation additionally requires
+state evidence: ready/busy records have `readyAt`, terminated records have `terminatedAt`, cleaned
+records have `cleanedAt`, failed records have a normalized error, and inactive/terminal records do
+not retain active execution IDs. A fail-closed transition table makes the permitted status edges
+explicit; notably, a busy Sandbox cannot enter cleanup and a cleaned Sandbox cannot restart.
 
 ## Security Validation
 

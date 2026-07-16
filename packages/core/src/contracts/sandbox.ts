@@ -1,4 +1,5 @@
-import type { SpecMetadata, VersionedSpec } from '../specs';
+import type { ExecutionPrincipal, NormalizedExecutionError } from './execution';
+import type { SpecMetadata, SpecRef, VersionedSpec } from '../specs';
 
 export interface ExecutionImageSpec {
   reference: string;
@@ -180,4 +181,108 @@ export interface ExecutionEnvironmentSpec extends VersionedSpec, SpecMetadata {
   workingDirectoryPolicy: 'workspace_only' | 'configured_paths';
   defaultTimeoutMs: number;
   metadata?: Record<string, unknown>;
+}
+
+export interface SandboxProviderCapabilities {
+  processIsolation: boolean;
+  filesystemIsolation: boolean;
+  networkIsolation: boolean;
+  cpuLimits: boolean;
+  memoryLimits: boolean;
+  diskLimits: boolean;
+  pidsLimit: boolean;
+  cancellation: boolean;
+  processTreeKill: boolean;
+  snapshots: boolean;
+  imageDigestPinning: boolean;
+  remoteExecution: boolean;
+}
+
+export type SandboxStatus =
+  | 'creating'
+  | 'created'
+  | 'starting'
+  | 'ready'
+  | 'busy'
+  | 'stopping'
+  | 'stopped'
+  | 'terminating'
+  | 'terminated'
+  | 'cleaning'
+  | 'cleaned'
+  | 'failed';
+
+export interface SandboxRecord {
+  id: string;
+  revision: number;
+  providerId: string;
+  environmentRef: SpecRef;
+  environmentRevision: string;
+  tenantId?: string;
+  userId: string;
+  workspaceId: string;
+  sessionId?: string;
+  runId: string;
+  agentId?: string;
+  status: SandboxStatus;
+  providerSandboxRef?: string;
+  imageDigest?: string;
+  activeExecutionIds: string[];
+  resourceLimits: ResourceLimitSpec;
+  networkPolicyHash: string;
+  mountPolicyHash: string;
+  createdAt: string;
+  readyAt?: string;
+  lastUsedAt?: string;
+  expiresAt?: string;
+  terminatedAt?: string;
+  cleanedAt?: string;
+  error?: NormalizedExecutionError;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SandboxCreateRequest {
+  operationId: string;
+  principal: ExecutionPrincipal;
+  environment: ExecutionEnvironmentSpec;
+  environmentRevision: string;
+  userId: string;
+  tenantId?: string;
+  workspaceId: string;
+  sessionId?: string;
+  runId: string;
+  agentId?: string;
+  idempotencyKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SandboxStartRequest {
+  operationId: string;
+  sandboxId: string;
+  principal: ExecutionPrincipal;
+  expectedRevision: number;
+  idempotencyKey?: string;
+}
+
+export interface SandboxStatusRequest {
+  sandboxId: string;
+  principal: ExecutionPrincipal;
+}
+
+export interface SandboxTerminateRequest {
+  operationId: string;
+  sandboxId: string;
+  principal: ExecutionPrincipal;
+  expectedRevision: number;
+  reason?: string;
+  idempotencyKey?: string;
+}
+
+export interface SandboxCleanupRequest {
+  operationId: string;
+  sandboxId: string;
+  principal: ExecutionPrincipal;
+  expectedRevision: number;
+  reason?: string;
+  idempotencyKey?: string;
 }

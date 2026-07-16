@@ -10,3 +10,4 @@ export * from './modules/workspace';
 export * from './modules/workspace/operations';
 export * from './modules/workspace/snapshots';
 export * from './modules/execution-environment';
+export * from './modules/sandbox';
