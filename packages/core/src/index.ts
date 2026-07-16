@@ -9,6 +9,7 @@ export * from './contracts/execution-store';
 export * from './contracts/sandbox-provider';
 export * from './contracts/execution-events';
 export * from './contracts/execution-cache';
+export * from './contracts/recovery';
 export * from './contracts/workspace';
 export * from './contracts/sandbox';
 export * from './modules/workspace';
