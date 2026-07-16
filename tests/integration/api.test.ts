@@ -663,6 +663,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         .send({ name: 'approval-test-tool', params: { value: 'pending' } });
       expect(r.status).toBe(202);
       expect(r.body.success).toBe(true);
+      expect(r.body.invocationId).toBeTruthy();
       expect(r.body.data).toMatchObject({
         tool: 'approval-test-tool',
         status: 'human_review_required',
@@ -706,6 +707,54 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
             }),
           }),
         ])
+      );
+
+      const ownerToken = generateToken({
+        id: devUserId,
+        email: 'runtime-owner@hypha.local',
+        isAdmin: false,
+      });
+      const foreignToken = generateToken({
+        id: 'foreign-runtime-user',
+        email: 'foreign-runtime-user@hypha.local',
+        isAdmin: false,
+      });
+      const ownInvocation = await request(app)
+        .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+      expect(ownInvocation.status).toBe(200);
+      expect(ownInvocation.body.data.id).toBe(r.body.invocationId);
+
+      const foreignInvocation = await request(app)
+        .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
+        .set('Authorization', `Bearer ${foreignToken}`);
+      expect(foreignInvocation.status).toBe(403);
+      expect(foreignInvocation.body.error.code).toBe('TOOL_INVOCATION_ACCESS_DENIED');
+
+      const foreignCancel = await request(app)
+        .post(`/api/v1/tool-invocations/${r.body.invocationId}/cancel`)
+        .set('Authorization', `Bearer ${foreignToken}`)
+        .send({ reason: 'cross-user cancellation must be denied' });
+      expect(foreignCancel.status).toBe(403);
+
+      const approved = await request(app)
+        .post(`/api/v1/tool-approvals/${r.body.invocationId}/approve`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(approved.status).toBe(200);
+      expect(approved.body.data.status).toBe('completed');
+      expect(called).toBe(true);
+
+      const completedRun = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(completedRun.status).toBe(200);
+      expect(completedRun.body.data.status).toBe('completed');
+
+      const completedEvents = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect((completedEvents.body.data || []).map((event: any) => event.type)).toContain(
+        'run.completed'
       );
     } finally {
       await getToolManager().unregister('approval-test-tool');

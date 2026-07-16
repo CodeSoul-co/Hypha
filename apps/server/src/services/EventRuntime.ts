@@ -1306,11 +1306,45 @@ class EventRuntimeService {
   async approveToolInvocation(invocationId: string, approvedBy: string): Promise<ToolCallResult> {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     if (invocation) this.registerManagedTool(invocation.toolId);
-    return this.toolRunner.approveAndResume(invocationId, approvedBy);
+    const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
+    if (invocation && result.status === 'completed') {
+      await this.completeApprovedToolRun(invocation, result);
+    }
+    return result;
   }
 
   async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
-    return this.toolRunner.rejectInvocation(invocationId);
+    const invocation = await this.toolRunner.getInvocation(invocationId);
+    const result = await this.toolRunner.rejectInvocation(invocationId);
+    const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
+    const run = runId ? this.runs.get(runId) : undefined;
+    if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
+    }
+    return result;
+  }
+
+  private async completeApprovedToolRun(
+    invocation: ToolInvocationRecord,
+    result: ToolCallResult
+  ): Promise<void> {
+    const runId = invocation.scope?.runId ?? invocation.request.context.runId;
+    const run = this.runs.get(runId);
+    if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
+
+    if (run.snapshot.currentState === 'HumanReview') {
+      await this.transition(runId, 'ObservationRecorded', {
+        tool: invocation.toolId,
+        invocationId: invocation.id,
+      });
+      await this.transition(runId, 'Verifying', { invocationId: invocation.id });
+      await this.transition(runId, 'MemorySync', { invocationId: invocation.id });
+    }
+    await this.completeRun(runId, {
+      tool: invocation.toolId,
+      invocationId: invocation.id,
+      output: result.output,
+    });
   }
 
   async runGovernedTool<TOutput>(input: {
@@ -2325,7 +2359,12 @@ function createDefaultDomainPack(): DomainPackSpec {
     ),
     ...states
       .filter((state) => state !== 'Completed' && state !== 'Failed')
-      .map((from) => ({ from, to: 'Failed', description: `${from} failed` }))
+      .map((from) => ({ from, to: 'Failed', description: `${from} failed` })),
+    {
+      from: 'HumanReview',
+      to: 'ObservationRecorded',
+      description: 'Approved Tool execution produced an observation',
+    }
   );
   return validateDomainPackSpec({
     id: 'hypha.default',
@@ -2484,6 +2523,11 @@ function summarizeValue(value: unknown): Record<string, unknown> {
     return { type: 'object', keys: Object.keys(value as Record<string, unknown>) };
   }
   return { type: typeof value };
+}
+
+function toolResultErrorMessage(result: ToolCallResult, fallback: string): string {
+  if (typeof result.error === 'string') return result.error;
+  return result.error?.message ?? fallback;
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> {
