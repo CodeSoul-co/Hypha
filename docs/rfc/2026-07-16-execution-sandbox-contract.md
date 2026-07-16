@@ -37,10 +37,10 @@ This RFC covers the engineering specification's policy contracts:
 - `SandboxProviderCapabilities`, `SandboxStatus`, and `SandboxRecord`;
 - governed create, start, status, terminate, and cleanup request contracts.
 
-`SandboxProvider`, command execution, process-tree implementation, Docker/remote integration,
-Artifact capture, and Event emission remain deferred. The Provider port is intentionally deferred
-until `CommandExecutionRequest` and `CommandExecutionResult` exist, so it does not expose an
-incomplete or temporary execution method.
+The provider-neutral `SandboxProvider` port and capability negotiation are defined by the subsequent
+[Sandbox Provider Port and Capability Negotiation](2026-07-16-sandbox-provider-capability-contract.md)
+RFC. Concrete Provider implementation, process-tree implementation, Docker/remote integration,
+Artifact capture, typed Provider snapshot support, and Event emission remain deferred.
 
 ## Missing Engineering-Spec Types
 
