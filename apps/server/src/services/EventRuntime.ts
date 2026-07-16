@@ -561,6 +561,7 @@ class EventRuntimeService {
     );
     this.runtime = new EventFirstRuntime(this.events);
     this.workCache = createWorkCacheManager();
+    this.recoveryKnowledge = this.workCache.getRecoveryKnowledgePort();
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
