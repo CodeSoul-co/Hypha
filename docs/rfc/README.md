@@ -10,3 +10,4 @@ RFCs describe proposed or extensible designs that are not yet final architecture
 - [Governed Command Execution Contract](2026-07-16-command-execution-contract.md)
 - [Execution Store, Lease, and Fencing Contract](2026-07-16-execution-store-lease-contract.md)
 - [Sandbox Provider Port and Capability Negotiation](2026-07-16-sandbox-provider-capability-contract.md)
+- [Execution Lifecycle Event and Payload Contract](2026-07-16-execution-event-contract.md)
