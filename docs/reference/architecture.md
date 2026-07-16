@@ -148,6 +148,12 @@ to the source event id/type, tree type, block id, and cache key.
 WorkCache does not replace `@hypha/serving-cache`, does not alter DomainPack or
 agent interfaces, and does not implement MessageTree or KVPrefixTree in V1.
 
+`RecoveryTree` is the recovery-specific cache boundary. It consumes completed/resolved/escalated
+recovery events and exposes a `RecoveryKnowledgePort` through `WorkCacheManager`. Keys include the
+failure fingerprint, participant, and policy/spec/provider revisions; expiry or revision drift
+deletes stale blocks. A hit is a revalidated strategy hint only—the FSM snapshot, events, and
+provider receipts still determine whether recovery succeeded.
+
 ## Extension Boundaries
 
 Add new behavior by defining or extending a spec first, then implementing an adapter or runtime component behind that spec. Public extensions should expose TypeScript types, Zod validation, JSON schema export, examples, and tests.
