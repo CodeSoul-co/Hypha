@@ -21,7 +21,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
 | `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.               |
-| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.           |
+| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.            |
 | `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
@@ -288,17 +288,17 @@ DomainPack schema, or tool/MCP execution contracts.
 
 Core exports:
 
-| Export                | Purpose                                                          |
-| --------------------- | ---------------------------------------------------------------- |
-| `CacheStore`          | Minimal async store interface: `get`, `set`, `delete`, `clear`.  |
-| `CacheEntry`          | Persisted `key`, `value`, timestamps, optional metadata.         |
-| `CacheMetadata`       | Provider/model/cache type, request hash, tool hash, prefix data. |
-| `CachePolicy`         | `enabled`, `mode`, TTL, error/stream/no-cache behavior.          |
-| `ServingCacheManager` | Key generation, lookup, expiry enforcement, and writes.          |
-| `CachedLLMProvider`   | Provider wrapper that applies exact cache policy.                |
+| Export                    | Purpose                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `CacheStore`              | Minimal async store interface: `get`, `set`, `delete`, `clear`.                    |
+| `CacheEntry`              | Persisted `key`, `value`, timestamps, optional metadata.                           |
+| `CacheMetadata`           | Provider/model/cache type, request hash, tool hash, prefix data.                   |
+| `CachePolicy`             | `enabled`, `mode`, TTL, error/stream/no-cache behavior.                            |
+| `ServingCacheManager`     | Key generation, lookup, expiry enforcement, and writes.                            |
+| `CachedLLMProvider`       | Provider wrapper that applies exact cache policy.                                  |
 | `PrefixCacheShapeTracker` | Compares stable prefix shape per provider/model/scope and reports changed reasons. |
-| `MemoryCacheStore`    | In-memory store for tests and local experiments.                 |
-| `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
+| `MemoryCacheStore`        | In-memory store for tests and local experiments.                                   |
+| `SQLiteCacheStore`        | Persistent local store backed by `cache_entries`.                                  |
 
 `LLMCacheKeyInput` fields are `provider`, `model`, `messages`, optional
 `system`, optional `tools`, optional `params`, optional `cacheScope`, and
@@ -331,30 +331,30 @@ Cache contracts.
 
 Core exports:
 
-| Export | Purpose |
-| --- | --- |
-| `RuntimeTypeDefinition` | Declares source event types, work node type, primary tree, and materializer. |
-| `NormalizedWorkEvent` | Source event plus normalized tree/node metadata. |
-| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records. |
-| `CacheBlock<T>` | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key. |
-| `CacheTree<T>` | Tree interface for lookup, write, invalidate, and list. |
-| `TypedCacheForest` | Store-backed collection of typed cache trees. |
-| `WorkCacheManager` | Ingests events, enforces TTL/validity rules, and returns derived audit events. |
-| `WorkCachePolicy` | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
-| `MemoryWorkCacheStore` | In-memory store. |
-| `SQLiteWorkCacheStore` | Persistent store backed by `workcache_blocks`. |
+| Export                           | Purpose                                                                                         |
+| -------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `RuntimeTypeDefinition`          | Declares source event types, work node type, primary tree, and materializer.                    |
+| `NormalizedWorkEvent`            | Source event plus normalized tree/node metadata.                                                |
+| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records.                                                   |
+| `CacheBlock<T>`                  | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key.  |
+| `CacheTree<T>`                   | Tree interface for lookup, write, invalidate, and list.                                         |
+| `TypedCacheForest`               | Store-backed collection of typed cache trees.                                                   |
+| `WorkCacheManager`               | Ingests events, enforces TTL/validity rules, and returns derived audit events.                  |
+| `WorkCachePolicy`                | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
+| `MemoryWorkCacheStore`           | In-memory store.                                                                                |
+| `SQLiteWorkCacheStore`           | Persistent store backed by `workcache_blocks`.                                                  |
 
 Default source event alignment:
 
-| Source event group | Primary tree |
-| --- | --- |
-| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree` |
-| `inference.completed`, `model.call.completed` | `ComputationTree` |
-| `tool.call.completed`, `mcp.call.completed` | `ToolTree` |
-| `context.build.completed`, `context.compacted` | `ObservationTree` |
-| `eval.completed`, `regression.completed` | `VerificationTree` |
-| `memory.read.completed`, `memory.write.committed` | `MemoryTree` |
-| `llm.cache.write` with prefix metadata | `PromptPrefixTree` |
+| Source event group                                                                                               | Primary tree       |
+| ---------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree`         |
+| `inference.completed`, `model.call.completed`                                                                    | `ComputationTree`  |
+| `tool.call.completed`, `mcp.call.completed`                                                                      | `ToolTree`         |
+| `context.build.completed`, `context.compacted`                                                                   | `ObservationTree`  |
+| `eval.completed`, `regression.completed`                                                                         | `VerificationTree` |
+| `memory.read.completed`, `memory.write.committed`                                                                | `MemoryTree`       |
+| `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
 Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
