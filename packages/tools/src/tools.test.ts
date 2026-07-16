@@ -1204,8 +1204,45 @@ describe('@hypha/tools governed runner', () => {
       input: { secret: '[REDACTED]', visible: true },
     });
     expect(events.find((event) => event.type === 'tool.call.completed')?.payload).toMatchObject({
+      input: { secret: '[REDACTED]', visible: true },
       output: { token: '[REDACTED]', visible: true },
     });
+  });
+
+  it('does not expose Tool inputs on completion when audit input capture is disabled', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        id: 'tool.audit-input-disabled',
+        version: '0.0.0',
+        description: 'Tool whose input must not be copied to completion events.',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        auditPolicy: {
+          enabled: true,
+          includeInput: false,
+          includeOutput: true,
+        },
+      },
+      async () => ({ visible: true })
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace);
+
+    await runner.run({
+      toolId: 'tool.audit-input-disabled',
+      input: { secret: 'never-copy-me' },
+      context: {
+        runId: 'run_audit_input_disabled',
+        stepId: 'step_audit_input_disabled',
+        invocationId: 'invocation_audit_input_disabled',
+      },
+    });
+
+    const events = await trace.list({ runId: 'run_audit_input_disabled' });
+    const completed = events.find((event) => event.type === 'tool.call.completed');
+    expect(completed?.payload).not.toHaveProperty('input');
+    expect(completed?.payload).toMatchObject({ output: { visible: true } });
   });
 
   it('rejects duplicate registrations unless replacement is explicit', () => {
