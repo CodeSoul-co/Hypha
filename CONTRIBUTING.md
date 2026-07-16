@@ -18,11 +18,11 @@ Use this checkout to inspect the current integrated state and run cross-domain c
 local baseline update, not a source-branch merge rule. After updating it, switch to the branch
 that owns the work and synchronize that branch from its parent:
 
-| Work branch | Update from | Merge completed work into |
-|---|---|---|
-| `memory`, `tools`, `runtime`, `execution`, and other Framework source branches | `origin/dev` | `dev` |
-| `domain-*` | `origin/domain` | `domain` |
-| `cache-feature-*` | `origin/cache-base` | `cache-base` |
+| Work branch                                                                    | Update from         | Merge completed work into |
+| ------------------------------------------------------------------------------ | ------------------- | ------------------------- |
+| `memory`, `tools`, `runtime`, `execution`, and other Framework source branches | `origin/dev`        | `dev`                     |
+| `domain-*`                                                                     | `origin/domain`     | `domain`                  |
+| `cache-feature-*`                                                              | `origin/cache-base` | `cache-base`              |
 
 Do not merge `dev-domain-merge` directly into Framework, Domain, or Cache source branches. That
 would move DomainPack integration into branches that do not own it.
@@ -43,6 +43,24 @@ dev-domain-merge + cache-base → dev-merge → main
 `dev-domain-merge` first validates Framework + DomainPack. `dev-merge` then adds Cache and is the
 only branch allowed to enter `main`. Direct feature development and source fixes are forbidden on
 both joint integration branches.
+
+## Restricted remote branch updates
+
+Only the GitHub user `erwinmsmith` may push to or merge a pull request into these remote branches:
+
+- `cache-base` and any other Cache integration or release branch;
+- `dev-domain-merge`;
+- `dev-merge`;
+- `main`.
+
+Cache contributors may push to the `cache-feature-*` branch that owns their work. After that branch
+passes its source-level checks, `erwinmsmith` performs the reviewed merge into `cache-base` and the
+remaining release flow. Other contributors may prepare a pull request for a restricted branch, but
+they must not merge it or update the restricted remote ref themselves.
+
+An unauthorized restricted-branch update stops the release flow. The repository maintainer reverts
+the remote content without rewriting shared history, records the actual push actor separately from
+the commit author, and requires the change to restart from the correct owner branch.
 
 ## Bug routing
 
