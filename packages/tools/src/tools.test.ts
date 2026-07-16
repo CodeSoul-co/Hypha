@@ -287,6 +287,18 @@ describe('@hypha/tools governed runner', () => {
       valid: false,
       issues: [expect.objectContaining({ path: '$.mode' })],
     });
+    expect(validateToolInput({ type: 'string', pattern: '[' }, 'value')).toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ message: expect.stringContaining('pattern is invalid') })],
+    });
+    expect(validateToolInput({ type: 'string', pattern: '(a+)+$' }, 'a'.repeat(100))).toMatchObject(
+      {
+        valid: false,
+        issues: [
+          expect.objectContaining({ message: expect.stringContaining('unsafe backtracking') }),
+        ],
+      }
+    );
   });
 
   it('records MCP calls through the same governed runner', async () => {

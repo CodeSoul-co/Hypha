@@ -93,3 +93,37 @@ npm run test:integration
 
 The final validation also covers Cache enabled and disabled modes, replay, regression, DomainPack
 loading, and runtime smoke tests.
+
+## FSM recovery engineering rules
+
+- Runtime recovery must be represented by explicit FSM states, transitions, persisted counters,
+  and trace callbacks. Do not add an unbounded or hidden agent retry loop.
+- Normalize errors into a stable source/category/code contract before selecting a response. Keep
+  provider payloads behind adapters and keep secrets out of recovery metadata.
+- Every retry policy must bound attempts per state, total attempts, elapsed time, backoff, jitter,
+  and circuit probes. Cancellation terminates the current attempt and propagates through schedulers
+  and adapters.
+- Never retry an external write whose commit state is unknown. Quarantine it until receipt or
+  reconciliation evidence is available. A known committed effect may be compensated only by an
+  explicit, idempotent compensation handler.
+- Deterministic validation, policy, authentication, authorization, and invariant failures are not
+  transient provider failures. Route them to corrected input, human review, quarantine, or failure.
+- Cache, Session views, and UI state are not recovery sources of truth. Reconstruct from versioned
+  specs, FSM snapshots, append-only events, invocation records, receipts, leases, and fencing tokens.
+- Recovery defects discovered during integration still return to the owning source branch. The FSM
+  coordinator does not grant an integration branch ownership of Runtime, Tool, Memory, Domain, or
+  Cache implementation.
+
+## Common tool engineering rules
+
+- Common tools must remain provider-neutral and domain-neutral. Business workflow, prompt, route,
+  schema, or product-specific behavior belongs in a DomainPack or application surface.
+- Declare strict input/output schemas, side-effect level, permission scope, timeout, audit behavior,
+  and size/depth/result limits. Validate again inside handlers that can be called outside the
+  governed runner.
+- Treat caller search text as a literal unless the public contract explicitly declares a bounded
+  regex feature. Reject invalid or unsafe schema patterns instead of evaluating them unchecked.
+- Reject prototype-pollution keys and non-JSON values in generic data tools. Do not expose arbitrary
+  shell, filesystem, network, environment, secret, or dynamic-code access through a utility tool.
+- Preserve structured error codes through application adapters so FSM recovery can distinguish
+  validation, policy, transient dependency, timeout, conflict, and uncertain side-effect failures.
