@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryEventStore } from '@hypha/core';
 import {
   GovernedToolRunner,
+  InMemoryToolApprovalStore,
   MockToolRunner,
   ToolRegistry,
   toolSpecDefinition,
@@ -126,11 +127,16 @@ describe('@hypha/tools governed runner', () => {
 
     expect(result.status).toBe('failed');
     expect(called).toBe(false);
-    expect(String(result.error)).toContain('$.query');
-    expect(String(result.error)).toContain('$.filters.limit');
-    expect(String(result.error)).toContain('$.filters.tags[1]');
-    expect(String(result.error)).toContain('$.filters.extra');
-    expect(String(result.error)).toContain('$.unexpected');
+    expect(result.error).toMatchObject({
+      code: 'TOOL_INPUT_INVALID',
+      phase: 'input_validation',
+      message: expect.stringContaining('$.query'),
+    });
+    const message = typeof result.error === 'string' ? result.error : result.error?.message;
+    expect(message).toContain('$.filters.limit');
+    expect(message).toContain('$.filters.tags[1]');
+    expect(message).toContain('$.filters.extra');
+    expect(message).toContain('$.unexpected');
   });
 
   it('exposes reusable tool input validation results', () => {
@@ -221,7 +227,11 @@ describe('@hypha/tools governed runner', () => {
       })
     ).resolves.toMatchObject({
       status: 'human_review_required',
-      error: 'owner approval required',
+      error: {
+        code: 'TOOL_APPROVAL_REQUIRED',
+        message: 'owner approval required',
+        phase: 'approval',
+      },
     });
     expect(called).toBe(false);
     await expect(trace.list({ runId: 'run_human_approval' })).resolves.toEqual(
@@ -230,7 +240,9 @@ describe('@hypha/tools governed runner', () => {
           type: 'human.review.requested',
           payload: expect.objectContaining({
             source: 'local',
-            reason: 'owner approval required',
+            approvalRequest: expect.objectContaining({
+              reason: 'owner approval required',
+            }),
           }),
         }),
       ])
@@ -273,7 +285,10 @@ describe('@hypha/tools governed runner', () => {
         expect.objectContaining({
           type: 'tool.call.failed',
           payload: expect.objectContaining({
-            phase: 'output_validation',
+            error: expect.objectContaining({
+              code: 'TOOL_OUTPUT_INVALID',
+              phase: 'output_validation',
+            }),
           }),
         }),
       ])
@@ -354,6 +369,169 @@ describe('@hypha/tools governed runner', () => {
     );
   });
 
+  it('rejects tools outside the current execution scope before handler execution', async () => {
+    const registry = new ToolRegistry();
+    let called = false;
+    registry.register(
+      {
+        id: 'tool.allowed-elsewhere',
+        version: '0.0.0',
+        description: 'Scoped tool',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+      },
+      async () => {
+        called = true;
+        return { ok: true };
+      }
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace);
+
+    const result = await runner.run({
+      toolId: 'tool.allowed-elsewhere',
+      input: {},
+      context: {
+        runId: 'run_scope',
+        stepId: 'step_scope',
+        fsmState: 'Review',
+        executionScope: {
+          fsmState: 'Review',
+          allowedToolIds: ['tool.review-only'],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: 'denied',
+      error: {
+        code: 'TOOL_NOT_ALLOWED_IN_SCOPE',
+        phase: 'authorization',
+      },
+    });
+    expect(called).toBe(false);
+  });
+
+  it('resumes an approved write invocation and executes it only once', async () => {
+    const registry = new ToolRegistry();
+    const approvalStore = new InMemoryToolApprovalStore();
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.approved-write',
+        version: '0.0.0',
+        description: 'Approved write',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'write',
+        humanApprovalPolicy: { required: true, reason: 'confirm write' },
+      },
+      async () => {
+        calls += 1;
+        return { calls };
+      }
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace, undefined, {
+      approvalStore,
+      now: () => '2026-07-15T00:00:00.000Z',
+    });
+    const request = {
+      toolId: 'tool.approved-write',
+      input: { value: 1 },
+      context: {
+        runId: 'run_approval_resume',
+        stepId: 'step_write',
+        invocationId: 'invocation_write_1',
+      },
+    };
+
+    await expect(runner.run(request)).resolves.toMatchObject({
+      status: 'human_review_required',
+      invocationId: 'invocation_write_1',
+    });
+    expect(calls).toBe(0);
+
+    await approvalStore.approve('invocation_write_1', 'owner', {
+      approvedAt: '2026-07-15T00:00:00.000Z',
+    });
+    await expect(runner.run(request)).resolves.toMatchObject({
+      status: 'completed',
+      output: { calls: 1 },
+    });
+    await expect(runner.run(request)).resolves.toMatchObject({
+      status: 'completed',
+      output: { calls: 1 },
+    });
+    expect(calls).toBe(1);
+
+    await expect(trace.list({ runId: 'run_approval_resume' })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'human.review.requested' }),
+        expect.objectContaining({ type: 'human.review.approved' }),
+        expect.objectContaining({ type: 'human.review.resolved' }),
+        expect.objectContaining({ type: 'tool.call.completed' }),
+      ])
+    );
+  });
+
+  it('honors audit inclusion and redaction policies', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        id: 'tool.audit',
+        version: '0.0.0',
+        description: 'Audited tool',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        auditPolicy: {
+          enabled: true,
+          includeInput: true,
+          includeOutput: true,
+          redactPaths: ['secret', 'output.token'],
+        },
+      },
+      async () => ({ token: 'output-secret', visible: true })
+    );
+    const trace = new InMemoryEventStore();
+    const runner = new GovernedToolRunner(registry, trace);
+
+    await runner.run({
+      toolId: 'tool.audit',
+      input: { secret: 'input-secret', visible: true },
+      context: {
+        runId: 'run_audit',
+        stepId: 'step_audit',
+        invocationId: 'invocation_audit',
+      },
+    });
+
+    const events = await trace.list({ runId: 'run_audit' });
+    expect(events.find((event) => event.type === 'tool.call.requested')?.payload).toMatchObject({
+      input: { secret: '[REDACTED]', visible: true },
+    });
+    expect(events.find((event) => event.type === 'tool.call.completed')?.payload).toMatchObject({
+      output: { token: '[REDACTED]', visible: true },
+    });
+  });
+
+  it('rejects duplicate registrations unless replacement is explicit', () => {
+    const registry = new ToolRegistry();
+    const spec = {
+      id: 'tool.duplicate',
+      version: '0.0.0',
+      description: 'Duplicate tool',
+      inputSchema: { type: 'object' },
+      sideEffectLevel: 'read' as const,
+    };
+    registry.register(spec, async () => ({ version: 1 }));
+
+    expect(() => registry.register(spec, async () => ({ version: 2 }))).toThrow(
+      'Tool already registered: tool.duplicate'
+    );
+    expect(() =>
+      registry.register(spec, async () => ({ version: 2 }), { replace: true })
+    ).not.toThrow();
+  });
   it('exports Stage1 ToolSpec schema and minimal example', () => {
     expect(validateToolSpec(toolSpecDefinition.example).id).toBe('tool.search');
     expect(toolSpecJsonSchemas.ToolSpec.required).toContain('sideEffectLevel');
