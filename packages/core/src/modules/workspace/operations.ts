@@ -1,5 +1,4 @@
 import { z, type ZodType } from 'zod';
-import type { ExecutionPrincipal } from '../../contracts/execution';
 import type {
   FileMutation,
   ResolvedWorkspacePath,
@@ -13,21 +12,13 @@ import type {
   WorkspaceWriteResult,
 } from '../../contracts/workspace';
 import type { JsonSchema } from '../../specs';
+import { executionPrincipalJsonSchema, executionPrincipalSchema } from '../execution';
 import { workspaceRelativePathSchema } from './index';
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
 
-export const executionPrincipalSchema = z.object({
-  principalId: z.string().min(1),
-  type: z.enum(['user', 'agent', 'service', 'system']),
-  tenantId: z.string().min(1).optional(),
-  userId: z.string().min(1).optional(),
-  agentId: z.string().min(1).optional(),
-  roles: z.array(z.string().min(1)).optional(),
-  permissionScopes: z.array(z.string().min(1)),
-  metadata: z.record(z.unknown()).optional(),
-}) satisfies ZodType<ExecutionPrincipal>;
+export { executionPrincipalSchema } from '../execution';
 
 export const workspacePathRequestSchema = z.object({
   workspaceId: z.string().min(1),
@@ -154,21 +145,7 @@ export const relativePathJsonSchema: JsonSchema = {
     'Relative Workspace path. Runtime validation also rejects encoded and Unicode-normalized traversal.',
 };
 
-export const principalJsonSchema: JsonSchema = {
-  type: 'object',
-  required: ['principalId', 'type', 'permissionScopes'],
-  properties: {
-    principalId: { type: 'string', minLength: 1 },
-    type: { enum: ['user', 'agent', 'service', 'system'] },
-    tenantId: { type: 'string', minLength: 1 },
-    userId: { type: 'string', minLength: 1 },
-    agentId: { type: 'string', minLength: 1 },
-    roles: { type: 'array', items: { type: 'string', minLength: 1 } },
-    permissionScopes: { type: 'array', items: { type: 'string', minLength: 1 } },
-    metadata: { type: 'object' },
-  },
-  additionalProperties: false,
-};
+export const principalJsonSchema: JsonSchema = executionPrincipalJsonSchema;
 
 const positiveIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 1 };
 const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 };

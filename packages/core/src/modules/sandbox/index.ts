@@ -1,5 +1,4 @@
 import { z, type ZodType } from 'zod';
-import type { NormalizedExecutionError } from '../../contracts/execution';
 import type {
   SandboxCleanupRequest,
   SandboxCreateRequest,
@@ -12,7 +11,12 @@ import type {
 } from '../../contracts/sandbox';
 import { specRefSchema } from '../../schemas';
 import type { JsonSchema } from '../../specs';
-import { executionPrincipalSchema, principalJsonSchema } from '../workspace/operations';
+import {
+  executionPrincipalJsonSchema,
+  executionPrincipalSchema,
+  normalizedExecutionErrorJsonSchema,
+  normalizedExecutionErrorSchema,
+} from '../execution';
 import {
   executionEnvironmentSpecJsonSchema,
   executionEnvironmentSpecSchema,
@@ -23,41 +27,7 @@ const nonEmptyString = z.string().min(1);
 const nonNegativeInteger = z.number().int().nonnegative();
 const timestampSchema = z.string().datetime({ offset: true });
 
-const executionErrorCodes = [
-  'EXECUTION_INVALID_REQUEST',
-  'EXECUTION_PERMISSION_DENIED',
-  'EXECUTION_POLICY_DENIED',
-  'EXECUTION_APPROVAL_REQUIRED',
-  'EXECUTION_WORKSPACE_NOT_FOUND',
-  'EXECUTION_PATH_ESCAPE',
-  'EXECUTION_PATH_DENIED',
-  'EXECUTION_QUOTA_EXCEEDED',
-  'EXECUTION_ENVIRONMENT_UNAVAILABLE',
-  'EXECUTION_SANDBOX_CREATE_FAILED',
-  'EXECUTION_SANDBOX_START_FAILED',
-  'EXECUTION_IMAGE_UNTRUSTED',
-  'EXECUTION_NETWORK_DENIED',
-  'EXECUTION_SECRET_DENIED',
-  'EXECUTION_PROCESS_START_FAILED',
-  'EXECUTION_TIMEOUT',
-  'EXECUTION_IDLE_TIMEOUT',
-  'EXECUTION_CANCELLED',
-  'EXECUTION_OOM_KILLED',
-  'EXECUTION_RESOURCE_EXCEEDED',
-  'EXECUTION_OUTPUT_LIMIT',
-  'EXECUTION_RESULT_UNKNOWN',
-  'EXECUTION_CLEANUP_FAILED',
-  'EXECUTION_INTERNAL_ERROR',
-] as const;
-
-export const normalizedExecutionErrorSchema = z.object({
-  code: z.enum(executionErrorCodes),
-  message: nonEmptyString,
-  retryable: z.boolean(),
-  providerCode: z.union([z.string(), z.number()]).optional(),
-  details: z.record(z.unknown()).optional(),
-  causeRef: nonEmptyString.optional(),
-}) satisfies ZodType<NormalizedExecutionError>;
+export { normalizedExecutionErrorSchema } from '../execution';
 
 export const sandboxProviderCapabilitiesSchema = z.object({
   processIsolation: z.boolean(),
@@ -253,19 +223,7 @@ const resourceLimitJsonSchema = executionEnvironmentSpecJsonSchema.properties?.r
   type: 'object',
 };
 
-export const normalizedExecutionErrorJsonSchema: JsonSchema = {
-  type: 'object',
-  required: ['code', 'message', 'retryable'],
-  properties: {
-    code: { enum: [...executionErrorCodes] },
-    message: nonEmptyStringJsonSchema,
-    retryable: { type: 'boolean' },
-    providerCode: { oneOf: [{ type: 'string' }, { type: 'number' }] },
-    details: { type: 'object' },
-    causeRef: nonEmptyStringJsonSchema,
-  },
-  additionalProperties: false,
-};
+export { normalizedExecutionErrorJsonSchema } from '../execution';
 
 export const sandboxProviderCapabilitiesJsonSchema: JsonSchema = {
   type: 'object',
@@ -357,7 +315,7 @@ const sandboxMutationRequestJsonSchema: JsonSchema = {
   properties: {
     operationId: nonEmptyStringJsonSchema,
     sandboxId: nonEmptyStringJsonSchema,
-    principal: principalJsonSchema,
+    principal: executionPrincipalJsonSchema,
     expectedRevision: nonNegativeIntegerJsonSchema,
     idempotencyKey: nonEmptyStringJsonSchema,
   },
@@ -380,7 +338,7 @@ export const sandboxLifecycleJsonSchemas: Record<string, JsonSchema> = {
     ],
     properties: {
       operationId: nonEmptyStringJsonSchema,
-      principal: principalJsonSchema,
+      principal: executionPrincipalJsonSchema,
       environment: executionEnvironmentSpecJsonSchema,
       environmentRevision: nonEmptyStringJsonSchema,
       userId: nonEmptyStringJsonSchema,
@@ -400,7 +358,7 @@ export const sandboxLifecycleJsonSchemas: Record<string, JsonSchema> = {
     required: ['sandboxId', 'principal'],
     properties: {
       sandboxId: nonEmptyStringJsonSchema,
-      principal: principalJsonSchema,
+      principal: executionPrincipalJsonSchema,
     },
     additionalProperties: false,
   },
