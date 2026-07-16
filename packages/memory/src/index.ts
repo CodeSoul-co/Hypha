@@ -11,9 +11,13 @@ import {
   versionedSpecSchema,
   type JsonSchema,
   type PolicyDecision,
+  type RecoveryFailure,
   type SpecMetadata,
   type VersionedSpec,
 } from '@hypha/core';
+import { classifyMemoryFailure, type MemoryRecoveryOperation } from './recovery';
+
+export * from './recovery';
 
 export interface MemoryScope {
   workspaceId?: string;
@@ -22,7 +26,13 @@ export interface MemoryScope {
   userId?: string;
 }
 
-export type MemoryType = 'working' | 'episodic' | 'semantic' | 'procedural' | 'artifact' | 'governance';
+export type MemoryType =
+  | 'working'
+  | 'episodic'
+  | 'semantic'
+  | 'procedural'
+  | 'artifact'
+  | 'governance';
 
 export interface MemoryRecord<TValue = unknown> {
   id: string;
@@ -148,6 +158,7 @@ export interface MemoryWritePolicy {
   allowLongTerm?: boolean;
   requireProvenance?: boolean;
   decision?: PolicyDecision;
+  idempotencyKey?: string;
 }
 
 export interface MemoryWriteResult {
@@ -187,7 +198,11 @@ export interface MemoryAuditReport {
 export interface MemoryProvider {
   read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
   search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
-  write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise<MemoryWriteResult>;
+  write(
+    scope: MemoryScope,
+    record: MemoryRecord,
+    policy: MemoryWritePolicy
+  ): Promise<MemoryWriteResult>;
   update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void>;
   invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void>;
   summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary>;
@@ -208,6 +223,15 @@ export interface MemoryManagerOptions {
   trace?: TraceRecorder;
   traceContext?: MemoryTraceContext;
   now?: () => string;
+  recovery?: MemoryManagerRecoveryOptions;
+}
+
+export interface MemoryManagerRecoveryOptions {
+  providerId?: string;
+  providerRevision?: string;
+  specRevision?: string;
+  policyRevision?: string;
+  onFailure?: (failure: RecoveryFailure) => void | Promise<void>;
 }
 
 export class MemoryManager {
@@ -232,9 +256,11 @@ export class MemoryManager {
       });
       return records;
     } catch (error) {
+      const failure = await this.handleFailure(scope, 'read', error);
       await this.recordTrace(scope, 'memory.read.failed', {
         operation: 'read',
         error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
       });
       throw error;
     }
@@ -258,9 +284,11 @@ export class MemoryManager {
       });
       return results;
     } catch (error) {
+      const failure = await this.handleFailure(scope, 'search', error);
       await this.recordTrace(scope, 'memory.read.failed', {
         operation: 'search',
         error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
       });
       throw error;
     }
@@ -271,6 +299,7 @@ export class MemoryManager {
     record: MemoryRecord,
     policy: MemoryWritePolicy
   ): Promise<MemoryWriteResult> {
+    let providerStarted = false;
     await this.recordTrace(scope, 'memory.write.requested', {
       recordId: record.id,
       type: record.type,
@@ -285,6 +314,7 @@ export class MemoryManager {
         recordId: record.id,
         type: record.type,
       });
+      providerStarted = true;
       const result = await this.provider.write(scope, record, policy);
       await this.recordTrace(scope, 'memory.write.committed', {
         recordId: result.recordId,
@@ -294,29 +324,136 @@ export class MemoryManager {
       });
       return result;
     } catch (error) {
+      const failure = await this.handleFailure(scope, 'write', error, {
+        recordId: record.id,
+        idempotencyKey: policy.idempotencyKey,
+        sideEffectState: providerStarted ? undefined : 'not_started',
+      });
       await this.recordTrace(scope, 'memory.write.rejected', {
         recordId: record.id,
         type: record.type,
         error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
       });
       throw error;
     }
   }
 
-  update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void> {
-    return this.provider.update(scope, recordId, patch);
+  async update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void> {
+    await this.recordTrace(scope, 'memory.write.requested', {
+      operation: 'update',
+      recordId,
+      patchKeys: Object.keys(patch),
+    });
+    try {
+      await this.provider.update(scope, recordId, patch);
+      await this.recordTrace(scope, 'memory.write.committed', { operation: 'update', recordId });
+    } catch (error) {
+      const failure = await this.handleFailure(scope, 'update', error, { recordId });
+      await this.recordTrace(scope, 'memory.write.rejected', {
+        operation: 'update',
+        recordId,
+        error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
+      });
+      throw error;
+    }
   }
 
-  invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void> {
-    return this.provider.invalidate(scope, recordId, reason);
+  async invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void> {
+    await this.recordTrace(scope, 'memory.write.requested', {
+      operation: 'invalidate',
+      recordId,
+      reason,
+    });
+    try {
+      await this.provider.invalidate(scope, recordId, reason);
+      await this.recordTrace(scope, 'memory.write.committed', {
+        operation: 'invalidate',
+        recordId,
+        reason,
+      });
+    } catch (error) {
+      const failure = await this.handleFailure(scope, 'invalidate', error, { recordId });
+      await this.recordTrace(scope, 'memory.write.rejected', {
+        operation: 'invalidate',
+        recordId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
+      });
+      throw error;
+    }
   }
 
-  summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary> {
-    return this.provider.summarize(scope, options);
+  async summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary> {
+    await this.recordTrace(scope, 'memory.read.requested', { operation: 'summarize', options });
+    try {
+      const summary = await this.provider.summarize(scope, options);
+      await this.recordTrace(scope, 'memory.read.completed', {
+        operation: 'summarize',
+        recordCount: summary.recordCount,
+      });
+      return summary;
+    } catch (error) {
+      const failure = await this.handleFailure(scope, 'summarize', error);
+      await this.recordTrace(scope, 'memory.read.failed', {
+        operation: 'summarize',
+        error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
+      });
+      throw error;
+    }
   }
 
-  audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport> {
-    return this.provider.audit(scope, options);
+  async audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport> {
+    await this.recordTrace(scope, 'memory.read.requested', { operation: 'audit', options });
+    try {
+      const report = await this.provider.audit(scope, options);
+      await this.recordTrace(scope, 'memory.read.completed', {
+        operation: 'audit',
+        recordsChecked: report.recordsChecked,
+        missingProvenanceCount: report.missingProvenance.length,
+      });
+      return report;
+    } catch (error) {
+      const failure = await this.handleFailure(scope, 'audit', error);
+      await this.recordTrace(scope, 'memory.read.failed', {
+        operation: 'audit',
+        error: error instanceof Error ? error.message : String(error),
+        recovery: failure,
+      });
+      throw error;
+    }
+  }
+
+  private async handleFailure(
+    scope: MemoryScope,
+    operation: MemoryRecoveryOperation,
+    error: unknown,
+    input: {
+      recordId?: string;
+      idempotencyKey?: string;
+      sideEffectState?: 'none' | 'not_started' | 'committed' | 'unknown';
+    } = {}
+  ): Promise<RecoveryFailure> {
+    const occurredAt = this.options.now?.() ?? new Date().toISOString();
+    const recovery = this.options.recovery;
+    const failure = classifyMemoryFailure(error, {
+      id: `${scope.runId ?? 'memory-runtime'}:memory:${operation}:${this.sequence + 1}`,
+      operation,
+      scope,
+      occurredAt,
+      providerId: recovery?.providerId,
+      providerRevision: recovery?.providerRevision,
+      specRevision: recovery?.specRevision,
+      policyRevision: recovery?.policyRevision,
+      recordId: input.recordId,
+      idempotencyKey: input.idempotencyKey,
+      sideEffectState: input.sideEffectState,
+    });
+    await recovery?.onFailure?.(failure);
+    return failure;
   }
 
   private async recordTrace(
@@ -359,6 +496,7 @@ function summarizeWritePolicy(policy: MemoryWritePolicy): Record<string, unknown
   return {
     allowLongTerm: policy.allowLongTerm,
     requireProvenance: policy.requireProvenance,
+    idempotencyKey: policy.idempotencyKey,
     decision: policy.decision
       ? {
           allowed: policy.decision.allowed,
@@ -441,36 +579,39 @@ export const memoryRetrievalPolicySchema = z.object({
   allowedTypes: z.array(memoryTypeSchema).optional(),
 }) satisfies ZodType<MemoryRetrievalPolicy>;
 
-export const memorySpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    providers: z.array(memoryProviderProfileSchema).min(1),
-    memoryTypes: z.array(memoryTypeSchema).min(1),
-    structuredStoreRef: z.string().optional(),
-    vectorIndexRef: z.string().optional(),
-    artifactStoreRef: z.string().optional(),
-    embeddingProviderRef: z.string().optional(),
-    readPolicy: z.string().optional(),
-    writePolicy: z.string().optional(),
-    freshnessPolicy: z.string().optional(),
-    provenancePolicy: z.enum(['required', 'best_effort']).optional(),
-    retentionPolicy: z.string().optional(),
-    privacyPolicy: z.string().optional(),
-    retrievalStrategy: z.string().optional(),
-    retrievalPolicy: memoryRetrievalPolicySchema.optional(),
-    writePolicyConfig: z.object({
+export const memorySpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  providers: z.array(memoryProviderProfileSchema).min(1),
+  memoryTypes: z.array(memoryTypeSchema).min(1),
+  structuredStoreRef: z.string().optional(),
+  vectorIndexRef: z.string().optional(),
+  artifactStoreRef: z.string().optional(),
+  embeddingProviderRef: z.string().optional(),
+  readPolicy: z.string().optional(),
+  writePolicy: z.string().optional(),
+  freshnessPolicy: z.string().optional(),
+  provenancePolicy: z.enum(['required', 'best_effort']).optional(),
+  retentionPolicy: z.string().optional(),
+  privacyPolicy: z.string().optional(),
+  retrievalStrategy: z.string().optional(),
+  retrievalPolicy: memoryRetrievalPolicySchema.optional(),
+  writePolicyConfig: z
+    .object({
       allowLongTerm: z.boolean().optional(),
       requireProvenance: z.boolean().optional(),
-      decision: z.object({
-        allowed: z.boolean(),
-        requiresHumanReview: z.boolean().optional(),
-        policyId: z.string().optional(),
-        ruleId: z.string().optional(),
-        reason: z.string().optional(),
-        metadata: z.record(z.unknown()).optional(),
-      }).optional(),
-    }).optional(),
-  }) satisfies ZodType<MemorySpec>;
+      idempotencyKey: z.string().min(1).optional(),
+      decision: z
+        .object({
+          allowed: z.boolean(),
+          requiresHumanReview: z.boolean().optional(),
+          policyId: z.string().optional(),
+          ruleId: z.string().optional(),
+          reason: z.string().optional(),
+          metadata: z.record(z.unknown()).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+}) satisfies ZodType<MemorySpec>;
 
 export const memorySpecJsonSchema: JsonSchema = {
   type: 'object',
