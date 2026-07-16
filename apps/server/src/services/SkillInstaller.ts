@@ -41,11 +41,12 @@ function getInstallDir(): string {
   const dirs = (() => {
     try { return getSkillManager().getDirs(); } catch { return []; }
   })();
+  // The user dir is the one inside $HOME; builtins live under the project
+  // cwd and should never be the install target.
   const home = os.homedir();
-  const builtinDir = path.resolve(process.cwd(), 'apps/server/src/core/skills/builtins');
   for (const d of dirs) {
-    const resolved = path.resolve(d.replace(/^~/, home));
-    if (resolved !== builtinDir) return resolved;
+    const resolved = d.replace(/^~/, home);
+    if (resolved.startsWith(home)) return resolved;
   }
   // Fallback: ~/.hypha/skills (the conventional default in config.yaml).
   return path.join(home, '.hypha', 'skills');

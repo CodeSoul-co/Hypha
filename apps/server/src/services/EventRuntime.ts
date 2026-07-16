@@ -6,7 +6,7 @@ import {
   type FrameworkEventType,
   type SpecRef,
 } from '@hypha/core';
-import { EventFirstRuntime, ServerRuntimeAdapter } from '@hypha/harness';
+import { EventFirstRuntime } from '@hypha/harness';
 import {
   compileWorkflowToFSM,
   validateDomainPackSpec,
@@ -21,20 +21,29 @@ import {
   type FSMSnapshot,
 } from '@hypha/fsm';
 import {
+  createDefaultInferenceBackendRegistry,
   hashContent,
+  HttpLocalInferenceDriver,
+  HyphaInferencePipeline,
   InferenceManager,
   InMemoryKvCacheProvider,
   InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
+  type AgentPromptRef,
+  type AgentPromptResolution,
+  type AgentPromptSpec,
   type InferenceCachePolicy,
   type InferenceProvider,
   type InferenceRequest,
   type InferenceResponse,
+  type LocalInferenceDriver,
   type KvCacheRef,
   type KvCacheScope,
   type KvCacheWriteMode,
   type PrefixCacheRef,
   type ReasoningOptions,
+  type ReasoningStrategy,
+  type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
@@ -62,16 +71,18 @@ import {
   modelResponseToChatResponse,
   modelStreamEventToStreamChunk,
 } from '../core/llm/LLMFactory';
+import { getPromptManager } from '../core/prompts/PromptManager';
 import {
   servingCacheResponseMetadata,
   type ServingCacheEvent,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
-import { storageConfig } from '../config';
+import { inferenceConfig, storageConfig } from '../config';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
+import { logger } from '../utils/logger';
 
 interface RuntimeRunContext {
   runId: string;
@@ -88,6 +99,14 @@ export interface EventRunHandle {
   sessionId: string;
   runtimeSessionId: string;
 }
+
+type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
+  metadata?: Record<string, unknown>;
+};
+
+type ResolvedRuntimeAgentSpec = ReActAgentSpec & {
+  promptResolution?: AgentPromptResolution;
+};
 
 export interface StartRunInput {
   userId: string;
@@ -108,6 +127,8 @@ export interface ChatInferenceInput {
   options?: ChatOptions;
   reasoning?: ReasoningOptions;
   cachePolicy?: InferenceCachePolicy;
+  agentSpec?: RuntimeAgentSpecInput;
+  metadata?: Record<string, unknown>;
 }
 
 interface ChatCachePolicyBuildInput {
@@ -209,6 +230,205 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   }
 }
 
+class PipelineChatInferenceProvider implements InferenceProvider {
+  readonly id = 'server-inference-backend';
+
+  constructor(
+    private readonly pipeline: HyphaInferencePipeline,
+    private readonly backendId: string,
+    private readonly driver?: LocalInferenceDriver,
+    private readonly autoStart = false
+  ) {}
+
+  async infer(
+    request: InferenceRequest<LLMInferenceInput>
+  ): Promise<InferenceResponse<ChatResponse>> {
+    await this.ensureLocalEngine();
+    const response = await this.pipeline.infer(this.toPipelineRequest(request));
+    const chat = backendResponseToChatResponse(response, request.modelAlias, this.backendId);
+    return {
+      ...response,
+      output: chat,
+    };
+  }
+
+  async *stream(
+    request: InferenceRequest<LLMInferenceInput>
+  ): AsyncIterable<InferenceResponse<StreamChunk>> {
+    await this.ensureLocalEngine();
+    let index = 0;
+    let lastUsage: InferenceResponse['usage'];
+    for await (const response of this.pipeline.stream(this.toPipelineRequest(request))) {
+      index += 1;
+      lastUsage = response.usage ?? lastUsage;
+      const content =
+        typeof response.output === 'string' ? response.output : String(response.output);
+      if (!content) continue;
+      yield {
+        ...response,
+        id: `${response.id}:chunk:${index}`,
+        output: { type: 'content', content, usage: chatUsageFromInference(response.usage) },
+      };
+    }
+    yield {
+      id: `${request.runId}:${request.stepId}:done`,
+      output: { type: 'done', usage: chatUsageFromInference(lastUsage) },
+      usage: lastUsage,
+      metadata: { backendId: this.backendId },
+    };
+  }
+
+  private toPipelineRequest(
+    request: InferenceRequest<LLMInferenceInput>
+  ): InferenceRequest<Record<string, unknown>> {
+    const reasoningInstruction = stringValue(request.metadata?.reasoningInstruction);
+    const systemPrompt = [request.input.options?.systemPrompt, reasoningInstruction]
+      .filter(Boolean)
+      .join('\n\n');
+    return {
+      ...request,
+      backendId: request.backendId ?? this.backendId,
+      input: {
+        instructions: systemPrompt || undefined,
+        messages: request.input.messages,
+      },
+      options: {
+        temperature: request.input.options?.temperature,
+        maxTokens: request.input.options?.maxTokens,
+        topP: request.input.options?.topP,
+        topK: request.input.options?.topK,
+        stop: request.input.options?.stopSequences,
+        responseFormat: 'text',
+      },
+      tools: request.input.options?.tools?.map((tool) => ({
+        id: tool.name,
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as Record<string, unknown>,
+      })),
+    };
+  }
+
+  private async ensureLocalEngine(): Promise<void> {
+    if (!this.driver || !this.autoStart) return;
+    if (this.driver.status().state !== 'ready') await this.driver.start();
+  }
+}
+
+function createRuntimeInferenceProvider(trace: ServingCacheTraceSink): InferenceProvider {
+  const config = inferenceConfig();
+  if (config.runtimeProvider !== 'backend') {
+    return new ServerLLMInferenceProvider({ trace });
+  }
+  const backendId = config.local.enabled ? config.local.engine : config.defaultBackend;
+  const backends = createDefaultInferenceBackendRegistry({
+    defaultBackendId: backendId,
+    ollama: config.backends.ollama,
+    sglang: config.backends.sglang,
+    vllm: config.backends.vllm,
+    llamaCpp: config.backends.llamaCpp,
+    openaiApi: config.backends.openaiApi,
+  });
+  let driver: LocalInferenceDriver | undefined;
+  if (config.local.enabled) {
+    driver = new HttpLocalInferenceDriver({
+      id: config.local.engine,
+      kind: config.local.engine,
+      mode: config.local.mode,
+      baseUrl: config.backends[config.local.engine].baseUrl,
+      endpoint: config.backends[config.local.engine].endpoint,
+      model: config.local.model,
+      host: config.local.host,
+      port: config.local.port,
+      command: config.local.command,
+      args: config.local.args,
+      cwd: config.local.cwd,
+      startupTimeoutMs: config.local.startupTimeoutMs,
+      healthPollMs: config.local.healthPollMs,
+      requestTimeoutMs: config.backends[config.local.engine].timeoutMs,
+    });
+    backends.register(driver.backend(), { default: true });
+  }
+  const pipeline = new HyphaInferencePipeline({
+    id: 'server-hypha-inference-pipeline',
+    defaultBackendId: backendId,
+    backends,
+    reusePolicy: config.plasmod.reusePolicy,
+  });
+  return new PipelineChatInferenceProvider(pipeline, backendId, driver, config.local.autoStart);
+}
+
+function backendResponseToChatResponse(
+  response: InferenceResponse,
+  model: string,
+  backendId: string
+): ChatResponse {
+  const toolCalls = extractBackendToolCalls(response.raw);
+  const content =
+    typeof response.output === 'string' ? response.output : String(response.output ?? '');
+  const usage = response.usage
+    ? {
+        inputTokens: response.usage.inputTokens ?? 0,
+        outputTokens: response.usage.outputTokens ?? 0,
+        totalTokens:
+          response.usage.totalTokens ??
+          (response.usage.inputTokens ?? 0) + (response.usage.outputTokens ?? 0),
+      }
+    : undefined;
+  return {
+    id: response.id,
+    model,
+    provider: backendId as ChatResponse['provider'],
+    content,
+    role: 'assistant',
+    finishReason: toolCalls?.length ? 'tool_use' : 'stop',
+    usage,
+    toolCalls,
+    raw: response.raw,
+  };
+}
+
+function chatUsageFromInference(
+  usage: InferenceResponse['usage']
+): ChatResponse['usage'] | undefined {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    totalTokens: usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+  };
+}
+
+function extractBackendToolCalls(raw: unknown): ChatResponse['toolCalls'] {
+  const record = asRecord(raw);
+  const choices = Array.isArray(record?.choices) ? record.choices : [];
+  const choice = asRecord(choices[0]);
+  const message = asRecord(choice?.message) ?? asRecord(record?.message);
+  const toolCalls = Array.isArray(message?.tool_calls)
+    ? message.tool_calls
+    : Array.isArray(message?.toolCalls)
+      ? message.toolCalls
+      : [];
+  return toolCalls.map((value, index) => {
+    const toolCall = asRecord(value) ?? {};
+    const fn = asRecord(toolCall.function) ?? {};
+    return {
+      id: stringValue(toolCall.id) ?? `tool-call-${index + 1}`,
+      name: stringValue(fn.name) ?? stringValue(toolCall.name) ?? `tool-${index + 1}`,
+      input: parseToolArguments(fn.arguments ?? toolCall.arguments),
+    };
+  });
+}
+
+function parseToolArguments(value: unknown): unknown {
+  if (typeof value !== 'string') return value ?? {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { value };
+  }
+}
+
 function modelCacheControlFromInferenceRequest(
   request: InferenceRequest<LLMInferenceInput>
 ): ModelCacheControl | undefined {
@@ -249,10 +469,10 @@ function legacyToolToModelTool(
 class EventRuntimeService {
   private readonly events: SQLiteEventStore;
   private readonly runtime: EventFirstRuntime;
-  private readonly serverRuntime: ServerRuntimeAdapter;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
   private readonly inference: InferenceManager;
+  private readonly inferenceProviderId: string;
   private readonly reasoning: ReasoningOrchestrator;
   private readonly defaultDomainPack = createDefaultDomainPack();
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
@@ -266,22 +486,50 @@ class EventRuntimeService {
       mode: sqliteStorage.sqliteMode,
     });
     this.runtime = new EventFirstRuntime(this.events);
-    this.serverRuntime = new ServerRuntimeAdapter({
-      listEvents: (runId: string) => this.listEvents(runId),
-    });
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
     });
-    this.inference.register(
-      new ServerLLMInferenceProvider({
-        trace: (event) => this.recordServingCacheEvent(event),
-      })
+    const inferenceProvider = createRuntimeInferenceProvider((event) =>
+      this.recordServingCacheEvent(event)
     );
+    this.inferenceProviderId = inferenceProvider.id;
+    this.inference.register(inferenceProvider);
     this.reasoning = new ReasoningOrchestrator({
       id: 'server-inference-router',
-      infer: (request) => this.inference.infer('server-llm', request),
+      infer: (request) => this.inference.infer(this.inferenceProviderId, request),
+      stream: (request) => this.inference.stream(this.inferenceProviderId, request),
     });
+  }
+
+  listReasoningStrategies(): ReasoningStrategyDescriptor[] {
+    return this.reasoning.registry.list();
+  }
+
+  registerReasoningStrategy(strategy: ReasoningStrategy, replace = false): void {
+    this.reasoning.registry.register(strategy, { replace });
+  }
+
+  unregisterReasoningStrategy(id: string): boolean {
+    return this.reasoning.registry.unregister(id);
+  }
+
+  async listAgentPrompts(): Promise<AgentPromptSpec[]> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    return manager.listAgentPrompts();
+  }
+
+  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    manager.registerAgentPrompt(spec);
+  }
+
+  async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    return manager.unregisterAgentPrompt(id, version);
   }
 
   async startRun(input: StartRunInput): Promise<EventRunHandle> {
@@ -414,8 +662,20 @@ class EventRuntimeService {
             model: input.options?.model ?? resolved.model,
           },
         },
-        reasoning: input.reasoning,
+        reasoning: {
+          ...(input.reasoning ?? { method: 'direct' as const }),
+          trace: async (event) => {
+            await this.append(
+              input.runId,
+              'reasoning.decision.recorded',
+              { strategyEvent: event },
+              undefined,
+              { stepId: input.stepId }
+            );
+          },
+        },
         metadata: {
+          ...input.metadata,
           userId: runContext?.userId,
           sessionId: runContext?.clientSessionId,
           runtimeSessionId: runContext?.sessionId,
@@ -459,6 +719,87 @@ class EventRuntimeService {
     }
   }
 
+  private async resolveChatAgent(
+    input: ChatInferenceInput & {
+      agentId?: string;
+    },
+    userId: string,
+    sessionId: string
+  ): Promise<ResolvedRuntimeAgentSpec> {
+    const spec = input.agentSpec ?? {};
+    const id = spec.id ?? input.agentId ?? 'agent.default';
+    const name = spec.name ?? input.agentId ?? 'Default Runtime Agent';
+    const explicitInstructions = mergeSystemPrompts(
+      spec.systemInstructions,
+      input.options?.systemPrompt
+    );
+    const promptRefs = this.resolveAgentPromptRefs(spec);
+    const promptResolution = explicitInstructions
+      ? undefined
+      : await this.resolveAgentPromptInstructions({
+          agentId: id,
+          agentName: name,
+          userId,
+          sessionId,
+          promptRefs,
+        });
+    const systemInstructions =
+      explicitInstructions ??
+      promptResolution?.instructions ??
+      `You are ${name}. Be helpful, harmless, and honest.`;
+
+    return {
+      ...spec,
+      id,
+      version: spec.version ?? '0.0.0',
+      name,
+      promptRefs,
+      modelAlias:
+        spec.modelAlias ??
+        input.modelAlias ??
+        input.options?.model ??
+        this.resolveChatModel().model,
+      systemInstructions,
+      promptResolution,
+      toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
+    };
+  }
+
+  private resolveAgentPromptRefs(spec: RuntimeAgentSpecInput): AgentPromptRef[] {
+    if (spec.promptRefs?.length) return spec.promptRefs;
+    const legacyTemplateId = stringValue(asRecord(spec.metadata)?.promptTemplateId);
+    return [{ id: legacyTemplateId ?? 'default-agent', required: true, priority: 0 }];
+  }
+
+  private async resolveAgentPromptInstructions(input: {
+    agentId: string;
+    agentName: string;
+    userId: string;
+    sessionId: string;
+    promptRefs: AgentPromptRef[];
+  }): Promise<AgentPromptResolution | undefined> {
+    const variables = {
+      agent_id: input.agentId,
+      agent_name: input.agentName,
+      user_id: input.userId,
+      user_name: input.userId,
+      session_id: input.sessionId,
+      current_date: new Date().toISOString(),
+    };
+
+    try {
+      const promptManager = getPromptManager();
+      await promptManager.ensureInitialized();
+      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
+    } catch (error) {
+      logger.warn('Agent prompt template resolution failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return undefined;
+  }
+
   async runReActChat(
     input: ChatInferenceInput & {
       agentId?: string;
@@ -466,22 +807,15 @@ class EventRuntimeService {
       sessionId?: string;
     }
   ): Promise<ChatResponse> {
-    const agent: ReActAgentSpec = {
-      id: input.agentId ?? 'agent.default',
-      version: '0.0.0',
-      name: input.agentId ?? 'Default Runtime Agent',
-      modelAlias: input.modelAlias || input.options?.model || this.resolveChatModel().model,
-      toolRefs: input.options?.tools?.map((tool) => tool.name),
-    };
     const runContext = this.runs.get(input.runId);
     const userId = input.userId ?? runContext?.userId ?? 'single-user';
     const sessionId = input.sessionId ?? runContext?.clientSessionId ?? input.runId;
+    const agent = await this.resolveChatAgent(input, userId, sessionId);
+    const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     let chatResponse: ChatResponse | undefined;
-    let nextToolCallIndex = 0;
-    const toolObservations: Array<Record<string, unknown>> = [];
-
     const selectToolAction = (toolCall: NonNullable<ChatResponse['toolCalls']>[number]) => ({
       type: 'tool' as const,
+      toolCallId: toolCall.id,
       target: toolCall.name,
       input: toolCall.input,
       reason: `model-tool-call:${toolCall.id}`,
@@ -496,7 +830,7 @@ class EventRuntimeService {
           modelAlias: context.agent.modelAlias,
           input: {
             messages: context.messages as LLMMessage[],
-            options: input.options,
+            options: chatOptions,
           },
           cachePolicy: input.cachePolicy,
           metadata: {
@@ -519,23 +853,10 @@ class EventRuntimeService {
         };
       },
       async verify(_context, observation) {
-        if (chatResponse && observation.source === 'tool') {
-          const toolCall = chatResponse.toolCalls?.[nextToolCallIndex];
-          toolObservations.push({
-            toolCallId: toolCall?.id,
-            toolName: toolCall?.name,
-            status: observation.provenance?.status,
-            output: safeSerialize(observation.value),
-          });
-          nextToolCallIndex += 1;
-          const nextToolCall = chatResponse.toolCalls?.[nextToolCallIndex];
-          if (nextToolCall) {
-            return selectToolAction(nextToolCall);
-          }
+        if (observation.source === 'tool') {
           return {
-            type: 'finish',
-            input: attachToolObservations(chatResponse, toolObservations),
-            reason: 'all-tool-calls-observed',
+            type: 'model',
+            reason: 'continue-after-tool-observation',
           };
         }
         return {
@@ -557,6 +878,7 @@ class EventRuntimeService {
           options: requestInput.options,
           reasoning: input.reasoning,
           cachePolicy: request.cachePolicy ?? input.cachePolicy,
+          metadata: request.metadata,
         });
         return {
           id: response.id,
@@ -569,7 +891,12 @@ class EventRuntimeService {
     const runner = new ReActRunner(reactRuntime, {
       inference: reactInference,
       toolRunner: this.createReActToolRunner(input.runId, userId, sessionId),
-      maxIterations: Math.max(4, (input.options?.tools?.length ?? 0) + 2),
+      maxIterations: Math.max(
+        4,
+        agent.reasoning?.maxSteps ?? 0,
+        (chatOptions?.tools?.length ?? 0) + 2
+      ),
+      continueAfterTool: true,
       onStep: async (step) => {
         await this.record(
           input.runId,
@@ -590,6 +917,15 @@ class EventRuntimeService {
       agent,
       messages: input.messages,
       memoryScope: { userId, sessionId },
+      metadata: {
+        prompt: agent.promptResolution
+          ? {
+              refs: agent.promptRefs,
+              blocks: agent.promptResolution.blocks,
+              missing: agent.promptResolution.missing,
+            }
+          : asRecord(input.agentSpec?.metadata)?.prompt,
+      },
     });
     if (result.status !== 'completed') {
       throw new Error(
@@ -605,6 +941,12 @@ class EventRuntimeService {
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
     const runContext = this.runs.get(input.runId);
+    const agent = await this.resolveChatAgent(
+      input,
+      runContext?.userId ?? 'single-user',
+      runContext?.clientSessionId ?? input.runId
+    );
+    const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     await this.append(
       input.runId,
       'inference.requested',
@@ -627,29 +969,84 @@ class EventRuntimeService {
       { stepId: input.stepId }
     );
 
+    const inferenceRequest: InferenceRequest<LLMInferenceInput> = {
+      runId: input.runId,
+      stepId: input.stepId,
+      sessionId: runContext?.clientSessionId,
+      modelAlias: resolved.model,
+      cachePolicy: input.cachePolicy,
+      input: {
+        messages: input.messages,
+        options: {
+          ...chatOptions,
+          model: input.options?.model ?? resolved.model,
+        },
+      },
+      metadata: {
+        ...input.metadata,
+        prompt: agent.promptResolution
+          ? {
+              refs: agent.promptRefs,
+              blocks: agent.promptResolution.blocks,
+              missing: agent.promptResolution.missing,
+            }
+          : asRecord(input.agentSpec?.metadata)?.prompt,
+        stream: true,
+        userId: runContext?.userId,
+        sessionId: runContext?.clientSessionId,
+        runtimeSessionId: runContext?.sessionId,
+        provider: resolved.provider,
+        domainPackId: runContext?.domainPackId,
+      },
+    };
+    const reasoning: ReasoningOptions = {
+      ...(input.reasoning ?? { method: 'direct' as const }),
+      trace: async (event) => {
+        await this.append(
+          input.runId,
+          'reasoning.decision.recorded',
+          { strategyEvent: event, stream: true },
+          undefined,
+          { stepId: input.stepId }
+        );
+      },
+    };
     let completed = false;
     try {
-      for await (const response of this.inference.stream('server-llm', {
-        runId: input.runId,
-        stepId: input.stepId,
-        sessionId: runContext?.clientSessionId,
-        modelAlias: resolved.model,
-        cachePolicy: input.cachePolicy,
-        input: {
-          messages: input.messages,
-          options: {
-            ...input.options,
-            model: input.options?.model ?? resolved.model,
+      if (
+        reasoning.method === 'tot' ||
+        reasoning.method === 'got' ||
+        reasoning.method === 'self_consistency'
+      ) {
+        const response = await this.reasoning.infer({ ...inferenceRequest, reasoning });
+        const chat = response.output as ChatResponse;
+        if (chat.content) yield { type: 'content', content: chat.content };
+        yield { type: 'done', usage: chat.usage };
+        await this.append(
+          input.runId,
+          'model.call.completed',
+          { model: chat.model, provider: chat.provider, usage: chat.usage, stream: true },
+          undefined,
+          { stepId: input.stepId }
+        );
+        await this.append(
+          input.runId,
+          'inference.completed',
+          {
+            stream: true,
+            usage: response.usage,
+            cache: response.cache,
+            reasoning: response.metadata?.reasoning,
           },
-        },
-        metadata: {
-          stream: true,
-          userId: runContext?.userId,
-          sessionId: runContext?.clientSessionId,
-          runtimeSessionId: runContext?.sessionId,
-          provider: resolved.provider,
-          domainPackId: runContext?.domainPackId,
-        },
+          undefined,
+          { stepId: input.stepId }
+        );
+        return;
+      }
+
+      for await (const response of this.reasoning.stream({
+        ...inferenceRequest,
+        reasoning,
       })) {
         const chunk = response.output as StreamChunk;
         if (chunk.type === 'error') {
@@ -1321,7 +1718,7 @@ class EventRuntimeService {
     }));
     const variables = {
       defaultProvider: llm.getDefaultProvider(),
-      defaultModel: this.getWorkflowDefaultModel(),
+      defaultModel: llm.getDefaultModel(),
       ...workflow.variables,
       ...execution.context.variables,
     };
@@ -1534,7 +1931,7 @@ class EventRuntimeService {
     const llm = getLLMManager();
     const mergedVars: Record<string, unknown> = {
       defaultProvider: llm.getDefaultProvider(),
-      defaultModel: this.getWorkflowDefaultModel(),
+      defaultModel: llm.getDefaultModel(),
       ...variables,
     };
     return {
@@ -1561,14 +1958,6 @@ class EventRuntimeService {
           : undefined,
       })),
     };
-  }
-
-  private getWorkflowDefaultModel(): string {
-    return (
-      process.env.AGENT_DEFAULT_MODEL ||
-      process.env.HYPHA_LLM_DEFAULT_MODEL ||
-      getLLMManager().getDefaultModel()
-    );
   }
 
   private resolveWorkflowVariables(template: unknown, variables: Record<string, unknown>): unknown {
@@ -1624,14 +2013,6 @@ class EventRuntimeService {
 
   listEvents(runId: string): Promise<FrameworkEvent[]> {
     return this.runtime.listEvents(runId);
-  }
-
-  projectLoop(runId: string) {
-    return this.serverRuntime.projectLoop(runId);
-  }
-
-  projectStateAttempts(runId: string) {
-    return this.serverRuntime.projectStateAttempts(runId);
   }
 
   private async ensureSession(
@@ -1846,20 +2227,6 @@ function normalizeToolInput(input: unknown): Record<string, unknown> {
   return input === undefined ? {} : { value: input };
 }
 
-function attachToolObservations(
-  response: ChatResponse,
-  toolObservations: Array<Record<string, unknown>>
-): ChatResponse {
-  if (!toolObservations.length) return response;
-  return {
-    ...response,
-    raw: {
-      ...(asRecord(response.raw) ?? {}),
-      hyphaToolObservations: toolObservations,
-    },
-  };
-}
-
 function normalizeWorkflowGuardCondition(condition: string): string {
   return condition
     .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, pathValue: string) =>
@@ -2026,6 +2393,31 @@ function stringValue(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
 }
 
+function mergeSystemPrompts(...prompts: Array<string | undefined>): string | undefined {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const prompt of prompts) {
+    const normalized = stringValue(prompt);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    parts.push(normalized);
+  }
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
+function withSystemPrompt(
+  options: ChatOptions | undefined,
+  systemPrompt: string | undefined
+): ChatOptions | undefined {
+  const resolved = mergeSystemPrompts(systemPrompt);
+  if (!resolved) return options;
+  if (options?.systemPrompt === resolved) return options;
+  return {
+    ...options,
+    systemPrompt: resolved,
+  };
+}
+
 function numberValue(input: unknown): number | undefined {
   return typeof input === 'number' && Number.isFinite(input) ? input : undefined;
 }
@@ -2042,7 +2434,7 @@ function inferToolSideEffect(
 ): 'none' | 'read' | 'write' | 'external_effect' | 'irreversible' {
   if (name === 'filesystem' && params && typeof params === 'object') {
     const operation = (params as Record<string, unknown>).operation;
-    if (operation === 'write') return 'write';
+    if (operation === 'write' || operation === 'execute') return 'write';
     if (operation === 'delete') return 'irreversible';
     return 'read';
   }

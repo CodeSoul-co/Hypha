@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
-import { getConfig } from '../../config';
+import { filesystemToolConfig, getConfig } from '../../config';
 import {
   classicMCPCapabilityDescriptors,
   createClassicMCPMockGateway,
@@ -26,10 +26,6 @@ import type { ToolSpec as HyphaToolSpec } from '@hypha/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import axios from 'axios';
-
-// Built-in tool constructors — registered in initialize(), then enabled/disabled
-// based on configs/tools.yaml.
-const BUILTIN_TOOL_CTORS: Array<new () => ITool> = [FilesystemTool, SearchTool];
 
 type MCPToolResolution = {
   client: MCPClient;
@@ -86,11 +82,7 @@ class LocalMCPClient implements MCPClient {
           name: 'hypha',
           version: '1.0.0',
         },
-        {
-          capabilities: {
-            tools: {},
-          },
-        }
+        { capabilities: {} }
       );
 
       await this.client.connect(transport);
@@ -483,9 +475,10 @@ export class ToolManager {
     const config = getConfig();
 
     // 1. Register built-in tool implementations.
-    for (const Ctor of BUILTIN_TOOL_CTORS) {
+    const builtinTools: ITool[] = [new FilesystemTool(filesystemToolConfig()), new SearchTool()];
+    for (const tool of builtinTools) {
       try {
-        await this.register(new Ctor());
+        await this.register(tool);
       } catch (err) {
         logger.error('Failed to register built-in tool:', err);
       }
@@ -800,7 +793,7 @@ export class ToolManager {
 
   private toolSpecToDefinition(spec: HyphaToolSpec): ToolDefinition {
     return {
-      name: spec.source === 'mcp' ? spec.id : spec.name ?? spec.id,
+      name: spec.source === 'mcp' ? spec.id : (spec.name ?? spec.id),
       description: spec.description,
       inputSchema: this.asObjectInputSchema(spec.inputSchema),
       outputSchema: spec.outputSchema as Record<string, any> | undefined,
