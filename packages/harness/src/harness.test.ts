@@ -632,9 +632,12 @@ describe('@hypha/harness contracts', () => {
       output: {
         toolId: 'tool.danger',
         status: 'denied',
-        error: expect.stringContaining('requires an explicit policy override'),
       },
     });
+    const deniedError = (result.react.output as { error?: string | { message?: string } }).error;
+    expect(typeof deniedError === 'string' ? deniedError : deniedError?.message).toContain(
+      'requires an explicit policy override'
+    );
     expect(result.events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['skill.completed', 'react.step.completed'])
     );
