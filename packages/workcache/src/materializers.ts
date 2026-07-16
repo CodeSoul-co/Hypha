@@ -1,4 +1,4 @@
-import type { FrameworkEvent } from '@hypha/core';
+import type { FrameworkEvent, RecoveryKnowledge } from '@hypha/core';
 import { createWorkBlockId, createWorkCacheKey, hashStableJson, stableJson } from './key';
 import type {
   CacheBlock,
@@ -6,6 +6,7 @@ import type {
   CacheTreeType,
   NormalizedWorkEvent,
   PromptPrefixBlockValue,
+  RecoveryKnowledgeBlockValue,
   WorkNodeType,
 } from './types';
 
@@ -282,6 +283,60 @@ export function materializeMessageBlock(event: NormalizedWorkEvent): CacheBlock[
         messageStatus: status,
       },
       tags: ['message-bus'],
+    }),
+  ];
+}
+
+export function materializeRecoveryKnowledgeBlock(event: NormalizedWorkEvent): CacheBlock[] {
+  const payload = recordFromUnknown(event.payload);
+  const rawKnowledge = recordFromUnknown(payload.knowledge);
+  const rawKey = recordFromUnknown(rawKnowledge.key);
+  const validation = recordFromUnknown(rawKnowledge.validation);
+  const fingerprint = stringValue(rawKey.fingerprint);
+  const participantId = stringValue(rawKey.participantId);
+  const strategy = stringValue(rawKnowledge.strategy);
+  const outcome = stringValue(rawKnowledge.outcome);
+  const learnedAt = stringValue(rawKnowledge.learnedAt);
+  const validationStatus = stringValue(validation.status);
+  if (
+    !fingerprint ||
+    !participantId ||
+    !strategy ||
+    !outcome ||
+    !learnedAt ||
+    (validationStatus !== 'verified' && validationStatus !== 'negative')
+  ) {
+    return [];
+  }
+  const knowledge = rawKnowledge as unknown as RecoveryKnowledge;
+  const sourceHashes = Object.fromEntries(
+    [
+      ['policy', stringValue(rawKey.policyRevision)],
+      ['spec', stringValue(rawKey.specRevision)],
+      ['provider', stringValue(rawKey.providerRevision)],
+    ].filter((entry): entry is [string, string] => Boolean(entry[1]))
+  );
+  return [
+    createBlock<RecoveryKnowledgeBlockValue>(event, {
+      identity: knowledge.key,
+      value: knowledge,
+      validity: {
+        status: 'valid',
+        proof: recordFromUnknown(validation.proof),
+        sourceHashes,
+        provenanceHash: hashStableJson({ key: knowledge.key, validation }),
+      },
+      provenance: {
+        fingerprint,
+        participantId,
+        learnedAt,
+      },
+      metadata: {
+        strategy,
+        outcome,
+        validationStatus,
+      },
+      tags: ['recovery-knowledge', `recovery:${validationStatus}`],
     }),
   ];
 }
