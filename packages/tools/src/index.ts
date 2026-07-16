@@ -56,6 +56,7 @@ import {
 } from './contracts';
 
 export * from './contracts';
+export * from './common-tools';
 export * from './media';
 export * from './workspace';
 
@@ -3309,8 +3310,33 @@ function validateStringSchema(
     issues.push({ path, message: `must contain at most ${maxLength} characters` });
   }
   const pattern = stringKeyword(schema, 'pattern');
-  if (pattern && !new RegExp(pattern).test(value)) {
-    issues.push({ path, message: `must match pattern ${pattern}` });
+  if (pattern) {
+    const compiled = compileToolSchemaPattern(pattern);
+    if ('error' in compiled) {
+      issues.push({ path, message: compiled.error });
+    } else if (value.length > 1_000_000) {
+      issues.push({ path, message: 'exceeds the safe pattern input limit' });
+    } else if (!compiled.expression.test(value)) {
+      issues.push({ path, message: `must match pattern ${pattern}` });
+    }
+  }
+}
+
+function compileToolSchemaPattern(pattern: string): { expression: RegExp } | { error: string } {
+  if (pattern.length > 512) return { error: 'schema pattern exceeds 512 characters' };
+  if (
+    /\\[1-9]/.test(pattern) ||
+    /\((?:[^()]|\\.)*[*+}](?:[^()]|\\.)*\)[*+{]/.test(pattern) ||
+    /\((?:[^()]|\\.)*\|(?:[^()]|\\.)*\)[*+{]/.test(pattern)
+  ) {
+    return { error: 'schema pattern uses unsafe backtracking constructs' };
+  }
+  try {
+    return { expression: new RegExp(pattern) };
+  } catch (error) {
+    return {
+      error: `schema pattern is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 

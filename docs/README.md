@@ -6,6 +6,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.
 - [Runtime Model](reference/runtime-model.md): DomainPack, Session, Run, Event, FSM, replay, audit, regression, and concurrency conventions.
+- [FSM Anomaly Recovery](architecture/fsm-recovery.md): anomaly taxonomy, bounded recovery states, circuit breaking, compensation, quarantine, and module failure matrix.
 - [Storage Reference](reference/storage.md): document, messaging, relational, vector, and artifact storage conventions plus memory extension points.
 - [Local Data Layout](reference/local-data-layout.md): ignored `data/` tree for local runtime records, indexes, artifacts, and logs.
 - [Framework API](api/framework.md): TypeScript package contracts and field-level spec references.
@@ -23,6 +24,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [Local Development](guides/local-development.md): setup, environment, commands, storage adapters, and verification checks.
 - [Tool/MCP Security](guides/tool-mcp-security.md): trust boundaries, secrets, side effects, approval, and recovery.
 - [Tool Adapter Guide](guides/tool-adapters.md): implement and register Local, HTTP, Plugin, Mock, and MCP adapters.
+- [Common Utility Tools](guides/common-utility-tools.md): governed JSON, text, and SHA-256 tools with limits and examples.
 - [Tool/MCP Migration](guides/tool-mcp-migration.md): move legacy handlers and MCP calls to the governed runtime.
 - [Governance Examples](examples/tool-mcp-governance.md): local Tool execution and MCP catalog/snapshot examples.
 - [Capability Matrix](reference/tool-mcp-capability-matrix.md): public surfaces and runtime guarantees.

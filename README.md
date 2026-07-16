@@ -27,7 +27,7 @@ The runtime model is event-first:
 - `Run` is one concrete execution under a Session.
 - `Event` is the smallest source-of-truth fact record. Trace, replay, audit, regression, and state projection are derived from events.
 
-The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state.
+The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state. Anomaly recovery is also FSM-native: bounded retry and circuit wait enter `Recovering`, committed effects enter `Compensating`, and uncertain effects enter `Quarantined`.
 
 ## API Documentation
 
@@ -76,6 +76,11 @@ connection, catalog, trust, drift, schema-cache, and immutable Run snapshot reco
 See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
 [security guide](docs/guides/tool-mcp-security.md), and
 [adapter guide](docs/guides/tool-adapters.md).
+
+The server includes governed, side-effect-free `utility.json`, `utility.text`, and `utility.hash`
+tools for bounded JSON operations, literal text transformations, and SHA-256 fingerprints. See the
+[common utility guide](docs/guides/common-utility-tools.md) and
+[FSM recovery architecture](docs/architecture/fsm-recovery.md).
 
 ## Governed Execution Contracts
 
