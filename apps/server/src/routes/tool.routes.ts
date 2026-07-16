@@ -185,6 +185,7 @@ router.post(
         return res.status(HTTP_STATUS.ACCEPTED).json({
           success: true,
           runId,
+          invocationId: result.invocationId,
           data: {
             tool: name,
             status: result.status,
@@ -204,6 +205,7 @@ router.post(
       res.json({
         success: true,
         runId,
+        invocationId: result.invocationId,
         data: output,
       });
     } catch (error) {
