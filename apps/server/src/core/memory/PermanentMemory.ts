@@ -46,7 +46,7 @@ function toPlainMessage(doc: IMessage): PermanentMessage {
 
 export class PermanentMemory implements IPermanentStore {
   async createConversation(
-    conversation: Omit<PermanentConversation, 'id' | 'createdAt' | 'updatedAt'>
+    conversation: Omit<PermanentConversation, 'id' | 'createdAt' | 'updatedAt'>,
   ): Promise<PermanentConversation> {
     try {
       const doc = await ConversationModel.create({
@@ -90,7 +90,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async getConversationBySessionId(
     sessionId: string,
-    userId?: string
+    userId?: string,
   ): Promise<PermanentConversation | null> {
     try {
       const doc = await ConversationModel.findOne({
@@ -106,7 +106,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async updateConversation(
     id: string,
-    updates: Partial<PermanentConversation>
+    updates: Partial<PermanentConversation>,
   ): Promise<PermanentConversation | null> {
     try {
       const doc = await ConversationModel.findByIdAndUpdate(
@@ -121,7 +121,7 @@ export class PermanentMemory implements IPermanentStore {
             ...(updates.agentId !== undefined && { agentId: updates.agentId }),
           },
         },
-        { new: true }
+        { new: true },
       );
 
       return doc ? toPlainConversation(doc) : null;
@@ -151,10 +151,17 @@ export class PermanentMemory implements IPermanentStore {
 
   async listConversations(
     userId: string,
-    options: ListConversationsOptions = {}
+    options: ListConversationsOptions = {},
   ): Promise<PermanentConversation[]> {
     try {
-      const { page = 1, pageSize = 20, agentId, isArchived, startDate, endDate } = options;
+      const {
+        page = 1,
+        pageSize = 20,
+        agentId,
+        isArchived,
+        startDate,
+        endDate,
+      } = options;
 
       const filter: Record<string, any> = { userId };
 
@@ -182,7 +189,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async addMessage(
     conversationId: string,
-    message: Omit<PermanentMessage, 'id' | 'conversationId' | 'timestamp'>
+    message: Omit<PermanentMessage, 'id' | 'conversationId' | 'timestamp'>,
   ): Promise<PermanentMessage> {
     try {
       const doc = await MessageModel.create({
@@ -215,7 +222,7 @@ export class PermanentMemory implements IPermanentStore {
 
   async getMessages(
     conversationId: string,
-    options: ListMessagesOptions = {}
+    options: ListMessagesOptions = {},
   ): Promise<PermanentMessage[]> {
     try {
       const { page = 1, pageSize = 50, startDate, endDate, roles } = options;
@@ -248,7 +255,10 @@ export class PermanentMemory implements IPermanentStore {
     }
   }
 
-  async deleteMessage(conversationId: string, messageId: string): Promise<boolean> {
+  async deleteMessage(
+    conversationId: string,
+    messageId: string,
+  ): Promise<boolean> {
     try {
       const result = await MessageModel.findOneAndDelete({
         _id: new mongoose.Types.ObjectId(messageId),
@@ -265,7 +275,7 @@ export class PermanentMemory implements IPermanentStore {
   async searchConversations(
     userId: string,
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<PermanentConversation[]> {
     try {
       const { page = 1, pageSize = 20 } = options;
@@ -292,14 +302,16 @@ export class PermanentMemory implements IPermanentStore {
   async searchMessages(
     userId: string,
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<PermanentMessage[]> {
     try {
       const { page = 1, pageSize = 20 } = options;
       const skip = (page - 1) * pageSize;
 
       // First get user's conversation IDs
-      const conversations = await ConversationModel.find({ userId }).select('_id');
+      const conversations = await ConversationModel.find({ userId }).select(
+        '_id',
+      );
       const conversationIds = conversations.map((c) => c._id);
 
       const docs = await MessageModel.find({
@@ -333,7 +345,9 @@ export class PermanentMemory implements IPermanentStore {
             },
           },
         ]),
-        ConversationModel.findOne({ userId }).sort({ updatedAt: -1 }).select('updatedAt'),
+        ConversationModel.findOne({ userId })
+          .sort({ updatedAt: -1 })
+          .select('updatedAt'),
       ]);
 
       const totalConversations = stats[0]?.totalConversations || 0;
@@ -383,7 +397,7 @@ export class PermanentMemory implements IPermanentStore {
           isArchived: false,
           updatedAt: { $lt: cutoffDate },
         },
-        { $set: { isArchived: true } }
+        { $set: { isArchived: true } },
       );
 
       if (result.modifiedCount > 0) {

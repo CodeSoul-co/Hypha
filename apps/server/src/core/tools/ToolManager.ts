@@ -14,30 +14,18 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
-import { InMemoryTelemetryRecorder } from '@hypha/core';
 import { filesystemToolConfig, getConfig } from '../../config';
-import {
-  FileMCPCapabilityCatalogStore,
-  FileToolContractSnapshotStore,
-  LocalWorkspaceRuntime,
-} from '@hypha/adapters-local';
 import {
   classicMCPCapabilityDescriptors,
   createClassicMCPMockGateway,
   normalizeMCPToolSpec,
-  MCPConnectionManager,
-  SDKMCPConnectionSessionFactory,
-  MCPCapabilityCatalog,
-  type MCPCapabilityRecord,
   type MCPCapabilityDescriptor,
   type MCPGateway,
 } from '@hypha/mcp';
-import {
-  LocalFunctionToolAdapter,
-  MCPToolAdapter,
-  type ToolAdapter,
-  type ToolSpec as HyphaToolSpec,
-} from '@hypha/tools';
+import type { ToolSpec as HyphaToolSpec } from '@hypha/tools';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import axios from 'axios';
 
 type MCPToolResolution = {
   client: MCPClient;
@@ -56,89 +44,265 @@ type MCPToolMetadata = {
   version?: string;
 };
 
-class ManagedMCPClient implements MCPClient {
-  status: MCPClient['status'] = 'disconnected';
+// Local MCP Client implementation
+class LocalMCPClient implements MCPClient {
+  id: string;
+  name: string;
+  status: 'connecting' | 'connected' | 'disconnected' | 'error' = 'disconnected';
   tools: ToolDefinition[] = [];
 
-  constructor(
-    readonly id: string,
-    readonly name: string,
-    private readonly manager: MCPConnectionManager
-  ) {}
+  private client: Client | null = null;
+  private config: MCPServerConfig;
+  private childProcess: any = null;
+
+  constructor(config: MCPServerConfig) {
+    this.id = config.id;
+    this.name = config.name;
+    this.config = config;
+  }
 
   async connect(): Promise<void> {
+    if (this.status === 'connected') return;
+
     this.status = 'connecting';
+    logger.info(`Connecting to MCP server: ${this.name}`);
+
     try {
-      await this.manager.connect(this.id);
-      await this.refreshTools();
+      if (!this.config.command || !this.config.args) {
+        throw new Error('MCP server command and args are required');
+      }
+
+      const transport = new StdioClientTransport({
+        command: this.config.command,
+        args: this.config.args,
+      });
+
+      this.client = new Client(
+        {
+          name: 'hypha',
+          version: '1.0.0',
+        },
+        {
+          capabilities: {
+            tools: {},
+          },
+        }
+      );
+
+      await this.client.connect(transport);
       this.status = 'connected';
-    } catch (error) {
+
+      // List available tools
+      await this.refreshTools();
+
+      logger.info(`MCP server connected: ${this.name}`, { toolCount: this.tools.length });
+    } catch (error: any) {
       this.status = 'error';
+      logger.error(`Failed to connect to MCP server ${this.name}:`, error);
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
-    await this.manager.disconnect(this.id, 'server-tool-manager');
+    if (this.client) {
+      await this.client.close();
+      this.client = null;
+    }
+    if (this.childProcess) {
+      this.childProcess.kill();
+      this.childProcess = null;
+    }
     this.status = 'disconnected';
     this.tools = [];
+    logger.info(`MCP server disconnected: ${this.name}`);
   }
 
-  async invoke(name: string, args: any): Promise<ToolResult> {
+  async callTool(name: string, args: any): Promise<ToolResult> {
+    if (!this.client || this.status !== 'connected') {
+      return { success: false, error: 'MCP client not connected' };
+    }
+
     try {
-      const output = await this.manager.call({
-        serverId: this.id,
-        capabilityId: name,
-        input: args,
-        context: {
-          runId: 'server-mcp',
-          stepId: `mcp:${this.id}:${name}`,
-          invocationId: `server-mcp:${this.id}:${name}:${Date.now()}`,
-        },
+      const result = await this.client.callTool({
+        name,
+        arguments: args,
       });
-      return { success: true, output };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
+
+      return { success: true, output: result };
+    } catch (error: any) {
+      logger.error(`MCP tool call failed: ${name}`, error);
+      return { success: false, error: error.message };
     }
   }
 
   async listTools(): Promise<ToolDefinition[]> {
-    if (this.status !== 'connected') return [];
-    return this.refreshTools();
+    if (!this.client || this.status !== 'connected') {
+      return [];
+    }
+
+    try {
+      return await this.refreshTools();
+    } catch (error) {
+      logger.error(`Failed to list tools from ${this.name}:`, error);
+      return [];
+    }
   }
 
   async healthCheck(): Promise<boolean> {
-    const status = await this.manager.status(this.id);
-    return status.health.status === 'healthy';
+    if (!this.client) return false;
+    try {
+      await this.refreshTools();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async refreshTools(): Promise<ToolDefinition[]> {
-    const descriptors = await this.manager.discover({
-      id: `server.${this.id}`,
-      version: '1.0.0',
-      servers: [{ id: this.id, mode: 'remote' }],
+    if (!this.client || this.status !== 'connected') {
+      throw new Error('MCP client not connected');
+    }
+    const response = await this.client.listTools();
+    this.tools = response.tools.map((tool: any) => ({
+      name: String(tool.name),
+      description: tool.description || '',
+      inputSchema: tool.inputSchema || { type: 'object' },
+      outputSchema: tool.outputSchema,
+      metadata: {
+        sourceRef: {
+          serverId: this.id,
+          capabilityId: String(tool.name),
+        },
+        sideEffectLevel: 'read',
+      },
+    }));
+    return this.tools;
+  }
+}
+
+// Remote MCP Client implementation
+class RemoteMCPClient implements MCPClient {
+  id: string;
+  name: string;
+  status: 'connecting' | 'connected' | 'disconnected' | 'error' = 'disconnected';
+  tools: ToolDefinition[] = [];
+
+  private config: MCPServerConfig;
+  private baseUrl: string;
+  private authToken?: string;
+
+  constructor(config: MCPServerConfig) {
+    this.id = config.id;
+    this.name = config.name;
+    this.config = config;
+    this.baseUrl = config.endpoint || '';
+    this.authToken = config.authToken;
+  }
+
+  async connect(): Promise<void> {
+    if (this.status === 'connected') return;
+
+    this.status = 'connecting';
+    logger.info(`Connecting to remote MCP server: ${this.name}`);
+
+    try {
+      if (!this.baseUrl) {
+        throw new Error('Remote MCP endpoint is required');
+      }
+      // Verify connection by listing tools
+      await this.fetchTools();
+      this.status = 'connected';
+      logger.info(`Remote MCP server connected: ${this.name}`);
+    } catch (error: any) {
+      this.status = 'error';
+      logger.error(`Failed to connect to remote MCP server ${this.name}:`, error);
+      throw error;
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    this.status = 'disconnected';
+    this.tools = [];
+    logger.info(`Remote MCP server disconnected: ${this.name}`);
+  }
+
+  async callTool(name: string, args: any): Promise<ToolResult> {
+    if (this.status !== 'connected') {
+      return { success: false, error: 'Remote MCP client not connected' };
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (this.authToken) {
+        headers['Authorization'] = `Bearer ${this.authToken}`;
+      }
+
+      const response = await axios.post(
+        `${this.baseUrl}/tools/call`,
+        { name, arguments: args },
+        { headers, timeout: 30000 }
+      );
+
+      return { success: true, output: response.data };
+    } catch (error: any) {
+      logger.error(`Remote MCP tool call failed: ${name}`, error);
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message,
+      };
+    }
+  }
+
+  async listTools(): Promise<ToolDefinition[]> {
+    try {
+      return await this.fetchTools();
+    } catch (error) {
+      logger.error(`Failed to list tools from remote MCP ${this.name}:`, error);
+      return [];
+    }
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      await this.fetchTools();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async fetchTools(): Promise<ToolDefinition[]> {
+    if (!this.baseUrl) {
+      throw new Error('Remote MCP endpoint is required');
+    }
+    const headers: Record<string, string> = {};
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
+    const response = await axios.get(`${this.baseUrl}/tools`, {
+      headers,
+      timeout: 10000,
     });
-    this.tools = descriptors
-      .filter((descriptor) => descriptor.type === 'tool')
-      .map((descriptor) => ({
-        name: descriptor.capabilityId,
-        description: descriptor.description ?? '',
-        inputSchema: {
-          ...(descriptor.inputSchema as Record<string, any>),
-          type: 'object',
+
+    const remoteTools = Array.isArray(response.data?.tools) ? response.data.tools : [];
+    this.tools = remoteTools.map((tool: any) => ({
+      name: String(tool.name),
+      description: tool.description || '',
+      inputSchema: tool.inputSchema || { type: 'object' },
+      outputSchema: tool.outputSchema,
+      metadata: {
+        sourceRef: {
+          serverId: this.id,
+          capabilityId: String(tool.name),
         },
-        outputSchema: descriptor.outputSchema as Record<string, any> | undefined,
-        metadata: {
-          sourceRef: {
-            serverId: descriptor.serverId,
-            capabilityId: descriptor.capabilityId,
-          },
-          sideEffectLevel: descriptor.sideEffectLevel,
-          permissionScope: descriptor.permissionScope,
-          trustLevel: descriptor.trustLevel,
-          version: descriptor.version,
-        },
-      }));
+        sideEffectLevel: tool.sideEffectLevel || 'read',
+        permissionScope: tool.permissionScope,
+      },
+    }));
     return this.tools;
   }
 }
@@ -215,7 +379,7 @@ class FixtureMCPClient implements MCPClient {
     logger.info(`Fixture MCP server disconnected: ${this.name}`);
   }
 
-  async invoke(name: string, args: any): Promise<ToolResult> {
+  async callTool(name: string, args: any): Promise<ToolResult> {
     if (this.status !== 'connected') {
       return { success: false, error: 'Fixture MCP client not connected' };
     }
@@ -223,8 +387,11 @@ class FixtureMCPClient implements MCPClient {
     if (!capability) {
       return { success: false, error: `MCP fixture tool not found: ${name}` };
     }
+    if (!this.gateway.callTool) {
+      return { success: false, error: 'Fixture MCP gateway does not support tool calls' };
+    }
     try {
-      const output = await this.gateway.call({
+      const output = await this.gateway.callTool({
         serverId: capability.serverId,
         capabilityId: capability.capabilityId,
         input: args,
@@ -307,35 +474,12 @@ class FixtureMCPClient implements MCPClient {
 export class ToolManager {
   private tools: Map<string, ToolRegistration> = new Map();
   private mcpClients: Map<string, MCPClient> = new Map();
-  private readonly mcpAuthorization = new Map<string, string>();
-  private readonly mcpTelemetry = new InMemoryTelemetryRecorder();
-  private readonly connectionManager = new MCPConnectionManager({
-    sessionFactory: new SDKMCPConnectionSessionFactory({
-      resolveAuthorizationRef: (ref) => this.mcpAuthorization.get(ref) ?? ref,
-    }),
-    telemetry: this.mcpTelemetry,
-  });
-  private readonly mcpCatalogs = new Map<string, MCPCapabilityCatalog>();
-  private readonly mcpCatalogStore = new FileMCPCapabilityCatalogStore(
-    process.env.HYPHA_MCP_CATALOG_STORE ??
-      path.resolve(process.cwd(), 'data/runtime/mcp-capability-catalog.json')
-  );
-  private readonly mcpSnapshotStore = new FileToolContractSnapshotStore(
-    process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ??
-      path.resolve(process.cwd(), 'data/runtime/tool-contract-snapshots')
-  );
 
   async initialize(): Promise<void> {
     const config = getConfig();
 
     // 1. Register built-in tool implementations.
-    const filesystemConfig = filesystemToolConfig();
-    const workspaceRuntime = new LocalWorkspaceRuntime(filesystemConfig);
-    await workspaceRuntime.initialize();
-    const builtinTools: ITool[] = [
-      new FilesystemTool(workspaceRuntime, filesystemConfig),
-      new SearchTool(),
-    ];
+    const builtinTools: ITool[] = [new FilesystemTool(filesystemToolConfig()), new SearchTool()];
     for (const tool of builtinTools) {
       try {
         await this.register(tool);
@@ -393,7 +537,6 @@ export class ToolManager {
       await client.disconnect();
     }
     this.mcpClients.clear();
-    await this.connectionManager.closeAll();
 
     // Call unload on all tools
     for (const [id, registration] of this.tools) {
@@ -528,132 +671,35 @@ export class ToolManager {
     return null;
   }
 
-  resolveGovernedTool(nameOrId: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
-    const localTool = this.getTool(nameOrId) ?? this.getToolByName(nameOrId);
+  async executeTool(name: string, params: ToolParams): Promise<ToolResult> {
+    // First check local tools
+    const localTool = this.getToolByName(name);
     if (localTool) {
-      const governance = localTool.governance;
-      const spec: HyphaToolSpec = {
-        id: localTool.id,
-        version: '0.0.0',
-        name: localTool.name,
-        description: localTool.description,
-        inputSchema: localTool.schema.inputSchema,
-        outputSchema: governance?.outputSchema ?? localTool.schema.outputSchema,
-        sideEffectLevel: governance?.sideEffectLevel ?? 'read',
-        permissionScope: governance?.permissionScope,
-        preconditions: governance?.preconditions,
-        postconditions: governance?.postconditions,
-        timeoutPolicy: governance?.timeoutPolicy,
-        retryPolicy: governance?.retryPolicy,
-        auditPolicy: governance?.auditPolicy,
-        humanApprovalPolicy: governance?.humanApprovalPolicy,
-        source: 'local',
-      };
-      return {
-        spec,
-        adapter: new LocalFunctionToolAdapter(`server-local:${localTool.id}`, async (input) => {
-          const result = await localTool.execute(input as ToolParams);
-          if (!result.success) throw new Error(result.error ?? `Tool failed: ${localTool.id}`);
-          return result.output;
-        }),
-      };
+      return localTool.execute(params);
     }
 
-    const mcpTool = this.findMCPToolByName(nameOrId);
+    // Then check MCP tools
+    const mcpTool = this.findMCPToolByName(name);
     if (mcpTool) {
-      const serverId = mcpTool.spec.sourceRef?.serverId ?? mcpTool.client.id;
-      const capabilityId = mcpTool.spec.sourceRef?.capabilityId ?? mcpTool.tool.name;
-      return {
-        spec: mcpTool.spec,
-        adapter: new MCPToolAdapter(`server-mcp:${serverId}`, serverId, capabilityId, {
-          invoke: async ({ input }) => {
-            const result = await mcpTool.client.invoke(mcpTool.tool.name, input);
-            if (!result.success) {
-              throw new Error(result.error ?? `MCP Tool failed: ${mcpTool.spec.id}`);
-            }
-            return result.output;
-          },
-          health: async () => ({
-            status: (await mcpTool.client.healthCheck()) ? 'healthy' : 'unhealthy',
-            checkedAt: new Date().toISOString(),
-          }),
-        }),
-      };
+      return mcpTool.client.callTool(mcpTool.tool.name, params);
     }
 
-    return null;
+    return { success: false, error: `Tool not found: ${name}` };
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
-    if (config.authToken) this.mcpAuthorization.set(`mcp-auth:${config.id}`, config.authToken);
-    if (config.mode !== 'fixture') {
-      this.connectionManager.register({
-        id: config.id,
-        displayName: config.name,
-        mode: config.mode,
-        transport:
-          config.mode === 'local'
-            ? {
-                type: 'stdio',
-                command: config.command ?? '',
-                args: config.args,
-                envAllowList: ['PATH'],
-                stderrMode: 'capture',
-              }
-            : {
-                type: 'streamable_http',
-                endpoint: config.endpoint ?? '',
-                authorizationRef: config.authToken ? `mcp-auth:${config.id}` : undefined,
-                sessionMode: 'protocol_default',
-              },
-        singleStart: true,
-        initializationTimeoutMs: 10_000,
-        requestTimeoutMs: 30_000,
-        shutdownTimeoutMs: 5_000,
-        reconnectPolicy: { maxAttempts: 3, backoffMs: 250 },
-      });
-      const catalog = new MCPCapabilityCatalog({
-        integration: {
-          id: `server.${config.id}`,
-          version: '1.0.0',
-          servers: [{ id: config.id, mode: config.mode }],
-        },
-        gateway: this.connectionManager,
-        trustPolicy: {
-          defaultTrustLevel: 'restricted',
-          requireApprovalForNewCapability: false,
-          requireApprovalForSchemaChange: true,
-          allowServerDeclaredSideEffectHints: false,
-          pinServerIdentity: true,
-          pinProtocolVersion: true,
-          pinCapabilityHashes: true,
-        },
-        driftPolicy: {
-          onDescriptionChange: 'snapshot_next_run',
-          onSchemaChange: 'require_approval',
-          onRemoval: 'allow_existing_run',
-          onServerIdentityChange: 'quarantine',
-          notifyRuntime: true,
-          invalidateSchemaCache: true,
-        },
-        store: this.mcpCatalogStore,
-        snapshotStore: this.mcpSnapshotStore,
-        telemetry: this.mcpTelemetry,
-      });
-      catalog.bindConnectionManager(this.connectionManager);
-      this.mcpCatalogs.set(config.id, catalog);
-    }
     const client =
-      config.mode === 'fixture'
-        ? new FixtureMCPClient(config)
-        : new ManagedMCPClient(config.id, config.name, this.connectionManager);
+      config.mode === 'local'
+        ? new LocalMCPClient(config)
+        : config.mode === 'remote'
+          ? new RemoteMCPClient(config)
+          : new FixtureMCPClient(config);
 
     this.mcpClients.set(config.id, client);
 
     if (config.autoStart || config.autoConnect) {
       try {
         await client.connect();
-        await this.mcpCatalogs.get(config.id)?.refresh(config.id, 'server-auto-connect');
       } catch (error) {
         logger.error(`Failed to auto-connect MCP server ${config.id}:`, error);
       }
@@ -669,51 +715,8 @@ export class ToolManager {
     }
   }
 
-  async connectMCPServer(serverId: string): Promise<void> {
-    const client = this.mcpClients.get(serverId);
-    if (!client) throw new Error(`MCP server not found: ${serverId}`);
-    await client.connect();
-    await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-connect-command');
-  }
-
-  async listMCPCapabilities(): Promise<MCPCapabilityRecord[]> {
-    const records = await Promise.all(
-      Array.from(this.mcpCatalogs.values()).map((catalog) =>
-        catalog.list({ loadDescriptors: false })
-      )
-    );
-    return records.flat();
-  }
-
-  async listMCPDrifts(): Promise<MCPCapabilityRecord[]> {
-    return (await this.listMCPCapabilities()).filter(
-      (record) =>
-        record.driftState === 'changed' ||
-        record.driftState === 'quarantined' ||
-        record.driftState === 'removed'
-    );
-  }
-
-  hasMCPServer(serverId: string): boolean {
-    return this.mcpClients.has(serverId);
-  }
-
-  async getMCPServerStatus(serverId: string): Promise<{
-    id: string;
-    name: string;
-    status: MCPClient['status'];
-    healthy: boolean;
-    toolCount: number;
-  } | null> {
-    const client = this.mcpClients.get(serverId);
-    if (!client) return null;
-    return {
-      id: client.id,
-      name: client.name,
-      status: client.status,
-      healthy: await client.healthCheck(),
-      toolCount: client.tools.length,
-    };
+  getMCPClient(serverId: string): MCPClient | null {
+    return this.mcpClients.get(serverId) || null;
   }
 
   listNormalizedMCPTools(): Array<{
@@ -794,7 +797,7 @@ export class ToolManager {
 
   private toolSpecToDefinition(spec: HyphaToolSpec): ToolDefinition {
     return {
-      name: spec.source === 'mcp' ? spec.id : (spec.name ?? spec.id),
+      name: spec.source === 'mcp' ? spec.id : spec.name ?? spec.id,
       description: spec.description,
       inputSchema: this.asObjectInputSchema(spec.inputSchema),
       outputSchema: spec.outputSchema as Record<string, any> | undefined,

@@ -11,8 +11,6 @@ import usageRoutes from './usage.routes';
 import apiDocsRoutes from './api-docs.routes';
 import devRoutes from './dev.routes';
 import runtimeRoutes from './runtime.routes';
-import { approvalRouter, invocationRouter } from './tool-runtime.routes';
-import mcpRoutes from './mcp.routes';
 
 const router = Router();
 
@@ -34,9 +32,6 @@ router.use('/chat', chatRoutes);
 router.use('/memory', memoryRoutes);
 router.use('/skills', skillRoutes);
 router.use('/tools', toolRoutes);
-router.use('/tool-invocations', invocationRouter);
-router.use('/tool-approvals', approvalRouter);
-router.use('/mcp', mcpRoutes);
 router.use('/workflows', workflowRoutes);
 router.use('/models', modelRoutes);
 router.use('/status', statusRoutes);

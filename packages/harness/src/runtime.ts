@@ -39,7 +39,7 @@ import {
   SkillContextLoader,
   SkillSelector,
 } from '@hypha/skills';
-import type { ToolExecutionScope, ToolRunner } from '@hypha/tools';
+import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 
 export interface RuntimeSession {
   id: string;
@@ -171,11 +171,6 @@ export interface HarnessedReActFSMRunnerOptions {
   verifier?: Verifier;
   reactRuntime?: ReActAgentRuntime;
   maxIterations?: number;
-  resolveToolExecutionScope?: (input: {
-    fsmState: string;
-    context: BuiltAgentContext;
-    toolId: string;
-  }) => ToolExecutionScope | undefined;
   now?: () => string;
 }
 
@@ -731,7 +726,7 @@ export class HarnessedReActFSMRunner {
   private readonly fsmSpec: FSMProcessSpec;
   private readonly contextBuilder: ContextBuilder;
   private readonly verifier: Verifier;
-  private readonly toolRunner?: ToolRunner;
+  private readonly toolRunner: ToolRunner;
   private readonly reactRuntime?: ReActAgentRuntime;
   private readonly maxIterations?: number;
   private readonly now: () => string;
@@ -763,7 +758,7 @@ export class HarnessedReActFSMRunner {
           })
         : baseContextBuilder;
     this.verifier = options.verifier ?? new DefaultVerifier();
-    this.toolRunner = options.toolRunner;
+    this.toolRunner = options.toolRunner ?? new MockToolRunner();
     this.reactRuntime = options.reactRuntime;
     this.maxIterations = options.maxIterations;
     this.now = options.now ?? (() => new Date().toISOString());
@@ -836,12 +831,6 @@ export class HarnessedReActFSMRunner {
         inference: this.options.inference,
         toolRunner: this.toolRunner,
         maxIterations: this.maxIterations,
-        resolveToolExecutionScope: (reactContext, action) =>
-          this.options.resolveToolExecutionScope?.({
-            fsmState: fsm.getSnapshot().currentState,
-            context: reactContext as BuiltAgentContext,
-            toolId: action.target ?? '',
-          }) ?? reactContext.toolExecutionScope,
         onStep: async (step) => {
           await this.runManager.recordReactStep(runContext, step);
           const state = stateForReActStep(step);
@@ -871,7 +860,7 @@ export class HarnessedReActFSMRunner {
       }
 
       return {
-        run: (await this.runManager.projectRun(input.runId)) ?? run,
+        run,
         react,
         fsmSnapshot: fsm.getSnapshot(),
         events: await this.runManager.listEvents(input.runId),
@@ -886,7 +875,7 @@ export class HarnessedReActFSMRunner {
         error,
       };
       return {
-        run: (await this.runManager.projectRun(input.runId)) ?? run,
+        run,
         react,
         fsmSnapshot: fsm.getSnapshot(),
         events: await this.runManager.listEvents(input.runId),

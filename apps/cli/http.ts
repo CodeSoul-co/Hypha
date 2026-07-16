@@ -30,24 +30,16 @@ function getClient(): AxiosInstance {
         );
       }
       return Promise.reject(err);
-    }
+    },
   );
   return client;
 }
 
 /** Reset the cached client — call after `hypha config` changes baseUrl. */
-export function resetClient(): void {
-  client = null;
-}
+export function resetClient(): void { client = null; }
 
-export interface ApiSuccess<T> {
-  success: true;
-  data: T;
-}
-export interface ApiError {
-  success: false;
-  error: { code: string; message: string; details?: any };
-}
+export interface ApiSuccess<T> { success: true; data: T; }
+export interface ApiError    { success: false; error: { code: string; message: string; details?: any }; }
 export type ApiResponse<T> = ApiSuccess<T> | ApiError;
 
 export async function apiGet<T>(path: string, params?: Record<string, unknown>): Promise<T> {

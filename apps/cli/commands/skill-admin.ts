@@ -12,28 +12,23 @@ import { apiDelete, apiGet, apiPost } from '../http';
 import { apiGetRaw } from './_util';
 
 export function registerSkillAdmin(program: Command): void {
-  const cmd = new Command('skill').description('Install, uninstall, or inspect skills');
+  const cmd = new Command('skill')
+    .description('Install, uninstall, or inspect skills');
 
-  cmd
-    .command('show <id>')
+  cmd.command('show <id>')
     .description('Print the .md file (frontmatter + body) for a skill')
     .action(async (id: string) => {
       const data = await apiGetRaw<any>(`/skills/${encodeURIComponent(id)}`);
       if (!data.success) {
-        console.error(
-          chalk.red(`✗ ${data.error?.code || 'ERR'}: ${data.error?.message || 'not found'}`)
-        );
+        console.error(chalk.red(`✗ ${data.error?.code || 'ERR'}: ${data.error?.message || 'not found'}`));
         process.exit(1);
       }
       console.log(chalk.gray(`# file: ${data.data.filePath}`));
       console.log(`---\n${data.data.body}\n---`);
     });
 
-  cmd
-    .command('install <source>')
-    .description(
-      'Install a skill from a local path or http(s) URL. Or use --inline for raw .md text.'
-    )
+  cmd.command('install <source>')
+    .description('Install a skill from a local path or http(s) URL. Or use --inline for raw .md text.')
     .option('--as <id>', 'Override the id read from frontmatter (must match the file content)')
     .option('--inline <text>', 'Install from raw .md content (skip the <source> argument)')
     .option('--filename <name>', 'Filename to use when saving inline content (default: <id>.md)')
@@ -70,8 +65,7 @@ export function registerSkillAdmin(program: Command): void {
       }
     });
 
-  cmd
-    .command('uninstall <id>')
+  cmd.command('uninstall <id>')
     .description('Remove an installed skill (admin only — calls DELETE /skills/install/:id)')
     .action(async (id: string) => {
       try {
@@ -85,22 +79,17 @@ export function registerSkillAdmin(program: Command): void {
       }
     });
 
-  cmd
-    .command('installed')
+  cmd.command('installed')
     .description('List skills installed on the server (GET /skills/installed)')
     .action(async () => {
       const data = await apiGet<any[]>('/skills/installed');
-      if (data.length === 0) {
-        console.log(chalk.gray('(no user-installed skills)'));
-        return;
-      }
+      if (data.length === 0) { console.log(chalk.gray('(no user-installed skills)')); return; }
       for (const s of data) {
         console.log(`${chalk.cyan(s.id)}  ${chalk.gray(s.name)}  ${chalk.gray(s.filePath)}`);
       }
     });
 
-  cmd
-    .command('reload')
+  cmd.command('reload')
     .description('Re-scan all skill directories on the server (POST /skills/reload)')
     .action(async () => {
       const r = await apiPost<any>('/skills/reload');

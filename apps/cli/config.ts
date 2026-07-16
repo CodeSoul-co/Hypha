@@ -32,9 +32,7 @@ function ensureHome(): void {
   if (!fs.existsSync(HOME)) fs.mkdirSync(HOME, { recursive: true, mode: 0o700 });
 }
 
-export function getHome(): string {
-  return HOME;
-}
+export function getHome(): string { return HOME; }
 
 export function getBaseUrl(): string {
   // Override precedence: env var > config file > default
@@ -53,11 +51,8 @@ export function getDefaultProvider(): string | undefined {
 
 export function readConfig(): CliConfig | null {
   if (!fs.existsSync(CONFIG_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')); }
+  catch { return null; }
 }
 
 export function writeConfig(patch: Partial<CliConfig>): CliConfig {
@@ -70,20 +65,14 @@ export function writeConfig(patch: Partial<CliConfig>): CliConfig {
 
 export function getToken(): string | null {
   if (!fs.existsSync(TOKEN_PATH)) return null;
-  try {
-    return (JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8')) as StoredToken).token;
-  } catch {
-    return null;
-  }
+  try { return (JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8')) as StoredToken).token; }
+  catch { return null; }
 }
 
 export function readToken(): StoredToken | null {
   if (!fs.existsSync(TOKEN_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8'));
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8')); }
+  catch { return null; }
 }
 
 export function writeToken(t: Omit<StoredToken, 'savedAt'>): StoredToken {
@@ -91,11 +80,7 @@ export function writeToken(t: Omit<StoredToken, 'savedAt'>): StoredToken {
   const full: StoredToken = { ...t, savedAt: new Date().toISOString() };
   fs.writeFileSync(TOKEN_PATH, JSON.stringify(full, null, 2), { mode: 0o600 });
   // Best-effort chmod — some FS (Windows) ignore the mode arg.
-  try {
-    fs.chmodSync(TOKEN_PATH, 0o600);
-  } catch {
-    /* noop */
-  }
+  try { fs.chmodSync(TOKEN_PATH, 0o600); } catch { /* noop */ }
   return full;
 }
 

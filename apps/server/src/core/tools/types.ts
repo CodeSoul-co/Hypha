@@ -141,7 +141,7 @@ export interface MCPClient {
 
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  invoke(name: string, args: any): Promise<ToolResult>;
+  callTool(name: string, args: any): Promise<ToolResult>;
   listTools(): Promise<ToolDefinition[]>;
   healthCheck(): Promise<boolean>;
 }

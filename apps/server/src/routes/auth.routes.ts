@@ -43,13 +43,17 @@ router.post(
       throw new AppError(
         'REGISTRATION_DISABLED',
         'Registration is disabled for this hypha instance',
-        HTTP_STATUS.FORBIDDEN
+        HTTP_STATUS.FORBIDDEN,
       );
     }
 
     const { error, value } = registerSchema.validate(req.body);
     if (error) {
-      throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'VALIDATION_ERROR',
+        error.message,
+        HTTP_STATUS.BAD_REQUEST,
+      );
     }
 
     const { email, username, password, displayName } = value;
@@ -63,7 +67,7 @@ router.post(
       throw new AppError(
         'USER_EXISTS',
         'User with this email or username already exists',
-        HTTP_STATUS.CONFLICT
+        HTTP_STATUS.CONFLICT,
       );
     }
 
@@ -97,7 +101,7 @@ router.post(
         refreshToken,
       },
     });
-  })
+  }),
 );
 
 // Login
@@ -106,7 +110,11 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { error, value } = loginSchema.validate(req.body);
     if (error) {
-      throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'VALIDATION_ERROR',
+        error.message,
+        HTTP_STATUS.BAD_REQUEST,
+      );
     }
 
     const { email, password } = value;
@@ -117,12 +125,16 @@ router.post(
       throw new AppError(
         'INVALID_CREDENTIALS',
         'Invalid email or password',
-        HTTP_STATUS.UNAUTHORIZED
+        HTTP_STATUS.UNAUTHORIZED,
       );
     }
 
     if (!user.isActive) {
-      throw new AppError('ACCOUNT_DISABLED', 'Account is disabled', HTTP_STATUS.FORBIDDEN);
+      throw new AppError(
+        'ACCOUNT_DISABLED',
+        'Account is disabled',
+        HTTP_STATUS.FORBIDDEN,
+      );
     }
 
     // Verify password
@@ -131,7 +143,7 @@ router.post(
       throw new AppError(
         'INVALID_CREDENTIALS',
         'Invalid email or password',
-        HTTP_STATUS.UNAUTHORIZED
+        HTTP_STATUS.UNAUTHORIZED,
       );
     }
 
@@ -153,7 +165,7 @@ router.post(
         refreshToken,
       },
     });
-  })
+  }),
 );
 
 // Refresh token
@@ -163,18 +175,30 @@ router.post(
     const { refreshToken } = req.body;
 
     if (!refreshToken) {
-      throw new AppError('MISSING_TOKEN', 'Refresh token is required', HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'MISSING_TOKEN',
+        'Refresh token is required',
+        HTTP_STATUS.BAD_REQUEST,
+      );
     }
 
     const payload = verifyRefreshToken(refreshToken);
     if (!payload) {
-      throw new AppError('INVALID_TOKEN', 'Invalid refresh token', HTTP_STATUS.UNAUTHORIZED);
+      throw new AppError(
+        'INVALID_TOKEN',
+        'Invalid refresh token',
+        HTTP_STATUS.UNAUTHORIZED,
+      );
     }
 
     // Find user
     const user = await UserModel.findById(payload.userId);
     if (!user || !user.isActive) {
-      throw new AppError('USER_NOT_FOUND', 'User not found or disabled', HTTP_STATUS.UNAUTHORIZED);
+      throw new AppError(
+        'USER_NOT_FOUND',
+        'User not found or disabled',
+        HTTP_STATUS.UNAUTHORIZED,
+      );
     }
 
     // Generate new tokens
@@ -188,7 +212,7 @@ router.post(
         refreshToken: newRefreshToken,
       },
     });
-  })
+  }),
 );
 
 // Get current user
@@ -199,14 +223,18 @@ router.get(
     const user = await UserModel.findById(req.user!.userId);
 
     if (!user) {
-      throw new AppError('USER_NOT_FOUND', 'User not found', HTTP_STATUS.NOT_FOUND);
+      throw new AppError(
+        'USER_NOT_FOUND',
+        'User not found',
+        HTTP_STATUS.NOT_FOUND,
+      );
     }
 
     res.json({
       success: true,
       data: user.toSafeObject(),
     });
-  })
+  }),
 );
 
 // Update current account settings
@@ -219,7 +247,11 @@ router.put(
     // First get the current user to merge preferences
     const currentUser = await UserModel.findById(req.user!.userId);
     if (!currentUser) {
-      throw new AppError('USER_NOT_FOUND', 'User not found', HTTP_STATUS.NOT_FOUND);
+      throw new AppError(
+        'USER_NOT_FOUND',
+        'User not found',
+        HTTP_STATUS.NOT_FOUND,
+      );
     }
 
     interface UserUpdatePayload {
@@ -228,19 +260,28 @@ router.put(
     }
     const updateData: UserUpdatePayload = {};
     if (displayName) updateData.displayName = displayName;
-    if (preferences) updateData.preferences = { ...currentUser.preferences, ...preferences };
+    if (preferences)
+      updateData.preferences = { ...currentUser.preferences, ...preferences };
 
-    const user = await UserModel.findByIdAndUpdate(req.user!.userId, updateData, { new: true });
+    const user = await UserModel.findByIdAndUpdate(
+      req.user!.userId,
+      updateData,
+      { new: true },
+    );
 
     if (!user) {
-      throw new AppError('USER_NOT_FOUND', 'User not found', HTTP_STATUS.NOT_FOUND);
+      throw new AppError(
+        'USER_NOT_FOUND',
+        'User not found',
+        HTTP_STATUS.NOT_FOUND,
+      );
     }
 
     res.json({
       success: true,
       data: user.toSafeObject(),
     });
-  })
+  }),
 );
 
 // Generate API Key
@@ -277,7 +318,7 @@ router.post(
         apiKey: plainKey,
       },
     });
-  })
+  }),
 );
 
 // List API Keys
@@ -300,7 +341,7 @@ router.get(
         createdAt: key.createdAt,
       })),
     });
-  })
+  }),
 );
 
 // Revoke API Key
@@ -313,11 +354,15 @@ router.delete(
     const result = await ApiKeyModel.findOneAndUpdate(
       { keyId, userId: req.user!.userId },
       { isActive: false },
-      { new: true }
+      { new: true },
     );
 
     if (!result) {
-      throw new AppError('KEY_NOT_FOUND', 'API key not found', HTTP_STATUS.NOT_FOUND);
+      throw new AppError(
+        'KEY_NOT_FOUND',
+        'API key not found',
+        HTTP_STATUS.NOT_FOUND,
+      );
     }
 
     logger.info(`API key revoked: ${keyId}`);
@@ -326,7 +371,7 @@ router.delete(
       success: true,
       message: 'API key revoked',
     });
-  })
+  }),
 );
 
 // Logout
@@ -340,7 +385,7 @@ router.post(
       success: true,
       message: 'Logged out successfully',
     });
-  })
+  }),
 );
 
 export default router;

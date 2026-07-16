@@ -181,7 +181,7 @@ export function requirePermission(...permissions: string[]) {
     }
 
     if (req.apiKey) {
-      const hasPermission = permissions.some((p) => req.apiKey!.permissions.includes(p));
+      const hasPermission = permissions.some(p => req.apiKey!.permissions.includes(p));
       if (!hasPermission) {
         res.status(HTTP_STATUS.FORBIDDEN).json({
           success: false,
@@ -198,26 +198,25 @@ export function requirePermission(...permissions: string[]) {
 }
 
 // Generate JWT token
-export function generateToken(user: {
-  id?: string;
-  _id?: unknown;
-  email: string;
-  isAdmin: boolean;
-}): string {
+export function generateToken(user: { id?: string; _id?: unknown; email: string; isAdmin: boolean }): string {
   const userId = user.id ?? String(user._id);
   const config = authConfig();
-  return jwt.sign({ userId, email: user.email, isAdmin: user.isAdmin }, config.jwt.secret, {
-    expiresIn: config.jwt.expiry,
-  });
+  return jwt.sign(
+    { userId, email: user.email, isAdmin: user.isAdmin },
+    config.jwt.secret,
+    { expiresIn: config.jwt.expiry }
+  );
 }
 
 // Generate refresh token
 export function generateRefreshToken(user: { id?: string; _id?: unknown }): string {
   const userId = user.id ?? String(user._id);
   const config = authConfig();
-  return jwt.sign({ userId, type: 'refresh' }, config.jwt.secret, {
-    expiresIn: config.jwt.refreshExpiry,
-  });
+  return jwt.sign(
+    { userId, type: 'refresh' },
+    config.jwt.secret,
+    { expiresIn: config.jwt.refreshExpiry }
+  );
 }
 
 // Verify refresh token

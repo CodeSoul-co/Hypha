@@ -35,7 +35,9 @@ export async function initSingleUserOwner(): Promise<{
     await owner.save();
 
     logger.info(`[Auth] Created single-user owner: ${email}`);
-    logger.info('[Auth] Owner login: POST /auth/login with the configured credentials');
+    logger.info(
+      '[Auth] Owner login: POST /auth/login with the configured credentials',
+    );
 
     return { email, password };
   } catch (error) {
@@ -59,7 +61,9 @@ export async function initDevAdminUser(): Promise<{
   const adminPassword = process.env.DEV_ADMIN_PASSWORD || 'hypha_admin_2026';
 
   try {
-    const existing = await UserModel.findOne({ email: adminEmail }).select('+password');
+    const existing = await UserModel.findOne({ email: adminEmail }).select(
+      '+password',
+    );
     if (existing) {
       logger.info(`[DevAuth] Using existing admin user: ${adminEmail}`);
       return { email: adminEmail, password: adminPassword };
@@ -77,7 +81,9 @@ export async function initDevAdminUser(): Promise<{
     await admin.save();
 
     logger.info(`[DevAuth] Created admin user: ${adminEmail}`);
-    logger.info(`[DevAuth] Admin login: POST /auth/login with configured credentials`);
+    logger.info(
+      `[DevAuth] Admin login: POST /auth/login with configured credentials`,
+    );
 
     return { email: adminEmail, password: adminPassword };
   } catch (error) {
@@ -101,7 +107,9 @@ export async function initDevTestUser(): Promise<{
   const devPassword = process.env.DEV_TEST_PASSWORD || 'devpassword123';
 
   try {
-    const existing = await UserModel.findOne({ email: devEmail }).select('+password');
+    const existing = await UserModel.findOne({ email: devEmail }).select(
+      '+password',
+    );
     if (existing) {
       logger.info(`[DevAuth] Using existing test user: ${devEmail}`);
       return { email: devEmail, password: devPassword };
@@ -118,7 +126,9 @@ export async function initDevTestUser(): Promise<{
 
     await user.save();
     logger.info(`[DevAuth] Created test user: ${devEmail}`);
-    logger.info(`[DevAuth] Test user login: POST /auth/login with configured credentials`);
+    logger.info(
+      `[DevAuth] Test user login: POST /auth/login with configured credentials`,
+    );
 
     return { email: devEmail, password: devPassword };
   } catch (error) {
@@ -148,7 +158,7 @@ export async function getDevTestToken(): Promise<string | null> {
     const token = jwt.default.sign(
       { userId: user._id, email: user.email },
       config.auth.jwt.secret,
-      { expiresIn: '30d' }
+      { expiresIn: '30d' },
     );
 
     logger.info(`[DevAuth] Test token ready for: ${devEmail}`);
@@ -173,7 +183,7 @@ export async function getSingleUserToken(): Promise<string | null> {
     const token = jwt.default.sign(
       { userId: user._id, email: user.email, isAdmin: !!user.isAdmin },
       config.auth.jwt.secret,
-      { expiresIn: '30d' }
+      { expiresIn: '30d' },
     );
 
     logger.info(`[Auth] Owner token ready for: ${user.email}`);

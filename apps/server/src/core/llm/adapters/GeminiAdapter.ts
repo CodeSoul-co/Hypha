@@ -1,13 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import {
-  ILLMAdapter,
-  ChatOptions,
-  ChatResponse,
-  LLMMessage,
-  StreamChunk,
-  ToolDefinition,
-  ModelInfo,
-} from '../types';
+import { ILLMAdapter, ChatOptions, ChatResponse, LLMMessage, StreamChunk, ToolDefinition, ModelInfo } from '../types';
 import { logger } from '../../../utils/logger';
 
 export class GeminiAdapter implements ILLMAdapter {
@@ -59,9 +51,7 @@ export class GeminiAdapter implements ILLMAdapter {
       const requestParams: any = {
         contents,
         generationConfig,
-        systemInstruction: options?.systemPrompt
-          ? { parts: [{ text: options.systemPrompt }] }
-          : undefined,
+        systemInstruction: options?.systemPrompt ? { parts: [{ text: options.systemPrompt }] } : undefined,
       };
 
       const result = await model.generateContent(requestParams);
@@ -108,9 +98,7 @@ export class GeminiAdapter implements ILLMAdapter {
       const requestParams: any = {
         contents,
         generationConfig,
-        systemInstruction: options?.systemPrompt
-          ? { parts: [{ text: options.systemPrompt }] }
-          : undefined,
+        systemInstruction: options?.systemPrompt ? { parts: [{ text: options.systemPrompt }] } : undefined,
       };
 
       const result = await model.generateContentStream(requestParams);
@@ -132,11 +120,7 @@ export class GeminiAdapter implements ILLMAdapter {
     }
   }
 
-  async createToolCall(
-    messages: LLMMessage[],
-    tools: ToolDefinition[],
-    options?: ChatOptions
-  ): Promise<ChatResponse> {
+  async createToolCall(messages: LLMMessage[], tools: ToolDefinition[], options?: ChatOptions): Promise<ChatResponse> {
     return this.chat(messages, { ...options, tools });
   }
 
@@ -191,7 +175,7 @@ export class GeminiAdapter implements ILLMAdapter {
 
   async getModel(modelId: string): Promise<ModelInfo | null> {
     const models = await this.listModels();
-    return models.find((m) => m.id === modelId) || null;
+    return models.find(m => m.id === modelId) || null;
   }
 
   async healthCheck(): Promise<boolean> {
@@ -205,8 +189,8 @@ export class GeminiAdapter implements ILLMAdapter {
 
   private convertMessages(messages: LLMMessage[]): any[] {
     return messages
-      .filter((msg) => msg.role !== 'system')
-      .map((msg) => ({
+      .filter(msg => msg.role !== 'system')
+      .map(msg => ({
         role: msg.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: msg.content }],
       }));

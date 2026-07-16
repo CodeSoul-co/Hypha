@@ -17,7 +17,7 @@
     "build": "npm run build:packages && npm run build:server && npm run build:cli",
     "build:packages": "tsc -b packages/core packages/storage packages/inference packages/fsm packages/kernel packages/harness packages/models packages/serving-cache packages/memory packages/tools packages/mcp packages/skills packages/domain packages/adapters-local packages/testing",
     "build:server": "tsc -p apps/server/tsconfig.json",
-    "build:cli": "tsc -p apps/cli/tsconfig.json && node scripts/make-cli-executable.mjs",
+    "build:cli": "tsc -p apps/cli/tsconfig.json && chmod +x dist/apps/cli/index.js",
     "start": "node dist/apps/server/app.js",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "typecheck:server": "tsc -p apps/server/tsconfig.json --noEmit",
@@ -51,7 +51,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
     "@google/generative-ai": "^0.2.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^0.5.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.10.0",
     "chalk": "^5.6.2",

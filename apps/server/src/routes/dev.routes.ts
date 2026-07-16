@@ -71,7 +71,7 @@ router.post(
     const token = jwt.sign(
       { userId: user._id, email: user.email, isAdmin: !!user.isAdmin },
       config.auth.jwt.secret,
-      { expiresIn: '30d' }
+      { expiresIn: '30d' },
     );
 
     logger.debug(`[Dev] Token generated for: ${email}`);
@@ -89,7 +89,7 @@ router.post(
         expiresIn: '30d',
       },
     });
-  })
+  }),
 );
 
 // ============================================================
@@ -116,12 +116,14 @@ router.post(
       auth.mode === 'single-user'
         ? auth.singleUser.email
         : process.env.DEV_TEST_EMAIL || 'dev@test.local';
-    const username = auth.mode === 'single-user' ? auth.singleUser.username : 'devuser';
+    const username =
+      auth.mode === 'single-user' ? auth.singleUser.username : 'devuser';
     const password =
       auth.mode === 'single-user'
         ? auth.singleUser.password
         : process.env.DEV_TEST_PASSWORD || 'devpassword123';
-    const displayName = auth.mode === 'single-user' ? auth.singleUser.displayName : 'Dev User';
+    const displayName =
+      auth.mode === 'single-user' ? auth.singleUser.displayName : 'Dev User';
 
     // Delete existing
     await UserModel.deleteOne({ email });
@@ -145,7 +147,7 @@ router.post(
     const token = jwt.sign(
       { userId: user._id, email: user.email, isAdmin: !!user.isAdmin },
       config.auth.jwt.secret,
-      { expiresIn: '30d' }
+      { expiresIn: '30d' },
     );
 
     logger.info(`[Dev] Local user reset: ${email}`);
@@ -163,7 +165,7 @@ router.post(
         expiresIn: '30d',
       },
     });
-  })
+  }),
 );
 
 export default router;

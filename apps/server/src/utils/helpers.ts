@@ -30,7 +30,7 @@ export function formatDate(date: Date, format: string = 'YYYY-MM-DD HH:mm:ss'): 
 }
 
 export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export async function retry<T>(
@@ -52,7 +52,10 @@ export async function retry<T>(
   throw lastError;
 }
 
-export function omit<T extends object, K extends keyof T>(obj: T, keys: K[]): Omit<T, K> {
+export function omit<T extends object, K extends keyof T>(
+  obj: T,
+  keys: K[]
+): Omit<T, K> {
   const result = { ...obj };
   for (const key of keys) {
     delete result[key];
@@ -60,7 +63,10 @@ export function omit<T extends object, K extends keyof T>(obj: T, keys: K[]): Om
   return result;
 }
 
-export function pick<T extends object, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
+export function pick<T extends object, K extends keyof T>(
+  obj: T,
+  keys: K[]
+): Pick<T, K> {
   const result = {} as Pick<T, K>;
   for (const key of keys) {
     if (key in obj) {

@@ -82,7 +82,6 @@ export const versionedSpecSchema = z.object({
 export const specRefSchema = z.object({
   id: z.string().min(1),
   version: z.string().min(1).optional(),
-  revision: z.string().min(1).optional(),
 }) satisfies ZodType<SpecRef>;
 
 export const specMetadataSchema = z.object({

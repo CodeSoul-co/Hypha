@@ -24,11 +24,7 @@ describe('@hypha/memory manager contract', () => {
       },
       update: async () => {},
       invalidate: async () => {},
-      summarize: async (scope) => ({
-        scope,
-        recordCount: records.length,
-        types: { working: records.length },
-      }),
+      summarize: async (scope) => ({ scope, recordCount: records.length, types: { working: records.length } }),
       audit: async (scope) => ({ scope, recordsChecked: records.length, missingProvenance: [] }),
     };
     const manager = new MemoryManager(provider);
@@ -72,10 +68,11 @@ describe('@hypha/memory manager contract', () => {
     };
 
     await expect(
-      manager.write({ userId: 'owner', runId: 'run_1' }, record, {
-        requireProvenance: true,
-        allowLongTerm: true,
-      })
+      manager.write(
+        { userId: 'owner', runId: 'run_1' },
+        record,
+        { requireProvenance: true, allowLongTerm: true }
+      )
     ).rejects.toThrow(/requires provenance/);
     await expect(
       manager.write(

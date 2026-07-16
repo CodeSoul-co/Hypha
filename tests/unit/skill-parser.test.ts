@@ -2,11 +2,7 @@
  * Unit tests for the .md skill parser. These run under the `unit`
  * project (no DB) so they stay fast and pure.
  */
-import {
-  parseSkillMarkdown,
-  listSkillFiles,
-  loadSkillFile,
-} from '../../apps/server/src/core/skills/parser';
+import { parseSkillMarkdown, listSkillFiles, loadSkillFile } from '../../apps/server/src/core/skills/parser';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -60,9 +56,7 @@ id: foo
 name: Foo
 ---
 body`;
-    expect(() => parseSkillMarkdown(md, '/tmp/foo.md')).toThrow(
-      /missing required frontmatter fields/
-    );
+    expect(() => parseSkillMarkdown(md, '/tmp/foo.md')).toThrow(/missing required frontmatter fields/);
   });
 
   it('rejects empty triggers', () => {
@@ -97,9 +91,7 @@ describe('listSkillFiles / loadSkillFile', () => {
   let tmp: string;
   beforeAll(async () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'skills-'));
-    await fs.writeFile(
-      path.join(tmp, 'a.md'),
-      `---
+    await fs.writeFile(path.join(tmp, 'a.md'), `---
 id: a
 name: A
 description: a
@@ -108,11 +100,8 @@ priority: 1
 triggers:
   - type: always
 ---
-A body`
-    );
-    await fs.writeFile(
-      path.join(tmp, 'b.md'),
-      `---
+A body`);
+    await fs.writeFile(path.join(tmp, 'b.md'), `---
 id: b
 name: B
 description: b
@@ -121,8 +110,7 @@ priority: 2
 triggers:
   - type: always
 ---
-B body`
-    );
+B body`);
     await fs.writeFile(path.join(tmp, 'ignore.txt'), 'not a skill');
   });
   afterAll(async () => {

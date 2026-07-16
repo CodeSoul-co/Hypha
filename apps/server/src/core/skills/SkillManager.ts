@@ -41,16 +41,13 @@ const BUILTIN_HANDLERS: Record<string, (context: SkillContext) => Promise<SkillR
   'intent-classification': async (ctx) => {
     const msg = ctx.currentMessage.content || '';
     const intents: Array<[string, RegExp]> = [
-      ['help', /\b(help|usage|how to|怎么|如何|帮助)\b/i],
+      ['help',     /\b(help|usage|how to|怎么|如何|帮助)\b/i],
       ['question', /\?|？|why|what|when|where|who|how/i],
-      ['command', /^\s*[/!](\w+)/],
+      ['command',  /^\s*[/!](\w+)/],
     ];
     let intent = 'chat';
     for (const [name, re] of intents) {
-      if (re.test(msg)) {
-        intent = name;
-        break;
-      }
+      if (re.test(msg)) { intent = name; break; }
     }
     return { success: true, shouldContinue: true, variables: { intent } };
   },
@@ -75,20 +72,21 @@ export class SkillManager {
     // Precedence: explicit arg > env HYPHA_SKILLS_DIR (colon-separated) > config > builtins.
     const configDirs = (getConfig().skills as any).dirs as string[] | undefined;
     const envDirs = (process.env.HYPHA_SKILLS_DIR || '')
-      .split(':')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const raw = [...(opts?.dirs || []), ...envDirs, ...(configDirs || []), DEFAULT_BUILTIN_DIR];
+      .split(':').map((s) => s.trim()).filter(Boolean);
+    const raw = [
+      ...(opts?.dirs || []),
+      ...envDirs,
+      ...(configDirs || []),
+      DEFAULT_BUILTIN_DIR,
+    ];
     // Expand leading "~" to $HOME so the boot-time scan and the install
     // service agree on the install target.
     const home = require('os').homedir();
-    this.dirs = raw.map((d) => (d.startsWith('~/') ? home + d.slice(1) : d));
+    this.dirs = raw.map((d) => d.startsWith('~/') ? home + d.slice(1) : d);
   }
 
   /** Where the manager scans for .md skill files. */
-  getDirs(): string[] {
-    return [...this.dirs];
-  }
+  getDirs(): string[] { return [...this.dirs]; }
 
   async initialize(): Promise<void> {
     for (const dir of this.dirs) {
@@ -128,24 +126,16 @@ export class SkillManager {
       body: skill.body,
       run,
     });
-    logger.info(
-      `Skill loaded: ${skill.config.id} (${skill.config.name}) from ${path.basename(skill.filePath)}`
-    );
+    logger.info(`Skill loaded: ${skill.config.id} (${skill.config.name}) from ${path.basename(skill.filePath)}`);
   }
 
   async unregister(skillId: string): Promise<boolean> {
     return this.skills.delete(skillId);
   }
 
-  getSkill(skillId: string): RegisteredSkill | null {
-    return this.skills.get(skillId) || null;
-  }
-  getSkillConfig(skillId: string): SkillConfig | null {
-    return this.skills.get(skillId)?.config || null;
-  }
-  getSkillBody(skillId: string): string | null {
-    return this.skills.get(skillId)?.body || null;
-  }
+  getSkill(skillId: string): RegisteredSkill | null { return this.skills.get(skillId) || null; }
+  getSkillConfig(skillId: string): SkillConfig | null { return this.skills.get(skillId)?.config || null; }
+  getSkillBody(skillId: string): string | null { return this.skills.get(skillId)?.body || null; }
 
   listSkills(enabledOnly: boolean = false): SkillConfig[] {
     const list: SkillConfig[] = [];
@@ -198,15 +188,12 @@ export class SkillManager {
         case 'always':
           return true;
         case 'keyword':
-          if (context.currentMessage.content.toLowerCase().includes(t.pattern.toLowerCase()))
-            return true;
+          if (context.currentMessage.content.toLowerCase().includes(t.pattern.toLowerCase())) return true;
           break;
         case 'regex':
           try {
             if (new RegExp(t.pattern, 'i').test(context.currentMessage.content)) return true;
-          } catch {
-            logger.warn(`Invalid regex trigger: ${t.pattern}`);
-          }
+          } catch { logger.warn(`Invalid regex trigger: ${t.pattern}`); }
           break;
         case 'intent':
           if (context.variables?.intent === t.pattern) return true;

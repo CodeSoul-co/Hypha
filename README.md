@@ -64,18 +64,6 @@ Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`; the
 
 Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
 
-## Governed Tools and MCP
-
-Local, HTTP, Plugin, Mock, and MCP capabilities share `ToolAdapter`, `ToolRegistry`, and the
-single `GovernedToolRunner` execution path. Each call is a persistent Invocation with schema,
-permission, policy, approval, idempotency, retry, timeout, cancellation, artifact, event,
-observation, cache-validity, and recovery semantics. Dynamic MCP capabilities are separated into
-connection, catalog, trust, drift, schema-cache, and immutable Run snapshot records.
-
-See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
-[security guide](docs/guides/tool-mcp-security.md), and
-[adapter guide](docs/guides/tool-adapters.md).
-
 ## Development Commands
 
 ```bash

@@ -51,7 +51,11 @@ export interface Attachment {
 // Memory operations
 export interface IMemoryStore {
   addMessage(sessionId: string, message: TempMessage): Promise<void>;
-  getMessages(sessionId: string, limit?: number, userId?: string): Promise<TempMessage[]>;
+  getMessages(
+    sessionId: string,
+    limit?: number,
+    userId?: string,
+  ): Promise<TempMessage[]>;
   clearMessages(sessionId: string, userId?: string): Promise<void>;
   getAllSessions(userId: string): Promise<string[]>;
 }
@@ -59,41 +63,44 @@ export interface IMemoryStore {
 export interface IPermanentStore {
   // Conversation operations
   createConversation(
-    conversation: Omit<PermanentConversation, 'id' | 'createdAt' | 'updatedAt'>
+    conversation: Omit<PermanentConversation, 'id' | 'createdAt' | 'updatedAt'>,
   ): Promise<PermanentConversation>;
   getConversation(id: string): Promise<PermanentConversation | null>;
   getConversationBySessionId(
     sessionId: string,
-    userId?: string
+    userId?: string,
   ): Promise<PermanentConversation | null>;
   updateConversation(
     id: string,
-    updates: Partial<PermanentConversation>
+    updates: Partial<PermanentConversation>,
   ): Promise<PermanentConversation | null>;
   deleteConversation(id: string): Promise<boolean>;
   listConversations(
     userId: string,
-    options?: ListConversationsOptions
+    options?: ListConversationsOptions,
   ): Promise<PermanentConversation[]>;
 
   // Message operations
   addMessage(
     conversationId: string,
-    message: Omit<PermanentMessage, 'id' | 'conversationId' | 'timestamp'>
+    message: Omit<PermanentMessage, 'id' | 'conversationId' | 'timestamp'>,
   ): Promise<PermanentMessage>;
-  getMessages(conversationId: string, options?: ListMessagesOptions): Promise<PermanentMessage[]>;
+  getMessages(
+    conversationId: string,
+    options?: ListMessagesOptions,
+  ): Promise<PermanentMessage[]>;
   deleteMessage(conversationId: string, messageId: string): Promise<boolean>;
 
   // Search
   searchConversations(
     userId: string,
     query: string,
-    options?: SearchOptions
+    options?: SearchOptions,
   ): Promise<PermanentConversation[]>;
   searchMessages(
     userId: string,
     query: string,
-    options?: SearchOptions
+    options?: SearchOptions,
   ): Promise<PermanentMessage[]>;
 }
 

@@ -86,7 +86,9 @@ describe('@hypha/fsm runtime contracts', () => {
         variables: { owner: 'owner' },
       })
     ).toBe(true);
-    expect(evaluateGuardExpression('!exists(variables.blocked)', { variables: {} })).toBe(true);
+    expect(
+      evaluateGuardExpression('!exists(variables.blocked)', { variables: {} })
+    ).toBe(true);
   });
 
   it('enforces transition policy and human review state semantics', async () => {
@@ -96,13 +98,12 @@ describe('@hypha/fsm runtime contracts', () => {
         ...processSpec.states,
         { id: 'HumanReview', kind: 'human_review', humanReviewPolicy: { required: true } },
       ],
-      transitions: [...processSpec.transitions, { from: 'Reasoning', to: 'HumanReview' }],
+      transitions: [
+        ...processSpec.transitions,
+        { from: 'Reasoning', to: 'HumanReview' },
+      ],
     };
-    const initial = applyTransition(
-      reviewProcess,
-      createInitialSnapshot(reviewProcess, 'run_1'),
-      'Reasoning'
-    );
+    const initial = applyTransition(reviewProcess, createInitialSnapshot(reviewProcess, 'run_1'), 'Reasoning');
 
     await expect(
       applyTransitionWithRuntimePolicy(reviewProcess, initial, 'HumanReview')
@@ -123,12 +124,7 @@ describe('@hypha/fsm runtime contracts', () => {
     const timed: FSMProcessSpec = {
       ...processSpec,
       states: [
-        {
-          id: 'Idle',
-          kind: 'idle',
-          timeoutPolicy: { timeoutMs: 100, onTimeout: 'retry' },
-          retryPolicy: { maxAttempts: 2 },
-        },
+        { id: 'Idle', kind: 'idle', timeoutPolicy: { timeoutMs: 100, onTimeout: 'retry' }, retryPolicy: { maxAttempts: 2 } },
         { id: 'Reasoning', kind: 'reasoning' },
         { id: 'Completed', kind: 'completed' },
       ],

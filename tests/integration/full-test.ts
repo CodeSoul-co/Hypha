@@ -40,7 +40,10 @@ async function testHealthCheck() {
   try {
     const response = await axios.get(`${BASE_URL}/health`);
     if (response.data.success) {
-      log('success', `Health Check: OK (Uptime: ${response.data.data.uptime}s)`);
+      log(
+        'success',
+        `Health Check: OK (Uptime: ${response.data.data.uptime}s)`,
+      );
       results.push({ name: 'Health Check', passed: true });
     }
   } catch (error: any) {
@@ -69,7 +72,10 @@ async function testAuth() {
     });
     return null;
   } catch (error: any) {
-    log('error', `Auth Failed: ${error.response?.data?.error?.message || error.message}`);
+    log(
+      'error',
+      `Auth Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
     results.push({
       name: 'Authentication',
       passed: false,
@@ -92,18 +98,23 @@ async function testChat(token: string) {
         headers: {
           Authorization: `Bearer ${token}`,
         },
-      }
+      },
     );
 
     if (response.data.success) {
       log('success', `Chat Response Received:`);
       console.log(`   Model: ${response.data.data.model}`);
-      console.log(`   Content: ${response.data.data.content.substring(0, 100)}...`);
+      console.log(
+        `   Content: ${response.data.data.content.substring(0, 100)}...`,
+      );
       results.push({ name: 'Chat (SiliconFlow)', passed: true });
       return response.data.data.sessionId;
     }
   } catch (error: any) {
-    log('error', `Chat Failed: ${error.response?.data?.error?.message || error.message}`);
+    log(
+      'error',
+      `Chat Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
     results.push({
       name: 'Chat (SiliconFlow)',
       passed: false,
@@ -127,7 +138,10 @@ async function testChatHistory(token: string, sessionId: string) {
       return true;
     }
   } catch (error: any) {
-    log('error', `Chat History Failed: ${error.response?.data?.error?.message || error.message}`);
+    log(
+      'error',
+      `Chat History Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
     results.push({
       name: 'Chat History (Redis)',
       passed: false,
@@ -153,7 +167,7 @@ async function testPermanentMemory(token: string, sessionId: string) {
       },
       {
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     );
 
     if (createResponse.data.success) {
@@ -166,7 +180,10 @@ async function testPermanentMemory(token: string, sessionId: string) {
       });
 
       if (listResponse.data.success) {
-        log('success', `Conversations Listed: ${listResponse.data.data.length} found`);
+        log(
+          'success',
+          `Conversations Listed: ${listResponse.data.data.length} found`,
+        );
         results.push({ name: 'Permanent Memory (MongoDB)', passed: true });
         return conversationId;
       }
@@ -174,7 +191,7 @@ async function testPermanentMemory(token: string, sessionId: string) {
   } catch (error: any) {
     log(
       'error',
-      `Permanent Memory Failed: ${error.response?.data?.error?.message || error.message}`
+      `Permanent Memory Failed: ${error.response?.data?.error?.message || error.message}`,
     );
     results.push({
       name: 'Permanent Memory (MongoDB)',
@@ -193,15 +210,21 @@ async function testModelList(token: string) {
 
     if (response.data.success) {
       const siliconflowModels = response.data.data.filter(
-        (m: any) => m.id.includes('Qwen') || m.provider === 'siliconflow'
+        (m: any) => m.id.includes('Qwen') || m.provider === 'siliconflow',
       );
       log('success', `Models Available: ${response.data.data.length} total`);
-      log('info', `SiliconFlow Models: ${siliconflowModels.map((m: any) => m.id).join(', ')}`);
+      log(
+        'info',
+        `SiliconFlow Models: ${siliconflowModels.map((m: any) => m.id).join(', ')}`,
+      );
       results.push({ name: 'Model List', passed: true });
       return true;
     }
   } catch (error: any) {
-    log('error', `Model List Failed: ${error.response?.data?.error?.message || error.message}`);
+    log(
+      'error',
+      `Model List Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
     results.push({ name: 'Model List', passed: false, error: error.message });
     return false;
   }
@@ -215,7 +238,7 @@ async function testClearChat(token: string, sessionId: string) {
       {},
       {
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     );
 
     if (response.data.success) {
@@ -224,7 +247,10 @@ async function testClearChat(token: string, sessionId: string) {
       return true;
     }
   } catch (error: any) {
-    log('error', `Clear Chat Failed: ${error.response?.data?.error?.message || error.message}`);
+    log(
+      'error',
+      `Clear Chat Failed: ${error.response?.data?.error?.message || error.message}`,
+    );
     results.push({
       name: 'Clear Chat (Redis)',
       passed: false,
@@ -267,7 +293,7 @@ async function checkMongoDirectly() {
         if (!error) {
           log('success', `MongoDB Databases: ${stdout.trim()}`);
         }
-      }
+      },
     );
   } catch (error: any) {
     log('error', `MongoDB Check Failed: ${error.message}`);
@@ -339,7 +365,7 @@ function printSummary() {
 
   console.log('');
   console.log(
-    `${colors.green}Passed: ${passed}${colors.reset} | ${colors.red}Failed: ${failed}${colors.reset}`
+    `${colors.green}Passed: ${passed}${colors.reset} | ${colors.red}Failed: ${failed}${colors.reset}`,
   );
   console.log('='.repeat(60) + '\n');
 

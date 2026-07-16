@@ -22,20 +22,13 @@ export function registerSkills(program: Command): void {
     .action(async () => {
       try {
         const skills = await apiGet<SkillConfig[]>('/skills');
-        if (skills.length === 0) {
-          console.log(chalk.gray('(no skills loaded)'));
-          return;
-        }
+        if (skills.length === 0) { console.log(chalk.gray('(no skills loaded)')); return; }
         for (const s of skills) {
           const flag = s.enabled ? chalk.green('●') : chalk.gray('○');
           const trig = s.triggers?.length
-            ? chalk.gray(
-                `  triggers: ${s.triggers.map((t) => `${t.type}${t.pattern ? `(${t.pattern})` : ''}`).join(', ')}`
-              )
+            ? chalk.gray(`  triggers: ${s.triggers.map(t => `${t.type}${t.pattern ? `(${t.pattern})` : ''}`).join(', ')}`)
             : '';
-          console.log(
-            `${flag} ${chalk.bold(s.id)}  ${chalk.gray('— ' + s.name)}  ${chalk.gray('prio=' + s.priority)}`
-          );
+          console.log(`${flag} ${chalk.bold(s.id)}  ${chalk.gray('— ' + s.name)}  ${chalk.gray('prio=' + s.priority)}`);
           if (s.description) console.log(`  ${chalk.gray(s.description)}`);
           if (trig) console.log(trig);
         }

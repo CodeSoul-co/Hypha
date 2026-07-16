@@ -65,16 +65,12 @@ export function parseSkillMarkdown(raw: string, filePath: string): ParsedSkillFi
   // Required fields. We surface all missing ones at once so a single
   // bad file doesn't generate N rounds of "fix and rerun".
   const required: Array<keyof SkillConfig> = ['id', 'name', 'description', 'version', 'priority'];
-  const missing = required.filter(
-    (k) => parsed[k] === undefined || parsed[k] === null || parsed[k] === ''
-  );
+  const missing = required.filter((k) => parsed[k] === undefined || parsed[k] === null || parsed[k] === '');
   if (missing.length) {
     throw new Error(`Skill ${filePath} missing required frontmatter fields: ${missing.join(', ')}`);
   }
   if (!Array.isArray(parsed.triggers) || parsed.triggers.length === 0) {
-    throw new Error(
-      `Skill ${filePath} must declare at least one trigger in frontmatter 'triggers:'`
-    );
+    throw new Error(`Skill ${filePath} must declare at least one trigger in frontmatter 'triggers:'`);
   }
   // Validate each trigger shape — keyword/regex require a non-empty pattern,
   // intent requires a name. We don't restrict the pattern to a specific
@@ -83,13 +79,9 @@ export function parseSkillMarkdown(raw: string, filePath: string): ParsedSkillFi
     if (!t || typeof t !== 'object' || !t.type) {
       throw new Error(`Skill ${filePath} trigger #${i} is missing 'type'`);
     }
-    if (
-      (t.type === 'keyword' || t.type === 'regex' || t.type === 'intent') &&
-      (typeof t.pattern !== 'string' || t.pattern.length === 0)
-    ) {
-      throw new Error(
-        `Skill ${filePath} trigger #${i} (type=${t.type}) needs a non-empty 'pattern'`
-      );
+    if ((t.type === 'keyword' || t.type === 'regex' || t.type === 'intent') &&
+        (typeof t.pattern !== 'string' || t.pattern.length === 0)) {
+      throw new Error(`Skill ${filePath} trigger #${i} (type=${t.type}) needs a non-empty 'pattern'`);
     }
   }
 
@@ -127,7 +119,7 @@ export async function listSkillFiles(dir: string): Promise<string[]> {
   try {
     entries = await fs.readdir(dir);
   } catch (err: any) {
-    if (err.code === 'ENOENT') return []; // dir missing is fine
+    if (err.code === 'ENOENT') return [];   // dir missing is fine
     throw err;
   }
   return entries

@@ -3,7 +3,7 @@ import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/ada
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
 import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@hypha/memory';
 import { SkillRegistry } from '@hypha/skills';
-import { MockToolRunner, type ToolCallRequest, type ToolRunner } from '@hypha/tools';
+import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 import {
   BasicReActAgentRuntime,
   createEpisodicMemorySync,
@@ -17,7 +17,6 @@ import {
   reactAgentSpecDefinition,
   REACT_PHASE_ORDER,
   SkillContextBuilder,
-  ToolRunnerActivityAdapter,
   validateReActAgentSpec,
   validateReasoningConfig,
   type ReActAgentRuntime,
@@ -25,65 +24,6 @@ import {
 } from './index';
 
 describe('@hypha/kernel ReAct contracts', () => {
-  it('binds Runtime ToolActivity requests to the governed ToolRunner port', async () => {
-    const runner = new MockToolRunner();
-    runner.registerResult('tool.activity', {
-      toolId: 'tool.activity',
-      status: 'completed',
-      output: { ok: true },
-      artifactRefs: ['artifact:activity'],
-    });
-    const activity = new ToolRunnerActivityAdapter(runner);
-    await expect(
-      activity.execute({
-        operationId: 'operation-1',
-        invocationId: 'invocation-1',
-        runId: 'run-activity',
-        stateAttemptId: 'state-attempt-1',
-        toolRef: { id: 'tool.activity', version: '1.0.0' },
-        input: {},
-        principal: { id: 'agent-1', type: 'agent', permissionScopes: ['activity.read'] },
-      })
-    ).resolves.toMatchObject({
-      invocationId: 'invocation-1',
-      status: 'completed',
-      artifactRefs: ['artifact:activity'],
-    });
-  });
-
-  it('preserves reconciliation conflicts for Runtime recovery decisions', async () => {
-    const activity = new ToolRunnerActivityAdapter({
-      async run(request) {
-        return {
-          toolId: request.toolId,
-          invocationId: request.context.invocationId,
-          status: 'conflict',
-          error: {
-            code: 'TOOL_CONCURRENCY_CONFLICT',
-            message: 'External commit state is unknown.',
-            retryable: false,
-            phase: 'execution',
-          },
-        };
-      },
-    });
-
-    await expect(
-      activity.execute({
-        operationId: 'operation-conflict',
-        invocationId: 'invocation-conflict',
-        runId: 'run-conflict',
-        stateAttemptId: 'state-attempt-conflict',
-        toolRef: { id: 'tool.external', version: '1.0.0' },
-        input: {},
-        principal: { id: 'agent-1', type: 'agent', permissionScopes: ['external.write'] },
-      })
-    ).resolves.toMatchObject({
-      invocationId: 'invocation-conflict',
-      status: 'conflict',
-      error: { code: 'TOOL_CONCURRENCY_CONFLICT' },
-    });
-  });
   it('keeps skills attached to agents and exposes explicit ReAct phases', () => {
     const agent: ReActAgentSpec = {
       id: 'agent',
@@ -172,16 +112,9 @@ describe('@hypha/kernel ReAct contracts', () => {
         return { id: 'response_1', output: 'need tool' };
       },
     };
-    let capturedRequest: ToolCallRequest | undefined;
     const toolRunner: ToolRunner = {
-      async run(request) {
-        capturedRequest = request;
-        return {
-          toolId: 'tool.search',
-          invocationId: request.context.invocationId,
-          status: 'completed',
-          output: { result: 'hypha' },
-        };
+      async run() {
+        return { toolId: 'tool.search', status: 'completed', output: { result: 'hypha' } };
       },
     };
     const runtime: ReActAgentRuntime = {
@@ -194,12 +127,7 @@ describe('@hypha/kernel ReAct contracts', () => {
         };
       },
       async selectAction() {
-        return {
-          type: 'tool',
-          target: 'tool.search',
-          toolCallId: 'call_search_1',
-          input: { query: 'hypha' },
-        };
+        return { type: 'tool', target: 'tool.search', input: { query: 'hypha' } };
       },
       async verify(_context, observation) {
         return { type: 'finish', input: observation.value };
@@ -213,39 +141,9 @@ describe('@hypha/kernel ReAct contracts', () => {
       agent: reactAgentSpecDefinition.example,
       messages: [{ role: 'user', content: 'search' }],
       memoryScope: { userId: 'owner', sessionId: 'session_1' },
-      toolExecutionScope: {
-        allowedToolIds: ['tool.search'],
-        policyRefs: ['policy.search'],
-        fsmState: 'Acting',
-      },
-      toolPrincipal: {
-        id: 'owner',
-        type: 'user',
-        permissionScopes: ['search:read'],
-      },
     });
 
     expect(result.status).toBe('completed');
-    expect(capturedRequest).toMatchObject({
-      toolId: 'tool.search',
-      context: {
-        invocationId: 'call_search_1',
-        userId: 'owner',
-        sessionId: 'session_1',
-        agentId: reactAgentSpecDefinition.example.id,
-        fsmState: 'Acting',
-        executionScope: {
-          allowedToolIds: ['tool.search'],
-          policyRefs: ['policy.search'],
-          fsmState: 'Acting',
-        },
-        principal: {
-          id: 'owner',
-          type: 'user',
-          permissionScopes: ['search:read'],
-        },
-      },
-    });
     expect(result.steps.map((step) => step.phase)).toEqual(
       expect.arrayContaining(['policy_check', 'act', 'observe_result', 'verify', 'memory_sync'])
     );
@@ -335,12 +233,7 @@ describe('@hypha/kernel ReAct contracts', () => {
         };
       },
       async selectAction() {
-        return {
-          type: 'tool',
-          target: 'tool.search',
-          toolCallId: 'call_search_1',
-          input: { query: 'hypha' },
-        };
+        return { type: 'tool', target: 'tool.search', input: { query: 'hypha' } };
       },
       async verify() {
         throw new Error('verify must not run after tool human review');

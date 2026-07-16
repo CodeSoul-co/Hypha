@@ -12,7 +12,12 @@ export interface MessageAddress {
   id: string;
 }
 
-export type MessageStatus = 'queued' | 'delivered' | 'acknowledged' | 'failed' | 'dead_lettered';
+export type MessageStatus =
+  | 'queued'
+  | 'delivered'
+  | 'acknowledged'
+  | 'failed'
+  | 'dead_lettered';
 
 export interface RuntimeMessage<TPayload = unknown> {
   id: string;
@@ -89,9 +94,7 @@ export interface MessageListFilter {
 }
 
 export interface MessageBus {
-  publish<TPayload = unknown>(
-    input: PublishMessageInput<TPayload>
-  ): Promise<RuntimeMessage<TPayload>>;
+  publish<TPayload = unknown>(input: PublishMessageInput<TPayload>): Promise<RuntimeMessage<TPayload>>;
   pull<TPayload = unknown>(filter: PullMessageFilter): Promise<RuntimeMessage<TPayload> | null>;
   acknowledge(input: MessageAckInput): Promise<RuntimeMessage | null>;
   fail(input: MessageFailInput): Promise<RuntimeMessage | null>;
@@ -223,11 +226,7 @@ export class InMemoryMessageBus implements MessageBus {
       if (filter.sessionId && message.sessionId !== filter.sessionId) return false;
       if (filter.runId && message.runId !== filter.runId) return false;
       if (filter.status && message.status !== filter.status) return false;
-      if (
-        filter.to &&
-        queueKey(message.userId, message.sessionId, message.to) !==
-          queueKey(message.userId, message.sessionId, filter.to)
-      ) {
+      if (filter.to && queueKey(message.userId, message.sessionId, message.to) !== queueKey(message.userId, message.sessionId, filter.to)) {
         return false;
       }
       return true;

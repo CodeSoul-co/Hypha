@@ -1,13 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import {
-  ILLMAdapter,
-  ChatOptions,
-  ChatResponse,
-  LLMMessage,
-  StreamChunk,
-  ToolDefinition,
-  ModelInfo,
-} from '../types';
+import { ILLMAdapter, ChatOptions, ChatResponse, LLMMessage, StreamChunk, ToolDefinition, ModelInfo } from '../types';
 import { logger } from '../../../utils/logger';
 
 export class ClaudeAdapter implements ILLMAdapter {
@@ -44,7 +36,7 @@ export class ClaudeAdapter implements ILLMAdapter {
 
     const model = options?.model || 'claude-3-5-sonnet-20241022';
 
-    const anthropicMessages: Anthropic.MessageParam[] = messages.map((msg) => ({
+    const anthropicMessages: Anthropic.MessageParam[] = messages.map(msg => ({
       role: msg.role as 'user' | 'assistant',
       content: msg.content,
     }));
@@ -59,7 +51,7 @@ export class ClaudeAdapter implements ILLMAdapter {
     };
 
     if (options?.tools && options.tools.length > 0) {
-      params.tools = options.tools.map((tool) => ({
+      params.tools = options.tools.map(tool => ({
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
@@ -118,7 +110,7 @@ export class ClaudeAdapter implements ILLMAdapter {
 
     const model = options?.model || 'claude-3-5-sonnet-20241022';
 
-    const anthropicMessages: Anthropic.MessageParam[] = messages.map((msg) => ({
+    const anthropicMessages: Anthropic.MessageParam[] = messages.map(msg => ({
       role: msg.role as 'user' | 'assistant',
       content: msg.content,
     }));
@@ -133,7 +125,7 @@ export class ClaudeAdapter implements ILLMAdapter {
     };
 
     if (options?.tools && options.tools.length > 0) {
-      params.tools = options.tools.map((tool) => ({
+      params.tools = options.tools.map(tool => ({
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
@@ -181,8 +173,7 @@ export class ClaudeAdapter implements ILLMAdapter {
               usage: {
                 inputTokens: deltaEvent.usage.input_tokens || 0,
                 outputTokens: deltaEvent.usage.output_tokens || 0,
-                totalTokens:
-                  (deltaEvent.usage.input_tokens || 0) + (deltaEvent.usage.output_tokens || 0),
+                totalTokens: (deltaEvent.usage.input_tokens || 0) + (deltaEvent.usage.output_tokens || 0),
               },
             };
           }
@@ -200,11 +191,7 @@ export class ClaudeAdapter implements ILLMAdapter {
     }
   }
 
-  async createToolCall(
-    messages: LLMMessage[],
-    tools: ToolDefinition[],
-    options?: ChatOptions
-  ): Promise<ChatResponse> {
+  async createToolCall(messages: LLMMessage[], tools: ToolDefinition[], options?: ChatOptions): Promise<ChatResponse> {
     return this.chat(messages, { ...options, tools });
   }
 
@@ -260,7 +247,7 @@ export class ClaudeAdapter implements ILLMAdapter {
 
   async getModel(modelId: string): Promise<ModelInfo | null> {
     const models = await this.listModels();
-    return models.find((m) => m.id === modelId) || null;
+    return models.find(m => m.id === modelId) || null;
   }
 
   async healthCheck(): Promise<boolean> {

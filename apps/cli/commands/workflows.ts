@@ -19,10 +19,7 @@ export function registerWorkflows(program: Command): void {
     .action(async () => {
       try {
         const list = await apiGet<WorkflowDefinition[]>('/workflows');
-        if (list.length === 0) {
-          console.log(chalk.gray('(no workflows loaded)'));
-          return;
-        }
+        if (list.length === 0) { console.log(chalk.gray('(no workflows loaded)')); return; }
         for (const w of list) {
           console.log(`${chalk.bold(w.name)} ${chalk.gray('v' + w.version)}`);
           if (w.description) console.log(`  ${chalk.gray(w.description)}`);
