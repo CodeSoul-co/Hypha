@@ -31,12 +31,15 @@ describe('Workspace operation contracts', () => {
 
   it.each([
     '/host/root',
+    '\\host\\root',
     'C:\\host\\root',
     '../outside',
     '%2e%2e%2foutside',
     '%252e%252e%252foutside',
     '．．/outside',
     '%2fhost%2froot',
+    '%5chost%5croot',
+    '%255chost%255croot',
     'working/%00/file',
   ])('rejects raw, encoded, or Unicode-confusable unsafe path %s', (relativePath) => {
     expect(() =>

@@ -395,7 +395,7 @@ export function validateWorkspaceSpec(input: unknown): WorkspaceSpec {
 }
 
 function isAbsoluteLike(value: string): boolean {
-  return value.startsWith('/') || value.startsWith('\\\\') || /^[a-zA-Z]:[\\/]/u.test(value);
+  return value.startsWith('/') || value.startsWith('\\') || /^[a-zA-Z]:[\\/]/u.test(value);
 }
 
 function normalizePathForValidation(value: string): string {

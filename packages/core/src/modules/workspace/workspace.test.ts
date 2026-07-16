@@ -14,17 +14,21 @@ describe('WorkspaceSpec', () => {
     );
   });
 
-  it.each(['/host/root', 'C:\\host\\root', '..\\outside', 'working/../../outside'])(
-    'rejects unsafe workspace path %s',
-    (working) => {
-      expect(() =>
-        validateWorkspaceSpec({
-          ...workspaceSpecExample,
-          directories: { ...workspaceSpecExample.directories, working },
-        })
-      ).toThrow();
-    }
-  );
+  it.each([
+    '/host/root',
+    '\\host\\root',
+    '%5chost%5croot',
+    'C:\\host\\root',
+    '..\\outside',
+    'working/../../outside',
+  ])('rejects unsafe workspace path %s', (working) => {
+    expect(() =>
+      validateWorkspaceSpec({
+        ...workspaceSpecExample,
+        directories: { ...workspaceSpecExample.directories, working },
+      })
+    ).toThrow();
+  });
 
   it('requires provided roots and rejects roots for managed workspaces', () => {
     expect(() =>

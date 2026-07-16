@@ -229,6 +229,22 @@ describe('Execution lifecycle Event contracts', () => {
     }
   });
 
+  it('rejects unknown top-level payload and envelope fields instead of silently stripping them', () => {
+    expect(() =>
+      validateExecutionEventPayload('command.execution.queued', {
+        executionId: 'execution.example',
+        status: 'queued',
+        stdout: 'unbounded output',
+      })
+    ).toThrow();
+    expect(() =>
+      validateExecutionFrameworkEvent({
+        ...commandExecutionEventExample,
+        secretValue: 'plaintext',
+      })
+    ).toThrow();
+  });
+
   it('applies sensitive-field checks to nested normalized error details', () => {
     expect(() =>
       validateExecutionEventPayload('command.execution.failed', {

@@ -74,22 +74,24 @@ const nonNegativeInteger = z.number().int().nonnegative();
 const nonNegativeNumber = z.number().nonnegative();
 const timestampSchema = z.string().datetime({ offset: true });
 
-const executionEventPayloadBaseObjectSchema = z.object({
-  operationId: nonEmptyString.optional(),
-  executionId: nonEmptyString.optional(),
-  sandboxId: nonEmptyString.optional(),
-  workspaceId: nonEmptyString.optional(),
-  environmentId: nonEmptyString.optional(),
-  environmentRevision: nonEmptyString.optional(),
-  commandHash: nonEmptyString.optional(),
-  sourceTreeHash: nonEmptyString.optional(),
-  artifactRefs: z.array(nonEmptyString).optional(),
-  status: nonEmptyString.optional(),
-  latencyMs: nonNegativeNumber.optional(),
-  resourceUsage: executionResourceUsageSchema.optional(),
-  error: normalizedExecutionErrorSchema.optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+const executionEventPayloadBaseObjectSchema = z
+  .object({
+    operationId: nonEmptyString.optional(),
+    executionId: nonEmptyString.optional(),
+    sandboxId: nonEmptyString.optional(),
+    workspaceId: nonEmptyString.optional(),
+    environmentId: nonEmptyString.optional(),
+    environmentRevision: nonEmptyString.optional(),
+    commandHash: nonEmptyString.optional(),
+    sourceTreeHash: nonEmptyString.optional(),
+    artifactRefs: z.array(nonEmptyString).optional(),
+    status: nonEmptyString.optional(),
+    latencyMs: nonNegativeNumber.optional(),
+    resourceUsage: executionResourceUsageSchema.optional(),
+    error: normalizedExecutionErrorSchema.optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
 
 export const executionEventPayloadBaseSchema = executionEventPayloadBaseObjectSchema.superRefine(
   addPayloadSecurityIssues
@@ -144,6 +146,7 @@ const executionFrameworkEventEnvelopeSchema = z
     payload: z.unknown(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     addSensitiveFieldIssues(value.metadata, context, ['metadata']);
   });
