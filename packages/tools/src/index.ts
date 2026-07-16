@@ -2279,6 +2279,7 @@ export class GovernedToolRunner implements ToolRunner {
             ...basePayload,
             serverId: spec.sourceRef?.serverId,
             capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
+            ...(auditedInput.included ? { input: auditedInput.value } : {}),
             ...(auditedOutput.included ? { output: auditedOutput.value } : {}),
             attempts: attempt,
           });
@@ -2286,6 +2287,7 @@ export class GovernedToolRunner implements ToolRunner {
         const durationMs = Date.now() - startedAt;
         await record('tool.call.completed', 'completed', {
           ...basePayload,
+          ...(auditedInput.included ? { input: auditedInput.value } : {}),
           ...(auditedOutput.included ? { output: auditedOutput.value } : {}),
           attempts: attempt,
           durationMs,
