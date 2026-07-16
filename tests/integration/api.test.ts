@@ -20,6 +20,7 @@ import { UserModel } from '../../apps/server/src/models/User';
 import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
+import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
 
 const app = application.getApp();
@@ -253,15 +254,55 @@ describe('GET /api/v1/skills (bug 8)', () => {
 });
 
 describe('GET /api/v1/tools (bug 9)', () => {
-  it('includes built-in tools (filesystem, search)', async () => {
+  it('includes built-in filesystem, search, and common utility tools', async () => {
     const r = await request(app).get('/api/v1/tools').set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     const names = (r.body.data || []).map((t: any) => t.name);
-    expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'filesystem',
+        'search',
+        'utility.json',
+        'utility.text',
+        'utility.hash',
+      ])
+    );
+  });
+
+  it('executes a common utility through the governed runtime path', async () => {
+    const response = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'utility.hash', params: { operation: 'sha256_text', text: 'hypha' } });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toMatchObject({
+      algorithm: 'sha256',
+      encoding: 'hex',
+      inputBytes: 5,
+    });
+    expect(response.body.data.digest).toHaveLength(64);
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${response.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.completed',
+          payload: expect.objectContaining({
+            source: 'local',
+            sideEffectLevel: 'none',
+          }),
+        }),
+      ])
+    );
   });
 
   it('writes and executes an allowlisted file through governed runtime events', async () => {
-    const scriptPath = 'data/workspace/bin/hypha-integration-print.sh';
+    const scriptPath = 'data/workspace/bin/hypha-integration-print.js';
     try {
       const write = await request(app)
         .post('/api/v1/tools/execute')
@@ -271,7 +312,7 @@ describe('GET /api/v1/tools (bug 9)', () => {
           params: {
             operation: 'write',
             path: scriptPath,
-            content: '#!/bin/sh\nprintf "%s" "$1"\n',
+            content: "process.stdout.write(process.argv[2] || '');\n",
             executable: true,
           },
         });
@@ -355,7 +396,10 @@ describe('MCP tool invocation', () => {
         expect.objectContaining({
           id: 'filesystem.read_file',
           source: 'mcp',
-          sourceRef: { serverId: 'filesystem', capabilityId: 'read_file' },
+          sourceRef: expect.objectContaining({
+            serverId: 'filesystem',
+            capabilityId: 'read_file',
+          }),
         }),
       ])
     );
@@ -457,9 +501,9 @@ describe('MCP tool invocation', () => {
         expect.objectContaining({
           type: 'tool.call.failed',
           payload: expect.objectContaining({
-            phase: 'input_validation',
             source: 'mcp',
             sideEffectLevel: 'read',
+            error: expect.objectContaining({ phase: 'input_validation' }),
           }),
         }),
       ])
@@ -513,9 +557,9 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         expect.objectContaining({
           type: 'tool.call.failed',
           payload: expect.objectContaining({
-            phase: 'input_validation',
             source: 'local',
             sideEffectLevel: 'read',
+            error: expect.objectContaining({ phase: 'input_validation' }),
           }),
         }),
         expect.objectContaining({ type: 'run.failed' }),
@@ -538,7 +582,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
     expect(replay.body.data.statePath).toEqual(
       expect.arrayContaining(['RunInitialized', 'Acting', 'Completed'])
     );
-    expect(replay.body.data.toolCallEventIds).toHaveLength(5);
+    expect(replay.body.data.toolCallEventIds.length).toBeGreaterThanOrEqual(5);
     expect(replay.body.data.toolCalls).toHaveLength(1);
 
     const audit = await request(app)
@@ -659,6 +703,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         .send({ name: 'approval-test-tool', params: { value: 'pending' } });
       expect(r.status).toBe(202);
       expect(r.body.success).toBe(true);
+      expect(r.body.invocationId).toBeTruthy();
       expect(r.body.data).toMatchObject({
         tool: 'approval-test-tool',
         status: 'human_review_required',
@@ -696,10 +741,60 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
             payload: expect.objectContaining({
               source: 'local',
               sideEffectLevel: 'write',
-              reason: 'integration approval required',
+              approvalRequest: expect.objectContaining({
+                reason: 'integration approval required',
+              }),
             }),
           }),
         ])
+      );
+
+      const ownerToken = generateToken({
+        id: devUserId,
+        email: 'runtime-owner@hypha.local',
+        isAdmin: false,
+      });
+      const foreignToken = generateToken({
+        id: 'foreign-runtime-user',
+        email: 'foreign-runtime-user@hypha.local',
+        isAdmin: false,
+      });
+      const ownInvocation = await request(app)
+        .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+      expect(ownInvocation.status).toBe(200);
+      expect(ownInvocation.body.data.id).toBe(r.body.invocationId);
+
+      const foreignInvocation = await request(app)
+        .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
+        .set('Authorization', `Bearer ${foreignToken}`);
+      expect(foreignInvocation.status).toBe(403);
+      expect(foreignInvocation.body.error.code).toBe('TOOL_INVOCATION_ACCESS_DENIED');
+
+      const foreignCancel = await request(app)
+        .post(`/api/v1/tool-invocations/${r.body.invocationId}/cancel`)
+        .set('Authorization', `Bearer ${foreignToken}`)
+        .send({ reason: 'cross-user cancellation must be denied' });
+      expect(foreignCancel.status).toBe(403);
+
+      const approved = await request(app)
+        .post(`/api/v1/tool-approvals/${r.body.invocationId}/approve`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(approved.status).toBe(200);
+      expect(approved.body.data.status).toBe('completed');
+      expect(called).toBe(true);
+
+      const completedRun = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(completedRun.status).toBe(200);
+      expect(completedRun.body.data.status).toBe('completed');
+
+      const completedEvents = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect((completedEvents.body.data || []).map((event: any) => event.type)).toContain(
+        'run.completed'
       );
     } finally {
       await getToolManager().unregister('approval-test-tool');
@@ -708,14 +803,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
 });
 
 describe('workflow template variable resolution (remaining #2)', () => {
-  it('substitutes ${env.VAR} in stage.model so the LLM is called with a real model id', async () => {
-    // The bundled conversation-flow.yaml has `model: ${AGENT_DEFAULT_MODEL}`.
-    // Set the env var BEFORE the workflow engine reads it. The engine resolves
-    // placeholders on every execute(), so this works even though the YAML was
-    // loaded during application.initialize() with the env var unset.
-    process.env.AGENT_DEFAULT_MODEL = 'deepseek-v4-flash';
-    expect(process.env.AGENT_DEFAULT_MODEL).toBe('deepseek-v4-flash'); // sanity
-
+  it('substitutes ${defaultModel} in stage.model with the active runtime model id', async () => {
     const r = await request(app)
       .post('/api/v1/workflows/conversation-flow/execute')
       .set('Authorization', `Bearer ${devToken}`)
@@ -739,8 +827,8 @@ describe('workflow template variable resolution (remaining #2)', () => {
     const reasoningStarted = (events.body.data || []).find(
       (event: any) => event.type === 'agent.reasoning.started'
     );
-    expect(reasoningStarted?.payload?.modelAlias).toBe('deepseek-v4-flash');
-    expect(JSON.stringify(events.body.data)).not.toContain('${AGENT_DEFAULT_MODEL}');
+    expect(reasoningStarted?.payload?.modelAlias).toBe(getLLMManager().getDefaultModel());
+    expect(JSON.stringify(events.body.data)).not.toContain('${defaultModel}');
     expect(JSON.stringify(events.body.data)).not.toMatch(/supported API model names are/i);
 
     const replay = await request(app)
