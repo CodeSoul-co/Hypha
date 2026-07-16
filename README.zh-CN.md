@@ -37,7 +37,8 @@ hypha 采用 ReAct + FSM 执行模型。ReAct 描述 agent 的观察、推理、
 
 - [文档索引](docs/README.md)：架构、包边界、指南和 API reference 的入口。
 - [HTTP API](docs/api/http.md)：REST endpoint、鉴权方式、请求体、响应结构和运行时约定。
-- [Framework API](docs/api/framework.md)：DomainPack、Session、Run、Event、inference、memory、tool、MCP、skill 和 model provider 的 TypeScript 契约。
+- [Framework API](docs/api/framework.md)：DomainPack、Session、Run、Event、execution、inference、memory、tool、MCP、skill 和 model provider 的 TypeScript 契约。
+- [Execution 契约](docs/architecture/execution.md)：provider-neutral 的 Workspace、Sandbox、Command、Store、Event 与 cache fingerprint 边界。
 - [架构说明](docs/reference/architecture.md)：package 职责、harness 语义、runtime 模型和扩展边界。
 - [Storage](docs/reference/storage.md)：document、messaging、relational、vector 和 artifact 存储在本地、自托管、托管云部署中的配置约定。
 - [Domain Pack 指南](docs/guides/domain-packs.md)：声明 workflow、tool、memory、skill、policy、评估和输出契约的字段约定与示例。
@@ -81,6 +82,12 @@ Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`To
 动态 MCP capability 的连接状态、catalog、trust、drift、schema cache 与 Run contract snapshot 相互分离。运行中的 Run 使用不可变 snapshot，远端 capability 变化不会静默替换当前执行或 replay 使用的契约。
 
 参见 [Tool/MCP 架构](docs/architecture/tool-mcp.md)、[安全指南](docs/guides/tool-mcp-security.md) 与 [Adapter 指南](docs/guides/tool-adapters.md)。
+
+## 受治理的 Execution 契约
+
+`@hypha/core` 提供 provider-neutral 的受管 Workspace、sandbox environment、command execution、带 revision 的 record/lease、生命周期 event 与确定性 cache fingerprint 契约。文件系统、进程、容器、远端 provider、存储、artifact、policy 与 secret 的具体实现都保留在 adapter 和 harness 边界之后。Adapter 执行副作用之前，框架会验证路径、身份、状态转换、终态证据、敏感事件字段、幂等边界与 stale-writer fencing。
+
+契约分层与扩展规则参见 [Execution 架构](docs/architecture/execution.md)。
 
 ## 开发命令
 
