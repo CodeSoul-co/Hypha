@@ -118,6 +118,23 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
   -> MemorySync -> Completed
 ```
 
+The same process contains explicit recovery routes. `FSMRecoveryPolicySpec` limits attempts per
+state, total attempts, elapsed time, backoff, and circuit-breaker probes. `FSMAnomaly` records the
+source, category, code, retry evidence, and side-effect commit state. `FSMSnapshot.recovery`
+persists the attempt and circuit state, while `onRecoveryDecision` exposes the event-recording
+boundary.
+
+```text
+normal state -> Recovering -> original state
+normal state -> Compensating -> HumanReview | Quarantined | Failed
+normal state -> Quarantined -> HumanReview | Failed | Cancelled
+```
+
+`runFSMRecoveryLoop()` performs only bounded attempts. It returns suspended work and
+`nextEligibleAt` rather than sleeping by default. Unknown external commit state is quarantined and
+never retried; committed effects require an explicit idempotent compensation handler. See
+[FSM Anomaly Recovery](../architecture/fsm-recovery.md).
+
 ## Message Bus
 
 `@hypha/harness` exposes `MessageBus` and `InMemoryMessageBus` as the transport

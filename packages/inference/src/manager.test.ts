@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RecoveryFailure } from '@hypha/core';
 import {
   createDefaultInferenceBackendRegistry,
   LlamaCppInferenceBackend,
@@ -12,8 +13,16 @@ import { HyphaInferencePipeline } from './pipeline';
 import { InMemoryPlasmodHotLayer } from './plasmod';
 import { DefaultPrefixSegmenter } from './prefix';
 import { DefaultPromptCompiler } from './prompt';
+import { AgentPromptRegistry } from './agent-prompts';
 import { ReasoningOrchestrator } from './reasoning';
-import type { InferenceBackendRequest, InferenceProvider } from './types';
+import { ReasoningStrategyRegistry } from './reasoning-registry';
+import { REACT_OFFICIAL_REFERENCES } from './reasoning-sources';
+import type {
+  InferenceBackendRequest,
+  InferenceProvider,
+  KvCacheProvider,
+  PrefixCacheProvider,
+} from './types';
 
 class RecordingTransport {
   readonly calls: Array<{
@@ -78,6 +87,132 @@ function backendRequest(): InferenceBackendRequest {
 }
 
 describe('@hypha/inference', () => {
+  it('registers built-in reasoning strategies with pinned official sources', () => {
+    const orchestrator = new ReasoningOrchestrator({
+      id: 'source-test',
+      infer: async () => ({ id: 'unused', output: null }),
+    });
+    const descriptors = orchestrator.registry.list();
+
+    expect(descriptors.map((descriptor) => descriptor.id)).toEqual([
+      'reasoning.cot',
+      'reasoning.direct',
+      'reasoning.got',
+      'reasoning.self-consistency',
+      'reasoning.tot',
+    ]);
+    expect(descriptors.find((descriptor) => descriptor.id === 'reasoning.tot')?.references).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repository: 'princeton-nlp/tree-of-thought-llm',
+          revision: expect.stringMatching(/^[0-9a-f]{40}$/),
+          official: true,
+        }),
+      ])
+    );
+    expect(descriptors.find((descriptor) => descriptor.id === 'reasoning.got')?.references).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repository: 'spcl/graph-of-thoughts',
+          official: true,
+        }),
+      ])
+    );
+    expect(REACT_OFFICIAL_REFERENCES[0]).toMatchObject({
+      repository: 'ysymyth/ReAct',
+      revision: expect.stringMatching(/^[0-9a-f]{40}$/),
+    });
+  });
+
+  it('allows independently registered reasoning strategies to override an alias', async () => {
+    const registry = new ReasoningStrategyRegistry();
+    registry.register({
+      descriptor: {
+        id: 'reasoning.custom-direct',
+        version: '1.0.0',
+        method: 'direct',
+        name: 'Custom direct',
+        description: 'Extension fixture',
+        aliases: ['custom'],
+        references: [],
+        capabilities: {
+          branching: false,
+          graph: false,
+          aggregation: false,
+          streaming: false,
+          toolLoop: false,
+        },
+      },
+      execute: async ({ request }) => ({ id: 'custom', output: request.input }),
+    });
+    const orchestrator = new ReasoningOrchestrator(
+      { id: 'unused', infer: async () => ({ id: 'unused', output: null }) },
+      'custom-orchestrator',
+      registry
+    );
+
+    await expect(
+      orchestrator.infer({
+        runId: 'run-custom',
+        stepId: 'step-custom',
+        modelAlias: 'model',
+        input: 'custom-output',
+        reasoning: { method: 'direct', strategyRef: 'custom' },
+      })
+    ).resolves.toMatchObject({ id: 'custom', output: 'custom-output' });
+  });
+
+  it('registers, versions, resolves, and renders agent prompt assets', () => {
+    const registry = new AgentPromptRegistry();
+    registry.register({
+      id: 'agent.base',
+      version: '1.0.0',
+      name: 'Base agent prompt',
+      role: 'system',
+      template: 'You are {{agent_name}}.',
+      variables: [{ name: 'agent_name', type: 'string', required: true }],
+    });
+    registry.register({
+      id: 'agent.base',
+      version: '2.0.0',
+      name: 'Base agent prompt v2',
+      role: 'system',
+      template: 'Act as {{agent_name}} for {{user_id}}.',
+      variables: [
+        { name: 'agent_name', type: 'string', required: true },
+        { name: 'user_id', type: 'string', required: true },
+      ],
+    });
+
+    const resolved = registry.resolve([{ id: 'agent.base', required: true }], {
+      agent_name: 'Hypha',
+      user_id: 'user-1',
+    });
+    expect(resolved.instructions).toBe('Act as Hypha for user-1.');
+    expect(resolved.blocks[0]).toMatchObject({
+      templateId: 'agent.base',
+      templateVersion: '2.0.0',
+      cacheable: true,
+      stable: true,
+    });
+    expect(resolved.blocks[0]?.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('rejects undeclared agent prompt variables instead of silently erasing them', () => {
+    const registry = new AgentPromptRegistry();
+    registry.register({
+      id: 'agent.invalid',
+      version: '1.0.0',
+      name: 'Invalid prompt',
+      role: 'system',
+      template: 'Known {{known}} unknown {{unknown}}.',
+      variables: [{ name: 'known', type: 'string', required: true }],
+    });
+
+    expect(() =>
+      registry.resolve([{ id: 'agent.invalid', required: true }], { known: 'value' })
+    ).toThrow('Undeclared agent prompt variables: agent.invalid.unknown');
+  });
   it('routes inference requests through registered providers', async () => {
     const manager = new InferenceManager();
     const provider: InferenceProvider = {
@@ -376,6 +511,111 @@ describe('@hypha/inference', () => {
     await expect(kvCache.get(kv)).resolves.toEqual({ handle: 'existing' });
   });
 
+  it('bypasses failed optional caches while preserving normalized recovery evidence', async () => {
+    const failures: RecoveryFailure[] = [];
+    const prefixCache: PrefixCacheProvider = {
+      get: async () => {
+        throw Object.assign(new Error('prefix cache offline'), { code: 'ECONNREFUSED' });
+      },
+      put: async () => {},
+      invalidate: async () => {},
+    };
+    const kvCache: KvCacheProvider = {
+      get: async () => {
+        throw Object.assign(new Error('kv cache offline'), { code: 'ECONNREFUSED' });
+      },
+      put: async () => {
+        throw Object.assign(new Error('kv cache write failed'), { code: 'ENOSPC' });
+      },
+      invalidate: async () => {},
+    };
+    const manager = new InferenceManager({
+      prefixCache,
+      kvCache,
+      onRecoveryFailure: (failure) => {
+        failures.push(failure);
+      },
+    });
+    manager.register({
+      id: 'mock',
+      infer: async (request) => ({
+        id: 'response_cache_bypass',
+        output: { metadata: request.metadata },
+        nextKvCacheValue: { handle: 'new' },
+      }),
+    });
+    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
+    const kv = { id: 'kv_failed', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_cache_bypass',
+        stepId: 'step_cache_bypass',
+        modelAlias: 'default',
+        input: 'hello',
+        cachePolicy: {
+          prefix,
+          kvCache: kv,
+          writeKvCache: { ref: kv },
+        },
+      })
+    ).resolves.toMatchObject({
+      id: 'response_cache_bypass',
+      cache: {
+        prefixHit: false,
+        kvCacheHit: false,
+        kvCacheMissReason: 'error',
+        kvCacheWritten: false,
+        bypassed: true,
+        issues: [
+          { operation: 'prefix_read', bypassed: true },
+          { operation: 'kv_read', bypassed: true },
+          { operation: 'kv_write', bypassed: true },
+        ],
+      },
+    });
+    expect(failures).toHaveLength(3);
+    expect(failures.every((failure) => failure.module === 'cache')).toBe(true);
+  });
+
+  it('reports provider failures without hiding the original inference error', async () => {
+    const failures: RecoveryFailure[] = [];
+    const manager = new InferenceManager({
+      providerRevision: 'provider-v1',
+      onRecoveryFailure: (failure) => {
+        failures.push(failure);
+      },
+    });
+    const providerError = Object.assign(new Error('provider overloaded'), {
+      status: 429,
+      retryAfterMs: 500,
+    });
+    manager.register({
+      id: 'mock',
+      infer: async () => {
+        throw providerError;
+      },
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_provider_failure',
+        stepId: 'step_provider_failure',
+        modelAlias: 'default',
+        input: 'hello',
+      })
+    ).rejects.toBe(providerError);
+    expect(failures).toMatchObject([
+      {
+        module: 'inference',
+        category: 'rate_limit',
+        retryable: true,
+        retryAfterMs: 500,
+        evidence: { providerRevision: 'provider-v1' },
+      },
+    ]);
+  });
+
   it('runs CoT and ToT reasoning strategies through provider abstraction', async () => {
     const calls: unknown[] = [];
     const provider: InferenceProvider = {
@@ -405,8 +645,23 @@ describe('@hypha/inference', () => {
         input: 'branch',
         reasoning: { method: 'tot', branches: 2 },
       })
-    ).resolves.toMatchObject({ id: 'response_2' });
-    expect(calls).toHaveLength(3);
+    ).resolves.toMatchObject({
+      id: 'response_4',
+      metadata: { reasoning: { method: 'tot', nodeCount: 6 } },
+    });
+    expect(calls).toHaveLength(7);
+
+    await expect(
+      orchestrator.infer({
+        runId: 'run_1',
+        stepId: 'step_3',
+        modelAlias: 'default',
+        input: 'merge candidates',
+        reasoning: { method: 'got', branches: 2, maxDepth: 1 },
+      })
+    ).resolves.toMatchObject({
+      metadata: { reasoning: { method: 'got', nodeCount: 3 } },
+    });
   });
 
   it('compiles prompts and segments stable prefixes from dynamic input', async () => {
@@ -504,7 +759,7 @@ describe('@hypha/inference', () => {
         .list()
         .map((entry) => entry.id)
         .sort()
-    ).toEqual(['llama.cpp', 'openai-api', 'sglang', 'vllm']);
+    ).toEqual(['llama.cpp', 'ollama', 'openai-api', 'sglang', 'vllm']);
   });
 
   it('normalizes concrete backend request and response shapes', async () => {
