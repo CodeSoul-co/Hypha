@@ -5,3 +5,5 @@ This directory contains current architecture notes for hypha subsystems. These n
 ## Index
 
 - [Storage Runtime](storage-runtime.md)
+- [Governed Tool and MCP Runtime](tool-mcp.md)
+- [Governed Execution Contracts](execution.md)
