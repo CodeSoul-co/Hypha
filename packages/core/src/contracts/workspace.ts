@@ -244,3 +244,105 @@ export interface WorkspaceDeleteRequest {
   expectedContentHash?: string;
   idempotencyKey?: string;
 }
+
+export type WorkspaceSnapshotType = 'full' | 'incremental' | 'manifest_only' | 'failure_snapshot';
+
+export interface WorkspaceSnapshotRequest {
+  operationId: string;
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  type: WorkspaceSnapshotType;
+  baseSnapshotRef?: string;
+  includePaths?: string[];
+  excludePatterns?: string[];
+  reason?: string;
+  idempotencyKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkspaceSnapshotEntry {
+  path: string;
+  kind: 'file' | 'directory' | 'symlink';
+  sizeBytes?: number;
+  contentHash?: string;
+  mode?: number;
+  symlinkTarget?: string;
+  artifactRef?: string;
+}
+
+export interface WorkspaceSnapshotManifest {
+  id: string;
+  workspaceId: string;
+  baseSnapshotId?: string;
+  entries: WorkspaceSnapshotEntry[];
+  ignoredPatterns?: string[];
+  sourceTreeHash: string;
+  manifestHash: string;
+  totalBytes: number;
+  fileCount: number;
+  createdAt: string;
+  createdBy: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkspaceRestoreRequest {
+  operationId: string;
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  snapshotRef: string;
+  expectedWorkspaceSnapshotHash?: string;
+  idempotencyKey?: string;
+}
+
+export interface WorkspaceDiffRequest {
+  operationId: string;
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  fromSnapshotRef: string;
+  toSnapshotRef?: string;
+  createPatchArtifact?: boolean;
+}
+
+export interface WorkspaceDiffSummary {
+  created: number;
+  modified: number;
+  deleted: number;
+  renamed: number;
+  permissionChanged: number;
+  bytesAdded: number;
+  bytesRemoved: number;
+}
+
+export interface WorkspaceDiffResult {
+  fromSnapshotRef: string;
+  toSnapshotRef?: string;
+  mutations: FileMutation[];
+  patchArtifactRef?: string;
+  summary: WorkspaceDiffSummary;
+}
+
+export interface WorkspacePatchRequest {
+  operationId: string;
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  patchArtifactRef: string;
+  expectedBaseSnapshotHash?: string;
+  mode: 'check' | 'apply';
+  conflictPolicy: 'fail' | 'three_way' | 'mark_conflicts';
+  idempotencyKey?: string;
+}
+
+export interface WorkspacePatchConflict {
+  path: string;
+  reason: string;
+  expectedHash?: string;
+  actualHash?: string;
+}
+
+export interface WorkspacePatchResult {
+  checked: boolean;
+  applied: boolean;
+  conflicts: WorkspacePatchConflict[];
+  mutations: FileMutation[];
+  resultingWorkspaceSnapshotHash?: string;
+}

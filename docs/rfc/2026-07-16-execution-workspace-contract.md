@@ -145,3 +145,26 @@ The complete `WorkspaceRuntime` interface remains deferred until the canonical E
 `ArtifactRecord` is introduced. The repository currently has a Memory-local legacy `ArtifactRef`;
 Core must not depend on Memory, and Execution must not create a second conflicting shared
 `ArtifactRef` or modify Memory-owned implementation on the `execution` branch.
+
+## Snapshot, Restore, Diff, and Patch Contract Increment
+
+The third implementation increment defines the Workspace recovery contracts that do not require a
+canonical `ArtifactRef` object. Snapshot and patch references remain opaque strings at this
+boundary; file bodies and Artifact bytes are never embedded in manifests, events, or Cache inputs.
+
+The engineering specification defines `WorkspaceSnapshotManifest`, `WorkspaceSnapshotEntry`,
+`WorkspaceDiffResult`, and `WorkspacePatchRequest`, but leaves their surrounding request and result
+shapes open. This increment adds the following conservative rules:
+
+- incremental Snapshot requests require `baseSnapshotRef`;
+- Snapshot manifests expose `sourceTreeHash` and `manifestHash` as stable Cache validity inputs;
+- restores may include `expectedWorkspaceSnapshotHash` to reject stale replacement attempts;
+- Diff compares a required base Snapshot with either another Snapshot or the current Workspace;
+- Patch `check` is the dry-run mode;
+- Patch `apply` requires `expectedBaseSnapshotHash` and reports conflicts explicitly;
+- Snapshot entries, mutations, and conflicts contain only Workspace-relative paths and opaque
+  references.
+
+Provider implementations must calculate hashes from canonical manifests and must not treat Cache
+as the source of truth. Actual Snapshot persistence and the `WorkspaceRuntime.snapshot()` return
+type remain deferred until the Execution-owned Artifact contract is available.

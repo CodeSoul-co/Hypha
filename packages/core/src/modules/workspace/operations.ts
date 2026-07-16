@@ -146,7 +146,7 @@ export const workspaceWriteResultSchema = z.object({
   artifactRef: z.string().min(1).optional(),
 }) satisfies ZodType<WorkspaceWriteResult>;
 
-const relativePathJsonSchema: JsonSchema = {
+export const relativePathJsonSchema: JsonSchema = {
   type: 'string',
   minLength: 1,
   pattern: '^(?![\\\\/])(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+$',
@@ -154,7 +154,7 @@ const relativePathJsonSchema: JsonSchema = {
     'Relative Workspace path. Runtime validation also rejects encoded and Unicode-normalized traversal.',
 };
 
-const principalJsonSchema: JsonSchema = {
+export const principalJsonSchema: JsonSchema = {
   type: 'object',
   required: ['principalId', 'type', 'permissionScopes'],
   properties: {
@@ -175,7 +175,7 @@ const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 }
 const permissionJsonSchema: JsonSchema = { enum: ['read', 'write', 'execute', 'delete'] };
 const entryKindJsonSchema: JsonSchema = { enum: ['file', 'directory', 'symlink', 'other'] };
 
-const fileMutationJsonSchema: JsonSchema = {
+export const fileMutationJsonSchema: JsonSchema = {
   type: 'object',
   required: ['path', 'operation', 'detectedAt'],
   properties: {
