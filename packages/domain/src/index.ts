@@ -1,6 +1,5 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { createHash } from 'crypto';
 import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import type {
@@ -49,9 +48,6 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   taskSchemas: TaskSchemaSpec[];
   outputContracts: OutputContractSpec[];
   sessionProfiles?: SessionProfileSpec[];
-  runtimeProfiles?: RuntimeProfileSpec[];
-  messageBusProfiles?: RuntimeMessageBusProfileSpec[];
-  sessionQueueProfiles?: RuntimeSessionQueueProfileSpec[];
   workflows: WorkflowSpec[];
   defaultWorkflow?: string;
   allowedSkills?: SkillRef[];
@@ -100,7 +96,6 @@ export interface DomainCompileOptions {
   taskSchemaId?: string;
   workflowId?: string;
   sessionProfileId?: string;
-  runtimeProfileId?: string;
   memoryProfileId?: string;
   mcpProfileId?: string;
   contextProfileId?: string;
@@ -143,8 +138,6 @@ export interface DomainAgentPatchTarget {
 
 export interface WorkflowStateBinding {
   stateId: string;
-  stateType: WorkflowStateType;
-  activityBindings: RuntimeActivityBindingSpec[];
   allowedTools: string[];
   allowedSkills: string[];
   requiredSkills: string[];
@@ -153,110 +146,6 @@ export interface WorkflowStateBinding {
   reasoningProfileRef?: string;
   policyRefs: string[];
   evaluationRefs: string[];
-  concurrencyPolicyRef?: string;
-  resourcePolicyRef?: string;
-  recoveryPolicyRef?: string;
-}
-
-export type WorkflowStateType =
-  | 'agent'
-  | 'deterministic'
-  | 'human'
-  | 'wait_signal'
-  | 'timer'
-  | 'subworkflow'
-  | 'parallel'
-  | 'join'
-  | 'terminal';
-
-export type RuntimeActivityType =
-  | 'model'
-  | 'tool'
-  | 'memory'
-  | 'execution'
-  | 'human'
-  | 'custom';
-
-export interface RuntimeActivityBindingSpec {
-  id: string;
-  activityType: RuntimeActivityType;
-  portRef: {
-    id: string;
-    version: string;
-    revision?: string;
-  };
-  operation: string;
-  contractHash: string;
-  policyRefs?: string[];
-  metadata?: Record<string, unknown>;
-}
-
-export interface RuntimeMessageBusProfileSpec extends VersionedSpec, SpecMetadata {
-  revision?: string;
-  delivery: 'at_least_once';
-  transportRef: SpecRef;
-  topicPrefix?: string;
-  maxAttempts?: number;
-  deadLetterTopic?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface RuntimeSessionQueueProfileSpec extends VersionedSpec, SpecMetadata {
-  revision?: string;
-  ordering: 'fifo';
-  concurrency: 'serial' | 'bounded';
-  maxInFlight?: number;
-  leaseTtlMs?: number;
-  fairness?: 'round_robin' | 'priority_aging';
-  metadata?: Record<string, unknown>;
-}
-
-export interface RuntimeProfileSpec extends VersionedSpec, SpecMetadata {
-  revision?: string;
-  messageBusProfileRef?: SpecRef;
-  sessionQueueProfileRef?: SpecRef;
-  defaultTimeoutPolicy?: TimeoutPolicySpec;
-  defaultRetryPolicy?: RetryPolicySpec;
-  maxConcurrentRuns?: number;
-  concurrencyPolicyRef?: string;
-  resourcePolicyRef?: string;
-  recoveryPolicyRef?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface PinnedDomainRuntimeRef {
-  id: string;
-  version: string;
-  revision?: string;
-  hash: string;
-}
-
-export interface WorkflowDependencySnapshot {
-  schemaVersion: '1.0.0';
-  domainPack: PinnedDomainRuntimeRef;
-  workflow: PinnedDomainRuntimeRef;
-  runtimeProfile?: PinnedDomainRuntimeRef;
-  messageBusProfile?: PinnedDomainRuntimeRef;
-  sessionQueueProfile?: PinnedDomainRuntimeRef;
-  activityContracts: Array<{
-    bindingId: string;
-    stateId: string;
-    activityType: RuntimeActivityType;
-    portRef: RuntimeActivityBindingSpec['portRef'];
-    operation: string;
-    contractHash: string;
-  }>;
-  policyRefs: string[];
-  hash: string;
-}
-
-export interface CompiledWorkflowRuntimeSpec {
-  domainPackRef: PinnedDomainRuntimeRef;
-  workflowRef: PinnedDomainRuntimeRef;
-  fsmProcess: FSMProcessSpec;
-  stateBindings: WorkflowStateBinding[];
-  dependencySnapshot: WorkflowDependencySnapshot;
-  processHash: string;
 }
 
 export interface DomainBindingResolution {
@@ -264,9 +153,6 @@ export interface DomainBindingResolution {
   taskSchema?: TaskSchemaSpec;
   outputContract?: OutputContractSpec;
   sessionProfile?: SessionProfileSpec;
-  runtimeProfile?: RuntimeProfileSpec;
-  messageBusProfile?: RuntimeMessageBusProfileSpec;
-  sessionQueueProfile?: RuntimeSessionQueueProfileSpec;
   workflow: WorkflowSpec;
   memoryProfile?: MemorySpec;
   mcpProfile?: MCPIntegrationSpec;
@@ -289,7 +175,6 @@ export interface DomainCompilationResult {
   domainPack: DomainPackSpec;
   bindings: DomainBindingResolution;
   fsmProcess: FSMProcessSpec;
-  runtime: CompiledWorkflowRuntimeSpec;
   harnessedSystem: HarnessedAgentSystemSpec;
   agentPatch: DomainAgentPatch;
   sessionInitialization: DomainSessionInitialization;
@@ -299,9 +184,6 @@ export type DomainPackOverlayCollection =
   | 'taskSchemas'
   | 'outputContracts'
   | 'sessionProfiles'
-  | 'runtimeProfiles'
-  | 'messageBusProfiles'
-  | 'sessionQueueProfiles'
   | 'workflows'
   | 'allowedSkills'
   | 'defaultSkills'
@@ -419,8 +301,6 @@ export interface TaskInstance<TInput = unknown, TConstraints = unknown> {
 }
 
 export interface WorkflowSpec extends VersionedSpec, SpecMetadata {
-  revision?: string;
-  runtimeProfileRef?: SpecRef;
   initialState: string;
   terminalStates: string[];
   states: WorkflowStateSpec[];
@@ -430,8 +310,6 @@ export interface WorkflowSpec extends VersionedSpec, SpecMetadata {
 export interface WorkflowStateSpec extends SpecMetadata {
   id: string;
   goal: string;
-  stateType?: WorkflowStateType;
-  activityBindings?: RuntimeActivityBindingSpec[];
   inputContract?: JsonSchema;
   outputContract?: JsonSchema;
   allowedTools?: string[];
@@ -448,9 +326,6 @@ export interface WorkflowStateSpec extends SpecMetadata {
   timeoutPolicy?: TimeoutPolicySpec;
   retryPolicyRef?: string;
   retryPolicy?: RetryPolicySpec;
-  concurrencyPolicyRef?: string;
-  resourcePolicyRef?: string;
-  recoveryPolicyRef?: string;
 }
 
 export interface WorkflowTransitionSpec {
@@ -464,7 +339,6 @@ export interface WorkflowCompileOptions {
   workflowId?: string;
   fsmProcessId?: string;
   agentRef?: SpecRef;
-  runtimeProfileRef?: SpecRef;
 }
 
 export interface DomainSessionInitOptions {
@@ -499,31 +373,19 @@ export function compileWorkflowToFSM(
   options: WorkflowCompileOptions = {}
 ): FSMProcessSpec {
   const workflow = selectWorkflow(domainPack, options.workflowId);
-  const runtimeProfile = resolveProfileRef(
-    domainPack.runtimeProfiles,
-    options.runtimeProfileRef ?? workflow.runtimeProfileRef,
-    'Runtime profile'
-  );
-  const states: FSMStateSpec[] = workflow.states.map((state) => {
-    const isTerminal = workflow.terminalStates.includes(state.id);
-    return {
-      id: state.id,
-      name: state.name,
-      description: state.description ?? state.goal,
-      kind: isTerminal ? inferTerminalKind(state.id) : mapWorkflowStateKind(state.stateType),
-      timeoutPolicy: isTerminal
-        ? undefined
-        : state.timeoutPolicy ??
-          (state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined) ??
-          runtimeProfile?.defaultTimeoutPolicy,
-      retryPolicy: isTerminal
-        ? undefined
-        : state.retryPolicy ?? runtimeProfile?.defaultRetryPolicy,
-      humanReviewPolicy: state.humanReviewPolicy,
-      policyRefs: state.policyRefs,
-      traceEvents: [`workflow.state.${state.id}`],
-    };
-  });
+  const states: FSMStateSpec[] = workflow.states.map((state) => ({
+    id: state.id,
+    name: state.name,
+    description: state.description ?? state.goal,
+    kind: workflow.terminalStates.includes(state.id) ? inferTerminalKind(state.id) : 'domain',
+    timeoutPolicy:
+      state.timeoutPolicy ??
+      (state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined),
+    retryPolicy: state.retryPolicy,
+    humanReviewPolicy: state.humanReviewPolicy,
+    policyRefs: state.policyRefs,
+    traceEvents: [`workflow.state.${state.id}`],
+  }));
   const transitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
     from: transition.from,
     to: transition.to,
@@ -542,83 +404,6 @@ export function compileWorkflowToFSM(
     transitions,
     terminalStates: workflow.terminalStates,
     tags: ['compiled-from-domain-pack', domainPack.id],
-  };
-}
-
-export function compileWorkflowForRuntime(
-  input: DomainPackSpec,
-  options: WorkflowCompileOptions = {}
-): CompiledWorkflowRuntimeSpec {
-  const domainPack = validateDomainPackSpec(input);
-  const workflow = selectWorkflow(domainPack, options.workflowId);
-  const runtimeProfile = resolveProfileRef(
-    domainPack.runtimeProfiles,
-    options.runtimeProfileRef ?? workflow.runtimeProfileRef,
-    'Runtime profile'
-  );
-  const messageBusProfile = resolveProfileRef(
-    domainPack.messageBusProfiles,
-    runtimeProfile?.messageBusProfileRef,
-    'Runtime message bus profile'
-  );
-  const sessionQueueProfile = resolveProfileRef(
-    domainPack.sessionQueueProfiles,
-    runtimeProfile?.sessionQueueProfileRef,
-    'Runtime session queue profile'
-  );
-  const fsmProcess = compileWorkflowToFSM(domainPack, {
-    ...options,
-    workflowId: workflow.id,
-    runtimeProfileRef: runtimeProfile ? toSpecRef(runtimeProfile) : undefined,
-  });
-  const stateBindings = workflow.states.map(resolveWorkflowStateBinding);
-  const activityContracts = stateBindings.flatMap((state) =>
-    state.activityBindings.map((binding) => ({
-      bindingId: binding.id,
-      stateId: state.stateId,
-      activityType: binding.activityType,
-      portRef: binding.portRef,
-      operation: binding.operation,
-      contractHash: binding.contractHash,
-    }))
-  );
-  const policyRefs = mergeStrings(
-    runtimeProfile?.concurrencyPolicyRef ? [runtimeProfile.concurrencyPolicyRef] : undefined,
-    runtimeProfile?.resourcePolicyRef ? [runtimeProfile.resourcePolicyRef] : undefined,
-    runtimeProfile?.recoveryPolicyRef ? [runtimeProfile.recoveryPolicyRef] : undefined,
-    ...stateBindings.map((state) => [
-      ...state.policyRefs,
-      ...(state.concurrencyPolicyRef ? [state.concurrencyPolicyRef] : []),
-      ...(state.resourcePolicyRef ? [state.resourcePolicyRef] : []),
-      ...(state.recoveryPolicyRef ? [state.recoveryPolicyRef] : []),
-      ...state.activityBindings.flatMap((binding) => binding.policyRefs ?? []),
-    ])
-  ).sort();
-  const snapshotWithoutHash = {
-    schemaVersion: '1.0.0' as const,
-    domainPack: pinDomainRuntimeSpec(domainPack),
-    workflow: pinDomainRuntimeSpec(workflow),
-    runtimeProfile: runtimeProfile ? pinDomainRuntimeSpec(runtimeProfile) : undefined,
-    messageBusProfile: messageBusProfile ? pinDomainRuntimeSpec(messageBusProfile) : undefined,
-    sessionQueueProfile: sessionQueueProfile ? pinDomainRuntimeSpec(sessionQueueProfile) : undefined,
-    activityContracts,
-    policyRefs,
-  };
-  const dependencySnapshot: WorkflowDependencySnapshot = {
-    ...snapshotWithoutHash,
-    hash: hashCanonicalValue(snapshotWithoutHash),
-  };
-  return {
-    domainPackRef: dependencySnapshot.domainPack,
-    workflowRef: dependencySnapshot.workflow,
-    fsmProcess,
-    stateBindings,
-    dependencySnapshot,
-    processHash: hashCanonicalValue({
-      fsmProcess,
-      stateBindings,
-      dependencySnapshotHash: dependencySnapshot.hash,
-    }),
   };
 }
 
@@ -703,13 +488,6 @@ export class WorkflowCompiler {
   compile(domainPack: DomainPackSpec, options: WorkflowCompileOptions = {}): FSMProcessSpec {
     return compileWorkflowToFSM(domainPack, options);
   }
-
-  compileRuntime(
-    domainPack: DomainPackSpec,
-    options: WorkflowCompileOptions = {}
-  ): CompiledWorkflowRuntimeSpec {
-    return compileWorkflowForRuntime(domainPack, options);
-  }
 }
 
 export async function loadDomainPackFile(filePath: string): Promise<DomainPackSpec> {
@@ -776,21 +554,6 @@ export function extendDomainPack(base: DomainPackSpec, overlay: DomainPackOverla
       base.sessionProfiles,
       patch.sessionProfiles,
       remove?.sessionProfiles
-    ),
-    runtimeProfiles: upsertById(
-      base.runtimeProfiles,
-      patch.runtimeProfiles,
-      remove?.runtimeProfiles
-    ),
-    messageBusProfiles: upsertById(
-      base.messageBusProfiles,
-      patch.messageBusProfiles,
-      remove?.messageBusProfiles
-    ),
-    sessionQueueProfiles: upsertById(
-      base.sessionQueueProfiles,
-      patch.sessionQueueProfiles,
-      remove?.sessionQueueProfiles
     ),
     workflows: upsertById(base.workflows, patch.workflows, remove?.workflows) ?? base.workflows,
     allowedSkills: upsertById(base.allowedSkills, patch.allowedSkills, remove?.allowedSkills),
@@ -904,34 +667,11 @@ export function compileDomainPackToHarnessedSystem(
       .map((state) => state.reasoningProfileRef)
       .filter((id): id is string => Boolean(id))
   );
-  const runtime = compileWorkflowForRuntime(domainPack, {
+  const fsmProcess = compileWorkflowToFSM(domainPack, {
     workflowId: workflow.id,
     fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
     agentRef: options.agentRef,
-    runtimeProfileRef: options.runtimeProfileId ? { id: options.runtimeProfileId } : undefined,
   });
-  const fsmProcess = runtime.fsmProcess;
-  const runtimeProfile = runtime.dependencySnapshot.runtimeProfile
-    ? selectProfileById(
-        domainPack.runtimeProfiles,
-        runtime.dependencySnapshot.runtimeProfile.id,
-        'Runtime profile'
-      )
-    : undefined;
-  const messageBusProfile = runtime.dependencySnapshot.messageBusProfile
-    ? selectProfileById(
-        domainPack.messageBusProfiles,
-        runtime.dependencySnapshot.messageBusProfile.id,
-        'Runtime message bus profile'
-      )
-    : undefined;
-  const sessionQueueProfile = runtime.dependencySnapshot.sessionQueueProfile
-    ? selectProfileById(
-        domainPack.sessionQueueProfiles,
-        runtime.dependencySnapshot.sessionQueueProfile.id,
-        'Runtime session queue profile'
-      )
-    : undefined;
   const harnessedSystem: HarnessedAgentSystemSpec = {
     id: options.systemId ?? `${domainPack.id}.${workflow.id}.system`,
     version: options.systemVersion ?? domainPack.version,
@@ -986,9 +726,6 @@ export function compileDomainPackToHarnessedSystem(
       taskSchema,
       outputContract,
       sessionProfile: selectSessionProfile(domainPack, options.sessionProfileId),
-      runtimeProfile,
-      messageBusProfile,
-      sessionQueueProfile,
       workflow,
       memoryProfile,
       mcpProfile,
@@ -1007,7 +744,6 @@ export function compileDomainPackToHarnessedSystem(
       workflowStates: workflowStateBindings,
     },
     fsmProcess,
-    runtime,
     harnessedSystem,
     agentPatch,
     sessionInitialization,
@@ -1079,27 +815,9 @@ function selectProfileById<TSpec extends VersionedSpec>(
   return spec;
 }
 
-function resolveProfileRef<TSpec extends VersionedSpec>(
-  specs: TSpec[] | undefined,
-  ref: SpecRef | undefined,
-  label: string
-): TSpec | undefined {
-  if (!ref) return undefined;
-  const spec = specs?.find(
-    (candidate) => candidate.id === ref.id && (!ref.version || candidate.version === ref.version)
-  );
-  if (!spec) {
-    const requested = ref.version ? `${ref.id}@${ref.version}` : ref.id;
-    throw new Error(`${label} not found in domain pack: ${requested}`);
-  }
-  return spec;
-}
-
 function resolveWorkflowStateBinding(state: WorkflowStateSpec): WorkflowStateBinding {
   return {
     stateId: state.id,
-    stateType: state.stateType ?? 'deterministic',
-    activityBindings: state.activityBindings ?? [],
     allowedTools: state.allowedTools ?? [],
     allowedSkills: state.allowedSkills ?? [],
     requiredSkills: state.requiredSkills ?? [],
@@ -1108,36 +826,7 @@ function resolveWorkflowStateBinding(state: WorkflowStateSpec): WorkflowStateBin
     reasoningProfileRef: state.reasoningProfileRef,
     policyRefs: state.policyRefs ?? [],
     evaluationRefs: state.evaluationRefs ?? [],
-    concurrencyPolicyRef: state.concurrencyPolicyRef,
-    resourcePolicyRef: state.resourcePolicyRef,
-    recoveryPolicyRef: state.recoveryPolicyRef,
   };
-}
-
-function pinDomainRuntimeSpec(
-  spec: VersionedSpec & { revision?: string }
-): PinnedDomainRuntimeRef {
-  return {
-    id: spec.id,
-    version: spec.version,
-    revision: spec.revision,
-    hash: hashCanonicalValue(spec),
-  };
-}
-
-function hashCanonicalValue(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(canonicalizeValue(value))).digest('hex');
-}
-
-function canonicalizeValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalizeValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, canonicalizeValue(entry)])
-  );
 }
 
 function upsertById<TSpec extends { id: string }>(
@@ -1262,12 +951,6 @@ function inferTerminalKind(stateId: string): FSMStateSpec['kind'] {
   return 'completed';
 }
 
-function mapWorkflowStateKind(stateType: WorkflowStateType | undefined): FSMStateSpec['kind'] {
-  if (stateType === 'agent') return 'reasoning';
-  if (stateType === 'human') return 'human_review';
-  return 'domain';
-}
-
 export const riskProfileSpecSchema = z.object({
   defaultRiskLevel: riskLevelSchema,
   escalationPolicyRef: z.string().optional(),
@@ -1346,83 +1029,9 @@ export const taskSchemaSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   defaultSkillRefs: z.array(specRefSchema).optional(),
 }) satisfies ZodType<TaskSchemaSpec>;
 
-export const workflowStateTypeSchema = z.enum([
-  'agent',
-  'deterministic',
-  'human',
-  'wait_signal',
-  'timer',
-  'subworkflow',
-  'parallel',
-  'join',
-  'terminal',
-]);
-
-export const runtimeActivityTypeSchema = z.enum([
-  'model',
-  'tool',
-  'memory',
-  'execution',
-  'human',
-  'custom',
-]);
-
-export const runtimeActivityBindingSpecSchema = z.object({
-  id: z.string().min(1),
-  activityType: runtimeActivityTypeSchema,
-  portRef: z.object({
-    id: z.string().min(1),
-    version: z.string().min(1),
-    revision: z.string().min(1).optional(),
-  }),
-  operation: z.string().min(1),
-  contractHash: z.string().min(1),
-  policyRefs: z.array(z.string().min(1)).optional(),
-  metadata: z.record(z.unknown()).optional(),
-}) satisfies ZodType<RuntimeActivityBindingSpec>;
-
-export const runtimeMessageBusProfileSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    revision: z.string().min(1).optional(),
-    delivery: z.literal('at_least_once'),
-    transportRef: specRefSchema,
-    topicPrefix: z.string().min(1).optional(),
-    maxAttempts: z.number().int().positive().optional(),
-    deadLetterTopic: z.string().min(1).optional(),
-    metadata: z.record(z.unknown()).optional(),
-  }) satisfies ZodType<RuntimeMessageBusProfileSpec>;
-
-export const runtimeSessionQueueProfileSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    revision: z.string().min(1).optional(),
-    ordering: z.literal('fifo'),
-    concurrency: z.enum(['serial', 'bounded']),
-    maxInFlight: z.number().int().positive().optional(),
-    leaseTtlMs: z.number().int().positive().optional(),
-    fairness: z.enum(['round_robin', 'priority_aging']).optional(),
-    metadata: z.record(z.unknown()).optional(),
-  }) satisfies ZodType<RuntimeSessionQueueProfileSpec>;
-
-export const runtimeProfileSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
-  revision: z.string().min(1).optional(),
-  messageBusProfileRef: specRefSchema.optional(),
-  sessionQueueProfileRef: specRefSchema.optional(),
-  defaultTimeoutPolicy: timeoutPolicySpecSchema.optional(),
-  defaultRetryPolicy: retryPolicySpecSchema.optional(),
-  maxConcurrentRuns: z.number().int().positive().optional(),
-  concurrencyPolicyRef: z.string().min(1).optional(),
-  resourcePolicyRef: z.string().min(1).optional(),
-  recoveryPolicyRef: z.string().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
-}) satisfies ZodType<RuntimeProfileSpec>;
-
 export const workflowStateSpecSchema = specMetadataSchema.extend({
   id: z.string().min(1),
   goal: z.string().min(1),
-  stateType: workflowStateTypeSchema.optional(),
-  activityBindings: z.array(runtimeActivityBindingSpecSchema).optional(),
   inputContract: jsonSchemaSchema.optional(),
   outputContract: jsonSchemaSchema.optional(),
   allowedTools: z.array(z.string()).optional(),
@@ -1439,9 +1048,6 @@ export const workflowStateSpecSchema = specMetadataSchema.extend({
   timeoutPolicy: timeoutPolicySpecSchema.optional(),
   retryPolicyRef: z.string().optional(),
   retryPolicy: retryPolicySpecSchema.optional(),
-  concurrencyPolicyRef: z.string().optional(),
-  resourcePolicyRef: z.string().optional(),
-  recoveryPolicyRef: z.string().optional(),
 });
 
 export const workflowTransitionSpecSchema = z.object({
@@ -1452,8 +1058,6 @@ export const workflowTransitionSpecSchema = z.object({
 });
 
 export const workflowSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
-  revision: z.string().min(1).optional(),
-  runtimeProfileRef: specRefSchema.optional(),
   initialState: z.string().min(1),
   terminalStates: z.array(z.string().min(1)).min(1),
   states: z.array(workflowStateSpecSchema).min(1),
@@ -1465,9 +1069,6 @@ export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   taskSchemas: z.array(taskSchemaSpecSchema).min(1),
   outputContracts: z.array(outputContractSpecSchema).min(1),
   sessionProfiles: z.array(sessionProfileSpecSchema).optional(),
-  runtimeProfiles: z.array(runtimeProfileSpecSchema).optional(),
-  messageBusProfiles: z.array(runtimeMessageBusProfileSpecSchema).optional(),
-  sessionQueueProfiles: z.array(runtimeSessionQueueProfileSpecSchema).optional(),
   workflows: z.array(workflowSpecSchema).min(1),
   defaultWorkflow: z.string().optional(),
   allowedSkills: z.array(specRefSchema).optional(),
@@ -1487,72 +1088,6 @@ export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   metadata: z.record(z.unknown()).optional(),
 }) satisfies ZodType<DomainPackSpec>;
 
-export const runtimeProfileSpecJsonSchema: JsonSchema = {
-  type: 'object',
-  required: ['id', 'version'],
-  properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
-    name: { type: 'string' },
-    description: { type: 'string' },
-    owner: { type: 'string' },
-    tags: { type: 'array', items: { type: 'string' } },
-    revision: { type: 'string' },
-    messageBusProfileRef: { type: 'object' },
-    sessionQueueProfileRef: { type: 'object' },
-    defaultTimeoutPolicy: { type: 'object' },
-    defaultRetryPolicy: { type: 'object' },
-    maxConcurrentRuns: { type: 'integer', minimum: 1 },
-    concurrencyPolicyRef: { type: 'string' },
-    resourcePolicyRef: { type: 'string' },
-    recoveryPolicyRef: { type: 'string' },
-    metadata: { type: 'object' },
-  },
-  additionalProperties: false,
-};
-
-export const runtimeMessageBusProfileSpecJsonSchema: JsonSchema = {
-  type: 'object',
-  required: ['id', 'version', 'delivery', 'transportRef'],
-  properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
-    name: { type: 'string' },
-    description: { type: 'string' },
-    owner: { type: 'string' },
-    tags: { type: 'array', items: { type: 'string' } },
-    revision: { type: 'string' },
-    delivery: { enum: ['at_least_once'] },
-    transportRef: { type: 'object' },
-    topicPrefix: { type: 'string' },
-    maxAttempts: { type: 'integer', minimum: 1 },
-    deadLetterTopic: { type: 'string' },
-    metadata: { type: 'object' },
-  },
-  additionalProperties: false,
-};
-
-export const runtimeSessionQueueProfileSpecJsonSchema: JsonSchema = {
-  type: 'object',
-  required: ['id', 'version', 'ordering', 'concurrency'],
-  properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
-    name: { type: 'string' },
-    description: { type: 'string' },
-    owner: { type: 'string' },
-    tags: { type: 'array', items: { type: 'string' } },
-    revision: { type: 'string' },
-    ordering: { enum: ['fifo'] },
-    concurrency: { enum: ['serial', 'bounded'] },
-    maxInFlight: { type: 'integer', minimum: 1 },
-    leaseTtlMs: { type: 'integer', minimum: 1 },
-    fairness: { enum: ['round_robin', 'priority_aging'] },
-    metadata: { type: 'object' },
-  },
-  additionalProperties: false,
-};
-
 export const workflowSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'initialState', 'terminalStates', 'states', 'transitions'],
@@ -1561,8 +1096,6 @@ export const workflowSpecJsonSchema: JsonSchema = {
     version: { type: 'string' },
     name: { type: 'string' },
     description: { type: 'string' },
-    revision: { type: 'string' },
-    runtimeProfileRef: { type: 'object' },
     initialState: { type: 'string' },
     terminalStates: { type: 'array', items: { type: 'string' } },
     states: {
@@ -1573,20 +1106,6 @@ export const workflowSpecJsonSchema: JsonSchema = {
         properties: {
           id: { type: 'string' },
           goal: { type: 'string' },
-          stateType: {
-            enum: [
-              'agent',
-              'deterministic',
-              'human',
-              'wait_signal',
-              'timer',
-              'subworkflow',
-              'parallel',
-              'join',
-              'terminal',
-            ],
-          },
-          activityBindings: { type: 'array', items: { type: 'object' } },
           allowedTools: { type: 'array', items: { type: 'string' } },
           allowedSkills: { type: 'array', items: { type: 'string' } },
           requiredSkills: { type: 'array', items: { type: 'string' } },
@@ -1666,9 +1185,6 @@ export const domainPackSpecJsonSchema: JsonSchema = {
     taskSchemas: { type: 'array', items: { type: 'object' } },
     outputContracts: { type: 'array', items: { type: 'object' } },
     sessionProfiles: { type: 'array', items: { type: 'object' } },
-    runtimeProfiles: { type: 'array', items: { type: 'object' } },
-    messageBusProfiles: { type: 'array', items: { type: 'object' } },
-    sessionQueueProfiles: { type: 'array', items: { type: 'object' } },
     workflows: { type: 'array', items: workflowSpecJsonSchema },
     defaultWorkflow: { type: 'string' },
     allowedSkills: { type: 'array', items: { type: 'object' } },
@@ -1693,32 +1209,14 @@ export const domainPackSpecJsonSchema: JsonSchema = {
 export const workflowSpecExample: WorkflowSpec = {
   id: 'workflow.default',
   version: '0.0.0',
-  revision: 'workflow-default-r1',
   name: 'Default Workflow',
-  runtimeProfileRef: { id: 'runtime.default', version: '0.0.0' },
   initialState: 'Intake',
   terminalStates: ['Completed', 'Failed'],
   states: [
-    {
-      id: 'Intake',
-      goal: 'Normalize task input.',
-      stateType: 'deterministic',
-      policyRefs: ['policy.default'],
-    },
+    { id: 'Intake', goal: 'Normalize task input.', policyRefs: ['policy.default'] },
     {
       id: 'Reasoning',
       goal: 'Reason and select the next action.',
-      stateType: 'agent',
-      activityBindings: [
-        {
-          id: 'activity.model.reason',
-          activityType: 'model',
-          portRef: { id: 'runtime-port.model', version: '1.0.0', revision: 'model-port-r1' },
-          operation: 'generate',
-          contractHash: 'sha256:model-generate-v1',
-          policyRefs: ['policy.default'],
-        },
-      ],
       allowedTools: ['tool.search'],
       allowedSkills: ['skill.context-enrichment'],
       requiredSkills: ['skill.context-enrichment'],
@@ -1737,45 +1235,6 @@ export const workflowSpecExample: WorkflowSpec = {
     { from: 'Reasoning', to: 'Completed' },
     { from: 'Reasoning', to: 'Failed' },
   ],
-};
-
-export const runtimeMessageBusProfileSpecExample: RuntimeMessageBusProfileSpec = {
-  id: 'runtime-bus.default',
-  version: '0.0.0',
-  revision: 'runtime-bus-default-r1',
-  delivery: 'at_least_once',
-  transportRef: { id: 'transport.local-runtime-bus', version: '1.0.0' },
-  topicPrefix: 'hypha.runtime',
-  maxAttempts: 5,
-  deadLetterTopic: 'hypha.runtime.dead-letter',
-};
-
-export const runtimeSessionQueueProfileSpecExample: RuntimeSessionQueueProfileSpec = {
-  id: 'runtime-queue.default',
-  version: '0.0.0',
-  revision: 'runtime-queue-default-r1',
-  ordering: 'fifo',
-  concurrency: 'serial',
-  maxInFlight: 1,
-  leaseTtlMs: 30000,
-  fairness: 'priority_aging',
-};
-
-export const runtimeProfileSpecExample: RuntimeProfileSpec = {
-  id: 'runtime.default',
-  version: '0.0.0',
-  revision: 'runtime-default-r1',
-  messageBusProfileRef: { id: runtimeMessageBusProfileSpecExample.id, version: '0.0.0' },
-  sessionQueueProfileRef: {
-    id: runtimeSessionQueueProfileSpecExample.id,
-    version: '0.0.0',
-  },
-  defaultTimeoutPolicy: { timeoutMs: 30000, onTimeout: 'fail' },
-  defaultRetryPolicy: { maxAttempts: 2, backoffMs: 1000 },
-  maxConcurrentRuns: 4,
-  concurrencyPolicyRef: 'policy.default',
-  resourcePolicyRef: 'policy.default',
-  recoveryPolicyRef: 'policy.default',
 };
 
 export const reasoningSpecExample: ReasoningSpec = {
@@ -1833,9 +1292,6 @@ export const domainPackSpecExample: DomainPackSpec = {
       defaultPolicyRefs: ['policy.default'],
     },
   ],
-  runtimeProfiles: [runtimeProfileSpecExample],
-  messageBusProfiles: [runtimeMessageBusProfileSpecExample],
-  sessionQueueProfiles: [runtimeSessionQueueProfileSpecExample],
   workflows: [workflowSpecExample],
   defaultWorkflow: workflowSpecExample.id,
   allowedSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
@@ -1971,29 +1427,6 @@ export const workflowSpecDefinition = defineSpecSchema<WorkflowSpec>({
   example: workflowSpecExample,
 });
 
-export const runtimeProfileSpecDefinition = defineSpecSchema<RuntimeProfileSpec>({
-  id: 'RuntimeProfileSpec',
-  zod: runtimeProfileSpecSchema,
-  jsonSchema: runtimeProfileSpecJsonSchema,
-  example: runtimeProfileSpecExample,
-});
-
-export const runtimeMessageBusProfileSpecDefinition =
-  defineSpecSchema<RuntimeMessageBusProfileSpec>({
-    id: 'RuntimeMessageBusProfileSpec',
-    zod: runtimeMessageBusProfileSpecSchema,
-    jsonSchema: runtimeMessageBusProfileSpecJsonSchema,
-    example: runtimeMessageBusProfileSpecExample,
-  });
-
-export const runtimeSessionQueueProfileSpecDefinition =
-  defineSpecSchema<RuntimeSessionQueueProfileSpec>({
-    id: 'RuntimeSessionQueueProfileSpec',
-    zod: runtimeSessionQueueProfileSpecSchema,
-    jsonSchema: runtimeSessionQueueProfileSpecJsonSchema,
-    example: runtimeSessionQueueProfileSpecExample,
-  });
-
 export const reasoningSpecDefinition = defineSpecSchema<ReasoningSpec>({
   id: 'ReasoningSpec',
   zod: reasoningSpecSchema,
@@ -2017,9 +1450,6 @@ export const domainPackSpecDefinition = defineSpecSchema<DomainPackSpec>({
 
 export const domainSpecDefinitions = [
   workflowSpecDefinition,
-  runtimeProfileSpecDefinition,
-  runtimeMessageBusProfileSpecDefinition,
-  runtimeSessionQueueProfileSpecDefinition,
   reasoningSpecDefinition,
   businessRuleSpecDefinition,
   domainPackSpecDefinition,
@@ -2105,41 +1535,7 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
     }
   }
 
-  for (const runtimeProfile of domainPack.runtimeProfiles ?? []) {
-    assertKnownSpecRef(
-      runtimeProfile.messageBusProfileRef,
-      domainPack.messageBusProfiles,
-      'Runtime message bus profile',
-      runtimeProfile.id
-    );
-    assertKnownSpecRef(
-      runtimeProfile.sessionQueueProfileRef,
-      domainPack.sessionQueueProfiles,
-      'Runtime session queue profile',
-      runtimeProfile.id
-    );
-    for (const policyRef of [
-      runtimeProfile.concurrencyPolicyRef,
-      runtimeProfile.resourcePolicyRef,
-      runtimeProfile.recoveryPolicyRef,
-    ]) {
-      assertKnownId(policyRef, policyIds, 'Runtime profile policy', runtimeProfile.id);
-    }
-  }
-
-  for (const queueProfile of domainPack.sessionQueueProfiles ?? []) {
-    if (queueProfile.concurrency === 'serial' && (queueProfile.maxInFlight ?? 1) !== 1) {
-      throw new Error(`Serial runtime session queue must use maxInFlight 1: ${queueProfile.id}`);
-    }
-  }
-
   for (const workflow of domainPack.workflows) {
-    assertKnownSpecRef(
-      workflow.runtimeProfileRef,
-      domainPack.runtimeProfiles,
-      'Workflow runtime profile',
-      workflow.id
-    );
     validateWorkflowReferences(workflow, {
       toolIds,
       mcpProfileIds,
@@ -2220,14 +1616,6 @@ function validateWorkflowReferences(
     for (const evaluationRef of state.evaluationRefs ?? []) {
       assertKnownId(evaluationRef, refs.evaluationIds, 'Workflow state evaluation', state.id);
     }
-    for (const policyRef of [
-      state.concurrencyPolicyRef,
-      state.resourcePolicyRef,
-      state.recoveryPolicyRef,
-      ...(state.activityBindings ?? []).flatMap((binding) => binding.policyRefs ?? []),
-    ]) {
-      assertKnownId(policyRef, refs.policyIds, 'Workflow state runtime policy', state.id);
-    }
   }
 }
 
@@ -2235,9 +1623,6 @@ function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
   assertUniqueIds(domainPack.taskSchemas, 'DomainPack taskSchemas');
   assertUniqueIds(domainPack.outputContracts, 'DomainPack outputContracts');
   assertUniqueIds(domainPack.sessionProfiles, 'DomainPack sessionProfiles');
-  assertUniqueIds(domainPack.runtimeProfiles, 'DomainPack runtimeProfiles');
-  assertUniqueIds(domainPack.messageBusProfiles, 'DomainPack messageBusProfiles');
-  assertUniqueIds(domainPack.sessionQueueProfiles, 'DomainPack sessionQueueProfiles');
   assertUniqueIds(domainPack.workflows, 'DomainPack workflows');
   assertUniqueIds(domainPack.allowedSkills, 'DomainPack allowedSkills');
   assertUniqueIds(domainPack.defaultSkills, 'DomainPack defaultSkills');
@@ -2253,12 +1638,6 @@ function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
   assertUniqueIds(domainPack.regressionCases, 'DomainPack regressionCases');
   for (const workflow of domainPack.workflows) {
     assertUniqueIds(workflow.states, `Workflow ${workflow.id} states`);
-    for (const state of workflow.states) {
-      assertUniqueIds(
-        state.activityBindings,
-        `Workflow ${workflow.id} state ${state.id} activityBindings`
-      );
-    }
   }
 }
 
@@ -2327,21 +1706,5 @@ function assertKnownId(
   if (!id) return;
   if (!allowed.has(id)) {
     throw new Error(`${label} not found for ${owner}: ${id}`);
-  }
-}
-
-function assertKnownSpecRef<TSpec extends VersionedSpec>(
-  ref: SpecRef | undefined,
-  specs: TSpec[] | undefined,
-  label: string,
-  owner: string
-): void {
-  if (!ref) return;
-  const match = specs?.find(
-    (candidate) => candidate.id === ref.id && (!ref.version || candidate.version === ref.version)
-  );
-  if (!match) {
-    const requested = ref.version ? `${ref.id}@${ref.version}` : ref.id;
-    throw new Error(`${label} not found for ${owner}: ${requested}`);
   }
 }
