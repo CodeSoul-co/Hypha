@@ -14,6 +14,23 @@ import {
   type SpecMetadata,
   type VersionedSpec,
 } from '@hypha/core';
+import type { ManagedMemoryRecord, MemoryManagementCapabilities } from './contracts';
+import type {
+  ManagedMemoryDeleteRequest,
+  ManagedMemoryDeleteResult,
+  ManagedMemorySearchRequest,
+  ManagedMemorySearchResult,
+  ManagedMemoryUpdateRequest,
+  ManagedMemoryWriteResult,
+  MemoryAddRequest,
+  MemoryGetRequest,
+  MemoryHistoryRequest,
+  MemoryListRequest,
+  MemoryListResult,
+  MemoryManagementProvider,
+  MemoryVersion,
+  ProviderHealth,
+} from './operations';
 
 export interface MemoryScope {
   workspaceId?: string;
@@ -22,7 +39,13 @@ export interface MemoryScope {
   userId?: string;
 }
 
-export type MemoryType = 'working' | 'episodic' | 'semantic' | 'procedural' | 'artifact' | 'governance';
+export type MemoryType =
+  | 'working'
+  | 'episodic'
+  | 'semantic'
+  | 'procedural'
+  | 'artifact'
+  | 'governance';
 
 export interface MemoryRecord<TValue = unknown> {
   id: string;
@@ -80,6 +103,7 @@ export interface StructuredStoreProvider {
   get<T>(table: string, id: string): Promise<T | null>;
   insert<T extends { id: string }>(table: string, record: T): Promise<void>;
   update<T>(table: string, id: string, patch: Partial<T>): Promise<void>;
+  delete(table: string, id: string): Promise<void>;
   query<T>(table: string, query: StructuredQuery): Promise<T[]>;
   transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T>;
 }
@@ -187,7 +211,11 @@ export interface MemoryAuditReport {
 export interface MemoryProvider {
   read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
   search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
-  write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise<MemoryWriteResult>;
+  write(
+    scope: MemoryScope,
+    record: MemoryRecord,
+    policy: MemoryWritePolicy
+  ): Promise<MemoryWriteResult>;
   update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void>;
   invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void>;
   summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary>;
@@ -214,17 +242,26 @@ export class MemoryManager {
   private sequence = 0;
 
   constructor(
-    private readonly provider: MemoryProvider,
+    private readonly provider: MemoryProvider | MemoryManagementProvider,
     private readonly options: MemoryManagerOptions = {}
   ) {}
 
+  capabilities(): Promise<MemoryManagementCapabilities> {
+    return this.requireManagedProvider().capabilities();
+  }
+
+  add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult> {
+    return this.requireManagedProvider().add(request);
+  }
+
   async read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]> {
+    const provider = this.requireLegacyProvider();
     await this.recordTrace(scope, 'memory.read.requested', {
       operation: 'read',
       query,
     });
     try {
-      const records = await this.provider.read(scope, query);
+      const records = await provider.read(scope, query);
       await this.recordTrace(scope, 'memory.read.completed', {
         operation: 'read',
         count: records.length,
@@ -240,8 +277,23 @@ export class MemoryManager {
     }
   }
 
-  async search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]> {
-    await this.recordTrace(scope, 'memory.read.requested', {
+  search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
+  search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]>;
+  async search(
+    scopeOrRequest: MemoryScope | ManagedMemorySearchRequest,
+    query?: MemorySearchQuery
+  ): Promise<MemorySearchResult[] | ManagedMemorySearchResult[]> {
+    if (isManagedMemorySearchRequest(scopeOrRequest)) {
+      return this.requireManagedProvider().search(scopeOrRequest);
+    }
+    if (!query) {
+      throw new FrameworkError({
+        code: 'MEMORY_QUERY_REQUIRED',
+        message: 'Legacy memory search requires an explicit query.',
+      });
+    }
+    const provider = this.requireLegacyProvider();
+    await this.recordTrace(scopeOrRequest, 'memory.read.requested', {
       operation: 'search',
       query: {
         ...query,
@@ -249,8 +301,8 @@ export class MemoryManager {
       },
     });
     try {
-      const results = await this.provider.search(scope, query);
-      await this.recordTrace(scope, 'memory.read.completed', {
+      const results = await provider.search(scopeOrRequest, query);
+      await this.recordTrace(scopeOrRequest, 'memory.read.completed', {
         operation: 'search',
         count: results.length,
         recordIds: results.map((result) => result.record.id),
@@ -258,7 +310,7 @@ export class MemoryManager {
       });
       return results;
     } catch (error) {
-      await this.recordTrace(scope, 'memory.read.failed', {
+      await this.recordTrace(scopeOrRequest, 'memory.read.failed', {
         operation: 'search',
         error: error instanceof Error ? error.message : String(error),
       });
@@ -271,6 +323,7 @@ export class MemoryManager {
     record: MemoryRecord,
     policy: MemoryWritePolicy
   ): Promise<MemoryWriteResult> {
+    const provider = this.requireLegacyProvider();
     await this.recordTrace(scope, 'memory.write.requested', {
       recordId: record.id,
       type: record.type,
@@ -285,7 +338,7 @@ export class MemoryManager {
         recordId: record.id,
         type: record.type,
       });
-      const result = await this.provider.write(scope, record, policy);
+      const result = await provider.write(scope, record, policy);
       await this.recordTrace(scope, 'memory.write.committed', {
         recordId: result.recordId,
         type: record.type,
@@ -303,20 +356,88 @@ export class MemoryManager {
     }
   }
 
-  update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void> {
-    return this.provider.update(scope, recordId, patch);
+  update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void>;
+  update(request: ManagedMemoryUpdateRequest): Promise<ManagedMemoryWriteResult>;
+  update(
+    scopeOrRequest: MemoryScope | ManagedMemoryUpdateRequest,
+    recordId?: string,
+    patch?: Partial<MemoryRecord>
+  ): Promise<void> | Promise<ManagedMemoryWriteResult> {
+    if (isManagedMemoryUpdateRequest(scopeOrRequest)) {
+      return this.requireManagedProvider().update(scopeOrRequest);
+    }
+    if (!recordId || !patch) {
+      throw new FrameworkError({
+        code: 'MEMORY_UPDATE_ARGUMENTS_REQUIRED',
+        message: 'Legacy memory update requires recordId and patch.',
+      });
+    }
+    return this.requireLegacyProvider().update(scopeOrRequest, recordId, patch);
+  }
+
+  get(request: MemoryGetRequest): Promise<ManagedMemoryRecord | null> {
+    return this.requireManagedProvider().get(request);
+  }
+
+  list(request: MemoryListRequest): Promise<MemoryListResult> {
+    return this.requireManagedProvider().list(request);
+  }
+
+  delete(request: ManagedMemoryDeleteRequest): Promise<ManagedMemoryDeleteResult> {
+    return this.requireManagedProvider().delete(request);
+  }
+
+  history(request: MemoryHistoryRequest): Promise<MemoryVersion[]> {
+    const provider = this.requireManagedProvider();
+    if (!provider.history) {
+      throw new FrameworkError({
+        code: 'MEMORY_CAPABILITY_UNSUPPORTED',
+        message: `Memory provider ${provider.id} does not support history.`,
+      });
+    }
+    return provider.history(request);
+  }
+
+  health(): Promise<ProviderHealth> {
+    return this.requireManagedProvider().health();
+  }
+
+  async close(): Promise<void> {
+    if (isMemoryManagementProvider(this.provider)) {
+      await this.provider.close?.();
+    }
   }
 
   invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void> {
-    return this.provider.invalidate(scope, recordId, reason);
+    return this.requireLegacyProvider().invalidate(scope, recordId, reason);
   }
 
   summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary> {
-    return this.provider.summarize(scope, options);
+    return this.requireLegacyProvider().summarize(scope, options);
   }
 
   audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport> {
-    return this.provider.audit(scope, options);
+    return this.requireLegacyProvider().audit(scope, options);
+  }
+
+  private requireManagedProvider(): MemoryManagementProvider {
+    if (!isMemoryManagementProvider(this.provider)) {
+      throw new FrameworkError({
+        code: 'MEMORY_MANAGED_PROVIDER_REQUIRED',
+        message: 'This operation requires a managed memory provider.',
+      });
+    }
+    return this.provider;
+  }
+
+  private requireLegacyProvider(): MemoryProvider {
+    if (isMemoryManagementProvider(this.provider)) {
+      throw new FrameworkError({
+        code: 'MEMORY_LEGACY_PROVIDER_REQUIRED',
+        message: 'This compatibility operation requires a legacy memory provider.',
+      });
+    }
+    return this.provider;
   }
 
   private async recordTrace(
@@ -353,6 +474,30 @@ export class MemoryManager {
       })
     );
   }
+}
+
+function isMemoryManagementProvider(
+  provider: MemoryProvider | MemoryManagementProvider
+): provider is MemoryManagementProvider {
+  return (
+    'capabilities' in provider &&
+    'add' in provider &&
+    'get' in provider &&
+    'list' in provider &&
+    'health' in provider
+  );
+}
+
+function isManagedMemorySearchRequest(
+  value: MemoryScope | ManagedMemorySearchRequest
+): value is ManagedMemorySearchRequest {
+  return 'operationId' in value && 'principal' in value && 'profileRef' in value;
+}
+
+function isManagedMemoryUpdateRequest(
+  value: MemoryScope | ManagedMemoryUpdateRequest
+): value is ManagedMemoryUpdateRequest {
+  return 'operationId' in value && 'principal' in value && 'memoryId' in value;
 }
 
 function summarizeWritePolicy(policy: MemoryWritePolicy): Record<string, unknown> {
@@ -441,36 +586,38 @@ export const memoryRetrievalPolicySchema = z.object({
   allowedTypes: z.array(memoryTypeSchema).optional(),
 }) satisfies ZodType<MemoryRetrievalPolicy>;
 
-export const memorySpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    providers: z.array(memoryProviderProfileSchema).min(1),
-    memoryTypes: z.array(memoryTypeSchema).min(1),
-    structuredStoreRef: z.string().optional(),
-    vectorIndexRef: z.string().optional(),
-    artifactStoreRef: z.string().optional(),
-    embeddingProviderRef: z.string().optional(),
-    readPolicy: z.string().optional(),
-    writePolicy: z.string().optional(),
-    freshnessPolicy: z.string().optional(),
-    provenancePolicy: z.enum(['required', 'best_effort']).optional(),
-    retentionPolicy: z.string().optional(),
-    privacyPolicy: z.string().optional(),
-    retrievalStrategy: z.string().optional(),
-    retrievalPolicy: memoryRetrievalPolicySchema.optional(),
-    writePolicyConfig: z.object({
+export const memorySpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  providers: z.array(memoryProviderProfileSchema).min(1),
+  memoryTypes: z.array(memoryTypeSchema).min(1),
+  structuredStoreRef: z.string().optional(),
+  vectorIndexRef: z.string().optional(),
+  artifactStoreRef: z.string().optional(),
+  embeddingProviderRef: z.string().optional(),
+  readPolicy: z.string().optional(),
+  writePolicy: z.string().optional(),
+  freshnessPolicy: z.string().optional(),
+  provenancePolicy: z.enum(['required', 'best_effort']).optional(),
+  retentionPolicy: z.string().optional(),
+  privacyPolicy: z.string().optional(),
+  retrievalStrategy: z.string().optional(),
+  retrievalPolicy: memoryRetrievalPolicySchema.optional(),
+  writePolicyConfig: z
+    .object({
       allowLongTerm: z.boolean().optional(),
       requireProvenance: z.boolean().optional(),
-      decision: z.object({
-        allowed: z.boolean(),
-        requiresHumanReview: z.boolean().optional(),
-        policyId: z.string().optional(),
-        ruleId: z.string().optional(),
-        reason: z.string().optional(),
-        metadata: z.record(z.unknown()).optional(),
-      }).optional(),
-    }).optional(),
-  }) satisfies ZodType<MemorySpec>;
+      decision: z
+        .object({
+          allowed: z.boolean(),
+          requiresHumanReview: z.boolean().optional(),
+          policyId: z.string().optional(),
+          ruleId: z.string().optional(),
+          reason: z.string().optional(),
+          metadata: z.record(z.unknown()).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+}) satisfies ZodType<MemorySpec>;
 
 export const memorySpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -560,4 +707,27 @@ export function validateMemorySpec(input: unknown): MemorySpec {
   return memorySpecDefinition.parse(input);
 }
 
+export * from './contracts';
+export * from './record-contract';
+export * from './profile-contract';
+export * from './operations';
+export * from './operation-contract';
+export * from './context-contracts';
+export * from './context-schema';
+export * from './lifecycle-contracts';
+export * from './lifecycle-schema';
+export * from './memory-utils';
+export * from './managed-store';
+export * from './native-maintenance';
+export * from './structured-managed-store';
+export * from './native-memory';
+export * from './context-builder';
+export * from './context-source-resolver';
+export * from './extraction';
+export * from './context-compaction';
+export * from './retrieval';
+export * from './index-outbox';
+export * from './lifecycle-workers';
+export * from './memory-events';
+export * from './working-store';
 export * from './hybrid';

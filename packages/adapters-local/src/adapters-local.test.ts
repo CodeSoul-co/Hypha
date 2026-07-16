@@ -11,6 +11,11 @@ import {
   createLocalStorageBackbone,
 } from './index';
 import { createFrameworkEvent } from '@hypha/core';
+import {
+  StructuredManagedMemoryRecordStore,
+  hashMemoryScope,
+  managedMemoryRecordExample,
+} from '@hypha/memory';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -56,6 +61,49 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(artifacts.get(ref)).resolves.toEqual(Buffer.from('{"ok":true}'));
 
     await expect(new MockEmbeddingProvider().embed(['hypha'])).resolves.toHaveLength(1);
+  });
+
+  it('persists the versioned managed-memory source of truth in SQLite', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-managed-memory-'));
+    const filename = path.join(root, 'managed.sqlite');
+    const scope = {
+      tenantId: 'tenant-a',
+      userId: 'alice',
+      workspaceId: 'workspace-a',
+    };
+    const first = {
+      ...managedMemoryRecordExample,
+      id: 'memory:sqlite:1',
+      versionId: 'memory:sqlite:1:v1',
+      scope,
+      scopeHash: hashMemoryScope(scope),
+    };
+    const store = new StructuredManagedMemoryRecordStore({
+      provider: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+    });
+
+    await store.create(first);
+    await store.createVersion(
+      {
+        ...first,
+        versionId: 'memory:sqlite:1:v2',
+        revision: 2,
+        content: { preference: 'detailed answers' },
+        updatedAt: '2026-07-16T00:01:00.000Z',
+      },
+      1
+    );
+
+    const reopened = new StructuredManagedMemoryRecordStore({
+      provider: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+    });
+    await expect(reopened.get(first.id, scope)).resolves.toMatchObject({ revision: 2 });
+    await expect(reopened.history(first.id, scope)).resolves.toHaveLength(2);
+    await expect(reopened.get(first.id, { ...scope, userId: 'bob' })).resolves.toBeNull();
+
+    await reopened.delete(first.id, scope);
+    await expect(reopened.get(first.id, scope)).resolves.toBeNull();
+    await expect(reopened.history(first.id, scope)).resolves.toHaveLength(0);
   });
 
   it('stores framework events in SQLite for replayable local runtime traces', async () => {
