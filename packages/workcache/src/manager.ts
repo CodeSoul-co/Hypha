@@ -1,4 +1,4 @@
-import type { FrameworkEvent } from '@hypha/core';
+import type { FrameworkEvent, RecoveryKnowledgePort } from '@hypha/core';
 import { WorkGraphIndex } from './graph';
 import { hashStableJson } from './key';
 import { fallbackAuditIdentity, sameValidity } from './materializers';
@@ -6,6 +6,7 @@ import { normalizeWorkCachePolicy } from './policies';
 import { createDefaultRuntimeTypeRegistry } from './registry';
 import { TypedCacheForest } from './forest';
 import { HotIndexedWorkCacheStore } from './stores/hot-index-store';
+import { WorkCacheRecoveryKnowledgeStore } from './recovery-knowledge';
 import type {
   CacheBlock,
   CacheTreeType,
@@ -32,6 +33,7 @@ export class WorkCacheManager {
   private readonly registry: NonNullable<WorkCacheManagerOptions['registry']>;
   private readonly workGraph: WorkGraphIndexLike;
   private readonly now: () => number;
+  private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor(options: WorkCacheManagerOptions) {
     this.policy = normalizeWorkCachePolicy(options.policy);
@@ -207,6 +209,14 @@ export class WorkCacheManager {
     return this.workGraph.listDemandSignals(runId);
   }
 
+  getRecoveryKnowledgePort(): RecoveryKnowledgePort {
+    this.recoveryKnowledge ??= new WorkCacheRecoveryKnowledgeStore(this.store, {
+      ttlMs: this.policy.trees.RecoveryTree.ttlMs,
+      now: this.now,
+    });
+    return this.recoveryKnowledge;
+  }
+
   async lookup<T = unknown>(query: WorkCacheLookupQuery): Promise<WorkCacheLookupResult<T>> {
     if (!this.policy.enabled || this.policy.store === 'off') {
       return { hit: false, reason: 'disabled' };
@@ -267,7 +277,8 @@ export class WorkCacheManager {
         treeType: 'PromptPrefixTree',
         nodeType: 'prompt_prefix',
         blockId: first?.id ?? `workcache:prefix:${prefixHash}`,
-        cacheKey: first?.cacheKey ?? `workcache:PromptPrefixTree:prompt_prefix:sha256:${prefixHash}`,
+        cacheKey:
+          first?.cacheKey ?? `workcache:PromptPrefixTree:prompt_prefix:sha256:${prefixHash}`,
         reason: 'materialized',
         prefixHash,
       }),
@@ -346,10 +357,7 @@ export class WorkCacheManager {
   }
 
   private maxHotEntries(): number {
-    return Object.values(this.policy.trees).reduce(
-      (sum, tree) => sum + (tree.maxEntries ?? 0),
-      0
-    );
+    return Object.values(this.policy.trees).reduce((sum, tree) => sum + (tree.maxEntries ?? 0), 0);
   }
 }
 
@@ -413,10 +421,7 @@ function demandForBlock(block: CacheBlock, signals: DemandSignal[]): DemandSigna
     .sort((left, right) => right.demandScore - left.demandScore)[0];
 }
 
-function mergeDemand(
-  utility: CacheBlock['utility'],
-  signal: DemandSignal
-): CacheBlock['utility'] {
+function mergeDemand(utility: CacheBlock['utility'], signal: DemandSignal): CacheBlock['utility'] {
   const downstreamFanout =
     typeof signal.metadata?.downstreamFanout === 'number'
       ? signal.metadata.downstreamFanout
