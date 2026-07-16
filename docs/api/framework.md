@@ -15,7 +15,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | Package                 | Public Surface                                                                                                                                     |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                     |
-| `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers.                         |
+| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                       |
 | `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                   |
 | `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers. |
 | `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                      |
@@ -27,7 +27,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                                                 |
 | `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                 |
-| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, message bus, queues, replay/audit/regression projections.                               |
+| `@hypha/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.           |
 | `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                            |
 | `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                        |
 
@@ -55,6 +55,12 @@ Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `Outp
 | `capabilities` | string[] | Declared features such as `structured`, `transactions`, `events`, `cache`, `queue`, `pubsub`, `streams`, `vector_search`, `metadata_filter`, or `artifact_bytes`. |
 
 `StorageTopologySpec` groups profiles and declares default refs for relational, document, messaging, cache, vector, artifact, event, and memory storage. `messagingRef` is the default queue/stream/pub-sub path; `cacheRef` may point to the same Redis profile when cache behavior is colocated. `createSQLiteStorageProfile`, `createMongoStorageProfile`, `createRedisStorageProfile`, `createKafkaStorageProfile`, `createQdrantStorageProfile`, `createChromaStorageProfile`, `createPineconeStorageProfile`, and related helpers create common profiles. `resolveStorageConnection(profile, env)` resolves URI/env/local host configuration and `redactStorageConnection(connection)` removes credentials before logging or exposing diagnostics.
+
+`StorageFailureContext` identifies a read, query, write, transaction, event append, artifact,
+lease, snapshot, or restore operation plus provider/role/revision/idempotency evidence.
+`classifyStorageFailure(error, context)` returns the shared `RecoveryFailure` contract;
+`adviseStorageRecovery(failure)` returns a strategy plus reconciliation, revision refresh, replica,
+and derived-cache invalidation requirements. Ambiguous mutations are never marked retryable.
 
 ## DomainPack
 
@@ -141,7 +147,7 @@ regression, and deployment.
 
 `FrameworkEvent` fields include `id`, `type`, `runId`, optional `workspaceId`, `sessionId`, `stepId`, `agentId`, `fsmState`, `timestamp`, `payload`, and `metadata`.
 
-Common event types include `session.created`, `run.created`, `run.started`, `run.waiting_human`, `run.cancelled`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `context.compacted`, `human.review.requested`, `human.review.approved`, `human.review.rejected`, `eval.completed`, `replay.completed`, and `regression.completed`.
+Common event types include `session.created`, `run.created`, `run.started`, `run.waiting_human`, `run.cancelled`, `fsm.state.entered`, `react.step.completed`, `agent.reasoning.completed`, `inference.completed`, `model.call.completed`, `tool.call.completed`, `memory.write.committed`, `recovery.case.opened`, `recovery.strategy.selected`, `recovery.attempt.started`, `recovery.attempt.completed`, `recovery.progress.detected`, `recovery.case.resolved`, `recovery.case.escalated`, `context.compacted`, `human.review.requested`, `eval.completed`, `replay.completed`, and `regression.completed`.
 
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
@@ -154,8 +160,9 @@ handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
 `expiresAt`, and metadata. `InMemoryMessageBus.publish()`, `pull()`,
 `acknowledge()`, `fail()`, and `list()` keep messages scoped by
 `userId + sessionId + recipient`; traced buses emit `message.enqueued`,
-`message.delivered`, `message.acknowledged`, `message.failed`, and
-`message.dead_lettered`.
+`message.delivered`, `message.retrying`, `message.acknowledged`, `message.failed`, and
+`message.dead_lettered`. Constructor options bound delivery attempts and retry delay/multiplier;
+`fail({ retry: true })` requeues only inside that budget.
 
 ## Evaluation, Replay, and Regression
 
@@ -213,12 +220,25 @@ FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardEx
 
 `FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, `cancel(options)`, `decideRecovery(anomaly, options)`, `registerRecoverySuccess(circuitKey)`, and `getSnapshot()`. Runtime callbacks `onTransition`, `onStateEntered`, and `onRecoveryDecision` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
 
-`classifyFSMAnomaly()` normalizes provider and framework errors. `planFSMRecovery()` returns a
-deterministic action without performing a hidden side effect. `runFSMRecoveryLoop()` from
-`@hypha/harness` executes the bounded state loop and suspends delayed retries unless a scheduler and
-inline delay budget are supplied. Actions are `retry`, `wait`, `compensate`, `human_review`,
-`quarantine`, `fail`, or `cancel`. The full safety order and failure matrix are documented in
-[FSM Anomaly Recovery](../architecture/fsm-recovery.md).
+`RecoveryFailure` is the shared module-neutral failure record. It contains module/category/code,
+retryability, side-effect state, root/circuit keys, and `RecoveryEvidence` such as operation and
+dependency keys, revision, receipt status, idempotency/input/output hashes, source hashes, and
+policy/spec/provider revisions. `RecoveryCaseSnapshot` persists cycles, no-progress count,
+attempts, outputs, degraded participants, and the last failure/evidence hash.
+
+`classifyFSMAnomaly()` normalizes generic provider and framework errors. Module classifiers add
+stronger evidence: `classifyInferenceFailure()`, `classifyInferenceCacheFailure()`,
+`classifyMemoryFailure()`, `classifyExecutionFailure()`, and `classifyStorageFailure()`.
+`planFSMRecovery()` returns a deterministic action without performing a hidden side effect.
+`runFSMRecoveryLoop()` executes one bounded operation; `runRecoverySupervisor()` executes
+dependency-ordered `RecoveryParticipant` records and never repeats a completed participant.
+Strategies are `retry`, `reconcile`, `fallback`, `degrade`, `compensate`, `wait`, `human_review`,
+`quarantine`, `fail`, or `cancel`.
+
+`RecoveryKnowledgePort` optionally supplies a verified strategy hint keyed by failure fingerprint,
+participant, and policy/spec/provider revision. Hits are revalidated and mismatches are invalidated;
+the port cannot complete a case or replace event/receipt evidence. The full safety order and module
+matrix are documented in [FSM Anomaly Recovery](../architecture/fsm-recovery.md).
 
 `defaultReActFSMProcessSpec` declares the minimal agent closure:
 
@@ -228,8 +248,10 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
   -> MemorySync -> Completed
 ```
 
-Recovery routes use `Recovering`, `Compensating`, and `Quarantined`; these are non-terminal states
-with explicit transitions back to an allowed work state, review, failure, or cancellation.
+Recovery routes use `Recovering`, `Compensating`, `Quarantined`, and `HumanReview`; these are
+non-terminal states with explicit transitions back to an allowed work state, review, failure, or
+cancellation. Domain workflow compilation adds the recovery envelope and `Failed`/`Cancelled`
+terminals even when the source workflow declares only domain states.
 
 ## ReAct Kernel
 
