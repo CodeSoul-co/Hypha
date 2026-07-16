@@ -6,6 +6,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 - [Architecture Reference](../reference/architecture.md) explains package responsibilities, harness semantics, and extension boundaries.
 - [Runtime Model](../reference/runtime-model.md) explains event-first execution, FSM transitions, ReAct phases, side effects, and concurrency.
+- [Execution Contracts](../architecture/execution.md) explains provider-neutral Workspace, Sandbox, Command, Store, Event, and cache boundaries.
 - [Domain Packs](../guides/domain-packs.md) provides a field-level guide and minimal declaration example.
 - [Local Development](../guides/local-development.md) lists setup, storage, and verification commands.
 
@@ -13,7 +14,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 | Package                 | Public Surface                                                                                                             |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `@hypha/core`           | Spec primitives, schema definitions, events, errors, policy interfaces.                                                    |
+| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                             |
 | `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
 | `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.           |
 | `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, timeout/retry/human-review helpers.                    |
@@ -36,7 +37,7 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
 
 `createPolicySpecEngine(policy)` creates a basic `PolicyEngine` from `PolicySpec`. Rules are evaluated in order and can match `sideEffectLevels`, `scopes`, and simple expressions `true` or `default`. Effects map to allow, deny, or human-review-required decisions; unmatched rules use `defaultEffect`.
 
