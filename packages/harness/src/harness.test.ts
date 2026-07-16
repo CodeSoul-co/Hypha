@@ -632,7 +632,10 @@ describe('@hypha/harness contracts', () => {
       output: {
         toolId: 'tool.danger',
         status: 'denied',
-        error: expect.stringContaining('requires an explicit policy override'),
+        error: expect.objectContaining({
+          code: 'TOOL_POLICY_DENIED',
+          message: expect.stringContaining('requires an explicit policy override'),
+        }),
       },
     });
     expect(result.events.map((event) => event.type)).toEqual(
@@ -643,6 +646,129 @@ describe('@hypha/harness contracts', () => {
     );
   });
 
+  it('enforces the FSM-resolved tool execution scope before dispatch', async () => {
+    let handlerCalls = 0;
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(
+      {
+        id: 'tool.scoped',
+        version: '0.0.0',
+        description: 'Scope enforcement test tool',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'none',
+      },
+      async () => {
+        handlerCalls += 1;
+        return { ok: true };
+      }
+    );
+    const toolTrace = new InMemoryTraceRecorder();
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'tool',
+            toolId: 'tool.scoped',
+            toolCallId: 'call_scoped_1',
+            input: {},
+          },
+        };
+      },
+    };
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      toolRunner: new GovernedToolRunner(toolRegistry, toolTrace),
+      resolveToolExecutionScope: ({ fsmState }) => ({
+        allowedToolIds: ['tool.other'],
+        policyRefs: ['policy.scope'],
+        fsmState,
+      }),
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_scoped_tool',
+      stepId: 'react',
+      sessionId: 'session_scoped_tool',
+      userId: 'owner',
+      agent: {
+        id: 'agent.scoped-tool',
+        version: '0.0.0',
+        name: 'Scoped Tool Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.scoped'],
+      },
+      input: 'use scoped tool',
+    });
+
+    expect(handlerCalls).toBe(0);
+    expect(result.react).toMatchObject({
+      status: 'completed',
+      output: {
+        toolId: 'tool.scoped',
+        invocationId: 'call_scoped_1',
+        status: 'denied',
+        error: { code: 'TOOL_NOT_ALLOWED_IN_SCOPE' },
+      },
+    });
+    expect(await toolTrace.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.rejected',
+          payload: expect.objectContaining({
+            error: expect.objectContaining({ code: 'TOOL_NOT_ALLOWED_IN_SCOPE' }),
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('fails closed when a tool action has no configured ToolRunner', async () => {
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: { action: 'tool', toolId: 'tool.missing', input: {} },
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_missing_tool_runner',
+      stepId: 'react',
+      sessionId: 'session_missing_tool_runner',
+      userId: 'owner',
+      agent: {
+        id: 'agent.missing-tool-runner',
+        version: '0.0.0',
+        name: 'Missing Tool Runner Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.missing'],
+      },
+      input: 'use missing tool',
+    });
+
+    expect(result.react).toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({
+        message: expect.stringContaining('cannot execute without toolRunner'),
+      }),
+    });
+    expect(result.run.status).toBe('failed');
+    expect(result.fsmSnapshot.currentState).toBe('Failed');
+    await expect(runManager.projectRun('run_missing_tool_runner')).resolves.toMatchObject({
+      status: 'failed',
+    });
+  });
   it('projects human-review runs from events instead of leaving them running', async () => {
     const inference: InferenceProvider = {
       id: 'mock-inference',
