@@ -5,4 +5,3 @@ ADRs record accepted architecture decisions for hypha. They should explain the d
 ## Index
 
 - [ADR 0001: Storage Configuration Taxonomy](0001-storage-configuration-taxonomy.md)
-- [ADR 0002: Memory Source of Truth, Outbox, Consistency, and Scope](ADR-0002-memory-source-of-truth-outbox-scope.md)
