@@ -5,3 +5,4 @@ RFCs describe proposed or extensible designs that are not yet final architecture
 ## Index
 
 - [RFC 0001: Storage Adapter Expansion](0001-storage-adapter-expansion.md)
+- [Execution Workspace Contract Foundation](2026-07-16-execution-workspace-contract.md)
