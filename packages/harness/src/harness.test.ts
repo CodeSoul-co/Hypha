@@ -8,6 +8,7 @@ import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
 import {
   EventFirstRuntime,
   HarnessedReActFSMRunner,
+  InMemoryMessageBus,
   InMemoryTraceRecorder,
   RunManager,
   SessionProjector,
@@ -42,6 +43,218 @@ describe('@hypha/harness contracts', () => {
     expect(queue.dequeue('user-a', 'same')?.id).toBe('a1');
     expect(queue.dequeue('user-b', 'same')?.id).toBe('b1');
     expect(queue.dequeue('user-a', 'same')?.id).toBe('a2');
+  });
+
+  it('routes runtime messages by user, session, recipient, and FSM state', async () => {
+    const trace = new InMemoryTraceRecorder();
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+
+    await bus.publish({
+      id: 'msg_a',
+      type: 'workflow.input',
+      userId: 'user-a',
+      sessionId: 'shared',
+      runId: 'run_a',
+      fsmState: 'Reasoning',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'hello a' },
+    });
+    await bus.publish({
+      id: 'msg_b',
+      type: 'workflow.input',
+      userId: 'user-b',
+      sessionId: 'shared',
+      runId: 'run_b',
+      fsmState: 'Reasoning',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'hello b' },
+    });
+
+    const delivered = await bus.pull({
+      userId: 'user-a',
+      sessionId: 'shared',
+      runId: 'run_a',
+      fsmState: 'Reasoning',
+      to: recipient,
+    });
+    expect(delivered).toMatchObject({
+      id: 'msg_a',
+      status: 'delivered',
+      runId: 'run_a',
+      fsmState: 'Reasoning',
+    });
+    await bus.acknowledge({
+      id: 'msg_a',
+      userId: 'user-a',
+      sessionId: 'shared',
+      runId: 'run_a',
+      handledBy: recipient,
+    });
+
+    expect(
+      await bus.pull({
+        userId: 'user-a',
+        sessionId: 'shared',
+        runId: 'run_a',
+        fsmState: 'Reasoning',
+        to: recipient,
+      })
+    ).toBeNull();
+    await expect(
+      bus.pull({
+        userId: 'user-b',
+        sessionId: 'shared',
+        runId: 'run_b',
+        fsmState: 'Reasoning',
+        to: recipient,
+      })
+    ).resolves.toMatchObject({ id: 'msg_b' });
+
+    expect((await trace.list({ runId: 'run_a' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.delivered',
+      'message.acknowledged',
+    ]);
+  });
+
+  it('dead-letters expired messages without blocking the recipient queue', async () => {
+    const trace = new InMemoryTraceRecorder();
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => '2026-07-04T00:00:10.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    const common = {
+      userId: 'owner',
+      sessionId: 'session_messages',
+      runId: 'run_messages',
+      from: { kind: 'workflow' as const, id: 'workflow.default' },
+      to: recipient,
+    };
+
+    await bus.publish({
+      ...common,
+      id: 'msg_expired',
+      type: 'workflow.input',
+      expiresAt: '2026-07-04T00:00:00.000Z',
+      payload: { text: 'old' },
+    });
+    await bus.publish({
+      ...common,
+      id: 'msg_fresh',
+      type: 'workflow.input',
+      payload: { text: 'fresh' },
+    });
+
+    await expect(
+      bus.pull({
+        userId: 'owner',
+        sessionId: 'session_messages',
+        runId: 'run_messages',
+        to: recipient,
+      })
+    ).resolves.toMatchObject({ id: 'msg_fresh', status: 'delivered' });
+    await expect(bus.list({ status: 'dead_lettered' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_expired' }),
+    ]);
+    expect((await trace.list({ runId: 'run_messages' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.enqueued',
+      'message.dead_lettered',
+      'message.delivered',
+    ]);
+  });
+
+  it('removes queued messages from delivery indexes when they are failed directly', async () => {
+    const bus = new InMemoryMessageBus({
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    const common = {
+      userId: 'owner',
+      sessionId: 'session_direct_fail',
+      runId: 'run_direct_fail',
+      from: { kind: 'workflow' as const, id: 'workflow.default' },
+      to: recipient,
+      type: 'workflow.input',
+    };
+
+    await bus.publish({ ...common, id: 'msg_failed_queued', payload: { text: 'old' } });
+    await bus.publish({ ...common, id: 'msg_after_fail', payload: { text: 'next' } });
+    await bus.fail({
+      id: 'msg_failed_queued',
+      userId: 'owner',
+      sessionId: 'session_direct_fail',
+      runId: 'run_direct_fail',
+      reason: 'cancelled_before_delivery',
+    });
+
+    await expect(
+      bus.pull({
+        userId: 'owner',
+        sessionId: 'session_direct_fail',
+        runId: 'run_direct_fail',
+        to: recipient,
+      })
+    ).resolves.toMatchObject({ id: 'msg_after_fail', status: 'delivered' });
+    await expect(bus.list({ status: 'failed' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_failed_queued' }),
+    ]);
+  });
+
+  it('keeps terminal message transitions idempotent in the event stream', async () => {
+    const trace = new InMemoryTraceRecorder();
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    await bus.publish({
+      id: 'msg_terminal',
+      type: 'workflow.input',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'terminal' },
+    });
+
+    await bus.acknowledge({
+      id: 'msg_terminal',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      handledBy: recipient,
+    });
+    await bus.fail({
+      id: 'msg_terminal',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      reason: 'late_failure',
+    });
+    await bus.acknowledge({
+      id: 'msg_terminal',
+      userId: 'owner',
+      sessionId: 'session_terminal',
+      runId: 'run_terminal',
+      handledBy: recipient,
+    });
+
+    await expect(bus.list({ runId: 'run_terminal' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_terminal', status: 'acknowledged' }),
+    ]);
+    expect((await trace.list({ runId: 'run_terminal' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.acknowledged',
+    ]);
   });
 
   it('derives session, run, replay, audit, and regression state from events', async () => {
@@ -419,7 +632,10 @@ describe('@hypha/harness contracts', () => {
       output: {
         toolId: 'tool.danger',
         status: 'denied',
-        error: expect.stringContaining('requires an explicit policy override'),
+        error: expect.objectContaining({
+          code: 'TOOL_POLICY_DENIED',
+          message: expect.stringContaining('requires an explicit policy override'),
+        }),
       },
     });
     expect(result.events.map((event) => event.type)).toEqual(
@@ -430,6 +646,129 @@ describe('@hypha/harness contracts', () => {
     );
   });
 
+  it('enforces the FSM-resolved tool execution scope before dispatch', async () => {
+    let handlerCalls = 0;
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(
+      {
+        id: 'tool.scoped',
+        version: '0.0.0',
+        description: 'Scope enforcement test tool',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'none',
+      },
+      async () => {
+        handlerCalls += 1;
+        return { ok: true };
+      }
+    );
+    const toolTrace = new InMemoryTraceRecorder();
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'tool',
+            toolId: 'tool.scoped',
+            toolCallId: 'call_scoped_1',
+            input: {},
+          },
+        };
+      },
+    };
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      toolRunner: new GovernedToolRunner(toolRegistry, toolTrace),
+      resolveToolExecutionScope: ({ fsmState }) => ({
+        allowedToolIds: ['tool.other'],
+        policyRefs: ['policy.scope'],
+        fsmState,
+      }),
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_scoped_tool',
+      stepId: 'react',
+      sessionId: 'session_scoped_tool',
+      userId: 'owner',
+      agent: {
+        id: 'agent.scoped-tool',
+        version: '0.0.0',
+        name: 'Scoped Tool Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.scoped'],
+      },
+      input: 'use scoped tool',
+    });
+
+    expect(handlerCalls).toBe(0);
+    expect(result.react).toMatchObject({
+      status: 'completed',
+      output: {
+        toolId: 'tool.scoped',
+        invocationId: 'call_scoped_1',
+        status: 'denied',
+        error: { code: 'TOOL_NOT_ALLOWED_IN_SCOPE' },
+      },
+    });
+    expect(await toolTrace.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.rejected',
+          payload: expect.objectContaining({
+            error: expect.objectContaining({ code: 'TOOL_NOT_ALLOWED_IN_SCOPE' }),
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('fails closed when a tool action has no configured ToolRunner', async () => {
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: { action: 'tool', toolId: 'tool.missing', input: {} },
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_missing_tool_runner',
+      stepId: 'react',
+      sessionId: 'session_missing_tool_runner',
+      userId: 'owner',
+      agent: {
+        id: 'agent.missing-tool-runner',
+        version: '0.0.0',
+        name: 'Missing Tool Runner Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.missing'],
+      },
+      input: 'use missing tool',
+    });
+
+    expect(result.react).toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({
+        message: expect.stringContaining('cannot execute without toolRunner'),
+      }),
+    });
+    expect(result.run.status).toBe('failed');
+    expect(result.fsmSnapshot.currentState).toBe('Failed');
+    await expect(runManager.projectRun('run_missing_tool_runner')).resolves.toMatchObject({
+      status: 'failed',
+    });
+  });
   it('projects human-review runs from events instead of leaving them running', async () => {
     const inference: InferenceProvider = {
       id: 'mock-inference',

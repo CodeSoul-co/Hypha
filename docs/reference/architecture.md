@@ -14,11 +14,12 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.          | Provider-specific request types in public kernel contracts.        |
 | `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.  | Agent loop, workflow semantics, or app-specific model preferences. |
 | `@hypha/serving-cache`  | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.         | Semantic cache, WorkCache graph scheduling, or agent loop changes. |
+| `@hypha/workcache`      | Event-derived typed runtime cache blocks, WorkGraph scheduling view, hot-indexed typed cache forest, memory/SQLite stores, and audit events. | Source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
 | `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.            | Direct execution bypassing policy.                                 |
 | `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.      | Provider SDK lifecycle as framework core.                          |
 | `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                      | App session storage rules.                                         |
 | `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                         | Workflow replacement logic or direct tool execution.               |
-| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, skill/reasoning trace events, queues, replay/audit/regression.  | FSM internals or app-specific state.                               |
+| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, message bus, queues, skill/reasoning trace events, replay/audit/regression. | FSM internals or app-specific state.                               |
 | `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                         | Framework spec definitions.                                        |
 | `@hypha/testing`        | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                 | Production runtime behavior or live model/tool execution.          |
 
@@ -31,6 +32,14 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 `fsm` remains a separate package because FSM is a reusable process language. Domain workflows compile into `FSMProcessSpec`, and the ReAct runtime uses FSM transitions without coupling domain declarations to HTTP, storage, or provider adapters.
 
 `RunManager` and `HarnessedReActFSMRunner` live in `@hypha/harness` because they coordinate event recording, run lifecycle, ReAct execution, and FSM callbacks. They do not define FSM semantics; they consume `FSMRuntime` and record the resulting state and transition facts as events.
+
+`InMemoryMessageBus` is the package-level transport contract for future
+multi-workflow and multi-agent surfaces. Messages are scoped by
+`userId + sessionId + runId`, can carry `fsmState`, `stepId`, and `agentId`,
+and emit `message.enqueued`, `message.delivered`, `message.acknowledged`,
+`message.failed`, or `message.dead_lettered` through a `TraceRecorder`. The bus
+does not advance FSM state by itself; consumers bind message handling to FSM
+guards and transitions.
 
 `@hypha/domain` owns the declaration-to-runtime binding step. `LocalDomainPackLoader`
 loads predefined packs, `DomainPackRegistry` stores validated versions,
@@ -49,6 +58,7 @@ Allowed examples:
 apps/server -> @hypha/domain -> @hypha/fsm -> @hypha/core
 apps/server -> @hypha/kernel -> @hypha/inference -> @hypha/models
 apps/server -> @hypha/serving-cache -> @hypha/models
+apps/server -> @hypha/workcache -> @hypha/core
 apps/server -> @hypha/tools -> @hypha/core
 apps/server -> @hypha/storage -> @hypha/core
 ```
@@ -83,6 +93,51 @@ The layer records prompt prefix metadata and emits `llm.cache.lookup`,
 `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`
 events through the runtime trace bridge. It is not a semantic cache, WorkCache,
 or provider KV cache.
+
+For provider-side prefix cache, the layer keeps request shape stable by sorting
+tool schemas and tracking stable prefix hashes per provider/model/scope. It
+records `prefixCache.changedReasons` and provider usage `cacheHitTokens` /
+`cacheMissTokens` when available, but the physical prefix cache remains inside
+the model provider.
+
+## WorkCache
+
+`@hypha/workcache` consumes existing runtime events and materializes typed
+`CacheBlock` records in a hot-indexed `TypedCacheForest`. Its default registry
+aligns only current Hypha events to primary trees: planning/reasoning events to
+`PlanTree`, model/inference completions to `ComputationTree`, tool and MCP
+completions to `ToolTree`, context and message bus events to
+`ObservationTree`, evaluation and regression completions to
+`VerificationTree`, memory events to `MemoryTree`, and serving-cache prefix
+metadata on `llm.cache.write` to `PromptPrefixTree`.
+
+WorkCache also maintains a rebuildable `WorkGraph` from source events. Each
+normalized event becomes one typed work node, dependency edges are derived from
+input refs, provenance, environment deps, and cache links, and `DemandSignal`
+records update tree-local block utility. The cache tree runtime model is a
+three-layer structure: source events as the rebuildable log, CPU memory for the
+current WorkGraph plus hot cache index, and memory/SQLite as the backing store.
+Current-run updates are synchronous for immediate reuse; heavier pruning or
+rebuild work belongs behind the same graph/store interfaces and should not
+block an agent step.
+
+PromptPrefixTree is managed at prompt-block granularity. Serving Cache
+`llm.cache.write` metadata is split into stable `system`, `tool-schema`,
+`prompt-template`, `project-context`, `domain-pack`, or `memory` blocks. The
+tree stores each block's content, hash, order, prefix hash, and template
+metadata; it does not store the complete source event payload. Prefix
+materialization selects a prefix group and assembles ordered blocks under the
+configured token budget.
+
+cache-base enables it with `HYPHA_WORKCACHE=memory` by default. Set
+`HYPHA_WORKCACHE=off` to disable it or `HYPHA_WORKCACHE=sqlite` to persist
+cache blocks. Derived audit events are `workcache.lookup`, `workcache.hit`,
+`workcache.miss`, `workcache.write`, `workcache.invalidate`,
+`workcache.bypass`, and `workcache.prefix.materialized`. Each event links back
+to the source event id/type, tree type, block id, and cache key.
+
+WorkCache does not replace `@hypha/serving-cache`, does not alter DomainPack or
+agent interfaces, and does not implement MessageTree or KVPrefixTree in V1.
 
 ## Extension Boundaries
 

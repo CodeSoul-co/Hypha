@@ -21,11 +21,12 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
 | `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
 | `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.               |
+| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.           |
 | `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
 | `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
 | `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
 | `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                         |
-| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, queues, replay/audit/regression projections.                    |
+| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, message bus, queues, replay/audit/regression projections.       |
 | `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
 | `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                |
 
@@ -144,6 +145,16 @@ Common event types include `session.created`, `run.created`, `run.started`, `run
 Side-effecting runtime operations also emit phase events. Tool execution records request, policy, approval, start, timeout, retry, completion, failure, or rejection. MCP-backed tools additionally record MCP call start, completion, and failure. Memory reads and writes record requested/completed or requested/validated/committed/rejected phases.
 
 `RunManager` is the package-level writer for event-first run execution. It creates sessions and runs, records `run.started`, writes `fsm.transition.accepted` and `fsm.state.entered`, records `react.step.completed`, marks human-review waits with `human.review.requested` and `run.waiting_human`, records human-review decisions and context compaction, and finalizes runs with `run.completed`, `run.failed`, or `run.cancelled`.
+
+`MessageBus` is the harness transport contract for future asynchronous
+handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
+`runId`, `from`, `to`, `payload`, `status`, timestamps, optional `stepId`,
+`agentId`, `fsmState`, `correlationId`, `causationId`, `availableAt`,
+`expiresAt`, and metadata. `InMemoryMessageBus.publish()`, `pull()`,
+`acknowledge()`, `fail()`, and `list()` keep messages scoped by
+`userId + sessionId + recipient`; traced buses emit `message.enqueued`,
+`message.delivered`, `message.acknowledged`, `message.failed`, and
+`message.dead_lettered`.
 
 ## Evaluation, Replay, and Regression
 
@@ -285,17 +296,82 @@ Core exports:
 | `CachePolicy`         | `enabled`, `mode`, TTL, error/stream/no-cache behavior.          |
 | `ServingCacheManager` | Key generation, lookup, expiry enforcement, and writes.          |
 | `CachedLLMProvider`   | Provider wrapper that applies exact cache policy.                |
+| `PrefixCacheShapeTracker` | Compares stable prefix shape per provider/model/scope and reports changed reasons. |
 | `MemoryCacheStore`    | In-memory store for tests and local experiments.                 |
 | `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
 
 `LLMCacheKeyInput` fields are `provider`, `model`, `messages`, optional
-`system`, optional `tools`, optional `params`, and optional `cacheScope`.
+`system`, optional `tools`, optional `params`, optional `cacheScope`, and
+optional `promptBlocks`. `promptBlocks` describes already-rendered stable
+prompt components such as prompt templates, system blocks, tool schemas,
+project context, DomainPack context, or memory. It is prefix metadata for
+WorkCache and does not change the exact response cache key unless the rendered
+content also changes in `system`, `messages`, `tools`, or params.
 `CacheScope` may include `tenantId`, `userId`, `projectId`, `sessionId`, and
 `domainPackId`.
+
+Trace payloads may include `prefixCache`, with `prefixHash`,
+`toolSchemaHash`, `domainPackHash`, `dynamicSuffixHash`,
+`stablePrefixChanged`, `dynamicSuffixChanged`, and `changedReasons`. Provider
+usage may include `cacheHitTokens` and `cacheMissTokens`; DeepSeek
+`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` and OpenAI-compatible
+`prompt_tokens_details.cached_tokens` are normalized into these fields. This is
+provider-side prefix cache observability, not a local KV cache.
 
 Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
 `llm.cache.write`, and `llm.cache.bypass`. Streaming requests always bypass
 cache in the first version.
+
+## WorkCache
+
+`@hypha/workcache` exposes an event-derived typed runtime cache. It consumes
+existing `FrameworkEvent` records and writes `CacheBlock<T>` entries into
+primary trees without changing Session, Run, Event, DomainPack, or Serving
+Cache contracts.
+
+Core exports:
+
+| Export | Purpose |
+| --- | --- |
+| `RuntimeTypeDefinition` | Declares source event types, work node type, primary tree, and materializer. |
+| `NormalizedWorkEvent` | Source event plus normalized tree/node metadata. |
+| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records. |
+| `CacheBlock<T>` | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key. |
+| `CacheTree<T>` | Tree interface for lookup, write, invalidate, and list. |
+| `TypedCacheForest` | Store-backed collection of typed cache trees. |
+| `WorkCacheManager` | Ingests events, enforces TTL/validity rules, and returns derived audit events. |
+| `WorkCachePolicy` | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
+| `MemoryWorkCacheStore` | In-memory store. |
+| `SQLiteWorkCacheStore` | Persistent store backed by `workcache_blocks`. |
+
+Default source event alignment:
+
+| Source event group | Primary tree |
+| --- | --- |
+| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree` |
+| `inference.completed`, `model.call.completed` | `ComputationTree` |
+| `tool.call.completed`, `mcp.call.completed` | `ToolTree` |
+| `context.build.completed`, `context.compacted` | `ObservationTree` |
+| `eval.completed`, `regression.completed` | `VerificationTree` |
+| `memory.read.completed`, `memory.write.committed` | `MemoryTree` |
+| `llm.cache.write` with prefix metadata | `PromptPrefixTree` |
+
+Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
+`HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
+per-tree TTL fields under `workCache.trees` in `config.yaml`.
+
+`PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
+prompt block. A block value contains `id`, `type`, `hash`, `content`,
+`tokenEstimate`, `order`, `prefixHash`, optional template fields, and metadata.
+It does not store the complete `llm.cache.write` event or a full prompt event
+payload. `WorkCacheManager.materializePromptPrefix()` selects the requested or
+latest `prefixHash`, orders its blocks, applies the prompt token budget, and
+assembles the runtime prefix string.
+
+Derived audit events are `workcache.lookup`, `workcache.hit`,
+`workcache.miss`, `workcache.write`, `workcache.invalidate`,
+`workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
+`sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
 
 ## Inference
 

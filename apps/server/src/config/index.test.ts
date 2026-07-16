@@ -1,4 +1,12 @@
-import { dbConfig, inferenceConfig, redisConfig, reloadConfig, storageConfig } from './index';
+import {
+  dbConfig,
+  filesystemToolConfig,
+  inferenceConfig,
+  redisConfig,
+  reloadConfig,
+  storageConfig,
+  workCacheConfig,
+} from './index';
 
 const trackedEnv = [
   'MONGODB_URI',
@@ -12,10 +20,29 @@ const trackedEnv = [
   'HYPHA_SYSTEM_LOG_PATH',
   'KAFKA_ENABLED',
   'HYPHA_INFERENCE_DEFAULT_BACKEND',
+  'HYPHA_INFERENCE_RUNTIME_PROVIDER',
+  'HYPHA_LOCAL_INFERENCE_ENABLED',
+  'HYPHA_LOCAL_INFERENCE_ENGINE',
+  'HYPHA_LOCAL_INFERENCE_MODE',
+  'HYPHA_LOCAL_INFERENCE_AUTO_START',
+  'HYPHA_LOCAL_INFERENCE_MODEL',
+  'HYPHA_LOCAL_INFERENCE_PORT',
+  'OLLAMA_INFERENCE_BASE_URL',
   'SGLANG_BASE_URL',
   'VLLM_BASE_URL',
   'LLAMA_CPP_BASE_URL',
   'OPENAI_INFERENCE_BASE_URL',
+  'HYPHA_WORKCACHE',
+  'HYPHA_WORKCACHE_SQLITE_PATH',
+  'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
+  'HYPHA_FILESYSTEM_WORKING_DIRECTORY',
+  'HYPHA_FILESYSTEM_READ_PATHS',
+  'HYPHA_FILESYSTEM_WRITE_PATHS',
+  'HYPHA_FILESYSTEM_EXECUTE_PATHS',
+  'HYPHA_FILESYSTEM_EXECUTION_ENABLED',
+  'HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS',
+  'HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES',
+  'FILESYSTEM_TOOL_ROOT',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -107,6 +134,88 @@ describe('configuration storage taxonomy', () => {
     expect(inferenceConfig().plasmod.reusePolicy).toMatchObject({
       allowCrossSession: false,
       requireExactHash: true,
+    });
+  });
+  it('keeps WorkCache enabled on the cache integration line and switches configured stores from env', () => {
+    reloadConfig();
+    expect(workCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'memory',
+      promptBudgetTokens: 4096,
+    });
+
+    process.env.HYPHA_WORKCACHE = 'sqlite';
+    process.env.HYPHA_WORKCACHE_SQLITE_PATH = './data/runtime/cache/test-workcache.sqlite';
+    process.env.HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS = '2048';
+
+    expect(workCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'sqlite',
+      promptBudgetTokens: 2048,
+      sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
+    });
+  });
+
+  it('loads a managed local Ollama runtime without changing the provider default', () => {
+    process.env.HYPHA_INFERENCE_RUNTIME_PROVIDER = 'backend';
+    process.env.HYPHA_LOCAL_INFERENCE_ENABLED = 'true';
+    process.env.HYPHA_LOCAL_INFERENCE_ENGINE = 'ollama';
+    process.env.HYPHA_LOCAL_INFERENCE_MODE = 'managed';
+    process.env.HYPHA_LOCAL_INFERENCE_AUTO_START = 'true';
+    process.env.HYPHA_LOCAL_INFERENCE_MODEL = 'qwen3:8b';
+    process.env.HYPHA_LOCAL_INFERENCE_PORT = '11435';
+    process.env.OLLAMA_INFERENCE_BASE_URL = 'http://ollama.local:11435';
+
+    reloadConfig();
+
+    expect(inferenceConfig()).toMatchObject({
+      runtimeProvider: 'backend',
+      local: {
+        enabled: true,
+        engine: 'ollama',
+        mode: 'managed',
+        autoStart: true,
+        model: 'qwen3:8b',
+        port: 11435,
+      },
+      backends: {
+        ollama: { baseUrl: 'http://ollama.local:11435' },
+      },
+    });
+  });
+  it('loads separate filesystem read, write, and execute path policies', () => {
+    process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY = './workspace';
+    process.env.HYPHA_FILESYSTEM_READ_PATHS = './workspace,./shared';
+    process.env.HYPHA_FILESYSTEM_WRITE_PATHS = './workspace/output';
+    process.env.HYPHA_FILESYSTEM_EXECUTE_PATHS = './workspace/bin';
+    process.env.HYPHA_FILESYSTEM_EXECUTION_ENABLED = 'false';
+    process.env.HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS = '2500';
+    process.env.HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES = '8192';
+
+    reloadConfig();
+
+    expect(filesystemToolConfig()).toEqual({
+      workingDirectory: './workspace',
+      readPaths: ['./workspace', './shared'],
+      writePaths: ['./workspace/output'],
+      executePaths: ['./workspace/bin'],
+      execution: {
+        enabled: false,
+        timeoutMs: 2500,
+        maxOutputBytes: 8192,
+      },
+    });
+  });
+
+  it('keeps FILESYSTEM_TOOL_ROOT as a legacy read-write fallback', () => {
+    process.env.FILESYSTEM_TOOL_ROOT = './legacy-workspace';
+
+    reloadConfig();
+
+    expect(filesystemToolConfig()).toMatchObject({
+      workingDirectory: './legacy-workspace',
+      readPaths: ['./legacy-workspace'],
+      writePaths: ['./legacy-workspace'],
     });
   });
 });

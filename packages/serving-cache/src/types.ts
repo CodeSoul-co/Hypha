@@ -48,6 +48,29 @@ export interface LLMCacheKeyInput {
   tools?: unknown[];
   params?: Record<string, unknown>;
   cacheScope?: CacheScope;
+  promptBlocks?: PromptPrefixBlockInput[];
+}
+
+export type PromptPrefixBlockType =
+  | 'system'
+  | 'tool-schema'
+  | 'project-context'
+  | 'domain-pack'
+  | 'memory'
+  | 'prompt-template';
+
+export interface PromptPrefixBlockInput {
+  id: string;
+  type: PromptPrefixBlockType;
+  stable?: boolean;
+  hash?: string;
+  content?: string;
+  tokenEstimate?: number;
+  order?: number;
+  source?: string;
+  templateId?: string;
+  templateVersion?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PromptPrefixMetadata {
@@ -57,12 +80,54 @@ export interface PromptPrefixMetadata {
   requestHash?: string;
   toolSchemaHash?: string;
   domainPackHash?: string;
-  blocks: Array<{
-    id: string;
-    type: 'system' | 'tool-schema' | 'project-context' | 'domain-pack' | 'memory';
-    hash: string;
-    stable: boolean;
-  }>;
+  blocks: PromptPrefixBlock[];
+}
+
+export interface PromptPrefixBlock extends Required<Pick<PromptPrefixBlockInput, 'id' | 'type' | 'hash'>> {
+  stable: boolean;
+  content?: string;
+  tokenEstimate?: number;
+  order?: number;
+  source?: string;
+  templateId?: string;
+  templateVersion?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type PrefixCacheChangeReason =
+  | 'first_request'
+  | 'prefix_changed'
+  | 'tool_schema_changed'
+  | 'domain_pack_changed'
+  | 'dynamic_suffix_changed'
+  | 'unchanged';
+
+export interface PrefixCacheShapeObservation {
+  provider: string;
+  model: string;
+  prefixHash: string;
+  previousPrefixHash?: string;
+  toolSchemaHash?: string;
+  previousToolSchemaHash?: string;
+  domainPackHash?: string;
+  previousDomainPackHash?: string;
+  dynamicSuffixHash?: string;
+  previousDynamicSuffixHash?: string;
+  requestHash?: string;
+  prefixTokenEstimate?: number;
+  blockCount: number;
+  stablePrefixChanged: boolean;
+  dynamicSuffixChanged: boolean;
+  changedReasons: PrefixCacheChangeReason[];
+  scope?: CacheScope;
+}
+
+export interface ProviderPrefixCacheUsage {
+  source: 'provider-usage' | 'hypha-serving-cache' | 'unknown';
+  inputTokens?: number;
+  hitTokens?: number;
+  missTokens?: number;
+  hitRate?: number;
 }
 
 export interface CachePolicy {
@@ -90,6 +155,7 @@ export type ServingCacheEvent =
       provider: string;
       model: string;
       scope?: CacheScope;
+      prefixCache?: PrefixCacheShapeObservation;
       runId?: string;
       stepId?: string;
     }
@@ -100,6 +166,7 @@ export type ServingCacheEvent =
       provider: string;
       model: string;
       scope?: CacheScope;
+      prefixCache?: PrefixCacheShapeObservation;
       runId?: string;
       stepId?: string;
     }
@@ -110,6 +177,7 @@ export type ServingCacheEvent =
       provider: string;
       model: string;
       scope?: CacheScope;
+      prefixCache?: PrefixCacheShapeObservation;
       runId?: string;
       stepId?: string;
     }
@@ -120,6 +188,9 @@ export type ServingCacheEvent =
       provider: string;
       model: string;
       scope?: CacheScope;
+      prefixMetadata?: PromptPrefixMetadata;
+      prefixCache?: PrefixCacheShapeObservation;
+      providerPrefixCache?: ProviderPrefixCacheUsage;
       runId?: string;
       stepId?: string;
     }
@@ -168,4 +239,5 @@ export interface CachedLLMProviderOptions {
   ) => string;
   scopeResolver?: (request: ModelRequest) => CacheScope | undefined;
   paramsResolver?: (request: ModelRequest) => Record<string, unknown> | undefined;
+  promptBlocksResolver?: (request: ModelRequest) => PromptPrefixBlockInput[] | undefined;
 }

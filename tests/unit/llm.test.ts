@@ -71,6 +71,25 @@ describe('LLM Adapters', () => {
       expect(manager.getDefaultProvider()).toBe('deepseek');
       expect(manager.getDefaultModel()).toBe('deepseek-v4-flash');
     });
+
+    it('falls back before chat when the configured default provider is unavailable', async () => {
+      const manager = new LLMManager();
+      const deepseekModels = [createModelInfo('deepseek-v4-flash', 'deepseek')];
+      const adapter = createAdapter('deepseek', deepseekModels);
+
+      (manager as any).initialized = true;
+      (manager as any).adapters.set('deepseek', adapter);
+      (manager as any).providerDefaultModels.set('deepseek', 'deepseek-v4-flash');
+
+      const response = await manager.chat([{ role: 'user', content: 'hello' }]);
+
+      expect(response).toMatchObject({
+        provider: 'deepseek',
+        content: 'ok',
+      });
+      expect(manager.getDefaultProvider()).toBe('deepseek');
+      expect(manager.getDefaultModel()).toBe('deepseek-v4-flash');
+    });
   });
 
   describe('LLMManagerModelProvider facade', () => {

@@ -55,4 +55,82 @@ describe('PromptManager', () => {
 
     expect(manager.render('sentinel', {}, 'system')).toBe('src prompt');
   });
+
+  it('applies declared defaults consistently on cached renders', () => {
+    const manager = new PromptManager(undefined, true);
+    manager.register({
+      id: 'cached-defaults',
+      name: 'Cached Defaults',
+      category: 'system',
+      content: 'Hello {{ agent_name }} from {{ session_id }}.',
+      variables: [
+        {
+          name: 'agent_name',
+          type: 'string',
+          required: true,
+          default: 'Assistant',
+        },
+        {
+          name: 'session_id',
+          type: 'string',
+          required: false,
+        },
+      ],
+    });
+
+    expect(manager.render('cached-defaults', { agent_name: 'Planner' }, 'system')).toBe(
+      'Hello Planner from .'
+    );
+    expect(manager.render('cached-defaults', {}, 'system')).toBe('Hello Assistant from .');
+  });
+
+  it('reports unresolved prompt variables during validated renders', () => {
+    const manager = new PromptManager(undefined, false);
+    manager.register({
+      id: 'broken-template',
+      name: 'Broken Template',
+      category: 'system',
+      content: 'Hello {{known}} {{unknown}}.',
+      variables: [
+        {
+          name: 'known',
+          type: 'string',
+          required: true,
+          default: 'Agent',
+        },
+      ],
+    });
+
+    expect(manager.renderWithValidation('broken-template', {}, 'system')).toEqual({
+      success: false,
+      errors: ['Unresolved variable: unknown'],
+    });
+  });
+
+  it('adapts server templates into versioned agent prompt registry blocks', () => {
+    const manager = new PromptManager(undefined, false);
+    manager.register({
+      id: 'agent-managed',
+      name: 'Managed Agent Prompt',
+      category: 'system',
+      content: 'You are {{agent_name}} for {{user_id}}.',
+      variables: [
+        { name: 'agent_name', type: 'string', required: true },
+        { name: 'user_id', type: 'string', required: true },
+      ],
+      metadata: { version: '2.1.0', stable: true, cacheable: true },
+    });
+
+    const resolved = manager.resolveAgentPrompts(
+      [{ id: 'agent-managed', version: '2.1.0', required: true }],
+      { agent_name: 'Hypha', user_id: 'user-1' }
+    );
+    expect(resolved.instructions).toBe('You are Hypha for user-1.');
+    expect(resolved.blocks[0]).toMatchObject({
+      templateId: 'agent-managed',
+      templateVersion: '2.1.0',
+      stable: true,
+      cacheable: true,
+    });
+  });
 });
