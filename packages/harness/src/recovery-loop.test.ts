@@ -83,6 +83,40 @@ describe('@hypha/harness explicit FSM recovery loop', () => {
     expect(fsm.getSnapshot().currentState).toBe('Quarantined');
   });
 
+  it('reconciles an unknown side effect before retrying the operation', async () => {
+    const fsm = await reasoningRuntime('run_reconcile_single');
+    const reconcile = vi.fn(async () => 'reconciled');
+    const result = await runFSMRecoveryLoop({
+      fsm,
+      source: 'execution',
+      async execute() {
+        throw new Error('provider receipt unavailable');
+      },
+      classify(error): FSMAnomaly {
+        return {
+          id: 'unknown_execution_receipt',
+          source: 'execution',
+          category: 'execution_failure',
+          code: 'EXECUTION_RESULT_UNKNOWN',
+          message: String(error),
+          occurredAt: '2026-07-16T00:00:00.100Z',
+          retryable: true,
+          sideEffectState: 'unknown',
+          reconciliationAvailable: true,
+        };
+      },
+      reconcile,
+    });
+
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      output: 'reconciled',
+      decision: { action: 'reconcile' },
+    });
+    expect(fsm.getSnapshot().currentState).toBe('Reasoning');
+  });
+
   it('runs explicit compensation and routes the result to human review', async () => {
     const fsm = await reasoningRuntime('run_compensate');
     const compensate = vi.fn(async () => undefined);
