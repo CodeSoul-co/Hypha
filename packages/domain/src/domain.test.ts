@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDomainAgentPatch,
   businessRuleSpecDefinition,
+  compileWorkflowForRuntime,
   compileWorkflowToFSM,
   compileDomainPackToHarnessedSystem,
   DomainPackRegistry,
@@ -15,6 +16,9 @@ import {
   LocalDomainPackLoader,
   parseDomainPackDocument,
   reasoningSpecDefinition,
+  runtimeMessageBusProfileSpecDefinition,
+  runtimeProfileSpecDefinition,
+  runtimeSessionQueueProfileSpecDefinition,
   validateDomainPackSpec,
   validateWorkflowSpec,
   WorkflowCompiler,
@@ -78,6 +82,79 @@ describe('@hypha/domain workflow compiler', () => {
     );
   });
 
+  it('compiles pinned runtime profiles, state bindings, and dependency snapshots', () => {
+    const compiled = compileWorkflowForRuntime(domainPackSpecDefinition.example);
+    const repeated = new WorkflowCompiler().compileRuntime(domainPackSpecDefinition.example);
+
+    expect(compiled.workflowRef).toMatchObject({
+      id: 'workflow.default',
+      version: '0.0.0',
+      revision: 'workflow-default-r1',
+    });
+    expect(compiled.dependencySnapshot.runtimeProfile).toMatchObject({
+      id: 'runtime.default',
+      version: '0.0.0',
+      revision: 'runtime-default-r1',
+    });
+    expect(compiled.dependencySnapshot.messageBusProfile?.id).toBe('runtime-bus.default');
+    expect(compiled.dependencySnapshot.sessionQueueProfile?.id).toBe(
+      'runtime-queue.default'
+    );
+    expect(compiled.dependencySnapshot.activityContracts).toEqual([
+      {
+        bindingId: 'activity.model.reason',
+        stateId: 'Reasoning',
+        activityType: 'model',
+        portRef: {
+          id: 'runtime-port.model',
+          version: '1.0.0',
+          revision: 'model-port-r1',
+        },
+        operation: 'generate',
+        contractHash: 'sha256:model-generate-v1',
+      },
+    ]);
+    expect(compiled.stateBindings.find((state) => state.stateId === 'Reasoning')).toMatchObject({
+      stateType: 'agent',
+      activityBindings: [{ id: 'activity.model.reason' }],
+    });
+    expect(compiled.fsmProcess.states.find((state) => state.id === 'Intake')).toMatchObject({
+      kind: 'domain',
+      timeoutPolicy: { timeoutMs: 30000, onTimeout: 'fail' },
+      retryPolicy: { maxAttempts: 2, backoffMs: 1000 },
+    });
+    expect(compiled.dependencySnapshot.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(compiled.processHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(repeated.dependencySnapshot.hash).toBe(compiled.dependencySnapshot.hash);
+    expect(repeated.processHash).toBe(compiled.processHash);
+  });
+
+  it('rejects unresolved runtime profiles and invalid runtime queue semantics', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            runtimeProfileRef: { id: 'runtime.missing', version: '1.0.0' },
+          },
+        ],
+      })
+    ).toThrow(/Workflow runtime profile not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        sessionQueueProfiles: [
+          {
+            ...runtimeSessionQueueProfileSpecDefinition.example,
+            maxInFlight: 2,
+          },
+        ],
+      })
+    ).toThrow(/Serial runtime session queue must use maxInFlight 1/);
+  });
+
   it('initializes runtime session metadata from DomainPack SessionProfile without embedding Session', () => {
     const domainPack: DomainPackSpec = {
       id: 'minimal',
@@ -122,11 +199,25 @@ describe('@hypha/domain workflow compiler', () => {
       'rule.output-contract'
     );
     expect(validateDomainPackSpec(domainPackSpecDefinition.example).id).toBe('domain.default');
+    expect(runtimeProfileSpecDefinition.parse(runtimeProfileSpecDefinition.example).id).toBe(
+      'runtime.default'
+    );
+    expect(
+      runtimeMessageBusProfileSpecDefinition.parse(
+        runtimeMessageBusProfileSpecDefinition.example
+      ).id
+    ).toBe('runtime-bus.default');
+    expect(
+      runtimeSessionQueueProfileSpecDefinition.parse(
+        runtimeSessionQueueProfileSpecDefinition.example
+      ).id
+    ).toBe('runtime-queue.default');
     expect(domainSpecJsonSchemas.WorkflowSpec.required).toContain('states');
     expect(domainSpecJsonSchemas.ReasoningSpec.required).toContain('thinkingMode');
     expect(domainSpecJsonSchemas.BusinessRuleSpec.required).toContain('scope');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('workflows');
     expect(domainSpecJsonSchemas.DomainPackSpec.required).toContain('outputContracts');
+    expect(domainSpecJsonSchemas.RuntimeProfileSpec.required).toContain('version');
     const workflowStateProperties =
       domainSpecJsonSchemas.WorkflowSpec.properties?.states?.items?.properties ?? {};
     expect(workflowStateProperties.requiredSkills).toMatchObject({ type: 'array' });
