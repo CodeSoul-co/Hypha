@@ -20,6 +20,7 @@ import { UserModel } from '../../apps/server/src/models/User';
 import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
+import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
 
 const app = application.getApp();
@@ -713,7 +714,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
 });
 
 describe('workflow template variable resolution (remaining #2)', () => {
-  it('substitutes ${defaultModel} in stage.model with the configured model id', async () => {
+  it('substitutes ${defaultModel} in stage.model with the active runtime model id', async () => {
     const r = await request(app)
       .post('/api/v1/workflows/conversation-flow/execute')
       .set('Authorization', `Bearer ${devToken}`)
@@ -737,7 +738,7 @@ describe('workflow template variable resolution (remaining #2)', () => {
     const reasoningStarted = (events.body.data || []).find(
       (event: any) => event.type === 'agent.reasoning.started'
     );
-    expect(reasoningStarted?.payload?.modelAlias).toBe('gpt-4o-mini');
+    expect(reasoningStarted?.payload?.modelAlias).toBe(getLLMManager().getDefaultModel());
     expect(JSON.stringify(events.body.data)).not.toContain('${defaultModel}');
     expect(JSON.stringify(events.body.data)).not.toMatch(/supported API model names are/i);
 
