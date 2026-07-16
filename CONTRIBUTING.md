@@ -113,6 +113,20 @@ loading, and runtime smoke tests.
 - Recovery defects discovered during integration still return to the owning source branch. The FSM
   coordinator does not grant an integration branch ownership of Runtime, Tool, Memory, Domain, or
   Cache implementation.
+- Every fallible framework module must expose a stable classifier or adapter boundary that produces
+  `RecoveryFailure` plus revision-, receipt-, checksum-, idempotency-, or provider-state evidence.
+  Human-readable error text, elapsed time, and repeated log messages are not proof of progress.
+- Cross-module recovery must use dependency-ordered participants. A completed upstream participant
+  is not executed again; repeated fingerprints with unchanged evidence consume the no-progress
+  budget and switch to a declared fallback/degradation path or escalate.
+- Inference Cache, Serving Cache, and WorkCache failures may degrade or bypass only when the primary
+  operation remains correct. Recovery knowledge is a revision-matched hint, must be revalidated on
+  every hit, and must be invalidated on policy/spec/provider drift, expiry, or negative outcomes.
+- Message delivery uses bounded requeue/backoff and a dead-letter terminal state. A poison or
+  expired message must not block the recipient queue or restart an unbounded agent loop.
+- Domain workflow compilation must preserve the shared recovery envelope (`Recovering`,
+  `Compensating`, `Quarantined`, `HumanReview`, `Failed`, and `Cancelled`) so application workflows
+  cannot accidentally remove the FSM paths required by the runtime supervisor.
 
 ## Common tool engineering rules
 
