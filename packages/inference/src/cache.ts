@@ -54,9 +54,10 @@ export class InferenceCacheManager {
   }
 
   async putKv(input: KvCacheCreateInput, value: unknown): Promise<KvCacheRef> {
-    const expiresAt = input.ttlMs !== undefined
-      ? new Date(this.now().getTime() + input.ttlMs).toISOString()
-      : undefined;
+    const expiresAt =
+      input.ttlMs !== undefined
+        ? new Date(this.now().getTime() + input.ttlMs).toISOString()
+        : undefined;
     const ref: KvCacheRef = {
       id: input.id,
       provider: input.provider,

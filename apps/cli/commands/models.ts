@@ -24,7 +24,10 @@ export function registerModels(program: Command): void {
     .option('--ids', 'Print only model ids (one per line) — easier for piping into --model)')
     .action(async (opts) => {
       try {
-        const all = await apiGet<ModelInfo[]>('/models', opts.provider ? { provider: opts.provider } : undefined);
+        const all = await apiGet<ModelInfo[]>(
+          '/models',
+          opts.provider ? { provider: opts.provider } : undefined
+        );
         if (opts.ids) {
           for (const m of all) process.stdout.write(m.id + '\n');
           return;
@@ -40,7 +43,9 @@ export function registerModels(program: Command): void {
           console.log(chalk.bold(chalk.cyan(prov)));
           for (const m of list) {
             const ctx = m.contextWindow ? `ctx=${m.contextWindow}` : '';
-            process.stdout.write(`  ${m.id.padEnd(34)} ${m.displayName ? chalk.gray(m.displayName) : ''} ${ctx ? chalk.gray(ctx) : ''}\n`);
+            process.stdout.write(
+              `  ${m.id.padEnd(34)} ${m.displayName ? chalk.gray(m.displayName) : ''} ${ctx ? chalk.gray(ctx) : ''}\n`
+            );
           }
         }
       } catch (err: any) {
@@ -55,10 +60,15 @@ export function registerModels(program: Command): void {
     .action(async () => {
       try {
         const data = await apiGet<any>('/models/health');
-        const defaultMark = (id: string) => id === data.defaultProvider ? chalk.green(' (default)') : '';
-        console.log(`${data.healthy ? chalk.green('healthy') : chalk.red('unhealthy')} • default: ${data.defaultProvider}/${data.defaultModel}`);
+        const defaultMark = (id: string) =>
+          id === data.defaultProvider ? chalk.green(' (default)') : '';
+        console.log(
+          `${data.healthy ? chalk.green('healthy') : chalk.red('unhealthy')} • default: ${data.defaultProvider}/${data.defaultModel}`
+        );
         for (const p of data.providers || []) {
-          console.log(`  ${p.id}${defaultMark(p.id)}: ${p.healthy ? chalk.green('ok') : chalk.red('down')}`);
+          console.log(
+            `  ${p.id}${defaultMark(p.id)}: ${p.healthy ? chalk.green('ok') : chalk.red('down')}`
+          );
         }
       } catch (err: any) {
         console.error(chalk.red(`✗ ${err.message}`));

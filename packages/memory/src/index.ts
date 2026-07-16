@@ -22,7 +22,13 @@ export interface MemoryScope {
   userId?: string;
 }
 
-export type MemoryType = 'working' | 'episodic' | 'semantic' | 'procedural' | 'artifact' | 'governance';
+export type MemoryType =
+  | 'working'
+  | 'episodic'
+  | 'semantic'
+  | 'procedural'
+  | 'artifact'
+  | 'governance';
 
 export interface MemoryRecord<TValue = unknown> {
   id: string;
@@ -187,7 +193,11 @@ export interface MemoryAuditReport {
 export interface MemoryProvider {
   read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
   search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
-  write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise<MemoryWriteResult>;
+  write(
+    scope: MemoryScope,
+    record: MemoryRecord,
+    policy: MemoryWritePolicy
+  ): Promise<MemoryWriteResult>;
   update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void>;
   invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void>;
   summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary>;
@@ -441,36 +451,38 @@ export const memoryRetrievalPolicySchema = z.object({
   allowedTypes: z.array(memoryTypeSchema).optional(),
 }) satisfies ZodType<MemoryRetrievalPolicy>;
 
-export const memorySpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    providers: z.array(memoryProviderProfileSchema).min(1),
-    memoryTypes: z.array(memoryTypeSchema).min(1),
-    structuredStoreRef: z.string().optional(),
-    vectorIndexRef: z.string().optional(),
-    artifactStoreRef: z.string().optional(),
-    embeddingProviderRef: z.string().optional(),
-    readPolicy: z.string().optional(),
-    writePolicy: z.string().optional(),
-    freshnessPolicy: z.string().optional(),
-    provenancePolicy: z.enum(['required', 'best_effort']).optional(),
-    retentionPolicy: z.string().optional(),
-    privacyPolicy: z.string().optional(),
-    retrievalStrategy: z.string().optional(),
-    retrievalPolicy: memoryRetrievalPolicySchema.optional(),
-    writePolicyConfig: z.object({
+export const memorySpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  providers: z.array(memoryProviderProfileSchema).min(1),
+  memoryTypes: z.array(memoryTypeSchema).min(1),
+  structuredStoreRef: z.string().optional(),
+  vectorIndexRef: z.string().optional(),
+  artifactStoreRef: z.string().optional(),
+  embeddingProviderRef: z.string().optional(),
+  readPolicy: z.string().optional(),
+  writePolicy: z.string().optional(),
+  freshnessPolicy: z.string().optional(),
+  provenancePolicy: z.enum(['required', 'best_effort']).optional(),
+  retentionPolicy: z.string().optional(),
+  privacyPolicy: z.string().optional(),
+  retrievalStrategy: z.string().optional(),
+  retrievalPolicy: memoryRetrievalPolicySchema.optional(),
+  writePolicyConfig: z
+    .object({
       allowLongTerm: z.boolean().optional(),
       requireProvenance: z.boolean().optional(),
-      decision: z.object({
-        allowed: z.boolean(),
-        requiresHumanReview: z.boolean().optional(),
-        policyId: z.string().optional(),
-        ruleId: z.string().optional(),
-        reason: z.string().optional(),
-        metadata: z.record(z.unknown()).optional(),
-      }).optional(),
-    }).optional(),
-  }) satisfies ZodType<MemorySpec>;
+      decision: z
+        .object({
+          allowed: z.boolean(),
+          requiresHumanReview: z.boolean().optional(),
+          policyId: z.string().optional(),
+          ruleId: z.string().optional(),
+          reason: z.string().optional(),
+          metadata: z.record(z.unknown()).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+}) satisfies ZodType<MemorySpec>;
 
 export const memorySpecJsonSchema: JsonSchema = {
   type: 'object',

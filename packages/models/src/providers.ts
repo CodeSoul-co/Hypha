@@ -430,16 +430,14 @@ function normalizeToolCalls(
   toolNameMap?: OpenAICompatibleToolNameMap
 ): NormalizedToolCall[] | undefined {
   if (!toolCalls?.length) return undefined;
-  return toolCalls.map(
-    (toolCall): NormalizedToolCall => {
-      const providerName = toolCall.function?.name ?? toolCall.id;
-      return {
-        id: toolCall.id,
-        toolId: toolNameMap?.toOriginalName.get(providerName) ?? providerName,
-        arguments: parseToolArguments(toolCall.function?.arguments),
-      };
-    }
-  );
+  return toolCalls.map((toolCall): NormalizedToolCall => {
+    const providerName = toolCall.function?.name ?? toolCall.id;
+    return {
+      id: toolCall.id,
+      toolId: toolNameMap?.toOriginalName.get(providerName) ?? providerName,
+      arguments: parseToolArguments(toolCall.function?.arguments),
+    };
+  });
 }
 
 function createOpenAICompatibleToolNameMap(
@@ -479,7 +477,10 @@ function uniqueOpenAICompatibleToolName(
 }
 
 function sanitizeOpenAICompatibleToolName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return name
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 function truncateToolName(name: string, maxLength = 64): string {

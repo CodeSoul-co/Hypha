@@ -18,10 +18,10 @@ import { AppError } from '../middleware/errorHandler';
 
 export interface InstallInput {
   source: 'path' | 'url' | 'inline';
-  path?: string;        // for source=path — local file path on the SERVER
-  url?: string;         // for source=url — http(s) URL
-  content?: string;     // for source=inline — raw .md body
-  filename?: string;    // optional, used to name the saved file (defaults to <id>.md)
+  path?: string; // for source=path — local file path on the SERVER
+  url?: string; // for source=url — http(s) URL
+  content?: string; // for source=inline — raw .md body
+  filename?: string; // optional, used to name the saved file (defaults to <id>.md)
 }
 
 export interface InstallResult {
@@ -39,7 +39,11 @@ export interface InstallResult {
  */
 function getInstallDir(): string {
   const dirs = (() => {
-    try { return getSkillManager().getDirs(); } catch { return []; }
+    try {
+      return getSkillManager().getDirs();
+    } catch {
+      return [];
+    }
   })();
   // The user dir is the one inside $HOME; builtins live under the project
   // cwd and should never be the install target.
@@ -57,7 +61,8 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 function inferFilename(input: InstallInput, id: string): string {
-  if (input.filename) return input.filename.endsWith('.md') ? input.filename : `${input.filename}.md`;
+  if (input.filename)
+    return input.filename.endsWith('.md') ? input.filename : `${input.filename}.md`;
   return `${id}.md`;
 }
 
@@ -78,29 +83,49 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
   let originLabel = '';
   if (input.source === 'inline') {
     if (typeof input.content !== 'string' || !input.content.trim()) {
-      throw new AppError('VALIDATION_ERROR', 'content is required for source=inline', HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'VALIDATION_ERROR',
+        'content is required for source=inline',
+        HTTP_STATUS.BAD_REQUEST
+      );
     }
     raw = input.content;
     originLabel = input.filename || '<inline>';
   } else if (input.source === 'path') {
     if (typeof input.path !== 'string' || !input.path) {
-      throw new AppError('VALIDATION_ERROR', 'path is required for source=path', HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'VALIDATION_ERROR',
+        'path is required for source=path',
+        HTTP_STATUS.BAD_REQUEST
+      );
     }
     raw = await fs.readFile(input.path, 'utf-8');
     originLabel = input.path;
   } else if (input.source === 'url') {
     if (typeof input.url !== 'string' || !input.url) {
-      throw new AppError('VALIDATION_ERROR', 'url is required for source=url', HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'VALIDATION_ERROR',
+        'url is required for source=url',
+        HTTP_STATUS.BAD_REQUEST
+      );
     }
     try {
       const r = await axios.get<string>(input.url, { responseType: 'text', timeout: 15_000 });
       raw = typeof r.data === 'string' ? r.data : JSON.stringify(r.data);
     } catch (err: any) {
-      throw new AppError('FETCH_FAILED', `Failed to fetch ${input.url}: ${err.message}`, HTTP_STATUS.BAD_REQUEST);
+      throw new AppError(
+        'FETCH_FAILED',
+        `Failed to fetch ${input.url}: ${err.message}`,
+        HTTP_STATUS.BAD_REQUEST
+      );
     }
     originLabel = input.url;
   } else {
-    throw new AppError('VALIDATION_ERROR', `unsupported source: ${input.source}`, HTTP_STATUS.BAD_REQUEST);
+    throw new AppError(
+      'VALIDATION_ERROR',
+      `unsupported source: ${input.source}`,
+      HTTP_STATUS.BAD_REQUEST
+    );
   }
 
   validateMarkdown(raw, originLabel);
@@ -112,9 +137,11 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
   const target = path.join(dir, inferFilename(input, parsed.config.id));
   try {
     await fs.access(target);
-    throw new AppError('SKILL_ALREADY_INSTALLED',
+    throw new AppError(
+      'SKILL_ALREADY_INSTALLED',
       `Skill "${parsed.config.id}" is already installed at ${target}; uninstall first.`,
-      HTTP_STATUS.CONFLICT);
+      HTTP_STATUS.CONFLICT
+    );
   } catch (err: any) {
     if (err && err.code === 'ENOENT') {
       // good — file does not exist
@@ -126,7 +153,9 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
   }
 
   await ensureDir(dir);
-  logger.info(`SkillInstaller: writing to ${target} (installDir resolved from dirs: ${JSON.stringify(getSkillManager().getDirs())})`);
+  logger.info(
+    `SkillInstaller: writing to ${target} (installDir resolved from dirs: ${JSON.stringify(getSkillManager().getDirs())})`
+  );
   await fs.writeFile(target, raw, { mode: 0o644 });
   logger.info(`Skill installed: ${parsed.config.id} → ${target}`);
 
@@ -151,7 +180,9 @@ export async function uninstallSkill(id: string): Promise<boolean> {
   }
 }
 
-export async function listInstalledSkills(): Promise<Array<{ id: string; filePath: string; name: string }>> {
+export async function listInstalledSkills(): Promise<
+  Array<{ id: string; filePath: string; name: string }>
+> {
   const dir = getInstallDir();
   let entries: string[];
   try {
@@ -178,7 +209,9 @@ export async function listInstalledSkills(): Promise<Array<{ id: string; filePat
  * Re-scan every configured skills dir and rebuild the registry. Cheap;
  * skills are small .md files. Used by `POST /skills/reload` and by tests.
  */
-export async function reloadSkills(mgr: ReturnType<typeof getSkillManager> = getSkillManager()): Promise<void> {
+export async function reloadSkills(
+  mgr: ReturnType<typeof getSkillManager> = getSkillManager()
+): Promise<void> {
   await mgr.destroy();
   await mgr.initialize();
 }

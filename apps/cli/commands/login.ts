@@ -30,13 +30,20 @@ function prompt(question: string, hidden = false): Promise<string> {
           process.stderr.write('\n');
           rl.close();
           resolve(buf);
-        } else if (c === '') { process.exit(1); }
-        else if (c === '' || c === '\b') { buf = buf.slice(0, -1); }
-        else { buf += c; }
+        } else if (c === '') {
+          process.exit(1);
+        } else if (c === '' || c === '\b') {
+          buf = buf.slice(0, -1);
+        } else {
+          buf += c;
+        }
       };
       stdin.on('data', onData);
     } else {
-      rl.question(question, (answer) => { rl.close(); resolve(answer); });
+      rl.question(question, (answer) => {
+        rl.close();
+        resolve(answer);
+      });
     }
   });
 }
@@ -54,11 +61,18 @@ export function registerLogin(program: Command): void {
         const r = await axios.post(`${getBaseUrl()}/dev/token`);
         const d = r.data?.data;
         if (!d?.token || !d?.user) {
-          console.error(chalk.red('✗ /dev/token did not return a token. Is the server in dev mode?'));
+          console.error(
+            chalk.red('✗ /dev/token did not return a token. Is the server in dev mode?')
+          );
           process.exit(1);
         }
         user = d.user;
-        writeToken({ token: d.token, userId: String(user._id || user.id), email: user.email, isAdmin: !!user.isAdmin });
+        writeToken({
+          token: d.token,
+          userId: String(user._id || user.id),
+          email: user.email,
+          isAdmin: !!user.isAdmin,
+        });
         console.log(chalk.green(`✓ Logged in as ${user.email} (dev token, 30 days)`));
         return;
       }
@@ -68,7 +82,7 @@ export function registerLogin(program: Command): void {
       try {
         const data = await apiPost<{ user: any; accessToken: string; refreshToken: string }>(
           '/auth/login',
-          { email, password },
+          { email, password }
         );
         user = data.user;
         writeToken({
@@ -93,7 +107,10 @@ export function registerLogout(program: Command): void {
     .description('Remove the stored JWT (alias of `hypha login logout`)')
     .action(() => {
       const t = readToken();
-      if (!t) { console.log(chalk.gray('Not logged in.')); return; }
+      if (!t) {
+        console.log(chalk.gray('Not logged in.'));
+        return;
+      }
       clearToken();
       console.log(chalk.green(`✓ Logged out ${t.email}`));
     });
@@ -105,7 +122,10 @@ export function registerWhoami(program: Command): void {
     .description('Show the currently stored login (alias of `hypha login whoami`)')
     .action(() => {
       const t = readToken();
-      if (!t) { console.log(chalk.yellow('Not logged in. Run `hypha login` or `hypha login --dev`.')); return; }
+      if (!t) {
+        console.log(chalk.yellow('Not logged in. Run `hypha login` or `hypha login --dev`.'));
+        return;
+      }
       console.log(`${t.email}${t.isAdmin ? chalk.cyan(' (admin)') : ''}`);
       console.log(chalk.gray(`  token saved: ${t.savedAt}`));
       console.log(chalk.gray(`  token userId: ${t.userId}`));

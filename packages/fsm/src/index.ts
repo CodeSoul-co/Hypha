@@ -126,10 +126,7 @@ export interface FSMRuntimeOptions {
   onTransition?: (record: StateTransition) => Promise<void> | void;
 }
 
-export type FSMGuardEvaluator = (
-  guard: string,
-  context: FSMGuardContext
-) => boolean;
+export type FSMGuardEvaluator = (guard: string, context: FSMGuardContext) => boolean;
 
 export interface FSMTimeoutEvaluation {
   timedOut: boolean;
@@ -181,10 +178,7 @@ export function validateFSMProcessSpec(spec: FSMProcessSpec): void {
   }
 }
 
-export function getAllowedTransitions(
-  spec: FSMProcessSpec,
-  stateId: string
-): FSMTransitionSpec[] {
+export function getAllowedTransitions(spec: FSMProcessSpec, stateId: string): FSMTransitionSpec[] {
   return spec.transitions.filter((transition) => transition.from === stateId);
 }
 
@@ -474,7 +468,9 @@ export async function applyTransitionWithRuntimePolicy(
     if (decision.requiresHumanReview) {
       throw new FrameworkError({
         code: 'FSM_HUMAN_REVIEW_REQUIRED',
-        message: decision.reason ?? `FSM transition requires human review: ${snapshot.currentState} -> ${to}`,
+        message:
+          decision.reason ??
+          `FSM transition requires human review: ${snapshot.currentState} -> ${to}`,
         context: { processId: spec.id, runId: snapshot.runId, decision },
       });
     }
@@ -513,12 +509,10 @@ export function canRetryState(
   return attemptedCount < state.retryPolicy.maxAttempts;
 }
 
-export function evaluateGuardExpression(
-  guard: string,
-  context: FSMGuardContext = {}
-): boolean {
+export function evaluateGuardExpression(guard: string, context: FSMGuardContext = {}): boolean {
   const expression = guard.trim();
-  if (!expression || expression === 'true' || expression === 'always' || expression === 'default') return true;
+  if (!expression || expression === 'true' || expression === 'always' || expression === 'default')
+    return true;
   if (expression === 'false' || expression === 'never') return false;
   if (expression.startsWith('else:')) {
     return !evaluateGuardExpression(expression.slice('else:'.length), context);
@@ -610,14 +604,12 @@ export const fsmTransitionSpecSchema = z.object({
   traceEvent: z.string().optional(),
 });
 
-export const fsmProcessSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    initialState: z.string().min(1),
-    states: z.array(fsmStateSpecSchema).min(1),
-    transitions: z.array(fsmTransitionSpecSchema),
-    terminalStates: z.array(z.string().min(1)),
-  }) satisfies ZodType<FSMProcessSpec>;
+export const fsmProcessSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  initialState: z.string().min(1),
+  states: z.array(fsmStateSpecSchema).min(1),
+  transitions: z.array(fsmTransitionSpecSchema),
+  terminalStates: z.array(z.string().min(1)),
+}) satisfies ZodType<FSMProcessSpec>;
 
 export const fsmProcessSpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -756,7 +748,7 @@ function splitGuardExpression(expression: string, operator: '&&' | '||'): string
   for (let index = 0; index < expression.length; index += 1) {
     const char = expression[index];
     if ((char === '"' || char === "'") && expression[index - 1] !== '\\') {
-      quote = quote === char ? null : quote ?? char;
+      quote = quote === char ? null : (quote ?? char);
       continue;
     }
     if (quote) continue;

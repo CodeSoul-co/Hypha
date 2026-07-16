@@ -35,7 +35,9 @@ program
 program.hook('preAction', () => {
   if (program.opts().verbose) {
     const token = readToken();
-    process.stderr.write(chalk.gray(`[hypha] base=${getBaseUrl()} user=${token?.email || 'anonymous'}\n`));
+    process.stderr.write(
+      chalk.gray(`[hypha] base=${getBaseUrl()} user=${token?.email || 'anonymous'}\n`)
+    );
   }
 });
 
@@ -58,9 +60,13 @@ program.action(() => {
   console.log(chalk.bold('hypha ') + chalk.gray('- hypha CLI example'));
   console.log(`  base:  ${chalk.cyan(getBaseUrl())}`);
   console.log(`  home:  ${chalk.cyan(getHome())}`);
-  console.log(`  user:  ${token ? chalk.green(token.email) : chalk.yellow('not logged in')}  (${chalk.gray('hypha login')})`);
+  console.log(
+    `  user:  ${token ? chalk.green(token.email) : chalk.yellow('not logged in')}  (${chalk.gray('hypha login')})`
+  );
   console.log();
-  console.log(`  Try:  ${chalk.cyan('hypha chat "hi"')}  |  ${chalk.cyan('hypha models')}  |  ${chalk.cyan('hypha usage')}`);
+  console.log(
+    `  Try:  ${chalk.cyan('hypha chat "hi"')}  |  ${chalk.cyan('hypha models')}  |  ${chalk.cyan('hypha usage')}`
+  );
   console.log(`  Full: ${chalk.cyan('hypha --help')}`);
 });
 

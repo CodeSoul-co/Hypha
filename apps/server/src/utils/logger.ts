@@ -20,10 +20,7 @@ export function createLogger(): winston.Logger {
     config = {
       level: 'info',
       format: 'json',
-      outputs: [
-        { type: 'console' },
-        { type: 'file', path: './data/logs/system.log' }
-      ],
+      outputs: [{ type: 'console' }, { type: 'file', path: './data/logs/system.log' }],
     };
   }
 
@@ -48,13 +45,17 @@ export function createLogger(): winston.Logger {
         let metaStr = '';
         if (metaKeys.length > 0) {
           // Pretty print meta objects
-          metaStr = ' ' + metaKeys.map(k => {
-            const v = meta[k];
-            if (typeof v === 'object' && v !== null) {
-              return `${k}=${JSON.stringify(v)}`;
-            }
-            return `${k}=${v}`;
-          }).join(' ');
+          metaStr =
+            ' ' +
+            metaKeys
+              .map((k) => {
+                const v = meta[k];
+                if (typeof v === 'object' && v !== null) {
+                  return `${k}=${JSON.stringify(v)}`;
+                }
+                return `${k}=${v}`;
+              })
+              .join(' ');
         }
         return `${timestamp} [${level}] ${message}${metaStr}`;
       })

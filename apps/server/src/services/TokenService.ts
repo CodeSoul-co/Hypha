@@ -30,7 +30,7 @@ class TokenService {
         record.modelId,
         record.promptTokens,
         record.completionTokens,
-        cacheHit,
+        cacheHit
       );
       const pricing = getModelPricing(record.modelId, record.modelProvider);
 
@@ -88,22 +88,14 @@ class TokenService {
    * Get user's recent usage records
    */
   async getRecentUsage(userId: string, limit: number = 50, skip: number = 0) {
-    return TokenUsageModel
-      .find({ userId })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    return TokenUsageModel.find({ userId }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
   }
 
   /**
    * Get usage records for a specific conversation
    */
   async getConversationUsage(conversationId: string) {
-    return TokenUsageModel
-      .find({ conversationId })
-      .sort({ createdAt: 1 })
-      .lean();
+    return TokenUsageModel.find({ conversationId }).sort({ createdAt: 1 }).lean();
   }
 
   /**

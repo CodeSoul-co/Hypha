@@ -36,7 +36,7 @@ router.get(
     const messages = await tempMemory.getMessages(
       sessionId,
       limit ? parseInt(limit as string) : undefined,
-      userId,
+      userId
     );
 
     // Get session info
@@ -50,7 +50,7 @@ router.get(
         ...sessionInfo,
       },
     });
-  }),
+  })
 );
 
 // Get all sessions for user
@@ -73,7 +73,7 @@ router.get(
       success: true,
       data: sessions,
     });
-  }),
+  })
 );
 
 // Clear temporary memory
@@ -97,7 +97,7 @@ router.delete(
       success: true,
       message: 'Temporary memory cleared',
     });
-  }),
+  })
 );
 
 // Permanent Memory Routes
@@ -107,8 +107,7 @@ router.get(
   '/permanent',
   asyncHandler(async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { page, pageSize, agentId, isArchived, startDate, endDate } =
-      req.query;
+    const { page, pageSize, agentId, isArchived, startDate, endDate } = req.query;
 
     if (!userId) {
       return res.status(401).json({
@@ -131,7 +130,7 @@ router.get(
       success: true,
       data: conversations,
     });
-  }),
+  })
 );
 
 // Get conversation
@@ -162,7 +161,7 @@ router.get(
       success: true,
       data: conversation,
     });
-  }),
+  })
 );
 
 // Get conversation messages
@@ -199,7 +198,7 @@ router.get(
       success: true,
       data: messages,
     });
-  }),
+  })
 );
 
 // Create conversation
@@ -207,8 +206,7 @@ router.post(
   '/permanent',
   asyncHandler(async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { sessionId, agentId, modelId, modelProvider, title, tags } =
-      req.body;
+    const { sessionId, agentId, modelId, modelProvider, title, tags } = req.body;
 
     if (!userId) {
       return res.status(401).json({
@@ -233,7 +231,7 @@ router.post(
       success: true,
       data: conversation,
     });
-  }),
+  })
 );
 
 // Update conversation
@@ -277,7 +275,7 @@ router.put(
       success: true,
       data: conversation,
     });
-  }),
+  })
 );
 
 // Delete conversation
@@ -316,7 +314,7 @@ router.delete(
       success: true,
       message: 'Conversation deleted',
     });
-  }),
+  })
 );
 
 // Search conversations
@@ -344,20 +342,16 @@ router.get(
     }
 
     const permanentMemory = getPermanentMemory();
-    const results = await permanentMemory.searchConversations(
-      userId,
-      q as string,
-      {
-        page: page ? parseInt(page as string) : 1,
-        pageSize: pageSize ? parseInt(pageSize as string) : 20,
-      },
-    );
+    const results = await permanentMemory.searchConversations(userId, q as string, {
+      page: page ? parseInt(page as string) : 1,
+      pageSize: pageSize ? parseInt(pageSize as string) : 20,
+    });
 
     res.json({
       success: true,
       data: results,
     });
-  }),
+  })
 );
 
 // Search messages
@@ -394,7 +388,7 @@ router.get(
       success: true,
       data: results,
     });
-  }),
+  })
 );
 
 // Get memory stats
@@ -417,7 +411,7 @@ router.get(
       success: true,
       data: stats,
     });
-  }),
+  })
 );
 
 export default router;

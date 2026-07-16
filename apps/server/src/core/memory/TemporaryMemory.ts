@@ -36,7 +36,7 @@ export class TemporaryMemory implements TempMemoryOptions {
 
   async addMessage(
     sessionId: string,
-    message: Omit<TempMessage, 'id' | 'timestamp'>,
+    message: Omit<TempMessage, 'id' | 'timestamp'>
   ): Promise<void> {
     const redis = getRedisClient();
     if (!redis) {
@@ -75,7 +75,7 @@ export class TemporaryMemory implements TempMemoryOptions {
       'timestamp',
       messageData.timestamp.toISOString(),
       'metadata',
-      JSON.stringify(messageData.metadata || {}),
+      JSON.stringify(messageData.metadata || {})
     );
 
     // Set TTL on the key
@@ -94,17 +94,12 @@ export class TemporaryMemory implements TempMemoryOptions {
       sessionId,
       messageId: id,
       role: message.role,
-      contentPreview:
-        message.content.substring(0, 50) +
-        (message.content.length > 50 ? '...' : ''),
+      contentPreview: message.content.substring(0, 50) + (message.content.length > 50 ? '...' : ''),
       durationMs: duration,
     });
   }
 
-  private async enforceLimit(
-    sessionId: string,
-    userId?: string,
-  ): Promise<void> {
+  private async enforceLimit(sessionId: string, userId?: string): Promise<void> {
     const redis = getRedisClient();
     if (!redis) return;
 
@@ -127,11 +122,7 @@ export class TemporaryMemory implements TempMemoryOptions {
     }
   }
 
-  async getMessages(
-    sessionId: string,
-    limit?: number,
-    userId?: string,
-  ): Promise<TempMessage[]> {
+  async getMessages(sessionId: string, limit?: number, userId?: string): Promise<TempMessage[]> {
     const redis = getRedisClient();
     if (!redis) {
       throw new Error('Redis client not initialized');
@@ -208,7 +199,7 @@ export class TemporaryMemory implements TempMemoryOptions {
 
   async getSessionInfo(
     sessionId: string,
-    userId?: string,
+    userId?: string
   ): Promise<{
     messageCount: number;
     oldestTimestamp?: Date;

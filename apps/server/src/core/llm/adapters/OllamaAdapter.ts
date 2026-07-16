@@ -1,5 +1,13 @@
 import axios, { AxiosInstance } from 'axios';
-import { ILLMAdapter, ChatOptions, ChatResponse, LLMMessage, StreamChunk, ToolDefinition, ModelInfo } from '../types';
+import {
+  ILLMAdapter,
+  ChatOptions,
+  ChatResponse,
+  LLMMessage,
+  StreamChunk,
+  ToolDefinition,
+  ModelInfo,
+} from '../types';
 import { logger } from '../../../utils/logger';
 
 export class OllamaAdapter implements ILLMAdapter {
@@ -45,7 +53,7 @@ export class OllamaAdapter implements ILLMAdapter {
 
     const model = options?.model || this.availableModels[0] || 'llama2';
 
-    const requestMessages = messages.map(msg => ({
+    const requestMessages = messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
@@ -72,11 +80,13 @@ export class OllamaAdapter implements ILLMAdapter {
         content: data.message?.content || '',
         role: 'assistant',
         finishReason: data.done ? 'stop' : 'length',
-        usage: data.eval_count ? {
-          inputTokens: data.prompt_eval_count || 0,
-          outputTokens: data.eval_count || 0,
-          totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
-        } : undefined,
+        usage: data.eval_count
+          ? {
+              inputTokens: data.prompt_eval_count || 0,
+              outputTokens: data.eval_count || 0,
+              totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+            }
+          : undefined,
         raw: data,
       };
     } catch (error: any) {
@@ -90,25 +100,29 @@ export class OllamaAdapter implements ILLMAdapter {
 
     const model = options?.model || this.availableModels[0] || 'llama2';
 
-    const requestMessages = messages.map(msg => ({
+    const requestMessages = messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
     try {
-      const response = await this.client!.post('/api/chat', {
-        model,
-        messages: requestMessages,
-        stream: true,
-        options: {
-          temperature: options?.temperature,
-          num_predict: options?.maxTokens,
-          top_p: options?.topP,
-          stop: options?.stopSequences,
+      const response = await this.client!.post(
+        '/api/chat',
+        {
+          model,
+          messages: requestMessages,
+          stream: true,
+          options: {
+            temperature: options?.temperature,
+            num_predict: options?.maxTokens,
+            top_p: options?.topP,
+            stop: options?.stopSequences,
+          },
         },
-      }, {
-        responseType: 'stream',
-      });
+        {
+          responseType: 'stream',
+        }
+      );
 
       let fullContent = '';
 
@@ -126,11 +140,13 @@ export class OllamaAdapter implements ILLMAdapter {
               type: 'done',
               content: fullContent,
               finishReason: 'stop',
-              usage: data.eval_count ? {
-                inputTokens: data.prompt_eval_count || 0,
-                outputTokens: data.eval_count || 0,
-                totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
-              } : undefined,
+              usage: data.eval_count
+                ? {
+                    inputTokens: data.prompt_eval_count || 0,
+                    outputTokens: data.eval_count || 0,
+                    totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+                  }
+                : undefined,
             };
           }
         } catch (parseError) {
@@ -143,7 +159,11 @@ export class OllamaAdapter implements ILLMAdapter {
     }
   }
 
-  async createToolCall(messages: LLMMessage[], tools: ToolDefinition[], options?: ChatOptions): Promise<ChatResponse> {
+  async createToolCall(
+    messages: LLMMessage[],
+    tools: ToolDefinition[],
+    options?: ChatOptions
+  ): Promise<ChatResponse> {
     // Ollama has limited tool calling support
     // We'll simulate it with a regular chat
     logger.warn('Ollama does not natively support tool calling. Using regular chat.');
@@ -199,7 +219,7 @@ export class OllamaAdapter implements ILLMAdapter {
     ];
 
     // Add any models discovered from Ollama
-    const discoveredModels = this.availableModels.map(name => ({
+    const discoveredModels = this.availableModels.map((name) => ({
       id: name,
       name,
       provider: this.provider,
@@ -219,7 +239,7 @@ export class OllamaAdapter implements ILLMAdapter {
 
   async getModel(modelId: string): Promise<ModelInfo | null> {
     const models = await this.listModels();
-    return models.find(m => m.id === modelId) || null;
+    return models.find((m) => m.id === modelId) || null;
   }
 
   async healthCheck(): Promise<boolean> {

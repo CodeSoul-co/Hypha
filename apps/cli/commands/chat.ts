@@ -55,7 +55,9 @@ async function readStdin(): Promise<string> {
   return new Promise<string>((resolve) => {
     let buf = '';
     process.stdin.setEncoding('utf-8');
-    process.stdin.on('data', (c) => { buf += c; });
+    process.stdin.on('data', (c) => {
+      buf += c;
+    });
     process.stdin.on('end', () => resolve(buf));
   });
 }
@@ -66,11 +68,13 @@ async function runBlocking(body: any, session: string): Promise<void> {
     // data shape: { sessionId, content, model, provider, usage, toolCalls }
     process.stdout.write(data.content);
     if (!data.content.endsWith('\n')) process.stdout.write('\n');
-    process.stderr.write(chalk.gray(
-      `\n[${data.model}/${data.provider} • session=${data.sessionId}` +
-      ` • in=${data.usage?.inputTokens ?? 0} out=${data.usage?.outputTokens ?? 0}` +
-      ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}]\n`,
-    ));
+    process.stderr.write(
+      chalk.gray(
+        `\n[${data.model}/${data.provider} • session=${data.sessionId}` +
+          ` • in=${data.usage?.inputTokens ?? 0} out=${data.usage?.outputTokens ?? 0}` +
+          ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}]\n`
+      )
+    );
   } catch (err: any) {
     console.error(chalk.red(`✗ ${err.message}`));
     process.exit(1);
@@ -80,7 +84,10 @@ async function runBlocking(body: any, session: string): Promise<void> {
 async function runStream(body: any, session: string): Promise<void> {
   const { getBaseUrl } = await import('../config');
   const token = getToken();
-  if (!token) { console.error(chalk.red('✗ Not logged in.')); process.exit(1); }
+  if (!token) {
+    console.error(chalk.red('✗ Not logged in.'));
+    process.exit(1);
+  }
 
   try {
     const response = await axios.post(`${getBaseUrl()}/chat/stream`, body, {
@@ -106,14 +113,16 @@ async function runStream(body: any, session: string): Promise<void> {
               if (m.type === 'content' && m.content) {
                 process.stdout.write(m.content);
               } else if (m.type === 'done') {
-                tokens.in  = m.usage?.inputTokens  ?? tokens.in;
+                tokens.in = m.usage?.inputTokens ?? tokens.in;
                 tokens.out = m.usage?.outputTokens ?? tokens.out;
                 tokens.hit = m.usage?.cacheHitTokens ?? tokens.hit;
                 tokens.model = m.model || tokens.model;
               } else if (m.type === 'error') {
                 process.stderr.write(chalk.red(`\n✗ ${m.error || 'stream error'}\n`));
               }
-            } catch { /* ignore partial line */ }
+            } catch {
+              /* ignore partial line */
+            }
           }
         }
       });
@@ -121,10 +130,12 @@ async function runStream(body: any, session: string): Promise<void> {
       response.data.on('error', (e: Error) => reject(e));
     });
     if (!buffer.endsWith('\n')) process.stdout.write('\n');
-    process.stderr.write(chalk.gray(
-      `\n[${tokens.model || body.model || '?'} • session=${session}` +
-      ` • in=${tokens.in} out=${tokens.out} • cacheHit=${tokens.hit}]\n`,
-    ));
+    process.stderr.write(
+      chalk.gray(
+        `\n[${tokens.model || body.model || '?'} • session=${session}` +
+          ` • in=${tokens.in} out=${tokens.out} • cacheHit=${tokens.hit}]\n`
+      )
+    );
   } catch (err: any) {
     console.error(chalk.red(`✗ ${err.message}`));
     process.exit(1);

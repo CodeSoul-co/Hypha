@@ -75,7 +75,11 @@ export interface IWorkflowEngine {
   unloadWorkflow(name: string, version?: string): void;
   getWorkflow(name: string, version?: string): WorkflowDefinition | null;
   listWorkflows(): WorkflowDefinition[];
-  execute(workflowName: string, context: WorkflowExecutionContext, version?: string): Promise<WorkflowExecution>;
+  execute(
+    workflowName: string,
+    context: WorkflowExecutionContext,
+    version?: string
+  ): Promise<WorkflowExecution>;
   cancel(executionId: string): Promise<void>;
 }
 

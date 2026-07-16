@@ -39,52 +39,54 @@ export interface ITokenUsageModel extends Model<ITokenUsage> {
 export const MODEL_PRICING: Record<string, { input: number; output: number; cacheHit?: number }> = {
   // Anthropic
   'claude-3-5-sonnet-20241022': { input: 3, output: 15 },
-  'claude-3-5-haiku-20241022':  { input: 0.8, output: 4 },
-  'claude-3-opus-20240229':     { input: 15, output: 75 },
-  'claude-3-sonnet-20240229':   { input: 3, output: 15 },
+  'claude-3-5-haiku-20241022': { input: 0.8, output: 4 },
+  'claude-3-opus-20240229': { input: 15, output: 75 },
+  'claude-3-sonnet-20240229': { input: 3, output: 15 },
 
   // OpenAI
-  'gpt-4o':           { input: 2.5, output: 10 },
-  'gpt-4-turbo':      { input: 10, output: 30 },
-  'gpt-4':            { input: 30, output: 60 },
-  'gpt-3.5-turbo':    { input: 0.5, output: 1.5 },
+  'gpt-4o': { input: 2.5, output: 10 },
+  'gpt-4-turbo': { input: 10, output: 30 },
+  'gpt-4': { input: 30, output: 60 },
+  'gpt-3.5-turbo': { input: 0.5, output: 1.5 },
 
   // Google
-  'gemini-2.0-flash':  { input: 0, output: 0.1 },
-  'gemini-1.5-pro':    { input: 1.25, output: 5 },
-  'gemini-1.5-flash':  { input: 0.075, output: 0.3 },
+  'gemini-2.0-flash': { input: 0, output: 0.1 },
+  'gemini-1.5-pro': { input: 1.25, output: 5 },
+  'gemini-1.5-flash': { input: 0.075, output: 0.3 },
 
   // DeepSeek (CNY→USD at ~7:1, official 2026/06 pricing)
   //   v4-flash: ¥1 in (miss) / ¥0.02 in (cache hit) / ¥2 out per M
   //   v4-pro:   ¥3 in (miss) / ¥0.025 in (cache hit) / ¥6 out per M
   //   Legacy deepseek-chat/reasoner alias to v4-flash, deprecated 2026/07/24
   'deepseek-v4-flash': { input: 0.14, output: 0.28, cacheHit: 0.0028 },
-  'deepseek-v4-pro':   { input: 0.42, output: 0.84, cacheHit: 0.0035 },
-  'deepseek-chat':     { input: 0.14, output: 0.28, cacheHit: 0.0028 },
+  'deepseek-v4-pro': { input: 0.42, output: 0.84, cacheHit: 0.0035 },
+  'deepseek-chat': { input: 0.14, output: 0.28, cacheHit: 0.0028 },
   'deepseek-reasoner': { input: 0.14, output: 0.28, cacheHit: 0.0028 },
-  'deepseek-coder':    { input: 0.14, output: 0.28, cacheHit: 0.0028 },
+  'deepseek-coder': { input: 0.14, output: 0.28, cacheHit: 0.0028 },
 
   // Ollama (free, local)
-  'llama2':            { input: 0, output: 0 },
-  'llama3':            { input: 0, output: 0 },
-  'mistral':           { input: 0, output: 0 },
-  'codellama':         { input: 0, output: 0 },
-  'phi3':              { input: 0, output: 0 },
+  llama2: { input: 0, output: 0 },
+  llama3: { input: 0, output: 0 },
+  mistral: { input: 0, output: 0 },
+  codellama: { input: 0, output: 0 },
+  phi3: { input: 0, output: 0 },
 
   // SiliconFlow (OpenAI compatible)
-  'Qwen/Qwen2.5-7B-Instruct': { input: 0, output: 0 },  // free tier
-  'Qwen/Qwen3-32B':           { input: 0, output: 0 },  // free tier
-  'deepseek-ai/DeepSeek-V2.5': { input: 0, output: 0 },  // free tier
-  'THUDM/glm-4-9b-chat':       { input: 0, output: 0 },  // free tier
+  'Qwen/Qwen2.5-7B-Instruct': { input: 0, output: 0 }, // free tier
+  'Qwen/Qwen3-32B': { input: 0, output: 0 }, // free tier
+  'deepseek-ai/DeepSeek-V2.5': { input: 0, output: 0 }, // free tier
+  'THUDM/glm-4-9b-chat': { input: 0, output: 0 }, // free tier
 
   // OpenAI Compatible
-  'moonshot-v1-8k':    { input: 1, output: 2 },
-  'moonshot-v1-32k':   { input: 1, output: 2 },
-  'moonshot-v1-128k':  { input: 1, output: 2 },
+  'moonshot-v1-8k': { input: 1, output: 2 },
+  'moonshot-v1-32k': { input: 1, output: 2 },
+  'moonshot-v1-128k': { input: 1, output: 2 },
 };
 
-export function getModelPricing(modelId: string, _provider: string):
-  { input: number; output: number; cacheHit: number } {
+export function getModelPricing(
+  modelId: string,
+  _provider: string
+): { input: number; output: number; cacheHit: number } {
   if (MODEL_PRICING[modelId]) {
     const p = MODEL_PRICING[modelId];
     return { input: p.input, output: p.output, cacheHit: p.cacheHit ?? p.input };
@@ -97,7 +99,7 @@ export function calculateCost(
   modelId: string,
   promptTokens: number,
   completionTokens: number,
-  cacheHitTokens: number = 0,
+  cacheHitTokens: number = 0
 ): { promptCost: number; completionCost: number; totalCost: number } {
   const pricing = getModelPricing(modelId, '');
 
@@ -105,7 +107,7 @@ export function calculateCost(
   // subtract the cached portion to avoid double-charging.
   const missTokens = Math.max(0, promptTokens - cacheHitTokens);
   const missCost = (missTokens / 1_000_000) * pricing.input;
-  const hitCost  = (cacheHitTokens / 1_000_000) * pricing.cacheHit;
+  const hitCost = (cacheHitTokens / 1_000_000) * pricing.cacheHit;
   const promptCost = missCost + hitCost;
   const completionCost = (completionTokens / 1_000_000) * pricing.output;
   return {
@@ -210,7 +212,11 @@ TokenUsageSchema.index({ userId: 1, modelId: 1, createdAt: -1 });
 TokenUsageSchema.index({ conversationId: 1, createdAt: -1 });
 
 // Static aggregation methods
-TokenUsageSchema.statics.getUserStats = async function (userId: string, startDate?: Date, endDate?: Date) {
+TokenUsageSchema.statics.getUserStats = async function (
+  userId: string,
+  startDate?: Date,
+  endDate?: Date
+) {
   const match: Record<string, any> = { userId };
   if (startDate || endDate) {
     match.createdAt = {};
@@ -232,16 +238,22 @@ TokenUsageSchema.statics.getUserStats = async function (userId: string, startDat
     },
   ]);
 
-  return stats[0] || {
-    totalPromptTokens: 0,
-    totalCompletionTokens: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    requestCount: 0,
-  };
+  return (
+    stats[0] || {
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      requestCount: 0,
+    }
+  );
 };
 
-TokenUsageSchema.statics.getUserStatsByModel = async function (userId: string, startDate?: Date, endDate?: Date) {
+TokenUsageSchema.statics.getUserStatsByModel = async function (
+  userId: string,
+  startDate?: Date,
+  endDate?: Date
+) {
   const match: Record<string, any> = { userId };
   if (startDate || endDate) {
     match.createdAt = {};
@@ -289,6 +301,9 @@ TokenUsageSchema.statics.getDailyStats = async function (userId: string, days: n
   ]);
 };
 
-export const TokenUsageModel = mongoose.model<ITokenUsage, ITokenUsageModel>('TokenUsage', TokenUsageSchema);
+export const TokenUsageModel = mongoose.model<ITokenUsage, ITokenUsageModel>(
+  'TokenUsage',
+  TokenUsageSchema
+);
 
 export default TokenUsageModel;

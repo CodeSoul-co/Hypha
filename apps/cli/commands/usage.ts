@@ -25,8 +25,8 @@ export function registerUsage(program: Command): void {
           for (const m of data.byModel) {
             console.log(
               `  ${m.modelId.padEnd(28)} prov=${chalk.gray(m.modelProvider.padEnd(12))} ` +
-              `tokens=${chalk.cyan(String(m.totalTokens).padStart(6))} ` +
-              `cost=$${(m.totalCost || 0).toFixed(6)} reqs=${m.requestCount}`,
+                `tokens=${chalk.cyan(String(m.totalTokens).padStart(6))} ` +
+                `cost=$${(m.totalCost || 0).toFixed(6)} reqs=${m.requestCount}`
             );
           }
         }
@@ -37,7 +37,9 @@ export function registerUsage(program: Command): void {
           // not the raw aggregation `{_id: {year, month, day}}` shape.
           for (const d of data.daily.slice(-7)) {
             const day = d.date || '—';
-            console.log(`  ${day}  tokens=${String(d.totalTokens).padStart(6)}  cost=$${(d.totalCost || 0).toFixed(6)}  reqs=${d.requestCount}`);
+            console.log(
+              `  ${day}  tokens=${String(d.totalTokens).padStart(6)}  cost=$${(d.totalCost || 0).toFixed(6)}  reqs=${d.requestCount}`
+            );
           }
         }
       } catch (err: any) {
@@ -54,10 +56,12 @@ export function registerUsage(program: Command): void {
         const data = await apiGet<any[]>('/usage/pricing');
         console.log(chalk.bold('Pricing (USD per 1M tokens)'));
         for (const p of data) {
-          const hit = p.cacheHitPricePerM !== undefined && p.cacheHitPricePerM !== p.inputPricePerM
-            ? `  cacheHit=$${p.cacheHitPricePerM}` : '';
+          const hit =
+            p.cacheHitPricePerM !== undefined && p.cacheHitPricePerM !== p.inputPricePerM
+              ? `  cacheHit=$${p.cacheHitPricePerM}`
+              : '';
           console.log(
-            `  ${p.modelId.padEnd(28)}  in=$${p.inputPricePerM}/M  out=$${p.outputPricePerM}/M${hit}`,
+            `  ${p.modelId.padEnd(28)}  in=$${p.inputPricePerM}/M  out=$${p.outputPricePerM}/M${hit}`
           );
         }
       } catch (err: any) {
