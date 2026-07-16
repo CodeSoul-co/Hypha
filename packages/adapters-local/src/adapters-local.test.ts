@@ -9,6 +9,10 @@ import {
   SQLiteEventStore,
   SQLiteStructuredStore,
   createLocalStorageBackbone,
+  ArtifactStoreToolPort,
+  FileMCPCapabilityCatalogStore,
+  FileToolContractSnapshotStore,
+  FileToolObservationStore,
 } from './index';
 import { createFrameworkEvent } from '@hypha/core';
 import fs from 'fs';
@@ -16,6 +20,68 @@ import os from 'os';
 import path from 'path';
 
 describe('@hypha/adapters-local reference providers', () => {
+  it('persists MCP catalog revisions, Tool snapshots, and artifactized Tool output', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-tool-bindings-'));
+    const catalog = new FileMCPCapabilityCatalogStore(path.join(root, 'mcp-catalog.json'));
+    await catalog.save({
+      id: 'server:tool:search:hash-1',
+      serverId: 'server',
+      kind: 'tool',
+      remoteName: 'search',
+      stableToolId: 'mcp.server.search',
+      capabilityHash: 'hash-1',
+      descriptorHash: 'descriptor-1',
+      descriptor: {},
+      trust: { level: 'restricted', source: 'runtime_discovery' },
+      driftState: 'approved',
+      firstSeenAt: '2026-07-16T00:00:00.000Z',
+      lastSeenAt: '2026-07-16T00:00:00.000Z',
+    });
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { capabilityHash: 'hash-1', stableToolId: 'mcp.server.search' },
+    ]);
+
+    const snapshots = new FileToolContractSnapshotStore(path.join(root, 'snapshots'));
+    await snapshots.save({
+      id: 'snapshot-1',
+      runId: 'run-1',
+      createdAt: '2026-07-16T00:00:00.000Z',
+      toolContracts: [],
+      snapshotHash: 'snapshot-hash-1',
+    });
+    await expect(snapshots.get('snapshot-1')).resolves.toMatchObject({ runId: 'run-1' });
+
+    const artifacts = new InMemoryArtifactStore();
+    const artifactRef = await new ArtifactStoreToolPort(artifacts).store({
+      invocationId: 'invocation-1',
+      toolId: 'tool.large-output',
+      value: { rows: [1, 2, 3] },
+    });
+    expect(artifactRef).toContain('tool-results/tool.large-output/invocation-1.json');
+
+    const observationRoot = path.join(root, 'observations');
+    const observationRef = await new FileToolObservationStore(observationRoot).record({
+      invocationId: 'invocation-1',
+      toolId: 'tool.large-output',
+      toolRevision: 'revision-1',
+      runId: 'run-1',
+      stepId: 'tool',
+      inputHash: 'input-hash',
+      outputHash: 'output-hash',
+      value: { artifactRef },
+      artifactRefs: [artifactRef],
+      provenance: { source: 'local', contractSnapshotRef: 'snapshot-1' },
+    });
+    expect(observationRef).toMatch(/^observation:/);
+    const observation = JSON.parse(
+      fs.readFileSync(path.join(observationRoot, fs.readdirSync(observationRoot)[0]), 'utf-8')
+    );
+    expect(observation).toMatchObject({
+      id: observationRef,
+      invocationId: 'invocation-1',
+      provenance: { contractSnapshotRef: 'snapshot-1' },
+    });
+  });
   it('stores structured records, vectors, and artifacts locally', async () => {
     const structured = new InMemoryStructuredStore();
     await structured.insert('runs', { id: 'run_1', status: 'completed' });

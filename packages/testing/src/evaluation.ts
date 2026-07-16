@@ -621,8 +621,25 @@ function checkLifecyclePairs(events: FrameworkEvent[]): EvaluationCheckResult[] 
       'tool.call.failed',
       'tool.call.timeout',
       'tool.call.rejected',
+      'tool.call.cancelled',
     ]),
     ...checkPhasePair(events, 'mcp.call.started', ['mcp.call.completed', 'mcp.call.failed']),
+    ...checkPhasePair(events, 'mcp.request.started', [
+      'mcp.request.completed',
+      'mcp.request.failed',
+      'mcp.request.cancelled',
+    ]),
+    ...checkPhasePair(events, 'human.review.requested', [
+      'human.review.approved',
+      'human.review.rejected',
+      'human.review.expired',
+      'human.review.cancelled',
+    ]),
+    ...checkPhasePair(events, 'mcp.capability.drift.detected', [
+      'mcp.catalog.refreshed',
+      'mcp.capability.quarantined',
+      'mcp.capability.approved',
+    ]),
     ...checkPhasePair(events, 'memory.read.requested', [
       'memory.read.completed',
       'memory.read.failed',
