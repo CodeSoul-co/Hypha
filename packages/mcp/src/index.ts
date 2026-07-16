@@ -130,6 +130,8 @@ export interface MCPGateway {
   discover(integration: MCPIntegrationSpec): Promise<MCPCapabilityDescriptor[]>;
   normalize(capability: MCPCapabilityDescriptor): Promise<NormalizedMCPCapability>;
   call(request: MCPToolCallRequest): Promise<unknown>;
+  /** @deprecated Use call(). Kept for adapters migrating from the classic gateway contract. */
+  callTool?(request: MCPToolCallRequest): Promise<unknown>;
   readResource?(request: MCPResourceReadRequest): Promise<MCPResourceResult>;
   getPrompt?(request: MCPPromptRequest): Promise<MCPPromptResult>;
   health(serverId?: string): Promise<Record<string, import('@hypha/tools').ProviderHealth>>;
@@ -189,6 +191,10 @@ export class MockMCPGateway implements MCPGateway {
       input: request.input,
       ok: true,
     };
+  }
+
+  async callTool(request: MCPToolCallRequest): Promise<unknown> {
+    return this.call(request);
   }
 
   async readResource(request: MCPResourceReadRequest): Promise<MCPResourceResult> {

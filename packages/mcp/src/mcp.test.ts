@@ -61,6 +61,21 @@ describe('@hypha/mcp normalization', () => {
     });
   });
 
+  it('keeps the classic callTool gateway alias during adapter migration', async () => {
+    const gateway = new MockMCPGateway();
+    gateway.registerToolHandler('local', 'search', ({ input }) => ({ input }));
+    const request = {
+      serverId: 'local',
+      capabilityId: 'search',
+      input: { query: 'hypha' },
+      context: { runId: 'run_compat', stepId: 'search' },
+    };
+
+    await expect(gateway.callTool(request)).resolves.toEqual({
+      input: { query: 'hypha' },
+    });
+  });
+
   it('exports MCPIntegrationSpec schema and minimal example', () => {
     expect(validateMCPIntegrationSpec(mcpIntegrationSpecDefinition.example).id).toBe('mcp.default');
     expect(mcpSpecJsonSchemas.MCPIntegrationSpec.required).toContain('servers');
