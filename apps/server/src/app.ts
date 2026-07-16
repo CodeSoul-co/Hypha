@@ -7,32 +7,12 @@ import http from 'http';
 
 import { getConfig } from './config';
 import { logger } from './utils/logger';
-import {
-  initializeDatabases,
-  closeDatabases,
-  checkStorageHealth,
-} from './services/database';
-import {
-  initializeLLM,
-  destroyLLM,
-  getLLMManager,
-} from './core/llm/LLMFactory';
-import {
-  initializeSkillManager,
-  destroySkillManager,
-} from './core/skills/SkillManager';
-import {
-  initializeToolManager,
-  destroyToolManager,
-} from './core/tools/ToolManager';
-import {
-  initializeWorkflowEngine,
-  destroyWorkflowEngine,
-} from './core/workflow/WorkflowEngine';
-import {
-  initializePromptManager,
-  destroyPromptManager,
-} from './core/prompts/PromptManager';
+import { initializeDatabases, closeDatabases, checkStorageHealth } from './services/database';
+import { initializeLLM, destroyLLM, getLLMManager } from './core/llm/LLMFactory';
+import { initializeSkillManager, destroySkillManager } from './core/skills/SkillManager';
+import { initializeToolManager, destroyToolManager } from './core/tools/ToolManager';
+import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow/WorkflowEngine';
+import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
 import { getTemporaryMemory } from './core/memory/TemporaryMemory';
 import { getPermanentMemory } from './core/memory/PermanentMemory';
 import {
@@ -50,6 +30,7 @@ import {
   rateLimitHandler,
 } from './middleware/errorHandler';
 import { HTTP_STATUS } from './constants';
+import { getEventRuntime } from './services/EventRuntime';
 
 class Application {
   private app: Express;
@@ -82,7 +63,7 @@ class Application {
     this.app.use(
       helmet({
         contentSecurityPolicy: false, // Disable for API
-      }),
+      })
     );
 
     // CORS
@@ -91,7 +72,7 @@ class Application {
         origin: '*', // Configure for production
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
-      }),
+      })
     );
 
     // Compression
@@ -167,6 +148,9 @@ class Application {
     // Initialize Tool Manager
     await initializeToolManager();
 
+    // Recover persisted Tool invocations after their adapters are available.
+    await getEventRuntime().recoverToolInvocations();
+
     // Initialize Workflow Engine
     await initializeWorkflowEngine();
 
@@ -199,7 +183,7 @@ class Application {
 
     if (available.length === 0) {
       logger.warn(
-        'No LLM providers initialized — chat endpoints will fail until an API key is configured.',
+        'No LLM providers initialized — chat endpoints will fail until an API key is configured.'
       );
       return;
     }
@@ -208,7 +192,7 @@ class Application {
       const fallback = available[0];
       logger.warn(
         `Configured defaultProvider="${wanted}" is not initialized (missing API key?). ` +
-          `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`,
+          `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`
       );
       await llm.setDefaultProvider(fallback);
     }
@@ -237,8 +221,7 @@ class Application {
   private async startupHealthCheck(host: string, port: number): Promise<void> {
     const baseUrl = `http://${host}:${port}`;
     const apiBase = `${baseUrl}${this.config.app.apiPrefix}`;
-    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] =
-      [];
+    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] = [];
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     logger.info('🔍  Starting health checks...');
@@ -330,9 +313,7 @@ class Application {
           status: 'fail',
           detail: 'No providers available',
         });
-        logger.warn(
-          '  ⚠️  LLM         │ No providers available (check API keys)',
-        );
+        logger.warn('  ⚠️  LLM         │ No providers available (check API keys)');
       }
     } catch (err) {
       checks.push({
@@ -349,9 +330,7 @@ class Application {
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     if (failed === 0) {
-      logger.info(
-        `🚀  All systems ready! (${passed}/${checks.length} checks passed)`,
-      );
+      logger.info(`🚀  All systems ready! (${passed}/${checks.length} checks passed)`);
       logger.info(`📖  API Docs: ${apiBase}/docs`);
       logger.info(`📊  Status:   ${apiBase}/status/page`);
       logger.info(`💰  Usage:    ${apiBase}/usage/page`);
@@ -367,9 +346,7 @@ class Application {
               const ownerToken = await getSingleUserToken();
               if (ownerToken) {
                 logger.info('');
-                logger.info(
-                  `    Client usage: POST ${apiBase}/dev/token returns token`,
-                );
+                logger.info(`    Client usage: POST ${apiBase}/dev/token returns token`);
                 logger.info('    Credentials and tokens are intentionally not printed.');
               }
             }
@@ -390,9 +367,7 @@ class Application {
               const devToken = await getDevTestToken();
               if (devToken) {
                 logger.info('');
-                logger.info(
-                  `    Client usage: POST ${apiBase}/dev/token returns token`,
-                );
+                logger.info(`    Client usage: POST ${apiBase}/dev/token returns token`);
                 logger.info('    Credentials and tokens are intentionally not printed.');
               }
             }
@@ -402,9 +377,7 @@ class Application {
         }
       }
     } else {
-      logger.warn(
-        `⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`,
-      );
+      logger.warn(`⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`);
       logger.warn(`🔧  Review logs above for details`);
     }
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

@@ -40,48 +40,68 @@ describe('EventRuntime WorkCache integration', () => {
 
   it('derives ToolTree blocks from governed read-only tool completion events', async () => {
     const { getEventRuntime } = await import('./EventRuntime');
+    const { getToolManager } = await import('../core/tools/ToolManager');
     const runtime = getEventRuntime();
-    const handle = await runtime.startRun({
-      userId: 'workcache-user',
-      sessionId: 'workcache-session',
-      input: { purpose: 'workcache-tool-tree-test' },
-    });
-
-    const result = await runtime.runGovernedToolResult({
-      runId: handle.runId,
-      stepId: 'tool-step',
-      userId: 'workcache-user',
-      sessionId: 'workcache-session',
-      toolId: 'fixture.read',
-      toolSpec: {
-        sideEffectLevel: 'read',
-        permissionScope: ['fixture.read'],
+    const toolManager = getToolManager();
+    await toolManager.register({
+      id: 'fixture.read',
+      name: 'fixture.read',
+      description: 'Read-only WorkCache integration fixture.',
+      schema: {
+        name: 'fixture.read',
+        description: 'Read-only WorkCache integration fixture.',
         inputSchema: {
           type: 'object',
           properties: { query: { type: 'string' } },
           required: ['query'],
         },
       },
-      params: { query: 'hypha' },
-      handler: async () => ({
-        value: 'ok',
-        validity: { sourceHashes: { query: 'query-hash' } },
-      }),
+      governance: {
+        sideEffectLevel: 'read',
+        permissionScope: ['fixture.read'],
+      },
+      async execute() {
+        return {
+          success: true,
+          output: {
+            value: 'ok',
+            validity: { sourceHashes: { query: 'query-hash' } },
+          },
+        };
+      },
+    });
+    const handle = await runtime.startRun({
+      userId: 'workcache-user',
+      sessionId: 'workcache-session',
+      input: { purpose: 'workcache-tool-tree-test' },
     });
 
-    expect(result.status).toBe('completed');
-    const events = await runtime.listEvents(handle.runId);
-    const sourceIndex = events.findIndex((event) => event.type === 'tool.call.completed');
-    const workCacheIndex = events.findIndex((event) => {
-      const payload = event.payload as Record<string, unknown>;
-      return event.type === 'workcache.write' && payload.treeType === 'ToolTree';
-    });
-    expect(sourceIndex).toBeGreaterThanOrEqual(0);
-    expect(workCacheIndex).toBeGreaterThan(sourceIndex);
-    expect(events[workCacheIndex]?.payload).toMatchObject({
-      sourceEventType: 'tool.call.completed',
-      treeType: 'ToolTree',
-    });
+    try {
+      const result = await runtime.runGovernedToolResult({
+        runId: handle.runId,
+        stepId: 'tool-step',
+        userId: 'workcache-user',
+        sessionId: 'workcache-session',
+        toolId: 'fixture.read',
+        params: { query: 'hypha' },
+      });
+
+      expect(result.status).toBe('completed');
+      const events = await runtime.listEvents(handle.runId);
+      const sourceIndex = events.findIndex((event) => event.type === 'tool.call.completed');
+      const workCacheIndex = events.findIndex((event) => {
+        const payload = event.payload as Record<string, unknown>;
+        return event.type === 'workcache.write' && payload.treeType === 'ToolTree';
+      });
+      expect(sourceIndex).toBeGreaterThanOrEqual(0);
+      expect(workCacheIndex).toBeGreaterThan(sourceIndex);
+      expect(events[workCacheIndex]?.payload).toMatchObject({
+        sourceEventType: 'tool.call.completed',
+        treeType: 'ToolTree',
+      });
+    } finally {
+      await toolManager.unregister('fixture.read');
+    }
   });
 
   it('keeps event projection order stable when events share the same wall-clock tick', async () => {
