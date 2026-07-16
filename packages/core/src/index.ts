@@ -5,6 +5,8 @@ export * from './errors';
 export * from './ids';
 export * from './contracts/execution';
 export * from './contracts/workspace';
+export * from './contracts/sandbox';
 export * from './modules/workspace';
 export * from './modules/workspace/operations';
 export * from './modules/workspace/snapshots';
+export * from './modules/execution-environment';
