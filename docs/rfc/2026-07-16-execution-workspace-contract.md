@@ -117,3 +117,31 @@ The first implementation is accepted when:
 - Artifact versioning, access, lineage, retention, and garbage collection;
 - Text2SQL contracts and execution policy;
 - DomainPack binding and WorkCache materialization.
+
+## Workspace Operation Contract Increment
+
+The second implementation increment adds path resolution and file-operation contracts without
+exposing a filesystem provider to an Agent. It introduces the request and result shapes needed for
+resolve, list, read, write, and delete operations, plus `ExecutionPrincipal`, `ProviderHealth`, and
+`FileMutation`.
+
+The engineering specification references `CreateWorkspaceRequest`, `WorkspaceListRequest`,
+`WorkspaceReadResult`, `WorkspaceDeleteRequest`, and several Snapshot/Diff/Patch request or result
+types without defining them. This increment defines only the non-Artifact-dependent file-operation
+shapes:
+
+- list requests use an optional relative directory, recursion flag, entry limit, and cursor;
+- reads use non-negative offsets and positive length/output limits;
+- writes require exactly one of inline `content` or `artifactRef` and retain optimistic concurrency
+  through `expectedContentHash`;
+- deletes retain optimistic concurrency and idempotency inputs;
+- every public path input uses the same relative-path validation boundary.
+
+Encoded or Unicode-normalized traversal is rejected at validation time. Provider implementations
+must still perform canonical path, link, and time-of-check/time-of-use verification because string
+validation alone is not a sandbox boundary.
+
+The complete `WorkspaceRuntime` interface remains deferred until the canonical Execution-owned
+`ArtifactRecord` is introduced. The repository currently has a Memory-local legacy `ArtifactRef`;
+Core must not depend on Memory, and Execution must not create a second conflicting shared
+`ArtifactRef` or modify Memory-owned implementation on the `execution` branch.

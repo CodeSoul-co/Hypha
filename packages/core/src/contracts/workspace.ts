@@ -1,5 +1,5 @@
 import type { SpecMetadata, SpecRef, VersionedSpec } from '../specs';
-import type { NormalizedExecutionError } from './execution';
+import type { ExecutionPrincipal, NormalizedExecutionError } from './execution';
 
 export interface WorkspaceDirectorySpec {
   inputs: string;
@@ -137,4 +137,110 @@ export interface WorkspaceEventPayload {
   files?: number;
   error?: NormalizedExecutionError;
   metadata?: Record<string, unknown>;
+}
+
+export type WorkspacePathOperation = 'read' | 'write' | 'execute' | 'delete' | 'list';
+export type WorkspaceEntryKind = 'file' | 'directory' | 'symlink' | 'other';
+export type WorkspacePermission = 'read' | 'write' | 'execute' | 'delete';
+
+export interface WorkspacePathRequest {
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  relativePath: string;
+  operation: WorkspacePathOperation;
+  allowMissing?: boolean;
+}
+
+export interface ResolvedWorkspacePath {
+  workspaceId: string;
+  relativePath: string;
+  canonicalRelativePath: string;
+  pathRef: string;
+  exists: boolean;
+  kind?: WorkspaceEntryKind;
+  permissions: WorkspacePermission[];
+  contentHash?: string;
+}
+
+export interface WorkspaceListRequest {
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  relativePath?: string;
+  recursive?: boolean;
+  includeHidden?: boolean;
+  maxEntries?: number;
+  cursor?: string;
+}
+
+export interface WorkspaceFileEntry {
+  relativePath: string;
+  kind: WorkspaceEntryKind;
+  sizeBytes?: number;
+  contentHash?: string;
+  modifiedAt?: string;
+  permissions?: WorkspacePermission[];
+}
+
+export interface WorkspaceReadRequest {
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  relativePath: string;
+  encoding?: 'utf8' | 'base64';
+  offset?: number;
+  length?: number;
+  maxBytes?: number;
+}
+
+export interface WorkspaceReadResult {
+  relativePath: string;
+  encoding: 'utf8' | 'base64';
+  content: string;
+  contentHash: string;
+  sizeBytes: number;
+  truncated?: boolean;
+  nextOffset?: number;
+}
+
+export interface WorkspaceWriteRequest {
+  operationId: string;
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  relativePath: string;
+  content?: string | Uint8Array;
+  artifactRef?: string;
+  mode: 'create' | 'overwrite' | 'append' | 'atomic_replace';
+  expectedContentHash?: string;
+  createParents?: boolean;
+  idempotencyKey?: string;
+}
+
+export interface FileMutation {
+  path: string;
+  operation: 'created' | 'modified' | 'deleted' | 'renamed' | 'permission_changed';
+  beforeHash?: string;
+  afterHash?: string;
+  beforeSizeBytes?: number;
+  afterSizeBytes?: number;
+  artifactRef?: string;
+  oldPath?: string;
+  detectedAt: string;
+}
+
+export interface WorkspaceWriteResult {
+  relativePath: string;
+  beforeHash?: string;
+  afterHash: string;
+  sizeBytes: number;
+  mutation: FileMutation;
+  artifactRef?: string;
+}
+
+export interface WorkspaceDeleteRequest {
+  operationId: string;
+  workspaceId: string;
+  principal: ExecutionPrincipal;
+  relativePath: string;
+  recursive?: boolean;
+  expectedContentHash?: string;
+  idempotencyKey?: string;
 }

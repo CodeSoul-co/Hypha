@@ -1,3 +1,22 @@
+export interface ProviderHealth {
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
+  checkedAt: string;
+  latencyMs?: number;
+  message?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface ExecutionPrincipal {
+  principalId: string;
+  type: 'user' | 'agent' | 'service' | 'system';
+  tenantId?: string;
+  userId?: string;
+  agentId?: string;
+  roles?: string[];
+  permissionScopes: string[];
+  metadata?: Record<string, unknown>;
+}
+
 export interface NormalizedExecutionError {
   code:
     | 'EXECUTION_INVALID_REQUEST'

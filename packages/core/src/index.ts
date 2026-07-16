@@ -6,3 +6,4 @@ export * from './ids';
 export * from './contracts/execution';
 export * from './contracts/workspace';
 export * from './modules/workspace';
+export * from './modules/workspace/operations';

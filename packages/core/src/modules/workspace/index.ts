@@ -23,13 +23,20 @@ export const workspaceRelativePathSchema = z
   .string()
   .min(1)
   .superRefine((value, context) => {
-    if (isAbsoluteLike(value)) {
+    const normalized = normalizePathForValidation(value);
+    if (!normalized.trim() || normalized.includes('\0')) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'must be a non-empty safe path',
+      });
+    }
+    if (isAbsoluteLike(normalized)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'must be a relative workspace path',
       });
     }
-    if (value.split(/[\\/]+/u).includes('..')) {
+    if (normalized.split(/[\\/]+/u).includes('..')) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'must not contain traversal segments',
@@ -389,6 +396,20 @@ export function validateWorkspaceSpec(input: unknown): WorkspaceSpec {
 
 function isAbsoluteLike(value: string): boolean {
   return value.startsWith('/') || value.startsWith('\\\\') || /^[a-zA-Z]:[\\/]/u.test(value);
+}
+
+function normalizePathForValidation(value: string): string {
+  let normalized = value.normalize('NFKC');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const decoded = decodeURIComponent(normalized);
+      if (decoded === normalized) break;
+      normalized = decoded.normalize('NFKC');
+    } catch {
+      break;
+    }
+  }
+  return normalized;
 }
 
 function normalizeExtension(value: string): string {
