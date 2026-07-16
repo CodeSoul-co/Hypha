@@ -37,3 +37,18 @@ tools:
           type: string
         limit:
           type: number
+
+  - id: utility.json
+    name: JSON Utility
+    description: Safely parse, stringify, inspect, and enumerate JSON values
+    enabled: true
+
+  - id: utility.text
+    name: Text Utility
+    description: Perform bounded deterministic text transformations and inspection
+    enabled: true
+
+  - id: utility.hash
+    name: Hash Utility
+    description: Compute SHA-256 for text or canonical JSON
+    enabled: true

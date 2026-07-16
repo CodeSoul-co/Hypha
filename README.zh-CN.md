@@ -29,7 +29,7 @@ hypha 采用 ReAct + FSM 执行模型。ReAct 描述 agent 的观察、推理、
 - `Run` 是 Session 下的一次具体执行实例。
 - `Event` 是最小事实记录。trace、replay、audit、regression 和 state projection 都从 events 派生。
 
-包级运行时提供 `FSMRuntime`、`ReActAgentRunner`、`RunManager` 和 `HarnessedReActFSMRunner`，用于执行带治理和 trace 的最小 agent 状态闭环。
+包级运行时提供 `FSMRuntime`、`ReActAgentRunner`、`RunManager` 和 `HarnessedReActFSMRunner`，用于执行带治理和 trace 的最小 agent 状态闭环。异常恢复同样由 FSM 显式管理：有界重试与熔断等待进入 `Recovering`，已提交副作用进入 `Compensating`，提交状态不确定的副作用进入 `Quarantined`。
 
 ## API 文档
 
@@ -82,6 +82,8 @@ Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`To
 动态 MCP capability 的连接状态、catalog、trust、drift、schema cache 与 Run contract snapshot 相互分离。运行中的 Run 使用不可变 snapshot，远端 capability 变化不会静默替换当前执行或 replay 使用的契约。
 
 参见 [Tool/MCP 架构](docs/architecture/tool-mcp.md)、[安全指南](docs/guides/tool-mcp-security.md) 与 [Adapter 指南](docs/guides/tool-adapters.md)。
+
+服务端内置受治理、无副作用的 `utility.json`、`utility.text` 与 `utility.hash`，用于有边界的 JSON 处理、字面文本变换和 SHA-256 指纹。参见[通用工具指南](docs/guides/common-utility-tools.md)与 [FSM 异常恢复架构](docs/architecture/fsm-recovery.md)。
 
 ## 受治理的 Execution 契约
 

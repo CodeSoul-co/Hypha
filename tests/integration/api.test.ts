@@ -254,11 +254,51 @@ describe('GET /api/v1/skills (bug 8)', () => {
 });
 
 describe('GET /api/v1/tools (bug 9)', () => {
-  it('includes built-in tools (filesystem, search)', async () => {
+  it('includes built-in filesystem, search, and common utility tools', async () => {
     const r = await request(app).get('/api/v1/tools').set('Authorization', `Bearer ${devToken}`);
     expect(r.status).toBe(200);
     const names = (r.body.data || []).map((t: any) => t.name);
-    expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'filesystem',
+        'search',
+        'utility.json',
+        'utility.text',
+        'utility.hash',
+      ])
+    );
+  });
+
+  it('executes a common utility through the governed runtime path', async () => {
+    const response = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'utility.hash', params: { operation: 'sha256_text', text: 'hypha' } });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toMatchObject({
+      algorithm: 'sha256',
+      encoding: 'hex',
+      inputBytes: 5,
+    });
+    expect(response.body.data.digest).toHaveLength(64);
+
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${response.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.status).toBe(200);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.completed',
+          payload: expect.objectContaining({
+            source: 'local',
+            sideEffectLevel: 'none',
+          }),
+        }),
+      ])
+    );
   });
 
   it('writes and executes an allowlisted file through governed runtime events', async () => {
