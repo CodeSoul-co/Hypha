@@ -12,24 +12,24 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 ## Package Boundary Summary
 
-| Package                 | Public Surface                                                                                                             |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                             |
-| `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.           |
-| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, timeout/retry/human-review helpers.                    |
-| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                              |
-| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.          |
-| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                          |
-| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.               |
-| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.           |
-| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, schema validation, side-effect governance.             |
-| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.        |
-| `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                         |
-| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                         |
-| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, message bus, queues, replay/audit/regression projections.       |
-| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                    |
-| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                |
+| Package                 | Public Surface                                                                                                                                     |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                     |
+| `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers.                         |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                   |
+| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers. |
+| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                      |
+| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                  |
+| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                  |
+| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                       |
+| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                    |
+| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.   |
+| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                |
+| `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                                                 |
+| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                 |
+| `@hypha/harness`        | Event-first runtime views, `RunManager`, ReAct/FSM runner, message bus, queues, replay/audit/regression projections.                               |
+| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                            |
+| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                        |
 
 Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
 
@@ -200,7 +200,7 @@ contain at least one item.
 | `states`         | `WorkflowStateSpec[]`      | State goals, contracts, policies, tools, skills, and timeouts. |
 | `transitions`    | `WorkflowTransitionSpec[]` | Allowed state transitions and guards.                          |
 
-`compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, and `terminalStates`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, and `updatedAt`.
+`compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, `terminalStates`, and an optional `recoveryPolicy`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, `updatedAt`, and optional persisted `recovery` counters/circuits.
 
 `WorkflowStateSpec.allowedSkills` narrows which agent-bound skills may activate
 in that state. `requiredSkills` declares skills that must be attached to the
@@ -209,9 +209,16 @@ also declares `allowedSkills`, every required skill must be included there. If
 a required skill is missing, unavailable, or denied by skill policy, context
 building fails before model inference.
 
-FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, and `canRetryState`. Guards support deterministic boolean literals, `default`, `else:<guard>`, variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and `matches(path, pattern)`. Transitions can be rejected by guards, policy, or human-review requirements.
+FSM runtime helpers include `applyTransitionWithRuntimePolicy`, `evaluateGuardExpression`, `evaluateStateTimeout`, `canRetryState`, and `validateFSMSnapshot`. Guards support deterministic boolean literals, `default`, `else:<guard>`, own-property variable paths, `!`, `&&`, `||`, equality, numeric comparison, `exists(path)`, and bounded `matches(path, pattern)`. Unsafe prototype paths, oversized expressions/input, invalid regex, backreferences, lookarounds, and high-risk nested quantifiers are rejected. Transitions can be rejected by guards, policy, or human-review requirements.
 
-`FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, `cancel(options)`, and `getSnapshot()`. Runtime callbacks `onTransition` and `onStateEntered` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
+`FSMRuntime` owns one `FSMSnapshot` for a run and exposes `start()`, `transition(to, options)`, `transitionPath(states, options)`, `cancel(options)`, `decideRecovery(anomaly, options)`, `registerRecoverySuccess(circuitKey)`, and `getSnapshot()`. Runtime callbacks `onTransition`, `onStateEntered`, and `onRecoveryDecision` allow harness code to record trace events without putting storage or event-log dependencies inside the FSM package.
+
+`classifyFSMAnomaly()` normalizes provider and framework errors. `planFSMRecovery()` returns a
+deterministic action without performing a hidden side effect. `runFSMRecoveryLoop()` from
+`@hypha/harness` executes the bounded state loop and suspends delayed retries unless a scheduler and
+inline delay budget are supplied. Actions are `retry`, `wait`, `compensate`, `human_review`,
+`quarantine`, `fail`, or `cancel`. The full safety order and failure matrix are documented in
+[FSM Anomaly Recovery](../architecture/fsm-recovery.md).
 
 `defaultReActFSMProcessSpec` declares the minimal agent closure:
 
@@ -220,6 +227,9 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
   -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying
   -> MemorySync -> Completed
 ```
+
+Recovery routes use `Recovering`, `Compensating`, and `Quarantined`; these are non-terminal states
+with explicit transitions back to an allowed work state, review, failure, or cancellation.
 
 ## ReAct Kernel
 
@@ -289,17 +299,17 @@ DomainPack schema, or tool/MCP execution contracts.
 
 Core exports:
 
-| Export                | Purpose                                                          |
-| --------------------- | ---------------------------------------------------------------- |
-| `CacheStore`          | Minimal async store interface: `get`, `set`, `delete`, `clear`.  |
-| `CacheEntry`          | Persisted `key`, `value`, timestamps, optional metadata.         |
-| `CacheMetadata`       | Provider/model/cache type, request hash, tool hash, prefix data. |
-| `CachePolicy`         | `enabled`, `mode`, TTL, error/stream/no-cache behavior.          |
-| `ServingCacheManager` | Key generation, lookup, expiry enforcement, and writes.          |
-| `CachedLLMProvider`   | Provider wrapper that applies exact cache policy.                |
+| Export                    | Purpose                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `CacheStore`              | Minimal async store interface: `get`, `set`, `delete`, `clear`.                    |
+| `CacheEntry`              | Persisted `key`, `value`, timestamps, optional metadata.                           |
+| `CacheMetadata`           | Provider/model/cache type, request hash, tool hash, prefix data.                   |
+| `CachePolicy`             | `enabled`, `mode`, TTL, error/stream/no-cache behavior.                            |
+| `ServingCacheManager`     | Key generation, lookup, expiry enforcement, and writes.                            |
+| `CachedLLMProvider`       | Provider wrapper that applies exact cache policy.                                  |
 | `PrefixCacheShapeTracker` | Compares stable prefix shape per provider/model/scope and reports changed reasons. |
-| `MemoryCacheStore`    | In-memory store for tests and local experiments.                 |
-| `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
+| `MemoryCacheStore`        | In-memory store for tests and local experiments.                                   |
+| `SQLiteCacheStore`        | Persistent local store backed by `cache_entries`.                                  |
 
 `LLMCacheKeyInput` fields are `provider`, `model`, `messages`, optional
 `system`, optional `tools`, optional `params`, optional `cacheScope`, and
@@ -332,30 +342,30 @@ Cache contracts.
 
 Core exports:
 
-| Export | Purpose |
-| --- | --- |
-| `RuntimeTypeDefinition` | Declares source event types, work node type, primary tree, and materializer. |
-| `NormalizedWorkEvent` | Source event plus normalized tree/node metadata. |
-| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records. |
-| `CacheBlock<T>` | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key. |
-| `CacheTree<T>` | Tree interface for lookup, write, invalidate, and list. |
-| `TypedCacheForest` | Store-backed collection of typed cache trees. |
-| `WorkCacheManager` | Ingests events, enforces TTL/validity rules, and returns derived audit events. |
-| `WorkCachePolicy` | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
-| `MemoryWorkCacheStore` | In-memory store. |
-| `SQLiteWorkCacheStore` | Persistent store backed by `workcache_blocks`. |
+| Export                           | Purpose                                                                                         |
+| -------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `RuntimeTypeDefinition`          | Declares source event types, work node type, primary tree, and materializer.                    |
+| `NormalizedWorkEvent`            | Source event plus normalized tree/node metadata.                                                |
+| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records.                                                   |
+| `CacheBlock<T>`                  | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key.  |
+| `CacheTree<T>`                   | Tree interface for lookup, write, invalidate, and list.                                         |
+| `TypedCacheForest`               | Store-backed collection of typed cache trees.                                                   |
+| `WorkCacheManager`               | Ingests events, enforces TTL/validity rules, and returns derived audit events.                  |
+| `WorkCachePolicy`                | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
+| `MemoryWorkCacheStore`           | In-memory store.                                                                                |
+| `SQLiteWorkCacheStore`           | Persistent store backed by `workcache_blocks`.                                                  |
 
 Default source event alignment:
 
-| Source event group | Primary tree |
-| --- | --- |
-| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree` |
-| `inference.completed`, `model.call.completed` | `ComputationTree` |
-| `tool.call.completed`, `mcp.call.completed` | `ToolTree` |
-| `context.build.completed`, `context.compacted` | `ObservationTree` |
-| `eval.completed`, `regression.completed` | `VerificationTree` |
-| `memory.read.completed`, `memory.write.committed` | `MemoryTree` |
-| `llm.cache.write` with prefix metadata | `PromptPrefixTree` |
+| Source event group                                                                                               | Primary tree       |
+| ---------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree`         |
+| `inference.completed`, `model.call.completed`                                                                    | `ComputationTree`  |
+| `tool.call.completed`, `mcp.call.completed`                                                                      | `ToolTree`         |
+| `context.build.completed`, `context.compacted`                                                                   | `ObservationTree`  |
+| `eval.completed`, `regression.completed`                                                                         | `VerificationTree` |
+| `memory.read.completed`, `memory.write.committed`                                                                | `MemoryTree`       |
+| `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
 Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
@@ -434,7 +444,8 @@ and example definitions are exported from `@hypha/tools`.
 `ToolRegistry` binds an immutable normalized contract to a `ToolAdapter`. Built-in adapters cover
 local functions, plugins, mocks, HTTP providers, and MCP capabilities. `validateToolInput()` handles
 the recursive JSON Schema subset used by Tool contracts, including nested objects and arrays,
-required fields, enum, type checks, `additionalProperties`, string constraints, and numeric bounds.
+required fields, enum, type checks, `additionalProperties`, string constraints, numeric bounds, and
+bounded pattern evaluation. Invalid and high-risk backtracking patterns return validation issues.
 
 `GovernedToolRunner` owns the complete Invocation lifecycle. It persists Invocation state, resolves
 scope-aware idempotency, validates input and output, evaluates policy and permission scopes, waits
@@ -445,6 +456,12 @@ MCP events, and supports recovery. Calls return structured results such as `comp
 both request and completion events.
 
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
+
+The server also registers `utility.json`, `utility.text`, and `utility.hash`. Their pure executors and
+contracts are exported from `@hypha/tools`. They provide bounded JSON parse/stable stringify/Pointer
+lookup, literal text inspection/transformation, and SHA-256 over text or canonical JSON. They reject
+prototype-pollution keys, excessive JSON depth/nodes, oversized text/results, and arbitrary search
+regex. See [Common Utility Tools](../guides/common-utility-tools.md).
 
 The built-in server `search` tool is a governed local tool with `permissionScope: ["web.search"]`. It defaults to deterministic offline results. Set `WEB_SEARCH_PROVIDER=auto` to try `WEB_SEARCH_PROVIDER_ORDER` with fallback, `WEB_SEARCH_PROVIDER=china` to prefer `WEB_SEARCH_CHINA_PROVIDER_ORDER` (`baidu,so360,stub` by default), `WEB_SEARCH_PROVIDER=baidu` or `so360` for mainland China no-key suggest providers, `WEB_SEARCH_PROVIDER=wikipedia` for Wikipedia OpenSearch, or `WEB_SEARCH_PROVIDER=duckduckgo` for a DuckDuckGo Instant Answer-compatible endpoint. `WEB_SEARCH_FALLBACK_PROVIDERS`, provider-specific endpoints, `WEB_SEARCH_TIMEOUT_MS`, and `WEB_SEARCH_USER_AGENT` control deployment-specific transport details.
 
