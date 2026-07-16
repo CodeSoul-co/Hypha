@@ -6,6 +6,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 - [Architecture Reference](../reference/architecture.md) explains package responsibilities, harness semantics, and extension boundaries.
 - [Runtime Model](../reference/runtime-model.md) explains event-first execution, FSM transitions, ReAct phases, side effects, and concurrency.
+- [Execution Contracts](../architecture/execution.md) explains provider-neutral Workspace, Sandbox, Command, Store, Event, and cache boundaries.
 - [Domain Packs](../guides/domain-packs.md) provides a field-level guide and minimal declaration example.
 - [Local Development](../guides/local-development.md) lists setup, storage, and verification commands.
 
@@ -13,7 +14,7 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 | Package                 | Public Surface                                                                                                             |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `@hypha/core`           | Spec primitives, schema definitions, events, errors, policy interfaces.                                                    |
+| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                             |
 | `@hypha/storage`        | `StorageProviderProfile`, `StorageTopologySpec`, connection resolution, SQLite/MongoDB/Redis/Kafka/vector profile helpers. |
 | `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.           |
 | `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, timeout/retry/human-review helpers.                    |
@@ -35,7 +36,7 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, and `DomainPackSpec`.
+Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
 
 `createPolicySpecEngine(policy)` creates a basic `PolicyEngine` from `PolicySpec`. Rules are evaluated in order and can match `sideEffectLevels`, `scopes`, and simple expressions `true` or `default`. Effects map to allow, deny, or human-review-required decisions; unmatched rules use `defaultEffect`.
 
@@ -357,26 +358,49 @@ Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `art
 
 ## Tools, MCP, and Skills
 
-`ToolSpec` defines `id`, `version`, `description`, `inputSchema`, optional `outputSchema`, `sideEffectLevel`, permission scope, preconditions, postconditions, timeout, retry, audit, human approval, and `source`.
+`ToolSpec` remains the compatibility registration shape for `id`, `version`, schemas, side effects,
+permissions, policy, timeout, retry, audit, approval, and source metadata.
+`GovernedToolContractSpec` is the structured canonical contract: `input`, `output`, `semantics`,
+`execution`, `governance`, `observability`, `cache`, optional `streaming`, and immutable `revision`.
+Registration normalizes both shapes before execution. TypeScript types, Zod validators, JSON Schema,
+and example definitions are exported from `@hypha/tools`.
 
-`ToolRegistry.register(spec, handler)` validates `ToolSpec` before making a tool executable. `validateToolInput(schema, input)` validates recursive JSON Schema features used by tool contracts, including nested objects, arrays, required fields, enum, type checks, `additionalProperties`, string length/pattern, and numeric bounds.
+`ToolRegistry` binds an immutable normalized contract to a `ToolAdapter`. Built-in adapters cover
+local functions, plugins, mocks, HTTP providers, and MCP capabilities. `validateToolInput()` handles
+the recursive JSON Schema subset used by Tool contracts, including nested objects and arrays,
+required fields, enum, type checks, `additionalProperties`, string constraints, and numeric bounds.
 
-`GovernedToolRunner` records tool request, policy check, approval, start, timeout, retry, completion, failure, and rejection events. It enforces input validation, output validation, default side-effect policy, optional timeout policy, retry policy, human review policy, and MCP source tracing. Tool calls return `completed`, `failed`, `denied`, or `human_review_required`. Tool trace payloads include `source`, `sourceRef`, `sideEffectLevel`, and `permissionScope` so local and MCP execution are auditable even when policy blocks the call.
+`GovernedToolRunner` owns the complete Invocation lifecycle. It persists Invocation state, resolves
+scope-aware idempotency, validates input and output, evaluates policy and permission scopes, waits
+for revision-checked approval, handles timeout/retry/cancellation, reconciles external receipts,
+artifactizes large output, records observations, applies validity-aware result reuse, emits Tool and
+MCP events, and supports recovery. Calls return structured results such as `completed`, `failed`,
+`denied`, `conflict`, `cancelled`, or `human_review_required`. Audit inclusion and redaction apply to
+both request and completion events.
 
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
 The built-in server `search` tool is a governed local tool with `permissionScope: ["web.search"]`. It defaults to deterministic offline results. Set `WEB_SEARCH_PROVIDER=auto` to try `WEB_SEARCH_PROVIDER_ORDER` with fallback, `WEB_SEARCH_PROVIDER=china` to prefer `WEB_SEARCH_CHINA_PROVIDER_ORDER` (`baidu,so360,stub` by default), `WEB_SEARCH_PROVIDER=baidu` or `so360` for mainland China no-key suggest providers, `WEB_SEARCH_PROVIDER=wikipedia` for Wikipedia OpenSearch, or `WEB_SEARCH_PROVIDER=duckduckgo` for a DuckDuckGo Instant Answer-compatible endpoint. `WEB_SEARCH_FALLBACK_PROVIDERS`, provider-specific endpoints, `WEB_SEARCH_TIMEOUT_MS`, and `WEB_SEARCH_USER_AGENT` control deployment-specific transport details.
 
-`MCPIntegrationSpec` declares MCP servers, allowed and denied capabilities, trust policy, import policy, resource/tool/prompt policies, version pinning, and capability hashing. `MockMCPGateway` supports capability discovery and mock tool handlers. `registerMCPGatewayTools({ integration, gateway, registry, trace, traceContext })` discovers MCP capabilities, records `mcp.capability.discovered`, normalizes tool capabilities to `ToolSpec`, records `mcp.tool.normalized`, and registers handlers into the same `ToolRegistry` used by local tools. MCP-backed calls keep `sourceRef.serverId` and `sourceRef.capabilityId` for trace and replay.
+`MCPIntegrationSpec` declares servers, capability allow/deny rules, trust, import policy,
+resource/tool/prompt policies, version pins, and hashing. `MCPConnectionManager` owns stdio and
+Streamable HTTP sessions, initialization, pagination, cancellation, health, reconnect, and cleanup.
+`MCPCapabilityCatalog` owns normalized capability revisions, schema cache, trust, drift,
+quarantine, approval, stable Tool IDs, and immutable Run snapshots. Provider SDK objects do not
+cross this boundary.
 
-`@hypha/mcp` exports `classicMCPIntegrationSpec`, `classicMCPCapabilityDescriptors`, and `createClassicMCPMockGateway()` for deterministic MCP fixtures. The preset covers `filesystem.read_file`, `fetch.fetch`, `time.now`, `search.web_search`, `baidu.web_search`, and `so360.web_search`; each capability normalizes to `ToolSpec` and runs through `GovernedToolRunner` with normal policy, schema validation, and trace events.
+`ToolProfileSpec` groups versioned Tool, MCP profile, and policy refs with default permission scopes
+and eager/lazy loading. A Session profile selects the default Tool profile; a workflow state may
+override it. The Domain compiler projects only profiles and Tools selected by effective workflow
+states, validates referenced versions, and applies `deniedToolRefs` after legacy, direct, and
+profile-based allow sources so deny always wins.
 
-The API server registers runtime MCP clients from `tools.mcpServers` in
-`config.yaml`. Supported modes are `fixture` for the in-process classic gateway,
-`local` for stdio MCP servers with `command` and `args`, and `remote` for HTTP
-gateways with `endpoint` and optional bearer `authToken`. Server MCP tools are
-published through `/tools`, `/tools/mcp/tools`, ReAct chat, workflow stages, and
-`POST /tools/execute` using normalized names such as `search.web_search`.
+The API server registers MCP clients from `tools.mcpServers` in `config.yaml`: `fixture` for the
+in-process gateway, `local` for stdio servers, and `remote` for Streamable HTTP. Governed Tools are
+available through `/tools`, `/tools/:id`, `/tools/execute`, `/tool-invocations`, and
+`/tool-approvals`; MCP connection and catalog views are available through `/mcp/servers`,
+`/mcp/capabilities`, and `/mcp/drifts`. ReAct, workflow, and HTTP surfaces all delegate execution to
+the same runner.
 
 `SkillSpec` declares activation policy, instructions, references, scripts, assets, allowed and required tools, required MCP servers, memory access policy, side-effect policy, context budget, input schema, output contract, evaluation cases, provenance, and trust level.
 

@@ -35,7 +35,8 @@ Public API documentation is maintained as field-level references:
 
 - [Documentation Index](docs/README.md): entry point for architecture, package boundaries, guides, and API references.
 - [HTTP API](docs/api/http.md): REST endpoints, authentication, request bodies, response shapes, and runtime conventions.
-- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, inference, memory, tools, MCP, skills, and model providers.
+- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, execution, inference, memory, tools, MCP, skills, and model providers.
+- [Execution Contracts](docs/architecture/execution.md): provider-neutral Workspace, Sandbox, Command, Store, Event, and cache-fingerprint boundaries.
 - [Architecture](docs/reference/architecture.md): package responsibilities, harness semantics, runtime model, and extension boundaries.
 - [Storage](docs/reference/storage.md): document, messaging, relational, vector, and artifact storage conventions for local, self-hosted, managed, and cloud deployments.
 - [Domain Packs](docs/guides/domain-packs.md): field contracts and examples for declaring workflows, tools, memory, skills, policy, and output contracts.
@@ -63,6 +64,30 @@ The exact cache key is derived from the resolved provider, model, system or pref
 Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`; the default `off` mode keeps provider calls on the original path. `HYPHA_SERVING_CACHE_MODE` supports `off`, `read`, `write`, and `readwrite`, and `HYPHA_SERVING_CACHE_TTL_MS` controls expiry. SQLite entries use `HYPHA_SERVING_CACHE_SQLITE_PATH`.
 
 Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
+
+## Governed Tools and MCP
+
+Local, HTTP, Plugin, Mock, and MCP capabilities share `ToolAdapter`, `ToolRegistry`, and the
+single `GovernedToolRunner` execution path. Each call is a persistent Invocation with schema,
+permission, policy, approval, idempotency, retry, timeout, cancellation, artifact, event,
+observation, cache-validity, and recovery semantics. Dynamic MCP capabilities are separated into
+connection, catalog, trust, drift, schema-cache, and immutable Run snapshot records.
+
+See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
+[security guide](docs/guides/tool-mcp-security.md), and
+[adapter guide](docs/guides/tool-adapters.md).
+
+## Governed Execution Contracts
+
+`@hypha/core` exposes provider-neutral contracts for managed Workspaces, sandbox environments,
+command execution, revisioned records and leases, lifecycle events, and deterministic cache
+fingerprints. The contracts keep filesystem, process, container, remote-provider, storage, artifact,
+policy, and secret implementations behind adapter and harness boundaries. Paths, identities,
+transitions, terminal evidence, sensitive event fields, idempotency, and stale-writer fencing are
+validated before adapters perform side effects.
+
+See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
+extension rules.
 
 ## Development Commands
 
