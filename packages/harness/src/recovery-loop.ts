@@ -24,6 +24,15 @@ export interface FSMRecoveryLoopOptions<TOutput> {
     context: FSMRecoveryAttemptContext
   ) => FSMAnomaly | Promise<FSMAnomaly>;
   compensate?: (decision: FSMRecoveryDecision, context: FSMRecoveryAttemptContext) => Promise<void>;
+  reconcile?: (
+    decision: FSMRecoveryDecision,
+    context: FSMRecoveryAttemptContext
+  ) => Promise<TOutput>;
+  fallback?: (
+    decision: FSMRecoveryDecision,
+    context: FSMRecoveryAttemptContext
+  ) => Promise<TOutput>;
+  degrade?: (decision: FSMRecoveryDecision, context: FSMRecoveryAttemptContext) => Promise<TOutput>;
   scheduler?: FSMRecoveryLoopScheduler;
   maxInlineDelayMs?: number;
   signal?: AbortSignal;
@@ -31,7 +40,7 @@ export interface FSMRecoveryLoopOptions<TOutput> {
 }
 
 export interface FSMRecoveryLoopResult<TOutput> {
-  status: 'succeeded' | 'suspended' | 'compensated' | 'failed' | 'cancelled';
+  status: 'succeeded' | 'degraded' | 'suspended' | 'compensated' | 'failed' | 'cancelled';
   output?: TOutput;
   error?: unknown;
   decision?: FSMRecoveryDecision;
@@ -98,6 +107,46 @@ export async function runFSMRecoveryLoop<TOutput>(
         await resumeRetry(options.fsm, decision);
         shouldAttempt = true;
         continue;
+      }
+
+      if (
+        decision.action === 'reconcile' ||
+        decision.action === 'fallback' ||
+        decision.action === 'degrade'
+      ) {
+        const handler =
+          decision.action === 'reconcile'
+            ? options.reconcile
+            : decision.action === 'fallback'
+              ? options.fallback
+              : options.degrade;
+        if (!handler) {
+          await transitionIfNeeded(options.fsm, decision.quarantineState, {
+            phase: 'recovery_strategy_unavailable',
+            anomalyId: decision.anomaly.id,
+            recoveryAction: decision.action,
+          });
+          return { status: 'suspended', error, decision, attempts };
+        }
+        try {
+          const output = await handler(decision, context);
+          options.fsm.registerRecoverySuccess(decision.circuitKey, now());
+          await resumeRetry(options.fsm, decision);
+          return {
+            status: decision.action === 'reconcile' ? 'succeeded' : 'degraded',
+            output,
+            decision,
+            attempts,
+          };
+        } catch (strategyError) {
+          await transitionIfNeeded(options.fsm, decision.quarantineState, {
+            phase: 'recovery_strategy_failed',
+            anomalyId: decision.anomaly.id,
+            recoveryAction: decision.action,
+            error: strategyError instanceof Error ? strategyError.message : String(strategyError),
+          });
+          return { status: 'suspended', error: strategyError, decision, attempts };
+        }
       }
 
       if (decision.action === 'compensate') {
