@@ -653,7 +653,25 @@ export function compileDomainPackToHarnessedSystem(
       domainPack.defaultReasoningProfile,
     'Reasoning profile'
   );
-  const workflowStateBindings = workflow.states.map((state) => resolveWorkflowStateBinding(state));
+  const defaultToolProfile = selectProfileById(
+    domainPack.toolProfiles,
+    sessionInitialization.toolProfileRef,
+    'Tool profile'
+  );
+  const toolProfilesById = new Map(
+    (domainPack.toolProfiles ?? []).map((profile) => [profile.id, profile])
+  );
+  const toolsById = specMap(domainPack.tools);
+  const mcpProfilesById = specMap(domainPack.mcpProfiles);
+  const workflowStateBindings = workflow.states.map((state) =>
+    resolveWorkflowStateBinding(
+      state,
+      defaultToolProfile,
+      toolProfilesById,
+      toolsById,
+      mcpProfilesById
+    )
+  );
   const requiredSkillRefs = resolveSkillRefsByIds(
     workflowStateBindings.flatMap((state) => state.requiredSkills),
     domainPack.allowedSkills
@@ -667,10 +685,15 @@ export function compileDomainPackToHarnessedSystem(
   assertSkillsAllowed(selectedSkillRefs, domainPack.allowedSkills, 'Agent skill');
   const selectedToolIds = mergeStrings(
     options.agentToolRefs,
-    domainPack.tools?.map((tool) => tool.id),
-    workflowStateBindings.flatMap((state) => state.allowedTools),
-    workflowStateBindings.flatMap((state) => state.allowedToolRefs?.map((ref) => ref.id) ?? []),
-    domainPack.toolProfiles?.flatMap((profile) => profile.toolRefs.map((ref) => ref.id))
+    workflowStateBindings.flatMap((state) => state.allowedTools)
+  );
+  const declaredToolIds = idSet(domainPack.tools);
+  for (const toolId of selectedToolIds) {
+    assertKnownId(toolId, declaredToolIds, 'Agent tool', domainPack.id);
+  }
+  const selectedToolProfileIds = mergeStrings(
+    defaultToolProfile ? [defaultToolProfile.id] : undefined,
+    workflowStateBindings.flatMap((state) => state.toolProfileRefs?.map((ref) => ref.id) ?? [])
   );
   const policyIds = mergeStrings(
     options.policyRefs,
@@ -764,7 +787,7 @@ export function compileDomainPackToHarnessedSystem(
       regressionCases: domainPack.regressionCases ?? [],
       businessRules: domainPack.businessRules ?? [],
       tools: selectSpecsByIds(domainPack.tools, selectedToolIds),
-      toolProfiles: domainPack.toolProfiles ?? [],
+      toolProfiles: selectSpecsByIds(domainPack.toolProfiles, selectedToolProfileIds),
       allowedSkills: domainPack.allowedSkills ?? selectedSkillRefs,
       defaultSkills: selectedSkillRefs,
       skillPolicies: domainPack.skillPolicies ?? [],
@@ -857,25 +880,65 @@ export function resolveWorkflowToolExecutionScope(
   };
 }
 
-function resolveWorkflowStateBinding(state: WorkflowStateSpec): WorkflowStateBinding {
+function resolveWorkflowStateBinding(
+  state: WorkflowStateSpec,
+  defaultToolProfile: ToolProfileSpec | undefined,
+  toolProfilesById: Map<string, ToolProfileSpec>,
+  toolsById: Map<string, ToolSpec>,
+  mcpProfilesById: Map<string, MCPIntegrationSpec>
+): WorkflowStateBinding {
+  const selectedProfileRefs = state.toolProfileRefs?.length
+    ? mergeSpecRefs(state.toolProfileRefs)
+    : defaultToolProfile
+      ? [toSpecRef(defaultToolProfile)]
+      : [];
+  const selectedProfiles = selectedProfileRefs
+    .map((ref) => toolProfilesById.get(ref.id))
+    .filter((profile): profile is ToolProfileSpec => Boolean(profile));
+  const deniedToolIds = new Set((state.deniedToolRefs ?? []).map((ref) => ref.id));
+  const allowedToolIds = mergeStrings(
+    state.allowedTools,
+    state.allowedToolRefs?.map((ref) => ref.id),
+    selectedProfiles.flatMap((profile) => profile.toolRefs.map((ref) => ref.id))
+  ).filter((toolId) => !deniedToolIds.has(toolId));
+  const allowedMCPProfileIds = mergeStrings(
+    state.allowedMCPProfiles,
+    state.allowedMCPProfileRefs?.map((ref) => ref.id),
+    selectedProfiles.flatMap((profile) => (profile.mcpProfileRefs ?? []).map((ref) => ref.id))
+  );
+  const policyRefs = mergeStrings(
+    state.policyRefs,
+    selectedProfiles.flatMap((profile) => (profile.policyRefs ?? []).map((ref) => ref.id))
+  );
+  const permissionScopes = mergeStrings(
+    selectedProfiles.flatMap((profile) => profile.defaultPermissionScopes ?? []),
+    state.permissionScopes
+  );
   return {
     stateId: state.id,
-    allowedTools: state.allowedTools ?? [],
+    allowedTools: allowedToolIds,
     allowedSkills: state.allowedSkills ?? [],
     requiredSkills: state.requiredSkills ?? [],
-    allowedMCPProfiles: state.allowedMCPProfiles ?? [],
+    allowedMCPProfiles: allowedMCPProfileIds,
     memoryPolicyRef: state.memoryPolicyRef,
     reasoningProfileRef: state.reasoningProfileRef,
-    policyRefs: state.policyRefs ?? [],
+    policyRefs,
     evaluationRefs: state.evaluationRefs ?? [],
-    toolProfileRefs: state.toolProfileRefs,
-    allowedToolRefs: state.allowedToolRefs ?? state.allowedTools?.map((id) => ({ id })),
+    toolProfileRefs: selectedProfileRefs.length ? selectedProfileRefs : undefined,
+    allowedToolRefs: allowedToolIds.map((id) => toOptionalSpecRef(toolsById.get(id)) ?? { id }),
     deniedToolRefs: state.deniedToolRefs,
-    allowedMCPProfileRefs:
-      state.allowedMCPProfileRefs ?? state.allowedMCPProfiles?.map((id) => ({ id })),
+    allowedMCPProfileRefs: allowedMCPProfileIds.map(
+      (id) => toOptionalSpecRef(mcpProfilesById.get(id)) ?? { id }
+    ),
     humanApprovalPolicyRef: state.humanApprovalPolicyRef,
-    permissionScopes: state.permissionScopes,
-    capabilityLoadPolicy: state.capabilityLoadPolicy,
+    permissionScopes: permissionScopes.length ? permissionScopes : undefined,
+    capabilityLoadPolicy:
+      state.capabilityLoadPolicy ??
+      (selectedProfiles.length
+        ? selectedProfiles.some((profile) => profile.lazyLoad)
+          ? 'lazy'
+          : 'eager'
+        : undefined),
   };
 }
 
@@ -905,6 +968,16 @@ function resolveSkillRefsByIds(ids: string[], allowedSkills: SkillRef[] | undefi
 
 function mergeSkillRefs(...groups: Array<SkillRef[] | undefined>): SkillRef[] {
   const merged = new Map<string, SkillRef>();
+  for (const group of groups) {
+    for (const ref of group ?? []) {
+      merged.set(ref.id, ref);
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function mergeSpecRefs(...groups: Array<SpecRef[] | undefined>): SpecRef[] {
+  const merged = new Map<string, SpecRef>();
   for (const group of groups) {
     for (const ref of group ?? []) {
       merged.set(ref.id, ref);
@@ -1553,6 +1626,10 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
   const skillPolicyIds = idSet(domainPack.skillPolicies);
   const toolIds = idSet(domainPack.tools);
   const toolProfileIds = idSet(domainPack.toolProfiles);
+  const toolsById = specMap(domainPack.tools);
+  const toolProfilesById = specMap(domainPack.toolProfiles);
+  const mcpProfilesById = specMap(domainPack.mcpProfiles);
+  const policiesById = specMap(domainPack.policies);
 
   assertKnownId(domainPack.defaultWorkflow, workflowIds, 'Default workflow', domainPack.id);
   assertKnownId(
@@ -1617,13 +1694,13 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
 
   for (const profile of domainPack.toolProfiles ?? []) {
     for (const toolRef of profile.toolRefs) {
-      assertKnownId(toolRef.id, toolIds, 'Tool profile Tool', profile.id);
+      assertKnownSpecRef(toolRef, toolsById, 'Tool profile Tool', profile.id);
     }
     for (const mcpRef of profile.mcpProfileRefs ?? []) {
-      assertKnownId(mcpRef.id, mcpProfileIds, 'Tool profile MCP profile', profile.id);
+      assertKnownSpecRef(mcpRef, mcpProfilesById, 'Tool profile MCP profile', profile.id);
     }
     for (const policyRef of profile.policyRefs ?? []) {
-      assertKnownId(policyRef.id, policyIds, 'Tool profile policy', profile.id);
+      assertKnownSpecRef(policyRef, policiesById, 'Tool profile policy', profile.id);
     }
   }
 
@@ -1635,7 +1712,10 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
       reasoningProfileIds,
       policyIds,
       evaluationIds,
-      tools: new Map((domainPack.tools ?? []).map((tool) => [tool.id, tool])),
+      tools: toolsById,
+      toolProfiles: toolProfilesById,
+      mcpProfiles: mcpProfilesById,
+      policies: policiesById,
     });
   }
 
@@ -1681,6 +1761,9 @@ function validateWorkflowReferences(
     policyIds: Set<string>;
     evaluationIds: Set<string>;
     tools: Map<string, ToolSpec>;
+    toolProfiles: Map<string, ToolProfileSpec>;
+    mcpProfiles: Map<string, MCPIntegrationSpec>;
+    policies: Map<string, PolicySpec>;
   }
 ): void {
   const stateIds = idSet(workflow.states);
@@ -1697,7 +1780,7 @@ function validateWorkflowReferences(
       assertKnownId(toolRef, refs.toolIds, 'Workflow state tool', state.id);
     }
     for (const toolRef of state.allowedToolRefs ?? []) {
-      assertKnownId(toolRef.id, refs.toolIds, 'Workflow state Tool ref', state.id);
+      assertKnownSpecRef(toolRef, refs.tools, 'Workflow state Tool ref', state.id);
       const tool = domainTool(refs, toolRef.id);
       if (state.permissionScopes && tool) {
         const granted = new Set(state.permissionScopes);
@@ -1714,29 +1797,31 @@ function validateWorkflowReferences(
       }
     }
     for (const toolRef of state.deniedToolRefs ?? []) {
-      assertKnownId(toolRef.id, refs.toolIds, 'Workflow state denied Tool ref', state.id);
+      assertKnownSpecRef(toolRef, refs.tools, 'Workflow state denied Tool ref', state.id);
     }
     for (const profileRef of state.toolProfileRefs ?? []) {
-      assertKnownId(profileRef.id, refs.toolProfileIds, 'Workflow state Tool profile', state.id);
+      assertKnownSpecRef(profileRef, refs.toolProfiles, 'Workflow state Tool profile', state.id);
     }
     assertKnownId(state.memoryPolicyRef, refs.policyIds, 'Workflow state memory policy', state.id);
     for (const mcpProfileRef of state.allowedMCPProfiles ?? []) {
       assertKnownId(mcpProfileRef, refs.mcpProfileIds, 'Workflow state MCP profile', state.id);
     }
     for (const mcpProfileRef of state.allowedMCPProfileRefs ?? []) {
-      assertKnownId(
-        mcpProfileRef.id,
-        refs.mcpProfileIds,
+      assertKnownSpecRef(
+        mcpProfileRef,
+        refs.mcpProfiles,
         'Workflow state MCP profile ref',
         state.id
       );
     }
-    assertKnownId(
-      state.humanApprovalPolicyRef?.id,
-      refs.policyIds,
-      'Workflow state human approval policy',
-      state.id
-    );
+    if (state.humanApprovalPolicyRef) {
+      assertKnownSpecRef(
+        state.humanApprovalPolicyRef,
+        refs.policies,
+        'Workflow state human approval policy',
+        state.id
+      );
+    }
     assertKnownId(
       state.reasoningProfileRef,
       refs.reasoningProfileIds,
@@ -1825,6 +1910,10 @@ function idSet(items: Array<{ id: string }> | undefined): Set<string> {
   return new Set((items ?? []).map((item) => item.id));
 }
 
+function specMap<TSpec extends VersionedSpec>(items: TSpec[] | undefined): Map<string, TSpec> {
+  return new Map((items ?? []).map((item) => [item.id, item]));
+}
+
 function assertUniqueIds(items: Array<{ id: string }> | undefined, label: string): void {
   const seen = new Set<string>();
   for (const item of items ?? []) {
@@ -1844,5 +1933,22 @@ function assertKnownId(
   if (!id) return;
   if (!allowed.has(id)) {
     throw new Error(`${label} not found for ${owner}: ${id}`);
+  }
+}
+
+function assertKnownSpecRef<TSpec extends VersionedSpec>(
+  ref: SpecRef,
+  available: Map<string, TSpec>,
+  label: string,
+  owner: string
+): void {
+  const spec = available.get(ref.id);
+  if (!spec) {
+    throw new Error(`${label} not found for ${owner}: ${ref.id}`);
+  }
+  if (ref.version && ref.version !== spec.version) {
+    throw new Error(
+      `${label} version mismatch for ${owner}: ${ref.id} requested ${ref.version}, available ${spec.version}`
+    );
   }
 }
