@@ -2325,24 +2325,31 @@ function workflowDefinitionToWorkflowSpec(workflow: WorkflowDefinition): Workflo
     { id: 'Failed', goal: 'Workflow failed' },
   ];
   const transitions: WorkflowSpec['transitions'] = [];
+  const transitionKeys = new Set<string>();
+  const appendTransition = (transition: WorkflowSpec['transitions'][number]): void => {
+    const key = `${transition.from}\u0000${transition.to}\u0000${transition.guard ?? ''}`;
+    if (transitionKeys.has(key)) return;
+    transitionKeys.add(key);
+    transitions.push(transition);
+  };
   for (const stage of workflow.stages) {
     const next = stage.next === 'end' || !stage.next ? 'Completed' : stage.next;
-    transitions.push({ from: stage.id, to: next, description: `${stage.id} next` });
+    appendTransition({ from: stage.id, to: next, description: `${stage.id} next` });
     for (const branch of stage.branches ?? []) {
-      transitions.push({
+      appendTransition({
         from: stage.id,
         to: branch.then === 'end' ? 'Completed' : branch.then,
         description: `${stage.id} branch:${branch.condition}`,
       });
       if (branch.else) {
-        transitions.push({
+        appendTransition({
           from: stage.id,
           to: branch.else === 'end' ? 'Completed' : branch.else,
           description: `${stage.id} else:${branch.condition}`,
         });
       }
     }
-    transitions.push({ from: stage.id, to: 'Failed', description: `${stage.id} failed` });
+    appendTransition({ from: stage.id, to: 'Failed', description: `${stage.id} failed` });
   }
   return {
     id: workflow.name,
