@@ -39,7 +39,6 @@ export interface HttpInferenceBackendConfig {
 
 export interface DefaultInferenceBackendRegistryOptions {
   defaultBackendId?: string;
-  ollama?: Partial<HttpInferenceBackendConfig>;
   sglang?: Partial<HttpInferenceBackendConfig>;
   vllm?: Partial<HttpInferenceBackendConfig>;
   llamaCpp?: Partial<HttpInferenceBackendConfig>;
@@ -280,57 +279,6 @@ abstract class HttpInferenceBackend implements InferenceBackend {
   }
 }
 
-export class OllamaInferenceBackend extends HttpInferenceBackend {
-  constructor(config: Partial<HttpInferenceBackendConfig> = {}) {
-    super('ollama', 'ollama', {
-      baseUrl: 'http://localhost:11434',
-      endpoint: '/api/chat',
-      capabilities: {
-        chatCompletions: true,
-        textCompletions: false,
-        prefixCaching: true,
-        kvCaching: false,
-      },
-      ...config,
-    });
-  }
-
-  protected buildBody(request: InferenceBackendRequest, stream: boolean): Record<string, unknown> {
-    return {
-      model: resolveBackendModel(request),
-      messages: toOpenAIChatMessages(request.compiledPrompt.messages),
-      tools: openAICompatibleTools(request),
-      stream,
-      options: removeUndefined({
-        temperature: request.options?.temperature,
-        num_predict: request.options?.maxTokens,
-        top_p: request.options?.topP,
-        top_k: request.options?.topK,
-        stop: request.options?.stop,
-        seed: request.options?.seed,
-      }),
-      keep_alive: request.options?.extra?.ollamaKeepAlive,
-      ...backendExtra(request.options, 'ollama'),
-    };
-  }
-
-  protected normalize(
-    raw: unknown,
-    request: InferenceBackendRequest
-  ): InferenceBackendResponse<string> {
-    const record = asRecord(raw);
-    const message = asRecord(record.message);
-    const output = firstString(message.content, record.response, record.content) ?? '';
-    return {
-      id: firstString(record.id) ?? `${request.runId}:${request.stepId}:ollama`,
-      output,
-      usage: usageFromRecord(record),
-      metadata: { backendId: this.id, backendKind: this.kind },
-      raw,
-    };
-  }
-}
-
 export class SGLangInferenceBackend extends HttpInferenceBackend {
   constructor(config: Partial<HttpInferenceBackendConfig> = {}) {
     super('sglang', 'sglang', {
@@ -384,7 +332,6 @@ export class VLLMInferenceBackend extends HttpInferenceBackend {
       model: resolveBackendModel(request),
       messages: toOpenAIChatMessages(request.compiledPrompt.messages),
       stream,
-      tools: openAICompatibleTools(request),
       ...openAICompletionOptions(request.options),
       cache: backendCacheEnvelope(request),
       ...backendExtra(request.options, 'vllm'),
@@ -463,7 +410,6 @@ export class OpenAIAPIInferenceBackend extends HttpInferenceBackend {
       model: resolveBackendModel(request),
       messages: toOpenAIChatMessages(request.compiledPrompt.messages),
       stream,
-      tools: openAICompatibleTools(request),
       ...openAICompletionOptions(request.options),
       ...backendExtra(request.options, 'openaiApi'),
     };
@@ -481,9 +427,6 @@ export function createDefaultInferenceBackendRegistry(
   options: DefaultInferenceBackendRegistryOptions = {}
 ): InferenceBackendRegistry {
   const registry = new InferenceBackendRegistry(options.defaultBackendId ?? 'sglang');
-  registry.register(new OllamaInferenceBackend(options.ollama), {
-    default: options.defaultBackendId === 'ollama',
-  });
   registry.register(new SGLangInferenceBackend(options.sglang), {
     default: (options.defaultBackendId ?? 'sglang') === 'sglang',
   });
@@ -566,20 +509,6 @@ function toOpenAIChatMessages(messages: PromptMessage[]): Array<Record<string, s
       name: message.name,
     }) as Record<string, string>;
   });
-}
-
-function openAICompatibleTools(
-  request: InferenceBackendRequest
-): Array<Record<string, unknown>> | undefined {
-  if (!request.tools?.length) return undefined;
-  return request.tools.map((tool) => ({
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema,
-    },
-  }));
 }
 
 function normalizeOpenAICompatibleResponse(

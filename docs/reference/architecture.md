@@ -18,7 +18,7 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 | `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.      | Provider SDK lifecycle as framework core.                          |
 | `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                      | App session storage rules.                                         |
 | `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                         | Workflow replacement logic or direct tool execution.               |
-| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, message bus, queues, skill/reasoning trace events, replay/audit/regression. | FSM internals or app-specific state.                               |
+| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, skill/reasoning trace events, queues, replay/audit/regression.  | FSM internals or app-specific state.                               |
 | `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                         | Framework spec definitions.                                        |
 | `@hypha/testing`        | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                 | Production runtime behavior or live model/tool execution.          |
 
@@ -31,14 +31,6 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 `fsm` remains a separate package because FSM is a reusable process language. Domain workflows compile into `FSMProcessSpec`, and the ReAct runtime uses FSM transitions without coupling domain declarations to HTTP, storage, or provider adapters.
 
 `RunManager` and `HarnessedReActFSMRunner` live in `@hypha/harness` because they coordinate event recording, run lifecycle, ReAct execution, and FSM callbacks. They do not define FSM semantics; they consume `FSMRuntime` and record the resulting state and transition facts as events.
-
-`InMemoryMessageBus` is the package-level transport contract for future
-multi-workflow and multi-agent surfaces. Messages are scoped by
-`userId + sessionId + runId`, can carry `fsmState`, `stepId`, and `agentId`,
-and emit `message.enqueued`, `message.delivered`, `message.acknowledged`,
-`message.failed`, or `message.dead_lettered` through a `TraceRecorder`. The bus
-does not advance FSM state by itself; consumers bind message handling to FSM
-guards and transitions.
 
 `@hypha/domain` owns the declaration-to-runtime binding step. `LocalDomainPackLoader`
 loads predefined packs, `DomainPackRegistry` stores validated versions,

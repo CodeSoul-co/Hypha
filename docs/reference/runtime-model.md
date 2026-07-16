@@ -40,8 +40,6 @@ memory.write.committed
 human.review.requested
 human.review.approved
 human.review.rejected
-message.enqueued
-message.delivered
 fsm.state.entered
 run.completed
 ```
@@ -117,30 +115,6 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
   -> PolicyChecked -> Acting -> ObservationRecorded -> Verifying
   -> MemorySync -> Completed
 ```
-
-## Message Bus
-
-`@hypha/harness` exposes `MessageBus` and `InMemoryMessageBus` as the transport
-contract for future multi-workflow and multi-agent execution. The current
-single-agent runtime can ignore it, but clients that need asynchronous handoff
-can publish `RuntimeMessage` records scoped by `userId`, `sessionId`, and
-`runId`.
-
-Messages can carry `fsmState`, `stepId`, `agentId`, `correlationId`, and
-`causationId`. Consumers may pull by recipient and FSM state, then acknowledge
-or fail the message. The bus records delivery facts as events:
-
-```text
-message.enqueued
-message.delivered
-message.acknowledged
-message.failed
-message.dead_lettered
-```
-
-The message bus does not replace FSM. FSM remains the process authority;
-message delivery is an event-first input to a consumer that may then evaluate
-guards and perform transitions.
 
 ## ReAct Execution
 

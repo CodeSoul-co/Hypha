@@ -4,84 +4,25 @@ import {
   InMemoryArtifactStore,
   InMemoryStructuredStore,
   InMemoryVectorIndexProvider,
+  LocalRuntimeCommandQueue,
   LocalVectorIndexProvider,
+  LocalRuntimeDeliveryStore,
+  LocalRuntimeLeaseCoordinator,
+  LocalRuntimeMessageBus,
   MockEmbeddingProvider,
   SQLiteEventStore,
   SQLiteStructuredStore,
+  createLocalRuntimeEngine,
+  createLocalRuntimePersistence,
   createLocalStorageBackbone,
-  ArtifactStoreToolPort,
-  FileMCPCapabilityCatalogStore,
-  FileToolContractSnapshotStore,
-  FileToolObservationStore,
 } from './index';
 import { createFrameworkEvent } from '@hypha/core';
+import type { RuntimeActivityPort } from '@hypha/harness';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 describe('@hypha/adapters-local reference providers', () => {
-  it('persists MCP catalog revisions, Tool snapshots, and artifactized Tool output', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-tool-bindings-'));
-    const catalog = new FileMCPCapabilityCatalogStore(path.join(root, 'mcp-catalog.json'));
-    await catalog.save({
-      id: 'server:tool:search:hash-1',
-      serverId: 'server',
-      kind: 'tool',
-      remoteName: 'search',
-      stableToolId: 'mcp.server.search',
-      capabilityHash: 'hash-1',
-      descriptorHash: 'descriptor-1',
-      descriptor: {},
-      trust: { level: 'restricted', source: 'runtime_discovery' },
-      driftState: 'approved',
-      firstSeenAt: '2026-07-16T00:00:00.000Z',
-      lastSeenAt: '2026-07-16T00:00:00.000Z',
-    });
-    await expect(catalog.list('server')).resolves.toMatchObject([
-      { capabilityHash: 'hash-1', stableToolId: 'mcp.server.search' },
-    ]);
-
-    const snapshots = new FileToolContractSnapshotStore(path.join(root, 'snapshots'));
-    await snapshots.save({
-      id: 'snapshot-1',
-      runId: 'run-1',
-      createdAt: '2026-07-16T00:00:00.000Z',
-      toolContracts: [],
-      snapshotHash: 'snapshot-hash-1',
-    });
-    await expect(snapshots.get('snapshot-1')).resolves.toMatchObject({ runId: 'run-1' });
-
-    const artifacts = new InMemoryArtifactStore();
-    const artifactRef = await new ArtifactStoreToolPort(artifacts).store({
-      invocationId: 'invocation-1',
-      toolId: 'tool.large-output',
-      value: { rows: [1, 2, 3] },
-    });
-    expect(artifactRef).toContain('tool-results/tool.large-output/invocation-1.json');
-
-    const observationRoot = path.join(root, 'observations');
-    const observationRef = await new FileToolObservationStore(observationRoot).record({
-      invocationId: 'invocation-1',
-      toolId: 'tool.large-output',
-      toolRevision: 'revision-1',
-      runId: 'run-1',
-      stepId: 'tool',
-      inputHash: 'input-hash',
-      outputHash: 'output-hash',
-      value: { artifactRef },
-      artifactRefs: [artifactRef],
-      provenance: { source: 'local', contractSnapshotRef: 'snapshot-1' },
-    });
-    expect(observationRef).toMatch(/^observation:/);
-    const observation = JSON.parse(
-      fs.readFileSync(path.join(observationRoot, fs.readdirSync(observationRoot)[0]), 'utf-8')
-    );
-    expect(observation).toMatchObject({
-      id: observationRef,
-      invocationId: 'invocation-1',
-      provenance: { contractSnapshotRef: 'snapshot-1' },
-    });
-  });
   it('stores structured records, vectors, and artifacts locally', async () => {
     const structured = new InMemoryStructuredStore();
     await structured.insert('runs', { id: 'run_1', status: 'completed' });
@@ -307,9 +248,398 @@ describe('@hypha/adapters-local reference providers', () => {
       )
     ).resolves.toMatchObject([{ record: { id: 'memory_1' } }]);
   });
+
+  it('stores append-only event streams with idempotency and revisions locally', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-event-streams-'));
+    const events = new SQLiteEventStore({ filename: path.join(root, 'events.sqlite') });
+    const first = await events.appendToStream(
+      createFrameworkEvent({
+        id: 'run_stream:created',
+        type: 'run.created',
+        runId: 'run_stream',
+        streamId: 'run_stream',
+        idempotencyKey: 'create-run',
+        payload: { id: 'run_stream' },
+      }),
+      { expectedStreamSequence: 0 }
+    );
+    const duplicate = await events.appendToStream(
+      createFrameworkEvent({
+        id: 'run_stream:created:retry',
+        type: 'run.created',
+        runId: 'run_stream',
+        streamId: 'run_stream',
+        idempotencyKey: 'create-run',
+        payload: { id: 'run_stream' },
+      })
+    );
+
+    expect(first).toMatchObject({
+      status: 'appended',
+      streamId: 'run_stream',
+      streamSequence: 1,
+      globalSequence: 1,
+    });
+    expect(duplicate).toMatchObject({
+      status: 'duplicate',
+      event: { id: 'run_stream:created', streamSequence: 1 },
+    });
+    await expect(events.getStreamRevision('run_stream')).resolves.toBe(1);
+    await expect(
+      events.appendToStream(
+        createFrameworkEvent({
+          id: 'run_stream:started',
+          type: 'run.started',
+          runId: 'run_stream',
+          streamId: 'run_stream',
+          payload: {},
+        }),
+        { expectedStreamSequence: 0 }
+      )
+    ).rejects.toMatchObject({ code: 'EVENT_STREAM_REVISION_CONFLICT' });
+  });
+
+  it('persists runtime delivery records across local adapter instances', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-delivery-'));
+    const filename = path.join(root, 'runtime.sqlite');
+    const now = sequenceClock([
+      '2026-07-03T00:00:00.000Z',
+      '2026-07-03T00:00:01.000Z',
+      '2026-07-03T00:00:02.000Z',
+      '2026-07-03T00:00:03.000Z',
+      '2026-07-03T00:00:04.000Z',
+    ]);
+    const first = new LocalRuntimeDeliveryStore({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now,
+    });
+
+    const enqueued = await first.enqueue(
+      'outbox',
+      {
+        id: 'message_1',
+        topic: 'runtime.events',
+        payload: { eventId: 'event_1' },
+        idempotencyKey: 'event_1:message',
+        publishedAt: '2026-07-03T00:00:00.000Z',
+      },
+      { maxAttempts: 2 }
+    );
+    expect(enqueued.status).toBe('enqueued');
+    await expect(
+      first.enqueue('outbox', enqueued.record.message, { idempotencyKey: 'event_1:message' })
+    ).resolves.toMatchObject({ status: 'duplicate', record: { id: enqueued.record.id } });
+
+    const second = new LocalRuntimeDeliveryStore({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now,
+    });
+    const leased = await second.leaseNext({
+      box: 'outbox',
+      topic: 'runtime.events',
+      ownerId: 'worker_1',
+      ttlMs: 30000,
+    });
+    expect(leased).toMatchObject({
+      id: enqueued.record.id,
+      status: 'leased',
+      attempts: 1,
+      leaseOwnerId: 'worker_1',
+    });
+    await expect(second.acknowledge(leased!.id, leased!.leaseToken!)).resolves.toMatchObject({
+      status: 'acknowledged',
+    });
+
+    const reopened = new LocalRuntimeDeliveryStore({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now,
+    });
+    await expect(reopened.list({ status: 'acknowledged' })).resolves.toMatchObject([
+      { id: enqueued.record.id, topic: 'runtime.events' },
+    ]);
+  });
+
+  it('persists runtime command queue ordering and idempotency', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-command-'));
+    const filename = path.join(root, 'runtime.sqlite');
+    const scope = {
+      userId: 'owner',
+      sessionId: 'session_1',
+      runId: 'run_1',
+    };
+    const first = new LocalRuntimeCommandQueue({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now: sequenceClock([
+        '2026-07-03T00:00:00.000Z',
+        '2026-07-03T00:00:01.000Z',
+        '2026-07-03T00:00:02.000Z',
+      ]),
+    });
+    const command = {
+      id: 'command_1',
+      type: 'run.start' as const,
+      scope,
+      payload: { runId: 'run_1' },
+      idempotencyKey: 'run_1:start',
+      createdAt: '2026-07-03T00:00:00.000Z',
+    };
+
+    await expect(first.enqueue(command)).resolves.toMatchObject({
+      status: 'enqueued',
+      item: { command: { id: 'command_1' }, sequence: 1 },
+    });
+    await expect(first.enqueue(command)).resolves.toMatchObject({
+      status: 'duplicate',
+      item: { command: { id: 'command_1' }, sequence: 1 },
+    });
+
+    const second = new LocalRuntimeCommandQueue({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+    });
+    await expect(second.size(scope)).resolves.toBe(1);
+    await expect(second.dequeue(scope)).resolves.toMatchObject({
+      command: { id: 'command_1', type: 'run.start' },
+      queueKey: 'owner:session_1',
+      sequence: 1,
+    });
+    await expect(second.dequeue(scope)).resolves.toBeNull();
+  });
+
+  it('dead-letters runtime delivery records after persisted retry exhaustion', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-delivery-dlq-'));
+    const runtime = createLocalRuntimePersistence({
+      filename: path.join(root, 'runtime.sqlite'),
+      mode: 'sqlite',
+      defaultMaxAttempts: 1,
+      now: sequenceClock([
+        '2026-07-03T00:00:00.000Z',
+        '2026-07-03T00:00:01.000Z',
+        '2026-07-03T00:00:02.000Z',
+        '2026-07-03T00:00:03.000Z',
+      ]),
+    });
+    await runtime.delivery.enqueue('inbox', {
+      id: 'message_2',
+      topic: 'runtime.commands',
+      payload: { commandId: 'command_1' },
+      publishedAt: '2026-07-03T00:00:00.000Z',
+    });
+    const leased = await runtime.delivery.leaseNext({
+      box: 'inbox',
+      ownerId: 'worker_1',
+      ttlMs: 30000,
+    });
+    await expect(
+      runtime.delivery.negativeAcknowledge(leased!.id, leased!.leaseToken!, {
+        reason: 'handler_failed',
+      })
+    ).resolves.toMatchObject({
+      status: 'dead_lettered',
+      deadLetterReason: 'handler_failed',
+    });
+  });
+
+  it('persists runtime bus messages through the local delivery outbox', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-bus-'));
+    const filename = path.join(root, 'runtime.sqlite');
+    const delivery = new LocalRuntimeDeliveryStore({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now: () => '2026-07-03T00:00:00.000Z',
+    });
+    const bus = new LocalRuntimeMessageBus({
+      delivery,
+      now: () => '2026-07-03T00:00:00.000Z',
+    });
+    const received: string[] = [];
+    await bus.subscribe('runtime.events', (message) => {
+      received.push(message.id);
+    });
+
+    const first = await bus.publish(
+      {
+        topic: 'runtime.events',
+        payload: { eventId: 'event_1' },
+        idempotencyKey: 'event_1:message',
+      },
+      { correlationId: 'run_1' }
+    );
+    const duplicate = await bus.publish({
+      topic: 'runtime.events',
+      payload: { eventId: 'event_1' },
+      idempotencyKey: 'event_1:message',
+    });
+
+    expect(first.duplicate).toBe(false);
+    expect(duplicate).toMatchObject({ duplicate: true, messageId: first.messageId });
+    expect(received).toEqual([first.messageId]);
+
+    const reopened = new LocalRuntimeMessageBus({
+      delivery: new LocalRuntimeDeliveryStore({
+        structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      }),
+    });
+    await expect(reopened.list('runtime.events')).resolves.toMatchObject([
+      { id: first.messageId, topic: 'runtime.events' },
+    ]);
+  });
+
+  it('creates a restart-safe local runtime engine for command processing and projections', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-engine-'));
+    const scope = {
+      userId: 'owner',
+      sessionId: 'session_1',
+      runId: 'run_1',
+      agentId: 'agent_1',
+    };
+    const first = createLocalRuntimeEngine({
+      rootPath: root,
+      sqliteMode: 'sqlite',
+      now: () => '2026-07-03T00:00:00.000Z',
+      workerId: 'worker_1',
+    });
+    await first.commandProcessor.submit({
+      id: 'command_create_run',
+      type: 'run.create',
+      scope,
+      payload: { input: 'hello' },
+      idempotencyKey: 'run_1:create',
+      correlationId: 'run_1',
+      createdAt: '2026-07-03T00:00:00.000Z',
+    });
+
+    const reopened = createLocalRuntimeEngine({
+      rootPath: root,
+      sqliteMode: 'sqlite',
+      now: () => '2026-07-03T00:00:01.000Z',
+      workerId: 'worker_2',
+    });
+    await expect(reopened.runtime.commandQueue.size(scope)).resolves.toBe(1);
+    await expect(reopened.commandProcessor.processNext(scope)).resolves.toMatchObject({
+      commandId: 'command_create_run',
+      commandType: 'run.create',
+    });
+    await expect(reopened.runtime.commandQueue.size(scope)).resolves.toBe(0);
+    await expect(reopened.events.getStream('run_1')).resolves.toMatchObject([
+      { type: 'runtime.command.enqueued', streamSequence: 1 },
+      { type: 'run.created', streamSequence: 2 },
+      { type: 'runtime.command.applied', streamSequence: 3 },
+    ]);
+    await expect(reopened.runtime.bus.list('runtime.commands')).resolves.toHaveLength(1);
+    await expect(reopened.runtime.bus.list('runtime.events')).resolves.toHaveLength(2);
+    await expect(reopened.serverRuntime.projectLoop('run_1')).resolves.toMatchObject({
+      runId: 'run_1',
+      view: { isRunning: false },
+    });
+  });
+
+  it('wires a local recovery worker for restart-safe waiting attempt reconciliation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-recovery-worker-'));
+    const scope = {
+      userId: 'owner',
+      sessionId: 'session_1',
+      runId: 'run_recovery',
+      agentId: 'agent_1',
+    };
+    const waitingPort: RuntimeActivityPort = {
+      execute: async (request) => ({
+        activityId: request.activityId,
+        status: 'waiting',
+        eventIds: [],
+      }),
+      cancel: async () => undefined,
+      reconcile: async (activityId) => ({
+        activityId,
+        status: 'completed',
+        eventIds: ['human.review.approved:1'],
+      }),
+    };
+    const first = createLocalRuntimeEngine({
+      rootPath: root,
+      sqliteMode: 'sqlite',
+      now: () => '2026-07-03T00:00:00.000Z',
+      workerId: 'worker_1',
+    });
+    await first.stateAttemptExecutor.execute(
+      {
+        scope,
+        fsmProcessId: 'fsm.runtime.loop.default',
+        stateId: 'HumanReview',
+        attempt: 1,
+        activityType: 'human',
+        operationId: 'review',
+        input: { reason: 'approval_required' },
+      },
+      waitingPort
+    );
+
+    const reopened = createLocalRuntimeEngine({
+      rootPath: root,
+      sqliteMode: 'sqlite',
+      now: () => '2026-07-03T00:00:10.000Z',
+      workerId: 'worker_2',
+      recoveryResolver: {
+        resolve: async () => waitingPort,
+      },
+    });
+    await expect(reopened.recoveryWorker?.runOnce({ scanId: 'scan_1' })).resolves.toMatchObject({
+      status: 'completed',
+      scan: {
+        scanned: 1,
+        selected: 1,
+        recovered: [{ status: 'completed' }],
+      },
+    });
+    await expect(reopened.serverRuntime.projectStateAttempts('run_recovery')).resolves.toMatchObject({
+      waiting: [],
+      attempts: [
+        expect.objectContaining({
+          stateId: 'HumanReview',
+          status: 'completed',
+        }),
+      ],
+    });
+  });
+
+  it('persists runtime leases with fencing tokens', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-runtime-lease-'));
+    const filename = path.join(root, 'runtime.sqlite');
+    const first = new LocalRuntimeLeaseCoordinator({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now: () => '2026-07-03T00:00:00.000Z',
+    });
+    const acquired = await first.acquire('runtime.session:user:session', 'worker_1', 30000);
+    expect(acquired).toMatchObject({
+      status: 'acquired',
+      lease: { ownerId: 'worker_1', fencingToken: 1 },
+    });
+
+    const second = new LocalRuntimeLeaseCoordinator({
+      structured: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      now: () => '2026-07-03T00:00:01.000Z',
+    });
+    await expect(
+      second.acquire('runtime.session:user:session', 'worker_2', 30000)
+    ).resolves.toMatchObject({
+      status: 'busy',
+      current: { ownerId: 'worker_1', fencingToken: 1 },
+    });
+    await expect(second.assert('runtime.session:user:session', 1)).resolves.toBeUndefined();
+    await expect(
+      second.renew('runtime.session:user:session', 'worker_1', 1, 30000)
+    ).resolves.toMatchObject({ fencingToken: 1 });
+  });
 });
 
 async function awaitVector(value: string): Promise<number[]> {
   const [vector] = await new MockEmbeddingProvider().embed([value]);
   return vector;
+}
+
+function sequenceClock(values: string[]): () => string {
+  let index = 0;
+  return () => {
+    const value = values[Math.min(index, values.length - 1)];
+    index += 1;
+    return value;
+  };
 }

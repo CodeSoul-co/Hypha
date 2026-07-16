@@ -1,4 +1,24 @@
-import type { EventFilter, EventStore, FrameworkEvent, TraceRecorder } from '@hypha/core';
+import {
+  FrameworkError,
+  defaultEventStreamId,
+  type AppendOnlyEventStore,
+  type EventAppendOptions,
+  type EventAppendResult,
+  type EventFilter,
+  type EventStore,
+  type FrameworkEvent,
+  type TraceRecorder,
+} from '@hypha/core';
+import {
+  RuntimeCommandProcessor,
+  RuntimeLoopRunner,
+  RuntimeRecoveryScanner,
+  RuntimeRecoveryWorker,
+  RuntimeStateAttemptExecutor,
+  RuntimeStateAttemptRecoveryExecutor,
+  ServerRuntimeAdapter,
+  type RuntimeActivityPortResolver,
+} from '@hypha/harness';
 import type {
   ArtifactMeta,
   ArtifactRef,
@@ -11,23 +31,6 @@ import type {
   VectorRecord,
   VectorSearchResult,
 } from '@hypha/memory';
-import type {
-  ToolApprovalGrant,
-  ToolApprovalRequest,
-  ToolApprovalStore,
-  ToolCallResult,
-  ToolInvocationPatch,
-  ToolIdempotencyLookup,
-  ToolInvocationListRequest,
-  ToolInvocationRecord,
-  ToolInvocationStatus,
-  ToolInvocationStore,
-  ToolArtifactPort,
-  ToolObservationPort,
-  ToolContractSnapshot,
-  ToolContractSnapshotStore,
-} from '@hypha/tools';
-import type { MCPCapabilityCatalogStore, MCPCapabilityRecord } from '@hypha/mcp';
 import {
   createFileArtifactStorageProfile,
   createLocalVectorStorageProfile,
@@ -38,8 +41,24 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
+import {
+  LocalRuntimeCommandQueue,
+  LocalRuntimeDeliveryStore,
+  LocalRuntimeLeaseCoordinator,
+  LocalRuntimeMessageBus,
+  type LocalRuntimeStoreOptions,
+  type LocalRuntimeDeliveryStoreOptions,
+} from './runtime-local';
 
-export * from './workspace-runtime';
+export {
+  LocalRuntimeCommandQueue,
+  LocalRuntimeDeliveryStore,
+  LocalRuntimeLeaseCoordinator,
+  LocalRuntimeMessageBus,
+  type LocalRuntimeStoreOptions,
+  type LocalRuntimeDeliveryStoreOptions,
+  type LocalRuntimeMessageBusOptions,
+} from './runtime-local';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
@@ -82,6 +101,152 @@ export interface LocalStorageBackbone {
   artifacts: FileArtifactStore;
   embeddings: EmbeddingProvider;
   memory: HybridMemoryProvider;
+}
+
+export interface LocalRuntimePersistenceOptions {
+  filename: string;
+  mode?: SQLiteStructuredStoreOptions['mode'];
+  tablePrefix?: string;
+  now?: () => string;
+  defaultMaxAttempts?: number;
+  structured?: StructuredStoreProvider;
+}
+
+export interface LocalRuntimePersistence {
+  structured: StructuredStoreProvider;
+  commandQueue: LocalRuntimeCommandQueue;
+  delivery: LocalRuntimeDeliveryStore;
+  leases: LocalRuntimeLeaseCoordinator;
+  bus: LocalRuntimeMessageBus;
+}
+
+export function createLocalRuntimePersistence(
+  options: LocalRuntimePersistenceOptions
+): LocalRuntimePersistence {
+  const structured =
+    options.structured ??
+    new SQLiteStructuredStore({
+      filename: options.filename,
+      mode: options.mode,
+    });
+  const delivery = new LocalRuntimeDeliveryStore({
+    structured,
+    tablePrefix: options.tablePrefix,
+    now: options.now,
+    defaultMaxAttempts: options.defaultMaxAttempts,
+  });
+  return {
+    structured,
+    commandQueue: new LocalRuntimeCommandQueue({
+      structured,
+      tablePrefix: options.tablePrefix,
+      now: options.now,
+    }),
+    delivery,
+    leases: new LocalRuntimeLeaseCoordinator({
+      structured,
+      tablePrefix: options.tablePrefix,
+      now: options.now,
+    }),
+    bus: new LocalRuntimeMessageBus({
+      delivery,
+      now: options.now,
+    }),
+  };
+}
+
+export interface LocalRuntimeEngineOptions extends LocalStorageBackboneOptions {
+  runtimeDbFilename?: string;
+  tablePrefix?: string;
+  workerId?: string;
+  leaseTtlMs?: number;
+  defaultMaxAttempts?: number;
+  now?: () => string;
+  recoveryResolver?: RuntimeActivityPortResolver;
+  recoveryWorkerResourceId?: string;
+}
+
+export interface LocalRuntimeEngine {
+  storage: LocalStorageBackbone;
+  runtime: LocalRuntimePersistence;
+  events: SQLiteEventStore;
+  commandProcessor: RuntimeCommandProcessor;
+  stateAttemptExecutor: RuntimeStateAttemptExecutor;
+  stateAttemptRecovery: RuntimeStateAttemptRecoveryExecutor;
+  recoveryScanner: RuntimeRecoveryScanner;
+  recoveryWorker?: RuntimeRecoveryWorker;
+  loopRunner: RuntimeLoopRunner;
+  serverRuntime: ServerRuntimeAdapter;
+}
+
+export function createLocalRuntimeEngine(options: LocalRuntimeEngineOptions): LocalRuntimeEngine {
+  const storage = createLocalStorageBackbone(options);
+  const runtime = createLocalRuntimePersistence({
+    filename: options.runtimeDbFilename ?? path.join(path.resolve(options.rootPath), 'runtime.sqlite'),
+    mode: options.sqliteMode,
+    tablePrefix: options.tablePrefix,
+    now: options.now,
+    defaultMaxAttempts: options.defaultMaxAttempts,
+    structured: storage.structured,
+  });
+  const commandProcessor = new RuntimeCommandProcessor({
+    events: storage.eventStore,
+    queue: runtime.commandQueue,
+    bus: runtime.bus,
+    leaseCoordinator: runtime.leases,
+    workerId: options.workerId,
+    leaseTtlMs: options.leaseTtlMs,
+    now: options.now,
+  });
+  const stateAttemptExecutor = new RuntimeStateAttemptExecutor({
+    events: storage.eventStore,
+    leaseCoordinator: runtime.leases,
+    workerId: options.workerId,
+    leaseTtlMs: options.leaseTtlMs,
+    now: options.now,
+  });
+  const stateAttemptRecovery = new RuntimeStateAttemptRecoveryExecutor({
+    events: storage.eventStore,
+    leaseCoordinator: runtime.leases,
+    workerId: options.workerId,
+    leaseTtlMs: options.leaseTtlMs,
+    now: options.now,
+  });
+  const recoveryScanner = new RuntimeRecoveryScanner({
+    events: storage.eventStore,
+    leaseCoordinator: runtime.leases,
+    workerId: options.workerId,
+    leaseTtlMs: options.leaseTtlMs,
+    now: options.now,
+  });
+  return {
+    storage,
+    runtime,
+    events: storage.eventStore,
+    commandProcessor,
+    stateAttemptExecutor,
+    stateAttemptRecovery,
+    recoveryScanner,
+    recoveryWorker: options.recoveryResolver
+      ? new RuntimeRecoveryWorker({
+          events: storage.eventStore,
+          leaseCoordinator: runtime.leases,
+          workerId: options.workerId,
+          leaseTtlMs: options.leaseTtlMs,
+          now: options.now,
+          resolver: options.recoveryResolver,
+          resourceId: options.recoveryWorkerResourceId,
+        })
+      : undefined,
+    loopRunner: new RuntimeLoopRunner({
+      events: storage.eventStore,
+      stateAttemptExecutor,
+      now: options.now,
+    }),
+    serverRuntime: new ServerRuntimeAdapter({
+      listEvents: (runId) => storage.eventStore.list({ runId }),
+    }),
+  };
 }
 
 export function createLocalStorageBackbone(
@@ -164,7 +329,7 @@ export interface SQLiteEventStoreOptions {
   jsonFallbackFilename?: string;
 }
 
-export class SQLiteEventStore implements EventStore, TraceRecorder {
+export class SQLiteEventStore implements AppendOnlyEventStore, TraceRecorder {
   private readonly backend: EventStore & TraceRecorder;
 
   constructor(options: SQLiteEventStoreOptions) {
@@ -179,7 +344,7 @@ export class SQLiteEventStore implements EventStore, TraceRecorder {
   }
 
   async append(event: FrameworkEvent): Promise<void> {
-    await this.backend.append(event);
+    await this.appendToStream(event);
   }
 
   async record(event: FrameworkEvent): Promise<void> {
@@ -188,6 +353,65 @@ export class SQLiteEventStore implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     return this.backend.list(filter);
+  }
+
+  async appendToStream(
+    event: FrameworkEvent,
+    options: EventAppendOptions = {}
+  ): Promise<EventAppendResult> {
+    const streamId = options.streamId ?? event.streamId ?? defaultEventStreamId(event);
+    const idempotencyKey = options.idempotencyKey ?? event.idempotencyKey;
+    const dedupeKey = idempotencyKey ? `${streamId}:${idempotencyKey}` : undefined;
+    const events = await this.list();
+    if (dedupeKey) {
+      const existing = events.find(
+        (candidate) =>
+          candidate.streamId === streamId && candidate.idempotencyKey === idempotencyKey
+      );
+      if (existing) return eventAppendResult('duplicate', existing);
+    }
+    if (events.some((candidate) => candidate.id === event.id)) {
+      throw new FrameworkError({
+        code: 'EVENT_DUPLICATE_ID',
+        message: `Event id already exists: ${event.id}`,
+        context: { eventId: event.id, streamId },
+      });
+    }
+
+    const currentRevision = await this.getStreamRevision(streamId);
+    if (
+      options.expectedStreamSequence !== undefined &&
+      options.expectedStreamSequence !== currentRevision
+    ) {
+      throw new FrameworkError({
+        code: 'EVENT_STREAM_REVISION_CONFLICT',
+        message: `Event stream revision conflict for ${streamId}`,
+        context: {
+          streamId,
+          expectedStreamSequence: options.expectedStreamSequence,
+          actualStreamSequence: currentRevision,
+        },
+      });
+    }
+
+    const stored: FrameworkEvent = {
+      ...event,
+      streamId,
+      streamSequence: currentRevision + 1,
+      globalSequence: nextGlobalSequence(events),
+      idempotencyKey,
+    };
+    await this.backend.append(stored);
+    return eventAppendResult('appended', stored);
+  }
+
+  async getStream(streamId: string): Promise<FrameworkEvent[]> {
+    return this.list({ streamId });
+  }
+
+  async getStreamRevision(streamId: string): Promise<number> {
+    const events = await this.getStream(streamId);
+    return events.reduce((revision, event) => Math.max(revision, event.streamSequence ?? 0), 0);
   }
 
   async exportJsonl(filename: string, filter: EventFilter = {}): Promise<number> {
@@ -246,208 +470,6 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
   }
 }
 
-export interface FileToolRuntimeStoreOptions {
-  filename: string;
-}
-
-interface FileToolRuntimeState {
-  invocations: Record<string, ToolInvocationRecord>;
-  approvalRequests: Record<string, ToolApprovalRequest>;
-  approvalGrants: Record<string, ToolApprovalGrant>;
-}
-
-export class FileToolRuntimeStore implements ToolInvocationStore, ToolApprovalStore {
-  private state: FileToolRuntimeState;
-
-  constructor(private readonly options: FileToolRuntimeStoreOptions) {
-    fs.mkdirSync(path.dirname(options.filename), { recursive: true });
-    this.state = this.readState();
-  }
-
-  async get(invocationId: string): Promise<ToolInvocationRecord | null> {
-    this.refresh();
-    return this.state.invocations[invocationId] ?? null;
-  }
-
-  async findByIdempotency(request: ToolIdempotencyLookup): Promise<ToolInvocationRecord | null> {
-    this.refresh();
-    return this.findByIdempotencyInState(request);
-  }
-
-  async list(request: ToolInvocationListRequest = {}): Promise<ToolInvocationRecord[]> {
-    this.refresh();
-    return Object.values(this.state.invocations)
-      .filter(
-        (record) =>
-          (!request.statuses || request.statuses.includes(record.status)) &&
-          (!request.toolId || record.toolId === request.toolId) &&
-          (!request.runId || record.scope?.runId === request.runId)
-      )
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-      .slice(0, request.limit ?? Number.POSITIVE_INFINITY);
-  }
-
-  async create(record: ToolInvocationRecord): Promise<ToolInvocationRecord> {
-    this.refresh();
-    const existing = this.state.invocations[record.id];
-    if (existing) return existing;
-    if (record.idempotencyKey && typeof record.metadata?.idempotencyScopeHash === 'string') {
-      const idempotent = this.findByIdempotencyInState({
-        toolId: record.toolId,
-        idempotencyKey: record.idempotencyKey,
-        scopeHash: record.metadata.idempotencyScopeHash,
-      });
-      if (idempotent) return idempotent;
-    }
-    this.state.invocations[record.id] = record;
-    this.flush();
-    return record;
-  }
-
-  async update(
-    invocationId: string,
-    patch: ToolInvocationPatch,
-    options: {
-      expectedStatuses?: readonly ToolInvocationStatus[];
-      expectedRevision?: number;
-    } = {}
-  ): Promise<ToolInvocationRecord> {
-    this.refresh();
-    const existing = this.state.invocations[invocationId];
-    if (!existing) throw new Error('Tool invocation not found: ' + invocationId);
-    if (options.expectedStatuses && !options.expectedStatuses.includes(existing.status)) {
-      throw new Error('Tool invocation ' + invocationId + ' is in state ' + existing.status + '.');
-    }
-    if (options.expectedRevision !== undefined && options.expectedRevision !== existing.revision) {
-      throw new Error('Tool invocation revision changed: ' + invocationId);
-    }
-    const updated: ToolInvocationRecord = {
-      ...existing,
-      ...patch,
-      revision: existing.revision + 1,
-    };
-    this.state.invocations[invocationId] = updated;
-    this.flush();
-    return updated;
-  }
-
-  async getCompleted(invocationId: string): Promise<ToolCallResult | null> {
-    const invocation = await this.get(invocationId);
-    return invocation?.status === 'completed' ? (invocation.result ?? null) : null;
-  }
-
-  async saveCompleted(invocationId: string, result: ToolCallResult): Promise<void> {
-    const existing = await this.get(invocationId);
-    if (!existing) return;
-    await this.update(invocationId, {
-      status: 'completed',
-      result,
-      updatedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-    });
-  }
-
-  async getRequest(invocationId: string): Promise<ToolApprovalRequest | null> {
-    this.refresh();
-    return this.state.approvalRequests[invocationId] ?? null;
-  }
-
-  async requestApproval(request: ToolApprovalRequest): Promise<ToolApprovalRequest> {
-    this.refresh();
-    const existing = this.state.approvalRequests[request.invocationId];
-    if (existing) return existing;
-    this.state.approvalRequests[request.invocationId] = request;
-    this.flush();
-    return request;
-  }
-
-  async getGrant(invocationId: string): Promise<ToolApprovalGrant | null> {
-    this.refresh();
-    return this.state.approvalGrants[invocationId] ?? null;
-  }
-
-  async approve(
-    invocationId: string,
-    approvedBy: string,
-    options: { approvedAt?: string; expiresAt?: string } = {}
-  ): Promise<ToolApprovalGrant> {
-    this.refresh();
-    const request = this.state.approvalRequests[invocationId];
-    if (!request) throw new Error('Tool approval request not found: ' + invocationId);
-    if (request.status !== 'pending') {
-      throw new Error(
-        'Tool approval request is already resolved as ' + request.status + ': ' + invocationId
-      );
-    }
-    const approvedAt = options.approvedAt ?? new Date().toISOString();
-    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.parse(approvedAt)) {
-      this.state.approvalRequests[invocationId] = { ...request, status: 'expired' };
-      delete this.state.approvalGrants[invocationId];
-      this.flush();
-      throw new Error('Tool approval request has expired: ' + invocationId);
-    }
-    const grant: ToolApprovalGrant = {
-      requestId: request.id,
-      invocationId,
-      toolId: request.toolId,
-      inputHash: request.inputHash,
-      toolRevision: request.toolRevision,
-      contractSnapshotRef: request.contractSnapshotRef,
-      principalId: request.principalId,
-      policyDecisionRef: request.policyDecisionRef,
-      approvedBy,
-      approvedAt,
-      expiresAt: options.expiresAt,
-    };
-    this.state.approvalRequests[invocationId] = { ...request, status: 'approved' };
-    this.state.approvalGrants[invocationId] = grant;
-    this.flush();
-    return grant;
-  }
-
-  async reject(invocationId: string): Promise<ToolApprovalRequest> {
-    this.refresh();
-    const request = this.state.approvalRequests[invocationId];
-    if (!request) throw new Error('Tool approval request not found: ' + invocationId);
-    if (request.status !== 'pending') {
-      throw new Error(
-        'Tool approval request is already resolved as ' + request.status + ': ' + invocationId
-      );
-    }
-    const rejected = { ...request, status: 'rejected' as const };
-    this.state.approvalRequests[invocationId] = rejected;
-    delete this.state.approvalGrants[invocationId];
-    this.flush();
-    return rejected;
-  }
-
-  private refresh(): void {
-    this.state = this.readState();
-  }
-
-  private findByIdempotencyInState(request: ToolIdempotencyLookup): ToolInvocationRecord | null {
-    return (
-      Object.values(this.state.invocations).find(
-        (record) =>
-          record.toolId === request.toolId &&
-          record.idempotencyKey === request.idempotencyKey &&
-          record.metadata?.idempotencyScopeHash === request.scopeHash
-      ) ?? null
-    );
-  }
-
-  private readState(): FileToolRuntimeState {
-    return readJsonFile<FileToolRuntimeState>(this.options.filename, {
-      invocations: {},
-      approvalRequests: {},
-      approvalGrants: {},
-    });
-  }
-
-  private flush(): void {
-    writeJsonFile(this.options.filename, this.state);
-  }
-}
 class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
   private readonly db: SqliteDatabaseSync;
 
@@ -498,10 +520,10 @@ class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     const rows = this.db
-      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, id ASC')
+      .prepare('SELECT event FROM framework_events')
       .all();
     return filterEvents(
-      rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent),
+      rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent).sort(compareEvents),
       filter
     );
   }
@@ -829,99 +851,6 @@ export class FileArtifactStore implements ArtifactStoreProvider {
   }
 }
 
-export class ArtifactStoreToolPort implements ToolArtifactPort {
-  constructor(private readonly artifacts: ArtifactStoreProvider) {}
-
-  async store(request: {
-    invocationId: string;
-    toolId: string;
-    value: unknown;
-    mimeType?: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<string> {
-    const content = Buffer.isBuffer(request.value)
-      ? request.value
-      : typeof request.value === 'string'
-        ? request.value
-        : JSON.stringify(request.value);
-    const extension = request.mimeType === 'text/plain' ? 'txt' : 'json';
-    const ref = await this.artifacts.put(
-      `tool-results/${safePathSegment(request.toolId)}/${safePathSegment(request.invocationId)}.${extension}`,
-      content,
-      {
-        contentType: request.mimeType ?? 'application/json',
-        metadata: request.metadata,
-      }
-    );
-    return ref.id;
-  }
-}
-
-export class FileToolObservationStore implements ToolObservationPort {
-  constructor(private readonly rootPath: string) {
-    fs.mkdirSync(rootPath, { recursive: true });
-  }
-
-  async record(request: {
-    invocationId: string;
-    toolId: string;
-    toolRevision: string;
-    runId: string;
-    stepId: string;
-    inputHash: string;
-    outputHash: string;
-    value: unknown;
-    artifactRefs?: string[];
-    provenance: Record<string, unknown>;
-  }): Promise<string> {
-    const id = `observation:${hash(`${request.invocationId}:${request.outputHash}`)}`;
-    writeJsonFile(path.join(this.rootPath, `${safePathSegment(id)}.json`), {
-      id,
-      ...request,
-      recordedAt: new Date().toISOString(),
-    });
-    return id;
-  }
-}
-
-export class FileMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
-  constructor(private readonly filename: string) {
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-  }
-
-  async list(serverId?: string): Promise<MCPCapabilityRecord[]> {
-    return readJsonFile<MCPCapabilityRecord[]>(this.filename, []).filter(
-      (record) => !serverId || record.serverId === serverId
-    );
-  }
-
-  async save(record: MCPCapabilityRecord): Promise<void> {
-    const records = readJsonFile<MCPCapabilityRecord[]>(this.filename, []);
-    const index = records.findIndex((candidate) => candidate.id === record.id);
-    if (index >= 0) records[index] = record;
-    else records.push(record);
-    writeJsonFile(this.filename, records);
-  }
-}
-
-export class FileToolContractSnapshotStore implements ToolContractSnapshotStore {
-  constructor(private readonly rootPath: string) {
-    fs.mkdirSync(rootPath, { recursive: true });
-  }
-
-  async get(snapshotId: string): Promise<ToolContractSnapshot | null> {
-    return readJsonFile<ToolContractSnapshot | null>(this.snapshotPath(snapshotId), null);
-  }
-
-  async save(snapshot: ToolContractSnapshot): Promise<void> {
-    writeJsonFile(this.snapshotPath(snapshot.id), snapshot);
-  }
-
-  private snapshotPath(snapshotId: string): string {
-    return path.join(this.rootPath, `${safePathSegment(snapshotId)}.json`);
-  }
-}
-
 export class MockEmbeddingProvider implements EmbeddingProvider {
   async embed(input: string[]): Promise<number[][]> {
     return input.map((value) => deterministicVector(value));
@@ -967,11 +896,18 @@ function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): Frame
     if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
     if (filter.runId && event.runId !== filter.runId) return false;
     if (filter.type && event.type !== filter.type) return false;
+    if (filter.streamId && event.streamId !== filter.streamId) return false;
+    if (filter.correlationId && event.correlationId !== filter.correlationId) return false;
+    if (filter.causationId && event.causationId !== filter.causationId) return false;
+    if (filter.idempotencyKey && event.idempotencyKey !== filter.idempotencyKey) return false;
     return true;
   });
 }
 
 function compareEvents(left: FrameworkEvent, right: FrameworkEvent): number {
+  if (left.globalSequence !== undefined && right.globalSequence !== undefined) {
+    return left.globalSequence - right.globalSequence;
+  }
   return left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id);
 }
 
@@ -1011,10 +947,6 @@ function validateIdentifier(identifier: string): void {
   }
 }
 
-function safePathSegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, '_');
-}
-
 function quoteIdentifier(identifier: string): string {
   validateIdentifier(identifier);
   return `"${identifier}"`;
@@ -1038,6 +970,23 @@ function matchesWhere(
 
 function hash(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+function nextGlobalSequence(events: FrameworkEvent[]): number {
+  return events.reduce((sequence, event) => Math.max(sequence, event.globalSequence ?? 0), 0) + 1;
+}
+
+function eventAppendResult(
+  status: EventAppendResult['status'],
+  event: FrameworkEvent
+): EventAppendResult {
+  return {
+    status,
+    event,
+    streamId: event.streamId ?? defaultEventStreamId(event),
+    streamSequence: event.streamSequence ?? 0,
+    globalSequence: event.globalSequence ?? 0,
+  };
 }
 
 function deterministicVector(value: string): number[] {

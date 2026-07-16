@@ -72,7 +72,7 @@ export class SkillManager {
     // Precedence: explicit arg > env HYPHA_SKILLS_DIR (colon-separated) > config > builtins.
     const configDirs = (getConfig().skills as any).dirs as string[] | undefined;
     const envDirs = (process.env.HYPHA_SKILLS_DIR || '')
-      .split(':').map((s) => s.trim()).filter(Boolean);
+      .split(path.delimiter).map((s) => s.trim()).filter(Boolean);
     const raw = [
       ...(opts?.dirs || []),
       ...envDirs,

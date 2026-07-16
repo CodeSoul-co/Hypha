@@ -49,24 +49,10 @@ function parseBooleanish(value: unknown): unknown {
 }
 
 const booleanishSchema = z.preprocess(parseBooleanish, z.boolean());
-const pathListSchema = z.preprocess(
-  (value) => {
-    if (typeof value !== 'string') return value;
-    return value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  },
-  z.array(z.string().min(1))
-);
 const optionalBooleanishSchema = z.preprocess((value) => {
   if (typeof value === 'string' && value.trim() === '') return undefined;
   return parseBooleanish(value);
 }, z.boolean().optional());
-const optionalPositiveIntSchema = z.preprocess(
-  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
-  z.coerce.number().int().positive().optional()
-);
 
 // Provider API config schema
 const providerConfigSchema = z.object({
@@ -75,7 +61,7 @@ const providerConfigSchema = z.object({
   timeout: z.number().default(60000),
 });
 
-const inferenceBackendIdSchema = z.enum(['ollama', 'sglang', 'vllm', 'llama.cpp', 'openai-api']);
+const inferenceBackendIdSchema = z.enum(['sglang', 'vllm', 'llama.cpp', 'openai-api']);
 
 const inferenceHttpBackendConfigSchema = z.object({
   enabled: booleanishSchema.default(true),
@@ -87,24 +73,7 @@ const inferenceHttpBackendConfigSchema = z.object({
 
 const inferenceConfigSchema = z
   .object({
-    runtimeProvider: z.enum(['model-provider', 'backend']).default('model-provider'),
     defaultBackend: inferenceBackendIdSchema.default('sglang'),
-    local: z
-      .object({
-        enabled: booleanishSchema.default(false),
-        engine: z.enum(['ollama', 'sglang', 'vllm']).default('ollama'),
-        mode: z.enum(['connect', 'managed']).default('connect'),
-        autoStart: booleanishSchema.default(false),
-        model: optionalStringSchema,
-        host: z.string().default('127.0.0.1'),
-        port: optionalPositiveIntSchema,
-        command: optionalStringSchema,
-        args: pathListSchema.optional(),
-        cwd: optionalStringSchema,
-        startupTimeoutMs: z.coerce.number().int().positive().default(120000),
-        healthPollMs: z.coerce.number().int().positive().default(500),
-      })
-      .default({}),
     promptCompiler: z
       .object({
         enabled: booleanishSchema.default(true),
@@ -131,12 +100,6 @@ const inferenceConfigSchema = z
       .default({}),
     backends: z
       .object({
-        ollama: inferenceHttpBackendConfigSchema.default({
-          enabled: true,
-          baseUrl: 'http://localhost:11434',
-          endpoint: '/api/chat',
-          timeoutMs: 60000,
-        }),
         sglang: inferenceHttpBackendConfigSchema.default({
           enabled: true,
           baseUrl: 'http://localhost:30000',
@@ -443,21 +406,6 @@ const configSchema = z.object({
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
-    filesystem: z
-      .object({
-        workingDirectory: z.string().default('.'),
-        readPaths: pathListSchema.default(['.']),
-        writePaths: pathListSchema.default(['./data/workspace']),
-        executePaths: pathListSchema.default(['./data/workspace/bin']),
-        execution: z
-          .object({
-            enabled: booleanishSchema.default(false),
-            timeoutMs: z.coerce.number().int().positive().default(30000),
-            maxOutputBytes: z.coerce.number().int().positive().default(1048576),
-          })
-          .default({}),
-      })
-      .default({}),
     mcpServers: z
       .array(
         z.object({
@@ -681,20 +629,6 @@ export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;
-export const filesystemToolConfig = () => {
-  const raw = getConfig().tools.filesystem;
-  const legacyRoot = process.env.FILESYSTEM_TOOL_ROOT?.trim();
-  if (!legacyRoot) return raw;
-
-  return {
-    ...raw,
-    workingDirectory: process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY
-      ? raw.workingDirectory
-      : legacyRoot,
-    readPaths: process.env.HYPHA_FILESYSTEM_READ_PATHS ? raw.readPaths : [legacyRoot],
-    writePaths: process.env.HYPHA_FILESYSTEM_WRITE_PATHS ? raw.writePaths : [legacyRoot],
-  };
-};
 
 // Get enabled models for a provider
 export function getEnabledModels(provider: string): ModelConfig[] {

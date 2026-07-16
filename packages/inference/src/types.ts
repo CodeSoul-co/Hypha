@@ -8,7 +8,6 @@ export interface InferenceRequest<TInput = unknown> {
   backendId?: string;
   input: TInput;
   options?: InferenceGenerationOptions;
-  tools?: InferenceToolDescriptor[];
   cachePolicy?: InferenceCachePolicy;
   prefix?: PrefixCacheRef;
   resolvedPrefixContent?: string;
@@ -16,13 +15,6 @@ export interface InferenceRequest<TInput = unknown> {
   resolvedKvCacheValue?: unknown;
   trace?: boolean;
   metadata?: Record<string, unknown>;
-}
-
-export interface InferenceToolDescriptor {
-  id: string;
-  name: string;
-  description?: string;
-  inputSchema: Record<string, unknown>;
 }
 
 export interface InferenceResponse<TOutput = unknown> {
@@ -262,7 +254,7 @@ export interface PlasmodHotLayer {
   getCacheMetadata(segmentId: string): PlasmodCacheMetadata | null;
 }
 
-export type InferenceBackendKind = 'ollama' | 'sglang' | 'vllm' | 'llama.cpp' | 'openai-api';
+export type InferenceBackendKind = 'sglang' | 'vllm' | 'llama.cpp' | 'openai-api';
 
 export interface InferenceBackendCapabilities {
   streaming: boolean;
@@ -286,7 +278,6 @@ export interface InferenceBackendRequest {
   resolvedKvCacheValue?: unknown;
   physicalKvCache?: unknown;
   options?: InferenceGenerationOptions;
-  tools?: InferenceToolDescriptor[];
   metadata?: Record<string, unknown>;
 }
 

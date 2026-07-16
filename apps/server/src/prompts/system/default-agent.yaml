@@ -45,9 +45,4 @@ variables:
     type: string
     description: Current date and time
     required: false
-    default: "unspecified"
-
-metadata:
-  version: "1.0.0"
-  stable: false
-  cacheable: false
+    default: "${new Date().toISOString()}"

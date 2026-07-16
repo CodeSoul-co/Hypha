@@ -8,32 +8,12 @@ import {
   specMetadataSchema,
   versionedSpecSchema,
   type JsonSchema,
-  type FrameworkEventType,
   type SideEffectLevel,
   type SpecMetadata,
   type TraceRecorder,
   type VersionedSpec,
 } from '@hypha/core';
-import {
-  MCPToolAdapter,
-  type ToolCallContext,
-  type ToolRegistry,
-  type ToolSpec,
-} from '@hypha/tools';
-import {
-  InMemoryMCPCapabilityBaselineStore,
-  capabilityKey,
-  evaluateCapabilityDrift,
-  governedSideEffectLevel,
-  type MCPCapabilityBaselineStore,
-  type MCPDriftPolicy,
-  type MCPDriftRecord,
-} from './governance';
-
-export * from './governance';
-export * from './contracts';
-export * from './connection-manager';
-export * from './catalog';
+import type { ToolCallContext, ToolRegistry, ToolSpec } from '@hypha/tools';
 
 export interface MCPIntegrationSpec {
   id: string;
@@ -48,7 +28,6 @@ export interface MCPIntegrationSpec {
   promptPolicy?: string;
   versionPinning?: boolean;
   capabilityHashing?: boolean;
-  driftPolicy?: MCPDriftPolicy;
 }
 
 export interface MCPServerSpec {
@@ -70,10 +49,6 @@ export interface MCPCapabilityDescriptor extends VersionedSpec, SpecMetadata {
   permissionScope?: string[];
   capabilityHash?: string;
   trustLevel?: 'trusted' | 'reviewed' | 'untrusted';
-  declarationSource?: 'framework' | 'user' | 'server' | 'unknown';
-  annotations?: Record<string, unknown>;
-  protocolVersion?: string;
-  serverIdentity?: Record<string, unknown>;
 }
 
 export interface NormalizedMCPCapability {
@@ -92,36 +67,6 @@ export interface MCPToolCallRequest<TInput = unknown> {
   context: ToolCallContext;
 }
 
-export interface MCPResourceReadRequest {
-  serverId: string;
-  uri: string;
-  context?: Partial<ToolCallContext>;
-}
-
-export interface MCPResourceResult {
-  contents: Array<{
-    uri: string;
-    mimeType?: string;
-    text?: string;
-    blob?: string;
-    metadata?: Record<string, unknown>;
-  }>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface MCPPromptRequest {
-  serverId: string;
-  name: string;
-  arguments?: Record<string, string>;
-  context?: Partial<ToolCallContext>;
-}
-
-export interface MCPPromptResult {
-  description?: string;
-  messages: unknown[];
-  metadata?: Record<string, unknown>;
-}
-
 export type MCPToolHandler<TInput = unknown, TOutput = unknown> = (
   request: MCPToolCallRequest<TInput>
 ) => Promise<TOutput> | TOutput;
@@ -129,18 +74,11 @@ export type MCPToolHandler<TInput = unknown, TOutput = unknown> = (
 export interface MCPGateway {
   discover(integration: MCPIntegrationSpec): Promise<MCPCapabilityDescriptor[]>;
   normalize(capability: MCPCapabilityDescriptor): Promise<NormalizedMCPCapability>;
-  call(request: MCPToolCallRequest): Promise<unknown>;
-  /** @deprecated Use call(). Kept for adapters migrating from the classic gateway contract. */
   callTool?(request: MCPToolCallRequest): Promise<unknown>;
-  readResource?(request: MCPResourceReadRequest): Promise<MCPResourceResult>;
-  getPrompt?(request: MCPPromptRequest): Promise<MCPPromptResult>;
-  health(serverId?: string): Promise<Record<string, import('@hypha/tools').ProviderHealth>>;
 }
 
 export class MockMCPGateway implements MCPGateway {
   private readonly handlers = new Map<string, MCPToolHandler>();
-  private readonly resources = new Map<string, MCPResourceResult>();
-  private readonly prompts = new Map<string, MCPPromptResult>();
 
   constructor(private readonly capabilities: MCPCapabilityDescriptor[] = []) {}
 
@@ -148,23 +86,13 @@ export class MockMCPGateway implements MCPGateway {
     this.handlers.set(this.toolKey(serverId, capabilityId), handler);
   }
 
-  registerResource(serverId: string, uri: string, result: MCPResourceResult): void {
-    this.resources.set(this.toolKey(serverId, uri), result);
-  }
-
-  registerPrompt(serverId: string, name: string, result: MCPPromptResult): void {
-    this.prompts.set(this.toolKey(serverId, name), result);
-  }
-
   async discover(integration: MCPIntegrationSpec): Promise<MCPCapabilityDescriptor[]> {
     const allowed = new Set(integration.allowedCapabilities ?? []);
     const denied = new Set(integration.deniedCapabilities ?? []);
     return this.capabilities.filter((capability) => {
       if (!integration.servers.some((server) => server.id === capability.serverId)) return false;
-      const scopedId = capabilityKey(capability);
-      if (denied.has(capability.capabilityId) || denied.has(scopedId)) return false;
-      if (allowed.size > 0 && !allowed.has(capability.capabilityId) && !allowed.has(scopedId))
-        return false;
+      if (denied.has(capability.capabilityId)) return false;
+      if (allowed.size > 0 && !allowed.has(capability.capabilityId)) return false;
       return true;
     });
   }
@@ -180,7 +108,7 @@ export class MockMCPGateway implements MCPGateway {
     };
   }
 
-  async call(request: MCPToolCallRequest): Promise<unknown> {
+  async callTool(request: MCPToolCallRequest): Promise<unknown> {
     const handler = this.handlers.get(this.toolKey(request.serverId, request.capabilityId));
     if (handler) {
       return handler(request);
@@ -191,34 +119,6 @@ export class MockMCPGateway implements MCPGateway {
       input: request.input,
       ok: true,
     };
-  }
-
-  async callTool(request: MCPToolCallRequest): Promise<unknown> {
-    return this.call(request);
-  }
-
-  async readResource(request: MCPResourceReadRequest): Promise<MCPResourceResult> {
-    const result = this.resources.get(this.toolKey(request.serverId, request.uri));
-    if (!result) throw new Error(`MCP resource not found: ${request.serverId}/${request.uri}`);
-    return structuredClone(result);
-  }
-
-  async getPrompt(request: MCPPromptRequest): Promise<MCPPromptResult> {
-    const result = this.prompts.get(this.toolKey(request.serverId, request.name));
-    if (!result) throw new Error(`MCP prompt not found: ${request.serverId}/${request.name}`);
-    return structuredClone(result);
-  }
-
-  async health(serverId?: string): Promise<Record<string, import('@hypha/tools').ProviderHealth>> {
-    const serverIds = serverId
-      ? [serverId]
-      : Array.from(new Set(this.capabilities.map((capability) => capability.serverId)));
-    return Object.fromEntries(
-      serverIds.map((id) => [
-        id,
-        { status: 'healthy' as const, checkedAt: new Date().toISOString() },
-      ])
-    );
   }
 
   private toolKey(serverId: string, capabilityId: string): string {
@@ -569,33 +469,20 @@ export interface MCPGatewayToolRegistrationOptions {
   registry: ToolRegistry;
   trace?: TraceRecorder;
   traceContext?: MCPGatewayToolRegistrationContext;
-  baselineStore?: MCPCapabilityBaselineStore;
 }
 
 export interface MCPGatewayToolRegistrationResult {
   discoveredCapabilities: MCPCapabilityDescriptor[];
   normalizedCapabilities: NormalizedMCPCapability[];
   registeredTools: ToolSpec[];
-  quarantinedCapabilities: MCPCapabilityDescriptor[];
-  driftRecords: MCPDriftRecord[];
 }
 
 export async function registerMCPGatewayTools(
   options: MCPGatewayToolRegistrationOptions
 ): Promise<MCPGatewayToolRegistrationResult> {
-  const rawCapabilities = await options.gateway.discover(options.integration);
-  const baselineStore = options.baselineStore ?? new InMemoryMCPCapabilityBaselineStore();
-  const baseline = await baselineStore.load(options.integration.id);
-  const drift = evaluateCapabilityDrift(
-    rawCapabilities,
-    baseline,
-    options.integration.driftPolicy ?? 'quarantine'
-  );
-  const discoveredCapabilities = drift.current;
-  await baselineStore.save(options.integration.id, drift.acceptedBaseline);
+  const discoveredCapabilities = await options.gateway.discover(options.integration);
   const normalizedCapabilities: NormalizedMCPCapability[] = [];
   const registeredTools: ToolSpec[] = [];
-  const quarantinedCapabilities: MCPCapabilityDescriptor[] = [];
 
   for (const capability of discoveredCapabilities) {
     await recordMCPGatewayTrace(options, 'mcp.capability.discovered', {
@@ -607,32 +494,6 @@ export async function registerMCPGatewayTools(
       sideEffectLevel: capability.sideEffectLevel,
       trustLevel: capability.trustLevel,
     });
-    await recordMCPGatewayTrace(options, 'mcp.capability.trust.evaluated', {
-      integrationId: options.integration.id,
-      serverId: capability.serverId,
-      capabilityId: capability.capabilityId,
-      trustLevel: capability.trustLevel,
-      declarationSource: capability.declarationSource,
-      declaredSideEffectLevel: capability.sideEffectLevel,
-      governedSideEffectLevel: governedSideEffectLevel(capability),
-    });
-    const driftRecord = drift.records.find(
-      (record) => record.capabilityKey === capabilityKey(capability)
-    );
-    if (driftRecord && driftRecord.status !== 'unchanged') {
-      await recordMCPGatewayTrace(options, 'mcp.capability.drift.detected', {
-        integrationId: options.integration.id,
-        ...driftRecord,
-      });
-    }
-    if (drift.quarantinedKeys.has(capabilityKey(capability))) {
-      quarantinedCapabilities.push(capability);
-      await recordMCPGatewayTrace(options, 'mcp.capability.quarantined', {
-        integrationId: options.integration.id,
-        ...driftRecord,
-      });
-      continue;
-    }
     const normalized = await options.gateway.normalize(capability);
     normalizedCapabilities.push(normalized);
 
@@ -641,18 +502,19 @@ export async function registerMCPGatewayTools(
     }
 
     const toolSpec = normalizeMCPToolSpec(capability);
-    options.registry.registerAdapter(
-      toolSpec,
-      new MCPToolAdapter(
-        `mcp:${capability.serverId}`,
-        capability.serverId,
-        capability.capabilityId,
-        {
-          invoke: (request) => options.gateway.call(request),
-          health: async () => ({ status: 'unknown', checkedAt: new Date().toISOString() }),
-        }
-      )
-    );
+    options.registry.register(toolSpec, async (input, context) => {
+      if (!options.gateway.callTool) {
+        throw new Error(
+          `MCP gateway does not support tool calls: ${capability.serverId}.${capability.capabilityId}`
+        );
+      }
+      return options.gateway.callTool({
+        serverId: capability.serverId,
+        capabilityId: capability.capabilityId,
+        input,
+        context,
+      });
+    });
     registeredTools.push(toolSpec);
 
     await recordMCPGatewayTrace(options, 'mcp.tool.normalized', {
@@ -672,8 +534,6 @@ export async function registerMCPGatewayTools(
     discoveredCapabilities,
     normalizedCapabilities,
     registeredTools,
-    quarantinedCapabilities,
-    driftRecords: drift.records,
   };
 }
 
@@ -685,15 +545,12 @@ export function normalizeMCPToolSpec(capability: MCPCapabilityDescriptor): ToolS
     description: capability.description ?? `MCP capability ${capability.capabilityId}`,
     inputSchema: capability.inputSchema ?? { type: 'object' },
     outputSchema: capability.outputSchema,
-    sideEffectLevel: governedSideEffectLevel(capability),
+    sideEffectLevel: capability.sideEffectLevel ?? 'read',
     permissionScope: capability.permissionScope,
     source: 'mcp',
     sourceRef: {
       serverId: capability.serverId,
       capabilityId: capability.capabilityId,
-      capabilityHash: capability.capabilityHash,
-      trustLevel: capability.trustLevel ?? 'untrusted',
-      declarationSource: capability.declarationSource ?? 'server',
     },
   };
 }
@@ -720,7 +577,6 @@ export const mcpIntegrationSpecSchema = z.object({
   promptPolicy: z.string().optional(),
   versionPinning: z.boolean().optional(),
   capabilityHashing: z.boolean().optional(),
-  driftPolicy: z.enum(['quarantine', 'accept']).optional(),
 }) satisfies ZodType<MCPIntegrationSpec>;
 
 export const mcpCapabilityDescriptorSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
@@ -733,7 +589,6 @@ export const mcpCapabilityDescriptorSchema = versionedSpecSchema.merge(specMetad
   permissionScope: z.array(z.string()).optional(),
   capabilityHash: z.string().optional(),
   trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
-  declarationSource: z.enum(['framework', 'user', 'server', 'unknown']).optional(),
 });
 
 export const mcpIntegrationSpecJsonSchema: JsonSchema = {
@@ -766,7 +621,6 @@ export const mcpIntegrationSpecJsonSchema: JsonSchema = {
     promptPolicy: { type: 'string' },
     versionPinning: { type: 'boolean' },
     capabilityHashing: { type: 'boolean' },
-    driftPolicy: { enum: ['quarantine', 'accept'] },
   },
   additionalProperties: false,
 };
@@ -864,7 +718,7 @@ function validateHttpUrl(url: string): void {
 
 async function recordMCPGatewayTrace(
   options: MCPGatewayToolRegistrationOptions,
-  type: FrameworkEventType,
+  type: 'mcp.capability.discovered' | 'mcp.tool.normalized',
   payload: Record<string, unknown>
 ): Promise<void> {
   if (!options.trace || !options.traceContext) {

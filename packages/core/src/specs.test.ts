@@ -7,6 +7,7 @@ import {
   formatFrameworkId,
   assertSpecSchemaDefinition,
   coreSpecJsonSchemas,
+  InMemoryAppendOnlyEventStore,
   InMemoryEventStore,
   contextSpecDefinition,
   deploymentSpecDefinition,
@@ -79,6 +80,61 @@ describe('@hypha/core contracts', () => {
     await expect(store.list({ type: 'human.review.approved' })).resolves.toMatchObject([
       { id: 'event_3', payload: { reviewerId: 'owner' } },
     ]);
+  });
+
+  it('supports append-only event streams with revisions and idempotency', async () => {
+    const store = new InMemoryAppendOnlyEventStore();
+    const first = await store.appendToStream(
+      createFrameworkEvent({
+        id: 'event_1',
+        type: 'run.created',
+        runId: 'run_append_only',
+        sessionId: 'session_append_only',
+        streamId: 'run_append_only',
+        correlationId: 'correlation_1',
+        payload: { input: 'start' },
+      }),
+      { expectedStreamSequence: 0, idempotencyKey: 'create-run' }
+    );
+    const duplicate = await store.appendToStream(
+      createFrameworkEvent({
+        id: 'event_1_duplicate',
+        type: 'run.created',
+        runId: 'run_append_only',
+        sessionId: 'session_append_only',
+        streamId: 'run_append_only',
+        correlationId: 'correlation_1',
+        payload: { input: 'start' },
+      }),
+      { idempotencyKey: 'create-run' }
+    );
+
+    expect(first).toMatchObject({
+      status: 'appended',
+      streamId: 'run_append_only',
+      streamSequence: 1,
+      globalSequence: 1,
+    });
+    expect(duplicate).toMatchObject({
+      status: 'duplicate',
+      streamId: 'run_append_only',
+      streamSequence: 1,
+      globalSequence: 1,
+    });
+    await expect(store.getStreamRevision('run_append_only')).resolves.toBe(1);
+    await expect(store.list({ correlationId: 'correlation_1' })).resolves.toHaveLength(1);
+    await expect(
+      store.appendToStream(
+        createFrameworkEvent({
+          id: 'event_2',
+          type: 'run.started',
+          runId: 'run_append_only',
+          streamId: 'run_append_only',
+          payload: {},
+        }),
+        { expectedStreamSequence: 0 }
+      )
+    ).rejects.toMatchObject({ code: 'EVENT_STREAM_REVISION_CONFLICT' });
   });
 
   it('denies external side effects by default', async () => {

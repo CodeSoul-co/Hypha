@@ -5,3 +5,4 @@ RFCs describe proposed or extensible designs that are not yet final architecture
 ## Index
 
 - [RFC 0001: Storage Adapter Expansion](0001-storage-adapter-expansion.md)
+- [RFC 0002: Runtime Core Contracts](0002-runtime-core-contracts.md)

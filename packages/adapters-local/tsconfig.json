@@ -7,7 +7,6 @@
     { "path": "../core" },
     { "path": "../storage" },
     { "path": "../memory" },
-    { "path": "../mcp" },
-    { "path": "../tools" }
+    { "path": "../harness" }
   ]
 }

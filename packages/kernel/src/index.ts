@@ -7,13 +7,7 @@ import {
   specRefSchema,
   versionedSpecSchema,
 } from '@hypha/core';
-import {
-  agentPromptRefSchema,
-  type AgentPromptRef,
-  type InferenceProvider,
-  type InferenceRequest,
-  type InferenceResponse,
-} from '@hypha/inference';
+import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
 import type {
   EmbeddingProvider,
   MemoryManager,
@@ -34,134 +28,12 @@ import {
   type SkillRef,
   type SkillRegistry,
 } from '@hypha/skills';
-import type {
-  NormalizedToolError,
-  ToolExecutionScope,
-  ToolPrincipal,
-  ToolRunner,
-} from '@hypha/tools';
-
-export interface ToolActivityRequest {
-  operationId: string;
-  invocationId: string;
-  runId: string;
-  stateAttemptId: string;
-  toolRef: SpecRef;
-  input: unknown;
-  principal: ToolPrincipal;
-  deadlineAt?: string;
-  idempotencyKey?: string;
-  contractSnapshotRef?: string;
-}
-
-export interface ToolActivityResult {
-  invocationId: string;
-  status: 'completed' | 'failed' | 'denied' | 'waiting_approval' | 'cancelled' | 'conflict';
-  output?: unknown;
-  artifactRefs?: string[];
-  approvalRequestRef?: string;
-  eventIds: string[];
-  error?: NormalizedToolError;
-}
-
-export interface ToolActivityPort {
-  execute(request: ToolActivityRequest): Promise<ToolActivityResult>;
-  cancel(invocationId: string, reason?: string): Promise<ToolActivityResult | null>;
-}
-
-export class ToolRunnerActivityAdapter implements ToolActivityPort {
-  constructor(private readonly runner: ToolRunner) {}
-
-  async execute(request: ToolActivityRequest): Promise<ToolActivityResult> {
-    const result = await this.runner.run({
-      toolId: request.toolRef.id,
-      input: request.input,
-      context: {
-        runId: request.runId,
-        stepId: request.stateAttemptId,
-        invocationId: request.invocationId,
-        operationId: request.operationId,
-        idempotencyKey: request.idempotencyKey,
-        deadlineAt: request.deadlineAt,
-        contractSnapshotRef: request.contractSnapshotRef,
-        principal: request.principal,
-      },
-    });
-    return {
-      invocationId: request.invocationId,
-      status: result.status === 'human_review_required' ? 'waiting_approval' : result.status,
-      output: result.output,
-      artifactRefs: result.artifactRefs,
-      approvalRequestRef: result.approvalRequest?.id,
-      eventIds: [],
-      error: normalizeActivityError(result.error),
-    };
-  }
-
-  async cancel(invocationId: string, reason?: string): Promise<ToolActivityResult | null> {
-    const result = await this.runner.cancelInvocation?.(invocationId, reason);
-    if (!result) return null;
-    return {
-      invocationId,
-      status: result.status === 'human_review_required' ? 'waiting_approval' : result.status,
-      output: result.output,
-      artifactRefs: result.artifactRefs,
-      approvalRequestRef: result.approvalRequest?.id,
-      eventIds: [],
-      error: normalizeActivityError(result.error),
-    };
-  }
-}
-
-function normalizeActivityError(
-  error:
-    | string
-    | { code: string; message: string; retryable?: boolean; details?: Record<string, unknown> }
-    | undefined
-): NormalizedToolError | undefined {
-  if (!error) return undefined;
-  if (typeof error === 'string') {
-    return { code: 'TOOL_EXECUTION_FAILED', message: error, retryable: false };
-  }
-  return {
-    code: normalizedToolErrorCode(error.code),
-    message: error.message,
-    retryable: error.retryable ?? false,
-    details: error.details,
-  };
-}
-
-function normalizedToolErrorCode(code: string): NormalizedToolError['code'] {
-  const supported = new Set<NormalizedToolError['code']>([
-    'TOOL_NOT_FOUND',
-    'TOOL_DISABLED',
-    'TOOL_SCHEMA_INVALID',
-    'TOOL_OUTPUT_INVALID',
-    'TOOL_PERMISSION_DENIED',
-    'TOOL_POLICY_DENIED',
-    'TOOL_APPROVAL_REQUIRED',
-    'TOOL_APPROVAL_REJECTED',
-    'TOOL_APPROVAL_EXPIRED',
-    'TOOL_IDEMPOTENCY_CONFLICT',
-    'TOOL_CONCURRENCY_CONFLICT',
-    'TOOL_TIMEOUT',
-    'TOOL_CANCELLED',
-    'TOOL_ADAPTER_UNAVAILABLE',
-    'TOOL_RETRY_EXHAUSTED',
-    'TOOL_LATE_RESULT',
-    'TOOL_EXECUTION_FAILED',
-    'TOOL_INTERNAL_ERROR',
-  ]);
-  return supported.has(code as NormalizedToolError['code'])
-    ? (code as NormalizedToolError['code'])
-    : 'TOOL_EXECUTION_FAILED';
-}
+import { MockToolRunner, type ToolRunner } from '@hypha/tools';
 
 export interface ReActAgentSpec extends VersionedSpec, SpecMetadata {
   name: string;
   modelAlias: string;
   systemInstructions?: string;
-  promptRefs?: AgentPromptRef[];
   skillRefs?: SkillRef[];
   toolRefs?: string[];
   memoryProfileRef?: string;
@@ -204,13 +76,10 @@ export interface ReActRunContext {
   reasoningDecision?: AgenticReasoningDecision;
   activeSkills?: LoadedSkillContext[];
   rejectedSkills?: Array<{ skillId: string; reason: string }>;
-  toolExecutionScope?: ToolExecutionScope;
-  toolPrincipal?: ToolPrincipal;
 }
 
 export interface ReActAction {
   type: 'tool' | 'model' | 'finish' | 'human_review';
-  toolCallId?: string;
   target?: string;
   input?: unknown;
   reason?: string;
@@ -324,13 +193,8 @@ export interface ReActRunnerOptions {
   inference: InferenceProvider;
   toolRunner?: ToolRunner;
   maxIterations?: number;
-  continueAfterTool?: boolean;
   onStep?: (step: ReActStep) => Promise<void> | void;
   syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
-  resolveToolExecutionScope?: (
-    context: ReActRunContext,
-    action: ReActAction
-  ) => ToolExecutionScope | undefined;
 }
 
 export interface ContextBuildInput<TInput = unknown> {
@@ -344,8 +208,6 @@ export interface ContextBuildInput<TInput = unknown> {
   memoryScope?: MemoryScope;
   contextSpec?: ContextSpec;
   metadata?: Record<string, unknown>;
-  toolExecutionScope?: ToolExecutionScope;
-  toolPrincipal?: ToolPrincipal;
 }
 
 export interface BuiltAgentContext extends ReActRunContext {
@@ -477,8 +339,6 @@ export class DefaultContextBuilder implements ContextBuilder {
       messages: input.messages ?? messagesFromInput(input.input),
       memoryScope,
       contextSpec: input.contextSpec,
-      toolExecutionScope: input.toolExecutionScope,
-      toolPrincipal: input.toolPrincipal,
       metadata: {
         ...input.metadata,
         sessionId: input.sessionId,
@@ -951,7 +811,6 @@ export class BasicReActAgentRuntime implements ReActAgentRuntime {
 
 export class ReActRunner {
   private readonly maxIterations: number;
-  private toolInvocationSequence = 0;
 
   constructor(
     private readonly runtime: ReActAgentRuntime,
@@ -979,7 +838,7 @@ export class ReActRunner {
       const inferenceRequest = await this.runtime.reason(context);
       await pushStep('reason', { modelAlias: inferenceRequest.modelAlias }, inferenceRequest);
 
-      let response = await this.options.inference.infer(inferenceRequest);
+      const response = await this.options.inference.infer(inferenceRequest);
       let action = await this.runtime.selectAction(response);
       await pushStep('select_action', response, action);
 
@@ -1060,19 +919,6 @@ export class ReActRunner {
             finalAction: action,
           };
         }
-        if (action.type === 'model' && this.options.continueAfterTool) {
-          this.appendToolObservation(context, actionFromStep(steps), observation);
-          const nextRequest = await this.runtime.reason(context);
-          await pushStep(
-            'reason',
-            { modelAlias: nextRequest.modelAlias, afterObservation: true },
-            nextRequest
-          );
-          response = await this.options.inference.infer(nextRequest);
-          action = await this.runtime.selectAction(response);
-          await pushStep('select_action', response, action);
-          continue;
-        }
         if (action.type === 'finish' || action.type === 'model') {
           const output = action.input ?? observation.value;
           await pushStep('complete', action, output);
@@ -1098,28 +944,6 @@ export class ReActRunner {
     }
   }
 
-  private appendToolObservation(
-    context: ReActRunContext,
-    action: ReActAction,
-    observation: ReActObservation
-  ): void {
-    context.messages.push({
-      role: 'assistant',
-      content: stringifyReActMessage({
-        type: 'tool_call',
-        id: action.toolCallId,
-        tool: action.target,
-        input: action.input,
-      }),
-    });
-    context.messages.push({
-      role: 'tool',
-      name: action.target,
-      toolCallId: action.toolCallId,
-      content: stringifyReActMessage(observation.value),
-    });
-  }
-
   private async executeAction(
     context: ReActRunContext,
     action: ReActAction
@@ -1132,25 +956,14 @@ export class ReActRunner {
         `Tool action cannot execute without toolRunner and target: ${action.target ?? '<missing>'}`
       );
     }
-    this.toolInvocationSequence += 1;
-    const invocationId =
-      action.toolCallId ??
-      [context.runId, context.stepId, 'tool', action.target, this.toolInvocationSequence].join(':');
-    const executionScope =
-      this.options.resolveToolExecutionScope?.(context, action) ?? context.toolExecutionScope;
     const result = await this.options.toolRunner.run({
       toolId: action.target,
       input: action.input ?? {},
       context: {
         runId: context.runId,
-        stepId: `${context.stepId}:tool:${action.target}:${this.toolInvocationSequence}`,
-        invocationId,
+        stepId: `${context.stepId}:tool:${action.target}`,
         userId: context.memoryScope?.userId,
         sessionId: context.memoryScope?.sessionId,
-        agentId: context.agent.id,
-        fsmState: executionScope?.fsmState,
-        executionScope,
-        principal: context.toolPrincipal,
         metadata: context.metadata,
       },
     });
@@ -1158,33 +971,14 @@ export class ReActRunner {
       return {
         source: result.status === 'human_review_required' ? 'human' : 'tool',
         value: result,
-        provenance: { toolId: action.target, status: result.status, invocationId },
+        provenance: { toolId: action.target, status: result.status },
       };
     }
     return {
       source: 'tool',
       value: result.output,
-      provenance: { toolId: action.target, status: result.status, invocationId },
+      provenance: { toolId: action.target, status: result.status },
     };
-  }
-}
-
-function actionFromStep(steps: ReActStep[]): ReActAction {
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    const step = steps[index];
-    if (step.phase === 'act' && step.input && typeof step.input === 'object') {
-      return step.input as ReActAction;
-    }
-  }
-  throw new Error('ReAct tool observation is missing its action step.');
-}
-
-function stringifyReActMessage(value: unknown): string {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
   }
 }
 
@@ -1218,12 +1012,10 @@ export class ReActAgentRunner {
         : baseContextBuilder;
     this.runner = new ReActRunner(runtime, {
       inference: options.inference,
-      toolRunner: options.toolRunner,
+      toolRunner: options.toolRunner ?? new MockToolRunner(),
       maxIterations: options.maxIterations,
-      continueAfterTool: options.continueAfterTool,
       onStep: options.onStep,
       syncMemory: options.syncMemory,
-      resolveToolExecutionScope: options.resolveToolExecutionScope,
     });
   }
 
@@ -1238,10 +1030,6 @@ function actionFromInferenceOutput(output: unknown): ReActAction {
     if (action === 'tool') {
       return {
         type: 'tool',
-        toolCallId:
-          stringField(output, 'toolCallId') ??
-          stringField(output, 'callId') ??
-          stringField(output, 'id'),
         target: stringField(output, 'toolId') ?? stringField(output, 'target'),
         input: output.input ?? output.arguments ?? {},
         reason: stringField(output, 'reason'),
@@ -1277,8 +1065,6 @@ function firstToolCall(output: Record<string, unknown>): ReActAction | null {
   if (!target) return null;
   return {
     type: 'tool',
-    toolCallId:
-      stringField(first, 'toolCallId') ?? stringField(first, 'callId') ?? stringField(first, 'id'),
     target,
     input: first.arguments ?? first.input ?? {},
     reason: stringField(first, 'reason'),
@@ -1730,7 +1516,6 @@ export const reactAgentSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   name: z.string().min(1),
   modelAlias: z.string().min(1),
   systemInstructions: z.string().optional(),
-  promptRefs: z.array(agentPromptRefSchema).optional(),
   skillRefs: z.array(skillRefSchema).optional(),
   toolRefs: z.array(z.string()).optional(),
   memoryProfileRef: z.string().optional(),
@@ -1749,7 +1534,6 @@ export const reactAgentSpecJsonSchema: JsonSchema = {
     description: { type: 'string' },
     modelAlias: { type: 'string' },
     systemInstructions: { type: 'string' },
-    promptRefs: { type: 'array', items: { type: 'object' } },
     skillRefs: { type: 'array', items: { type: 'object' } },
     toolRefs: { type: 'array', items: { type: 'string' } },
     memoryProfileRef: { type: 'string' },

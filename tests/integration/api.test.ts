@@ -12,8 +12,6 @@
  *   bug 10 — /workflows/:name/execute does not crash on minimal context
  */
 import request from 'supertest';
-import fs from 'fs/promises';
-import path from 'path';
 import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
@@ -50,59 +48,6 @@ describe('GET /api/v1/health', () => {
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data.status).toBe('healthy');
-  });
-});
-
-describe('runtime reasoning and agent prompt registries', () => {
-  it('lists registered reasoning strategies with official source metadata', async () => {
-    const r = await request(app)
-      .get('/api/v1/runtime/reasoning/strategies')
-      .set('Authorization', `Bearer ${devToken}`);
-    expect(r.status).toBe(200);
-    expect(r.body.data).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'reasoning.tot',
-          references: expect.arrayContaining([
-            expect.objectContaining({
-              repository: 'princeton-nlp/tree-of-thought-llm',
-              official: true,
-            }),
-          ]),
-        }),
-        expect.objectContaining({ id: 'reasoning.got' }),
-      ])
-    );
-  });
-
-  it('registers, lists, and unregisters versioned agent prompts', async () => {
-    const id = `integration-agent-prompt-${Date.now()}`;
-    const spec = {
-      id,
-      version: '1.0.0',
-      name: 'Integration Agent Prompt',
-      role: 'system',
-      template: 'You are {{agent_name}}.',
-      variables: [{ name: 'agent_name', type: 'string', required: true }],
-      stable: true,
-      cacheable: true,
-    };
-    const created = await request(app)
-      .post('/api/v1/runtime/agent-prompts')
-      .set('Authorization', `Bearer ${devToken}`)
-      .send(spec);
-    expect(created.status).toBe(201);
-
-    const listed = await request(app)
-      .get('/api/v1/runtime/agent-prompts')
-      .set('Authorization', `Bearer ${devToken}`);
-    expect(listed.status).toBe(200);
-    expect(listed.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id })]));
-
-    const removed = await request(app)
-      .delete(`/api/v1/runtime/agent-prompts/${id}?version=1.0.0`)
-      .set('Authorization', `Bearer ${devToken}`);
-    expect(removed.status).toBe(200);
   });
 });
 
@@ -258,64 +203,6 @@ describe('GET /api/v1/tools (bug 9)', () => {
     expect(r.status).toBe(200);
     const names = (r.body.data || []).map((t: any) => t.name);
     expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
-  });
-
-  it('writes and executes an allowlisted file through governed runtime events', async () => {
-    const scriptPath = 'data/workspace/bin/hypha-integration-print.sh';
-    try {
-      const write = await request(app)
-        .post('/api/v1/tools/execute')
-        .set('Authorization', `Bearer ${devToken}`)
-        .send({
-          name: 'filesystem',
-          params: {
-            operation: 'write',
-            path: scriptPath,
-            content: '#!/bin/sh\nprintf "%s" "$1"\n',
-            executable: true,
-          },
-        });
-      expect(write.status).toBe(200);
-      expect(write.body.data).toMatchObject({ executable: true });
-
-      const execute = await request(app)
-        .post('/api/v1/tools/execute')
-        .set('Authorization', `Bearer ${devToken}`)
-        .send({
-          name: 'filesystem',
-          params: {
-            operation: 'execute',
-            path: scriptPath,
-            args: ['hypha; echo unsafe'],
-            cwd: 'data/workspace',
-          },
-        });
-      expect(execute.status).toBe(200);
-      expect(execute.body.data).toMatchObject({
-        stdout: 'hypha; echo unsafe',
-        stderr: '',
-        exitCode: 0,
-      });
-
-      const events = await request(app)
-        .get(`/api/v1/runtime/runs/${execute.body.runId}/events`)
-        .set('Authorization', `Bearer ${devToken}`);
-      expect(events.status).toBe(200);
-      expect(events.body.data || []).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: 'tool.policy.checked',
-            payload: expect.objectContaining({ sideEffectLevel: 'write' }),
-          }),
-          expect.objectContaining({
-            type: 'tool.call.completed',
-            payload: expect.objectContaining({ sideEffectLevel: 'write' }),
-          }),
-        ])
-      );
-    } finally {
-      await fs.rm(path.resolve(scriptPath), { force: true });
-    }
   });
 });
 
