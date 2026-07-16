@@ -15,6 +15,7 @@ import {
   LocalDomainPackLoader,
   parseDomainPackDocument,
   reasoningSpecDefinition,
+  resolveWorkflowToolExecutionScope,
   validateDomainPackSpec,
   validateWorkflowSpec,
   WorkflowCompiler,
@@ -135,6 +136,7 @@ describe('@hypha/domain workflow compiler', () => {
       defaultSkills: { type: 'array' },
       skillPolicies: { type: 'array' },
       tools: { type: 'array' },
+      toolProfiles: { type: 'array' },
       mcpProfiles: { type: 'array' },
       memoryProfiles: { type: 'array' },
       contextProfiles: { type: 'array' },
@@ -144,6 +146,26 @@ describe('@hypha/domain workflow compiler', () => {
       regressionCases: { type: 'array' },
       deploymentProfile: { type: 'object' },
     });
+  });
+
+  it('validates Tool profiles and state-level versioned Tool bindings', () => {
+    const example = domainPackSpecDefinition.example;
+    expect(validateDomainPackSpec(example).toolProfiles?.[0]).toMatchObject({
+      id: 'tools.default',
+      contractSnapshotMode: 'run',
+      lazyLoad: true,
+    });
+    expect(() =>
+      validateDomainPackSpec({
+        ...example,
+        toolProfiles: [
+          {
+            ...example.toolProfiles![0],
+            toolRefs: [{ id: 'tool.missing', version: '1.0.0' }],
+          },
+        ],
+      })
+    ).toThrow(/Tool profile Tool not found/);
   });
 
   it('rejects a DomainPack whose default workflow is not declared', () => {
@@ -365,6 +387,16 @@ describe('@hypha/domain workflow compiler', () => {
       policyRefs: ['policy.default'],
       evaluationRefs: ['eval.output-schema'],
     });
+    expect(
+      resolveWorkflowToolExecutionScope(compiled.bindings.workflowStates, 'Reasoning')
+    ).toEqual({
+      fsmState: 'Reasoning',
+      allowedToolIds: ['tool.search'],
+      policyRefs: ['policy.default'],
+    });
+    expect(() =>
+      resolveWorkflowToolExecutionScope(compiled.bindings.workflowStates, 'Unknown')
+    ).toThrow('Workflow state binding not found: Unknown');
   });
 
   it('projects state-scoped MCP and reasoning profiles into compiled system refs', () => {
