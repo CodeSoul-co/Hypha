@@ -12,6 +12,8 @@ import {
   type VersionedSpec,
 } from '@hypha/core';
 
+export * from './recovery';
+
 export type StorageProviderKind =
   | 'relational'
   | 'document'
