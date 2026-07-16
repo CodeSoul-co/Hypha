@@ -6,6 +6,7 @@ export interface VersionedSpec {
 export interface SpecRef {
   id: string;
   version?: string;
+  revision?: string;
 }
 
 export interface SpecMetadata {

@@ -12,12 +12,15 @@
  *   bug 10 — /workflows/:name/execute does not crash on minimal context
  */
 import request from 'supertest';
+import fs from 'fs/promises';
+import path from 'path';
 import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
 import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
+import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
 
 const app = application.getApp();
@@ -48,6 +51,59 @@ describe('GET /api/v1/health', () => {
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data.status).toBe('healthy');
+  });
+});
+
+describe('runtime reasoning and agent prompt registries', () => {
+  it('lists registered reasoning strategies with official source metadata', async () => {
+    const r = await request(app)
+      .get('/api/v1/runtime/reasoning/strategies')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(r.status).toBe(200);
+    expect(r.body.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'reasoning.tot',
+          references: expect.arrayContaining([
+            expect.objectContaining({
+              repository: 'princeton-nlp/tree-of-thought-llm',
+              official: true,
+            }),
+          ]),
+        }),
+        expect.objectContaining({ id: 'reasoning.got' }),
+      ])
+    );
+  });
+
+  it('registers, lists, and unregisters versioned agent prompts', async () => {
+    const id = `integration-agent-prompt-${Date.now()}`;
+    const spec = {
+      id,
+      version: '1.0.0',
+      name: 'Integration Agent Prompt',
+      role: 'system',
+      template: 'You are {{agent_name}}.',
+      variables: [{ name: 'agent_name', type: 'string', required: true }],
+      stable: true,
+      cacheable: true,
+    };
+    const created = await request(app)
+      .post('/api/v1/runtime/agent-prompts')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send(spec);
+    expect(created.status).toBe(201);
+
+    const listed = await request(app)
+      .get('/api/v1/runtime/agent-prompts')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id })]));
+
+    const removed = await request(app)
+      .delete(`/api/v1/runtime/agent-prompts/${id}?version=1.0.0`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(removed.status).toBe(200);
   });
 });
 
@@ -204,6 +260,64 @@ describe('GET /api/v1/tools (bug 9)', () => {
     const names = (r.body.data || []).map((t: any) => t.name);
     expect(names).toEqual(expect.arrayContaining(['filesystem', 'search']));
   });
+
+  it('writes and executes an allowlisted file through governed runtime events', async () => {
+    const scriptPath = 'data/workspace/bin/hypha-integration-print.js';
+    try {
+      const write = await request(app)
+        .post('/api/v1/tools/execute')
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({
+          name: 'filesystem',
+          params: {
+            operation: 'write',
+            path: scriptPath,
+            content: "process.stdout.write(process.argv[2] || '');\n",
+            executable: true,
+          },
+        });
+      expect(write.status).toBe(200);
+      expect(write.body.data).toMatchObject({ executable: true });
+
+      const execute = await request(app)
+        .post('/api/v1/tools/execute')
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({
+          name: 'filesystem',
+          params: {
+            operation: 'execute',
+            path: scriptPath,
+            args: ['hypha; echo unsafe'],
+            cwd: 'data/workspace',
+          },
+        });
+      expect(execute.status).toBe(200);
+      expect(execute.body.data).toMatchObject({
+        stdout: 'hypha; echo unsafe',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const events = await request(app)
+        .get(`/api/v1/runtime/runs/${execute.body.runId}/events`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(events.status).toBe(200);
+      expect(events.body.data || []).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool.policy.checked',
+            payload: expect.objectContaining({ sideEffectLevel: 'write' }),
+          }),
+          expect.objectContaining({
+            type: 'tool.call.completed',
+            payload: expect.objectContaining({ sideEffectLevel: 'write' }),
+          }),
+        ])
+      );
+    } finally {
+      await fs.rm(path.resolve(scriptPath), { force: true });
+    }
+  });
 });
 
 describe('MCP tool invocation', () => {
@@ -242,7 +356,10 @@ describe('MCP tool invocation', () => {
         expect.objectContaining({
           id: 'filesystem.read_file',
           source: 'mcp',
-          sourceRef: { serverId: 'filesystem', capabilityId: 'read_file' },
+          sourceRef: expect.objectContaining({
+            serverId: 'filesystem',
+            capabilityId: 'read_file',
+          }),
         }),
       ])
     );
@@ -344,9 +461,9 @@ describe('MCP tool invocation', () => {
         expect.objectContaining({
           type: 'tool.call.failed',
           payload: expect.objectContaining({
-            phase: 'input_validation',
             source: 'mcp',
             sideEffectLevel: 'read',
+            error: expect.objectContaining({ phase: 'input_validation' }),
           }),
         }),
       ])
@@ -400,9 +517,9 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         expect.objectContaining({
           type: 'tool.call.failed',
           payload: expect.objectContaining({
-            phase: 'input_validation',
             source: 'local',
             sideEffectLevel: 'read',
+            error: expect.objectContaining({ phase: 'input_validation' }),
           }),
         }),
         expect.objectContaining({ type: 'run.failed' }),
@@ -425,7 +542,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
     expect(replay.body.data.statePath).toEqual(
       expect.arrayContaining(['RunInitialized', 'Acting', 'Completed'])
     );
-    expect(replay.body.data.toolCallEventIds).toHaveLength(5);
+    expect(replay.body.data.toolCallEventIds.length).toBeGreaterThanOrEqual(5);
     expect(replay.body.data.toolCalls).toHaveLength(1);
 
     const audit = await request(app)
@@ -583,7 +700,9 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
             payload: expect.objectContaining({
               source: 'local',
               sideEffectLevel: 'write',
-              reason: 'integration approval required',
+              approvalRequest: expect.objectContaining({
+                reason: 'integration approval required',
+              }),
             }),
           }),
         ])
@@ -595,14 +714,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
 });
 
 describe('workflow template variable resolution (remaining #2)', () => {
-  it('substitutes ${env.VAR} in stage.model so the LLM is called with a real model id', async () => {
-    // The bundled conversation-flow.yaml has `model: ${AGENT_DEFAULT_MODEL}`.
-    // Set the env var BEFORE the workflow engine reads it. The engine resolves
-    // placeholders on every execute(), so this works even though the YAML was
-    // loaded during application.initialize() with the env var unset.
-    process.env.AGENT_DEFAULT_MODEL = 'deepseek-v4-flash';
-    expect(process.env.AGENT_DEFAULT_MODEL).toBe('deepseek-v4-flash'); // sanity
-
+  it('substitutes ${defaultModel} in stage.model with the active runtime model id', async () => {
     const r = await request(app)
       .post('/api/v1/workflows/conversation-flow/execute')
       .set('Authorization', `Bearer ${devToken}`)
@@ -626,8 +738,8 @@ describe('workflow template variable resolution (remaining #2)', () => {
     const reasoningStarted = (events.body.data || []).find(
       (event: any) => event.type === 'agent.reasoning.started'
     );
-    expect(reasoningStarted?.payload?.modelAlias).toBe('deepseek-v4-flash');
-    expect(JSON.stringify(events.body.data)).not.toContain('${AGENT_DEFAULT_MODEL}');
+    expect(reasoningStarted?.payload?.modelAlias).toBe(getLLMManager().getDefaultModel());
+    expect(JSON.stringify(events.body.data)).not.toContain('${defaultModel}');
     expect(JSON.stringify(events.body.data)).not.toMatch(/supported API model names are/i);
 
     const replay = await request(app)

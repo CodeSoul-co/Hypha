@@ -1,79 +1,114 @@
-import fs from 'fs/promises';
-import path from 'path';
+import type {
+  WorkspaceFileOperation,
+  WorkspaceRuntimeConfig,
+  WorkspaceRuntimePort,
+  WorkspaceRuntimeRequest,
+} from '@hypha/tools';
 import { BaseTool } from '../types';
-import type { ToolDefinition, ToolParams } from '../types';
+import type { ToolDefinition, ToolGovernanceSpec, ToolParams } from '../types';
 
-/**
- * Read / write / list files on the server's filesystem.
- *
- * Sandboxing: every path is resolved against the process CWD (or the
- * FILESYSTEM_TOOL_ROOT env var if set) and must stay inside it. Absolute paths
- * outside the sandbox are rejected to keep an LLM from reading /etc/passwd.
- */
+export type FilesystemToolConfig = WorkspaceRuntimeConfig;
+
+const defaultConfig: FilesystemToolConfig = {
+  workingDirectory: '.',
+  readPaths: ['.'],
+  writePaths: ['./data/workspace'],
+  executePaths: ['./data/workspace/bin'],
+  execution: {
+    enabled: false,
+    timeoutMs: 30000,
+    maxOutputBytes: 1048576,
+  },
+};
+
+/** Tool surface for governed workspace operations; I/O is owned by WorkspaceRuntimePort. */
 export default class FilesystemTool extends BaseTool {
   readonly id = 'filesystem';
   readonly name = 'filesystem';
-  readonly description = 'Read, write, or list files on the local filesystem (sandboxed to project root)';
-  readonly schema: ToolDefinition = {
-    name: 'filesystem',
-    description: this.description,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        operation: { type: 'string', enum: ['read', 'write', 'list'] },
-        path:      { type: 'string', description: 'Path relative to sandbox root' },
-        content:   { type: 'string', description: 'Required for operation=write' },
-      },
-      required: ['operation', 'path'],
+  readonly description: string;
+  readonly governance: ToolGovernanceSpec = {
+    permissionScope: ['filesystem:read', 'filesystem:write', 'filesystem:execute'],
+    auditPolicy: {
+      enabled: true,
+      includeInput: true,
+      includeOutput: true,
+      redactPaths: ['content'],
     },
   };
+  readonly schema: ToolDefinition;
 
-  private root: string;
-
-  constructor() {
+  constructor(
+    private readonly workspace: WorkspaceRuntimePort,
+    config: FilesystemToolConfig = defaultConfig
+  ) {
     super();
-    this.root = path.resolve(process.env.FILESYSTEM_TOOL_ROOT || process.cwd());
+    this.description = [
+      'Read, write, list, or execute files within a governed workspace runtime.',
+      `Read: ${config.readPaths.join(', ') || '(none)'}.`,
+      `Write: ${config.writePaths.join(', ') || '(none)'}.`,
+      `Execute: ${config.executePaths.join(', ') || '(none)'} (${config.execution.enabled ? 'enabled' : 'disabled'}).`,
+    ].join(' ');
+    this.schema = this.createSchema();
   }
 
-  private resolveSafe(p: string): string {
-    const abs = path.resolve(this.root, p);
-    if (!abs.startsWith(this.root + path.sep) && abs !== this.root) {
-      throw new Error(`Path escapes sandbox root: ${p}`);
+  protected async run(params: ToolParams): Promise<unknown> {
+    const operation = params.operation as WorkspaceFileOperation | undefined;
+    const requestedPath = params.path;
+    if (!operation || typeof requestedPath !== 'string' || !requestedPath.trim()) {
+      throw new Error('operation and path are required');
     }
-    return abs;
-  }
-
-  protected async run(params: ToolParams): Promise<any> {
-    const { operation, path: relPath, content } = params as {
-      operation: 'read' | 'write' | 'list';
-      path: string;
-      content?: string;
+    if (!['read', 'write', 'list', 'execute'].includes(operation)) {
+      throw new Error(`Unknown operation: ${String(operation)}`);
+    }
+    if (params.args !== undefined && !Array.isArray(params.args)) {
+      throw new Error('args must be an array of strings');
+    }
+    const request: WorkspaceRuntimeRequest = {
+      operation,
+      path: requestedPath,
+      content: typeof params.content === 'string' ? params.content : undefined,
+      executable: params.executable === true,
+      args: params.args as string[] | undefined,
+      cwd: typeof params.cwd === 'string' ? params.cwd : undefined,
+      timeoutMs: typeof params.timeoutMs === 'number' ? params.timeoutMs : undefined,
     };
-    if (!operation || !relPath) throw new Error('operation and path are required');
-    const abs = this.resolveSafe(relPath);
+    return this.workspace.execute(request);
+  }
 
-    switch (operation) {
-      case 'read': {
-        const text = await fs.readFile(abs, 'utf-8');
-        return { path: relPath, content: text };
-      }
-      case 'write': {
-        if (typeof content !== 'string') throw new Error('content is required for write');
-        await fs.writeFile(abs, content, 'utf-8');
-        return { path: relPath, bytesWritten: Buffer.byteLength(content, 'utf-8') };
-      }
-      case 'list': {
-        const entries = await fs.readdir(abs, { withFileTypes: true });
-        return {
-          path: relPath,
-          entries: entries.map(e => ({
-            name: e.name,
-            type: e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other',
-          })),
-        };
-      }
-      default:
-        throw new Error(`Unknown operation: ${operation}`);
-    }
+  private createSchema(): ToolDefinition {
+    return {
+      name: 'filesystem',
+      description: this.description,
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          operation: { type: 'string', enum: ['read', 'write', 'list', 'execute'] },
+          path: {
+            type: 'string',
+            description: 'Absolute path or path relative to the configured workspace',
+          },
+          content: { type: 'string', description: 'Required for operation=write' },
+          executable: {
+            type: 'boolean',
+            description: 'Mark a written file executable when the runtime allows it',
+          },
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Arguments passed directly to an executable without a shell',
+          },
+          cwd: {
+            type: 'string',
+            description: 'Execution directory constrained by the workspace runtime',
+          },
+          timeoutMs: {
+            type: 'number',
+            description: 'Execution timeout capped by the workspace runtime policy',
+          },
+        },
+        required: ['operation', 'path'],
+      },
+    };
   }
 }

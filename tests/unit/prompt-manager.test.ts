@@ -106,4 +106,31 @@ describe('PromptManager', () => {
       errors: ['Unresolved variable: unknown'],
     });
   });
+
+  it('adapts server templates into versioned agent prompt registry blocks', () => {
+    const manager = new PromptManager(undefined, false);
+    manager.register({
+      id: 'agent-managed',
+      name: 'Managed Agent Prompt',
+      category: 'system',
+      content: 'You are {{agent_name}} for {{user_id}}.',
+      variables: [
+        { name: 'agent_name', type: 'string', required: true },
+        { name: 'user_id', type: 'string', required: true },
+      ],
+      metadata: { version: '2.1.0', stable: true, cacheable: true },
+    });
+
+    const resolved = manager.resolveAgentPrompts(
+      [{ id: 'agent-managed', version: '2.1.0', required: true }],
+      { agent_name: 'Hypha', user_id: 'user-1' }
+    );
+    expect(resolved.instructions).toBe('You are Hypha for user-1.');
+    expect(resolved.blocks[0]).toMatchObject({
+      templateId: 'agent-managed',
+      templateVersion: '2.1.0',
+      stable: true,
+      cacheable: true,
+    });
+  });
 });
