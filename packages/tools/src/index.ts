@@ -608,6 +608,7 @@ export interface ToolInvocationStore {
 export class InMemoryToolInvocationStore implements ToolInvocationStore {
   private readonly records = new Map<string, ToolInvocationRecord>();
   private readonly completed = new Map<string, ToolCallResult>();
+  private readonly idempotencyIndex = new Map<string, string>();
 
   async get(invocationId: string): Promise<ToolInvocationRecord | null> {
     return this.records.get(invocationId) ?? null;
@@ -630,15 +631,12 @@ export class InMemoryToolInvocationStore implements ToolInvocationStore {
   }
 
   private findByIdempotencySync(request: ToolIdempotencyLookup): ToolInvocationRecord | null {
-    for (const record of this.records.values()) {
-      if (
-        record.toolId === request.toolId &&
-        record.idempotencyKey === request.idempotencyKey &&
-        record.metadata?.idempotencyScopeHash === request.scopeHash
-      ) {
-        return record;
-      }
-    }
+    const key = inMemoryIdempotencyIndexKey(request);
+    const invocationId = this.idempotencyIndex.get(key);
+    if (!invocationId) return null;
+    const record = this.records.get(invocationId);
+    if (record) return record;
+    this.idempotencyIndex.delete(key);
     return null;
   }
 
@@ -646,12 +644,14 @@ export class InMemoryToolInvocationStore implements ToolInvocationStore {
     const existing = this.records.get(record.id);
     if (existing) return existing;
     if (record.idempotencyKey && typeof record.metadata?.idempotencyScopeHash === 'string') {
-      const idempotent = this.findByIdempotencySync({
+      const lookup = {
         toolId: record.toolId,
         idempotencyKey: record.idempotencyKey,
         scopeHash: record.metadata.idempotencyScopeHash,
-      });
+      };
+      const idempotent = this.findByIdempotencySync(lookup);
       if (idempotent) return idempotent;
+      this.idempotencyIndex.set(inMemoryIdempotencyIndexKey(lookup), record.id);
     }
     this.records.set(record.id, record);
     return record;
@@ -721,6 +721,11 @@ export class InMemoryToolInvocationStore implements ToolInvocationStore {
     }
   }
 }
+
+function inMemoryIdempotencyIndexKey(request: ToolIdempotencyLookup): string {
+  return JSON.stringify([request.toolId, request.idempotencyKey, request.scopeHash]);
+}
+
 export type ToolHandler<TInput = unknown, TOutput = unknown> = (
   input: TInput,
   context: ToolCallContext

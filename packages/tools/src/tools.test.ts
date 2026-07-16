@@ -882,6 +882,49 @@ describe('@hypha/tools governed runner', () => {
     );
   });
 
+  it('keeps idempotency indexes isolated by execution scope', async () => {
+    const registry = new ToolRegistry();
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.scope-indexed',
+        version: '1.0.0',
+        revision: 'revision-1',
+        description: 'Scope-isolated idempotency test',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'write',
+        idempotencyPolicy: { mode: 'required' },
+      },
+      async () => ({ calls: ++calls })
+    );
+    const runner = new GovernedToolRunner(registry, new InMemoryEventStore());
+
+    const first = await runner.run({
+      toolId: 'tool.scope-indexed',
+      input: { value: 1 },
+      context: {
+        runId: 'run_scope_index_a',
+        stepId: 'write',
+        workspaceId: 'workspace-a',
+        idempotencyKey: 'shared-key',
+      },
+    });
+    const second = await runner.run({
+      toolId: 'tool.scope-indexed',
+      input: { value: 1 },
+      context: {
+        runId: 'run_scope_index_b',
+        stepId: 'write',
+        workspaceId: 'workspace-b',
+        idempotencyKey: 'shared-key',
+      },
+    });
+
+    expect(first).toMatchObject({ status: 'completed', output: { calls: 1 } });
+    expect(second).toMatchObject({ status: 'completed', output: { calls: 2 } });
+    expect(calls).toBe(2);
+  });
+
   it('allows only one concurrent approval decision and expires stale approval requests', async () => {
     const registry = new ToolRegistry();
     let calls = 0;
