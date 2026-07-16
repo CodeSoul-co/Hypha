@@ -5,6 +5,10 @@ materializes reusable `CacheBlock` records. It is not the source of truth:
 DomainPack, Session, Run, and Event semantics stay unchanged, and replay,
 audit, regression, and projections still derive from events.
 
+Recovery outcomes use the same boundary. `RecoveryTree` stores revision-safe
+strategy knowledge derived from recovery events; it never marks an FSM case
+complete or replaces a durable receipt.
+
 ## Runtime Type Alignment
 
 WorkCache V1 maps only current `FrameworkEventType` values by default.
@@ -21,6 +25,7 @@ enabled.
 | `message.enqueued`, `message.delivered`, `message.acknowledged`, `message.failed`, `message.dead_lettered`       | `observation`   | `ObservationTree`  |
 | `eval.completed`, `regression.completed`                                                                         | `verification`  | `VerificationTree` |
 | `memory.read.completed`, `memory.write.committed`                                                                | `memory`        | `MemoryTree`       |
+| `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `recovery`      | `RecoveryTree`     |
 | `llm.cache.write` with prompt prefix metadata                                                                    | `prompt_prefix` | `PromptPrefixTree` |
 
 `MessageTree` and `KVPrefixTree` are not V1 roots. PromptPrefixTree stores
@@ -38,6 +43,7 @@ manage provider KV cache.
 | `CacheTree<T>`, `TypedCacheForest`                            | Tree lookup/write/invalidation over a shared store.                                |
 | `WorkCacheManager`                                            | Ingests events, enforces TTL/validity, and emits audit events.                     |
 | `WorkCachePolicy`                                             | Store mode, prompt budget, unknown-event behavior, and per-tree TTLs.              |
+| `WorkCacheRecoveryKnowledgeStore`                             | `RecoveryKnowledgePort` backed by revision-safe `RecoveryTree` blocks.             |
 
 ## Work Graph and Tree Updates
 
@@ -102,6 +108,15 @@ split into stable blocks such as `system`, `tool-schema`, `prompt-template`,
 ordering/template metadata. Dynamic suffix hashes and request ids are trace
 metadata only; they do not invalidate stable prefix blocks. A template content
 or version change should produce a new block hash and therefore a new block.
+
+Recovery knowledge is keyed by failure fingerprint, participant id, and
+policy/spec/provider revisions. `WorkCacheManager.getRecoveryKnowledgePort()`
+stores verified and negative outcomes with an evidence hash and TTL. Lookup
+removes expired entries; a new revision removes stale entries for the same
+failure and participant. The recovery supervisor still revalidates every hit
+and uses only a verified strategy for a handler declared by the current
+participant. Negative knowledge records a failed strategy but does not
+authorize a different side effect.
 
 ## Audit Events
 
