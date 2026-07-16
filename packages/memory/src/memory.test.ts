@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryEventStore } from '@hypha/core';
 import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/adapters-local';
 import {
+  adviseMemoryRecovery,
+  classifyMemoryFailure,
   HybridMemoryProvider,
   MemoryManager,
   memorySpecDefinition,
@@ -24,7 +26,11 @@ describe('@hypha/memory manager contract', () => {
       },
       update: async () => {},
       invalidate: async () => {},
-      summarize: async (scope) => ({ scope, recordCount: records.length, types: { working: records.length } }),
+      summarize: async (scope) => ({
+        scope,
+        recordCount: records.length,
+        types: { working: records.length },
+      }),
       audit: async (scope) => ({ scope, recordsChecked: records.length, missingProvenance: [] }),
     };
     const manager = new MemoryManager(provider);
@@ -68,11 +74,10 @@ describe('@hypha/memory manager contract', () => {
     };
 
     await expect(
-      manager.write(
-        { userId: 'owner', runId: 'run_1' },
-        record,
-        { requireProvenance: true, allowLongTerm: true }
-      )
+      manager.write({ userId: 'owner', runId: 'run_1' }, record, {
+        requireProvenance: true,
+        allowLongTerm: true,
+      })
     ).rejects.toThrow(/requires provenance/);
     await expect(
       manager.write(
@@ -255,6 +260,88 @@ describe('@hypha/memory manager contract', () => {
       { type: 'memory.write.requested' },
       { type: 'memory.write.rejected' },
     ]);
+  });
+
+  it('classifies read outages as bounded retry or degradation candidates', () => {
+    const failure = classifyMemoryFailure(
+      Object.assign(new Error('memory backend timed out'), { code: 'ETIMEDOUT' }),
+      {
+        id: 'memory_read_timeout',
+        operation: 'read',
+        scope: { userId: 'owner', sessionId: 'session_1' },
+        occurredAt: '2026-07-16T00:00:00.000Z',
+        providerId: 'memory.primary',
+      }
+    );
+
+    expect(failure).toMatchObject({
+      module: 'memory',
+      category: 'timeout',
+      retryable: true,
+      sideEffectState: 'none',
+      circuitKey: 'memory:memory.primary',
+    });
+    expect(adviseMemoryRecovery(failure)).toMatchObject({
+      strategy: 'retry',
+      allowBoundedEmptyResult: true,
+    });
+  });
+
+  it('marks unconfirmed memory mutations for reconciliation and emits normalized evidence', async () => {
+    const trace = new InMemoryEventStore();
+    const failures: Array<ReturnType<typeof classifyMemoryFailure>> = [];
+    const provider: MemoryProvider = {
+      read: async () => [],
+      search: async () => [],
+      write: async () => {
+        throw Object.assign(new Error('connection lost after write'), { code: 'ECONNRESET' });
+      },
+      update: async () => {},
+      invalidate: async () => {},
+      summarize: async (scope) => ({ scope, recordCount: 0, types: {} }),
+      audit: async (scope) => ({ scope, recordsChecked: 0, missingProvenance: [] }),
+    };
+    const manager = new MemoryManager(provider, {
+      trace,
+      now: () => '2026-07-16T00:00:00.000Z',
+      recovery: {
+        providerId: 'memory.primary',
+        providerRevision: 'provider-v1',
+        onFailure: (failure) => {
+          failures.push(failure);
+        },
+      },
+    });
+
+    await expect(
+      manager.write(
+        { userId: 'owner', runId: 'run_memory_recovery' },
+        {
+          id: 'memory_recovery_record',
+          type: 'working',
+          value: 'value',
+          provenance: { eventId: 'event_1' },
+          createdAt: '2026-07-16T00:00:00.000Z',
+        },
+        { requireProvenance: true, idempotencyKey: 'memory-write-1' }
+      )
+    ).rejects.toThrow('connection lost after write');
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      sideEffectState: 'unknown',
+      retryable: false,
+      evidence: {
+        idempotencyKey: 'memory-write-1',
+        providerRevision: 'provider-v1',
+      },
+    });
+    expect(adviseMemoryRecovery(failures[0]).strategy).toBe('reconcile');
+    const events = await trace.list({ runId: 'run_memory_recovery' });
+    expect(events.at(-1)).toMatchObject({
+      type: 'memory.write.rejected',
+      payload: { recovery: { module: 'memory', sideEffectState: 'unknown' } },
+    });
   });
 
   it('exports Stage1 MemorySpec schema and minimal example', () => {
