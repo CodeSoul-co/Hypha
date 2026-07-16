@@ -22,3 +22,4 @@ export * from './modules/execution-events';
 export * from './modules/execution-cache';
 export * from './modules/execution-environment';
 export * from './modules/sandbox';
+export * from './telemetry';

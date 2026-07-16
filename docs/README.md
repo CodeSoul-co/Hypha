@@ -12,6 +12,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [HTTP API](api/http.md): REST endpoints, authentication, request bodies, response shapes, and SSE behavior.
 - [Architecture Notes](architecture/README.md): subsystem-level architecture notes.
 - [Serving Cache](architecture/serving-cache.md): exact LLM response cache middleware, key fields, policies, stores, and trace events.
+- [Tool/MCP Architecture](architecture/tool-mcp.md): governed execution, Invocation lifecycle, MCP trust, drift, and Run snapshots.
 - [ADRs](adr/README.md): accepted architecture decisions.
 - [RFCs](rfc/README.md): proposed designs and extension plans.
 
@@ -19,6 +20,12 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 
 - [Domain Packs](guides/domain-packs.md): how to declare workflows, task schemas, tools, MCP profiles, memory profiles, policies, evaluations, regressions, and output contracts.
 - [Local Development](guides/local-development.md): setup, environment, commands, storage adapters, and verification checks.
+- [Tool/MCP Security](guides/tool-mcp-security.md): trust boundaries, secrets, side effects, approval, and recovery.
+- [Tool Adapter Guide](guides/tool-adapters.md): implement and register Local, HTTP, Plugin, Mock, and MCP adapters.
+- [Tool/MCP Migration](guides/tool-mcp-migration.md): move legacy handlers and MCP calls to the governed runtime.
+- [Governance Examples](examples/tool-mcp-governance.md): local Tool execution and MCP catalog/snapshot examples.
+- [Capability Matrix](reference/tool-mcp-capability-matrix.md): public surfaces and runtime guarantees.
+- [Known Limitations](reference/tool-mcp-known-limitations.md): deliberate constraints and operational caveats.
 
 ## Documentation Rules
 

@@ -1,6 +1,15 @@
 import path from 'path';
-import { SQLiteEventStore } from '@hypha/adapters-local';
 import {
+  ArtifactStoreToolPort,
+  FileArtifactStore,
+  FileToolContractSnapshotStore,
+  FileToolObservationStore,
+  FileToolRuntimeStore,
+  SQLiteEventStore,
+} from '@hypha/adapters-local';
+import {
+  createFrameworkEvent,
+  InMemoryTelemetryRecorder,
   FrameworkError,
   type FrameworkEvent,
   type FrameworkEventType,
@@ -49,10 +58,14 @@ import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
+  hashToolContract,
   ToolRegistry,
+  type ToolContractSnapshot,
+  type ToolContractSnapshotStore,
   type ToolCallResult,
   type ToolRunner,
   type ToolSpec,
+  type ToolInvocationRecord,
 } from '@hypha/tools';
 import type {
   StageResult,
@@ -476,6 +489,11 @@ class EventRuntimeService {
   private readonly reasoning: ReasoningOrchestrator;
   private readonly defaultDomainPack = createDefaultDomainPack();
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
+  private readonly toolRegistry = new ToolRegistry();
+  private readonly toolTelemetry = new InMemoryTelemetryRecorder();
+  private readonly toolRunner: GovernedToolRunner;
+  private readonly toolSnapshotStore: ToolContractSnapshotStore;
+  private readonly runToolSnapshots = new Map<string, Promise<string>>();
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -484,6 +502,28 @@ class EventRuntimeService {
     this.events = new SQLiteEventStore({
       filename: eventDbPath,
       mode: sqliteStorage.sqliteMode,
+    });
+    const toolRuntimeStore = new FileToolRuntimeStore({
+      filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
+    });
+    this.toolSnapshotStore = new FileToolContractSnapshotStore(
+      process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
+    );
+    const artifactPort = new ArtifactStoreToolPort(
+      new FileArtifactStore({
+        rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
+      })
+    );
+    const observationPort = new FileToolObservationStore(
+      process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
+    );
+    this.toolRunner = new GovernedToolRunner(this.toolRegistry, this.events, undefined, {
+      approvalStore: toolRuntimeStore,
+      invocationStore: toolRuntimeStore,
+      artifactPort,
+      snapshotStore: this.toolSnapshotStore,
+      observationPort,
+      telemetry: this.toolTelemetry,
     });
     this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({
@@ -1170,42 +1210,103 @@ class EventRuntimeService {
     toolId: string;
     toolSpec?: Partial<ToolSpec>;
     params: unknown;
-    handler: () => Promise<TOutput>;
   }): Promise<ToolCallResult<TOutput>> {
-    const registry = new ToolRegistry();
-    registry.register(
-      {
-        id: input.toolId,
-        version: input.toolSpec?.version ?? '0.0.0',
-        name: input.toolSpec?.name ?? input.toolId,
-        description: input.toolSpec?.description ?? `Tool ${input.toolId}`,
-        inputSchema: input.toolSpec?.inputSchema ?? { type: 'object' },
-        outputSchema: input.toolSpec?.outputSchema,
-        sideEffectLevel: input.toolSpec?.sideEffectLevel ?? 'read',
-        permissionScope: input.toolSpec?.permissionScope,
-        preconditions: input.toolSpec?.preconditions,
-        postconditions: input.toolSpec?.postconditions,
-        timeoutPolicy: input.toolSpec?.timeoutPolicy,
-        retryPolicy: input.toolSpec?.retryPolicy,
-        auditPolicy: input.toolSpec?.auditPolicy,
-        humanApprovalPolicy: input.toolSpec?.humanApprovalPolicy,
-        source: input.toolSpec?.source ?? 'local',
-        sourceRef: input.toolSpec?.sourceRef,
-      },
-      async () => input.handler()
-    );
-    const runner = new GovernedToolRunner(registry, this.events);
-    const result = await runner.run({
-      toolId: input.toolId,
+    const invocationId = `tool-invocation:${generateId()}`;
+    const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
+    const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
+    const result = await this.toolRunner.run({
+      toolId,
       input: input.params,
       context: {
         runId: input.runId,
         stepId: input.stepId,
+        invocationId,
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
+        contractSnapshotRef,
+        principal: {
+          id: input.userId,
+          type: 'user',
+          userId: input.userId,
+          permissionScopes: ['*'],
+        },
       },
     });
     return result as ToolCallResult<TOutput>;
+  }
+
+  async getToolInvocation(invocationId: string): Promise<ToolInvocationRecord | null> {
+    return this.toolRunner.getInvocation(invocationId);
+  }
+
+  async recoverToolInvocations(): Promise<ToolCallResult[]> {
+    const interrupted = await this.toolRunner.listInvocations({
+      statuses: [
+        'created',
+        'validating',
+        'policy_checked',
+        'approved',
+        'queued',
+        'running',
+        'cancelling',
+      ],
+    });
+    for (const invocation of interrupted) {
+      try {
+        this.registerManagedTool(invocation.toolId);
+      } catch {
+        // The runner records a deterministic TOOL_NOT_FOUND result during recovery.
+      }
+    }
+    return this.toolRunner.recoverPendingInvocations();
+  }
+
+  async cancelToolInvocation(invocationId: string, reason?: string): Promise<ToolCallResult> {
+    return this.toolRunner.cancelInvocation(invocationId, reason);
+  }
+
+  async approveToolInvocation(invocationId: string, approvedBy: string): Promise<ToolCallResult> {
+    const invocation = await this.toolRunner.getInvocation(invocationId);
+    if (invocation) this.registerManagedTool(invocation.toolId);
+    const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
+    if (invocation && result.status === 'completed') {
+      await this.completeApprovedToolRun(invocation, result);
+    }
+    return result;
+  }
+
+  async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
+    const invocation = await this.toolRunner.getInvocation(invocationId);
+    const result = await this.toolRunner.rejectInvocation(invocationId);
+    const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
+    const run = runId ? this.runs.get(runId) : undefined;
+    if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
+    }
+    return result;
+  }
+
+  private async completeApprovedToolRun(
+    invocation: ToolInvocationRecord,
+    result: ToolCallResult
+  ): Promise<void> {
+    const runId = invocation.scope?.runId ?? invocation.request.context.runId;
+    const run = this.runs.get(runId);
+    if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
+
+    if (run.snapshot.currentState === 'HumanReview') {
+      await this.transition(runId, 'ObservationRecorded', {
+        tool: invocation.toolId,
+        invocationId: invocation.id,
+      });
+      await this.transition(runId, 'Verifying', { invocationId: invocation.id });
+      await this.transition(runId, 'MemorySync', { invocationId: invocation.id });
+    }
+    await this.completeRun(runId, {
+      tool: invocation.toolId,
+      invocationId: invocation.id,
+      output: result.output,
+    });
   }
 
   async runGovernedTool<TOutput>(input: {
@@ -1216,7 +1317,6 @@ class EventRuntimeService {
     toolId: string;
     toolSpec?: Partial<ToolSpec>;
     params: unknown;
-    handler: () => Promise<TOutput>;
   }): Promise<TOutput> {
     const result = await this.runGovernedToolResult(input);
     if (result.status !== 'completed') {
@@ -1225,6 +1325,95 @@ class EventRuntimeService {
       );
     }
     return result.output as TOutput;
+  }
+
+  private registerManagedTool(toolId: string, override?: Partial<ToolSpec>): string {
+    const resolved = getToolManager().resolveGovernedTool(toolId);
+    if (!resolved) {
+      throw new FrameworkError({
+        code: 'TOOL_NOT_FOUND',
+        message: `Tool not found: ${toolId}`,
+      });
+    }
+    const spec: ToolSpec = {
+      ...resolved.spec,
+      ...override,
+      id: resolved.spec.id,
+      version: override?.version ?? resolved.spec.version,
+      description: override?.description ?? resolved.spec.description,
+      inputSchema: override?.inputSchema ?? resolved.spec.inputSchema,
+      sideEffectLevel: override?.sideEffectLevel ?? resolved.spec.sideEffectLevel,
+    };
+    this.toolRegistry.registerAdapter(spec, resolved.adapter, { replace: true });
+    return spec.id;
+  }
+
+  private ensureRunToolSnapshot(runId: string): Promise<string> {
+    const active = this.runToolSnapshots.get(runId);
+    if (active) return active;
+    const snapshot = this.createRunToolSnapshot(runId).catch((error) => {
+      this.runToolSnapshots.delete(runId);
+      throw error;
+    });
+    this.runToolSnapshots.set(runId, snapshot);
+    return snapshot;
+  }
+
+  private async createRunToolSnapshot(runId: string): Promise<string> {
+    const snapshotId = `tool-snapshot:${runId}`;
+    const persisted = await this.toolSnapshotStore.get(snapshotId);
+    if (persisted) return persisted.id;
+
+    const manager = getToolManager();
+    for (const definition of manager.listTools(true)) {
+      const candidateId = definition.name;
+      if (this.toolRegistry.getSpec(candidateId)) continue;
+      try {
+        this.registerManagedTool(candidateId);
+      } catch {
+        // Tools unavailable at Run start are intentionally absent from this immutable snapshot.
+      }
+    }
+
+    const toolContracts = this.toolRegistry.list().map((spec) => ({
+      toolId: spec.id,
+      toolVersion: spec.version,
+      toolRevision: spec.revision,
+      inputSchemaHash: spec.input.schemaHash,
+      outputSchemaHash: spec.output?.schemaHash,
+      sourceCapabilityHash: spec.sourceRef?.capabilityHash,
+      sideEffectLevel: spec.sideEffectLevel,
+      adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
+    }));
+    const createdAt = new Date().toISOString();
+    const body = {
+      runId,
+      createdAt,
+      toolContracts,
+      catalogRevision: hashToolContract(
+        toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
+      ),
+    };
+    const snapshot: ToolContractSnapshot = {
+      id: snapshotId,
+      ...body,
+      snapshotHash: hashToolContract(body),
+    };
+    await this.toolSnapshotStore.save(snapshot);
+    await this.events.record(
+      createFrameworkEvent({
+        id: `${snapshotId}:created`,
+        type: 'tool.contract.snapshot.created',
+        runId,
+        payload: {
+          snapshotId,
+          snapshotHash: snapshot.snapshotHash,
+          catalogRevision: snapshot.catalogRevision,
+          toolCount: snapshot.toolContracts.length,
+        },
+      })
+    );
+    return snapshot.id;
   }
 
   private createReActToolRunner(runId: string, userId: string, sessionId: string): ToolRunner {
@@ -1263,13 +1452,6 @@ class EventRuntimeService {
                 descriptor?.source === 'mcp'
                   ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
                   : undefined,
-            },
-            handler: async () => {
-              const result = await toolManager.executeTool(request.toolId, params);
-              if (!result.success) {
-                throw new Error(result.error || `Tool failed: ${request.toolId}`);
-              }
-              return result.output;
             },
           });
           return {
@@ -1836,16 +2018,6 @@ class EventRuntimeService {
                 ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
                 : undefined,
           },
-          handler: async () => {
-            const result = await toolManager.executeTool(
-              toolName,
-              params as Record<string, unknown>
-            );
-            if (!result.success) {
-              throw new Error(result.error || `Tool failed: ${toolName}`);
-            }
-            return result.output;
-          },
         });
         outputs[toolName] = output;
       } catch (error) {
@@ -2099,7 +2271,12 @@ function createDefaultDomainPack(): DomainPackSpec {
     ),
     ...states
       .filter((state) => state !== 'Completed' && state !== 'Failed')
-      .map((from) => ({ from, to: 'Failed', description: `${from} failed` }))
+      .map((from) => ({ from, to: 'Failed', description: `${from} failed` })),
+    {
+      from: 'HumanReview',
+      to: 'ObservationRecorded',
+      description: 'Approved Tool execution produced an observation',
+    }
   );
   return validateDomainPackSpec({
     id: 'hypha.default',
@@ -2218,6 +2395,11 @@ function summarizeValue(value: unknown): Record<string, unknown> {
     return { type: 'object', keys: Object.keys(value as Record<string, unknown>) };
   }
   return { type: typeof value };
+}
+
+function toolResultErrorMessage(result: ToolCallResult, fallback: string): string {
+  if (typeof result.error === 'string') return result.error;
+  return result.error?.message ?? fallback;
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> {
