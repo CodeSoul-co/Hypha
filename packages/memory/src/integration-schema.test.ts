@@ -43,7 +43,7 @@ describe('memory integration schemas', () => {
   it('validates deterministic domain dependency snapshots', () => {
     const snapshot = createDomainMemoryDependencySnapshot(
       {
-        domainPackRef: { id: 'domain.legal', version: '1.0.0' },
+        domainPackRef: { id: 'domain.example', version: '1.0.0' },
         memoryProfileRef: workflowStateMemoryBindingExample.memoryProfileRef,
         contextProfileRef: workflowStateMemoryBindingExample.contextProfileRef,
         providerRefs: [{ id: 'provider.memory.native', version: '1.0.0' }],
