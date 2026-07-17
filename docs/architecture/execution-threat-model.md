@@ -14,6 +14,8 @@ it can actually guarantee.
   authority.
 - Bound CPU, memory, process count, disk writes, output, duration, and retained resources.
 - Make cancellation, cleanup, recovery, and replay deterministic and auditable.
+- Keep approval records, leases, events, checkpoints, cache metadata, and provider credentials
+  outside the authority of the workload they govern.
 - Keep large or sensitive bytes in governed storage and place only hashes and references in
   events and cache records.
 
@@ -27,6 +29,7 @@ it can actually guarantee.
 | Provider to host, container, or remote runtime | Filesystem handles, processes, DNS, sockets, credentials             | Operating-system, container, proxy, or remote control-plane enforcement                                  |
 | Provider to Workspace and Artifact storage     | Generated files, snapshots, output streams, manifests                | Canonical paths, final-target confinement, quotas, content verification, lineage, and access checks      |
 | Execution to Event and Cache storage           | Status, errors, metrics, hashes, references                          | No plaintext secrets, raw environment values, host paths, or unbounded stdout and stderr                 |
+| Workload to Execution control-plane storage    | File, shell, mount, and network operations that may reach framework state | Independently protected roots; deny rules take precedence over broad Workspace grants; no workload write authority over policy, approval, lease, event, checkpoint, cache-index, or provider-credential state |
 
 ## Threats and Required Controls
 
@@ -36,6 +39,7 @@ it can actually guarantee.
 | Process escape or orphaned descendants | Isolated process group, Windows Job Object, container, or remote termination scope; graceful cancel followed by forced termination; cleanup reconciliation                               | Killing only the direct child is not a process-tree guarantee                                                        |
 | Path traversal and link escape         | Workspace-relative paths; deny absolute, encoded, Unicode-confusable, and traversal forms; canonicalize existing roots and final targets; use handle-relative operations where available | String-prefix checks and check-then-open sequences remain vulnerable to symlink, junction, hardlink, or TOCTOU races |
 | Host filesystem exposure               | Precise Workspace mounts or managed roots; separate read, write, execute, and deny policy; read-only root filesystem for containers                                                      | A local process with path checks is not OS-level filesystem isolation                                                |
+| Control-plane state modification        | Store framework-owned policy, approval, lease, event, checkpoint, cache-index, and provider-credential state outside workload roots; apply an independent deny guard after Workspace resolution and again at the storage boundary | A broad Workspace or host mount must never implicitly authorize mutation of the mechanisms that govern or audit the same execution |
 | Secret leakage                         | Resolve references at the provider boundary; minimal allowlist; short lifetime; revoke on completion; redact output, events, errors, and logs                                            | Inheriting the complete host environment can disclose unrelated credentials to a child process                       |
 | Network escape, SSRF, or DNS rebinding | Network disabled by default; provider or proxy enforcement; DNS resolution and pinning; private and metadata ranges denied; bounded authorization lifetime                               | Application-only URL validation cannot provide network isolation                                                     |
 | Resource exhaustion                    | CPU, memory, PID, disk, output, connection, byte, idle, and wall-clock limits; deterministic cleanup                                                                                     | Timeout and output buffering alone do not constrain CPU, memory, descendants, or disk usage                          |
@@ -59,6 +63,7 @@ method is not a shell call.
 | Container and remote execution | Docker socket paths, Docker or Podman CLI, Docker SDKs, containerd, Kubernetes Pod or Job creation, remote command APIs, and provider SDKs                                                       | Require an explicit provider adapter, immutable runtime identity, capability negotiation, resource and security controls, receipts, termination, and cleanup                            |
 | Network egress                 | `fetch`, Axios, HTTP and HTTPS clients, sockets, TLS, DNS, WebSocket, proxy configuration, redirects, and provider SDK networking                                                                | Classify control-plane versus workload traffic; verify network mode, destination policy, DNS behavior, private and metadata ranges, authorization lifetime, byte limits, and revocation |
 | Secrets and environment        | `process.env`, environment spreads, dotenv files, API keys, tokens, credentials, authorization headers, secret resolvers, and error/log/event/cache serialization                                | Require reference-based minimal injection, explicit inheritance, redaction, bounded lifetime, revocation, and absence of plaintext values from durable evidence                         |
+| Framework-owned state          | Approval databases, policy files, leases, event logs, checkpoints, cache indexes, provider credentials, session stores, and administrative configuration                                      | Prove that workload mounts and Workspace grants exclude these roots; verify deny precedence, independent storage authorization, immutable audit evidence, and failure when a protected root overlaps a broad grant |
 | Dynamic or native execution    | `eval`, `Function`, VM contexts, worker processes, WebAssembly, native add-ons, generated scripts, and interpreter flags                                                                         | Treat the surface as executable code and apply the same provider, policy, capability, trace, timeout, and cleanup requirements                                                          |
 
 Every new or changed match is classified as runtime, administrative, build, test, or fixture code;
@@ -73,6 +78,8 @@ A reviewed surface is acceptable only when all applicable statements are true:
 - authority is explicit in principal, policy, capability, and immutable revision inputs;
 - the side effect crosses a named adapter boundary rather than Agent or Tool code directly;
 - executable, arguments, paths, environment, mounts, network, and Secret references are validated;
+- framework-owned policy, approval, lease, event, checkpoint, cache-index, session, and credential
+  stores remain unreachable even when a Workspace grant or mount is broader than intended;
 - timeout, cancellation, process-tree termination, output bounds, and cleanup are defined;
 - events contain bounded decisions, hashes, receipts, and references instead of sensitive bytes;
 - replay consumes recorded evidence without repeating the side effect;
