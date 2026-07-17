@@ -57,6 +57,22 @@ rationale is recorded in the
 `SandboxProviderCapabilities` and capability negotiation keep environment requirements separate
 from a concrete provider. Runtime code can reject an incompatible provider before any side effect.
 
+## Deterministic Mock Provider
+
+`@hypha/testing` exports `MockExecutionProvider` for provider contract tests, replay fixtures, and
+failure injection. It implements the governed `SandboxProvider` requests in memory and supports a
+queue of deterministic execution behaviors. A behavior can configure delay, terminal status,
+stdout and stderr, truncation references, file mutations, generated Artifact references, resource
+usage, and normalized errors. Delayed executions can be cancelled with an
+`ExecutionCancelRequest`; Sandbox revisions, cleanup, health, and closed-provider behavior remain
+observable through the normal provider contract.
+
+The mock never starts a process, reads or writes a Workspace, or provides a security boundary.
+Isolation capabilities therefore remain false; cancellation, process-tree termination, and
+snapshots are simulated contract capabilities only. It also does not emit Framework events by
+itself: Runtime or Harness code remains responsible for authorization, lifecycle event emission,
+and durable execution records around every provider call.
+
 ## Store, Lease, and Recovery Rules
 
 An `ExecutionRecord` is revisioned. Store adapters must apply compare-and-set atomically. When the
