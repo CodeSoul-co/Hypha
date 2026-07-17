@@ -1,5 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'crypto';
+import stableStringify from 'fast-json-stable-stringify';
 import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import type {
@@ -196,10 +198,27 @@ export interface DomainCompilationResult {
   domainPack: DomainPackSpec;
   bindings: DomainBindingResolution;
   fsmProcess: FSMProcessSpec;
+  workflowRef: SpecRef;
+  compilerVersion: string;
+  processHash: string;
+  dependencySnapshot: WorkflowDependencySnapshot;
   harnessedSystem: HarnessedAgentSystemSpec;
   agentPatch: DomainAgentPatch;
   sessionInitialization: DomainSessionInitialization;
 }
+
+export interface WorkflowDependencySnapshot {
+  agentRefs: SpecRef[];
+  toolProfileRefs: SpecRef[];
+  memoryProfileRefs: SpecRef[];
+  contextProfileRefs: SpecRef[];
+  workspaceProfileRefs: SpecRef[];
+  policyRefs: SpecRef[];
+  evaluationRefs: SpecRef[];
+  dependencyHash: string;
+}
+
+export const DOMAIN_COMPILER_VERSION = '1.0.0';
 
 export type DomainPackOverlayCollection =
   | 'taskSchemas'
@@ -821,6 +840,22 @@ export function compileDomainPackToHarnessedSystem(
     fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
     agentRef: options.agentRef,
   });
+  const workflowRef = toSpecRef(workflow);
+  const dependencySnapshot = createWorkflowDependencySnapshot({
+    agentRefs: [options.agentRef],
+    toolProfileRefs: idsToRefs(selectedToolProfileIds, domainPack.toolProfiles) ?? [],
+    memoryProfileRefs: memoryProfile ? [toSpecRef(memoryProfile)] : [],
+    contextProfileRefs: contextProfile ? [toSpecRef(contextProfile)] : [],
+    workspaceProfileRefs: [],
+    policyRefs: idsToRefs(policyIds, domainPack.policies) ?? [],
+    evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles) ?? [],
+  });
+  const processHash = hashDomainCompilation({
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    workflowRef,
+    fsmProcess,
+    dependencySnapshot,
+  });
   const harnessedSystem: HarnessedAgentSystemSpec = {
     id: options.systemId ?? `${domainPack.id}.${workflow.id}.system`,
     version: options.systemVersion ?? domainPack.version,
@@ -894,9 +929,31 @@ export function compileDomainPackToHarnessedSystem(
       workflowStates: workflowStateBindings,
     },
     fsmProcess,
+    workflowRef,
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    processHash,
+    dependencySnapshot,
     harnessedSystem,
     agentPatch,
     sessionInitialization,
+  };
+}
+
+export function createWorkflowDependencySnapshot(
+  input: Omit<WorkflowDependencySnapshot, 'dependencyHash'>
+): WorkflowDependencySnapshot {
+  const dependencies = {
+    agentRefs: cloneRefs(input.agentRefs),
+    toolProfileRefs: cloneRefs(input.toolProfileRefs),
+    memoryProfileRefs: cloneRefs(input.memoryProfileRefs),
+    contextProfileRefs: cloneRefs(input.contextProfileRefs),
+    workspaceProfileRefs: cloneRefs(input.workspaceProfileRefs),
+    policyRefs: cloneRefs(input.policyRefs),
+    evaluationRefs: cloneRefs(input.evaluationRefs),
+  };
+  return {
+    ...dependencies,
+    dependencyHash: hashDomainCompilation(dependencies),
   };
 }
 
@@ -1136,6 +1193,27 @@ function toSpecRef(spec: VersionedSpec): SpecRef {
 
 function toOptionalSpecRef(spec: VersionedSpec | undefined): SpecRef | undefined {
   return spec ? toSpecRef(spec) : undefined;
+}
+
+function cloneRefs(refs: SpecRef[]): SpecRef[] {
+  return refs
+    .map((ref) => ({
+      id: ref.id,
+      ...(ref.version === undefined ? {} : { version: ref.version }),
+      ...(ref.revision === undefined ? {} : { revision: ref.revision }),
+    }))
+    .sort(compareSpecRefs);
+}
+
+function compareSpecRefs(left: SpecRef, right: SpecRef): number {
+  const leftKey = `${left.id}\u0000${left.version ?? ''}\u0000${left.revision ?? ''}`;
+  const rightKey = `${right.id}\u0000${right.version ?? ''}\u0000${right.revision ?? ''}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function hashDomainCompilation(value: unknown): string {
+  const canonicalJson = stableStringify(value);
+  return `sha256:${createHash('sha256').update(canonicalJson).digest('hex')}`;
 }
 
 function compactRecord(input: Record<string, unknown>): Record<string, unknown> {
