@@ -149,6 +149,13 @@ describe('LocalProcessExecutionProvider', () => {
     await expect(
       provider.execute(command(ready.id, 'execution.local.cwd', ['-e', ''], { cwd: '../outside' }))
     ).rejects.toThrow();
+    await expect(
+      provider.execute(
+        command(ready.id, 'execution.local.workspace-precondition', ['-e', ''], {
+          expectedWorkspaceSnapshotHash: 'sha256:workspace-before',
+        })
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
     await expect(provider.status({ sandboxId: ready.id, principal })).resolves.toMatchObject({
       status: 'ready',
       revision: 2,

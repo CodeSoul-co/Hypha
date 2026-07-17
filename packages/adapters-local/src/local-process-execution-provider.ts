@@ -503,6 +503,13 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
         false
       );
     }
+    if (request.expectedWorkspaceSnapshotHash) {
+      throw providerError(
+        'EXECUTION_POLICY_DENIED',
+        'Workspace snapshot preconditions require a snapshot-capable provider.',
+        false
+      );
+    }
     const executable = await this.resolveExecutable(environment, request.executable);
     const cwd = await this.resolveWorkingDirectory(request.cwd);
     const commandEnvironment = this.buildEnvironment(environment, request.env);
