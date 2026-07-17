@@ -852,6 +852,7 @@ export * from './native-memory';
 export * from './extraction';
 export * from './working-store';
 export * from './external-adapters';
+export * from './mem0-rest-client';
 export * from './memory-events';
 export * from './context-contracts';
 export * from './context-schema';
