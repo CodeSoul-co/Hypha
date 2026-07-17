@@ -158,7 +158,89 @@ describe.runIf(smokeEnabled)('DockerExecutionProvider real daemon smoke', () => 
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it('cancels an active exec and stops the complete container scope', async () => {
+    if (!dockerPath || !imageReference || !imageDigest) {
+      throw new Error(
+        'HYPHA_DOCKER_CLI_PATH, HYPHA_DOCKER_IMAGE_REF, and HYPHA_DOCKER_IMAGE_DIGEST are required.'
+      );
+    }
+
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-docker-cancel-'));
+    const provider = createSmokeProvider(workspaceRoot, dockerPath);
+
+    try {
+      const created = await provider.create(
+        createRequest(environment(imageReference, imageDigest), 'cancel')
+      );
+      const ready = await provider.start({
+        operationId: 'operation.start.docker-smoke.cancel',
+        sandboxId: created.id,
+        principal,
+        expectedRevision: created.revision,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      trace('cancel-execute:start');
+      const running = provider.execute(
+        command(ready.id, 'cancel', {
+          args: ['DEBUG', 'SLEEP', '30'],
+          timeoutMs: 15_000,
+          captureFileMutations: false,
+        })
+      );
+      await waitForSandboxStatus(provider, ready.id, 'busy');
+      await provider.cancel({
+        operationId: 'operation.cancel.docker-smoke',
+        executionId: 'execution.docker-smoke.cancel',
+        principal,
+        expectedRevision: 2,
+        reason: 'Docker smoke cancellation',
+      });
+      const result = await running;
+      trace('cancel-execute:complete');
+
+      expect(result).toMatchObject({
+        status: 'cancelled',
+        exitCode: null,
+        error: { code: 'EXECUTION_CANCELLED' },
+        metadata: {
+          processTreeKillScope: 'container',
+          processTreeTerminationVerified: true,
+          terminationReason: 'cancelled',
+        },
+      });
+      const stopped = await provider.status({ sandboxId: ready.id, principal });
+      expect(stopped).toMatchObject({ status: 'stopped' });
+      await provider.cleanup({
+        operationId: 'operation.cleanup.docker-smoke.cancel',
+        sandboxId: ready.id,
+        principal,
+        expectedRevision: stopped!.revision,
+      });
+      await expect(provider.status({ sandboxId: ready.id, principal })).resolves.toMatchObject({
+        status: 'cleaned',
+      });
+    } finally {
+      await provider.close();
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
+
+async function waitForSandboxStatus(
+  provider: DockerExecutionProvider,
+  sandboxId: string,
+  expectedStatus: string
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const record = await provider.status({ sandboxId, principal });
+    if (record?.status === expectedStatus) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Sandbox ${sandboxId} did not reach ${expectedStatus}.`);
+}
 
 function environment(reference: string, digest: string): ExecutionEnvironmentSpec {
   return {
