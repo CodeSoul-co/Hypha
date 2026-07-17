@@ -97,6 +97,18 @@ Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`To
 
 契约分层与扩展规则参见 [Execution 架构](docs/architecture/execution.md)。
 
+## 受治理的 Memory 与 Context
+
+`@hypha/memory` 提供版本化 Memory profile、principal/user/workspace scope 隔离、乐观并发版本、
+scope 级幂等、结构化历史、record 与 index outbox 原子持久化、确定性检索解释、生命周期 worker
+和有界 Context 构建。Native provider 以结构化记录为真相源，向量索引通过带 lease 和有界重试的
+outbox 异步更新。hard delete 会同时清除当前记录与历史版本；外部 provider adapter 必须保留
+scope metadata，并在不确定写入重放前完成对账。
+
+Memory、Context、Domain、Cache、Replay 与 Evaluation 通过版本化依赖和 validity snapshot 协同。
+Context builder 在注入模型前执行 policy、provenance、token budget、确定性压缩以及指令/数据边界。
+详见[受治理的 Memory 架构](docs/architecture/memory.md)。
+
 ## 开发命令
 
 ```bash

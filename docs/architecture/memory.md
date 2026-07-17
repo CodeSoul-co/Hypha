@@ -1,0 +1,109 @@
+# Governed Memory Architecture
+
+`@hypha/memory` provides provider-neutral contracts for durable, scoped memory and bounded model
+context. Memory remains persisted state; context is a per-call view assembled from authorized
+sources. Domain Packs select versioned profiles, while Runtime and Harness own policy, events,
+recovery, replay, and cache invalidation around every operation.
+
+## Public Contract Layers
+
+| Layer       | Main contracts                                          | Responsibility                                                                                                                                  |
+| ----------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profile     | `MemoryProfileSpec`                                     | Provider, record/vector/artifact stores, scope, retrieval, write, retention, privacy, indexing, fallback, and context references.               |
+| Operation   | `MemoryManagementProvider`, `MemoryManager`             | Scoped add, search, get, list, optimistic update, delete, history, capabilities, health, and close.                                             |
+| Record      | `ManagedMemoryRecord`                                   | Versioned content, explicit scope and scope hash, provenance, visibility, status, relations, index state, and content hash.                     |
+| Persistence | `MemoryPersistenceUnitOfWork`                           | Atomic record/version and index-outbox mutation with declared durability capabilities.                                                          |
+| Retrieval   | `MemoryRetrievalPipeline`                               | Candidate generation, hard authorization filters, deterministic score fusion, stable tie-breaks, snapshots, and explanations.                   |
+| Context     | `MemoryContextBuilder`, `ContextSourceResolverRegistry` | Resolve sources, enforce policy and token budgets, compact deterministically, preserve provenance, and inject data with instruction boundaries. |
+| Integration | `MemoryActivityPort`, `MemoryActivityHarnessHook`       | Policy decision, provider call, trace, cache validity, replay, evaluation, and Domain/Workflow binding.                                         |
+
+All managed operations carry an `operationId`, `MemoryPrincipal`, `ManagedMemoryScope`, and the
+relevant profile reference. Scope hashes are derived from the explicit tenant, user, workspace,
+project, session, run, agent, and Domain Pack dimensions. A record is never selected merely because
+its provider returns a matching id or vector.
+
+## Write and Index Flow
+
+`NativeMemoryManagementProvider` applies scoped idempotency and deterministic maintenance planning
+before a mutation. New content either creates a record, creates a compare-and-set version, reuses an
+existing canonical record, requires review, or is rejected. The record mutation and its index job
+are committed through one `MemoryPersistenceUnitOfWork` transaction.
+
+Vector indexing is asynchronous when a profile selects `async_outbox`. `IndexOutboxWorker` leases
+jobs, embeds the exact record version, writes only the declared vector stores, retries with a bounded
+attempt budget, and dead-letters exhausted jobs without deleting the structured source record.
+Hard deletion removes both the current record and its version history; soft deletion creates a
+revisioned tombstone. Vector deletion remains an outbox action so structured state is the source of
+truth during recovery.
+
+Local and self-hosted deployments can use `StructuredMemoryPersistenceUnitOfWork` over a
+transactional `StructuredStoreProvider`. `InMemoryMemoryPersistenceUnitOfWork` is deterministic and
+atomic for tests but declares `durable: false`.
+
+## Retrieval and Context Safety
+
+The default retrieval pipeline rejects principal/scope mismatches before ranking. It also applies
+status, validity, type, source, visibility, policy, and deletion filters before deterministic score
+fusion. Returned results include a retrieval snapshot and explanation so replay and evaluation can
+identify which candidates, policy revision, profile revision, and ranking configuration were used.
+
+`DefaultMemoryContextBuilder` converts authorized records and other registered sources into bounded
+context items. It applies per-source and total token limits, explicit truncation/compaction policy,
+deduplication, stable ordering, sensitivity handling, and provenance. `DefaultContextInjectionGateway`
+keeps memory data separate from developer or system instructions; model-visible text is not treated
+as executable policy.
+
+## External Providers
+
+`ExternalMemoryManagementAdapter` keeps provider-specific transport and payloads behind the common
+management contract. `Mem0RestClient` maps Hypha scope dimensions to Mem0 metadata and discards
+responses whose returned scope hash does not match the request. External mutations are not retried
+after a write may have started unless reconciliation proves that replay is safe. MemoryBank-specific
+policy remains adapter configuration rather than a Core or Domain abstraction.
+
+## Events, Cache, Replay, and Domain Binding
+
+Memory activity emits bounded reference events such as `memory.read.requested`,
+`memory.read.completed`, `memory.write.requested`, `memory.write.committed`,
+`memory.write.rejected`, index lifecycle events, and maintenance worker events. Event payloads omit
+raw memory bodies, embeddings, credentials, and connection strings.
+
+Domain and Workflow bindings use versioned memory/context profile references. The Domain compiler's
+dependency snapshot includes the selected profiles in its deterministic hash. Cache validity binds
+record version, content hash, profile/policy revision, provider revision, and scope; a mismatch
+invalidates reuse. Replay stores references and snapshots rather than consulting mutable current
+memory as if it were historical truth.
+
+## Minimal Managed Provider
+
+```ts
+import {
+  MemoryManager,
+  NativeMemoryManagementProvider,
+  memoryProfileSpecExample,
+} from '@hypha/memory';
+
+const memory = new MemoryManager(
+  new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample })
+);
+
+await memory.add({
+  operationId: 'memory:add:preference',
+  principal: {
+    principalId: 'user:owner',
+    type: 'user',
+    userId: 'owner',
+    permissionScopes: ['memory:write'],
+  },
+  scope: { userId: 'owner', workspaceId: 'workspace:default' },
+  input: { responseStyle: 'concise' },
+  memoryType: 'preference',
+  source: { type: 'user_message', sourceId: 'message:1' },
+  profileRef: { id: memoryProfileSpecExample.id, version: memoryProfileSpecExample.version },
+  idempotencyKey: 'preference:response-style:v1',
+});
+```
+
+Production assembly must supply the policy, trace, persistence, provider health, and external
+receipt hooks required by the selected profile. Direct provider or store writes bypassing those
+boundaries are not framework-compliant.
