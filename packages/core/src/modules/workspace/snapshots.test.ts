@@ -1,12 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecutionPrincipal } from '../../contracts/execution';
 import {
+  validateWorkspaceDiffRequest,
   validateWorkspaceDiffResult,
+  validateWorkspaceDiffSummary,
+  validateWorkspacePatchConflict,
   validateWorkspacePatchRequest,
   validateWorkspacePatchResult,
   validateWorkspaceRestoreRequest,
+  validateWorkspaceSnapshotEntry,
   validateWorkspaceSnapshotManifest,
   validateWorkspaceSnapshotRequest,
+  workspaceDiffResultExample,
+  workspacePatchRequestExample,
+  workspacePatchResultExample,
+  workspaceSnapshotManifestExample,
+  workspaceSnapshotRequestExample,
   workspaceSnapshotJsonSchemas,
 } from './snapshots';
 
@@ -18,6 +27,24 @@ const principal: ExecutionPrincipal = {
 };
 
 describe('Workspace Snapshot, Diff, and Patch contracts', () => {
+  it('validates reusable Snapshot, Diff, and Patch fixtures', () => {
+    expect(validateWorkspaceSnapshotRequest(workspaceSnapshotRequestExample)).toEqual(
+      workspaceSnapshotRequestExample
+    );
+    expect(validateWorkspaceSnapshotManifest(workspaceSnapshotManifestExample)).toEqual(
+      workspaceSnapshotManifestExample
+    );
+    expect(validateWorkspaceDiffResult(workspaceDiffResultExample)).toEqual(
+      workspaceDiffResultExample
+    );
+    expect(validateWorkspacePatchRequest(workspacePatchRequestExample)).toEqual(
+      workspacePatchRequestExample
+    );
+    expect(validateWorkspacePatchResult(workspacePatchResultExample)).toEqual(
+      workspacePatchResultExample
+    );
+  });
+
   it('requires a base reference for incremental snapshots', () => {
     const request = {
       operationId: 'operation:snapshot',
@@ -101,6 +128,34 @@ describe('Workspace Snapshot, Diff, and Patch contracts', () => {
     ).toThrow(/number of file entries/u);
   });
 
+  it('keeps Snapshot entry kind and manifest byte evidence consistent', () => {
+    expect(() => validateWorkspaceSnapshotEntry({ path: 'working/link', kind: 'symlink' })).toThrow(
+      /required for symlink/u
+    );
+    expect(() =>
+      validateWorkspaceSnapshotEntry({
+        path: 'working/file.txt',
+        kind: 'file',
+        symlinkTarget: 'working/target.txt',
+      })
+    ).toThrow(/only valid for symlink/u);
+    expect(
+      validateWorkspaceSnapshotEntry({
+        path: 'working/link',
+        kind: 'symlink',
+        symlinkTarget: 'working/target.txt',
+      })
+    ).toMatchObject({ kind: 'symlink', symlinkTarget: 'working/target.txt' });
+
+    expect(() =>
+      validateWorkspaceSnapshotManifest({
+        ...workspaceSnapshotManifestExample,
+        totalBytes: workspaceSnapshotManifestExample.totalBytes + 1,
+      })
+    ).toThrow(/sum of file entry sizes/u);
+    expect(workspaceSnapshotJsonSchemas.WorkspaceSnapshotEntry.allOf).toHaveLength(1);
+  });
+
   it('retains stale-state protection on restore', () => {
     expect(
       validateWorkspaceRestoreRequest({
@@ -182,6 +237,42 @@ describe('Workspace Snapshot, Diff, and Patch contracts', () => {
         },
       })
     ).toMatchObject({ patchArtifactRef: 'artifact:patch', summary: { modified: 1 } });
+  });
+
+  it('validates component and request contract boundaries', () => {
+    expect(
+      validateWorkspaceSnapshotEntry(workspaceSnapshotManifestExample.entries[1])
+    ).toMatchObject({ kind: 'file', artifactRef: 'artifact:output' });
+    expect(
+      validateWorkspaceDiffRequest({
+        operationId: 'operation:diff',
+        workspaceId: 'workspace:1',
+        principal,
+        fromSnapshotRef: 'snapshot:before',
+        toSnapshotRef: 'snapshot:after',
+        createPatchArtifact: true,
+      })
+    ).toMatchObject({ createPatchArtifact: true });
+    expect(validateWorkspaceDiffSummary(workspaceDiffResultExample.summary)).toEqual(
+      workspaceDiffResultExample.summary
+    );
+    expect(
+      validateWorkspacePatchConflict({
+        path: 'working/output.txt',
+        reason: 'content hash mismatch',
+        expectedHash: 'sha256:expected',
+        actualHash: 'sha256:actual',
+      })
+    ).toMatchObject({ reason: 'content hash mismatch' });
+  });
+
+  it('rejects undeclared Snapshot and Patch fields', () => {
+    expect(() =>
+      validateWorkspaceSnapshotRequest({ ...workspaceSnapshotRequestExample, unexpected: true })
+    ).toThrow();
+    expect(() =>
+      validateWorkspacePatchResult({ ...workspacePatchResultExample, unexpected: true })
+    ).toThrow();
   });
 
   it('exports JSON Schema conditions for incremental Snapshot and Patch apply', () => {

@@ -1,4 +1,5 @@
 import type { SpecMetadata, SpecRef, VersionedSpec } from '../specs';
+import type { EventCreateInput, FrameworkEvent } from '../events';
 import type { ExecutionPrincipal, NormalizedExecutionError } from './execution';
 
 export interface WorkspaceDirectorySpec {
@@ -14,9 +15,13 @@ export interface WorkspaceDirectorySpec {
 }
 
 export interface WorkspacePathPolicySpec {
+  /** Read permission only. Exact or descendant deny rules always take precedence. */
   readOnlyPaths?: string[];
+  /** Write permission only. Exact or descendant deny rules always take precedence. */
   writablePaths?: string[];
+  /** Execute permission only. Exact or descendant deny rules always take precedence. */
   executablePaths?: string[];
+  /** Final deny boundary; it cannot be widened by any allow list. */
   deniedPaths?: string[];
   allowSymlinks?: boolean;
   allowHardLinks?: boolean;
@@ -138,6 +143,77 @@ export interface WorkspaceEventPayload {
   error?: NormalizedExecutionError;
   metadata?: Record<string, unknown>;
 }
+
+type WorkspaceEventPayloadWithRequired<K extends keyof WorkspaceEventPayload> =
+  WorkspaceEventPayload & Required<Pick<WorkspaceEventPayload, K>>;
+
+type WorkspaceStatusEventPayload<S extends WorkspaceStatus> = WorkspaceEventPayloadWithRequired<
+  'operationId' | 'status'
+> & { status: S };
+
+type WorkspaceQuotaExceededEventPayload = WorkspaceEventPayloadWithRequired<'operationId'> &
+  ({ bytes: number } | { files: number });
+
+export type WorkspaceFrameworkEventType =
+  | 'workspace.create.requested'
+  | 'workspace.created'
+  | 'workspace.ready'
+  | 'workspace.busy'
+  | 'workspace.path.resolved'
+  | 'workspace.path.denied'
+  | 'workspace.quota.exceeded'
+  | 'workspace.snapshot.requested'
+  | 'workspace.snapshot.created'
+  | 'workspace.snapshot.failed'
+  | 'workspace.restore.requested'
+  | 'workspace.restored'
+  | 'workspace.restore.failed'
+  | 'workspace.patch.checked'
+  | 'workspace.patch.applied'
+  | 'workspace.patch.conflict'
+  | 'workspace.cleanup.started'
+  | 'workspace.cleanup.completed'
+  | 'workspace.cleanup.failed';
+
+export type WorkspaceEventPayloadMap = {
+  'workspace.create.requested': WorkspaceEventPayloadWithRequired<'operationId' | 'profileRef'>;
+  'workspace.created': WorkspaceEventPayloadWithRequired<'operationId' | 'profileRef' | 'status'>;
+  'workspace.ready': WorkspaceStatusEventPayload<'ready'>;
+  'workspace.busy': WorkspaceStatusEventPayload<'busy'>;
+  'workspace.path.resolved': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.path.denied': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+  'workspace.quota.exceeded': WorkspaceQuotaExceededEventPayload;
+  'workspace.snapshot.requested': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.snapshot.created': WorkspaceEventPayloadWithRequired<
+    'operationId' | 'snapshotManifestHash' | 'artifactRefs'
+  >;
+  'workspace.snapshot.failed': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+  'workspace.restore.requested': WorkspaceEventPayloadWithRequired<'operationId' | 'artifactRefs'>;
+  'workspace.restored': WorkspaceEventPayloadWithRequired<'operationId' | 'workspaceSnapshotHash'>;
+  'workspace.restore.failed': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+  'workspace.patch.checked': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.patch.applied': WorkspaceEventPayloadWithRequired<
+    'operationId' | 'workspaceSnapshotHash'
+  >;
+  'workspace.patch.conflict': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.cleanup.started': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.cleanup.completed': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.cleanup.failed': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+};
+
+export type WorkspaceFrameworkEvent<
+  TType extends WorkspaceFrameworkEventType = WorkspaceFrameworkEventType,
+> = Omit<FrameworkEvent<WorkspaceEventPayloadMap[TType]>, 'type' | 'workspaceId'> & {
+  type: TType;
+  workspaceId: string;
+};
+
+export type WorkspaceEventCreateInput<
+  TType extends WorkspaceFrameworkEventType = WorkspaceFrameworkEventType,
+> = Omit<EventCreateInput<WorkspaceEventPayloadMap[TType]>, 'type' | 'workspaceId'> & {
+  type: TType;
+  workspaceId: string;
+};
 
 export type WorkspacePathOperation = 'read' | 'write' | 'execute' | 'delete' | 'list';
 export type WorkspaceEntryKind = 'file' | 'directory' | 'symlink' | 'other';
@@ -266,6 +342,7 @@ export interface WorkspaceSnapshotEntry {
   sizeBytes?: number;
   contentHash?: string;
   mode?: number;
+  /** Required only for symlink entries; always Workspace-relative. */
   symlinkTarget?: string;
   artifactRef?: string;
 }

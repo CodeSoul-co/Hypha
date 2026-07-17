@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import type { ExecutionPrincipal } from '../../contracts/execution';
 import type {
   FileMutation,
   ResolvedWorkspacePath,
@@ -20,33 +21,39 @@ const nonNegativeInteger = z.number().int().nonnegative();
 
 export { executionPrincipalSchema } from '../execution';
 
-export const workspacePathRequestSchema = z.object({
-  workspaceId: z.string().min(1),
-  principal: executionPrincipalSchema,
-  relativePath: workspaceRelativePathSchema,
-  operation: z.enum(['read', 'write', 'execute', 'delete', 'list']),
-  allowMissing: z.boolean().optional(),
-}) satisfies ZodType<WorkspacePathRequest>;
+export const workspacePathRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    principal: executionPrincipalSchema,
+    relativePath: workspaceRelativePathSchema,
+    operation: z.enum(['read', 'write', 'execute', 'delete', 'list']),
+    allowMissing: z.boolean().optional(),
+  })
+  .strict() satisfies ZodType<WorkspacePathRequest>;
 
-export const workspaceListRequestSchema = z.object({
-  workspaceId: z.string().min(1),
-  principal: executionPrincipalSchema,
-  relativePath: workspaceRelativePathSchema.optional(),
-  recursive: z.boolean().optional(),
-  includeHidden: z.boolean().optional(),
-  maxEntries: positiveInteger.optional(),
-  cursor: z.string().min(1).optional(),
-}) satisfies ZodType<WorkspaceListRequest>;
+export const workspaceListRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    principal: executionPrincipalSchema,
+    relativePath: workspaceRelativePathSchema.optional(),
+    recursive: z.boolean().optional(),
+    includeHidden: z.boolean().optional(),
+    maxEntries: positiveInteger.optional(),
+    cursor: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceListRequest>;
 
-export const workspaceReadRequestSchema = z.object({
-  workspaceId: z.string().min(1),
-  principal: executionPrincipalSchema,
-  relativePath: workspaceRelativePathSchema,
-  encoding: z.enum(['utf8', 'base64']).optional(),
-  offset: nonNegativeInteger.optional(),
-  length: positiveInteger.optional(),
-  maxBytes: positiveInteger.optional(),
-}) satisfies ZodType<WorkspaceReadRequest>;
+export const workspaceReadRequestSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    principal: executionPrincipalSchema,
+    relativePath: workspaceRelativePathSchema,
+    encoding: z.enum(['utf8', 'base64']).optional(),
+    offset: nonNegativeInteger.optional(),
+    length: positiveInteger.optional(),
+    maxBytes: positiveInteger.optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceReadRequest>;
 
 export const workspaceWriteRequestSchema = z
   .object({
@@ -61,6 +68,7 @@ export const workspaceWriteRequestSchema = z
     createParents: z.boolean().optional(),
     idempotencyKey: z.string().min(1).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     const sourceCount =
       Number(value.content !== undefined) + Number(value.artifactRef !== undefined);
@@ -73,69 +81,81 @@ export const workspaceWriteRequestSchema = z
     }
   }) satisfies ZodType<WorkspaceWriteRequest>;
 
-export const workspaceDeleteRequestSchema = z.object({
-  operationId: z.string().min(1),
-  workspaceId: z.string().min(1),
-  principal: executionPrincipalSchema,
-  relativePath: workspaceRelativePathSchema,
-  recursive: z.boolean().optional(),
-  expectedContentHash: z.string().min(1).optional(),
-  idempotencyKey: z.string().min(1).optional(),
-}) satisfies ZodType<WorkspaceDeleteRequest>;
+export const workspaceDeleteRequestSchema = z
+  .object({
+    operationId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    principal: executionPrincipalSchema,
+    relativePath: workspaceRelativePathSchema,
+    recursive: z.boolean().optional(),
+    expectedContentHash: z.string().min(1).optional(),
+    idempotencyKey: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceDeleteRequest>;
 
 const workspacePermissionSchema = z.enum(['read', 'write', 'execute', 'delete']);
 const workspaceEntryKindSchema = z.enum(['file', 'directory', 'symlink', 'other']);
 
-export const resolvedWorkspacePathSchema = z.object({
-  workspaceId: z.string().min(1),
-  relativePath: workspaceRelativePathSchema,
-  canonicalRelativePath: workspaceRelativePathSchema,
-  pathRef: z.string().min(1),
-  exists: z.boolean(),
-  kind: workspaceEntryKindSchema.optional(),
-  permissions: z.array(workspacePermissionSchema),
-  contentHash: z.string().min(1).optional(),
-}) satisfies ZodType<ResolvedWorkspacePath>;
+export const resolvedWorkspacePathSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    relativePath: workspaceRelativePathSchema,
+    canonicalRelativePath: workspaceRelativePathSchema,
+    pathRef: z.string().min(1),
+    exists: z.boolean(),
+    kind: workspaceEntryKindSchema.optional(),
+    permissions: z.array(workspacePermissionSchema),
+    contentHash: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<ResolvedWorkspacePath>;
 
-export const workspaceFileEntrySchema = z.object({
-  relativePath: workspaceRelativePathSchema,
-  kind: workspaceEntryKindSchema,
-  sizeBytes: nonNegativeInteger.optional(),
-  contentHash: z.string().min(1).optional(),
-  modifiedAt: z.string().min(1).optional(),
-  permissions: z.array(workspacePermissionSchema).optional(),
-}) satisfies ZodType<WorkspaceFileEntry>;
+export const workspaceFileEntrySchema = z
+  .object({
+    relativePath: workspaceRelativePathSchema,
+    kind: workspaceEntryKindSchema,
+    sizeBytes: nonNegativeInteger.optional(),
+    contentHash: z.string().min(1).optional(),
+    modifiedAt: z.string().min(1).optional(),
+    permissions: z.array(workspacePermissionSchema).optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceFileEntry>;
 
-export const workspaceReadResultSchema = z.object({
-  relativePath: workspaceRelativePathSchema,
-  encoding: z.enum(['utf8', 'base64']),
-  content: z.string(),
-  contentHash: z.string().min(1),
-  sizeBytes: nonNegativeInteger,
-  truncated: z.boolean().optional(),
-  nextOffset: nonNegativeInteger.optional(),
-}) satisfies ZodType<WorkspaceReadResult>;
+export const workspaceReadResultSchema = z
+  .object({
+    relativePath: workspaceRelativePathSchema,
+    encoding: z.enum(['utf8', 'base64']),
+    content: z.string(),
+    contentHash: z.string().min(1),
+    sizeBytes: nonNegativeInteger,
+    truncated: z.boolean().optional(),
+    nextOffset: nonNegativeInteger.optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceReadResult>;
 
-export const fileMutationSchema = z.object({
-  path: workspaceRelativePathSchema,
-  operation: z.enum(['created', 'modified', 'deleted', 'renamed', 'permission_changed']),
-  beforeHash: z.string().min(1).optional(),
-  afterHash: z.string().min(1).optional(),
-  beforeSizeBytes: nonNegativeInteger.optional(),
-  afterSizeBytes: nonNegativeInteger.optional(),
-  artifactRef: z.string().min(1).optional(),
-  oldPath: workspaceRelativePathSchema.optional(),
-  detectedAt: z.string().min(1),
-}) satisfies ZodType<FileMutation>;
+export const fileMutationSchema = z
+  .object({
+    path: workspaceRelativePathSchema,
+    operation: z.enum(['created', 'modified', 'deleted', 'renamed', 'permission_changed']),
+    beforeHash: z.string().min(1).optional(),
+    afterHash: z.string().min(1).optional(),
+    beforeSizeBytes: nonNegativeInteger.optional(),
+    afterSizeBytes: nonNegativeInteger.optional(),
+    artifactRef: z.string().min(1).optional(),
+    oldPath: workspaceRelativePathSchema.optional(),
+    detectedAt: z.string().min(1),
+  })
+  .strict() satisfies ZodType<FileMutation>;
 
-export const workspaceWriteResultSchema = z.object({
-  relativePath: workspaceRelativePathSchema,
-  beforeHash: z.string().min(1).optional(),
-  afterHash: z.string().min(1),
-  sizeBytes: nonNegativeInteger,
-  mutation: fileMutationSchema,
-  artifactRef: z.string().min(1).optional(),
-}) satisfies ZodType<WorkspaceWriteResult>;
+export const workspaceWriteResultSchema = z
+  .object({
+    relativePath: workspaceRelativePathSchema,
+    beforeHash: z.string().min(1).optional(),
+    afterHash: z.string().min(1),
+    sizeBytes: nonNegativeInteger,
+    mutation: fileMutationSchema,
+    artifactRef: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceWriteResult>;
 
 export const relativePathJsonSchema: JsonSchema = {
   type: 'string',
@@ -309,6 +329,50 @@ export const workspaceOperationJsonSchemas: Record<string, JsonSchema> = {
       artifactRef: { type: 'string', minLength: 1 },
     },
     additionalProperties: false,
+  },
+};
+
+export const workspaceOperationPrincipalExample: ExecutionPrincipal = {
+  principalId: 'agent:workspace.example',
+  type: 'agent',
+  agentId: 'agent:workspace.example',
+  permissionScopes: ['workspace:read', 'workspace:write'],
+};
+
+export const workspaceWriteRequestExample: WorkspaceWriteRequest = {
+  operationId: 'operation.workspace.write.example',
+  workspaceId: 'workspace.example',
+  principal: workspaceOperationPrincipalExample,
+  relativePath: 'working/output.txt',
+  content: 'example output',
+  mode: 'atomic_replace',
+  expectedContentHash: 'sha256:before',
+  createParents: true,
+  idempotencyKey: 'workspace.write.example',
+};
+
+export const workspaceDeleteRequestExample: WorkspaceDeleteRequest = {
+  operationId: 'operation.workspace.delete.example',
+  workspaceId: 'workspace.example',
+  principal: workspaceOperationPrincipalExample,
+  relativePath: 'working/obsolete.txt',
+  expectedContentHash: 'sha256:obsolete',
+  idempotencyKey: 'workspace.delete.example',
+};
+
+export const workspaceWriteResultExample: WorkspaceWriteResult = {
+  relativePath: workspaceWriteRequestExample.relativePath,
+  beforeHash: workspaceWriteRequestExample.expectedContentHash,
+  afterHash: 'sha256:after',
+  sizeBytes: 14,
+  mutation: {
+    path: workspaceWriteRequestExample.relativePath,
+    operation: 'modified',
+    beforeHash: workspaceWriteRequestExample.expectedContentHash,
+    afterHash: 'sha256:after',
+    beforeSizeBytes: 12,
+    afterSizeBytes: 14,
+    detectedAt: '2026-07-17T00:00:02.000Z',
   },
 };
 
