@@ -118,6 +118,20 @@ validated before adapters perform side effects.
 See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
 extension rules.
 
+## Governed Memory and Context
+
+`@hypha/memory` provides versioned Memory profiles, principal/user/workspace scope enforcement,
+optimistic record revisions, scoped idempotency, structured history, atomic record-plus-index-outbox
+persistence, deterministic retrieval explanations, lifecycle workers, and bounded context assembly.
+The native provider keeps structured records as the source of truth while vector indexing runs as a
+leased, retry-bounded outbox job. Hard delete removes current and historical versions; external
+provider adapters must preserve scope metadata and reconcile uncertain writes before replay.
+
+Memory, Context, Domain, Cache, Replay, and Evaluation share versioned dependency and validity
+snapshots. Context builders apply policy, provenance, token budgets, deterministic compaction, and
+instruction/data boundaries before model injection. See the
+[Governed Memory architecture](docs/architecture/memory.md).
+
 ## Development Commands
 
 ```bash
