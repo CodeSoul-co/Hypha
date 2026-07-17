@@ -12,23 +12,24 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 ## Package Boundary Summary
 
-| Package                 | Public Surface                                                                                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                     |
-| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                       |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                   |
-| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers. |
-| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                      |
-| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                  |
-| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                  |
-| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                       |
-| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.   |
-| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                |
-| `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                                                 |
-| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                 |
-| `@hypha/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.           |
-| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                            |
-| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                        |
+| Package                 | Public Surface                                                                                                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                                                                        |
+| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                                                                          |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                                                                      |
+| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers.                                                    |
+| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                                                                         |
+| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                                                                     |
+| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                                                                     |
+| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                                                                          |
+| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                                                                       |
+| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.                                                      |
+| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                                                                   |
+| `@hypha/memory`         | Versioned Memory profiles, managed operations, scoped records/history, atomic persistence and index outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. |
+| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                                                                    |
+| `@hypha/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.                                                              |
+| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                                                                               |
+| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                                                                           |
 
 Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
 
@@ -382,11 +383,29 @@ Cache references:
 
 ## Memory
 
-`MemoryRecord` fields include `id`, `type`, `value`, `source`, `confidence`, `provenance`, `visibility`, `expiresAt`, `createdAt`, and `updatedAt`.
+`MemoryProfileSpec` binds a management provider, record store, optional working/vector/artifact
+stores, embedding/reranker providers, and explicit scope, retrieval, write, retention,
+consolidation, conflict, privacy, fallback, indexing, and context policies. Top-level profile and
+provider contracts reject undeclared fields consistently in TypeScript validation and exported JSON
+Schema.
 
-Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `artifact`, and `governance`.
+`MemoryManagementProvider` implements `add`, `search`, `get`, `list`, optimistic `update`, `delete`,
+optional `history`, capabilities, health, and close. Requests carry `operationId`,
+`MemoryPrincipal`, `ManagedMemoryScope`, and the applicable profile ref. Managed record types include
+`working`, `episodic`, `semantic`, `procedural`, `preference`, `artifact`, `governance`,
+`reflection`, and `custom`.
 
-`MemoryProvider` implements `read`, `search`, `write`, `update`, `invalidate`, `summarize`, and `audit`. `MemoryScope` can include `workspaceId`, `sessionId`, `runId`, and `userId`.
+`ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
+and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
+hash, and timestamps. `ManagedMemoryRecordStore` uses compare-and-set revisions and scope-qualified
+lookups. `MemoryPersistenceUnitOfWork` declares durability and atomic record/outbox support;
+`StructuredMemoryPersistenceUnitOfWork` supplies that boundary over a transactional structured
+store.
+
+`DefaultMemoryRetrievalPipeline` applies principal/scope and hard record filters before deterministic
+score fusion, then returns a retrieval snapshot and explanation. `IndexOutboxWorker` leases exact
+record versions for vector upsert/delete, retries with a bounded attempt budget, and dead-letters an
+exhausted index job without discarding the structured source record.
 
 ## Tools, MCP, and Skills
 
@@ -476,9 +495,15 @@ Skill instructions loaded only after activation.
 
 Harnessed runs record `skill.selected`, `skill.loaded`, and `skill.completed` for activated skills. Skill-provided tools are not executed directly; tool actions still go through `ToolRunner` and the same policy/trace path as non-skill tool calls.
 
-## Memory and Context
+## Memory Runtime and Context Assembly
 
-`@hypha/memory` exposes `MemoryManager` over any `MemoryProvider`. The manager enforces write policy before provider side effects and can record standard trace events when constructed with a `TraceRecorder`:
+`MemoryManager` accepts either the managed provider contract above or the compatibility
+`MemoryProvider` contract. The compatibility surface retains `read`, `search`, `write`, `update`,
+`invalidate`, `summarize`, and `audit` for existing storage backbones; managed callers use
+`add/search/get/list/update/delete/history` request objects with explicit principal and scope.
+
+Compatibility writes still enforce `MemoryWritePolicy` before provider side effects and can record
+standard trace events when constructed with a `TraceRecorder`:
 
 ```ts
 const manager = new MemoryManager(storage.memory, { trace: storage.eventStore });
@@ -489,9 +514,17 @@ await manager.write(scope, record, {
 });
 ```
 
-`MemoryRecord` requires `id`, `type`, `value`, `provenance`, and `createdAt`. Long-term records such as `episodic`, `semantic`, and `procedural` require `allowLongTerm: true`; `requireProvenance: true` rejects records without provenance. Reads and searches emit `memory.read.requested` and `memory.read.completed`; writes emit `memory.write.requested`, `memory.write.validated`, and `memory.write.committed` or `memory.write.rejected`.
+Compatibility `MemoryRecord` requires `id`, `type`, `value`, `provenance`, and `createdAt`.
+Long-term records such as `episodic`, `semantic`, and `procedural` require `allowLongTerm: true`;
+`requireProvenance: true` rejects records without provenance. Managed and compatibility operations
+emit reference-only memory lifecycle events and normalize failures for FSM recovery.
 
-`@hypha/kernel` provides `MemoryContextBuilder` for model context construction. It retrieves memory through `MemoryManager.search()`, enforces configured `memoryTypes`, applies `ContextBudget` (`maxMessages`, `maxMemoryItems`, `maxMemoryChars`, `maxTotalChars`), tags each included record with `ContextProvenance`, and prepends a system context message with clear data/instruction boundaries. Use `createEpisodicMemorySync()` with `ReActRunner` when verified observations should become episodic memory.
+The managed `DefaultMemoryContextBuilder` resolves registered sources, applies policy, sensitivity,
+deduplication, stable ordering, per-source and total token budgets, deterministic extractive
+compaction, and `ContextProvenance`. `DefaultContextInjectionGateway` preserves the boundary between
+memory data and instructions. The kernel compatibility `MemoryContextBuilder` remains available for
+existing ReAct assembly, and `createEpisodicMemorySync()` routes verified observations through the
+same policy and trace path. See [Governed Memory](../architecture/memory.md).
 
 ## Local Adapters
 
