@@ -46,14 +46,6 @@ results rather than SDK objects. Command results bind execution and sandbox iden
 terminal states, require normalized error evidence for unsuccessful terminals, and use artifact
 references when bounded inline output is truncated.
 
-Stateful `SandboxProvider` methods accept governed request objects rather than raw sandbox or
-execution identifiers. Mutation requests carry an operation id, principal, expected record
-revision, and optional idempotency evidence; status requests carry the principal. This keeps
-authorization identity, optimistic concurrency, retries, audit, and replay explicit at the adapter
-boundary without moving policy decisions or Runtime scheduling into Core. The compatibility
-rationale is recorded in the
-[Governed Execution Provider Requests RFC](../rfc/2026-07-17-governed-execution-provider-requests.md).
-
 `SandboxProviderCapabilities` and capability negotiation keep environment requirements separate
 from a concrete provider. Runtime code can reject an incompatible provider before any side effect.
 
