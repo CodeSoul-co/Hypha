@@ -702,3 +702,4 @@ export function validateMemorySpec(input: unknown): MemorySpec {
 }
 
 export * from './hybrid';
+export * from './runtime-activity-port';

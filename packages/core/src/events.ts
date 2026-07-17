@@ -3,11 +3,78 @@ export type FrameworkEventType =
   | 'session.updated'
   | 'session.closed'
   | 'run.created'
+  | 'run.queued'
+  | 'run.acquiring'
   | 'run.started'
+  | 'run.resume.requested'
+  | 'run.resumed'
+  | 'run.waiting'
   | 'run.waiting_human'
+  | 'run.waiting_signal'
+  | 'run.waiting_timer'
+  | 'run.pausing'
+  | 'run.paused'
+  | 'run.retry_scheduled'
+  | 'run.recovering'
+  | 'run.cancelling'
+  | 'run.cancel.requested'
   | 'run.completed'
   | 'run.failed'
   | 'run.cancelled'
+  | 'run.timed_out'
+  | 'runtime.wait.created'
+  | 'runtime.wait.resolved'
+  | 'runtime.wait.expired'
+  | 'runtime.wait.cancelled'
+  | 'runtime.signal.received'
+  | 'runtime.signal.rejected'
+  | 'runtime.signal.duplicate'
+  | 'runtime.timer.registered'
+  | 'runtime.timer.fired'
+  | 'runtime.timer.cancelled'
+  | 'runtime.parallel.started'
+  | 'runtime.parallel.branch.requested'
+  | 'runtime.parallel.branch.started'
+  | 'runtime.parallel.branch.completed'
+  | 'runtime.parallel.branch.failed'
+  | 'runtime.parallel.branch.cancelled'
+  | 'runtime.parallel.joined'
+  | 'runtime.parallel.failed'
+  | 'runtime.child_run.cancel.requested'
+  | 'runtime.observation.recorded'
+  | 'runtime.activity.requested'
+  | 'runtime.activity.started'
+  | 'runtime.activity.cancellation.requested'
+  | 'runtime.activity.cancellation.unresolved'
+  | 'runtime.activity.waiting'
+  | 'runtime.activity.completed'
+  | 'runtime.activity.failed'
+  | 'runtime.activity.cancelled'
+  | 'runtime.activity.reconciled'
+  | 'runtime.activity.reconciliation.required'
+  | 'runtime.message.publish.requested'
+  | 'runtime.message.published'
+  | 'runtime.message.received'
+  | 'runtime.message.duplicate'
+  | 'runtime.message.acked'
+  | 'runtime.message.nacked'
+  | 'runtime.message.dead_lettered'
+  | 'runtime.message.outbox.recovered'
+  | 'session.command.enqueued'
+  | 'session.command.claimed'
+  | 'session.command.applied'
+  | 'session.command.reused'
+  | 'session.command.rejected'
+  | 'session.command.expired'
+  | 'session.command.recovered'
+  | 'runtime.lease.acquired'
+  | 'runtime.lease.renewed'
+  | 'runtime.lease.expired'
+  | 'runtime.fencing.rejected'
+  | 'runtime.resource.claimed'
+  | 'runtime.resource.waiting'
+  | 'runtime.resource.released'
+  | 'runtime.resource.conflict'
   | 'recovery.case.opened'
   | 'recovery.strategy.selected'
   | 'recovery.attempt.started'
@@ -19,8 +86,23 @@ export type FrameworkEventType =
   | 'fsm.transition.requested'
   | 'fsm.transition.accepted'
   | 'fsm.transition.rejected'
+  | 'fsm.transition.committed'
+  | 'fsm.initializing'
+  | 'fsm.ready'
+  | 'fsm.state.scheduled'
+  | 'fsm.state.claimed'
   | 'fsm.state.entered'
+  | 'fsm.state.execution.started'
+  | 'fsm.state.waiting'
+  | 'fsm.state.verification.started'
+  | 'fsm.state.verification.completed'
   | 'fsm.state.exited'
+  | 'fsm.state.completed'
+  | 'fsm.state.retryable_failed'
+  | 'fsm.state.failed'
+  | 'fsm.state.cancelled'
+  | 'fsm.state.abandoned'
+  | 'variables.patched'
   | 'thinking.started'
   | 'thinking.completed'
   | 'agent.deliberation.started'
@@ -196,20 +278,36 @@ export type FrameworkEventType =
 export interface FrameworkEvent<TPayload = unknown> {
   id: string;
   type: FrameworkEventType;
+  version?: string;
+  tenantId?: string;
+  userId?: string;
   workspaceId?: string;
   sessionId?: string;
   runId: string;
   stepId?: string;
   agentId?: string;
   fsmState?: string;
+  branchId?: string;
+  sequence?: number;
+  globalSequence?: number;
+  correlationId?: string;
+  causationId?: string;
+  parentEventId?: string;
+  idempotencyKey?: string;
+  operationId?: string;
   timestamp: string;
+  recordedAt?: string;
   payload: TPayload;
+  payloadHash?: string;
   metadata?: Record<string, unknown>;
 }
 
 export interface EventCreateInput<TPayload = unknown> {
   id: string;
   type: FrameworkEventType;
+  version?: string;
+  tenantId?: string;
+  userId?: string;
   runId: string;
   payload: TPayload;
   workspaceId?: string;
@@ -217,8 +315,26 @@ export interface EventCreateInput<TPayload = unknown> {
   stepId?: string;
   agentId?: string;
   fsmState?: string;
+  branchId?: string;
+  sequence?: number;
+  globalSequence?: number;
+  correlationId?: string;
+  causationId?: string;
+  parentEventId?: string;
+  idempotencyKey?: string;
+  operationId?: string;
   timestamp?: string;
+  recordedAt?: string;
+  payloadHash?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface PersistedFrameworkEvent<TPayload = unknown> extends FrameworkEvent<TPayload> {
+  version: string;
+  userId: string;
+  sequence: number;
+  recordedAt: string;
+  payloadHash: string;
 }
 
 export interface EventStore {
@@ -227,6 +343,8 @@ export interface EventStore {
 }
 
 export interface EventFilter {
+  tenantId?: string;
+  userId?: string;
   workspaceId?: string;
   sessionId?: string;
   runId?: string;
@@ -240,17 +358,31 @@ export interface TraceRecorder {
 export function createFrameworkEvent<TPayload = unknown>(
   input: EventCreateInput<TPayload>
 ): FrameworkEvent<TPayload> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
   return {
     id: input.id,
     type: input.type,
+    ...(input.version === undefined ? {} : { version: input.version }),
+    ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
+    ...(input.userId === undefined ? {} : { userId: input.userId }),
     workspaceId: input.workspaceId,
     sessionId: input.sessionId,
     runId: input.runId,
     stepId: input.stepId,
     agentId: input.agentId,
     fsmState: input.fsmState,
-    timestamp: input.timestamp ?? new Date().toISOString(),
+    ...(input.branchId === undefined ? {} : { branchId: input.branchId }),
+    ...(input.sequence === undefined ? {} : { sequence: input.sequence }),
+    ...(input.globalSequence === undefined ? {} : { globalSequence: input.globalSequence }),
+    ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+    ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+    ...(input.parentEventId === undefined ? {} : { parentEventId: input.parentEventId }),
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    ...(input.operationId === undefined ? {} : { operationId: input.operationId }),
+    timestamp,
+    ...(input.recordedAt === undefined ? {} : { recordedAt: input.recordedAt }),
     payload: input.payload,
+    ...(input.payloadHash === undefined ? {} : { payloadHash: input.payloadHash }),
     metadata: input.metadata,
   };
 }
@@ -268,6 +400,8 @@ export class InMemoryEventStore implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     return this.events.filter((event) => {
+      if (filter.tenantId && event.tenantId !== filter.tenantId) return false;
+      if (filter.userId && event.userId !== filter.userId) return false;
       if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
       if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
       if (filter.runId && event.runId !== filter.runId) return false;

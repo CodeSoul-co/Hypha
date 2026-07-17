@@ -38,21 +38,14 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
+import { loadSqlite, type SqliteDatabaseSync, type SqliteModule } from './sqlite-driver';
+
+export * from './runtime-event-store';
+export * from './projection-store';
+export * from './runtime-coordination-store';
+export * from './redis-streams-message-bus';
 
 export * from './workspace-runtime';
-
-interface SqliteDatabaseSync {
-  exec(sql: string): void;
-  prepare(sql: string): {
-    get(...params: unknown[]): Record<string, unknown> | undefined;
-    all(...params: unknown[]): Array<Record<string, unknown>>;
-    run(...params: unknown[]): unknown;
-  };
-}
-
-interface SqliteModule {
-  DatabaseSync: new (filename: string) => SqliteDatabaseSync;
-}
 
 export interface LocalAdapterProfile {
   id: string;
@@ -942,27 +935,10 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / Math.sqrt(aNorm * bNorm);
 }
 
-function loadSqlite(required = false): SqliteModule | null {
-  try {
-    return require('node:sqlite') as SqliteModule;
-  } catch (nodeSqliteError) {
-    try {
-      const BetterSqliteDatabase = require('better-sqlite3') as new (
-        filename: string
-      ) => SqliteDatabaseSync;
-      return { DatabaseSync: BetterSqliteDatabase };
-    } catch (betterSqliteError) {
-      if (!required) return null;
-      throw new Error(
-        'SQLite local adapters require node:sqlite or better-sqlite3 when mode is sqlite.',
-        { cause: { nodeSqliteError, betterSqliteError } }
-      );
-    }
-  }
-}
-
 function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): FrameworkEvent[] {
   return events.filter((event) => {
+    if (filter.tenantId && event.tenantId !== filter.tenantId) return false;
+    if (filter.userId && event.userId !== filter.userId) return false;
     if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
     if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
     if (filter.runId && event.runId !== filter.runId) return false;

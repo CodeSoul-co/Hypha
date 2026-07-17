@@ -59,6 +59,7 @@ export * from './contracts';
 export * from './common-tools';
 export * from './media';
 export * from './workspace';
+export * from './runtime-activity-port';
 
 class ToolTimeoutError extends Error {
   readonly code = 'TOOL_TIMEOUT';

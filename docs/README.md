@@ -6,6 +6,12 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.
 - [Runtime Model](reference/runtime-model.md): DomainPack, Session, Run, Event, FSM, replay, audit, regression, and concurrency conventions.
+- [Runtime Semantics](guides/runtime-semantics.md): event authority, durable commands, waits, Activities, cancellation, and replay boundaries.
+- [Workflow Authoring](guides/workflow-authoring.md): deterministic Domain Workflow compilation and version pinning rules.
+- [Runtime Recovery](guides/runtime-recovery.md): restart scanning, reconciliation, wait restoration, and operational checks.
+- [Runtime Migration](guides/runtime-migration.md): staged migration from mutable Runtime and Server-owned orchestration.
+- [Runtime Test Report](reference/runtime-test-report.md): automated acceptance coverage and outstanding test work.
+- [Runtime Known Limitations](reference/runtime-known-limitations.md): incomplete migration, checkpoint, deployment, and performance work.
 - [FSM Anomaly Recovery](architecture/fsm-recovery.md): cross-module supervision, evidence-based convergence, bounded recovery states, cache knowledge, and module failure matrix.
 - [Storage Reference](reference/storage.md): document, messaging, relational, vector, and artifact storage conventions plus memory extension points.
 - [Local Data Layout](reference/local-data-layout.md): ignored `data/` tree for local runtime records, indexes, artifacts, and logs.

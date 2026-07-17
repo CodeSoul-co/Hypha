@@ -12,3 +12,4 @@ export * from './plasmod';
 export * from './backends';
 export * from './pipeline';
 export * from './drivers';
+export * from './runtime-activity-port';

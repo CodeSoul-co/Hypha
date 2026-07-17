@@ -404,18 +404,19 @@ export class FSMRuntime {
   }
 
   getSnapshot(): FSMSnapshot {
-    return this.snapshot;
+    return structuredClone(this.snapshot);
   }
 
   async start(metadata?: Record<string, unknown>): Promise<FSMSnapshot> {
-    if (this.started) return this.snapshot;
-    this.started = true;
+    if (this.started) return this.getSnapshot();
     await this.emitStateEntered({
       stateId: this.snapshot.currentState,
       enteredAt: this.snapshot.updatedAt,
       metadata,
+      snapshot: this.snapshot,
     });
-    return this.snapshot;
+    this.started = true;
+    return this.getSnapshot();
   }
 
   async transition(
@@ -442,15 +443,16 @@ export class FSMRuntime {
       acceptedAt,
       metadata: options.metadata,
     };
-    this.snapshot = next;
-    await this.options.onTransition?.(record);
+    await this.options.onTransition?.(structuredClone(record));
     await this.emitStateEntered({
       stateId: to,
       fromState: from,
       enteredAt: acceptedAt,
       metadata: options.metadata,
+      snapshot: next,
     });
-    return record;
+    this.snapshot = structuredClone(next);
+    return structuredClone(record);
   }
 
   async transitionPath(
@@ -487,13 +489,14 @@ export class FSMRuntime {
       snapshot: this.snapshot.recovery,
       now,
     });
-    this.snapshot = { ...this.snapshot, recovery: plan.snapshot };
+    const next = { ...this.snapshot, recovery: plan.snapshot };
     await this.options.onRecoveryDecision?.({
       processId: this.spec.id,
       runId: this.snapshot.runId,
       decision: plan.decision,
-      snapshot: this.snapshot,
+      snapshot: structuredClone(next),
     });
+    this.snapshot = next;
     return plan.decision;
   }
 
@@ -511,13 +514,14 @@ export class FSMRuntime {
     fromState?: string;
     enteredAt: string;
     metadata?: Record<string, unknown>;
+    snapshot: FSMSnapshot;
   }): Promise<void> {
     await this.options.onStateEntered?.({
       processId: this.spec.id,
-      runId: this.snapshot.runId,
+      runId: input.snapshot.runId,
       stateId: input.stateId,
       fromState: input.fromState,
-      snapshot: this.snapshot,
+      snapshot: structuredClone(input.snapshot),
       enteredAt: input.enteredAt,
       metadata: input.metadata,
     });
@@ -1037,3 +1041,5 @@ function splitGuardExpression(expression: string, operator: '&&' | '||'): string
   parts.push(expression.slice(start).trim());
   return parts;
 }
+
+export * from './event-sourced-runtime';
