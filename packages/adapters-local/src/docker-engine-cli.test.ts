@@ -79,6 +79,10 @@ describe('DockerEngineCli', () => {
     );
     expect(args.at(-2)).toBe('registry.example.invalid/hypha/execution@sha256:abc123');
     expect(args.at(-1)).toBe('/hypha/idle');
+    const mountIndex = args.indexOf('--mount');
+    expect(args[mountIndex + 1]).toBe(
+      `type=bind,src=${path.resolve('workspace')},dst=/workspace,bind-propagation=rprivate`
+    );
     expect(args).not.toContain('--privileged');
     expect(args).not.toContain('/var/run/docker.sock');
   });

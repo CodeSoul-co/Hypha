@@ -130,6 +130,14 @@ injection, output redaction, and restricted egress require dedicated enforcement
 rejected rather than silently ignored. Runtime or Harness still owns authorization, capability
 negotiation, lifecycle events, durable records, and Artifact persistence.
 
+The real-daemon smoke test is opt-in so the default package suite remains independent of Docker. Set
+`HYPHA_DOCKER_SMOKE=1` together with an absolute `HYPHA_DOCKER_CLI_PATH`,
+`HYPHA_DOCKER_IMAGE_REF`, and immutable `HYPHA_DOCKER_IMAGE_DIGEST` to run
+`docker-execution-provider.smoke.test.ts`. The test uses pull policy `never`, exercises both a
+successful Workspace-producing command and a timed-out command, and verifies container-scope stop
+and removal in both paths. `HYPHA_DOCKER_SMOKE_TRACE=1` optionally exposes test-only Docker argument
+and stderr diagnostics; it must not be enabled in production execution paths.
+
 ## Store, Lease, and Recovery Rules
 
 An `ExecutionRecord` is revisioned. Store adapters must apply compare-and-set atomically. When the
