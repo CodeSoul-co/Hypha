@@ -364,18 +364,19 @@ Cache contracts.
 
 Core exports:
 
-| Export                           | Purpose                                                                                         |
-| -------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `RuntimeTypeDefinition`          | Declares source event types, work node type, primary tree, and materializer.                    |
-| `NormalizedWorkEvent`            | Source event plus normalized tree/node metadata.                                                |
-| `WorkGraphNode`, `WorkGraphEdge` | Graph-compatible node and dependency records.                                                   |
-| `CacheBlock<T>`                  | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key.  |
-| `CacheTree<T>`                   | Tree interface for lookup, write, invalidate, and list.                                         |
-| `TypedCacheForest`               | Store-backed collection of typed cache trees.                                                   |
-| `WorkCacheManager`               | Ingests events, enforces TTL/validity rules, and returns derived audit events.                  |
-| `WorkCachePolicy`                | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
-| `MemoryWorkCacheStore`           | In-memory store.                                                                                |
-| `SQLiteWorkCacheStore`           | Persistent store backed by `workcache_blocks`.                                                  |
+| Export                            | Purpose                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `RuntimeTypeDefinition`           | Declares source event types, work node type, primary tree, and materializer.                    |
+| `NormalizedWorkEvent`             | Source event plus normalized tree/node metadata.                                                |
+| `WorkGraphNode`, `WorkGraphEdge`  | Graph-compatible node and dependency records.                                                   |
+| `CacheBlock<T>`                   | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key.  |
+| `CacheTree<T>`                    | Tree interface for lookup, write, invalidate, and list.                                         |
+| `TypedCacheForest`                | Store-backed collection of typed cache trees.                                                   |
+| `WorkCacheManager`                | Ingests events, enforces TTL/validity rules, and returns derived audit events.                  |
+| `WorkCachePolicy`                 | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
+| `WorkCacheRecoveryKnowledgeStore` | Revision-safe `RecoveryKnowledgePort` backed by `RecoveryTree` blocks.                          |
+| `MemoryWorkCacheStore`            | In-memory store.                                                                                |
+| `SQLiteWorkCacheStore`            | Persistent store backed by `workcache_blocks`.                                                  |
 
 Default source event alignment:
 
@@ -387,6 +388,7 @@ Default source event alignment:
 | `context.build.completed`, `context.compacted`                                                                   | `ObservationTree`  |
 | `eval.completed`, `regression.completed`                                                                         | `VerificationTree` |
 | `memory.read.completed`, `memory.write.committed`                                                                | `MemoryTree`       |
+| `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `RecoveryTree`     |
 | `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
 Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
@@ -405,6 +407,11 @@ Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.miss`, `workcache.write`, `workcache.invalidate`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
 `sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
+
+`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by failure
+fingerprint, participant, and policy/spec/provider revision. Values include strategy, outcome,
+evidence hash, expiry, and verified/negative validation. Expired or mismatched blocks are removed;
+the runtime supervisor revalidates hits and remains the only component that advances the FSM case.
 
 ## Inference
 

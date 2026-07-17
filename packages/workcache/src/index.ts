@@ -8,6 +8,7 @@ export * from './forest';
 export * from './manager';
 export * from './thinking-cache';
 export * from './reasoning-inference-cache';
+export * from './recovery-knowledge';
 export * from './thinking-reasoning-cache';
 export * from './stores/memory-store';
 export * from './stores/sqlite-store';
