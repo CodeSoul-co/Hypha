@@ -45,6 +45,8 @@ export * from './execution-provider-error';
 export * from './local-process-policy';
 export * from './local-workspace-adapter';
 export * from './local-process-resource-accounting';
+export * from './execution-provider-values';
+export * from './local-sandbox-lifecycle';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
