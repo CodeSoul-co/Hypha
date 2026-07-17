@@ -225,6 +225,17 @@ export interface DockerImageInspection {
   repoDigests: string[];
 }
 
+export interface DockerContainerStats {
+  cpuPercentage?: number;
+  memoryUsageBytes?: number;
+  memoryLimitBytes?: number;
+  networkBytesReceived?: number;
+  networkBytesSent?: number;
+  readBytes?: number;
+  writtenBytes?: number;
+  pids?: number;
+}
+
 export interface DockerEngineClient {
   health(): Promise<{ serverVersion: string }>;
   inspectImage(reference: string): Promise<DockerImageInspection>;
@@ -232,6 +243,7 @@ export interface DockerEngineClient {
   startContainer(containerId: string): Promise<void>;
   execute(input: DockerContainerExecInput): Promise<DockerCommandResult>;
   inspectContainer(containerId: string): Promise<DockerContainerInspection | null>;
+  statsContainer(containerId: string): Promise<DockerContainerStats>;
   stopContainer(containerId: string, timeoutSeconds: number): Promise<void>;
   killContainer(containerId: string): Promise<void>;
   removeContainer(containerId: string): Promise<void>;
@@ -384,6 +396,37 @@ export class DockerEngineCli implements DockerEngineClient {
         ? { finishedAt: optionalTimestamp(state.FinishedAt) }
         : {}),
     };
+  }
+
+  async statsContainer(containerId: string): Promise<DockerContainerStats> {
+    const result = await this.manage([
+      'container',
+      'stats',
+      '--no-stream',
+      '--format',
+      '{{json .}}',
+      safeIdentifier(containerId, 'containerId'),
+    ]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout.trim());
+    } catch {
+      throw dockerError('Docker container stats are not valid JSON.', result);
+    }
+    const stats = asRecord(parsed, 'Docker container stats');
+    const [memoryUsageBytes, memoryLimitBytes] = parseSizePair(stats.MemUsage);
+    const [networkBytesReceived, networkBytesSent] = parseSizePair(stats.NetIO);
+    const [readBytes, writtenBytes] = parseSizePair(stats.BlockIO);
+    return compact({
+      cpuPercentage: parsePercentage(stats.CPUPerc),
+      memoryUsageBytes,
+      memoryLimitBytes,
+      networkBytesReceived,
+      networkBytesSent,
+      readBytes,
+      writtenBytes,
+      pids: parseNonNegativeInteger(stats.PIDs),
+    });
   }
 
   async stopContainer(containerId: string, timeoutSeconds: number): Promise<void> {
@@ -564,6 +607,40 @@ function requiredNumber(value: unknown, name: string): number {
 
 function optionalTimestamp(value: unknown): string | undefined {
   return typeof value === 'string' && value && !value.startsWith('0001-') ? value : undefined;
+}
+
+function parsePercentage(value: unknown): number | undefined {
+  if (typeof value !== 'string') return undefined;
+  const parsed = Number(value.trim().replace(/%$/u, ''));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function parseSizePair(value: unknown): [number | undefined, number | undefined] {
+  if (typeof value !== 'string') return [undefined, undefined];
+  const [first, second] = value.split('/').map((entry) => entry.trim());
+  return [parseDockerSize(first), parseDockerSize(second)];
+}
+
+function parseDockerSize(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = /^([0-9]+(?:\.[0-9]+)?)\s*([kmgtpe]?i?b)$/iu.exec(value);
+  if (!match) return undefined;
+  const amount = Number(match[1]);
+  const unit = match[2]!.toLowerCase();
+  const binary = unit.includes('i');
+  const exponent = ['', 'k', 'm', 'g', 't', 'p', 'e'].indexOf(unit[0] === 'b' ? '' : unit[0]!);
+  if (exponent < 0) return undefined;
+  return Math.round(amount * (binary ? 1024 : 1000) ** exponent);
+}
+
+function parseNonNegativeInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function compact<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 function positiveInteger(value: number, name: string): number {

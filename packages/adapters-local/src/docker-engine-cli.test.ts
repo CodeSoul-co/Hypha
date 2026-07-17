@@ -152,6 +152,15 @@ describe('DockerEngineCli', () => {
         },
       ]),
     });
+    runner.enqueue({
+      stdout: JSON.stringify({
+        CPUPerc: '12.50%',
+        MemUsage: '1.5MiB / 128MiB',
+        NetIO: '2kB / 3kB',
+        BlockIO: '4KiB / 5KiB',
+        PIDs: '7',
+      }),
+    });
     const engine = new DockerEngineCli({ runner });
 
     await expect(engine.health()).resolves.toEqual({ serverVersion: '29.0.0' });
@@ -169,6 +178,16 @@ describe('DockerEngineCli', () => {
       oomKilled: true,
       startedAt: '2026-07-17T00:00:00Z',
       finishedAt: '2026-07-17T00:00:01Z',
+    });
+    await expect(engine.statsContainer('container-123')).resolves.toEqual({
+      cpuPercentage: 12.5,
+      memoryUsageBytes: 1.5 * 1024 * 1024,
+      memoryLimitBytes: 128 * 1024 * 1024,
+      networkBytesReceived: 2000,
+      networkBytesSent: 3000,
+      readBytes: 4096,
+      writtenBytes: 5120,
+      pids: 7,
     });
   });
 
