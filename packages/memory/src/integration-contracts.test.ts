@@ -136,7 +136,7 @@ describe('memory integration contracts', () => {
 
     const snapshotA = createDomainMemoryDependencySnapshot(
       {
-        domainPackRef: { id: 'domain.legal', version: '1.0.0' },
+        domainPackRef: { id: 'domain.example', version: '1.0.0' },
         providerRefs: [
           { id: 'provider.vector', version: '2.0.0' },
           { id: 'provider.record', version: '1.0.0' },
@@ -151,7 +151,7 @@ describe('memory integration contracts', () => {
     );
     const snapshotB = createDomainMemoryDependencySnapshot(
       {
-        domainPackRef: { id: 'domain.legal', version: '1.0.0' },
+        domainPackRef: { id: 'domain.example', version: '1.0.0' },
         providerRefs: [...snapshotA.providerRefs].reverse(),
         policyRefs: [...snapshotA.policyRefs].reverse(),
         capabilitySnapshot: { search: true, add: true },
