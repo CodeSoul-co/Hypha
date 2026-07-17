@@ -18,6 +18,7 @@ import {
   fileMutationSchema,
   principalJsonSchema,
   relativePathJsonSchema,
+  workspaceOperationPrincipalExample,
 } from './operations';
 import { workspaceRelativePathSchema } from './index';
 
@@ -36,6 +37,7 @@ export const workspaceSnapshotRequestSchema = z
     idempotencyKey: z.string().min(1).optional(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.type === 'incremental' && !value.baseSnapshotRef) {
       context.addIssue({
@@ -46,15 +48,33 @@ export const workspaceSnapshotRequestSchema = z
     }
   }) satisfies ZodType<WorkspaceSnapshotRequest>;
 
-export const workspaceSnapshotEntrySchema = z.object({
-  path: workspaceRelativePathSchema,
-  kind: z.enum(['file', 'directory', 'symlink']),
-  sizeBytes: nonNegativeInteger.optional(),
-  contentHash: z.string().min(1).optional(),
-  mode: nonNegativeInteger.optional(),
-  symlinkTarget: workspaceRelativePathSchema.optional(),
-  artifactRef: z.string().min(1).optional(),
-}) satisfies ZodType<WorkspaceSnapshotEntry>;
+export const workspaceSnapshotEntrySchema = z
+  .object({
+    path: workspaceRelativePathSchema,
+    kind: z.enum(['file', 'directory', 'symlink']),
+    sizeBytes: nonNegativeInteger.optional(),
+    contentHash: z.string().min(1).optional(),
+    mode: nonNegativeInteger.optional(),
+    symlinkTarget: workspaceRelativePathSchema.optional(),
+    artifactRef: z.string().min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.kind === 'symlink' && value.symlinkTarget === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['symlinkTarget'],
+        message: 'is required for symlink entries',
+      });
+    }
+    if (value.kind !== 'symlink' && value.symlinkTarget !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['symlinkTarget'],
+        message: 'is only valid for symlink entries',
+      });
+    }
+  }) satisfies ZodType<WorkspaceSnapshotEntry>;
 
 export const workspaceSnapshotManifestSchema = z
   .object({
@@ -71,6 +91,7 @@ export const workspaceSnapshotManifestSchema = z
     createdBy: z.string().min(1),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     const paths = new Set<string>();
     for (const [index, entry] of value.entries.entries()) {
@@ -92,43 +113,62 @@ export const workspaceSnapshotManifestSchema = z
         message: 'must equal the number of file entries',
       });
     }
+    const fileEntries = value.entries.filter((entry) => entry.kind === 'file');
+    if (fileEntries.every((entry) => entry.sizeBytes !== undefined)) {
+      const actualTotalBytes = fileEntries.reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0);
+      if (actualTotalBytes !== value.totalBytes) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['totalBytes'],
+          message: 'must equal the sum of file entry sizes when all sizes are present',
+        });
+      }
+    }
   }) satisfies ZodType<WorkspaceSnapshotManifest>;
 
-export const workspaceRestoreRequestSchema = z.object({
-  operationId: z.string().min(1),
-  workspaceId: z.string().min(1),
-  principal: executionPrincipalSchema,
-  snapshotRef: z.string().min(1),
-  expectedWorkspaceSnapshotHash: z.string().min(1).optional(),
-  idempotencyKey: z.string().min(1).optional(),
-}) satisfies ZodType<WorkspaceRestoreRequest>;
+export const workspaceRestoreRequestSchema = z
+  .object({
+    operationId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    principal: executionPrincipalSchema,
+    snapshotRef: z.string().min(1),
+    expectedWorkspaceSnapshotHash: z.string().min(1).optional(),
+    idempotencyKey: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceRestoreRequest>;
 
-export const workspaceDiffRequestSchema = z.object({
-  operationId: z.string().min(1),
-  workspaceId: z.string().min(1),
-  principal: executionPrincipalSchema,
-  fromSnapshotRef: z.string().min(1),
-  toSnapshotRef: z.string().min(1).optional(),
-  createPatchArtifact: z.boolean().optional(),
-}) satisfies ZodType<WorkspaceDiffRequest>;
+export const workspaceDiffRequestSchema = z
+  .object({
+    operationId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    principal: executionPrincipalSchema,
+    fromSnapshotRef: z.string().min(1),
+    toSnapshotRef: z.string().min(1).optional(),
+    createPatchArtifact: z.boolean().optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceDiffRequest>;
 
-export const workspaceDiffSummarySchema = z.object({
-  created: nonNegativeInteger,
-  modified: nonNegativeInteger,
-  deleted: nonNegativeInteger,
-  renamed: nonNegativeInteger,
-  permissionChanged: nonNegativeInteger,
-  bytesAdded: nonNegativeInteger,
-  bytesRemoved: nonNegativeInteger,
-}) satisfies ZodType<WorkspaceDiffSummary>;
+export const workspaceDiffSummarySchema = z
+  .object({
+    created: nonNegativeInteger,
+    modified: nonNegativeInteger,
+    deleted: nonNegativeInteger,
+    renamed: nonNegativeInteger,
+    permissionChanged: nonNegativeInteger,
+    bytesAdded: nonNegativeInteger,
+    bytesRemoved: nonNegativeInteger,
+  })
+  .strict() satisfies ZodType<WorkspaceDiffSummary>;
 
-export const workspaceDiffResultSchema = z.object({
-  fromSnapshotRef: z.string().min(1),
-  toSnapshotRef: z.string().min(1).optional(),
-  mutations: z.array(fileMutationSchema),
-  patchArtifactRef: z.string().min(1).optional(),
-  summary: workspaceDiffSummarySchema,
-}) satisfies ZodType<WorkspaceDiffResult>;
+export const workspaceDiffResultSchema = z
+  .object({
+    fromSnapshotRef: z.string().min(1),
+    toSnapshotRef: z.string().min(1).optional(),
+    mutations: z.array(fileMutationSchema),
+    patchArtifactRef: z.string().min(1).optional(),
+    summary: workspaceDiffSummarySchema,
+  })
+  .strict() satisfies ZodType<WorkspaceDiffResult>;
 
 export const workspacePatchRequestSchema = z
   .object({
@@ -141,6 +181,7 @@ export const workspacePatchRequestSchema = z
     conflictPolicy: z.enum(['fail', 'three_way', 'mark_conflicts']),
     idempotencyKey: z.string().min(1).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.mode === 'apply' && !value.expectedBaseSnapshotHash) {
       context.addIssue({
@@ -151,12 +192,14 @@ export const workspacePatchRequestSchema = z
     }
   }) satisfies ZodType<WorkspacePatchRequest>;
 
-export const workspacePatchConflictSchema = z.object({
-  path: workspaceRelativePathSchema,
-  reason: z.string().min(1),
-  expectedHash: z.string().min(1).optional(),
-  actualHash: z.string().min(1).optional(),
-}) satisfies ZodType<WorkspacePatchConflict>;
+export const workspacePatchConflictSchema = z
+  .object({
+    path: workspaceRelativePathSchema,
+    reason: z.string().min(1),
+    expectedHash: z.string().min(1).optional(),
+    actualHash: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<WorkspacePatchConflict>;
 
 export const workspacePatchResultSchema = z
   .object({
@@ -166,6 +209,7 @@ export const workspacePatchResultSchema = z
     mutations: z.array(fileMutationSchema),
     resultingWorkspaceSnapshotHash: z.string().min(1).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.applied && !value.checked) {
       context.addIssue({
@@ -198,6 +242,13 @@ const snapshotEntryJsonSchema: JsonSchema = {
     artifactRef: { type: 'string', minLength: 1 },
   },
   additionalProperties: false,
+  allOf: [
+    {
+      if: { properties: { kind: { const: 'symlink' } }, required: ['kind'] },
+      then: { required: ['symlinkTarget'] },
+      else: { not: { required: ['symlinkTarget'] } },
+    },
+  ],
 };
 
 const diffSummaryJsonSchema: JsonSchema = {
@@ -380,8 +431,87 @@ export const workspaceSnapshotJsonSchemas: Record<string, JsonSchema> = {
   },
 };
 
+export const workspaceSnapshotRequestExample: WorkspaceSnapshotRequest = {
+  operationId: 'operation.workspace.snapshot.example',
+  workspaceId: 'workspace.example',
+  principal: workspaceOperationPrincipalExample,
+  type: 'incremental',
+  baseSnapshotRef: 'snapshot.base.example',
+  includePaths: ['source', 'working'],
+  idempotencyKey: 'workspace.snapshot.example',
+};
+
+export const workspaceSnapshotManifestExample: WorkspaceSnapshotManifest = {
+  id: 'snapshot.example',
+  workspaceId: 'workspace.example',
+  baseSnapshotId: 'snapshot.base.example',
+  entries: [
+    { path: 'working', kind: 'directory' },
+    {
+      path: 'working/output.txt',
+      kind: 'file',
+      sizeBytes: 14,
+      contentHash: 'sha256:output',
+      artifactRef: 'artifact:output',
+    },
+  ],
+  sourceTreeHash: 'sha256:source-tree',
+  manifestHash: 'sha256:manifest',
+  totalBytes: 14,
+  fileCount: 1,
+  createdAt: '2026-07-17T00:00:03.000Z',
+  createdBy: workspaceOperationPrincipalExample.principalId,
+};
+
+export const workspaceDiffResultExample: WorkspaceDiffResult = {
+  fromSnapshotRef: 'snapshot.base.example',
+  toSnapshotRef: workspaceSnapshotManifestExample.id,
+  mutations: [
+    {
+      path: 'working/output.txt',
+      operation: 'modified',
+      beforeHash: 'sha256:before',
+      afterHash: 'sha256:output',
+      detectedAt: '2026-07-17T00:00:03.000Z',
+    },
+  ],
+  patchArtifactRef: 'artifact:patch.example',
+  summary: {
+    created: 0,
+    modified: 1,
+    deleted: 0,
+    renamed: 0,
+    permissionChanged: 0,
+    bytesAdded: 2,
+    bytesRemoved: 0,
+  },
+};
+
+export const workspacePatchRequestExample: WorkspacePatchRequest = {
+  operationId: 'operation.workspace.patch.example',
+  workspaceId: 'workspace.example',
+  principal: workspaceOperationPrincipalExample,
+  patchArtifactRef: 'artifact:patch.example',
+  expectedBaseSnapshotHash: 'sha256:base-snapshot',
+  mode: 'apply',
+  conflictPolicy: 'fail',
+  idempotencyKey: 'workspace.patch.example',
+};
+
+export const workspacePatchResultExample: WorkspacePatchResult = {
+  checked: true,
+  applied: true,
+  conflicts: [],
+  mutations: workspaceDiffResultExample.mutations,
+  resultingWorkspaceSnapshotHash: 'sha256:resulting-snapshot',
+};
+
 export function validateWorkspaceSnapshotRequest(input: unknown): WorkspaceSnapshotRequest {
   return workspaceSnapshotRequestSchema.parse(input);
+}
+
+export function validateWorkspaceSnapshotEntry(input: unknown): WorkspaceSnapshotEntry {
+  return workspaceSnapshotEntrySchema.parse(input);
 }
 
 export function validateWorkspaceSnapshotManifest(input: unknown): WorkspaceSnapshotManifest {
@@ -400,8 +530,16 @@ export function validateWorkspaceDiffResult(input: unknown): WorkspaceDiffResult
   return workspaceDiffResultSchema.parse(input);
 }
 
+export function validateWorkspaceDiffSummary(input: unknown): WorkspaceDiffSummary {
+  return workspaceDiffSummarySchema.parse(input);
+}
+
 export function validateWorkspacePatchRequest(input: unknown): WorkspacePatchRequest {
   return workspacePatchRequestSchema.parse(input);
+}
+
+export function validateWorkspacePatchConflict(input: unknown): WorkspacePatchConflict {
+  return workspacePatchConflictSchema.parse(input);
 }
 
 export function validateWorkspacePatchResult(input: unknown): WorkspacePatchResult {

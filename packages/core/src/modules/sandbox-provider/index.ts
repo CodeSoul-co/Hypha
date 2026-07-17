@@ -34,18 +34,22 @@ export const sandboxCapabilityNames = [
 
 export const sandboxCapabilityNameSchema = z.enum(sandboxCapabilityNames);
 
-export const sandboxCapabilityRequirementSchema = z.object({
-  capability: sandboxCapabilityNameSchema,
-  source: z.enum(['environment', 'command', 'policy', 'runtime']),
-  reason: z.string().min(1),
-}) satisfies ZodType<SandboxCapabilityRequirement>;
+export const sandboxCapabilityRequirementSchema = z
+  .object({
+    capability: sandboxCapabilityNameSchema,
+    source: z.enum(['environment', 'command', 'policy', 'runtime']),
+    reason: z.string().min(1),
+  })
+  .strict() satisfies ZodType<SandboxCapabilityRequirement>;
 
-export const sandboxCapabilityNegotiationRequestSchema = z.object({
-  providerId: z.string().min(1),
-  capabilities: sandboxProviderCapabilitiesSchema,
-  requirements: z.array(sandboxCapabilityRequirementSchema),
-  evaluatedAt: z.string().datetime({ offset: true }),
-}) satisfies ZodType<SandboxCapabilityNegotiationRequest>;
+export const sandboxCapabilityNegotiationRequestSchema = z
+  .object({
+    providerId: z.string().min(1),
+    capabilities: sandboxProviderCapabilitiesSchema,
+    requirements: z.array(sandboxCapabilityRequirementSchema),
+    evaluatedAt: z.string().datetime({ offset: true }),
+  })
+  .strict() satisfies ZodType<SandboxCapabilityNegotiationRequest>;
 
 export const sandboxCapabilityNegotiationResultSchema = z
   .object({
@@ -56,6 +60,7 @@ export const sandboxCapabilityNegotiationResultSchema = z
     missingCapabilities: z.array(sandboxCapabilityNameSchema),
     evaluatedAt: z.string().datetime({ offset: true }),
   })
+  .strict()
   .superRefine((value, context) => {
     const expectedMissing = uniqueCapabilities(
       value.requirements
@@ -78,17 +83,21 @@ export const sandboxCapabilityNegotiationResultSchema = z
     }
   }) satisfies ZodType<SandboxCapabilityNegotiationResult>;
 
-const commandCapabilityRequirementSchema = z.object({
-  snapshotBefore: z.boolean().optional(),
-  snapshotAfter: z.boolean().optional(),
-  snapshotOnFailure: z.boolean().optional(),
-});
+const commandCapabilityRequirementSchema = z
+  .object({
+    snapshotBefore: z.boolean().optional(),
+    snapshotAfter: z.boolean().optional(),
+    snapshotOnFailure: z.boolean().optional(),
+  })
+  .strict();
 
-export const sandboxCapabilityDerivationInputSchema = z.object({
-  environment: executionEnvironmentSpecSchema,
-  command: commandCapabilityRequirementSchema.optional(),
-  additionalRequirements: z.array(sandboxCapabilityRequirementSchema).optional(),
-}) satisfies ZodType<SandboxCapabilityDerivationInput>;
+export const sandboxCapabilityDerivationInputSchema = z
+  .object({
+    environment: executionEnvironmentSpecSchema,
+    command: commandCapabilityRequirementSchema.optional(),
+    additionalRequirements: z.array(sandboxCapabilityRequirementSchema).optional(),
+  })
+  .strict() satisfies ZodType<SandboxCapabilityDerivationInput>;
 
 const capabilityNameJsonSchema: JsonSchema = { enum: [...sandboxCapabilityNames] };
 const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
