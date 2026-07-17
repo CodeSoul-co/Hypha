@@ -37,10 +37,6 @@ monotonic sequence, contiguous byte offset, base64 content, byte length, per-chu
 explicit final marker. Transfer receipts carry the provider identity, direction, final status,
 observed byte count, whole-content hash, and receipt hash.
 
-Core also exposes a stateful, transport-neutral chunk-sequence validator. Remote adapters can feed
-each chunk to it directly from an `AsyncIterable` and finalize the validator when the stream ends.
-The validator retains only sequence progress and byte counts; it must not buffer Artifact content.
-
 The contract defines no remote endpoint, credential, queue, HTTP client, RPC client, object-store
 client, or provider job type. Those details remain inside concrete adapters.
 
@@ -50,8 +46,6 @@ client, or provider job type. Those details remain inside concrete adapters.
 - JSON Schemas remain in parity with public serializable contracts.
 - Upload and download chunk sequences start at zero, remain contiguous, use contiguous byte
   offsets, contain exactly one final chunk, and match the declared transfer size.
-- Incremental validation rejects chunks received after the final marker and rejects streams that
-  end before their declared final chunk or byte count.
 - Completed transfer receipts require whole-content integrity evidence.
 - Provider implementations normalize vendor failures into existing Hypha execution errors and must
   treat unknown remote completion state as unknown rather than successful.
