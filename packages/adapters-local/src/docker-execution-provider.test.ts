@@ -221,7 +221,8 @@ describe('DockerExecutionProvider', () => {
       { cpuPercentage: 4, memoryUsageBytes: 4096, pids: 5 },
       { cpuPercentage: 2, memoryUsageBytes: 2048, pids: 3 },
     ];
-    engine.statsBehavior = async () => samples[Math.min(engine.statsCalls - 1, samples.length - 1)]!;
+    engine.statsBehavior = async () =>
+      samples[Math.min(engine.statsCalls - 1, samples.length - 1)]!;
     engine.executeBehavior = async () => {
       await new Promise((resolve) => setTimeout(resolve, 225));
       return commandResult();

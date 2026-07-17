@@ -443,13 +443,13 @@ export class RemoteArtifactChunkSequenceValidator {
       throw chunkSequenceError([], 'decoded chunk bytes exceed the expected transfer size');
     }
     if (chunk.final && nextOffsetBytes !== this.expectation.sizeBytes) {
-      throw chunkSequenceError(
-        ['final'],
-        'final chunk must complete the expected transfer size'
-      );
+      throw chunkSequenceError(['final'], 'final chunk must complete the expected transfer size');
     }
     if (!chunk.final && nextOffsetBytes === this.expectation.sizeBytes) {
-      throw chunkSequenceError(['final'], 'must be true when the expected transfer size is reached');
+      throw chunkSequenceError(
+        ['final'],
+        'must be true when the expected transfer size is reached'
+      );
     }
 
     this.nextSequence += 1;

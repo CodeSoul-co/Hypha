@@ -1428,9 +1428,7 @@ function optionalMaximum<K extends keyof DockerContainerStats>(
   const values = samples
     .map((sample) => sample[key])
     .filter((value): value is NonNullable<DockerContainerStats[K]> => value !== undefined);
-  return values.length
-    ? ({ [key]: Math.max(...values) } as Pick<DockerContainerStats, K>)
-    : {};
+  return values.length ? ({ [key]: Math.max(...values) } as Pick<DockerContainerStats, K>) : {};
 }
 
 function minimumPositive(values: Array<number | undefined>): number | undefined {
