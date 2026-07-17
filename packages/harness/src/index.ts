@@ -12,6 +12,7 @@ import type { FSMSnapshot } from '@hypha/fsm';
 export * from './runtime';
 export * from './message-bus';
 export * from './recovery-loop';
+export * from './recovery-supervisor';
 
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;

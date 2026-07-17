@@ -49,6 +49,20 @@ hypha defaults to a single-user runtime for local and self-hosted deployments. T
 
 Internal APIs keep `userId` boundaries for sessions, memory, token usage, API keys, and session queues. This keeps default deployment simple while preserving the concurrency model required by multi-user clients.
 
+## Coordinated Recovery
+
+Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and
+cache failures through the same FSM-governed recovery contract. Participants run in dependency
+order, completed upstream work is not repeated, and progress is proven by stable receipts,
+revisions, hashes, or provider state rather than by another loop iteration. Bounded retry,
+reconciliation, compatible fallback, degradation, compensation, human review, quarantine,
+cancellation, and failure are explicit strategies with trace events.
+
+Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
+changing the source result, and WorkCache can retain only revision-matched, revalidated recovery
+knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
+[FSM anomaly recovery](docs/architecture/fsm-recovery.md).
+
 ## Inference Runtime
 
 Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
@@ -69,11 +83,11 @@ For provider-side prefix cache, Hypha keeps request shape stable by canonicalizi
 
 ## WorkCache
 
-`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
+`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, `RecoveryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
 
 The bundled server configuration uses `HYPHA_WORKCACHE=memory`. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
 
-WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes.
+WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes. Recovery blocks are revision-matched, expiring strategy hints and never replace FSM, event, or receipt evidence.
 
 ## Governed Tools and MCP
 

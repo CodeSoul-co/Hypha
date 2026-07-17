@@ -78,6 +78,8 @@ export interface MessageAckInput {
 export interface MessageFailInput extends MessageAckInput {
   reason?: string;
   deadLetter?: boolean;
+  retry?: boolean;
+  retryAfterMs?: number;
 }
 
 export interface MessageListFilter {
@@ -101,15 +103,27 @@ export interface MessageBus {
 export interface InMemoryMessageBusOptions {
   trace?: TraceRecorder;
   now?: () => string;
+  maxDeliveryAttempts?: number;
+  initialRetryDelayMs?: number;
+  maxRetryDelayMs?: number;
+  retryMultiplier?: number;
 }
 
 export class InMemoryMessageBus implements MessageBus {
   private readonly messages = new Map<string, RuntimeMessage>();
   private readonly queues = new Map<string, string[]>();
   private readonly now: () => string;
+  private readonly maxDeliveryAttempts: number;
+  private readonly initialRetryDelayMs: number;
+  private readonly maxRetryDelayMs: number;
+  private readonly retryMultiplier: number;
 
   constructor(private readonly options: InMemoryMessageBusOptions = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.maxDeliveryAttempts = Math.max(1, options.maxDeliveryAttempts ?? 3);
+    this.initialRetryDelayMs = Math.max(0, options.initialRetryDelayMs ?? 250);
+    this.maxRetryDelayMs = Math.max(this.initialRetryDelayMs, options.maxRetryDelayMs ?? 30_000);
+    this.retryMultiplier = Math.max(1, options.retryMultiplier ?? 2);
   }
 
   async publish<TPayload = unknown>(
@@ -214,6 +228,21 @@ export class InMemoryMessageBus implements MessageBus {
     if (!message) return null;
     if (isTerminal(message.status)) return message;
     this.removeQueuedMessage(message);
+    if (input.retry && !input.deadLetter && message.attemptCount < this.maxDeliveryAttempts) {
+      return this.requeue(message, input);
+    }
+    if (input.retry && message.attemptCount >= this.maxDeliveryAttempts) {
+      return this.markFailed(message, {
+        ...input,
+        deadLetter: true,
+        reason: input.reason ?? 'delivery_attempt_budget_exhausted',
+        metadata: {
+          ...input.metadata,
+          exhaustedAttempts: message.attemptCount,
+          maxDeliveryAttempts: this.maxDeliveryAttempts,
+        },
+      });
+    }
     return this.markFailed(message, input);
   }
 
@@ -252,6 +281,38 @@ export class InMemoryMessageBus implements MessageBus {
       handledBy: input.handledBy,
     });
     return failed;
+  }
+
+  private async requeue(message: RuntimeMessage, input: MessageFailInput): Promise<RuntimeMessage> {
+    const timestamp = input.timestamp ?? this.now();
+    const requestedDelay = input.retryAfterMs;
+    const computedDelay = Math.min(
+      this.maxRetryDelayMs,
+      this.initialRetryDelayMs * this.retryMultiplier ** Math.max(0, message.attemptCount - 1)
+    );
+    const delayMs = Math.max(0, requestedDelay ?? computedDelay);
+    const availableAt = new Date(Date.parse(timestamp) + delayMs).toISOString();
+    const requeued = this.update(message, {
+      status: 'queued',
+      updatedAt: timestamp,
+      availableAt,
+      metadata: {
+        ...message.metadata,
+        ...input.metadata,
+        lastFailureReason: input.reason,
+        retryDelayMs: delayMs,
+        maxDeliveryAttempts: this.maxDeliveryAttempts,
+      },
+    });
+    this.queueFor(requeued).push(requeued.id);
+    await this.record('message.retrying', requeued, {
+      reason: input.reason,
+      handledBy: input.handledBy,
+      retryDelayMs: delayMs,
+      attemptCount: requeued.attemptCount,
+      maxDeliveryAttempts: this.maxDeliveryAttempts,
+    });
+    return requeued;
   }
 
   private requireOwnedMessage(
