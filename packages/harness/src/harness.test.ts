@@ -171,6 +171,80 @@ describe('@hypha/harness contracts', () => {
     ]);
   });
 
+  it('requeues transient message failures with backoff and dead-letters poison messages', async () => {
+    const trace = new InMemoryTraceRecorder();
+    let currentTime = '2026-07-04T00:00:00.000Z';
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => currentTime,
+      maxDeliveryAttempts: 2,
+      initialRetryDelayMs: 100,
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    await bus.publish({
+      id: 'msg_poison',
+      type: 'workflow.input',
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'retry me' },
+    });
+
+    const first = await bus.pull({
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      to: recipient,
+    });
+    expect(first?.attemptCount).toBe(1);
+    await bus.fail({
+      id: 'msg_poison',
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      retry: true,
+      reason: 'transient_handler_failure',
+    });
+
+    await expect(
+      bus.pull({
+        userId: 'owner',
+        sessionId: 'session_retry',
+        runId: 'run_retry',
+        to: recipient,
+      })
+    ).resolves.toBeNull();
+    currentTime = '2026-07-04T00:00:00.100Z';
+    const second = await bus.pull({
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      to: recipient,
+    });
+    expect(second?.attemptCount).toBe(2);
+    await bus.fail({
+      id: 'msg_poison',
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      retry: true,
+      reason: 'same_handler_failure',
+    });
+
+    await expect(bus.list({ status: 'dead_lettered' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_poison', attemptCount: 2 }),
+    ]);
+    expect((await trace.list({ runId: 'run_retry' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.delivered',
+      'message.retrying',
+      'message.delivered',
+      'message.dead_lettered',
+    ]);
+  });
+
   it('removes queued messages from delivery indexes when they are failed directly', async () => {
     const bus = new InMemoryMessageBus({
       now: () => '2026-07-04T00:00:00.000Z',

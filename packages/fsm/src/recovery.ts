@@ -1,42 +1,21 @@
 import { z } from 'zod';
+import {
+  RECOVERY_CATEGORIES,
+  RECOVERY_MODULES,
+  type RecoveryCategory,
+  type RecoveryModule,
+  type RecoverySideEffectState,
+} from '@hypha/core';
 
-export const FSM_ANOMALY_SOURCES = [
-  'fsm',
-  'inference',
-  'tool',
-  'memory',
-  'mcp',
-  'workspace',
-  'storage',
-  'message_bus',
-  'policy',
-  'domain',
-  'unknown',
-] as const;
+export const FSM_ANOMALY_SOURCES = RECOVERY_MODULES;
 
-export const FSM_ANOMALY_CATEGORIES = [
-  'validation',
-  'policy_denied',
-  'authentication',
-  'authorization',
-  'rate_limit',
-  'timeout',
-  'transient_dependency',
-  'permanent_dependency',
-  'concurrency_conflict',
-  'resource_exhausted',
-  'tool_failure',
-  'inference_failure',
-  'memory_failure',
-  'storage_failure',
-  'message_failure',
-  'invariant_violation',
-  'cancellation',
-  'unknown',
-] as const;
+export const FSM_ANOMALY_CATEGORIES = RECOVERY_CATEGORIES;
 
 export const FSM_RECOVERY_ACTIONS = [
   'retry',
+  'reconcile',
+  'fallback',
+  'degrade',
   'wait',
   'compensate',
   'human_review',
@@ -45,10 +24,10 @@ export const FSM_RECOVERY_ACTIONS = [
   'cancel',
 ] as const;
 
-export type FSMAnomalySource = (typeof FSM_ANOMALY_SOURCES)[number];
-export type FSMAnomalyCategory = (typeof FSM_ANOMALY_CATEGORIES)[number];
+export type FSMAnomalySource = RecoveryModule;
+export type FSMAnomalyCategory = RecoveryCategory;
 export type FSMRecoveryAction = (typeof FSM_RECOVERY_ACTIONS)[number];
-export type FSMSideEffectState = 'none' | 'not_started' | 'committed' | 'unknown';
+export type FSMSideEffectState = RecoverySideEffectState;
 export type FSMCircuitStatus = 'closed' | 'open' | 'half_open';
 
 export interface FSMAnomaly {
@@ -63,6 +42,9 @@ export interface FSMAnomaly {
   circuitKey?: string;
   sideEffectState?: FSMSideEffectState;
   compensationAvailable?: boolean;
+  reconciliationAvailable?: boolean;
+  fallbackAvailable?: boolean;
+  degradationAvailable?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -148,6 +130,9 @@ export interface FSMAnomalyClassificationInput {
   occurredAt?: string;
   sideEffectState?: FSMSideEffectState;
   compensationAvailable?: boolean;
+  reconciliationAvailable?: boolean;
+  fallbackAvailable?: boolean;
+  degradationAvailable?: boolean;
   retryable?: boolean;
   retryAfterMs?: number;
   circuitKey?: string;
@@ -167,8 +152,10 @@ export const defaultFSMRecoveryPolicy: FSMRecoveryPolicySpec = {
     'tool_failure',
     'inference_failure',
     'memory_failure',
+    'execution_failure',
     'storage_failure',
     'message_failure',
+    'cache_failure',
   ],
   nonRetryableCodes: [],
   backoff: {
@@ -210,6 +197,9 @@ export const fsmAnomalySchema = z.object({
   circuitKey: z.string().min(1).optional(),
   sideEffectState: z.enum(['none', 'not_started', 'committed', 'unknown']).optional(),
   compensationAvailable: z.boolean().optional(),
+  reconciliationAvailable: z.boolean().optional(),
+  fallbackAvailable: z.boolean().optional(),
+  degradationAvailable: z.boolean().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -296,6 +286,9 @@ export function classifyFSMAnomaly(
     circuitKey: input.circuitKey,
     sideEffectState: input.sideEffectState ?? 'none',
     compensationAvailable: input.compensationAvailable,
+    reconciliationAvailable: input.reconciliationAvailable,
+    fallbackAvailable: input.fallbackAvailable,
+    degradationAvailable: input.degradationAvailable,
     metadata: input.metadata,
   });
 }
@@ -347,7 +340,14 @@ export function planFSMRecovery(input: {
         action,
         fromState: input.stateId,
         transitionState,
-        resumeState: action === 'retry' || action === 'wait' ? input.stateId : undefined,
+        resumeState:
+          action === 'retry' ||
+          action === 'reconcile' ||
+          action === 'fallback' ||
+          action === 'degrade' ||
+          action === 'wait'
+            ? input.stateId
+            : undefined,
         attempt,
         totalAttempts,
         delayMs: boundedDelay,
@@ -372,6 +372,9 @@ export function planFSMRecovery(input: {
     return decide('cancel', 'Cancellation is terminal and must not be retried.');
   }
   if (anomaly.sideEffectState === 'unknown') {
+    if (anomaly.reconciliationAvailable) {
+      return decide('reconcile', 'Unknown commit state must be reconciled before any retry.');
+    }
     return decide('quarantine', 'External side-effect commit state is unknown.');
   }
   if (anomaly.sideEffectState === 'committed' && anomaly.compensationAvailable) {
@@ -389,6 +392,12 @@ export function planFSMRecovery(input: {
     return decide('human_review', 'The anomaly requires corrected input, authority, or policy.');
   }
   if (policy.nonRetryableCodes?.includes(anomaly.code) || anomaly.retryable === false) {
+    if (anomaly.fallbackAvailable) {
+      return decide('fallback', 'A validated fallback is available for the non-retryable failure.');
+    }
+    if (anomaly.degradationAvailable) {
+      return decide('degrade', 'A bounded degraded result is available for this failure.');
+    }
     return decide('fail', 'The anomaly is explicitly non-retryable.');
   }
   if (circuit.status === 'open') {
@@ -525,8 +534,10 @@ function classifyCategory(
     inference: 'inference_failure',
     tool: 'tool_failure',
     memory: 'memory_failure',
+    execution: 'execution_failure',
     storage: 'storage_failure',
     message_bus: 'message_failure',
+    cache: 'cache_failure',
     policy: 'policy_denied',
   };
   return sourceFallbacks[source] ?? 'unknown';
@@ -535,6 +546,9 @@ function classifyCategory(
 function transitionStateFor(action: FSMRecoveryAction, policy: FSMRecoveryPolicySpec): string {
   switch (action) {
     case 'retry':
+    case 'reconcile':
+    case 'fallback':
+    case 'degrade':
     case 'wait':
       return policy.stateTargets.recovering;
     case 'compensate':

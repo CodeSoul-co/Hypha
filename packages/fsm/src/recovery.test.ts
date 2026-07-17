@@ -149,6 +149,26 @@ describe('@hypha/fsm recovery contracts', () => {
     });
   });
 
+  it('reconciles unknown commits when receipt lookup is available', () => {
+    const plan = planFSMRecovery({
+      anomaly: {
+        ...baseAnomaly,
+        source: 'execution',
+        category: 'execution_failure',
+        sideEffectState: 'unknown',
+        reconciliationAvailable: true,
+      },
+      stateId: 'Acting',
+      now: '2026-07-16T00:00:00.100Z',
+    });
+
+    expect(plan.decision).toMatchObject({
+      action: 'reconcile',
+      transitionState: 'Recovering',
+      resumeState: 'Acting',
+    });
+  });
+
   it('closes the selected circuit after a successful probe', () => {
     const snapshot = createInitialFSMRecoverySnapshot('2026-07-16T00:00:00.000Z');
     snapshot.circuits.tool = {
