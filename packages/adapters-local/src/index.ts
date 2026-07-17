@@ -11,6 +11,23 @@ import type {
   VectorRecord,
   VectorSearchResult,
 } from '@hypha/memory';
+import type {
+  ToolApprovalGrant,
+  ToolApprovalRequest,
+  ToolApprovalStore,
+  ToolCallResult,
+  ToolInvocationPatch,
+  ToolIdempotencyLookup,
+  ToolInvocationListRequest,
+  ToolInvocationRecord,
+  ToolInvocationStatus,
+  ToolInvocationStore,
+  ToolArtifactPort,
+  ToolObservationPort,
+  ToolContractSnapshot,
+  ToolContractSnapshotStore,
+} from '@hypha/tools';
+import type { MCPCapabilityCatalogStore, MCPCapabilityRecord } from '@hypha/mcp';
 import {
   createFileArtifactStorageProfile,
   createLocalVectorStorageProfile,
@@ -21,6 +38,8 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
+
+export * from './workspace-runtime';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
@@ -218,6 +237,10 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
     await this.backend.update(table, id, patch);
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    await this.backend.delete(table, id);
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     return this.backend.query(table, query);
   }
@@ -227,6 +250,208 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
   }
 }
 
+export interface FileToolRuntimeStoreOptions {
+  filename: string;
+}
+
+interface FileToolRuntimeState {
+  invocations: Record<string, ToolInvocationRecord>;
+  approvalRequests: Record<string, ToolApprovalRequest>;
+  approvalGrants: Record<string, ToolApprovalGrant>;
+}
+
+export class FileToolRuntimeStore implements ToolInvocationStore, ToolApprovalStore {
+  private state: FileToolRuntimeState;
+
+  constructor(private readonly options: FileToolRuntimeStoreOptions) {
+    fs.mkdirSync(path.dirname(options.filename), { recursive: true });
+    this.state = this.readState();
+  }
+
+  async get(invocationId: string): Promise<ToolInvocationRecord | null> {
+    this.refresh();
+    return this.state.invocations[invocationId] ?? null;
+  }
+
+  async findByIdempotency(request: ToolIdempotencyLookup): Promise<ToolInvocationRecord | null> {
+    this.refresh();
+    return this.findByIdempotencyInState(request);
+  }
+
+  async list(request: ToolInvocationListRequest = {}): Promise<ToolInvocationRecord[]> {
+    this.refresh();
+    return Object.values(this.state.invocations)
+      .filter(
+        (record) =>
+          (!request.statuses || request.statuses.includes(record.status)) &&
+          (!request.toolId || record.toolId === request.toolId) &&
+          (!request.runId || record.scope?.runId === request.runId)
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .slice(0, request.limit ?? Number.POSITIVE_INFINITY);
+  }
+
+  async create(record: ToolInvocationRecord): Promise<ToolInvocationRecord> {
+    this.refresh();
+    const existing = this.state.invocations[record.id];
+    if (existing) return existing;
+    if (record.idempotencyKey && typeof record.metadata?.idempotencyScopeHash === 'string') {
+      const idempotent = this.findByIdempotencyInState({
+        toolId: record.toolId,
+        idempotencyKey: record.idempotencyKey,
+        scopeHash: record.metadata.idempotencyScopeHash,
+      });
+      if (idempotent) return idempotent;
+    }
+    this.state.invocations[record.id] = record;
+    this.flush();
+    return record;
+  }
+
+  async update(
+    invocationId: string,
+    patch: ToolInvocationPatch,
+    options: {
+      expectedStatuses?: readonly ToolInvocationStatus[];
+      expectedRevision?: number;
+    } = {}
+  ): Promise<ToolInvocationRecord> {
+    this.refresh();
+    const existing = this.state.invocations[invocationId];
+    if (!existing) throw new Error('Tool invocation not found: ' + invocationId);
+    if (options.expectedStatuses && !options.expectedStatuses.includes(existing.status)) {
+      throw new Error('Tool invocation ' + invocationId + ' is in state ' + existing.status + '.');
+    }
+    if (options.expectedRevision !== undefined && options.expectedRevision !== existing.revision) {
+      throw new Error('Tool invocation revision changed: ' + invocationId);
+    }
+    const updated: ToolInvocationRecord = {
+      ...existing,
+      ...patch,
+      revision: existing.revision + 1,
+    };
+    this.state.invocations[invocationId] = updated;
+    this.flush();
+    return updated;
+  }
+
+  async getCompleted(invocationId: string): Promise<ToolCallResult | null> {
+    const invocation = await this.get(invocationId);
+    return invocation?.status === 'completed' ? (invocation.result ?? null) : null;
+  }
+
+  async saveCompleted(invocationId: string, result: ToolCallResult): Promise<void> {
+    const existing = await this.get(invocationId);
+    if (!existing) return;
+    await this.update(invocationId, {
+      status: 'completed',
+      result,
+      updatedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+  }
+
+  async getRequest(invocationId: string): Promise<ToolApprovalRequest | null> {
+    this.refresh();
+    return this.state.approvalRequests[invocationId] ?? null;
+  }
+
+  async requestApproval(request: ToolApprovalRequest): Promise<ToolApprovalRequest> {
+    this.refresh();
+    const existing = this.state.approvalRequests[request.invocationId];
+    if (existing) return existing;
+    this.state.approvalRequests[request.invocationId] = request;
+    this.flush();
+    return request;
+  }
+
+  async getGrant(invocationId: string): Promise<ToolApprovalGrant | null> {
+    this.refresh();
+    return this.state.approvalGrants[invocationId] ?? null;
+  }
+
+  async approve(
+    invocationId: string,
+    approvedBy: string,
+    options: { approvedAt?: string; expiresAt?: string } = {}
+  ): Promise<ToolApprovalGrant> {
+    this.refresh();
+    const request = this.state.approvalRequests[invocationId];
+    if (!request) throw new Error('Tool approval request not found: ' + invocationId);
+    if (request.status !== 'pending') {
+      throw new Error(
+        'Tool approval request is already resolved as ' + request.status + ': ' + invocationId
+      );
+    }
+    const approvedAt = options.approvedAt ?? new Date().toISOString();
+    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.parse(approvedAt)) {
+      this.state.approvalRequests[invocationId] = { ...request, status: 'expired' };
+      delete this.state.approvalGrants[invocationId];
+      this.flush();
+      throw new Error('Tool approval request has expired: ' + invocationId);
+    }
+    const grant: ToolApprovalGrant = {
+      requestId: request.id,
+      invocationId,
+      toolId: request.toolId,
+      inputHash: request.inputHash,
+      toolRevision: request.toolRevision,
+      contractSnapshotRef: request.contractSnapshotRef,
+      principalId: request.principalId,
+      policyDecisionRef: request.policyDecisionRef,
+      approvedBy,
+      approvedAt,
+      expiresAt: options.expiresAt,
+    };
+    this.state.approvalRequests[invocationId] = { ...request, status: 'approved' };
+    this.state.approvalGrants[invocationId] = grant;
+    this.flush();
+    return grant;
+  }
+
+  async reject(invocationId: string): Promise<ToolApprovalRequest> {
+    this.refresh();
+    const request = this.state.approvalRequests[invocationId];
+    if (!request) throw new Error('Tool approval request not found: ' + invocationId);
+    if (request.status !== 'pending') {
+      throw new Error(
+        'Tool approval request is already resolved as ' + request.status + ': ' + invocationId
+      );
+    }
+    const rejected = { ...request, status: 'rejected' as const };
+    this.state.approvalRequests[invocationId] = rejected;
+    delete this.state.approvalGrants[invocationId];
+    this.flush();
+    return rejected;
+  }
+
+  private refresh(): void {
+    this.state = this.readState();
+  }
+
+  private findByIdempotencyInState(request: ToolIdempotencyLookup): ToolInvocationRecord | null {
+    return (
+      Object.values(this.state.invocations).find(
+        (record) =>
+          record.toolId === request.toolId &&
+          record.idempotencyKey === request.idempotencyKey &&
+          record.metadata?.idempotencyScopeHash === request.scopeHash
+      ) ?? null
+    );
+  }
+
+  private readState(): FileToolRuntimeState {
+    return readJsonFile<FileToolRuntimeState>(this.options.filename, {
+      invocations: {},
+      approvalRequests: {},
+      approvalGrants: {},
+    });
+  }
+
+  private flush(): void {
+    writeJsonFile(this.options.filename, this.state);
+  }
+}
 class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
   private readonly db: SqliteDatabaseSync;
 
@@ -346,6 +571,11 @@ class NodeSQLiteStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    this.ensureTable(table);
+    this.db.prepare('DELETE FROM ' + quoteIdentifier(table) + ' WHERE id = ?').run(id);
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     this.ensureTable(table);
     const rows = this.db.prepare(`SELECT record FROM ${quoteIdentifier(table)}`).all();
@@ -406,6 +636,13 @@ class JsonStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    validateIdentifier(table);
+    if (!this.tables[table]) return;
+    delete this.tables[table][id];
+    this.flush();
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     validateIdentifier(table);
     const records = Object.values(this.tables[table] ?? {});
@@ -449,6 +686,10 @@ export class InMemoryStructuredStore implements StructuredStoreProvider {
     const existing = records?.get(id);
     if (!records || !existing) return;
     records.set(id, { ...existing, ...(patch as Record<string, unknown>) });
+  }
+
+  async delete(table: string, id: string): Promise<void> {
+    this.tables.get(table)?.delete(id);
   }
 
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
@@ -608,6 +849,99 @@ export class FileArtifactStore implements ArtifactStoreProvider {
   }
 }
 
+export class ArtifactStoreToolPort implements ToolArtifactPort {
+  constructor(private readonly artifacts: ArtifactStoreProvider) {}
+
+  async store(request: {
+    invocationId: string;
+    toolId: string;
+    value: unknown;
+    mimeType?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<string> {
+    const content = Buffer.isBuffer(request.value)
+      ? request.value
+      : typeof request.value === 'string'
+        ? request.value
+        : JSON.stringify(request.value);
+    const extension = request.mimeType === 'text/plain' ? 'txt' : 'json';
+    const ref = await this.artifacts.put(
+      `tool-results/${safePathSegment(request.toolId)}/${safePathSegment(request.invocationId)}.${extension}`,
+      content,
+      {
+        contentType: request.mimeType ?? 'application/json',
+        metadata: request.metadata,
+      }
+    );
+    return ref.id;
+  }
+}
+
+export class FileToolObservationStore implements ToolObservationPort {
+  constructor(private readonly rootPath: string) {
+    fs.mkdirSync(rootPath, { recursive: true });
+  }
+
+  async record(request: {
+    invocationId: string;
+    toolId: string;
+    toolRevision: string;
+    runId: string;
+    stepId: string;
+    inputHash: string;
+    outputHash: string;
+    value: unknown;
+    artifactRefs?: string[];
+    provenance: Record<string, unknown>;
+  }): Promise<string> {
+    const id = `observation:${hash(`${request.invocationId}:${request.outputHash}`)}`;
+    writeJsonFile(path.join(this.rootPath, `${safePathSegment(id)}.json`), {
+      id,
+      ...request,
+      recordedAt: new Date().toISOString(),
+    });
+    return id;
+  }
+}
+
+export class FileMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
+  constructor(private readonly filename: string) {
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+  }
+
+  async list(serverId?: string): Promise<MCPCapabilityRecord[]> {
+    return readJsonFile<MCPCapabilityRecord[]>(this.filename, []).filter(
+      (record) => !serverId || record.serverId === serverId
+    );
+  }
+
+  async save(record: MCPCapabilityRecord): Promise<void> {
+    const records = readJsonFile<MCPCapabilityRecord[]>(this.filename, []);
+    const index = records.findIndex((candidate) => candidate.id === record.id);
+    if (index >= 0) records[index] = record;
+    else records.push(record);
+    writeJsonFile(this.filename, records);
+  }
+}
+
+export class FileToolContractSnapshotStore implements ToolContractSnapshotStore {
+  constructor(private readonly rootPath: string) {
+    fs.mkdirSync(rootPath, { recursive: true });
+  }
+
+  async get(snapshotId: string): Promise<ToolContractSnapshot | null> {
+    return readJsonFile<ToolContractSnapshot | null>(this.snapshotPath(snapshotId), null);
+  }
+
+  async save(snapshot: ToolContractSnapshot): Promise<void> {
+    writeJsonFile(this.snapshotPath(snapshot.id), snapshot);
+  }
+
+  private snapshotPath(snapshotId: string): string {
+    return path.join(this.rootPath, `${safePathSegment(snapshotId)}.json`);
+  }
+}
+
 export class MockEmbeddingProvider implements EmbeddingProvider {
   async embed(input: string[]): Promise<number[][]> {
     return input.map((value) => deterministicVector(value));
@@ -695,6 +1029,10 @@ function validateIdentifier(identifier: string): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
     throw new Error(`Invalid SQLite identifier: ${identifier}`);
   }
+}
+
+function safePathSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '_');
 }
 
 function quoteIdentifier(identifier: string): string {

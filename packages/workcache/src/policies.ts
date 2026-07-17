@@ -7,6 +7,7 @@ export const WORKCACHE_TREE_TYPES: CacheTreeType[] = [
   'ObservationTree',
   'VerificationTree',
   'MemoryTree',
+  'RecoveryTree',
   'PromptPrefixTree',
 ];
 
@@ -23,6 +24,7 @@ export const defaultWorkCachePolicy: WorkCachePolicy = {
     ObservationTree: { enabled: true, ttlMs: 1000 * 60 * 60, maxEntries: 1000 },
     VerificationTree: { enabled: true, ttlMs: 1000 * 60 * 60, maxEntries: 1000 },
     MemoryTree: { enabled: true, ttlMs: 1000 * 60 * 60 * 24, maxEntries: 1000 },
+    RecoveryTree: { enabled: true, ttlMs: 1000 * 60 * 60 * 6, maxEntries: 1000 },
     PromptPrefixTree: { enabled: true, ttlMs: 1000 * 60 * 60 * 24, maxEntries: 1000 },
   },
 };

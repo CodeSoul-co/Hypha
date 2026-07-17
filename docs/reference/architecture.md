@@ -4,24 +4,24 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 
 ## Package Map
 
-| Package                 | Responsibility                                                                                                                   | Should Not Contain                                                 |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `@hypha/core`           | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces.                                                  | Provider SDKs, database clients, HTTP server code.                 |
-| `@hypha/storage`        | Storage provider profiles, topology specs, connection resolution, cloud/local profile helpers.                                   | Concrete database clients or memory behavior.                      |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `ReasoningSpec`, session initialization, local pack loading, overlays, registry, and compiler. | Business-specific workflows or app routes.                         |
-| `@hypha/fsm`            | FSM process spec, `FSMRuntime`, guarded transitions, timeout/retry/human-review semantics.                                       | Tool handlers, model calls, storage adapters.                      |
-| `@hypha/kernel`         | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                           | Concrete model providers, direct tool side effects.                |
-| `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.          | Provider-specific request types in public kernel contracts.        |
-| `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.  | Agent loop, workflow semantics, or app-specific model preferences. |
-| `@hypha/serving-cache`  | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.         | Semantic cache, WorkCache graph scheduling, or agent loop changes. |
-| `@hypha/workcache`      | Event-derived typed runtime cache blocks, WorkGraph scheduling view, hot-indexed typed cache forest, memory/SQLite stores, and audit events. | Source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
-| `@hypha/tools`          | Tool specs, registry, recursive schema validation, governed runner, mock runner, side-effect policy and trace events.            | Direct execution bypassing policy.                                 |
-| `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.      | Provider SDK lifecycle as framework core.                          |
-| `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                      | App session storage rules.                                         |
-| `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                         | Workflow replacement logic or direct tool execution.               |
-| `@hypha/harness`        | Event-first runtime projections, `RunManager`, ReAct/FSM runner, message bus, queues, skill/reasoning trace events, replay/audit/regression. | FSM internals or app-specific state.                               |
-| `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                         | Framework spec definitions.                                        |
-| `@hypha/testing`        | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                 | Production runtime behavior or live model/tool execution.          |
+| Package                 | Responsibility                                                                                                                                             | Should Not Contain                                                             |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `@hypha/core`           | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces.                                                                            | Provider SDKs, database clients, HTTP server code.                             |
+| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral failure classification, and recovery advice.                                            | Concrete database clients or memory behavior.                                  |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `ReasoningSpec`, session initialization, local pack loading, overlays, registry, and compiler.                           | Business-specific workflows or app routes.                                     |
+| `@hypha/fsm`            | FSM process spec, `FSMRuntime`, guarded transitions, validated snapshots, anomaly classification, bounded retry/circuit/compensation/quarantine semantics. | Tool handlers, model calls, storage adapters.                                  |
+| `@hypha/kernel`         | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                                                     | Concrete model providers, direct tool side effects.                            |
+| `@hypha/inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.                                    | Provider-specific request types in public kernel contracts.                    |
+| `@hypha/models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.                            | Agent loop, workflow semantics, or app-specific model preferences.             |
+| `@hypha/serving-cache`  | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.                                   | Semantic cache, WorkCache graph scheduling, or agent loop changes.             |
+| `@hypha/workcache`      | Event-derived typed runtime cache blocks, WorkGraph scheduling view, hot-indexed typed cache forest, memory/SQLite stores, and audit events.               | Source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
+| `@hypha/tools`          | Tool specs, registry, safe recursive schema validation, governed runner, common JSON/text/hash utilities, side-effect policy and trace events.             | Direct execution bypassing policy.                                             |
+| `@hypha/mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.                                | Provider SDK lifecycle as framework core.                                      |
+| `@hypha/memory`         | Memory provider interfaces, scopes, records, write policy, hybrid provider.                                                                                | App session storage rules.                                                     |
+| `@hypha/skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                                                   | Workflow replacement logic or direct tool execution.                           |
+| `@hypha/harness`        | Event-first runtime projections, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression.                         | FSM internals or app-specific state.                                           |
+| `@hypha/adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                                                   | Framework spec definitions.                                                    |
+| `@hypha/testing`        | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                                           | Production runtime behavior or live model/tool execution.                      |
 
 ## Harness, Runtime, and FSM
 
@@ -29,15 +29,24 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 
 `runtime` is the execution layer. It creates sessions and runs, appends events, records side effects, and projects state from events. The server surface currently adapts HTTP requests into this runtime through `apps/server/src/services/EventRuntime.ts`.
 
-`fsm` remains a separate package because FSM is a reusable process language. Domain workflows compile into `FSMProcessSpec`, and the ReAct runtime uses FSM transitions without coupling domain declarations to HTTP, storage, or provider adapters.
+`fsm` remains a separate package because FSM is a reusable process language. Domain workflows compile into `FSMProcessSpec`, and the ReAct runtime uses FSM transitions without coupling domain declarations to HTTP, storage, or provider adapters. Recovery is also expressed as FSM state: `Recovering`, `Compensating`, and `Quarantined` are visible scheduling and evidence boundaries rather than a hidden exception loop.
 
 `RunManager` and `HarnessedReActFSMRunner` live in `@hypha/harness` because they coordinate event recording, run lifecycle, ReAct execution, and FSM callbacks. They do not define FSM semantics; they consume `FSMRuntime` and record the resulting state and transition facts as events.
+
+`runFSMRecoveryLoop()` coordinates one bounded operation. `runRecoverySupervisor()` coordinates a
+dependency-ordered set of module participants through the same FSM. It retains completed upstream
+outputs, fingerprints failures, compares evidence hashes, limits cycles/no-progress/repeated
+strategies/elapsed time, and selects only declared retry, reconciliation, fallback, degradation,
+compensation, or escalation handlers. Delayed work suspends unless a scheduler and inline delay
+budget are explicitly supplied. See [FSM Anomaly Recovery](../architecture/fsm-recovery.md).
 
 `InMemoryMessageBus` is the package-level transport contract for future
 multi-workflow and multi-agent surfaces. Messages are scoped by
 `userId + sessionId + runId`, can carry `fsmState`, `stepId`, and `agentId`,
-and emit `message.enqueued`, `message.delivered`, `message.acknowledged`,
-`message.failed`, or `message.dead_lettered` through a `TraceRecorder`. The bus
+and emit `message.enqueued`, `message.delivered`, `message.retrying`,
+`message.acknowledged`, `message.failed`, or `message.dead_lettered` through a `TraceRecorder`.
+Retries use bounded exponential delay and exhausted, expired, or poison messages are dead-lettered
+without blocking the recipient queue. The bus
 does not advance FSM state by itself; consumers bind message handling to FSM
 guards and transitions.
 
@@ -129,15 +138,21 @@ metadata; it does not store the complete source event payload. Prefix
 materialization selects a prefix group and assembles ordered blocks under the
 configured token budget.
 
-cache-base enables it with `HYPHA_WORKCACHE=memory` by default. Set
-`HYPHA_WORKCACHE=off` to disable it or `HYPHA_WORKCACHE=sqlite` to persist
-cache blocks. Derived audit events are `workcache.lookup`, `workcache.hit`,
+The bundled server configuration enables it with `HYPHA_WORKCACHE=memory`. Set
+`HYPHA_WORKCACHE=off` to disable it or `HYPHA_WORKCACHE=sqlite` to persist cache
+blocks. Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.miss`, `workcache.write`, `workcache.invalidate`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each event links back
 to the source event id/type, tree type, block id, and cache key.
 
 WorkCache does not replace `@hypha/serving-cache`, does not alter DomainPack or
 agent interfaces, and does not implement MessageTree or KVPrefixTree in V1.
+
+`RecoveryTree` is the recovery-specific cache boundary. It consumes completed/resolved/escalated
+recovery events and exposes a `RecoveryKnowledgePort` through `WorkCacheManager`. Keys include the
+failure fingerprint, participant, and policy/spec/provider revisions; expiry or revision drift
+deletes stale blocks. A hit is a revalidated strategy hint only—the FSM snapshot, events, and
+provider receipts still determine whether recovery succeeded.
 
 ## Extension Boundaries
 

@@ -118,6 +118,31 @@ Idle -> RunInitialized -> ContextBuilt -> Reasoning -> ActionSelected
   -> MemorySync -> Completed
 ```
 
+The same process contains explicit recovery routes. `FSMRecoveryPolicySpec` limits attempts per
+state, total attempts, elapsed time, backoff, and circuit-breaker probes. `FSMAnomaly` records the
+source, category, code, retry evidence, and side-effect commit state. `FSMSnapshot.recovery`
+persists the attempt and circuit state, while `onRecoveryDecision` exposes the event-recording
+boundary.
+
+```text
+normal state -> Recovering -> original state
+normal state -> Compensating -> HumanReview | Quarantined | Failed
+normal state -> Quarantined -> HumanReview | Failed | Cancelled
+```
+
+`runFSMRecoveryLoop()` performs bounded attempts for one operation. `runRecoverySupervisor()` adds
+dependency-ordered cross-module coordination. It preserves completed participant outputs, compares
+stable evidence hashes across attempts, and limits total cycles, unchanged-evidence cycles,
+same-strategy repeats, and elapsed time. Unknown external commit state is reconciled before replay
+when a receipt resolver exists; otherwise it is quarantined. Committed effects require an explicit
+idempotent compensation handler.
+
+Recovery is event-first. Cases emit `recovery.case.opened`, strategy and attempt events, explicit
+progress evidence, and a resolved or escalated terminal event. Inference and Memory operations in
+the server runtime use this supervisor, while Tool/MCP and Execution retain their own governed
+records and contribute normalized failure evidence. See
+[FSM Anomaly Recovery](../architecture/fsm-recovery.md).
+
 ## Message Bus
 
 `@hypha/harness` exposes `MessageBus` and `InMemoryMessageBus` as the transport
@@ -133,14 +158,17 @@ or fail the message. The bus records delivery facts as events:
 ```text
 message.enqueued
 message.delivered
+message.retrying
 message.acknowledged
 message.failed
 message.dead_lettered
 ```
 
-The message bus does not replace FSM. FSM remains the process authority;
-message delivery is an event-first input to a consumer that may then evaluate
-guards and perform transitions.
+Failed delivery may requeue with bounded exponential delay. When the delivery budget is exhausted,
+or a message is explicitly poison/expired, it becomes a dead letter and no longer blocks the
+recipient queue. The message bus does not replace FSM. FSM remains the process authority; message
+delivery is an event-first input to a consumer that may then evaluate guards and perform
+transitions.
 
 ## ReAct Execution
 

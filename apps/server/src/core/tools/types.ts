@@ -71,6 +71,10 @@ export abstract class BaseTool implements ITool {
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
+        metadata:
+          error && typeof error === 'object' && 'code' in error
+            ? { errorCode: String((error as { code: unknown }).code) }
+            : undefined,
       };
     }
   }
@@ -141,7 +145,7 @@ export interface MCPClient {
 
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  callTool(name: string, args: any): Promise<ToolResult>;
+  invoke(name: string, args: any): Promise<ToolResult>;
   listTools(): Promise<ToolDefinition[]>;
   healthCheck(): Promise<boolean>;
 }

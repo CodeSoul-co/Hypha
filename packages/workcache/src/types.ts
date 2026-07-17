@@ -1,4 +1,4 @@
-import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
+import type { FrameworkEvent, FrameworkEventType, RecoveryKnowledge } from '@hypha/core';
 
 export type WorkNodeType =
   | 'plan'
@@ -7,6 +7,7 @@ export type WorkNodeType =
   | 'observation'
   | 'verification'
   | 'memory'
+  | 'recovery'
   | 'prompt_prefix';
 
 export type CacheTreeType =
@@ -16,6 +17,7 @@ export type CacheTreeType =
   | 'ObservationTree'
   | 'VerificationTree'
   | 'MemoryTree'
+  | 'RecoveryTree'
   | 'PromptPrefixTree';
 
 export type WorkCacheStoreKind = 'off' | 'memory' | 'sqlite';
@@ -206,7 +208,10 @@ export interface CacheTree<T = unknown> {
 
 export interface WorkCacheStore {
   get<T = unknown>(blockId: string): Promise<CacheBlock<T> | null>;
-  getByCacheKey<T = unknown>(treeType: CacheTreeType, cacheKey: string): Promise<CacheBlock<T> | null>;
+  getByCacheKey<T = unknown>(
+    treeType: CacheTreeType,
+    cacheKey: string
+  ): Promise<CacheBlock<T> | null>;
   set<T = unknown>(block: CacheBlock<T>): Promise<void>;
   delete(blockId: string): Promise<void>;
   list<T = unknown>(treeType?: CacheTreeType): Promise<Array<CacheBlock<T>>>;
@@ -292,3 +297,5 @@ export interface PromptPrefixBlockValue {
   templateVersion?: string;
   metadata?: Record<string, unknown>;
 }
+
+export type RecoveryKnowledgeBlockValue = RecoveryKnowledge;

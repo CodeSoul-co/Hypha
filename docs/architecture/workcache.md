@@ -5,6 +5,10 @@ materializes reusable `CacheBlock` records. It is not the source of truth:
 DomainPack, Session, Run, and Event semantics stay unchanged, and replay,
 audit, regression, and projections still derive from events.
 
+Recovery outcomes use the same boundary. `RecoveryTree` stores revision-safe
+strategy knowledge derived from recovery events; it never marks an FSM case
+complete or replaces a durable receipt.
+
 ## Runtime Type Alignment
 
 WorkCache V1 maps only current `FrameworkEventType` values by default.
@@ -12,16 +16,17 @@ Unknown events are ignored or rejected according to `unknownEventPolicy`; they
 are not accepted as source events unless extension events are explicitly
 enabled.
 
-| Source events | Work node | Primary tree |
-| --- | --- | --- |
-| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `plan` | `PlanTree` |
-| `inference.completed`, `model.call.completed` | `computation` | `ComputationTree` |
-| `tool.call.completed`, `mcp.call.completed` | `tool` | `ToolTree` |
-| `context.build.completed`, `context.compacted` | `observation` | `ObservationTree` |
-| `message.enqueued`, `message.delivered`, `message.acknowledged`, `message.failed`, `message.dead_lettered` | `observation` | `ObservationTree` |
-| `eval.completed`, `regression.completed` | `verification` | `VerificationTree` |
-| `memory.read.completed`, `memory.write.committed` | `memory` | `MemoryTree` |
-| `llm.cache.write` with prompt prefix metadata | `prompt_prefix` | `PromptPrefixTree` |
+| Source events                                                                                                    | Work node       | Primary tree       |
+| ---------------------------------------------------------------------------------------------------------------- | --------------- | ------------------ |
+| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `plan`          | `PlanTree`         |
+| `inference.completed`, `model.call.completed`                                                                    | `computation`   | `ComputationTree`  |
+| `tool.call.completed`, `mcp.call.completed`                                                                      | `tool`          | `ToolTree`         |
+| `context.build.completed`, `context.compacted`                                                                   | `observation`   | `ObservationTree`  |
+| `message.enqueued`, `message.delivered`, `message.acknowledged`, `message.failed`, `message.dead_lettered`       | `observation`   | `ObservationTree`  |
+| `eval.completed`, `regression.completed`                                                                         | `verification`  | `VerificationTree` |
+| `memory.read.completed`, `memory.write.committed`                                                                | `memory`        | `MemoryTree`       |
+| `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `recovery`      | `RecoveryTree`     |
+| `llm.cache.write` with prompt prefix metadata                                                                    | `prompt_prefix` | `PromptPrefixTree` |
 
 `MessageTree` and `KVPrefixTree` are not V1 roots. PromptPrefixTree stores
 stable prompt blocks and can materialize a logical prefix string; it does not
@@ -29,15 +34,16 @@ manage provider KV cache.
 
 ## Core Exports
 
-| Export | Purpose |
-| --- | --- |
-| `RuntimeTypeDefinition` | Source event to work node/tree alignment plus materializer. |
-| `NormalizedWorkEvent` | Event payload normalized for a primary tree. |
-| `WorkGraphNode`, `WorkGraphEdge`, `WorkGraph`, `DemandSignal` | Event-derived scheduling graph, typed dependencies, and cache demand signals. |
-| `CacheBlock<T>` | Typed cache artifact with validity, provenance, utility, and source event linkage. |
-| `CacheTree<T>`, `TypedCacheForest` | Tree lookup/write/invalidation over a shared store. |
-| `WorkCacheManager` | Ingests events, enforces TTL/validity, and emits audit events. |
-| `WorkCachePolicy` | Store mode, prompt budget, unknown-event behavior, and per-tree TTLs. |
+| Export                                                        | Purpose                                                                            |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `RuntimeTypeDefinition`                                       | Source event to work node/tree alignment plus materializer.                        |
+| `NormalizedWorkEvent`                                         | Event payload normalized for a primary tree.                                       |
+| `WorkGraphNode`, `WorkGraphEdge`, `WorkGraph`, `DemandSignal` | Event-derived scheduling graph, typed dependencies, and cache demand signals.      |
+| `CacheBlock<T>`                                               | Typed cache artifact with validity, provenance, utility, and source event linkage. |
+| `CacheTree<T>`, `TypedCacheForest`                            | Tree lookup/write/invalidation over a shared store.                                |
+| `WorkCacheManager`                                            | Ingests events, enforces TTL/validity, and emits audit events.                     |
+| `WorkCachePolicy`                                             | Store mode, prompt budget, unknown-event behavior, and per-tree TTLs.              |
+| `WorkCacheRecoveryKnowledgeStore`                             | `RecoveryKnowledgePort` backed by revision-safe `RecoveryTree` blocks.             |
 
 ## Work Graph and Tree Updates
 
@@ -81,7 +87,7 @@ Configure the server with:
 
 ```bash
 HYPHA_WORKCACHE=off
-HYPHA_WORKCACHE=memory  # cache-base default
+HYPHA_WORKCACHE=memory  # bundled server default
 HYPHA_WORKCACHE=sqlite
 HYPHA_WORKCACHE_SQLITE_PATH=./data/runtime/cache/hypha-workcache.sqlite
 HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS=4096
@@ -103,18 +109,27 @@ ordering/template metadata. Dynamic suffix hashes and request ids are trace
 metadata only; they do not invalidate stable prefix blocks. A template content
 or version change should produce a new block hash and therefore a new block.
 
+Recovery knowledge is keyed by failure fingerprint, participant id, and
+policy/spec/provider revisions. `WorkCacheManager.getRecoveryKnowledgePort()`
+stores verified and negative outcomes with an evidence hash and TTL. Lookup
+removes expired entries; a new revision removes stale entries for the same
+failure and participant. The recovery supervisor still revalidates every hit
+and uses only a verified strategy for a handler declared by the current
+participant. Negative knowledge records a failed strategy but does not
+authorize a different side effect.
+
 ## Audit Events
 
 WorkCache may append derived audit events after the source event:
 
-| Event | Meaning |
-| --- | --- |
-| `workcache.lookup` | A tree lookup was attempted for a source event. |
-| `workcache.hit` | A fresh block with matching validity was reused. |
-| `workcache.miss` | No block existed, or the block expired/was invalid. |
-| `workcache.write` | A new block was stored. |
-| `workcache.invalidate` | A stale, expired, or changed-validity block was removed. |
-| `workcache.bypass` | The source event was known but not safe to cache. |
+| Event                           | Meaning                                                    |
+| ------------------------------- | ---------------------------------------------------------- |
+| `workcache.lookup`              | A tree lookup was attempted for a source event.            |
+| `workcache.hit`                 | A fresh block with matching validity was reused.           |
+| `workcache.miss`                | No block existed, or the block expired/was invalid.        |
+| `workcache.write`               | A new block was stored.                                    |
+| `workcache.invalidate`          | A stale, expired, or changed-validity block was removed.   |
+| `workcache.bypass`              | The source event was known but not safe to cache.          |
 | `workcache.prefix.materialized` | Stable prefix content was assembled from PromptPrefixTree. |
 
 Each audit payload includes `sourceEventId`, `sourceEventType`, `treeType`,

@@ -9,13 +9,86 @@ import {
   SQLiteEventStore,
   SQLiteStructuredStore,
   createLocalStorageBackbone,
+  ArtifactStoreToolPort,
+  FileMCPCapabilityCatalogStore,
+  FileToolContractSnapshotStore,
+  FileToolObservationStore,
 } from './index';
 import { createFrameworkEvent } from '@hypha/core';
+import {
+  LegacyVectorIndexStoreAdapter,
+  StructuredManagedMemoryRecordStore,
+  StructuredMemoryPersistenceUnitOfWork,
+  hashMemoryScope,
+  managedMemoryRecordExample,
+} from '@hypha/memory';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 describe('@hypha/adapters-local reference providers', () => {
+  it('persists MCP catalog revisions, Tool snapshots, and artifactized Tool output', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-tool-bindings-'));
+    const catalog = new FileMCPCapabilityCatalogStore(path.join(root, 'mcp-catalog.json'));
+    await catalog.save({
+      id: 'server:tool:search:hash-1',
+      serverId: 'server',
+      kind: 'tool',
+      remoteName: 'search',
+      stableToolId: 'mcp.server.search',
+      capabilityHash: 'hash-1',
+      descriptorHash: 'descriptor-1',
+      descriptor: {},
+      trust: { level: 'restricted', source: 'runtime_discovery' },
+      driftState: 'approved',
+      firstSeenAt: '2026-07-16T00:00:00.000Z',
+      lastSeenAt: '2026-07-16T00:00:00.000Z',
+    });
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { capabilityHash: 'hash-1', stableToolId: 'mcp.server.search' },
+    ]);
+
+    const snapshots = new FileToolContractSnapshotStore(path.join(root, 'snapshots'));
+    await snapshots.save({
+      id: 'snapshot-1',
+      runId: 'run-1',
+      createdAt: '2026-07-16T00:00:00.000Z',
+      toolContracts: [],
+      snapshotHash: 'snapshot-hash-1',
+    });
+    await expect(snapshots.get('snapshot-1')).resolves.toMatchObject({ runId: 'run-1' });
+
+    const artifacts = new InMemoryArtifactStore();
+    const artifactRef = await new ArtifactStoreToolPort(artifacts).store({
+      invocationId: 'invocation-1',
+      toolId: 'tool.large-output',
+      value: { rows: [1, 2, 3] },
+    });
+    expect(artifactRef).toContain('tool-results/tool.large-output/invocation-1.json');
+
+    const observationRoot = path.join(root, 'observations');
+    const observationRef = await new FileToolObservationStore(observationRoot).record({
+      invocationId: 'invocation-1',
+      toolId: 'tool.large-output',
+      toolRevision: 'revision-1',
+      runId: 'run-1',
+      stepId: 'tool',
+      inputHash: 'input-hash',
+      outputHash: 'output-hash',
+      value: { artifactRef },
+      artifactRefs: [artifactRef],
+      provenance: { source: 'local', contractSnapshotRef: 'snapshot-1' },
+    });
+    expect(observationRef).toMatch(/^observation:/);
+    const observation = JSON.parse(
+      fs.readFileSync(path.join(observationRoot, fs.readdirSync(observationRoot)[0]), 'utf-8')
+    );
+    expect(observation).toMatchObject({
+      id: observationRef,
+      invocationId: 'invocation-1',
+      provenance: { contractSnapshotRef: 'snapshot-1' },
+    });
+  });
   it('stores structured records, vectors, and artifacts locally', async () => {
     const structured = new InMemoryStructuredStore();
     await structured.insert('runs', { id: 'run_1', status: 'completed' });
@@ -56,6 +129,143 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(artifacts.get(ref)).resolves.toEqual(Buffer.from('{"ok":true}'));
 
     await expect(new MockEmbeddingProvider().embed(['hypha'])).resolves.toHaveLength(1);
+  });
+
+  it('bridges the persistent local vector provider through the managed Memory contract', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-managed-vector-'));
+    const filename = path.join(root, 'vectors.json');
+    const createAdapter = () =>
+      new LegacyVectorIndexStoreAdapter(
+        'vector.local.persistent',
+        new LocalVectorIndexProvider({ filename })
+      );
+
+    const adapter = createAdapter();
+    await adapter.upsert([
+      { id: 'memory:vector:1', vector: [1, 0], metadata: { userId: 'alice' } },
+    ]);
+    await expect(
+      createAdapter().search({ vector: [1, 0], topK: 1, filter: { userId: 'alice' } })
+    ).resolves.toMatchObject([{ id: 'memory:vector:1', score: 1 }]);
+
+    await createAdapter().delete(['memory:vector:1']);
+    await expect(createAdapter().search({ vector: [1, 0], topK: 1 })).resolves.toEqual([]);
+  });
+
+  it('persists the versioned managed-memory source of truth in SQLite', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-managed-memory-'));
+    const filename = path.join(root, 'managed.sqlite');
+    const scope = {
+      tenantId: 'tenant-a',
+      userId: 'alice',
+      workspaceId: 'workspace-a',
+    };
+    const first = {
+      ...managedMemoryRecordExample,
+      id: 'memory:sqlite:1',
+      versionId: 'memory:sqlite:1:v1',
+      scope,
+      scopeHash: hashMemoryScope(scope),
+    };
+    const store = new StructuredManagedMemoryRecordStore({
+      provider: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+    });
+
+    await store.create(first);
+    await store.createVersion(
+      {
+        ...first,
+        versionId: 'memory:sqlite:1:v2',
+        revision: 2,
+        content: { preference: 'detailed answers' },
+        updatedAt: '2026-07-16T00:01:00.000Z',
+      },
+      1
+    );
+
+    const reopened = new StructuredManagedMemoryRecordStore({
+      provider: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+    });
+    await expect(reopened.get(first.id, scope)).resolves.toMatchObject({ revision: 2 });
+    await expect(reopened.history(first.id, scope)).resolves.toHaveLength(2);
+    await expect(reopened.get(first.id, { ...scope, userId: 'bob' })).resolves.toBeNull();
+
+    await reopened.delete(first.id, scope);
+    await expect(reopened.get(first.id, scope)).resolves.toBeNull();
+    await expect(reopened.history(first.id, scope)).resolves.toHaveLength(0);
+  });
+
+  it('commits managed records and index outbox entries atomically across SQLite restarts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-memory-uow-'));
+    const filename = path.join(root, 'memory-uow.sqlite');
+    const scope = { tenantId: 'tenant-a', userId: 'alice', workspaceId: 'workspace-a' };
+    const record = {
+      ...managedMemoryRecordExample,
+      id: 'memory:uow:1',
+      versionId: 'memory:uow:1:v1',
+      scope,
+      scopeHash: hashMemoryScope(scope),
+    };
+    const createPersistence = () =>
+      new StructuredMemoryPersistenceUnitOfWork({
+        provider: new SQLiteStructuredStore({ filename, mode: 'sqlite' }),
+      });
+
+    const persistence = createPersistence();
+    await persistence.transaction(async ({ recordStore, outboxStore }) => {
+      await recordStore.create(record);
+      await outboxStore.enqueue({
+        id: 'outbox:uow:1',
+        operationId: 'operation:uow:1',
+        memoryId: record.id,
+        memoryVersionId: record.versionId,
+        scopeHash: record.scopeHash,
+        action: 'upsert',
+        targetVectorStoreIds: ['vector:local'],
+        state: 'pending',
+        attempts: 0,
+        availableAt: record.createdAt,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      });
+    });
+
+    const reopened = createPersistence();
+    await expect(reopened.recordStore.get(record.id, scope)).resolves.toMatchObject({
+      revision: 1,
+    });
+    await expect(reopened.outboxStore.list()).resolves.toHaveLength(1);
+    expect(reopened.capabilities).toEqual({ durable: true, atomicRecordAndOutbox: true });
+
+    await expect(
+      reopened.transaction(async ({ recordStore, outboxStore }) => {
+        const rollbackRecord = {
+          ...record,
+          id: 'memory:uow:rollback',
+          versionId: 'memory:uow:rollback:v1',
+        };
+        await recordStore.create(rollbackRecord);
+        await outboxStore.enqueue({
+          id: 'outbox:uow:rollback',
+          operationId: 'operation:uow:rollback',
+          memoryId: rollbackRecord.id,
+          memoryVersionId: rollbackRecord.versionId,
+          scopeHash: rollbackRecord.scopeHash,
+          action: 'upsert',
+          targetVectorStoreIds: ['vector:local'],
+          state: 'pending',
+          attempts: 0,
+          availableAt: rollbackRecord.createdAt,
+          createdAt: rollbackRecord.createdAt,
+          updatedAt: rollbackRecord.updatedAt,
+        });
+        throw new Error('rollback persistent unit');
+      })
+    ).rejects.toThrow('rollback persistent unit');
+
+    const afterRollback = createPersistence();
+    await expect(afterRollback.recordStore.get('memory:uow:rollback', scope)).resolves.toBeNull();
+    await expect(afterRollback.outboxStore.list()).resolves.toHaveLength(1);
   });
 
   it('stores framework events in SQLite for replayable local runtime traces', async () => {

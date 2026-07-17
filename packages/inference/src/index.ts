@@ -1,5 +1,6 @@
 export * from './types';
 export * from './manager';
+export * from './recovery';
 export * from './cache';
 export * from './reasoning';
 export * from './reasoning-registry';

@@ -27,7 +27,7 @@ The runtime model is event-first:
 - `Run` is one concrete execution under a Session.
 - `Event` is the smallest source-of-truth fact record. Trace, replay, audit, regression, and state projection are derived from events.
 
-The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state.
+The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state. Anomaly recovery is also FSM-native: bounded retry and circuit wait enter `Recovering`, committed effects enter `Compensating`, and uncertain effects enter `Quarantined`.
 
 ## API Documentation
 
@@ -35,7 +35,8 @@ Public API documentation is maintained as field-level references:
 
 - [Documentation Index](docs/README.md): entry point for architecture, package boundaries, guides, and API references.
 - [HTTP API](docs/api/http.md): REST endpoints, authentication, request bodies, response shapes, and runtime conventions.
-- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, inference, memory, tools, MCP, skills, and model providers.
+- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, execution, inference, memory, tools, MCP, skills, and model providers.
+- [Execution Contracts](docs/architecture/execution.md): provider-neutral Workspace, Sandbox, Command, Store, Event, and cache-fingerprint boundaries.
 - [Architecture](docs/reference/architecture.md): package responsibilities, harness semantics, runtime model, and extension boundaries.
 - [Storage](docs/reference/storage.md): document, messaging, relational, vector, and artifact storage conventions for local, self-hosted, managed, and cloud deployments.
 - [Domain Packs](docs/guides/domain-packs.md): field contracts and examples for declaring workflows, tools, memory, skills, policy, and output contracts.
@@ -47,6 +48,20 @@ When the server is running, the interactive route index is also available at `/a
 hypha defaults to a single-user runtime for local and self-hosted deployments. The configured owner account is seeded from `auth.singleUser`, and public registration is disabled unless multi-user mode is explicitly enabled.
 
 Internal APIs keep `userId` boundaries for sessions, memory, token usage, API keys, and session queues. This keeps default deployment simple while preserving the concurrency model required by multi-user clients.
+
+## Coordinated Recovery
+
+Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and
+cache failures through the same FSM-governed recovery contract. Participants run in dependency
+order, completed upstream work is not repeated, and progress is proven by stable receipts,
+revisions, hashes, or provider state rather than by another loop iteration. Bounded retry,
+reconciliation, compatible fallback, degradation, compensation, human review, quarantine,
+cancellation, and failure are explicit strategies with trace events.
+
+Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
+changing the source result, and WorkCache can retain only revision-matched, revalidated recovery
+knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
+[FSM anomaly recovery](docs/architecture/fsm-recovery.md).
 
 ## Inference Runtime
 
@@ -68,11 +83,40 @@ For provider-side prefix cache, Hypha keeps request shape stable by canonicalizi
 
 ## WorkCache
 
-`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
+`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, `RecoveryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
 
-On `cache-base`, WorkCache defaults to `HYPHA_WORKCACHE=memory` so event-derived blocks are available during real runtime checks. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
+The bundled server configuration uses `HYPHA_WORKCACHE=memory`. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
 
-WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes.
+WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes. Recovery blocks are revision-matched, expiring strategy hints and never replace FSM, event, or receipt evidence.
+
+## Governed Tools and MCP
+
+Local, HTTP, Plugin, Mock, and MCP capabilities share `ToolAdapter`, `ToolRegistry`, and the
+single `GovernedToolRunner` execution path. Each call is a persistent Invocation with schema,
+permission, policy, approval, idempotency, retry, timeout, cancellation, artifact, event,
+observation, cache-validity, and recovery semantics. Dynamic MCP capabilities are separated into
+connection, catalog, trust, drift, schema-cache, and immutable Run snapshot records.
+
+See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
+[security guide](docs/guides/tool-mcp-security.md), and
+[adapter guide](docs/guides/tool-adapters.md).
+
+The server includes governed, side-effect-free `utility.json`, `utility.text`, and `utility.hash`
+tools for bounded JSON operations, literal text transformations, and SHA-256 fingerprints. See the
+[common utility guide](docs/guides/common-utility-tools.md) and
+[FSM recovery architecture](docs/architecture/fsm-recovery.md).
+
+## Governed Execution Contracts
+
+`@hypha/core` exposes provider-neutral contracts for managed Workspaces, sandbox environments,
+command execution, revisioned records and leases, lifecycle events, and deterministic cache
+fingerprints. The contracts keep filesystem, process, container, remote-provider, storage, artifact,
+policy, and secret implementations behind adapter and harness boundaries. Paths, identities,
+transitions, terminal evidence, sensitive event fields, idempotency, and stale-writer fencing are
+validated before adapters perform side effects.
+
+See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
+extension rules.
 
 ## Development Commands
 
