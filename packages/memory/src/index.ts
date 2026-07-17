@@ -860,5 +860,6 @@ export * from './context-builder';
 export * from './context-source-resolver';
 export * from './context-compaction';
 export * from './retrieval';
+export * from './integration-contracts';
 
 export * from './hybrid';
