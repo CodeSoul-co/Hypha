@@ -15,9 +15,13 @@ export interface WorkspaceDirectorySpec {
 }
 
 export interface WorkspacePathPolicySpec {
+  /** Read permission only. Exact or descendant deny rules always take precedence. */
   readOnlyPaths?: string[];
+  /** Write permission only. Exact or descendant deny rules always take precedence. */
   writablePaths?: string[];
+  /** Execute permission only. Exact or descendant deny rules always take precedence. */
   executablePaths?: string[];
+  /** Final deny boundary; it cannot be widened by any allow list. */
   deniedPaths?: string[];
   allowSymlinks?: boolean;
   allowHardLinks?: boolean;

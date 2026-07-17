@@ -86,6 +86,47 @@ describe('WorkspaceSpec', () => {
     ).toThrow(/both allowed and denied/u);
   });
 
+  it('keeps path-policy deny precedence while rejecting ambiguous list entries', () => {
+    expect(
+      validateWorkspaceSpec({
+        ...workspaceSpecExample,
+        pathPolicy: {
+          ...workspaceSpecExample.pathPolicy,
+          writablePaths: ['working'],
+          deniedPaths: ['working/private'],
+        },
+      }).pathPolicy.deniedPaths
+    ).toEqual(['working/private']);
+
+    expect(() =>
+      validateWorkspaceSpec({
+        ...workspaceSpecExample,
+        pathPolicy: {
+          ...workspaceSpecExample.pathPolicy,
+          caseSensitivity: 'insensitive',
+          writablePaths: ['Working/Output', 'working\\output/'],
+        },
+      })
+    ).toThrow(/duplicates another path/u);
+  });
+
+  it('requires symlink permission before following symlinks for reads', () => {
+    expect(() =>
+      validateWorkspaceSpec({
+        ...workspaceSpecExample,
+        pathPolicy: {
+          ...workspaceSpecExample.pathPolicy,
+          allowSymlinks: false,
+          followSymlinksForRead: true,
+        },
+      })
+    ).toThrow(/requires allowSymlinks/u);
+
+    const pathPolicyJsonSchema = workspaceSpecJsonSchema.properties?.pathPolicy;
+    expect(pathPolicyJsonSchema?.allOf).toHaveLength(1);
+    expect(pathPolicyJsonSchema?.properties?.deniedPaths.description).toMatch(/cannot be overridden/u);
+  });
+
   it('rejects undeclared WorkspaceSpec fields at every contract boundary', () => {
     expect(() => validateWorkspaceSpec({ ...workspaceSpecExample, unexpected: true })).toThrow();
     expect(() =>

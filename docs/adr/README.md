@@ -10,3 +10,4 @@ ADRs record accepted architecture decisions for hypha. They should explain the d
 - [ADR 0004: Execution Process-Tree Termination](0004-execution-process-tree-termination.md)
 - [ADR 0005: Provider-Enforced Execution Network Policy](0005-execution-network-policy.md)
 - [ADR 0006: Workspace Event Minimum Evidence](0006-workspace-event-minimum-evidence.md)
+- [ADR 0007: Workspace Path Policy Precedence](0007-workspace-path-policy-precedence.md)

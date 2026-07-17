@@ -81,7 +81,38 @@ export const workspacePathPolicySpecSchema = z
     deniedExtensions: z.array(z.string().min(1)).optional(),
     caseSensitivity: z.enum(['platform', 'sensitive', 'insensitive']).optional(),
   })
-  .strict() satisfies ZodType<WorkspacePathPolicySpec>;
+  .strict()
+  .superRefine((value, context) => {
+    if (value.followSymlinksForRead && value.allowSymlinks !== true) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['followSymlinksForRead'],
+        message: 'requires allowSymlinks to be true',
+      });
+    }
+
+    const pathLists = [
+      ['readOnlyPaths', value.readOnlyPaths],
+      ['writablePaths', value.writablePaths],
+      ['executablePaths', value.executablePaths],
+      ['deniedPaths', value.deniedPaths],
+    ] as const;
+    for (const [field, paths] of pathLists) {
+      if (!paths) continue;
+      const seen = new Set<string>();
+      for (const [index, path] of paths.entries()) {
+        const canonical = canonicalizePolicyPath(path, value.caseSensitivity);
+        if (seen.has(canonical)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field, index],
+            message: 'duplicates another path in the same policy list after normalization',
+          });
+        }
+        seen.add(canonical);
+      }
+    }
+  }) satisfies ZodType<WorkspacePathPolicySpec>;
 
 export const workspaceQuotaSpecSchema = z
   .object({
@@ -503,10 +534,26 @@ export const workspaceSpecJsonSchema: JsonSchema = {
     pathPolicy: {
       type: 'object',
       properties: {
-        readOnlyPaths: { type: 'array', items: relativePathJsonSchema },
-        writablePaths: { type: 'array', items: relativePathJsonSchema },
-        executablePaths: { type: 'array', items: relativePathJsonSchema },
-        deniedPaths: { type: 'array', items: relativePathJsonSchema },
+        readOnlyPaths: {
+          type: 'array',
+          items: relativePathJsonSchema,
+          description: 'Read-only grants; deniedPaths takes precedence.',
+        },
+        writablePaths: {
+          type: 'array',
+          items: relativePathJsonSchema,
+          description: 'Write grants; deniedPaths takes precedence.',
+        },
+        executablePaths: {
+          type: 'array',
+          items: relativePathJsonSchema,
+          description: 'Execute grants; deniedPaths takes precedence.',
+        },
+        deniedPaths: {
+          type: 'array',
+          items: relativePathJsonSchema,
+          description: 'Final deny boundary that cannot be overridden by an allow list.',
+        },
         allowSymlinks: { type: 'boolean' },
         allowHardLinks: { type: 'boolean' },
         followSymlinksForRead: { type: 'boolean' },
@@ -517,6 +564,18 @@ export const workspaceSpecJsonSchema: JsonSchema = {
         caseSensitivity: { enum: ['platform', 'sensitive', 'insensitive'] },
       },
       additionalProperties: false,
+      allOf: [
+        {
+          if: {
+            properties: { followSymlinksForRead: { const: true } },
+            required: ['followSymlinksForRead'],
+          },
+          then: {
+            properties: { allowSymlinks: { const: true } },
+            required: ['allowSymlinks'],
+          },
+        },
+      ],
     },
     quota: workspaceQuotaSpecJsonSchema,
     cleanup: {
@@ -790,6 +849,17 @@ function normalizePathForValidation(value: string): string {
     }
   }
   return normalized;
+}
+
+function canonicalizePolicyPath(
+  value: string,
+  caseSensitivity: WorkspacePathPolicySpec['caseSensitivity']
+): string {
+  const canonical = normalizePathForValidation(value)
+    .replace(/\\/gu, '/')
+    .replace(/\/{2,}/gu, '/')
+    .replace(/\/$/u, '');
+  return caseSensitivity === 'insensitive' ? canonical.toLocaleLowerCase('en-US') : canonical;
 }
 
 function normalizeExtension(value: string): string {
