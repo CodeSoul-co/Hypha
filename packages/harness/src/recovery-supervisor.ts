@@ -118,8 +118,6 @@ export async function runRecoverySupervisor(
     assertDependencies(participant, completed);
     let action: RecoveryStrategy = 'retry';
     let lastFailure: RecoveryFailure | undefined;
-    let pendingRetry: RecoveryAttemptRecord | undefined;
-    let pendingRetryFailure: RecoveryFailure | undefined;
 
     while (!completed.has(participant.id)) {
       if (options.signal?.aborted) {
@@ -148,24 +146,6 @@ export async function runRecoverySupervisor(
         outputs[participant.id] = result.output;
         completed.add(participant.id);
         if (snapshot && lastFailure) {
-          if (pendingRetry && pendingRetryFailure) {
-            completeAttempt(pendingRetry, result.evidence, now());
-            const knowledge = await rememberOutcome(
-              options.knowledge,
-              participant,
-              pendingRetryFailure,
-              'retry',
-              'recovered',
-              pendingRetry.evidenceAfterHash ?? recoveryEvidenceHash(result.evidence),
-              now()
-            );
-            await recorder.record('recovery.attempt.completed', snapshot, {
-              attempt: pendingRetry,
-              knowledge,
-            });
-            pendingRetry = undefined;
-            pendingRetryFailure = undefined;
-          }
           snapshot.lastEvidenceHash = recoveryEvidenceHash(result.evidence);
           snapshot.updatedAt = now();
           options.fsm.registerRecoverySuccess(lastFailure.circuitKey ?? lastFailure.module, now());
@@ -180,26 +160,6 @@ export async function runRecoverySupervisor(
       } catch (error) {
         const failure = await participant.classify(error, context);
         validateFailure(participant, failure);
-        if (snapshot && pendingRetry && pendingRetryFailure) {
-          completeAttempt(pendingRetry, failure.evidence, now());
-          if (pendingRetry.status === 'succeeded') pendingRetry.status = 'failed';
-          pendingRetry.errorCode = failure.code;
-          const knowledge = await rememberOutcome(
-            options.knowledge,
-            participant,
-            pendingRetryFailure,
-            'retry',
-            'failed',
-            pendingRetry.evidenceAfterHash ?? recoveryEvidenceHash(failure.evidence),
-            now()
-          );
-          await recorder.record('recovery.attempt.completed', snapshot, {
-            attempt: pendingRetry,
-            knowledge,
-          });
-          pendingRetry = undefined;
-          pendingRetryFailure = undefined;
-        }
         lastFailure = failure;
         snapshot = openOrUpdateCase(snapshot, options, failure, outputs, now());
         const fingerprint = recoveryFailureFingerprint(failure);
@@ -282,12 +242,6 @@ export async function runRecoverySupervisor(
             }
             await options.scheduler.wait(fsmDecision.delayMs, fsmDecision, options.signal);
           }
-          pendingRetry = startedAttempt(snapshot, participant, action, failure, now());
-          pendingRetryFailure = failure;
-          snapshot.attempts.push(pendingRetry);
-          await recorder.record('recovery.attempt.started', snapshot, {
-            attempt: pendingRetry,
-          });
           await resumeFSM(options.fsm, snapshot.fsmState, failure, 'retry');
           continue;
         }
@@ -325,7 +279,8 @@ export async function runRecoverySupervisor(
           completed.add(participant.id);
           snapshot.lastEvidenceHash = record.evidenceAfterHash ?? snapshot.lastEvidenceHash;
           snapshot.updatedAt = now();
-          const knowledge = await rememberOutcome(
+          await recorder.record('recovery.attempt.completed', snapshot, { attempt: record });
+          await rememberOutcome(
             options.knowledge,
             participant,
             failure,
@@ -338,10 +293,6 @@ export async function runRecoverySupervisor(
             snapshot.lastEvidenceHash,
             now()
           );
-          await recorder.record('recovery.attempt.completed', snapshot, {
-            attempt: record,
-            knowledge,
-          });
 
           if (action === 'compensate') {
             snapshot.status = 'compensated';
@@ -360,7 +311,8 @@ export async function runRecoverySupervisor(
           record.status = 'failed';
           record.completedAt = now();
           record.errorCode = errorCode(actionError);
-          const knowledge = await rememberOutcome(
+          await recorder.record('recovery.attempt.completed', snapshot, { attempt: record });
+          await rememberOutcome(
             options.knowledge,
             participant,
             failure,
@@ -369,10 +321,6 @@ export async function runRecoverySupervisor(
             snapshot.lastEvidenceHash,
             now()
           );
-          await recorder.record('recovery.attempt.completed', snapshot, {
-            attempt: record,
-            knowledge,
-          });
           await resumeFSM(options.fsm, snapshot.fsmState, failure, `${action}_failed`);
           lastFailure = await participant.classify(
             actionError,
@@ -544,17 +492,16 @@ async function rememberOutcome(
   outcome: RecoveryKnowledge['outcome'],
   evidenceHash: string,
   now: string
-): Promise<RecoveryKnowledge> {
-  const item: RecoveryKnowledge = {
+): Promise<void> {
+  if (!knowledge) return;
+  await knowledge.put({
     key: knowledgeKey(participant, failure),
     strategy,
     outcome,
     evidenceHash,
     learnedAt: now,
     validation: { status: outcome === 'failed' ? 'negative' : 'verified' },
-  };
-  await knowledge?.put(item);
-  return item;
+  });
 }
 
 function knowledgeKey(

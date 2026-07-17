@@ -49,20 +49,6 @@ hypha defaults to a single-user runtime for local and self-hosted deployments. T
 
 Internal APIs keep `userId` boundaries for sessions, memory, token usage, API keys, and session queues. This keeps default deployment simple while preserving the concurrency model required by multi-user clients.
 
-## Coordinated Recovery
-
-Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and
-cache failures through the same FSM-governed recovery contract. Participants run in dependency
-order, completed upstream work is not repeated, and progress is proven by stable receipts,
-revisions, hashes, or provider state rather than by another loop iteration. Bounded retry,
-reconciliation, compatible fallback, degradation, compensation, human review, quarantine,
-cancellation, and failure are explicit strategies with trace events.
-
-Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
-changing the source result, and WorkCache can retain only revision-matched, revalidated recovery
-knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
-[FSM anomaly recovery](docs/architecture/fsm-recovery.md).
-
 ## Inference Runtime
 
 Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.

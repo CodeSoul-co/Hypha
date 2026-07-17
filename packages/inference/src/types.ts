@@ -72,14 +72,7 @@ export interface KvCacheRef {
 
 export type KvCacheScope = 'run' | 'session' | 'workspace';
 
-export type InferenceCacheMissReason = 'missing' | 'expired' | 'not_configured' | 'error';
-
-export interface InferenceCacheIssue {
-  operation: 'prefix_read' | 'kv_read' | 'kv_write' | 'invalidate';
-  code: string;
-  message: string;
-  bypassed: boolean;
-}
+export type InferenceCacheMissReason = 'missing' | 'expired' | 'not_configured';
 
 export type KvCacheWriteMode = 'write_through' | 'write_if_missing' | 'refresh';
 
@@ -105,8 +98,6 @@ export interface InferenceCacheUsage {
   kvCacheWritten?: boolean;
   kvCacheWriteRef?: KvCacheRef;
   reusedTokens?: number;
-  bypassed?: boolean;
-  issues?: InferenceCacheIssue[];
 }
 
 export interface InferenceProvider {
@@ -130,11 +121,6 @@ export interface KvCacheProvider {
 export interface InferenceManagerOptions {
   prefixCache?: PrefixCacheProvider;
   kvCache?: KvCacheProvider;
-  cacheFailureMode?: 'bypass' | 'strict';
-  providerRevision?: string;
-  policyRevision?: string;
-  specRevision?: string;
-  onRecoveryFailure?: (failure: RecoveryFailure) => void | Promise<void>;
 }
 
 export type PromptRole =
@@ -326,4 +312,3 @@ export interface InferenceBackendRegistryEntry {
   backend: InferenceBackend;
   default?: boolean;
 }
-import type { RecoveryFailure } from '@hypha/core';

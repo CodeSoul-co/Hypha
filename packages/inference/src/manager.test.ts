@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { RecoveryFailure } from '@hypha/core';
 import {
   createDefaultInferenceBackendRegistry,
   LlamaCppInferenceBackend,
@@ -17,12 +16,7 @@ import { AgentPromptRegistry } from './agent-prompts';
 import { ReasoningOrchestrator } from './reasoning';
 import { ReasoningStrategyRegistry } from './reasoning-registry';
 import { REACT_OFFICIAL_REFERENCES } from './reasoning-sources';
-import type {
-  InferenceBackendRequest,
-  InferenceProvider,
-  KvCacheProvider,
-  PrefixCacheProvider,
-} from './types';
+import type { InferenceBackendRequest, InferenceProvider } from './types';
 
 class RecordingTransport {
   readonly calls: Array<{
@@ -509,111 +503,6 @@ describe('@hypha/inference', () => {
       cache: { kvCacheWritten: false, kvCacheWriteRef: kv },
     });
     await expect(kvCache.get(kv)).resolves.toEqual({ handle: 'existing' });
-  });
-
-  it('bypasses failed optional caches while preserving normalized recovery evidence', async () => {
-    const failures: RecoveryFailure[] = [];
-    const prefixCache: PrefixCacheProvider = {
-      get: async () => {
-        throw Object.assign(new Error('prefix cache offline'), { code: 'ECONNREFUSED' });
-      },
-      put: async () => {},
-      invalidate: async () => {},
-    };
-    const kvCache: KvCacheProvider = {
-      get: async () => {
-        throw Object.assign(new Error('kv cache offline'), { code: 'ECONNREFUSED' });
-      },
-      put: async () => {
-        throw Object.assign(new Error('kv cache write failed'), { code: 'ENOSPC' });
-      },
-      invalidate: async () => {},
-    };
-    const manager = new InferenceManager({
-      prefixCache,
-      kvCache,
-      onRecoveryFailure: (failure) => {
-        failures.push(failure);
-      },
-    });
-    manager.register({
-      id: 'mock',
-      infer: async (request) => ({
-        id: 'response_cache_bypass',
-        output: { metadata: request.metadata },
-        nextKvCacheValue: { handle: 'new' },
-      }),
-    });
-    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
-    const kv = { id: 'kv_failed', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
-
-    await expect(
-      manager.infer('mock', {
-        runId: 'run_cache_bypass',
-        stepId: 'step_cache_bypass',
-        modelAlias: 'default',
-        input: 'hello',
-        cachePolicy: {
-          prefix,
-          kvCache: kv,
-          writeKvCache: { ref: kv },
-        },
-      })
-    ).resolves.toMatchObject({
-      id: 'response_cache_bypass',
-      cache: {
-        prefixHit: false,
-        kvCacheHit: false,
-        kvCacheMissReason: 'error',
-        kvCacheWritten: false,
-        bypassed: true,
-        issues: [
-          { operation: 'prefix_read', bypassed: true },
-          { operation: 'kv_read', bypassed: true },
-          { operation: 'kv_write', bypassed: true },
-        ],
-      },
-    });
-    expect(failures).toHaveLength(3);
-    expect(failures.every((failure) => failure.module === 'cache')).toBe(true);
-  });
-
-  it('reports provider failures without hiding the original inference error', async () => {
-    const failures: RecoveryFailure[] = [];
-    const manager = new InferenceManager({
-      providerRevision: 'provider-v1',
-      onRecoveryFailure: (failure) => {
-        failures.push(failure);
-      },
-    });
-    const providerError = Object.assign(new Error('provider overloaded'), {
-      status: 429,
-      retryAfterMs: 500,
-    });
-    manager.register({
-      id: 'mock',
-      infer: async () => {
-        throw providerError;
-      },
-    });
-
-    await expect(
-      manager.infer('mock', {
-        runId: 'run_provider_failure',
-        stepId: 'step_provider_failure',
-        modelAlias: 'default',
-        input: 'hello',
-      })
-    ).rejects.toBe(providerError);
-    expect(failures).toMatchObject([
-      {
-        module: 'inference',
-        category: 'rate_limit',
-        retryable: true,
-        retryAfterMs: 500,
-        evidence: { providerRevision: 'provider-v1' },
-      },
-    ]);
   });
 
   it('runs CoT and ToT reasoning strategies through provider abstraction', async () => {

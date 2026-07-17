@@ -1,8 +1,6 @@
-import { FrameworkError, type RecoveryFailure } from '@hypha/core';
+import { FrameworkError } from '@hypha/core';
 import { isKvCacheExpired } from './cache';
-import { classifyInferenceCacheFailure, classifyInferenceFailure } from './recovery';
 import type {
-  InferenceCacheIssue,
   InferenceCacheMissReason,
   InferenceManagerOptions,
   InferenceProvider,
@@ -16,31 +14,21 @@ import type {
 
 interface PreparedInferenceRequest {
   request: InferenceRequest;
-  providerId: string;
   prefixHit: boolean;
   kvCacheHit: boolean;
   prefixRef?: PrefixCacheRef;
   kvCacheRef?: KvCacheRef;
   kvCacheMissReason?: InferenceCacheMissReason;
-  cacheIssues: InferenceCacheIssue[];
-}
-
-interface CacheResolution<TValue> {
-  value: TValue | null;
-  missReason?: InferenceCacheMissReason;
-  issues: InferenceCacheIssue[];
 }
 
 export class InferenceManager {
   private readonly providers = new Map<string, InferenceProvider>();
   private readonly prefixCache?: PrefixCacheProvider;
   private readonly kvCache?: KvCacheProvider;
-  private readonly cacheFailureMode: 'bypass' | 'strict';
 
-  constructor(private readonly options: InferenceManagerOptions = {}) {
+  constructor(options: InferenceManagerOptions = {}) {
     this.prefixCache = options.prefixCache;
     this.kvCache = options.kvCache;
-    this.cacheFailureMode = options.cacheFailureMode ?? 'bypass';
   }
 
   register(provider: InferenceProvider): void {
@@ -61,14 +49,11 @@ export class InferenceManager {
       });
     }
 
-    const prepared = await this.prepareRequest(providerId, request);
-    try {
-      const response = await provider.infer(prepared.request);
-      return this.finalizeResponse(response, prepared);
-    } catch (error) {
-      await this.reportInferenceFailure(error, providerId, 'infer', request);
-      throw error;
-    }
+    const prepared = await this.prepareRequest(request);
+
+    const response = await provider.infer(prepared.request);
+
+    return this.finalizeResponse(response, prepared);
   }
 
   async *stream(providerId: string, request: InferenceRequest): AsyncIterable<InferenceResponse> {
@@ -88,93 +73,54 @@ export class InferenceManager {
       });
     }
 
-    const prepared = await this.prepareRequest(providerId, request);
-    try {
-      for await (const response of provider.stream(prepared.request)) {
-        yield await this.finalizeResponse(response, prepared);
-      }
-    } catch (error) {
-      await this.reportInferenceFailure(error, providerId, 'stream', request);
-      throw error;
+    const prepared = await this.prepareRequest(request);
+    for await (const response of provider.stream(prepared.request)) {
+      yield await this.finalizeResponse(response, prepared);
     }
   }
 
-  private async prepareRequest(
-    providerId: string,
-    request: InferenceRequest
-  ): Promise<PreparedInferenceRequest> {
+  private async prepareRequest(request: InferenceRequest): Promise<PreparedInferenceRequest> {
     const prefixRef = request.cachePolicy?.prefix ?? request.prefix;
     const kvCacheRef = request.cachePolicy?.kvCache ?? request.kvCache;
-    const [prefix, kvCache] = await Promise.all([
-      this.resolvePrefixCache(providerId, request, prefixRef),
-      this.resolveKvCache(providerId, request, kvCacheRef),
+    const [prefixContent, kvCacheValue] = await Promise.all([
+      prefixRef && this.prefixCache ? this.prefixCache.get(prefixRef) : Promise.resolve(null),
+      this.resolveKvCache(kvCacheRef),
     ]);
-    const cacheIssues = [...prefix.issues, ...kvCache.issues];
-    const kvCacheHit = kvCache.value !== null;
+    const kvCacheHit = kvCacheValue.value !== null;
     return {
       request: {
         ...request,
         prefix: prefixRef,
         kvCache: kvCacheRef,
-        resolvedPrefixContent: prefix.value ?? undefined,
-        resolvedKvCacheValue: kvCache.value ?? undefined,
+        resolvedPrefixContent: prefixContent ?? undefined,
+        resolvedKvCacheValue: kvCacheValue.value ?? undefined,
         metadata: {
           ...request.metadata,
-          prefixCacheHit: prefix.value !== null,
+          prefixCacheHit: prefixContent !== null,
           kvCacheHit,
-          ...(kvCache.missReason ? { kvCacheMissReason: kvCache.missReason } : {}),
-          ...(cacheIssues.length > 0 ? { inferenceCacheIssues: cacheIssues } : {}),
+          ...(kvCacheValue.missReason ? { kvCacheMissReason: kvCacheValue.missReason } : {}),
         },
       },
-      providerId,
-      prefixHit: prefix.value !== null,
+      prefixHit: prefixContent !== null,
       kvCacheHit,
       prefixRef,
       kvCacheRef,
-      kvCacheMissReason: kvCache.missReason,
-      cacheIssues,
+      kvCacheMissReason: kvCacheValue.missReason,
     };
   }
 
-  private async resolvePrefixCache(
-    providerId: string,
-    request: InferenceRequest,
-    ref: PrefixCacheRef | undefined
-  ): Promise<CacheResolution<string>> {
-    if (!ref || !this.prefixCache) return { value: null, issues: [] };
-    try {
-      return { value: await this.prefixCache.get(ref), issues: [] };
-    } catch (error) {
-      const issue = await this.handleCacheFailure(error, providerId, 'prefix_cache_read', request);
-      return { value: null, missReason: 'error', issues: [issue] };
-    }
-  }
-
-  private async resolveKvCache(
-    providerId: string,
-    request: InferenceRequest,
-    ref: KvCacheRef | undefined
-  ): Promise<CacheResolution<unknown>> {
-    if (!ref) return { value: null, issues: [] };
-    if (!this.kvCache) return { value: null, missReason: 'not_configured', issues: [] };
+  private async resolveKvCache(ref: KvCacheRef | undefined): Promise<{
+    value: unknown | null;
+    missReason?: InferenceCacheMissReason;
+  }> {
+    if (!ref) return { value: null };
     if (isKvCacheExpired(ref)) {
-      try {
-        await this.kvCache.invalidate(ref, 'expired');
-        return { value: null, missReason: 'expired', issues: [] };
-      } catch (error) {
-        const issue = await this.handleCacheFailure(error, providerId, 'cache_invalidate', request);
-        return { value: null, missReason: 'error', issues: [issue] };
-      }
+      await this.kvCache?.invalidate(ref, 'expired');
+      return { value: null, missReason: 'expired' };
     }
-    try {
-      const value = await this.kvCache.get(ref);
-      return value === null
-        ? { value: null, missReason: 'missing', issues: [] }
-        : { value, issues: [] };
-    } catch (error) {
-      const issue = await this.handleCacheFailure(error, providerId, 'kv_cache_read', request);
-      return { value: null, missReason: 'error', issues: [issue] };
-    }
+    if (!this.kvCache) return { value: null, missReason: 'not_configured' };
+    const value = await this.kvCache.get(ref);
+    return value === null ? { value: null, missReason: 'missing' } : { value };
   }
 
   private async finalizeResponse(
@@ -182,7 +128,6 @@ export class InferenceManager {
     prepared: PreparedInferenceRequest
   ): Promise<InferenceResponse> {
     const write = await this.writeKvCache(response, prepared);
-    const cacheIssues = [...prepared.cacheIssues, ...write.issues];
     return {
       ...response,
       cache: {
@@ -206,12 +151,6 @@ export class InferenceManager {
                 : {}),
             }
           : {}),
-        ...(cacheIssues.length > 0
-          ? {
-              bypassed: true,
-              issues: [...(response.cache?.issues ?? []), ...cacheIssues],
-            }
-          : {}),
       },
     };
   }
@@ -219,113 +158,28 @@ export class InferenceManager {
   private async writeKvCache(
     response: InferenceResponse,
     prepared: PreparedInferenceRequest
-  ): Promise<{ written: boolean; ref?: KvCacheRef; issues: InferenceCacheIssue[] }> {
+  ): Promise<{ written: boolean; ref?: KvCacheRef }> {
     const policy = prepared.request.cachePolicy?.writeKvCache;
-    if (!policy) return { written: false, issues: [] };
+    if (!policy) return { written: false };
     const ref = policy.ref;
-    if (!this.kvCache) return { written: false, ref, issues: [] };
+    if (!this.kvCache) return { written: false, ref };
     if (isKvCacheExpired(ref)) {
-      try {
-        await this.kvCache.invalidate(ref, 'expired');
-        return { written: false, ref, issues: [] };
-      } catch (error) {
-        const issue = await this.handleCacheFailure(
-          error,
-          prepared.providerId,
-          'cache_invalidate',
-          prepared.request
-        );
-        return { written: false, ref, issues: [issue] };
-      }
+      await this.kvCache.invalidate(ref, 'expired');
+      return { written: false, ref };
     }
     if ((policy.mode ?? 'write_through') === 'write_if_missing') {
-      if (prepared.kvCacheHit) return { written: false, ref, issues: [] };
-      try {
-        const existing = await this.kvCache.get(ref);
-        if (existing !== null) return { written: false, ref, issues: [] };
-      } catch (error) {
-        const issue = await this.handleCacheFailure(
-          error,
-          prepared.providerId,
-          'kv_cache_read',
-          prepared.request
-        );
-        return { written: false, ref, issues: [issue] };
+      if (prepared.kvCacheHit) {
+        return { written: false, ref };
+      }
+      const existing = await this.kvCache.get(ref);
+      if (existing !== null) {
+        return { written: false, ref };
       }
     }
     const value = policy.value !== undefined ? policy.value : response.nextKvCacheValue;
-    if (value === undefined) return { written: false, ref, issues: [] };
-    try {
-      await this.kvCache.put(ref, value);
-      return { written: true, ref, issues: [] };
-    } catch (error) {
-      const issue = await this.handleCacheFailure(
-        error,
-        prepared.providerId,
-        'kv_cache_write',
-        prepared.request
-      );
-      return { written: false, ref, issues: [issue] };
-    }
-  }
-
-  private async reportInferenceFailure(
-    error: unknown,
-    providerId: string,
-    operation: 'infer' | 'stream',
-    request: InferenceRequest
-  ): Promise<void> {
-    await this.notifyRecoveryFailure(
-      classifyInferenceFailure(error, {
-        id: `${request.runId}:${request.stepId}:inference:${operation}`,
-        operation,
-        request,
-        providerId,
-        providerRevision: this.options.providerRevision,
-        policyRevision: this.options.policyRevision,
-        specRevision: this.options.specRevision,
-      })
-    );
-  }
-
-  private async handleCacheFailure(
-    error: unknown,
-    providerId: string,
-    operation: 'prefix_cache_read' | 'kv_cache_read' | 'kv_cache_write' | 'cache_invalidate',
-    request: InferenceRequest
-  ): Promise<InferenceCacheIssue> {
-    if (this.cacheFailureMode === 'strict') throw error;
-    const failure = classifyInferenceCacheFailure(error, {
-      id: `${request.runId}:${request.stepId}:cache:${operation}`,
-      operation,
-      request,
-      providerId,
-      providerRevision: this.options.providerRevision,
-      policyRevision: this.options.policyRevision,
-      specRevision: this.options.specRevision,
-    });
-    await this.notifyRecoveryFailure(failure);
-    return {
-      operation:
-        operation === 'prefix_cache_read'
-          ? 'prefix_read'
-          : operation === 'kv_cache_read'
-            ? 'kv_read'
-            : operation === 'kv_cache_write'
-              ? 'kv_write'
-              : 'invalidate',
-      code: failure.code,
-      message: failure.message,
-      bypassed: true,
-    };
-  }
-
-  private async notifyRecoveryFailure(failure: RecoveryFailure): Promise<void> {
-    try {
-      await this.options.onRecoveryFailure?.(failure);
-    } catch {
-      // Observability sinks must not mask the provider or cache outcome.
-    }
+    if (value === undefined) return { written: false, ref };
+    await this.kvCache.put(ref, value);
+    return { written: true, ref };
   }
 }
 

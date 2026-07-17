@@ -6,7 +6,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.
 - [Runtime Model](reference/runtime-model.md): DomainPack, Session, Run, Event, FSM, replay, audit, regression, and concurrency conventions.
-- [FSM Anomaly Recovery](architecture/fsm-recovery.md): cross-module supervision, evidence-based convergence, bounded recovery states, cache knowledge, and module failure matrix.
+- [FSM Anomaly Recovery](architecture/fsm-recovery.md): anomaly taxonomy, bounded recovery states, circuit breaking, compensation, quarantine, and module failure matrix.
 - [Storage Reference](reference/storage.md): document, messaging, relational, vector, and artifact storage conventions plus memory extension points.
 - [Local Data Layout](reference/local-data-layout.md): ignored `data/` tree for local runtime records, indexes, artifacts, and logs.
 - [Framework API](api/framework.md): TypeScript package contracts and field-level spec references.
