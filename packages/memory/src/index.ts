@@ -701,4 +701,10 @@ export function validateMemorySpec(input: unknown): MemorySpec {
   return memorySpecDefinition.parse(input);
 }
 
+export * from './contracts';
+export * from './record-contract';
+export * from './profile-contract';
+export * from './operations';
+export * from './operation-contract';
+
 export * from './hybrid';
