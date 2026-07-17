@@ -68,12 +68,34 @@ describe('@hypha/domain workflow compiler', () => {
     const fsm = compileWorkflowToFSM(domainPack);
 
     expect(fsm.id).toBe('minimal.intake-reason-finalize.fsm');
-    expect(fsm.states.map((state) => state.id)).toEqual(['Intake', 'ReasonAct', 'Finalize']);
+    expect(fsm.states.map((state) => state.id)).toEqual(
+      expect.arrayContaining([
+        'Intake',
+        'ReasonAct',
+        'Finalize',
+        'Recovering',
+        'Compensating',
+        'Quarantined',
+        'HumanReview',
+        'Failed',
+        'Cancelled',
+      ])
+    );
     expect(fsm.states[1]).toMatchObject({
       timeoutPolicy: { timeoutMs: 1000, onTimeout: 'retry' },
       retryPolicy: { maxAttempts: 2 },
     });
     expect(fsm.transitions[1]).toMatchObject({ from: 'ReasonAct', to: 'Finalize' });
+    expect(fsm.transitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from: 'ReasonAct', to: 'Recovering' }),
+        expect.objectContaining({ from: 'Recovering', to: 'ReasonAct' }),
+        expect.objectContaining({ from: 'Recovering', to: 'HumanReview' }),
+        expect.objectContaining({ from: 'Quarantined', to: 'Failed' }),
+      ])
+    );
+    expect(fsm.recoveryPolicy).toBeDefined();
+    expect(fsm.terminalStates).toEqual(expect.arrayContaining(['Finalize', 'Failed', 'Cancelled']));
     expect(new WorkflowCompiler().compile(domainPack).id).toBe(
       'minimal.intake-reason-finalize.fsm'
     );
@@ -396,7 +418,7 @@ describe('@hypha/domain workflow compiler', () => {
     expect(compiled.fsmProcess).toMatchObject({
       id: 'domain.default.workflow.default.fsm',
       initialState: 'Intake',
-      terminalStates: ['Completed', 'Failed'],
+      terminalStates: ['Completed', 'Failed', 'Cancelled'],
     });
     expect(compiled.harnessedSystem).toMatchObject({
       id: 'domain.default.workflow.default.system',
