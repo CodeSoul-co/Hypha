@@ -86,6 +86,16 @@ interface DockerExecutionPolicy {
   maxCombinedOutputBytes: number;
 }
 
+interface ObservedDockerMetrics extends DockerContainerStats {
+  sampleCount: number;
+}
+
+interface DockerMetricsCollector {
+  stop(): Promise<ObservedDockerMetrics | undefined>;
+}
+
+const dockerMetricsSampleIntervalMs = 100;
+
 const dockerCapabilities: SandboxProviderCapabilities = {
   processIsolation: true,
   filesystemIsolation: true,
@@ -364,8 +374,13 @@ export class DockerExecutionProvider implements SandboxProvider {
 
     let commandResult: DockerCommandResult | undefined;
     let inspection: DockerContainerInspection | null = null;
-    let stats: DockerContainerStats | undefined;
+    let metrics: ObservedDockerMetrics | undefined;
     let result: CommandExecutionResult | undefined;
+    const metricsCollector = startDockerMetricsCollector(
+      this.engine,
+      state.containerId,
+      dockerMetricsSampleIntervalMs
+    );
     try {
       commandResult = await this.engine.execute({
         containerId: state.containerId,
@@ -380,13 +395,7 @@ export class DockerExecutionProvider implements SandboxProvider {
         maxStderrBytes: policy.maxStderrBytes,
         maxCombinedOutputBytes: policy.maxCombinedOutputBytes,
       });
-      if (!commandResult.terminationReason) {
-        try {
-          stats = await this.engine.statsContainer(state.containerId);
-        } catch {
-          // Metrics are best-effort evidence; termination and cleanup remain mandatory.
-        }
-      }
+      metrics = await metricsCollector.stop();
       inspection = await this.reconcileStopped(state);
       const changedFiles = before
         ? diffLocalWorkspaceSnapshots(
@@ -402,13 +411,14 @@ export class DockerExecutionProvider implements SandboxProvider {
           executionId,
           commandResult,
           inspection,
-          stats,
+          metrics,
           changedFiles
         )
       );
       this.executions.set(executionId, result);
       return clone(result);
     } catch (error) {
+      metrics ??= await metricsCollector.stop();
       if (!inspection) {
         try {
           inspection = await this.reconcileStopped(state);
@@ -835,7 +845,7 @@ export class DockerExecutionProvider implements SandboxProvider {
     executionId: string,
     command: DockerCommandResult,
     inspection: DockerContainerInspection | null,
-    stats: DockerContainerStats | undefined,
+    metrics: ObservedDockerMetrics | undefined,
     changedFiles: CommandExecutionResult['changedFiles']
   ): CommandExecutionResult {
     const terminal = mapDockerOutcome(command, inspection);
@@ -858,18 +868,18 @@ export class DockerExecutionProvider implements SandboxProvider {
       generatedArtifactRefs: [],
       resourceUsage: {
         outputBytes: command.observedStdoutBytes + command.observedStderrBytes,
-        ...(stats?.memoryUsageBytes !== undefined
-          ? { peakMemoryBytes: stats.memoryUsageBytes }
+        ...(metrics?.memoryUsageBytes !== undefined
+          ? { peakMemoryBytes: metrics.memoryUsageBytes }
           : {}),
-        ...(stats?.networkBytesReceived !== undefined
-          ? { networkBytesReceived: stats.networkBytesReceived }
+        ...(metrics?.networkBytesReceived !== undefined
+          ? { networkBytesReceived: metrics.networkBytesReceived }
           : {}),
-        ...(stats?.networkBytesSent !== undefined
-          ? { networkBytesSent: stats.networkBytesSent }
+        ...(metrics?.networkBytesSent !== undefined
+          ? { networkBytesSent: metrics.networkBytesSent }
           : {}),
-        ...(stats?.readBytes !== undefined ? { readBytes: stats.readBytes } : {}),
-        ...(stats?.writtenBytes !== undefined ? { writtenBytes: stats.writtenBytes } : {}),
-        ...(stats?.pids !== undefined ? { processCountPeak: stats.pids } : {}),
+        ...(metrics?.readBytes !== undefined ? { readBytes: metrics.readBytes } : {}),
+        ...(metrics?.writtenBytes !== undefined ? { writtenBytes: metrics.writtenBytes } : {}),
+        ...(metrics?.pids !== undefined ? { processCountPeak: metrics.pids } : {}),
       },
       externalReceipt: {
         id: `receipt.docker.${shortHash(`${executionId}:${command.completedAt}`)}`,
@@ -890,10 +900,13 @@ export class DockerExecutionProvider implements SandboxProvider {
         processTreeTerminationVerified: inspection ? !inspection.running : false,
         observedStdoutBytes: command.observedStdoutBytes,
         observedStderrBytes: command.observedStderrBytes,
-        metricsCollected: Boolean(stats),
-        ...(stats?.cpuPercentage !== undefined ? { cpuPercentage: stats.cpuPercentage } : {}),
-        ...(stats?.memoryLimitBytes !== undefined
-          ? { memoryLimitBytes: stats.memoryLimitBytes }
+        metricsCollected: Boolean(metrics),
+        metricsSampleCount: metrics?.sampleCount ?? 0,
+        ...(metrics?.cpuPercentage !== undefined
+          ? { cpuPercentagePeak: metrics.cpuPercentage }
+          : {}),
+        ...(metrics?.memoryLimitBytes !== undefined
+          ? { memoryLimitBytes: metrics.memoryLimitBytes }
           : {}),
         ...(command.terminationReason ? { terminationReason: command.terminationReason } : {}),
       },
@@ -1347,6 +1360,77 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function startDockerMetricsCollector(
+  engine: DockerEngineClient,
+  containerId: string,
+  sampleIntervalMs: number
+): DockerMetricsCollector {
+  const samples: DockerContainerStats[] = [];
+  let stopRequested = false;
+  let releaseDelay: (() => void) | undefined;
+  let stopResult: Promise<ObservedDockerMetrics | undefined> | undefined;
+
+  const collection = (async (): Promise<void> => {
+    while (!stopRequested) {
+      try {
+        samples.push(await engine.statsContainer(containerId));
+      } catch {
+        // Metrics are best-effort evidence; execution and cleanup must continue.
+      }
+      if (stopRequested) break;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, sampleIntervalMs);
+        releaseDelay = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      releaseDelay = undefined;
+    }
+  })();
+
+  return {
+    stop(): Promise<ObservedDockerMetrics | undefined> {
+      stopResult ??= (async () => {
+        stopRequested = true;
+        releaseDelay?.();
+        await collection;
+        return aggregateDockerMetrics(samples);
+      })();
+      return stopResult;
+    },
+  };
+}
+
+function aggregateDockerMetrics(
+  samples: readonly DockerContainerStats[]
+): ObservedDockerMetrics | undefined {
+  if (!samples.length) return undefined;
+  return {
+    sampleCount: samples.length,
+    ...optionalMaximum(samples, 'cpuPercentage'),
+    ...optionalMaximum(samples, 'memoryUsageBytes'),
+    ...optionalMaximum(samples, 'memoryLimitBytes'),
+    ...optionalMaximum(samples, 'networkBytesReceived'),
+    ...optionalMaximum(samples, 'networkBytesSent'),
+    ...optionalMaximum(samples, 'readBytes'),
+    ...optionalMaximum(samples, 'writtenBytes'),
+    ...optionalMaximum(samples, 'pids'),
+  };
+}
+
+function optionalMaximum<K extends keyof DockerContainerStats>(
+  samples: readonly DockerContainerStats[],
+  key: K
+): Pick<DockerContainerStats, K> | Record<never, never> {
+  const values = samples
+    .map((sample) => sample[key])
+    .filter((value): value is NonNullable<DockerContainerStats[K]> => value !== undefined);
+  return values.length
+    ? ({ [key]: Math.max(...values) } as Pick<DockerContainerStats, K>)
+    : {};
 }
 
 function minimumPositive(values: Array<number | undefined>): number | undefined {
