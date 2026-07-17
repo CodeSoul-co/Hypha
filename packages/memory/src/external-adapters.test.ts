@@ -76,7 +76,9 @@ describe('external memory management adapters', () => {
       retryAttempts: 2,
       circuitBreaker: { failureThreshold: 1, resetAfterMs: 60_000 },
       now: () => new Date('2026-07-17T00:00:00.000Z'),
-      onStateChange: (event) => changes.push(event.type),
+      onStateChange: (event) => {
+        changes.push(event.type);
+      },
     });
 
     const results = await adapter.search({

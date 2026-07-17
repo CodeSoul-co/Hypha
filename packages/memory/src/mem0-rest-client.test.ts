@@ -31,7 +31,7 @@ function addRequest(operationId: string): MemoryAddRequest {
     inputType: 'text',
     memoryType: 'semantic',
     source: { type: 'user_message', sourceId: 'message:mem0' },
-    extractionMode: 'auto',
+    extractionMode: 'provider',
     writeMode: 'sync',
     profileRef: {
       id: memoryProfileSpecExample.id,
