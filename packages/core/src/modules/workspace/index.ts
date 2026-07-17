@@ -52,41 +52,47 @@ export const workspaceRelativePathSchema = z
     }
   });
 
-export const workspaceDirectorySpecSchema = z.object({
-  inputs: workspaceRelativePathSchema,
-  source: workspaceRelativePathSchema,
-  working: workspaceRelativePathSchema,
-  outputs: workspaceRelativePathSchema,
-  logs: workspaceRelativePathSchema,
-  temp: workspaceRelativePathSchema,
-  snapshots: workspaceRelativePathSchema,
-  artifacts: workspaceRelativePathSchema.optional(),
-  cache: workspaceRelativePathSchema.optional(),
-}) satisfies ZodType<WorkspaceDirectorySpec>;
+export const workspaceDirectorySpecSchema = z
+  .object({
+    inputs: workspaceRelativePathSchema,
+    source: workspaceRelativePathSchema,
+    working: workspaceRelativePathSchema,
+    outputs: workspaceRelativePathSchema,
+    logs: workspaceRelativePathSchema,
+    temp: workspaceRelativePathSchema,
+    snapshots: workspaceRelativePathSchema,
+    artifacts: workspaceRelativePathSchema.optional(),
+    cache: workspaceRelativePathSchema.optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceDirectorySpec>;
 
-export const workspacePathPolicySpecSchema = z.object({
-  readOnlyPaths: z.array(workspaceRelativePathSchema).optional(),
-  writablePaths: z.array(workspaceRelativePathSchema).optional(),
-  executablePaths: z.array(workspaceRelativePathSchema).optional(),
-  deniedPaths: z.array(workspaceRelativePathSchema).optional(),
-  allowSymlinks: z.boolean().optional(),
-  allowHardLinks: z.boolean().optional(),
-  followSymlinksForRead: z.boolean().optional(),
-  allowHiddenFiles: z.boolean().optional(),
-  maxPathLength: positiveInteger.optional(),
-  allowedExtensions: z.array(z.string().min(1)).optional(),
-  deniedExtensions: z.array(z.string().min(1)).optional(),
-  caseSensitivity: z.enum(['platform', 'sensitive', 'insensitive']).optional(),
-}) satisfies ZodType<WorkspacePathPolicySpec>;
+export const workspacePathPolicySpecSchema = z
+  .object({
+    readOnlyPaths: z.array(workspaceRelativePathSchema).optional(),
+    writablePaths: z.array(workspaceRelativePathSchema).optional(),
+    executablePaths: z.array(workspaceRelativePathSchema).optional(),
+    deniedPaths: z.array(workspaceRelativePathSchema).optional(),
+    allowSymlinks: z.boolean().optional(),
+    allowHardLinks: z.boolean().optional(),
+    followSymlinksForRead: z.boolean().optional(),
+    allowHiddenFiles: z.boolean().optional(),
+    maxPathLength: positiveInteger.optional(),
+    allowedExtensions: z.array(z.string().min(1)).optional(),
+    deniedExtensions: z.array(z.string().min(1)).optional(),
+    caseSensitivity: z.enum(['platform', 'sensitive', 'insensitive']).optional(),
+  })
+  .strict() satisfies ZodType<WorkspacePathPolicySpec>;
 
-export const workspaceQuotaSpecSchema = z.object({
-  maxBytes: positiveInteger.optional(),
-  maxFiles: positiveInteger.optional(),
-  maxSingleFileBytes: positiveInteger.optional(),
-  maxDirectoryDepth: positiveInteger.optional(),
-  maxOpenFiles: positiveInteger.optional(),
-  maxMutationCountPerExecution: positiveInteger.optional(),
-}) satisfies ZodType<WorkspaceQuotaSpec>;
+export const workspaceQuotaSpecSchema = z
+  .object({
+    maxBytes: positiveInteger.optional(),
+    maxFiles: positiveInteger.optional(),
+    maxSingleFileBytes: positiveInteger.optional(),
+    maxDirectoryDepth: positiveInteger.optional(),
+    maxOpenFiles: positiveInteger.optional(),
+    maxMutationCountPerExecution: positiveInteger.optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceQuotaSpec>;
 
 export const workspaceCleanupPolicySpecSchema = z
   .object({
@@ -97,6 +103,7 @@ export const workspaceCleanupPolicySpecSchema = z
     secureDelete: z.boolean().optional(),
     archiveBeforeDelete: z.boolean().optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.mode === 'after_ttl' && value.ttlSeconds === undefined) {
       context.addIssue({
@@ -107,24 +114,28 @@ export const workspaceCleanupPolicySpecSchema = z
     }
   }) satisfies ZodType<WorkspaceCleanupPolicySpec>;
 
-export const workspaceSnapshotPolicySpecSchema = z.object({
-  enabled: z.boolean(),
-  mode: z.enum(['full', 'incremental', 'manifest_only']),
-  snapshotBeforeWrite: z.boolean().optional(),
-  snapshotAfterExecution: z.boolean().optional(),
-  snapshotOnFailure: z.boolean().optional(),
-  maxSnapshots: positiveInteger.optional(),
-}) satisfies ZodType<WorkspaceSnapshotPolicySpec>;
+export const workspaceSnapshotPolicySpecSchema = z
+  .object({
+    enabled: z.boolean(),
+    mode: z.enum(['full', 'incremental', 'manifest_only']),
+    snapshotBeforeWrite: z.boolean().optional(),
+    snapshotAfterExecution: z.boolean().optional(),
+    snapshotOnFailure: z.boolean().optional(),
+    maxSnapshots: positiveInteger.optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceSnapshotPolicySpec>;
 
-export const workspaceMutationPolicySpecSchema = z.object({
-  requireSnapshotBeforeWrite: z.boolean().optional(),
-  trackFileMutations: z.boolean().optional(),
-  maxPatchBytes: positiveInteger.optional(),
-  allowDelete: z.boolean().optional(),
-  requireApprovalForDelete: z.boolean().optional(),
-  preserveInputFiles: z.boolean().optional(),
-  atomicWrite: z.boolean().optional(),
-}) satisfies ZodType<WorkspaceMutationPolicySpec>;
+export const workspaceMutationPolicySpecSchema = z
+  .object({
+    requireSnapshotBeforeWrite: z.boolean().optional(),
+    trackFileMutations: z.boolean().optional(),
+    maxPatchBytes: positiveInteger.optional(),
+    allowDelete: z.boolean().optional(),
+    requireApprovalForDelete: z.boolean().optional(),
+    preserveInputFiles: z.boolean().optional(),
+    atomicWrite: z.boolean().optional(),
+  })
+  .strict() satisfies ZodType<WorkspaceMutationPolicySpec>;
 
 export const workspaceStatusSchema = z.enum([
   'creating',
@@ -227,6 +238,10 @@ export const workspaceRecordSchema = z
       addTimestampOrderIssue(value.createdAt, value.cleanedAt, 'cleanedAt', context);
   }) satisfies ZodType<WorkspaceRecord>;
 
+export const workspaceEventMetadataSchema = z.record(z.unknown()).superRefine((value, context) => {
+  addSensitiveWorkspaceEventFieldIssues(value, context, []);
+});
+
 export const workspaceEventPayloadSchema = z
   .object({
     operationId: nonEmptyString.optional(),
@@ -271,6 +286,7 @@ export const workspaceSpecSchema = versionedSpecSchema
     secretPolicyRef: specRefSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.rootPolicy === 'provided_ref' && !value.rootRef) {
       context.addIssue({
@@ -317,6 +333,7 @@ const specRefJsonSchema: JsonSchema = {
   properties: {
     id: nonEmptyStringJsonSchema,
     version: nonEmptyStringJsonSchema,
+    revision: nonEmptyStringJsonSchema,
   },
   additionalProperties: false,
 };
@@ -391,6 +408,31 @@ export const workspaceRecordJsonSchema: JsonSchema = {
     metadata: { type: 'object' },
   },
   additionalProperties: false,
+  allOf: [
+    {
+      if: {
+        properties: {
+          status: { enum: ['ready', 'busy', 'snapshotting', 'archiving', 'archived'] },
+        },
+      },
+      then: { required: ['readyAt'] },
+    },
+    {
+      if: { properties: { status: { const: 'busy' } } },
+      then: { properties: { activeExecutionIds: { minItems: 1 } } },
+    },
+    {
+      if: { properties: { status: { const: 'cleaned' } } },
+      then: {
+        required: ['cleanedAt'],
+        properties: { activeExecutionIds: { maxItems: 0 } },
+      },
+    },
+    {
+      if: { properties: { status: { const: 'failed' } } },
+      then: { required: ['error'] },
+    },
+  ],
 };
 
 export const workspaceEventPayloadJsonSchema: JsonSchema = {
@@ -658,7 +700,6 @@ export const workspaceSpecJsonSchemas = exportSpecJsonSchemas(workspaceSpecDefin
 
 export const workspaceRecordJsonSchemas: Record<string, JsonSchema> = {
   WorkspaceRecord: workspaceRecordJsonSchema,
-  WorkspaceEventPayload: workspaceEventPayloadJsonSchema,
 };
 
 export function validateWorkspaceSpec(input: unknown): WorkspaceSpec {

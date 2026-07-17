@@ -36,6 +36,8 @@ need raw file contents in events.
 `WorkspaceRecord` and `WorkspaceEventPayload` have strict Zod validators, JSON Schemas, and exported
 fixtures. Record validation enforces lifecycle evidence and timestamp ordering; event validation
 rejects duplicate references and recursively blocks sensitive or unbounded payload fields.
+Workspace lifecycle events use a typed event map and a dedicated factory that validates the event
+envelope, payload, and matching Workspace identity before the event can be recorded.
 
 ## Sandbox and Command Lifecycle
 

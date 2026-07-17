@@ -1,4 +1,5 @@
 import type { SpecMetadata, SpecRef, VersionedSpec } from '../specs';
+import type { EventCreateInput, FrameworkEvent } from '../events';
 import type { ExecutionPrincipal, NormalizedExecutionError } from './execution';
 
 export interface WorkspaceDirectorySpec {
@@ -138,6 +139,45 @@ export interface WorkspaceEventPayload {
   error?: NormalizedExecutionError;
   metadata?: Record<string, unknown>;
 }
+
+export type WorkspaceFrameworkEventType =
+  | 'workspace.create.requested'
+  | 'workspace.created'
+  | 'workspace.ready'
+  | 'workspace.busy'
+  | 'workspace.path.resolved'
+  | 'workspace.path.denied'
+  | 'workspace.quota.exceeded'
+  | 'workspace.snapshot.requested'
+  | 'workspace.snapshot.created'
+  | 'workspace.snapshot.failed'
+  | 'workspace.restore.requested'
+  | 'workspace.restored'
+  | 'workspace.restore.failed'
+  | 'workspace.patch.checked'
+  | 'workspace.patch.applied'
+  | 'workspace.patch.conflict'
+  | 'workspace.cleanup.started'
+  | 'workspace.cleanup.completed'
+  | 'workspace.cleanup.failed';
+
+export type WorkspaceEventPayloadMap = {
+  [K in WorkspaceFrameworkEventType]: WorkspaceEventPayload;
+};
+
+export type WorkspaceFrameworkEvent<
+  TType extends WorkspaceFrameworkEventType = WorkspaceFrameworkEventType,
+> = Omit<FrameworkEvent<WorkspaceEventPayloadMap[TType]>, 'type' | 'workspaceId'> & {
+  type: TType;
+  workspaceId: string;
+};
+
+export type WorkspaceEventCreateInput<
+  TType extends WorkspaceFrameworkEventType = WorkspaceFrameworkEventType,
+> = Omit<EventCreateInput<WorkspaceEventPayloadMap[TType]>, 'type' | 'workspaceId'> & {
+  type: TType;
+  workspaceId: string;
+};
 
 export type WorkspacePathOperation = 'read' | 'write' | 'execute' | 'delete' | 'list';
 export type WorkspaceEntryKind = 'file' | 'directory' | 'symlink' | 'other';

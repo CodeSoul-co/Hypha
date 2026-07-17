@@ -13,6 +13,7 @@ export * from './contracts/recovery';
 export * from './contracts/workspace';
 export * from './contracts/sandbox';
 export * from './modules/workspace';
+export * from './modules/workspace/events';
 export * from './modules/workspace/operations';
 export * from './modules/workspace/snapshots';
 export * from './modules/execution';

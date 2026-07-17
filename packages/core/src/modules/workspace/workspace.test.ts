@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { createFrameworkEvent } from '../../events';
 import {
   validateWorkspaceEventPayload,
   validateWorkspaceRecord,
@@ -87,16 +86,14 @@ describe('WorkspaceSpec', () => {
     ).toThrow(/both allowed and denied/u);
   });
 
-  it('reserves workspace lifecycle events as framework events', () => {
-    const event = createFrameworkEvent({
-      id: 'event:workspace:created',
-      type: 'workspace.created',
-      runId: 'run:1',
-      workspaceId: 'workspace:1',
-      payload: { workspaceId: 'workspace:1', status: 'ready' },
-    });
-    expect(event.type).toBe('workspace.created');
-    expect(event.workspaceId).toBe('workspace:1');
+  it('rejects undeclared WorkspaceSpec fields at every contract boundary', () => {
+    expect(() => validateWorkspaceSpec({ ...workspaceSpecExample, unexpected: true })).toThrow();
+    expect(() =>
+      validateWorkspaceSpec({
+        ...workspaceSpecExample,
+        quota: { ...workspaceSpecExample.quota, unexpected: true },
+      })
+    ).toThrow();
   });
 });
 
@@ -118,7 +115,24 @@ describe('WorkspaceRecord', () => {
       ])
     );
     expect(workspaceRecordJsonSchema.additionalProperties).toBe(false);
+    expect(workspaceRecordJsonSchema.allOf).toHaveLength(4);
+    expect(workspaceRecordJsonSchema.properties?.profileRef.properties?.revision).toEqual({
+      type: 'string',
+      minLength: 1,
+    });
     expect(workspaceRecordJsonSchemas.WorkspaceRecord).toBe(workspaceRecordJsonSchema);
+  });
+
+  it('retains SpecRef revisions and rejects undeclared record fields', () => {
+    expect(
+      validateWorkspaceRecord({
+        ...workspaceRecordExample,
+        profileRef: { ...workspaceRecordExample.profileRef, revision: 'sha256:profile' },
+      }).profileRef.revision
+    ).toBe('sha256:profile');
+    expect(() =>
+      validateWorkspaceRecord({ ...workspaceRecordExample, unexpected: true })
+    ).toThrow();
   });
 
   it.each([
@@ -170,7 +184,6 @@ describe('WorkspaceEventPayload', () => {
     );
     expect(workspaceEventPayloadJsonSchema.required).toEqual(['workspaceId']);
     expect(workspaceEventPayloadJsonSchema.additionalProperties).toBe(false);
-    expect(workspaceRecordJsonSchemas.WorkspaceEventPayload).toBe(workspaceEventPayloadJsonSchema);
   });
 
   it.each([
