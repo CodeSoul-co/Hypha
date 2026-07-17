@@ -53,6 +53,11 @@ export * from './local-process-execution-provider';
 export * from './docker-cli-transport';
 export * from './docker-workspace-mount';
 export * from './docker-engine-client';
+export * from './docker-execution-policy';
+export * from './docker-sandbox-lifecycle';
+export * from './docker-resource-accounting';
+export * from './docker-process-result';
+export * from './docker-execution-provider';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
