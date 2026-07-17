@@ -738,7 +738,7 @@ export const servingCacheConfig = () => {
     ...raw,
     store,
     mode,
-    enabled: raw.enabled || (store !== 'off' && store !== 'noop' && mode !== 'off'),
+    enabled: store !== 'off' && store !== 'noop' && mode !== 'off',
   };
 };
 export const workCacheConfig = () => {
@@ -755,7 +755,7 @@ export const workCacheConfig = () => {
       ...raw.sqlite,
       path: process.env.HYPHA_WORKCACHE_SQLITE_PATH ?? raw.sqlite.path,
     },
-    enabled: raw.enabled || store !== 'off',
+    enabled: store !== 'off',
   };
 };
 export const llmConfig = () => getConfig().llm;
