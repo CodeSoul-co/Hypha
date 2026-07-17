@@ -58,7 +58,23 @@ export const workspaceSnapshotEntrySchema = z
     symlinkTarget: workspaceRelativePathSchema.optional(),
     artifactRef: z.string().min(1).optional(),
   })
-  .strict() satisfies ZodType<WorkspaceSnapshotEntry>;
+  .strict()
+  .superRefine((value, context) => {
+    if (value.kind === 'symlink' && value.symlinkTarget === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['symlinkTarget'],
+        message: 'is required for symlink entries',
+      });
+    }
+    if (value.kind !== 'symlink' && value.symlinkTarget !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['symlinkTarget'],
+        message: 'is only valid for symlink entries',
+      });
+    }
+  }) satisfies ZodType<WorkspaceSnapshotEntry>;
 
 export const workspaceSnapshotManifestSchema = z
   .object({
@@ -96,6 +112,17 @@ export const workspaceSnapshotManifestSchema = z
         path: ['fileCount'],
         message: 'must equal the number of file entries',
       });
+    }
+    const fileEntries = value.entries.filter((entry) => entry.kind === 'file');
+    if (fileEntries.every((entry) => entry.sizeBytes !== undefined)) {
+      const actualTotalBytes = fileEntries.reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0);
+      if (actualTotalBytes !== value.totalBytes) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['totalBytes'],
+          message: 'must equal the sum of file entry sizes when all sizes are present',
+        });
+      }
     }
   }) satisfies ZodType<WorkspaceSnapshotManifest>;
 
@@ -215,6 +242,13 @@ const snapshotEntryJsonSchema: JsonSchema = {
     artifactRef: { type: 'string', minLength: 1 },
   },
   additionalProperties: false,
+  allOf: [
+    {
+      if: { properties: { kind: { const: 'symlink' } }, required: ['kind'] },
+      then: { required: ['symlinkTarget'] },
+      else: { not: { required: ['symlinkTarget'] } },
+    },
+  ],
 };
 
 const diffSummaryJsonSchema: JsonSchema = {

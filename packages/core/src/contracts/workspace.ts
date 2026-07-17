@@ -345,6 +345,7 @@ export interface WorkspaceSnapshotEntry {
   sizeBytes?: number;
   contentHash?: string;
   mode?: number;
+  /** Required only for symlink entries; always Workspace-relative. */
   symlinkTarget?: string;
   artifactRef?: string;
 }

@@ -128,6 +128,34 @@ describe('Workspace Snapshot, Diff, and Patch contracts', () => {
     ).toThrow(/number of file entries/u);
   });
 
+  it('keeps Snapshot entry kind and manifest byte evidence consistent', () => {
+    expect(() =>
+      validateWorkspaceSnapshotEntry({ path: 'working/link', kind: 'symlink' })
+    ).toThrow(/required for symlink/u);
+    expect(() =>
+      validateWorkspaceSnapshotEntry({
+        path: 'working/file.txt',
+        kind: 'file',
+        symlinkTarget: 'working/target.txt',
+      })
+    ).toThrow(/only valid for symlink/u);
+    expect(
+      validateWorkspaceSnapshotEntry({
+        path: 'working/link',
+        kind: 'symlink',
+        symlinkTarget: 'working/target.txt',
+      })
+    ).toMatchObject({ kind: 'symlink', symlinkTarget: 'working/target.txt' });
+
+    expect(() =>
+      validateWorkspaceSnapshotManifest({
+        ...workspaceSnapshotManifestExample,
+        totalBytes: workspaceSnapshotManifestExample.totalBytes + 1,
+      })
+    ).toThrow(/sum of file entry sizes/u);
+    expect(workspaceSnapshotJsonSchemas.WorkspaceSnapshotEntry.allOf).toHaveLength(1);
+  });
+
   it('retains stale-state protection on restore', () => {
     expect(
       validateWorkspaceRestoreRequest({
