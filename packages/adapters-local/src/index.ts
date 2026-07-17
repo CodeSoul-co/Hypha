@@ -40,6 +40,9 @@ import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
 
 export * from './workspace-runtime';
+export * from './local-process-execution-provider';
+export * from './local-process-supervisor';
+export * from './local-workspace-mutations';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;

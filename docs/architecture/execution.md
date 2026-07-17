@@ -73,6 +73,33 @@ snapshots are simulated contract capabilities only. It also does not emit Framew
 itself: Runtime or Harness code remains responsible for authorization, lifecycle event emission,
 and durable execution records around every provider call.
 
+## Trusted Local Process Provider
+
+`@hypha/adapters-local` exports `LocalProcessExecutionProvider` for trusted engineering and local
+development. It is not a strong Sandbox: process, filesystem, network, and resource isolation
+capabilities remain `false`. Commands must select an explicitly configured executable alias; the
+provider never invokes a shell, searches `PATH`, or inherits the complete host environment.
+Environment variables are copied from an explicit base environment and request allowlist, while
+secret-like names are rejected.
+
+The provider canonicalizes the Workspace root, executable, and working directory before execution.
+It applies bounded total and idle timeouts, bounded stdout and stderr capture, cancellation, and a
+bounded before/after Workspace scan that reports content and metadata mutations without following
+symlinks or junctions outside the managed root. Output that exceeds the configured limit fails with
+normalized evidence; the adapter does not invent an Artifact reference when no Artifact store has
+persisted the omitted bytes.
+
+On POSIX platforms each command starts in a dedicated process group and cancellation follows a
+graceful-then-forced group termination sequence. On Windows the Node.js standard library cannot
+create a Job Object, so the adapter may use bounded `taskkill /T /F` cleanup only as an explicitly
+enabled trusted-development fallback. It reports `processTreeKill: false`, health as degraded, and
+rejects construction by default on Windows. Capability negotiation must therefore fail closed when
+an environment requires a verified process-tree guarantee.
+
+Runtime or Harness code remains responsible for capability negotiation, authorization, lifecycle
+events, durable execution records, and Artifact persistence around provider calls. The local
+adapter only implements the provider boundary and bounded local side effects.
+
 ## Store, Lease, and Recovery Rules
 
 An `ExecutionRecord` is revisioned. Store adapters must apply compare-and-set atomically. When the
