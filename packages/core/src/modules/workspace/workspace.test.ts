@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '../../events';
-import { validateWorkspaceSpec, workspaceSpecExample, workspaceSpecJsonSchema } from './index';
+import {
+  validateWorkspaceEventPayload,
+  validateWorkspaceRecord,
+  validateWorkspaceSpec,
+  workspaceEventPayloadExample,
+  workspaceEventPayloadJsonSchema,
+  workspaceRecordExample,
+  workspaceRecordJsonSchema,
+  workspaceRecordJsonSchemas,
+  workspaceSpecExample,
+  workspaceSpecJsonSchema,
+} from './index';
 
 describe('WorkspaceSpec', () => {
   it('validates and exports the example contract', () => {
@@ -86,5 +97,118 @@ describe('WorkspaceSpec', () => {
     });
     expect(event.type).toBe('workspace.created');
     expect(event.workspaceId).toBe('workspace:1');
+  });
+});
+
+describe('WorkspaceRecord', () => {
+  it('validates and exports the example contract', () => {
+    expect(validateWorkspaceRecord(workspaceRecordExample)).toEqual(workspaceRecordExample);
+    expect(workspaceRecordJsonSchema.required).toEqual(
+      expect.arrayContaining([
+        'id',
+        'revision',
+        'userId',
+        'profileRef',
+        'status',
+        'quota',
+        'usage',
+        'activeExecutionIds',
+        'createdAt',
+        'updatedAt',
+      ])
+    );
+    expect(workspaceRecordJsonSchema.additionalProperties).toBe(false);
+    expect(workspaceRecordJsonSchemas.WorkspaceRecord).toBe(workspaceRecordJsonSchema);
+  });
+
+  it.each([
+    {
+      name: 'duplicate active executions',
+      record: { ...workspaceRecordExample, activeExecutionIds: ['exec:1', 'exec:1'] },
+    },
+    {
+      name: 'ready without readyAt',
+      record: { ...workspaceRecordExample, readyAt: undefined },
+    },
+    {
+      name: 'busy without an active execution',
+      record: { ...workspaceRecordExample, status: 'busy' as const, activeExecutionIds: [] },
+    },
+    {
+      name: 'cleaned without cleanedAt',
+      record: { ...workspaceRecordExample, status: 'cleaned' as const, readyAt: undefined },
+    },
+    {
+      name: 'cleaned with an active execution',
+      record: {
+        ...workspaceRecordExample,
+        status: 'cleaned' as const,
+        cleanedAt: workspaceRecordExample.updatedAt,
+        activeExecutionIds: ['exec:1'],
+      },
+    },
+    {
+      name: 'failed without an error',
+      record: { ...workspaceRecordExample, status: 'failed' as const, readyAt: undefined },
+    },
+    {
+      name: 'updated before creation',
+      record: {
+        ...workspaceRecordExample,
+        updatedAt: '2026-07-16T23:59:59.000Z',
+      },
+    },
+  ])('rejects $name', ({ record }) => {
+    expect(() => validateWorkspaceRecord(record)).toThrow();
+  });
+});
+
+describe('WorkspaceEventPayload', () => {
+  it('validates and exports the example contract', () => {
+    expect(validateWorkspaceEventPayload(workspaceEventPayloadExample)).toEqual(
+      workspaceEventPayloadExample
+    );
+    expect(workspaceEventPayloadJsonSchema.required).toEqual(['workspaceId']);
+    expect(workspaceEventPayloadJsonSchema.additionalProperties).toBe(false);
+    expect(workspaceRecordJsonSchemas.WorkspaceEventPayload).toBe(workspaceEventPayloadJsonSchema);
+  });
+
+  it.each([
+    {
+      name: 'unknown top-level field',
+      payload: { ...workspaceEventPayloadExample, rawResult: 'unbounded' },
+    },
+    {
+      name: 'duplicate artifact references',
+      payload: {
+        ...workspaceEventPayloadExample,
+        artifactRefs: ['artifact:1', 'artifact:1'],
+      },
+    },
+    {
+      name: 'negative usage',
+      payload: { ...workspaceEventPayloadExample, bytes: -1 },
+    },
+    {
+      name: 'secret metadata',
+      payload: {
+        ...workspaceEventPayloadExample,
+        metadata: { secretValue: 'plaintext' },
+      },
+    },
+    {
+      name: 'file content in error details',
+      payload: {
+        ...workspaceEventPayloadExample,
+        error: {
+          code: 'WORKSPACE_OPERATION_FAILED',
+          message: 'Workspace operation failed',
+          retryable: false,
+          details: { fileContent: 'raw data' },
+        },
+      },
+    },
+  ])('rejects $name', ({ payload }) => {
+    expect(() => validateWorkspaceEventPayload(payload)).toThrow();
   });
 });

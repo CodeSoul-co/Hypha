@@ -10,14 +10,22 @@ import type { JsonSchema } from '../../specs';
 import type {
   WorkspaceCleanupPolicySpec,
   WorkspaceDirectorySpec,
+  WorkspaceEventPayload,
   WorkspaceMutationPolicySpec,
   WorkspacePathPolicySpec,
   WorkspaceQuotaSpec,
+  WorkspaceRecord,
   WorkspaceSnapshotPolicySpec,
   WorkspaceSpec,
+  WorkspaceStatus,
+  WorkspaceUsage,
 } from '../../contracts/workspace';
+import { normalizedExecutionErrorJsonSchema, normalizedExecutionErrorSchema } from '../execution';
 
+const nonEmptyString = z.string().min(1);
+const nonNegativeInteger = z.number().int().nonnegative();
 const positiveInteger = z.number().int().positive();
+const timestampSchema = z.string().datetime({ offset: true });
 
 export const workspaceRelativePathSchema = z
   .string()
@@ -118,6 +126,134 @@ export const workspaceMutationPolicySpecSchema = z.object({
   atomicWrite: z.boolean().optional(),
 }) satisfies ZodType<WorkspaceMutationPolicySpec>;
 
+export const workspaceStatusSchema = z.enum([
+  'creating',
+  'ready',
+  'busy',
+  'snapshotting',
+  'archiving',
+  'archived',
+  'cleaning',
+  'cleaned',
+  'failed',
+]) satisfies ZodType<WorkspaceStatus>;
+
+export const workspaceUsageSchema = z
+  .object({
+    bytes: nonNegativeInteger,
+    files: nonNegativeInteger,
+    directories: nonNegativeInteger.optional(),
+    lastCalculatedAt: timestampSchema,
+  })
+  .strict() satisfies ZodType<WorkspaceUsage>;
+
+export const workspaceRecordSchema = z
+  .object({
+    id: nonEmptyString,
+    revision: nonNegativeInteger,
+    tenantId: nonEmptyString.optional(),
+    userId: nonEmptyString,
+    sessionId: nonEmptyString.optional(),
+    runId: nonEmptyString.optional(),
+    agentId: nonEmptyString.optional(),
+    profileRef: specRefSchema,
+    profileRevision: nonEmptyString,
+    rootPathRef: nonEmptyString,
+    status: workspaceStatusSchema,
+    quota: workspaceQuotaSpecSchema,
+    usage: workspaceUsageSchema,
+    activeExecutionIds: z.array(nonEmptyString),
+    latestSnapshotRef: nonEmptyString.optional(),
+    createdAt: timestampSchema,
+    readyAt: timestampSchema.optional(),
+    updatedAt: timestampSchema,
+    expiresAt: timestampSchema.optional(),
+    cleanedAt: timestampSchema.optional(),
+    error: normalizedExecutionErrorSchema.optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.activeExecutionIds).size !== value.activeExecutionIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['activeExecutionIds'],
+        message: 'must not contain duplicate execution IDs',
+      });
+    }
+    if (
+      ['ready', 'busy', 'snapshotting', 'archiving', 'archived'].includes(value.status) &&
+      !value.readyAt
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['readyAt'],
+        message: 'is required after a Workspace becomes ready',
+      });
+    }
+    if (value.status === 'busy' && value.activeExecutionIds.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['activeExecutionIds'],
+        message: 'must contain an execution ID while the Workspace is busy',
+      });
+    }
+    if (value.status === 'cleaned' && !value.cleanedAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['cleanedAt'],
+        message: 'is required for a cleaned Workspace',
+      });
+    }
+    if (value.status === 'cleaned' && value.activeExecutionIds.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['activeExecutionIds'],
+        message: 'must be empty for a cleaned Workspace',
+      });
+    }
+    if (value.status === 'failed' && !value.error) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: 'is required for a failed Workspace',
+      });
+    }
+    addTimestampOrderIssue(value.createdAt, value.updatedAt, 'updatedAt', context);
+    if (value.readyAt) addTimestampOrderIssue(value.createdAt, value.readyAt, 'readyAt', context);
+    if (value.expiresAt)
+      addTimestampOrderIssue(value.createdAt, value.expiresAt, 'expiresAt', context);
+    if (value.cleanedAt)
+      addTimestampOrderIssue(value.createdAt, value.cleanedAt, 'cleanedAt', context);
+  }) satisfies ZodType<WorkspaceRecord>;
+
+export const workspaceEventPayloadSchema = z
+  .object({
+    operationId: nonEmptyString.optional(),
+    workspaceId: nonEmptyString,
+    profileRef: specRefSchema.optional(),
+    status: workspaceStatusSchema.optional(),
+    sourceTreeHash: nonEmptyString.optional(),
+    workspaceSnapshotHash: nonEmptyString.optional(),
+    snapshotManifestHash: nonEmptyString.optional(),
+    artifactRefs: z.array(nonEmptyString).optional(),
+    bytes: nonNegativeInteger.optional(),
+    files: nonNegativeInteger.optional(),
+    error: normalizedExecutionErrorSchema.optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.artifactRefs && new Set(value.artifactRefs).size !== value.artifactRefs.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['artifactRefs'],
+        message: 'must not contain duplicate Artifact references',
+      });
+    }
+    addSensitiveWorkspaceEventFieldIssues(value, context, []);
+  }) satisfies ZodType<WorkspaceEventPayload>;
+
 export const workspaceSpecSchema = versionedSpecSchema
   .merge(specMetadataSchema)
   .extend({
@@ -172,6 +308,114 @@ const relativePathJsonSchema: JsonSchema = {
 };
 
 const positiveIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 1 };
+const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
+const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 };
+const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
+const specRefJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id'],
+  properties: {
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
+  },
+  additionalProperties: false,
+};
+
+export const workspaceQuotaSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    maxBytes: positiveIntegerJsonSchema,
+    maxFiles: positiveIntegerJsonSchema,
+    maxSingleFileBytes: positiveIntegerJsonSchema,
+    maxDirectoryDepth: positiveIntegerJsonSchema,
+    maxOpenFiles: positiveIntegerJsonSchema,
+    maxMutationCountPerExecution: positiveIntegerJsonSchema,
+  },
+  additionalProperties: false,
+};
+
+export const workspaceUsageJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['bytes', 'files', 'lastCalculatedAt'],
+  properties: {
+    bytes: nonNegativeIntegerJsonSchema,
+    files: nonNegativeIntegerJsonSchema,
+    directories: nonNegativeIntegerJsonSchema,
+    lastCalculatedAt: timestampJsonSchema,
+  },
+  additionalProperties: false,
+};
+
+export const workspaceRecordJsonSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'id',
+    'revision',
+    'userId',
+    'profileRef',
+    'profileRevision',
+    'rootPathRef',
+    'status',
+    'quota',
+    'usage',
+    'activeExecutionIds',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    id: nonEmptyStringJsonSchema,
+    revision: nonNegativeIntegerJsonSchema,
+    tenantId: nonEmptyStringJsonSchema,
+    userId: nonEmptyStringJsonSchema,
+    sessionId: nonEmptyStringJsonSchema,
+    runId: nonEmptyStringJsonSchema,
+    agentId: nonEmptyStringJsonSchema,
+    profileRef: specRefJsonSchema,
+    profileRevision: nonEmptyStringJsonSchema,
+    rootPathRef: nonEmptyStringJsonSchema,
+    status: { enum: workspaceStatusSchema.options },
+    quota: workspaceQuotaSpecJsonSchema,
+    usage: workspaceUsageJsonSchema,
+    activeExecutionIds: {
+      type: 'array',
+      items: nonEmptyStringJsonSchema,
+      uniqueItems: true,
+    },
+    latestSnapshotRef: nonEmptyStringJsonSchema,
+    createdAt: timestampJsonSchema,
+    readyAt: timestampJsonSchema,
+    updatedAt: timestampJsonSchema,
+    expiresAt: timestampJsonSchema,
+    cleanedAt: timestampJsonSchema,
+    error: normalizedExecutionErrorJsonSchema,
+    metadata: { type: 'object' },
+  },
+  additionalProperties: false,
+};
+
+export const workspaceEventPayloadJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['workspaceId'],
+  properties: {
+    operationId: nonEmptyStringJsonSchema,
+    workspaceId: nonEmptyStringJsonSchema,
+    profileRef: specRefJsonSchema,
+    status: { enum: workspaceStatusSchema.options },
+    sourceTreeHash: nonEmptyStringJsonSchema,
+    workspaceSnapshotHash: nonEmptyStringJsonSchema,
+    snapshotManifestHash: nonEmptyStringJsonSchema,
+    artifactRefs: {
+      type: 'array',
+      items: nonEmptyStringJsonSchema,
+      uniqueItems: true,
+    },
+    bytes: nonNegativeIntegerJsonSchema,
+    files: nonNegativeIntegerJsonSchema,
+    error: normalizedExecutionErrorJsonSchema,
+    metadata: { type: 'object' },
+  },
+  additionalProperties: false,
+};
 
 export const workspaceSpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -232,18 +476,7 @@ export const workspaceSpecJsonSchema: JsonSchema = {
       },
       additionalProperties: false,
     },
-    quota: {
-      type: 'object',
-      properties: {
-        maxBytes: positiveIntegerJsonSchema,
-        maxFiles: positiveIntegerJsonSchema,
-        maxSingleFileBytes: positiveIntegerJsonSchema,
-        maxDirectoryDepth: positiveIntegerJsonSchema,
-        maxOpenFiles: positiveIntegerJsonSchema,
-        maxMutationCountPerExecution: positiveIntegerJsonSchema,
-      },
-      additionalProperties: false,
-    },
+    quota: workspaceQuotaSpecJsonSchema,
     cleanup: {
       type: 'object',
       required: ['mode'],
@@ -380,6 +613,39 @@ export const workspaceSpecExample: WorkspaceSpec = {
   },
 };
 
+export const workspaceRecordExample: WorkspaceRecord = {
+  id: 'workspace.example',
+  revision: 1,
+  userId: 'user.example',
+  runId: 'run.example',
+  profileRef: { id: workspaceSpecExample.id, version: workspaceSpecExample.version },
+  profileRevision: 'sha256:workspace-profile-example',
+  rootPathRef: 'workspace-root:workspace.example',
+  status: 'ready',
+  quota: workspaceSpecExample.quota,
+  usage: {
+    bytes: 1024,
+    files: 4,
+    directories: 3,
+    lastCalculatedAt: '2026-07-17T00:00:00.000Z',
+  },
+  activeExecutionIds: [],
+  createdAt: '2026-07-17T00:00:00.000Z',
+  readyAt: '2026-07-17T00:00:01.000Z',
+  updatedAt: '2026-07-17T00:00:01.000Z',
+};
+
+export const workspaceEventPayloadExample: WorkspaceEventPayload = {
+  operationId: 'operation:workspace-ready',
+  workspaceId: workspaceRecordExample.id,
+  profileRef: workspaceRecordExample.profileRef,
+  status: 'ready',
+  sourceTreeHash: 'sha256:source-tree-example',
+  artifactRefs: ['artifact:workspace-manifest'],
+  bytes: workspaceRecordExample.usage.bytes,
+  files: workspaceRecordExample.usage.files,
+};
+
 export const workspaceSpecDefinition = defineSpecSchema<WorkspaceSpec>({
   id: 'WorkspaceSpec',
   zod: workspaceSpecSchema,
@@ -390,8 +656,81 @@ export const workspaceSpecDefinition = defineSpecSchema<WorkspaceSpec>({
 export const workspaceSpecDefinitions = [workspaceSpecDefinition] as const;
 export const workspaceSpecJsonSchemas = exportSpecJsonSchemas(workspaceSpecDefinitions);
 
+export const workspaceRecordJsonSchemas: Record<string, JsonSchema> = {
+  WorkspaceRecord: workspaceRecordJsonSchema,
+  WorkspaceEventPayload: workspaceEventPayloadJsonSchema,
+};
+
 export function validateWorkspaceSpec(input: unknown): WorkspaceSpec {
   return workspaceSpecDefinition.parse(input);
+}
+
+export function validateWorkspaceRecord(input: unknown): WorkspaceRecord {
+  return workspaceRecordSchema.parse(input);
+}
+
+export function validateWorkspaceEventPayload(input: unknown): WorkspaceEventPayload {
+  return workspaceEventPayloadSchema.parse(input);
+}
+
+function addTimestampOrderIssue(
+  earlier: string,
+  later: string,
+  field: string,
+  context: z.RefinementCtx
+): void {
+  if (Date.parse(later) < Date.parse(earlier)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [field],
+      message: `must not be earlier than ${field === 'updatedAt' ? 'createdAt' : 'Workspace creation'}`,
+    });
+  }
+}
+
+const forbiddenWorkspaceEventFieldNames = new Set([
+  'secret',
+  'secrets',
+  'secretvalue',
+  'secretvalues',
+  'plaintextsecret',
+  'stdout',
+  'stderr',
+  'rawoutput',
+  'outputcontent',
+  'filecontent',
+  'binarycontent',
+  'hostpath',
+  'hostabsolutepath',
+  'environmentvariables',
+  'envvalues',
+  'rawenv',
+]);
+
+function addSensitiveWorkspaceEventFieldIssues(
+  value: unknown,
+  context: z.RefinementCtx,
+  path: Array<string | number>
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      addSensitiveWorkspaceEventFieldIssues(item, context, [...path, index])
+    );
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    const normalized = key.replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
+    if (forbiddenWorkspaceEventFieldNames.has(normalized)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path, key],
+        message: 'sensitive or unbounded content fields are forbidden in Workspace events',
+      });
+      continue;
+    }
+    addSensitiveWorkspaceEventFieldIssues(child, context, [...path, key]);
+  }
 }
 
 function isAbsoluteLike(value: string): boolean {

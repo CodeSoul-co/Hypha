@@ -7,16 +7,16 @@ belong in adapters and must pass through the harness governance and trace path.
 
 ## Contract Layers
 
-| Layer               | Main exports                                                                  | Responsibility                                                                                                                |
-| ------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Identity and errors | `ExecutionPrincipal`, `NormalizedExecutionError`                              | Actor scope, permission evidence, and provider-neutral failures.                                                              |
-| Workspace           | `WorkspaceSpec`, operation, snapshot, diff, and patch contracts               | Managed roots, relative-path safety, quotas, mutation evidence, and optimistic concurrency.                                   |
-| Environment         | `ExecutionEnvironmentSpec`                                                    | Provider choice, image pinning, process policy, resources, mounts, network, security, secrets, logging, and lifecycle policy. |
-| Sandbox             | `SandboxRecord`, lifecycle requests, `SandboxProvider`                        | Revisioned sandbox state and the adapter boundary for create, start, execute, cancel, status, terminate, cleanup, and close.  |
-| Command             | `CommandExecutionRequest`, `CommandExecutionResult`, `CommandOutputChunk`     | Governed command input, bounded output, terminal evidence, resource usage, cancellation, and receipts.                        |
-| Persistence         | `ExecutionStore`, record, lease, fencing, idempotency, and recovery contracts | Compare-and-set updates, exclusive workers, stale-writer rejection, and restart-safe reconciliation evidence.                 |
-| Events              | typed Sandbox, Command, and Network Authorization events                      | Bounded lifecycle evidence without raw output, host paths, environment values, or plaintext secrets.                          |
-| Cache boundary      | execution validity, environment fingerprint, and result projection contracts  | Deterministic reuse inputs without placing cache policy or storage inside Core.                                               |
+| Layer               | Main exports                                                                              | Responsibility                                                                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity and errors | `ExecutionPrincipal`, `NormalizedExecutionError`                                          | Actor scope, permission evidence, and provider-neutral failures.                                                                        |
+| Workspace           | `WorkspaceSpec`, `WorkspaceRecord`, event, operation, snapshot, diff, and patch contracts | Managed roots, revisioned lifecycle state, relative-path safety, quotas, bounded events, mutation evidence, and optimistic concurrency. |
+| Environment         | `ExecutionEnvironmentSpec`                                                                | Provider choice, image pinning, process policy, resources, mounts, network, security, secrets, logging, and lifecycle policy.           |
+| Sandbox             | `SandboxRecord`, lifecycle requests, `SandboxProvider`                                    | Revisioned sandbox state and the adapter boundary for create, start, execute, cancel, status, terminate, cleanup, and close.            |
+| Command             | `CommandExecutionRequest`, `CommandExecutionResult`, `CommandOutputChunk`                 | Governed command input, bounded output, terminal evidence, resource usage, cancellation, and receipts.                                  |
+| Persistence         | `ExecutionStore`, record, lease, fencing, idempotency, and recovery contracts             | Compare-and-set updates, exclusive workers, stale-writer rejection, and restart-safe reconciliation evidence.                           |
+| Events              | typed Sandbox, Command, and Network Authorization events                                  | Bounded lifecycle evidence without raw output, host paths, environment values, or plaintext secrets.                                    |
+| Cache boundary      | execution validity, environment fingerprint, and result projection contracts              | Deterministic reuse inputs without placing cache policy or storage inside Core.                                                         |
 
 All public structures have TypeScript types and Zod validators. External schema consumers can use
 the corresponding JSON Schema exports. Validator helpers use the `validate*` naming convention.
@@ -32,6 +32,10 @@ that the resolved target remains inside the managed root.
 Write, delete, restore, and patch requests carry operation identity and may carry idempotency or
 expected-hash guards. Results return hashes and `FileMutation` evidence so replay and audit do not
 need raw file contents in events.
+
+`WorkspaceRecord` and `WorkspaceEventPayload` have strict Zod validators, JSON Schemas, and exported
+fixtures. Record validation enforces lifecycle evidence and timestamp ordering; event validation
+rejects duplicate references and recursively blocks sensitive or unbounded payload fields.
 
 ## Sandbox and Command Lifecycle
 
