@@ -2,6 +2,8 @@ import { z, type ZodType } from 'zod';
 import type { ExecutionPrincipal, NormalizedExecutionError } from '../../contracts/execution';
 import type { JsonSchema } from '../../specs';
 
+export * from './recovery';
+
 export const executionErrorCodes = [
   'EXECUTION_INVALID_REQUEST',
   'EXECUTION_PERMISSION_DENIED',

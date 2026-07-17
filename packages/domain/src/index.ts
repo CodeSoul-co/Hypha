@@ -37,7 +37,13 @@ import {
   timeoutPolicySpecSchema,
   versionedSpecSchema,
 } from '@hypha/core';
-import type { FSMProcessSpec, FSMStateSpec, FSMTransitionSpec } from '@hypha/fsm';
+import {
+  defaultFSMRecoveryPolicy,
+  type FSMProcessSpec,
+  type FSMStateKind,
+  type FSMStateSpec,
+  type FSMTransitionSpec,
+} from '@hypha/fsm';
 import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@hypha/mcp';
 import { memorySpecSchema, type MemorySpec } from '@hypha/memory';
 import type { SkillRef } from '@hypha/skills';
@@ -396,7 +402,7 @@ export function compileWorkflowToFSM(
   options: WorkflowCompileOptions = {}
 ): FSMProcessSpec {
   const workflow = selectWorkflow(domainPack, options.workflowId);
-  const states: FSMStateSpec[] = workflow.states.map((state) => ({
+  const workflowStates: FSMStateSpec[] = workflow.states.map((state) => ({
     id: state.id,
     name: state.name,
     description: state.description ?? state.goal,
@@ -409,7 +415,7 @@ export function compileWorkflowToFSM(
     policyRefs: state.policyRefs,
     traceEvents: [`workflow.state.${state.id}`],
   }));
-  const transitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
+  const workflowTransitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
     from: transition.from,
     to: transition.to,
     guard: transition.guard,
@@ -417,17 +423,111 @@ export function compileWorkflowToFSM(
     traceEvent: `workflow.transition.${transition.from}.${transition.to}`,
   }));
 
+  const recoveryEnvelope = compileRecoveryEnvelope(
+    workflowStates,
+    workflowTransitions,
+    workflow.terminalStates
+  );
+
   return {
     id: options.fsmProcessId ?? `${domainPack.id}.${workflow.id}.fsm`,
     version: workflow.version,
     name: `${domainPack.name} ${workflow.name ?? workflow.id} FSM`,
     description: workflow.description,
     initialState: workflow.initialState,
-    states,
-    transitions,
-    terminalStates: workflow.terminalStates,
+    recoveryPolicy: defaultFSMRecoveryPolicy,
+    states: recoveryEnvelope.states,
+    transitions: recoveryEnvelope.transitions,
+    terminalStates: recoveryEnvelope.terminalStates,
     tags: ['compiled-from-domain-pack', domainPack.id],
   };
+}
+
+const DOMAIN_RECOVERY_STATES: ReadonlyArray<{
+  id: string;
+  kind: FSMStateKind;
+}> = [
+  { id: 'Recovering', kind: 'recovering' },
+  { id: 'Compensating', kind: 'compensating' },
+  { id: 'Quarantined', kind: 'quarantined' },
+  { id: 'HumanReview', kind: 'human_review' },
+  { id: 'Failed', kind: 'failed' },
+  { id: 'Cancelled', kind: 'cancelled' },
+];
+
+function compileRecoveryEnvelope(
+  workflowStates: FSMStateSpec[],
+  workflowTransitions: FSMTransitionSpec[],
+  workflowTerminalStates: string[]
+): {
+  states: FSMStateSpec[];
+  transitions: FSMTransitionSpec[];
+  terminalStates: string[];
+} {
+  const recoveryKinds = new Map(DOMAIN_RECOVERY_STATES.map((state) => [state.id, state.kind]));
+  const existingIds = new Set(workflowStates.map((state) => state.id));
+  const states = workflowStates.map((state) => {
+    const recoveryKind = recoveryKinds.get(state.id);
+    return recoveryKind ? { ...state, kind: recoveryKind } : state;
+  });
+  for (const state of DOMAIN_RECOVERY_STATES) {
+    if (existingIds.has(state.id)) continue;
+    states.push({
+      id: state.id,
+      kind: state.kind,
+      description: `Framework recovery state: ${state.id}`,
+      traceEvents: ['fsm.state.entered'],
+    });
+  }
+
+  const terminalStates = mergeStrings(workflowTerminalStates, ['Failed', 'Cancelled']);
+  const recoverableStates = workflowStates
+    .map((state) => state.id)
+    .filter((stateId) => !terminalStates.includes(stateId) && !recoveryKinds.has(stateId));
+  const transitions = [...workflowTransitions];
+  const transitionKeys = new Set(
+    transitions.map((transition) => `${transition.from}->${transition.to}`)
+  );
+  const addTransition = (from: string, to: string): void => {
+    const key = `${from}->${to}`;
+    if (from === to || transitionKeys.has(key)) return;
+    transitionKeys.add(key);
+    transitions.push({
+      from,
+      to,
+      description: `Framework recovery transition: ${from} -> ${to}`,
+      traceEvent: 'fsm.transition.accepted',
+    });
+  };
+
+  for (const stateId of recoverableStates) {
+    addTransition(stateId, 'Recovering');
+    addTransition(stateId, 'Compensating');
+    addTransition(stateId, 'Quarantined');
+    addTransition(stateId, 'Cancelled');
+    addTransition('Recovering', stateId);
+    addTransition('HumanReview', stateId);
+  }
+  for (const [from, to] of [
+    ['Recovering', 'Compensating'],
+    ['Recovering', 'HumanReview'],
+    ['Recovering', 'Quarantined'],
+    ['Recovering', 'Failed'],
+    ['Recovering', 'Cancelled'],
+    ['Compensating', 'Recovering'],
+    ['Compensating', 'HumanReview'],
+    ['Compensating', 'Quarantined'],
+    ['Compensating', 'Failed'],
+    ['Quarantined', 'HumanReview'],
+    ['Quarantined', 'Failed'],
+    ['Quarantined', 'Cancelled'],
+    ['HumanReview', 'Failed'],
+    ['HumanReview', 'Cancelled'],
+  ]) {
+    addTransition(from, to);
+  }
+
+  return { states, transitions, terminalStates };
 }
 
 export class DomainPackRegistry {
