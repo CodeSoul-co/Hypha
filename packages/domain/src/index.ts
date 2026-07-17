@@ -208,13 +208,28 @@ export interface DomainCompilationResult {
 }
 
 export interface WorkflowDependencySnapshot {
+  domainPackRefs: SpecRef[];
+  taskSchemaRefs: SpecRef[];
+  outputContractRefs: SpecRef[];
+  sessionProfileRefs: SpecRef[];
   agentRefs: SpecRef[];
+  skillRefs: SpecRef[];
+  skillPolicyRefs: SpecRef[];
+  toolRefs: SpecRef[];
   toolProfileRefs: SpecRef[];
+  mcpProfileRefs: SpecRef[];
   memoryProfileRefs: SpecRef[];
   contextProfileRefs: SpecRef[];
+  reasoningProfileRefs: SpecRef[];
   workspaceProfileRefs: SpecRef[];
+  businessRuleRefs: SpecRef[];
   policyRefs: SpecRef[];
   evaluationRefs: SpecRef[];
+  traceRefs: SpecRef[];
+  modelProfileRefs: SpecRef[];
+  replayRefs: SpecRef[];
+  regressionRefs: SpecRef[];
+  deploymentRefs: SpecRef[];
   dependencyHash: string;
 }
 
@@ -841,21 +856,12 @@ export function compileDomainPackToHarnessedSystem(
     agentRef: options.agentRef,
   });
   const workflowRef = toSpecRef(workflow);
-  const dependencySnapshot = createWorkflowDependencySnapshot({
-    agentRefs: [options.agentRef],
-    toolProfileRefs: idsToRefs(selectedToolProfileIds, domainPack.toolProfiles) ?? [],
-    memoryProfileRefs: memoryProfile ? [toSpecRef(memoryProfile)] : [],
-    contextProfileRefs: contextProfile ? [toSpecRef(contextProfile)] : [],
-    workspaceProfileRefs: [],
-    policyRefs: idsToRefs(policyIds, domainPack.policies) ?? [],
-    evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles) ?? [],
-  });
-  const processHash = hashDomainCompilation({
-    compilerVersion: DOMAIN_COMPILER_VERSION,
-    workflowRef,
-    fsmProcess,
-    dependencySnapshot,
-  });
+  const traceRef = options.traceRef ?? {
+    id: `${domainPack.id}.trace`,
+    version: domainPack.version,
+  };
+  const regressionRef = options.regressionRef ?? toOptionalSpecRef(domainPack.regressionCases?.[0]);
+  const deploymentRef = options.deploymentRef ?? toOptionalSpecRef(domainPack.deploymentProfile);
   const harnessedSystem: HarnessedAgentSystemSpec = {
     id: options.systemId ?? `${domainPack.id}.${workflow.id}.system`,
     version: options.systemVersion ?? domainPack.version,
@@ -863,10 +869,7 @@ export function compileDomainPackToHarnessedSystem(
     description: domainPack.description,
     agentRef: options.agentRef,
     fsmProcessRef: toSpecRef(fsmProcess),
-    traceRef: options.traceRef ?? {
-      id: `${domainPack.id}.trace`,
-      version: domainPack.version,
-    },
+    traceRef,
     policyRefs: idsToRefs(policyIds, domainPack.policies),
     memoryRefs: memoryProfile ? [toSpecRef(memoryProfile)] : undefined,
     toolRefs: idsToRefs(selectedToolIds, domainPack.tools),
@@ -879,10 +882,46 @@ export function compileDomainPackToHarnessedSystem(
     modelProfileRef: options.modelProfileRef,
     evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles),
     replayRef: options.replayRef,
-    regressionRef: options.regressionRef ?? toOptionalSpecRef(domainPack.regressionCases?.[0]),
-    deploymentRef: options.deploymentRef ?? toOptionalSpecRef(domainPack.deploymentProfile),
+    regressionRef,
+    deploymentRef,
     tags: mergeStrings(domainPack.tags, ['compiled-from-domain-pack', domainPack.id]),
   };
+  const selectedSkillIds = new Set(selectedSkillRefs.map((ref) => ref.id));
+  const selectedSkillPolicies = (domainPack.skillPolicies ?? []).filter((binding) =>
+    selectedSkillIds.has(binding.skillRef.id)
+  );
+  const dependencySnapshot = createWorkflowDependencySnapshot({
+    domainPackRefs: [toSpecRef(domainPack)],
+    taskSchemaRefs: taskSchema ? [toSpecRef(taskSchema)] : [],
+    outputContractRefs: outputContract ? [toSpecRef(outputContract)] : [],
+    sessionProfileRefs: sessionInitialization.sessionProfileRef
+      ? [sessionInitialization.sessionProfileRef]
+      : [],
+    agentRefs: [options.agentRef],
+    skillRefs: selectedSkillRefs,
+    skillPolicyRefs: selectedSkillPolicies.map(toSpecRef),
+    toolRefs: idsToRefs(selectedToolIds, domainPack.tools) ?? [],
+    toolProfileRefs: idsToRefs(selectedToolProfileIds, domainPack.toolProfiles) ?? [],
+    mcpProfileRefs: idsToRefs(mcpProfileIds, domainPack.mcpProfiles) ?? [],
+    memoryProfileRefs: memoryProfile ? [toSpecRef(memoryProfile)] : [],
+    contextProfileRefs: contextProfile ? [toSpecRef(contextProfile)] : [],
+    reasoningProfileRefs: idsToRefs(reasoningProfileIds, domainPack.reasoningProfiles) ?? [],
+    workspaceProfileRefs: [],
+    businessRuleRefs: domainPack.businessRules?.map(toSpecRef) ?? [],
+    policyRefs: idsToRefs(policyIds, domainPack.policies) ?? [],
+    evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles) ?? [],
+    traceRefs: [traceRef],
+    modelProfileRefs: options.modelProfileRef ? [options.modelProfileRef] : [],
+    replayRefs: options.replayRef ? [options.replayRef] : [],
+    regressionRefs: regressionRef ? [regressionRef] : [],
+    deploymentRefs: deploymentRef ? [deploymentRef] : [],
+  });
+  const processHash = hashDomainCompilation({
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    workflowRef,
+    fsmProcess,
+    dependencySnapshot,
+  });
   const agentPatch: DomainAgentPatch = {
     skillRefs: selectedSkillRefs,
     toolRefs: selectedToolIds,
@@ -943,13 +982,28 @@ export function createWorkflowDependencySnapshot(
   input: Omit<WorkflowDependencySnapshot, 'dependencyHash'>
 ): WorkflowDependencySnapshot {
   const dependencies = {
+    domainPackRefs: cloneRefs(input.domainPackRefs),
+    taskSchemaRefs: cloneRefs(input.taskSchemaRefs),
+    outputContractRefs: cloneRefs(input.outputContractRefs),
+    sessionProfileRefs: cloneRefs(input.sessionProfileRefs),
     agentRefs: cloneRefs(input.agentRefs),
+    skillRefs: cloneRefs(input.skillRefs),
+    skillPolicyRefs: cloneRefs(input.skillPolicyRefs),
+    toolRefs: cloneRefs(input.toolRefs),
     toolProfileRefs: cloneRefs(input.toolProfileRefs),
+    mcpProfileRefs: cloneRefs(input.mcpProfileRefs),
     memoryProfileRefs: cloneRefs(input.memoryProfileRefs),
     contextProfileRefs: cloneRefs(input.contextProfileRefs),
+    reasoningProfileRefs: cloneRefs(input.reasoningProfileRefs),
     workspaceProfileRefs: cloneRefs(input.workspaceProfileRefs),
+    businessRuleRefs: cloneRefs(input.businessRuleRefs),
     policyRefs: cloneRefs(input.policyRefs),
     evaluationRefs: cloneRefs(input.evaluationRefs),
+    traceRefs: cloneRefs(input.traceRefs),
+    modelProfileRefs: cloneRefs(input.modelProfileRefs),
+    replayRefs: cloneRefs(input.replayRefs),
+    regressionRefs: cloneRefs(input.regressionRefs),
+    deploymentRefs: cloneRefs(input.deploymentRefs),
   };
   return {
     ...dependencies,

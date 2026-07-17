@@ -611,16 +611,31 @@ describe('@hypha/domain workflow compiler', () => {
 
   it('hashes equivalent dependency sets independently of reference order', () => {
     const first = createWorkflowDependencySnapshot({
+      domainPackRefs: [{ id: 'domain.default', version: '1.0.0' }],
+      taskSchemaRefs: [],
+      outputContractRefs: [],
+      sessionProfileRefs: [],
       agentRefs: [
         { id: 'agent.z', version: '1.0.0' },
         { id: 'agent.a', version: '1.0.0' },
       ],
+      skillRefs: [],
+      skillPolicyRefs: [],
+      toolRefs: [],
       toolProfileRefs: [{ id: 'tools.default', version: '1.0.0' }],
+      mcpProfileRefs: [],
       memoryProfileRefs: [],
       contextProfileRefs: [],
+      reasoningProfileRefs: [],
       workspaceProfileRefs: [],
+      businessRuleRefs: [],
       policyRefs: [],
       evaluationRefs: [],
+      traceRefs: [],
+      modelProfileRefs: [],
+      replayRefs: [],
+      regressionRefs: [],
+      deploymentRefs: [],
     });
     const reversed = createWorkflowDependencySnapshot({
       ...first,
@@ -629,6 +644,38 @@ describe('@hypha/domain workflow compiler', () => {
 
     expect(reversed.agentRefs).toEqual(first.agentRefs);
     expect(reversed.dependencyHash).toBe(first.dependencyHash);
+  });
+
+  it('invalidates the process hash when any runtime dependency family changes', () => {
+    const base = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.0' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+    const changedPack = structuredClone(domainPackSpecDefinition.example);
+    changedPack.mcpProfiles![0].version = '0.0.1';
+    changedPack.toolProfiles![0].mcpProfileRefs![0].version = '0.0.1';
+    const changedMcp = compileDomainPackToHarnessedSystem(changedPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.0' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+    const changedModel = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.1' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+
+    expect(base.dependencySnapshot).toMatchObject({
+      toolRefs: [{ id: 'tool.search', version: '0.0.0' }],
+      skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      mcpProfileRefs: [{ id: 'mcp.default', version: '0.0.0' }],
+      reasoningProfileRefs: [{ id: 'reasoning.default', version: '0.0.0' }],
+      modelProfileRefs: [{ id: 'model.default', version: '1.0.0' }],
+      replayRefs: [{ id: 'replay.default', version: '1.0.0' }],
+    });
+    expect(changedMcp.processHash).not.toBe(base.processHash);
+    expect(changedModel.processHash).not.toBe(base.processHash);
   });
 
   it('projects state-scoped MCP and reasoning profiles into compiled system refs', () => {
