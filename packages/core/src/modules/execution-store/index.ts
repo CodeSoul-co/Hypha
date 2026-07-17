@@ -39,6 +39,7 @@ export const executionLeaseSchema = z
     expiresAt: timestampSchema,
     heartbeatAt: timestampSchema,
   })
+  .strict()
   .superRefine((value, context) => {
     const acquiredAt = Date.parse(value.acquiredAt);
     const heartbeatAt = Date.parse(value.heartbeatAt);
@@ -85,6 +86,7 @@ export const executionRecordSchema = z
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.request.executionId && value.request.executionId !== value.id) {
       context.addIssue({
@@ -149,11 +151,13 @@ export const executionRecordSchema = z
     }
   }) satisfies ZodType<ExecutionRecord>;
 
-export const executionLeaseGuardSchema = z.object({
-  leaseId: nonEmptyString,
-  ownerId: nonEmptyString,
-  fencingToken: positiveInteger,
-}) satisfies ZodType<ExecutionLeaseGuard>;
+export const executionLeaseGuardSchema = z
+  .object({
+    leaseId: nonEmptyString,
+    ownerId: nonEmptyString,
+    fencingToken: positiveInteger,
+  })
+  .strict() satisfies ZodType<ExecutionLeaseGuard>;
 
 export const executionRecordCreateRequestSchema = z
   .object({
@@ -161,6 +165,7 @@ export const executionRecordCreateRequestSchema = z
     record: executionRecordSchema,
     idempotencyKey: nonEmptyString.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.record.revision !== 0) {
       context.addIssue({
@@ -208,6 +213,7 @@ export const executionRecordCompareAndSetRequestSchema = z
     next: executionRecordSchema,
     idempotencyKey: nonEmptyString.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.next.id !== value.executionId) {
       context.addIssue({
@@ -245,36 +251,42 @@ export const executionRecordCompareAndSetRequestSchema = z
     }
   }) satisfies ZodType<ExecutionRecordCompareAndSetRequest>;
 
-export const executionLeaseAcquireRequestSchema = z.object({
-  operationId: nonEmptyString,
-  executionId: nonEmptyString,
-  expectedRevision: nonNegativeInteger,
-  requestedLeaseId: nonEmptyString,
-  ownerId: nonEmptyString,
-  ttlMs: positiveInteger,
-  acquiredAt: timestampSchema,
-  idempotencyKey: nonEmptyString.optional(),
-}) satisfies ZodType<ExecutionLeaseAcquireRequest>;
+export const executionLeaseAcquireRequestSchema = z
+  .object({
+    operationId: nonEmptyString,
+    executionId: nonEmptyString,
+    expectedRevision: nonNegativeInteger,
+    requestedLeaseId: nonEmptyString,
+    ownerId: nonEmptyString,
+    ttlMs: positiveInteger,
+    acquiredAt: timestampSchema,
+    idempotencyKey: nonEmptyString.optional(),
+  })
+  .strict() satisfies ZodType<ExecutionLeaseAcquireRequest>;
 
-export const executionLeaseRenewRequestSchema = z.object({
-  operationId: nonEmptyString,
-  executionId: nonEmptyString,
-  expectedRevision: nonNegativeInteger,
-  leaseGuard: executionLeaseGuardSchema,
-  ttlMs: positiveInteger,
-  heartbeatAt: timestampSchema,
-  idempotencyKey: nonEmptyString.optional(),
-}) satisfies ZodType<ExecutionLeaseRenewRequest>;
+export const executionLeaseRenewRequestSchema = z
+  .object({
+    operationId: nonEmptyString,
+    executionId: nonEmptyString,
+    expectedRevision: nonNegativeInteger,
+    leaseGuard: executionLeaseGuardSchema,
+    ttlMs: positiveInteger,
+    heartbeatAt: timestampSchema,
+    idempotencyKey: nonEmptyString.optional(),
+  })
+  .strict() satisfies ZodType<ExecutionLeaseRenewRequest>;
 
-export const executionLeaseReleaseRequestSchema = z.object({
-  operationId: nonEmptyString,
-  executionId: nonEmptyString,
-  expectedRevision: nonNegativeInteger,
-  leaseGuard: executionLeaseGuardSchema,
-  releasedAt: timestampSchema,
-  reason: nonEmptyString.optional(),
-  idempotencyKey: nonEmptyString.optional(),
-}) satisfies ZodType<ExecutionLeaseReleaseRequest>;
+export const executionLeaseReleaseRequestSchema = z
+  .object({
+    operationId: nonEmptyString,
+    executionId: nonEmptyString,
+    expectedRevision: nonNegativeInteger,
+    leaseGuard: executionLeaseGuardSchema,
+    releasedAt: timestampSchema,
+    reason: nonEmptyString.optional(),
+    idempotencyKey: nonEmptyString.optional(),
+  })
+  .strict() satisfies ZodType<ExecutionLeaseReleaseRequest>;
 
 export const executionRecordQuerySchema = z
   .object({
@@ -289,6 +301,7 @@ export const executionRecordQuerySchema = z
     limit: positiveInteger.optional(),
     cursor: nonEmptyString.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.statuses && new Set(value.statuses).size !== value.statuses.length) {
       context.addIssue({
@@ -299,27 +312,33 @@ export const executionRecordQuerySchema = z
     }
   }) satisfies ZodType<ExecutionRecordQuery>;
 
-export const executionRecordPageSchema = z.object({
-  records: z.array(executionRecordSchema),
-  cursor: nonEmptyString.optional(),
-}) satisfies ZodType<ExecutionRecordPage>;
+export const executionRecordPageSchema = z
+  .object({
+    records: z.array(executionRecordSchema),
+    cursor: nonEmptyString.optional(),
+  })
+  .strict() satisfies ZodType<ExecutionRecordPage>;
 
-export const executionIdempotencyQuerySchema = z.object({
-  tenantId: nonEmptyString.optional(),
-  userId: nonEmptyString,
-  workspaceId: nonEmptyString,
-  idempotencyKey: nonEmptyString,
-  fingerprint: nonEmptyString,
-}) satisfies ZodType<ExecutionIdempotencyQuery>;
+export const executionIdempotencyQuerySchema = z
+  .object({
+    tenantId: nonEmptyString.optional(),
+    userId: nonEmptyString,
+    workspaceId: nonEmptyString,
+    idempotencyKey: nonEmptyString,
+    fingerprint: nonEmptyString,
+  })
+  .strict() satisfies ZodType<ExecutionIdempotencyQuery>;
 
 export const executionIdempotencyResolutionSchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('miss') }),
-  z.object({ status: z.literal('match'), record: executionRecordSchema }),
-  z.object({
-    status: z.literal('conflict'),
-    recordId: nonEmptyString,
-    existingFingerprint: nonEmptyString,
-  }),
+  z.object({ status: z.literal('miss') }).strict(),
+  z.object({ status: z.literal('match'), record: executionRecordSchema }).strict(),
+  z
+    .object({
+      status: z.literal('conflict'),
+      recordId: nonEmptyString,
+      existingFingerprint: nonEmptyString,
+    })
+    .strict(),
 ]) satisfies ZodType<ExecutionIdempotencyResolution>;
 
 export const executionRecoveryDispositionSchema = z.enum([
@@ -338,6 +357,7 @@ export const executionRecoveryAssessmentSchema = z
     providerStatusRef: nonEmptyString.optional(),
     reason: nonEmptyString.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (
       ['provider_queryable', 'provider_completed_result_missing'].includes(value.disposition) &&

@@ -132,7 +132,7 @@ export const networkAuthorizationEventPayloadSchema = executionEventPayloadBaseO
   })
   .superRefine(addPayloadSecurityIssues) satisfies ZodType<NetworkAuthorizationEventPayload>;
 
-const executionFrameworkEventEnvelopeSchema = z
+export const executionFrameworkEventEnvelopeSchema = z
   .object({
     id: nonEmptyString,
     type: executionFrameworkEventTypeSchema,
@@ -143,7 +143,9 @@ const executionFrameworkEventEnvelopeSchema = z
     agentId: nonEmptyString.optional(),
     fsmState: nonEmptyString.optional(),
     timestamp: timestampSchema,
-    payload: z.unknown(),
+    payload: z.unknown().refine((value) => value !== undefined, {
+      message: 'payload is required',
+    }),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict()
