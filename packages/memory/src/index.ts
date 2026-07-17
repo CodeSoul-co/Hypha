@@ -714,5 +714,11 @@ export * from './managed-store';
 export * from './structured-managed-store';
 export * from './index-outbox';
 export * from './lifecycle-workers';
+export * from './context-contracts';
+export * from './context-schema';
+export * from './context-builder';
+export * from './context-source-resolver';
+export * from './context-compaction';
+export * from './retrieval';
 
 export * from './hybrid';
