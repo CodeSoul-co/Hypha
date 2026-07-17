@@ -16,6 +16,7 @@ import {
 } from './index';
 import { createFrameworkEvent } from '@hypha/core';
 import {
+  LegacyVectorIndexStoreAdapter,
   StructuredManagedMemoryRecordStore,
   StructuredMemoryPersistenceUnitOfWork,
   hashMemoryScope,
@@ -128,6 +129,27 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(artifacts.get(ref)).resolves.toEqual(Buffer.from('{"ok":true}'));
 
     await expect(new MockEmbeddingProvider().embed(['hypha'])).resolves.toHaveLength(1);
+  });
+
+  it('bridges the persistent local vector provider through the managed Memory contract', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-managed-vector-'));
+    const filename = path.join(root, 'vectors.json');
+    const createAdapter = () =>
+      new LegacyVectorIndexStoreAdapter(
+        'vector.local.persistent',
+        new LocalVectorIndexProvider({ filename })
+      );
+
+    const adapter = createAdapter();
+    await adapter.upsert([
+      { id: 'memory:vector:1', vector: [1, 0], metadata: { userId: 'alice' } },
+    ]);
+    await expect(
+      createAdapter().search({ vector: [1, 0], topK: 1, filter: { userId: 'alice' } })
+    ).resolves.toMatchObject([{ id: 'memory:vector:1', score: 1 }]);
+
+    await createAdapter().delete(['memory:vector:1']);
+    await expect(createAdapter().search({ vector: [1, 0], topK: 1 })).resolves.toEqual([]);
   });
 
   it('persists the versioned managed-memory source of truth in SQLite', async () => {

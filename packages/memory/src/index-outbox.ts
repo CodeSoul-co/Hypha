@@ -1,4 +1,4 @@
-import type { EmbeddingProvider } from './index';
+import type { EmbeddingProvider, VectorIndexProvider } from './index';
 import type { ManagedMemoryRecord, NormalizedMemoryError } from './contracts';
 import type { ProviderHealth } from './operations';
 import type {
@@ -72,6 +72,29 @@ export class InMemoryLocalVectorStoreAdapter implements ManagedVectorStoreAdapte
       checkedAt: new Date().toISOString(),
       details: { points: this.points.size },
     };
+  }
+}
+
+export class LegacyVectorIndexStoreAdapter implements ManagedVectorStoreAdapter {
+  constructor(
+    readonly id: string,
+    private readonly provider: VectorIndexProvider
+  ) {}
+
+  async upsert(points: ManagedVectorPoint[]): Promise<void> {
+    await this.provider.upsert(points);
+  }
+
+  async delete(ids: string[]): Promise<void> {
+    await this.provider.delete(ids);
+  }
+
+  async search(request: ManagedVectorSearchRequest): Promise<ManagedVectorSearchResult[]> {
+    return this.provider.search(request);
+  }
+
+  async health(): Promise<ProviderHealth> {
+    return { status: 'healthy', checkedAt: new Date().toISOString() };
   }
 }
 
