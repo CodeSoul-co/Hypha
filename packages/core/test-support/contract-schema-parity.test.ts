@@ -63,4 +63,32 @@ describe('contract schema parity assertions', () => {
       })
     ).toThrow();
   });
+
+  it('detects malformed conditional and union composition', () => {
+    expect(() =>
+      expectContractParity({
+        name: 'EmptyUnion',
+        zod: z.object({ value: z.string() }).strict(),
+        json: {
+          type: 'object',
+          required: ['value'],
+          properties: { value: { type: 'string', oneOf: [] } },
+          additionalProperties: false,
+        },
+      })
+    ).toThrow(/oneOf must be a non-empty array/iu);
+
+    expect(() =>
+      expectContractParity({
+        name: 'IncompleteCondition',
+        zod: z.object({ value: z.string() }).strict(),
+        json: {
+          type: 'object',
+          required: ['value'],
+          properties: { value: { type: 'string', if: { enum: ['restricted'] } } },
+          additionalProperties: false,
+        },
+      })
+    ).toThrow(/if requires then or else/iu);
+  });
 });

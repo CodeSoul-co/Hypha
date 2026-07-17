@@ -34,6 +34,7 @@ function expectSchemaNodeParity(
   path: string,
   enforceUnknownFieldPolicy = false
 ): void {
+  expectJsonSchemaComposition(jsonSchema, path);
   const schema = unwrapSchema(zodSchema);
 
   if (schema instanceof z.ZodNullable) {
@@ -314,6 +315,38 @@ function jsonPrimitiveType(schema: JsonSchema): string | undefined {
   if (typeof constant === 'number') return Number.isInteger(constant) ? 'integer' : 'number';
   if (constant === null) return 'null';
   return undefined;
+}
+
+function expectJsonSchemaComposition(schema: JsonSchema, path: string): void {
+  for (const keyword of ['oneOf', 'allOf', 'anyOf'] as const) {
+    const variants = schema[keyword];
+    if (variants === undefined) continue;
+    if (!Array.isArray(variants) || variants.length === 0) {
+      throw new TypeError(`JSON Schema ${path}.${keyword} must be a non-empty array`);
+    }
+    variants.forEach((variant, index) => {
+      if (!isJsonSchema(variant)) {
+        throw new TypeError(`JSON Schema ${path}.${keyword}[${index}] must be an object`);
+      }
+      expectJsonSchemaComposition(variant, `${path}.${keyword}[${index}]`);
+    });
+  }
+
+  const condition = schema.if;
+  if (condition !== undefined) {
+    if (!isJsonSchema(condition)) throw new TypeError(`JSON Schema ${path}.if must be an object`);
+    if (schema.then === undefined && schema.else === undefined) {
+      throw new TypeError(`JSON Schema ${path}.if requires then or else`);
+    }
+    expectJsonSchemaComposition(condition, `${path}.if`);
+  }
+  for (const keyword of ['then', 'else', 'not'] as const) {
+    const branch = schema[keyword];
+    if (branch === undefined) continue;
+    if (!isJsonSchema(branch))
+      throw new TypeError(`JSON Schema ${path}.${keyword} must be an object`);
+    expectJsonSchemaComposition(branch, `${path}.${keyword}`);
+  }
 }
 
 function isJsonSchema(value: unknown): value is JsonSchema {
