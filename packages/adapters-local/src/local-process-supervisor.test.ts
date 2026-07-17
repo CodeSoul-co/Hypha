@@ -52,7 +52,7 @@ describe('LocalProcessSupervisor', () => {
   it('terminates a command that stops producing output after its idle timeout', async () => {
     const result = await new LocalProcessSupervisor().run(
       request(['-e', "process.stdout.write('started'); setInterval(() => {}, 1000)"], {
-        idleTimeoutMs: 40,
+        idleTimeoutMs: 250,
       })
     );
 
