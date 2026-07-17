@@ -26,8 +26,8 @@ describe('memory activity framework events', () => {
       );
     }
 
-    expect(
-      (await store.list({ runId: 'run:memory:activity' })).map((event) => event.type)
-    ).toEqual(eventTypes);
+    expect((await store.list({ runId: 'run:memory:activity' })).map((event) => event.type)).toEqual(
+      eventTypes
+    );
   });
 });
