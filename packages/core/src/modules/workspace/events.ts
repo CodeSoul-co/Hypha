@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  WorkspaceEventPayload,
   WorkspaceEventCreateInput,
   WorkspaceEventPayloadMap,
   WorkspaceFrameworkEvent,
@@ -37,6 +38,44 @@ export const workspaceFrameworkEventTypes = [
 ] as const satisfies readonly WorkspaceFrameworkEventType[];
 
 export const workspaceFrameworkEventTypeSchema = z.enum(workspaceFrameworkEventTypes);
+
+interface WorkspaceEventPayloadRequirement {
+  required: readonly (keyof WorkspaceEventPayload)[];
+  status?: 'ready' | 'busy';
+  atLeastOne?: readonly (keyof WorkspaceEventPayload)[];
+  nonEmptyArtifactRefs?: boolean;
+}
+
+export const workspaceEventPayloadRequirements = {
+  'workspace.create.requested': { required: ['operationId', 'profileRef'] },
+  'workspace.created': { required: ['operationId', 'profileRef', 'status'] },
+  'workspace.ready': { required: ['operationId', 'status'], status: 'ready' },
+  'workspace.busy': { required: ['operationId', 'status'], status: 'busy' },
+  'workspace.path.resolved': { required: ['operationId'] },
+  'workspace.path.denied': { required: ['operationId', 'error'] },
+  'workspace.quota.exceeded': {
+    required: ['operationId'],
+    atLeastOne: ['bytes', 'files'],
+  },
+  'workspace.snapshot.requested': { required: ['operationId'] },
+  'workspace.snapshot.created': {
+    required: ['operationId', 'snapshotManifestHash', 'artifactRefs'],
+    nonEmptyArtifactRefs: true,
+  },
+  'workspace.snapshot.failed': { required: ['operationId', 'error'] },
+  'workspace.restore.requested': {
+    required: ['operationId', 'artifactRefs'],
+    nonEmptyArtifactRefs: true,
+  },
+  'workspace.restored': { required: ['operationId', 'workspaceSnapshotHash'] },
+  'workspace.restore.failed': { required: ['operationId', 'error'] },
+  'workspace.patch.checked': { required: ['operationId'] },
+  'workspace.patch.applied': { required: ['operationId', 'workspaceSnapshotHash'] },
+  'workspace.patch.conflict': { required: ['operationId'] },
+  'workspace.cleanup.started': { required: ['operationId'] },
+  'workspace.cleanup.completed': { required: ['operationId'] },
+  'workspace.cleanup.failed': { required: ['operationId', 'error'] },
+} as const satisfies Record<WorkspaceFrameworkEventType, WorkspaceEventPayloadRequirement>;
 
 const nonEmptyString = z.string().min(1);
 const timestampSchema = z.string().datetime({ offset: true });
@@ -76,6 +115,24 @@ export const workspaceFrameworkEventJsonSchema: JsonSchema = {
     metadata: { type: 'object' },
   },
   additionalProperties: false,
+  allOf: Object.entries(workspaceEventPayloadRequirements).map(([type, requirement]) => {
+    const payloadConstraint: JsonSchema = { required: [...requirement.required] };
+    const payloadProperties: Record<string, JsonSchema> = {};
+    if ('status' in requirement) payloadProperties.status = { const: requirement.status };
+    if ('nonEmptyArtifactRefs' in requirement && requirement.nonEmptyArtifactRefs) {
+      payloadProperties.artifactRefs = { minItems: 1 };
+    }
+    if (Object.keys(payloadProperties).length > 0) {
+      payloadConstraint.properties = payloadProperties;
+    }
+    if ('atLeastOne' in requirement && requirement.atLeastOne) {
+      payloadConstraint.anyOf = requirement.atLeastOne.map((field) => ({ required: [field] }));
+    }
+    return {
+      if: { properties: { type: { const: type } }, required: ['type'] },
+      then: { properties: { payload: payloadConstraint } },
+    };
+  }),
 };
 
 export const workspaceEventJsonSchemas: Record<string, JsonSchema> = {
@@ -89,7 +146,11 @@ export const workspaceFrameworkEventExample: WorkspaceFrameworkEvent<'workspace.
   workspaceId: workspaceEventPayloadExample.workspaceId,
   runId: 'run.example',
   timestamp: '2026-07-17T00:00:01.000Z',
-  payload: workspaceEventPayloadExample,
+  payload: {
+    ...workspaceEventPayloadExample,
+    operationId: 'operation:workspace-ready',
+    status: 'ready',
+  },
 };
 
 export function validateWorkspaceEventPayloadForType<TType extends WorkspaceFrameworkEventType>(
@@ -97,7 +158,51 @@ export function validateWorkspaceEventPayloadForType<TType extends WorkspaceFram
   input: unknown
 ): WorkspaceEventPayloadMap[TType] {
   workspaceFrameworkEventTypeSchema.parse(type);
-  return validateWorkspaceEventPayload(input);
+  const payload = validateWorkspaceEventPayload(input);
+  const requirement = workspaceEventPayloadRequirements[type];
+  const issues: z.ZodIssue[] = [];
+
+  for (const field of requirement.required) {
+    if (payload[field] === undefined) {
+      issues.push({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `is required for ${type}`,
+      });
+    }
+  }
+  if ('status' in requirement && payload.status !== requirement.status) {
+    issues.push({
+      code: z.ZodIssueCode.custom,
+      path: ['status'],
+      message: `must be ${requirement.status} for ${type}`,
+    });
+  }
+  if (
+    'atLeastOne' in requirement &&
+    requirement.atLeastOne &&
+    !requirement.atLeastOne.some((field) => payload[field] !== undefined)
+  ) {
+    issues.push({
+      code: z.ZodIssueCode.custom,
+      path: [],
+      message: `requires at least one of ${requirement.atLeastOne.join(', ')}`,
+    });
+  }
+  if (
+    'nonEmptyArtifactRefs' in requirement &&
+    requirement.nonEmptyArtifactRefs &&
+    payload.artifactRefs?.length === 0
+  ) {
+    issues.push({
+      code: z.ZodIssueCode.custom,
+      path: ['artifactRefs'],
+      message: `must contain snapshot or patch evidence for ${type}`,
+    });
+  }
+  if (issues.length > 0) throw new z.ZodError(issues);
+
+  return payload as WorkspaceEventPayloadMap[TType];
 }
 
 export function validateWorkspaceFrameworkEvent(input: unknown): WorkspaceFrameworkEvent {

@@ -140,6 +140,15 @@ export interface WorkspaceEventPayload {
   metadata?: Record<string, unknown>;
 }
 
+type WorkspaceEventPayloadWithRequired<K extends keyof WorkspaceEventPayload> =
+  WorkspaceEventPayload & Required<Pick<WorkspaceEventPayload, K>>;
+
+type WorkspaceStatusEventPayload<S extends WorkspaceStatus> =
+  WorkspaceEventPayloadWithRequired<'operationId' | 'status'> & { status: S };
+
+type WorkspaceQuotaExceededEventPayload = WorkspaceEventPayloadWithRequired<'operationId'> &
+  ({ bytes: number } | { files: number });
+
 export type WorkspaceFrameworkEventType =
   | 'workspace.create.requested'
   | 'workspace.created'
@@ -162,7 +171,33 @@ export type WorkspaceFrameworkEventType =
   | 'workspace.cleanup.failed';
 
 export type WorkspaceEventPayloadMap = {
-  [K in WorkspaceFrameworkEventType]: WorkspaceEventPayload;
+  'workspace.create.requested': WorkspaceEventPayloadWithRequired<'operationId' | 'profileRef'>;
+  'workspace.created': WorkspaceEventPayloadWithRequired<
+    'operationId' | 'profileRef' | 'status'
+  >;
+  'workspace.ready': WorkspaceStatusEventPayload<'ready'>;
+  'workspace.busy': WorkspaceStatusEventPayload<'busy'>;
+  'workspace.path.resolved': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.path.denied': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+  'workspace.quota.exceeded': WorkspaceQuotaExceededEventPayload;
+  'workspace.snapshot.requested': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.snapshot.created': WorkspaceEventPayloadWithRequired<
+    'operationId' | 'snapshotManifestHash' | 'artifactRefs'
+  >;
+  'workspace.snapshot.failed': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+  'workspace.restore.requested': WorkspaceEventPayloadWithRequired<'operationId' | 'artifactRefs'>;
+  'workspace.restored': WorkspaceEventPayloadWithRequired<
+    'operationId' | 'workspaceSnapshotHash'
+  >;
+  'workspace.restore.failed': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
+  'workspace.patch.checked': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.patch.applied': WorkspaceEventPayloadWithRequired<
+    'operationId' | 'workspaceSnapshotHash'
+  >;
+  'workspace.patch.conflict': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.cleanup.started': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.cleanup.completed': WorkspaceEventPayloadWithRequired<'operationId'>;
+  'workspace.cleanup.failed': WorkspaceEventPayloadWithRequired<'operationId' | 'error'>;
 };
 
 export type WorkspaceFrameworkEvent<
