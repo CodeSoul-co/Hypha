@@ -10,6 +10,7 @@ import {
   type MemoryActivityRequest,
   type MemoryActivityResult,
   type MemoryManagementCapabilities,
+  type MemoryEventType,
 } from './index';
 
 const request: MemoryActivityRequest = {
@@ -21,11 +22,39 @@ const request: MemoryActivityRequest = {
     userId: 'user:integration',
     permissionScopes: ['memory:read'],
   },
-  scope: { userId: 'user:integration', workspaceId: 'workspace:integration' },
+  scope: {
+    userId: 'user:integration',
+    workspaceId: 'workspace:integration',
+    runId: 'run:integration',
+  },
   profileRef: { id: 'memory.default', version: '1.0.0' },
+  eventContext: {
+    runId: 'run:integration',
+    sessionId: 'session:integration',
+    workspaceId: 'workspace:integration',
+  },
   payload: { query: 'governed memory' },
 };
 
+function governance() {
+  let sequence = 0;
+  const publish = vi.fn(async (type: MemoryEventType) => {
+    const id = 'event:activity:' + sequence + ':' + type;
+    sequence += 1;
+    return id;
+  });
+  const beforeExecute = vi.fn();
+  const afterExecute = vi.fn();
+  return {
+    publish,
+    beforeExecute,
+    afterExecute,
+    options: {
+      events: { publish },
+      harness: { beforeExecute, afterExecute },
+    },
+  };
+}
 describe('memory integration contracts', () => {
   it('rejects an activity before invoking its handler when policy denies it', async () => {
     const handler = vi.fn(async () => ({
@@ -33,7 +62,9 @@ describe('memory integration contracts', () => {
       eventIds: [],
     }));
     const failed = vi.fn();
+    const hooks = governance();
     const activities = new DefaultMemoryActivityPort({
+      ...hooks.options,
       policy: {
         authorize: async () => ({
           allowed: false,
@@ -61,7 +92,9 @@ describe('memory integration contracts', () => {
     const completed = vi.fn(() => {
       throw new Error('trace backend unavailable');
     });
+    const hooks = governance();
     const activities = new DefaultMemoryActivityPort({
+      ...hooks.options,
       policy: { authorize: async () => ({ allowed: true }) },
       observers: [{ onCompleted: completed }],
     }).register('search', async () => ({
@@ -76,7 +109,11 @@ describe('memory integration contracts', () => {
       operationId: request.operationId,
       status: 'completed',
       memoryRefs: ['memory:1:v3'],
-      eventIds: ['event:search:completed'],
+      eventIds: [
+        'event:activity:0:memory.activity.requested',
+        'event:search:completed',
+        'event:activity:1:memory.activity.completed',
+      ],
     });
     expect(completed).toHaveBeenCalledOnce();
   });
@@ -180,5 +217,60 @@ describe('memory integration contracts', () => {
       },
       undefined
     );
+  });
+  it('propagates timeout cancellation and records a failed runtime event', async () => {
+    const hooks = governance();
+    let handlerSignal: AbortSignal | undefined;
+    const handler = vi.fn(
+      async (_activity: MemoryActivityRequest, signal?: AbortSignal) =>
+        new Promise<Omit<MemoryActivityResult, 'operationId'>>((resolve) => {
+          handlerSignal = signal;
+          signal?.addEventListener('abort', () => resolve({ status: 'cancelled', eventIds: [] }), {
+            once: true,
+          });
+        })
+    );
+    const activities = new DefaultMemoryActivityPort({
+      ...hooks.options,
+      policy: { authorize: async () => ({ allowed: true }) },
+    }).register('search', handler);
+
+    const result = await activities.execute({ ...request, timeoutMs: 5 });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: { code: 'MEMORY_PROVIDER_TIMEOUT', retryable: true },
+    });
+    expect(result.eventIds).toEqual([
+      'event:activity:0:memory.activity.requested',
+      'event:activity:1:memory.activity.failed',
+    ]);
+    expect(hooks.beforeExecute).toHaveBeenCalledOnce();
+    expect(hooks.afterExecute).toHaveBeenCalledOnce();
+  });
+
+  it('does not authorize or run a handler after external cancellation', async () => {
+    const hooks = governance();
+    const authorize = vi.fn(async () => ({ allowed: true }));
+    const handler = vi.fn(async () => ({ status: 'completed' as const, eventIds: [] }));
+    const activities = new DefaultMemoryActivityPort({
+      ...hooks.options,
+      policy: { authorize },
+    }).register('search', handler);
+    const controller = new AbortController();
+    controller.abort(new Error('runtime cancelled the activity'));
+
+    const result = await activities.execute(request, controller.signal);
+
+    expect(result.status).toBe('cancelled');
+    expect(authorize).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(hooks.beforeExecute).not.toHaveBeenCalled();
+    expect(result.eventIds).toEqual([
+      'event:activity:0:memory.activity.requested',
+      'event:activity:1:memory.activity.cancelled',
+    ]);
   });
 });

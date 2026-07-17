@@ -14,6 +14,7 @@ import type {
 } from './context-contracts';
 import type { ManagedMemorySearchRequest, MemoryManagementProvider } from './operations';
 import { hashMemoryScope, normalizeMemoryError, sha256 } from './memory-utils';
+import type { MemoryEventContext, MemoryEventPublisher } from './memory-events';
 
 export type MemoryActivityOperation =
   | 'extract'
@@ -29,6 +30,7 @@ export interface MemoryActivityRequest {
   principal: MemoryPrincipal;
   scope: ManagedMemoryScope;
   profileRef: SpecRef;
+  eventContext: MemoryEventContext;
   payload: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
@@ -72,8 +74,15 @@ export interface MemoryActivityObserver {
   onFailed?(request: MemoryActivityRequest, result: MemoryActivityResult): void | Promise<void>;
 }
 
+export interface MemoryActivityHarnessHook {
+  beforeExecute(request: MemoryActivityRequest, signal: AbortSignal): void | Promise<void>;
+  afterExecute(request: MemoryActivityRequest, result: MemoryActivityResult): void | Promise<void>;
+}
+
 export interface DefaultMemoryActivityPortOptions {
   policy: MemoryActivityPolicyPort;
+  events: MemoryEventPublisher;
+  harness: MemoryActivityHarnessHook;
   observers?: MemoryActivityObserver[];
 }
 
@@ -91,71 +100,152 @@ export class DefaultMemoryActivityPort implements MemoryActivityPort {
     request: MemoryActivityRequest,
     signal?: AbortSignal
   ): Promise<MemoryActivityResult> {
-    if (signal?.aborted) {
-      return this.finish(request, {
-        operationId: request.operationId,
-        status: 'cancelled',
-        eventIds: [],
-      });
-    }
+    const execution = createMemoryActivitySignal(request.timeoutMs, signal);
+    const eventIds: string[] = [];
+    let harnessStarted = false;
     try {
-      const decision = await this.options.policy.authorize(request, signal);
+      eventIds.push(await this.publish(request, 'memory.activity.requested', 'requested'));
+      throwIfAborted(execution.signal);
+
+      const decision = await awaitWithSignal(
+        this.options.policy.authorize(request, execution.signal),
+        execution.signal
+      );
       if (!decision.allowed) {
-        return this.finish(request, {
-          operationId: request.operationId,
-          status: 'failed',
-          eventIds: [],
-          error: {
-            code: 'MEMORY_POLICY_REJECTED',
-            message: decision.reason ?? 'Memory activity was rejected by policy.',
-            retryable: false,
-            details: { policyRevision: decision.policyRevision },
+        return this.finish(
+          request,
+          {
+            operationId: request.operationId,
+            status: 'failed',
+            eventIds,
+            error: {
+              code: 'MEMORY_POLICY_REJECTED',
+              message: decision.reason ?? 'Memory activity was rejected by policy.',
+              retryable: false,
+              details: { policyRevision: decision.policyRevision },
+            },
           },
-        });
+          harnessStarted
+        );
       }
-    } catch (error) {
-      return this.finish(request, {
-        operationId: request.operationId,
-        status: 'failed',
-        eventIds: [],
-        error: normalizeMemoryError(error),
-      });
-    }
-    const handler = this.handlers.get(request.operation);
-    if (!handler) {
-      return this.finish(request, {
-        operationId: request.operationId,
-        status: 'failed',
-        eventIds: [],
-        error: {
-          code: 'MEMORY_INVALID_INPUT',
-          message: `No Memory Activity handler is registered for ${request.operation}.`,
-          retryable: false,
+
+      await awaitWithSignal(
+        Promise.resolve(this.options.harness.beforeExecute(request, execution.signal)),
+        execution.signal
+      );
+      harnessStarted = true;
+
+      const handler = this.handlers.get(request.operation);
+      if (!handler) {
+        return this.finish(
+          request,
+          {
+            operationId: request.operationId,
+            status: 'failed',
+            eventIds,
+            error: {
+              code: 'MEMORY_INVALID_INPUT',
+              message: 'No Memory Activity handler is registered for ' + request.operation + '.',
+              retryable: false,
+            },
+          },
+          harnessStarted
+        );
+      }
+
+      await this.notify('onStarted', request);
+      const handled = await awaitWithSignal(handler(request, execution.signal), execution.signal);
+      return this.finish(
+        request,
+        {
+          operationId: request.operationId,
+          ...handled,
+          eventIds: [...eventIds, ...handled.eventIds],
         },
-      });
-    }
-    await this.notify('onStarted', request);
-    try {
-      return this.finish(request, {
-        operationId: request.operationId,
-        ...(await handler(request, signal)),
-      });
+        harnessStarted
+      );
     } catch (error) {
-      return this.finish(request, {
-        operationId: request.operationId,
-        status: signal?.aborted ? 'cancelled' : 'failed',
-        eventIds: [],
-        error: normalizeMemoryError(error),
-      });
+      const cancelled = execution.signal.aborted && !execution.timedOut();
+      return this.finish(
+        request,
+        {
+          operationId: request.operationId,
+          status: cancelled ? 'cancelled' : 'failed',
+          eventIds,
+          error: normalizeMemoryError(execution.signal.aborted ? execution.signal.reason : error),
+        },
+        harnessStarted
+      );
+    } finally {
+      execution.cleanup();
     }
   }
 
   private async finish(
     request: MemoryActivityRequest,
-    result: MemoryActivityResult
+    initialResult: MemoryActivityResult,
+    harnessStarted: boolean
   ): Promise<MemoryActivityResult> {
+    let result = initialResult;
+    if (harnessStarted) {
+      try {
+        await this.options.harness.afterExecute(request, result);
+      } catch (error) {
+        result = {
+          ...result,
+          status: result.status === 'completed' ? 'partial' : result.status,
+          error: normalizeMemoryError(error),
+        };
+      }
+    }
+
+    try {
+      const type =
+        result.status === 'completed'
+          ? 'memory.activity.completed'
+          : result.status === 'cancelled'
+            ? 'memory.activity.cancelled'
+            : 'memory.activity.failed';
+      const eventId = await this.publish(request, type, result.status, result.error);
+      result = { ...result, eventIds: [...result.eventIds, eventId] };
+    } catch (error) {
+      result = {
+        ...result,
+        status: result.status === 'completed' ? 'partial' : result.status,
+        error: normalizeMemoryError(error),
+      };
+    }
+
     await this.notify(result.status === 'completed' ? 'onCompleted' : 'onFailed', request, result);
     return result;
+  }
+
+  private publish(
+    request: MemoryActivityRequest,
+    type:
+      | 'memory.activity.requested'
+      | 'memory.activity.completed'
+      | 'memory.activity.failed'
+      | 'memory.activity.cancelled',
+    status: string,
+    error?: NormalizedMemoryError
+  ): Promise<string> {
+    return this.options.events.publish(
+      type,
+      {
+        operationId: request.operationId,
+        profileId: request.profileRef.id,
+        profileRevision: request.profileRef.revision ?? request.profileRef.version,
+        scopeHash: hashMemoryScope(request.scope),
+        status,
+        error,
+        metadata: {
+          operation: request.operation,
+          idempotencyKey: request.idempotencyKey,
+        },
+      },
+      request.eventContext
+    );
   }
 
   private async notify(
@@ -176,6 +266,59 @@ export class DefaultMemoryActivityPort implements MemoryActivityPort {
   }
 }
 
+interface MemoryActivitySignal {
+  signal: AbortSignal;
+  timedOut(): boolean;
+  cleanup(): void;
+}
+
+function createMemoryActivitySignal(
+  timeoutMs: number | undefined,
+  externalSignal: AbortSignal | undefined
+): MemoryActivitySignal {
+  const controller = new AbortController();
+  let timeoutReached = false;
+  const forwardAbort = (): void => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) {
+    forwardAbort();
+  } else {
+    externalSignal?.addEventListener('abort', forwardAbort, { once: true });
+  }
+
+  const timer =
+    timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          timeoutReached = true;
+          controller.abort({
+            code: 'MEMORY_PROVIDER_TIMEOUT',
+            message: 'Memory activity timed out after ' + timeoutMs + 'ms.',
+            retryable: true,
+          } satisfies NormalizedMemoryError);
+        }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timeoutReached,
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', forwardAbort);
+    },
+  };
+}
+
+async function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw signal.reason;
+}
 export function createMemorySearchActivityHandler(
   provider: MemoryManagementProvider
 ): MemoryActivityHandler {
