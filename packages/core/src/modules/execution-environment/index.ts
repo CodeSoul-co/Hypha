@@ -50,6 +50,7 @@ export const executionImageSpecSchema = z
     sbomRef: nonEmptyString.optional(),
     signaturePolicyRef: nonEmptyString.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.requireDigestPin && !value.digest) {
       context.addIssue({
@@ -80,6 +81,7 @@ export const processPolicySpecSchema = z
     locale: nonEmptyString.optional(),
     timezone: nonEmptyString.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (!value.shellEnabled && value.allowedShells?.length) {
       context.addIssue({
@@ -102,27 +104,29 @@ export const processPolicySpecSchema = z
     );
   }) satisfies ZodType<ProcessPolicySpec>;
 
-export const resourceLimitSpecSchema = z.object({
-  cpuCores: positiveNumber.optional(),
-  cpuQuotaMicros: positiveInteger.optional(),
-  cpuPeriodMicros: positiveInteger.optional(),
-  cpuShares: positiveInteger.optional(),
-  maxCpuSeconds: positiveNumber.optional(),
-  memoryMb: positiveNumber.optional(),
-  memorySwapMb: positiveNumber.optional(),
-  oomKillDisable: z.boolean().optional().default(false),
-  diskBytes: positiveInteger.optional(),
-  tempBytes: positiveInteger.optional(),
-  maxWriteBytes: positiveInteger.optional(),
-  blockIoWeight: positiveInteger.optional(),
-  pidsLimit: positiveInteger.optional(),
-  maxOpenFiles: positiveInteger.optional(),
-  maxStdoutBytes: positiveInteger.optional(),
-  maxStderrBytes: positiveInteger.optional(),
-  maxCombinedOutputBytes: positiveInteger.optional(),
-  maxExecutionSeconds: positiveNumber.optional(),
-  maxIdleSeconds: positiveNumber.optional(),
-}) satisfies ZodType<ResourceLimitSpec>;
+export const resourceLimitSpecSchema = z
+  .object({
+    cpuCores: positiveNumber.optional(),
+    cpuQuotaMicros: positiveInteger.optional(),
+    cpuPeriodMicros: positiveInteger.optional(),
+    cpuShares: positiveInteger.optional(),
+    maxCpuSeconds: positiveNumber.optional(),
+    memoryMb: positiveNumber.optional(),
+    memorySwapMb: positiveNumber.optional(),
+    oomKillDisable: z.boolean().optional().default(false),
+    diskBytes: positiveInteger.optional(),
+    tempBytes: positiveInteger.optional(),
+    maxWriteBytes: positiveInteger.optional(),
+    blockIoWeight: positiveInteger.optional(),
+    pidsLimit: positiveInteger.optional(),
+    maxOpenFiles: positiveInteger.optional(),
+    maxStdoutBytes: positiveInteger.optional(),
+    maxStderrBytes: positiveInteger.optional(),
+    maxCombinedOutputBytes: positiveInteger.optional(),
+    maxExecutionSeconds: positiveNumber.optional(),
+    maxIdleSeconds: positiveNumber.optional(),
+  })
+  .strict() satisfies ZodType<ResourceLimitSpec>;
 
 export const sandboxMountSpecSchema = z
   .object({
@@ -135,6 +139,7 @@ export const sandboxMountSpecSchema = z
     noSuid: z.boolean().optional(),
     noDev: z.boolean().optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (isDockerSocketReference(value.sourceRef) || isDockerSocketReference(value.targetPath)) {
       context.addIssue({
@@ -145,14 +150,16 @@ export const sandboxMountSpecSchema = z
     }
   }) satisfies ZodType<SandboxMountSpec>;
 
-export const sandboxTmpfsSpecSchema = z.object({
-  targetPath: sandboxPathSchema,
-  sizeBytes: positiveInteger.optional(),
-  mode: nonNegativeInteger.optional(),
-  noExec: z.boolean().optional(),
-  noSuid: z.boolean().optional(),
-  noDev: z.boolean().optional(),
-}) satisfies ZodType<SandboxTmpfsSpec>;
+export const sandboxTmpfsSpecSchema = z
+  .object({
+    targetPath: sandboxPathSchema,
+    sizeBytes: positiveInteger.optional(),
+    mode: nonNegativeInteger.optional(),
+    noExec: z.boolean().optional(),
+    noSuid: z.boolean().optional(),
+    noDev: z.boolean().optional(),
+  })
+  .strict() satisfies ZodType<SandboxTmpfsSpec>;
 
 export const sandboxFilesystemPolicySpecSchema = z
   .object({
@@ -167,6 +174,7 @@ export const sandboxFilesystemPolicySpecSchema = z
     allowHostPathMounts: z.boolean().optional(),
     maxMounts: positiveInteger.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.allowedDevices?.length && !value.allowDeviceAccess) {
       context.addIssue({
@@ -226,6 +234,7 @@ export const networkPolicySpecSchema = z
     maxBytesSent: positiveInteger.optional(),
     maxBytesReceived: positiveInteger.optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     addOverlapIssue(value.allowedDomains, value.deniedDomains, context, 'deniedDomains');
     addOverlapIssue(value.allowedCidrs, value.deniedCidrs, context, 'deniedCidrs');
@@ -277,6 +286,7 @@ export const sandboxSecurityPolicySpecSchema = z
     allowNestedContainers: z.boolean().optional().default(false),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     addOverlapIssue(value.dropCapabilities, value.addCapabilities, context, 'addCapabilities');
   }) satisfies ZodType<SandboxSecurityPolicySpec>;
@@ -292,6 +302,7 @@ export const secretInjectionPolicySpecSchema = z
     revokeOnExecutionEnd: z.boolean().optional(),
     allowChildProcessInheritance: z.boolean().optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.injectionMode === 'none' && value.allowedSecretRefs?.length) {
       context.addIssue({
@@ -309,30 +320,34 @@ export const secretInjectionPolicySpecSchema = z
     }
   }) satisfies ZodType<SecretInjectionPolicySpec>;
 
-export const executionLoggingPolicySpecSchema = z.object({
-  captureStdout: z.boolean(),
-  captureStderr: z.boolean(),
-  streamOutput: z.boolean().optional(),
-  includeTimestamps: z.boolean().optional(),
-  maxLineBytes: positiveInteger.optional(),
-  redactPatterns: z.array(nonEmptyString).optional(),
-  persistOutputAsArtifact: z.boolean().optional(),
-}) satisfies ZodType<ExecutionLoggingPolicySpec>;
+export const executionLoggingPolicySpecSchema = z
+  .object({
+    captureStdout: z.boolean(),
+    captureStderr: z.boolean(),
+    streamOutput: z.boolean().optional(),
+    includeTimestamps: z.boolean().optional(),
+    maxLineBytes: positiveInteger.optional(),
+    redactPatterns: z.array(nonEmptyString).optional(),
+    persistOutputAsArtifact: z.boolean().optional(),
+  })
+  .strict() satisfies ZodType<ExecutionLoggingPolicySpec>;
 
-export const sandboxLifecyclePolicySpecSchema = z.object({
-  reuse: z.enum(['never', 'run', 'session', 'pool']),
-  idleTtlSeconds: positiveInteger.optional(),
-  maxLifetimeSeconds: positiveInteger.optional(),
-  maxExecutions: positiveInteger.optional(),
-  createTimeoutMs: positiveInteger.optional(),
-  startTimeoutMs: positiveInteger.optional(),
-  stopTimeoutMs: positiveInteger.optional(),
-  cleanupTimeoutMs: positiveInteger.optional(),
-  snapshotOnFailure: z.boolean().optional(),
-  cleanupOnSuccess: z.boolean().optional(),
-  cleanupOnFailure: z.boolean().optional(),
-  retainForDebugSeconds: nonNegativeInteger.optional(),
-}) satisfies ZodType<SandboxLifecyclePolicySpec>;
+export const sandboxLifecyclePolicySpecSchema = z
+  .object({
+    reuse: z.enum(['never', 'run', 'session', 'pool']),
+    idleTtlSeconds: positiveInteger.optional(),
+    maxLifetimeSeconds: positiveInteger.optional(),
+    maxExecutions: positiveInteger.optional(),
+    createTimeoutMs: positiveInteger.optional(),
+    startTimeoutMs: positiveInteger.optional(),
+    stopTimeoutMs: positiveInteger.optional(),
+    cleanupTimeoutMs: positiveInteger.optional(),
+    snapshotOnFailure: z.boolean().optional(),
+    cleanupOnSuccess: z.boolean().optional(),
+    cleanupOnFailure: z.boolean().optional(),
+    retainForDebugSeconds: nonNegativeInteger.optional(),
+  })
+  .strict() satisfies ZodType<SandboxLifecyclePolicySpec>;
 
 export const executionEnvironmentSpecSchema = versionedSpecSchema
   .merge(specMetadataSchema)
@@ -353,6 +368,7 @@ export const executionEnvironmentSpecSchema = versionedSpecSchema
     defaultTimeoutMs: positiveInteger,
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.provider === 'docker') {
       if (!value.image) {

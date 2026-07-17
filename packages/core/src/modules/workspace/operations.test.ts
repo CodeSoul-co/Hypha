@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecutionPrincipal } from '../../contracts/execution';
 import {
+  validateFileMutation,
+  validateResolvedWorkspacePath,
   validateWorkspaceDeleteRequest,
+  validateWorkspaceFileEntry,
   validateWorkspaceListRequest,
   validateWorkspacePathRequest,
   validateWorkspaceReadRequest,
+  validateWorkspaceReadResult,
   validateWorkspaceWriteResult,
   validateWorkspaceWriteRequest,
+  workspaceDeleteRequestExample,
   workspaceOperationJsonSchemas,
+  workspaceWriteRequestExample,
+  workspaceWriteResultExample,
 } from './operations';
 
 const principal: ExecutionPrincipal = {
@@ -18,6 +25,18 @@ const principal: ExecutionPrincipal = {
 };
 
 describe('Workspace operation contracts', () => {
+  it('validates reusable write, delete, and result fixtures', () => {
+    expect(validateWorkspaceWriteRequest(workspaceWriteRequestExample)).toEqual(
+      workspaceWriteRequestExample
+    );
+    expect(validateWorkspaceDeleteRequest(workspaceDeleteRequestExample)).toEqual(
+      workspaceDeleteRequestExample
+    );
+    expect(validateWorkspaceWriteResult(workspaceWriteResultExample)).toEqual(
+      workspaceWriteResultExample
+    );
+  });
+
   it('validates a governed relative path request', () => {
     expect(
       validateWorkspacePathRequest({
@@ -141,6 +160,60 @@ describe('Workspace operation contracts', () => {
       afterHash: 'sha256:after',
       mutation: { operation: 'modified' },
     });
+  });
+
+  it('validates every remaining Workspace operation output boundary', () => {
+    const mutation = {
+      path: 'working/output.txt',
+      operation: 'created' as const,
+      afterHash: 'sha256:output',
+      detectedAt: '2026-07-17T00:00:02.000Z',
+    };
+    expect(validateFileMutation(mutation)).toEqual(mutation);
+    expect(
+      validateResolvedWorkspacePath({
+        workspaceId: 'workspace:1',
+        relativePath: 'working/output.txt',
+        canonicalRelativePath: 'working/output.txt',
+        pathRef: 'workspace-path:output',
+        exists: true,
+        kind: 'file',
+        permissions: ['read', 'write'],
+        contentHash: 'sha256:output',
+      })
+    ).toMatchObject({ exists: true, kind: 'file' });
+    expect(
+      validateWorkspaceFileEntry({
+        relativePath: 'working/output.txt',
+        kind: 'file',
+        sizeBytes: 14,
+        contentHash: 'sha256:output',
+      })
+    ).toMatchObject({ kind: 'file', sizeBytes: 14 });
+    expect(
+      validateWorkspaceReadResult({
+        relativePath: 'working/output.txt',
+        encoding: 'utf8',
+        content: 'example output',
+        contentHash: 'sha256:output',
+        sizeBytes: 14,
+      })
+    ).toMatchObject({ encoding: 'utf8', sizeBytes: 14 });
+  });
+
+  it('rejects undeclared operation request and result fields', () => {
+    expect(() =>
+      validateWorkspacePathRequest({
+        workspaceId: 'workspace:1',
+        principal,
+        relativePath: 'working/output.txt',
+        operation: 'read',
+        unexpected: true,
+      })
+    ).toThrow();
+    expect(() =>
+      validateWorkspaceWriteResult({ ...workspaceWriteResultExample, unexpected: true })
+    ).toThrow();
   });
 
   it('exports JSON Schema boundaries for every operation request', () => {

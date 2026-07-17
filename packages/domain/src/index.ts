@@ -1,5 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'crypto';
+import stableStringify from 'fast-json-stable-stringify';
 import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import type {
@@ -196,10 +198,42 @@ export interface DomainCompilationResult {
   domainPack: DomainPackSpec;
   bindings: DomainBindingResolution;
   fsmProcess: FSMProcessSpec;
+  workflowRef: SpecRef;
+  compilerVersion: string;
+  processHash: string;
+  dependencySnapshot: WorkflowDependencySnapshot;
   harnessedSystem: HarnessedAgentSystemSpec;
   agentPatch: DomainAgentPatch;
   sessionInitialization: DomainSessionInitialization;
 }
+
+export interface WorkflowDependencySnapshot {
+  domainPackRefs: SpecRef[];
+  taskSchemaRefs: SpecRef[];
+  outputContractRefs: SpecRef[];
+  sessionProfileRefs: SpecRef[];
+  agentRefs: SpecRef[];
+  skillRefs: SpecRef[];
+  skillPolicyRefs: SpecRef[];
+  toolRefs: SpecRef[];
+  toolProfileRefs: SpecRef[];
+  mcpProfileRefs: SpecRef[];
+  memoryProfileRefs: SpecRef[];
+  contextProfileRefs: SpecRef[];
+  reasoningProfileRefs: SpecRef[];
+  workspaceProfileRefs: SpecRef[];
+  businessRuleRefs: SpecRef[];
+  policyRefs: SpecRef[];
+  evaluationRefs: SpecRef[];
+  traceRefs: SpecRef[];
+  modelProfileRefs: SpecRef[];
+  replayRefs: SpecRef[];
+  regressionRefs: SpecRef[];
+  deploymentRefs: SpecRef[];
+  dependencyHash: string;
+}
+
+export const DOMAIN_COMPILER_VERSION = '1.0.0';
 
 export type DomainPackOverlayCollection =
   | 'taskSchemas'
@@ -821,6 +855,13 @@ export function compileDomainPackToHarnessedSystem(
     fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
     agentRef: options.agentRef,
   });
+  const workflowRef = toSpecRef(workflow);
+  const traceRef = options.traceRef ?? {
+    id: `${domainPack.id}.trace`,
+    version: domainPack.version,
+  };
+  const regressionRef = options.regressionRef ?? toOptionalSpecRef(domainPack.regressionCases?.[0]);
+  const deploymentRef = options.deploymentRef ?? toOptionalSpecRef(domainPack.deploymentProfile);
   const harnessedSystem: HarnessedAgentSystemSpec = {
     id: options.systemId ?? `${domainPack.id}.${workflow.id}.system`,
     version: options.systemVersion ?? domainPack.version,
@@ -828,10 +869,7 @@ export function compileDomainPackToHarnessedSystem(
     description: domainPack.description,
     agentRef: options.agentRef,
     fsmProcessRef: toSpecRef(fsmProcess),
-    traceRef: options.traceRef ?? {
-      id: `${domainPack.id}.trace`,
-      version: domainPack.version,
-    },
+    traceRef,
     policyRefs: idsToRefs(policyIds, domainPack.policies),
     memoryRefs: memoryProfile ? [toSpecRef(memoryProfile)] : undefined,
     toolRefs: idsToRefs(selectedToolIds, domainPack.tools),
@@ -844,10 +882,46 @@ export function compileDomainPackToHarnessedSystem(
     modelProfileRef: options.modelProfileRef,
     evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles),
     replayRef: options.replayRef,
-    regressionRef: options.regressionRef ?? toOptionalSpecRef(domainPack.regressionCases?.[0]),
-    deploymentRef: options.deploymentRef ?? toOptionalSpecRef(domainPack.deploymentProfile),
+    regressionRef,
+    deploymentRef,
     tags: mergeStrings(domainPack.tags, ['compiled-from-domain-pack', domainPack.id]),
   };
+  const selectedSkillIds = new Set(selectedSkillRefs.map((ref) => ref.id));
+  const selectedSkillPolicies = (domainPack.skillPolicies ?? []).filter((binding) =>
+    selectedSkillIds.has(binding.skillRef.id)
+  );
+  const dependencySnapshot = createWorkflowDependencySnapshot({
+    domainPackRefs: [toSpecRef(domainPack)],
+    taskSchemaRefs: taskSchema ? [toSpecRef(taskSchema)] : [],
+    outputContractRefs: outputContract ? [toSpecRef(outputContract)] : [],
+    sessionProfileRefs: sessionInitialization.sessionProfileRef
+      ? [sessionInitialization.sessionProfileRef]
+      : [],
+    agentRefs: [options.agentRef],
+    skillRefs: selectedSkillRefs,
+    skillPolicyRefs: selectedSkillPolicies.map(toSpecRef),
+    toolRefs: idsToRefs(selectedToolIds, domainPack.tools) ?? [],
+    toolProfileRefs: idsToRefs(selectedToolProfileIds, domainPack.toolProfiles) ?? [],
+    mcpProfileRefs: idsToRefs(mcpProfileIds, domainPack.mcpProfiles) ?? [],
+    memoryProfileRefs: memoryProfile ? [toSpecRef(memoryProfile)] : [],
+    contextProfileRefs: contextProfile ? [toSpecRef(contextProfile)] : [],
+    reasoningProfileRefs: idsToRefs(reasoningProfileIds, domainPack.reasoningProfiles) ?? [],
+    workspaceProfileRefs: [],
+    businessRuleRefs: domainPack.businessRules?.map(toSpecRef) ?? [],
+    policyRefs: idsToRefs(policyIds, domainPack.policies) ?? [],
+    evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles) ?? [],
+    traceRefs: [traceRef],
+    modelProfileRefs: options.modelProfileRef ? [options.modelProfileRef] : [],
+    replayRefs: options.replayRef ? [options.replayRef] : [],
+    regressionRefs: regressionRef ? [regressionRef] : [],
+    deploymentRefs: deploymentRef ? [deploymentRef] : [],
+  });
+  const processHash = hashDomainCompilation({
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    workflowRef,
+    fsmProcess,
+    dependencySnapshot,
+  });
   const agentPatch: DomainAgentPatch = {
     skillRefs: selectedSkillRefs,
     toolRefs: selectedToolIds,
@@ -894,9 +968,46 @@ export function compileDomainPackToHarnessedSystem(
       workflowStates: workflowStateBindings,
     },
     fsmProcess,
+    workflowRef,
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    processHash,
+    dependencySnapshot,
     harnessedSystem,
     agentPatch,
     sessionInitialization,
+  };
+}
+
+export function createWorkflowDependencySnapshot(
+  input: Omit<WorkflowDependencySnapshot, 'dependencyHash'>
+): WorkflowDependencySnapshot {
+  const dependencies = {
+    domainPackRefs: cloneRefs(input.domainPackRefs),
+    taskSchemaRefs: cloneRefs(input.taskSchemaRefs),
+    outputContractRefs: cloneRefs(input.outputContractRefs),
+    sessionProfileRefs: cloneRefs(input.sessionProfileRefs),
+    agentRefs: cloneRefs(input.agentRefs),
+    skillRefs: cloneRefs(input.skillRefs),
+    skillPolicyRefs: cloneRefs(input.skillPolicyRefs),
+    toolRefs: cloneRefs(input.toolRefs),
+    toolProfileRefs: cloneRefs(input.toolProfileRefs),
+    mcpProfileRefs: cloneRefs(input.mcpProfileRefs),
+    memoryProfileRefs: cloneRefs(input.memoryProfileRefs),
+    contextProfileRefs: cloneRefs(input.contextProfileRefs),
+    reasoningProfileRefs: cloneRefs(input.reasoningProfileRefs),
+    workspaceProfileRefs: cloneRefs(input.workspaceProfileRefs),
+    businessRuleRefs: cloneRefs(input.businessRuleRefs),
+    policyRefs: cloneRefs(input.policyRefs),
+    evaluationRefs: cloneRefs(input.evaluationRefs),
+    traceRefs: cloneRefs(input.traceRefs),
+    modelProfileRefs: cloneRefs(input.modelProfileRefs),
+    replayRefs: cloneRefs(input.replayRefs),
+    regressionRefs: cloneRefs(input.regressionRefs),
+    deploymentRefs: cloneRefs(input.deploymentRefs),
+  };
+  return {
+    ...dependencies,
+    dependencyHash: hashDomainCompilation(dependencies),
   };
 }
 
@@ -1136,6 +1247,27 @@ function toSpecRef(spec: VersionedSpec): SpecRef {
 
 function toOptionalSpecRef(spec: VersionedSpec | undefined): SpecRef | undefined {
   return spec ? toSpecRef(spec) : undefined;
+}
+
+function cloneRefs(refs: SpecRef[]): SpecRef[] {
+  return refs
+    .map((ref) => ({
+      id: ref.id,
+      ...(ref.version === undefined ? {} : { version: ref.version }),
+      ...(ref.revision === undefined ? {} : { revision: ref.revision }),
+    }))
+    .sort(compareSpecRefs);
+}
+
+function compareSpecRefs(left: SpecRef, right: SpecRef): number {
+  const leftKey = `${left.id}\u0000${left.version ?? ''}\u0000${left.revision ?? ''}`;
+  const rightKey = `${right.id}\u0000${right.version ?? ''}\u0000${right.revision ?? ''}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function hashDomainCompilation(value: unknown): string {
+  const canonicalJson = stableStringify(value);
+  return `sha256:${createHash('sha256').update(canonicalJson).digest('hex')}`;
 }
 
 function compactRecord(input: Record<string, unknown>): Record<string, unknown> {

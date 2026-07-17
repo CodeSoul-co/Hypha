@@ -7,6 +7,7 @@ import {
   businessRuleSpecDefinition,
   compileWorkflowToFSM,
   compileDomainPackToHarnessedSystem,
+  createWorkflowDependencySnapshot,
   DomainPackRegistry,
   domainPackSpecDefinition,
   domainSpecJsonSchemas,
@@ -420,6 +421,21 @@ describe('@hypha/domain workflow compiler', () => {
       initialState: 'Intake',
       terminalStates: ['Completed', 'Failed', 'Cancelled'],
     });
+    expect(compiled).toMatchObject({
+      workflowRef: { id: 'workflow.default', version: '0.0.0' },
+      compilerVersion: '1.0.0',
+      dependencySnapshot: {
+        agentRefs: [{ id: 'agent.default', version: '0.0.0' }],
+        toolProfileRefs: [{ id: 'tools.default', version: '1.0.0' }],
+        memoryProfileRefs: [{ id: 'memory.default', version: '0.0.0' }],
+        contextProfileRefs: [{ id: 'context.default', version: '0.0.0' }],
+        workspaceProfileRefs: [],
+        policyRefs: [{ id: 'policy.default', version: '0.0.0' }],
+        evaluationRefs: [{ id: 'eval.output-schema', version: '0.0.0' }],
+      },
+    });
+    expect(compiled.processHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(compiled.dependencySnapshot.dependencyHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(compiled.harnessedSystem).toMatchObject({
       id: 'domain.default.workflow.default.system',
       agentRef: { id: 'agent.default', version: '0.0.0' },
@@ -491,6 +507,26 @@ describe('@hypha/domain workflow compiler', () => {
     expect(() =>
       resolveWorkflowToolExecutionScope(compiled.bindings.workflowStates, 'Unknown')
     ).toThrow('Workflow state binding not found: Unknown');
+
+    const repeated = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      metadata: { requestSource: 'test' },
+    });
+    expect(repeated.processHash).toBe(compiled.processHash);
+    expect(repeated.dependencySnapshot.dependencyHash).toBe(
+      compiled.dependencySnapshot.dependencyHash
+    );
+
+    const changedDependency = structuredClone(domainPackSpecDefinition.example);
+    changedDependency.toolProfiles![0].version = '1.0.1';
+    const changed = compileDomainPackToHarnessedSystem(changedDependency, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      metadata: { requestSource: 'test' },
+    });
+    expect(changed.dependencySnapshot.dependencyHash).not.toBe(
+      compiled.dependencySnapshot.dependencyHash
+    );
+    expect(changed.processHash).not.toBe(compiled.processHash);
   });
 
   it('compiles only profile-selected tools and gives state denies precedence', () => {
@@ -571,6 +607,75 @@ describe('@hypha/domain workflow compiler', () => {
       allowedToolIds: ['tool.write'],
       policyRefs: ['policy.default'],
     });
+  });
+
+  it('hashes equivalent dependency sets independently of reference order', () => {
+    const first = createWorkflowDependencySnapshot({
+      domainPackRefs: [{ id: 'domain.default', version: '1.0.0' }],
+      taskSchemaRefs: [],
+      outputContractRefs: [],
+      sessionProfileRefs: [],
+      agentRefs: [
+        { id: 'agent.z', version: '1.0.0' },
+        { id: 'agent.a', version: '1.0.0' },
+      ],
+      skillRefs: [],
+      skillPolicyRefs: [],
+      toolRefs: [],
+      toolProfileRefs: [{ id: 'tools.default', version: '1.0.0' }],
+      mcpProfileRefs: [],
+      memoryProfileRefs: [],
+      contextProfileRefs: [],
+      reasoningProfileRefs: [],
+      workspaceProfileRefs: [],
+      businessRuleRefs: [],
+      policyRefs: [],
+      evaluationRefs: [],
+      traceRefs: [],
+      modelProfileRefs: [],
+      replayRefs: [],
+      regressionRefs: [],
+      deploymentRefs: [],
+    });
+    const reversed = createWorkflowDependencySnapshot({
+      ...first,
+      agentRefs: [...first.agentRefs].reverse(),
+    });
+
+    expect(reversed.agentRefs).toEqual(first.agentRefs);
+    expect(reversed.dependencyHash).toBe(first.dependencyHash);
+  });
+
+  it('invalidates the process hash when any runtime dependency family changes', () => {
+    const base = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.0' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+    const changedPack = structuredClone(domainPackSpecDefinition.example);
+    changedPack.mcpProfiles![0].version = '0.0.1';
+    changedPack.toolProfiles![0].mcpProfileRefs![0].version = '0.0.1';
+    const changedMcp = compileDomainPackToHarnessedSystem(changedPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.0' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+    const changedModel = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.1' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+
+    expect(base.dependencySnapshot).toMatchObject({
+      toolRefs: [{ id: 'tool.search', version: '0.0.0' }],
+      skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      mcpProfileRefs: [{ id: 'mcp.default', version: '0.0.0' }],
+      reasoningProfileRefs: [{ id: 'reasoning.default', version: '0.0.0' }],
+      modelProfileRefs: [{ id: 'model.default', version: '1.0.0' }],
+      replayRefs: [{ id: 'replay.default', version: '1.0.0' }],
+    });
+    expect(changedMcp.processHash).not.toBe(base.processHash);
+    expect(changedModel.processHash).not.toBe(base.processHash);
   });
 
   it('projects state-scoped MCP and reasoning profiles into compiled system refs', () => {
