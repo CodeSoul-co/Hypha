@@ -403,62 +403,89 @@ export function validateRemoteArtifactTransferReceipt(
   return remoteArtifactTransferReceiptSchema.parse(input);
 }
 
+export interface RemoteArtifactChunkSequenceProgress {
+  chunksValidated: number;
+  bytesValidated: number;
+  completed: boolean;
+}
+
+/** Validates a remote Artifact transfer incrementally without retaining chunk content. */
+export class RemoteArtifactChunkSequenceValidator {
+  private readonly expectation: RemoteArtifactChunkSequenceExpectation;
+  private nextSequence = 0;
+  private nextOffsetBytes = 0;
+  private completed = false;
+
+  constructor(expectationInput: unknown) {
+    this.expectation = remoteArtifactChunkSequenceExpectationSchema.parse(expectationInput);
+  }
+
+  push(input: unknown): RemoteArtifactChunk {
+    if (this.completed) {
+      throw chunkSequenceError([], 'must not contain chunks after the final chunk');
+    }
+    const chunk = remoteArtifactChunkSchema.parse(input);
+    if (chunk.transferId !== this.expectation.transferId) {
+      throw chunkSequenceError(['transferId'], 'must match the transfer expectation');
+    }
+    if (chunk.artifactRef !== this.expectation.artifactRef) {
+      throw chunkSequenceError(['artifactRef'], 'must match the transfer expectation');
+    }
+    if (chunk.sequence !== this.nextSequence) {
+      throw chunkSequenceError(['sequence'], 'must be contiguous and start at zero');
+    }
+    if (chunk.offsetBytes !== this.nextOffsetBytes) {
+      throw chunkSequenceError(['offsetBytes'], 'must be contiguous with the previous chunk');
+    }
+
+    const nextOffsetBytes = this.nextOffsetBytes + chunk.byteLength;
+    if (nextOffsetBytes > this.expectation.sizeBytes) {
+      throw chunkSequenceError([], 'decoded chunk bytes exceed the expected transfer size');
+    }
+    if (chunk.final && nextOffsetBytes !== this.expectation.sizeBytes) {
+      throw chunkSequenceError(
+        ['final'],
+        'final chunk must complete the expected transfer size'
+      );
+    }
+    if (!chunk.final && nextOffsetBytes === this.expectation.sizeBytes) {
+      throw chunkSequenceError(['final'], 'must be true when the expected transfer size is reached');
+    }
+
+    this.nextSequence += 1;
+    this.nextOffsetBytes = nextOffsetBytes;
+    this.completed = chunk.final;
+    return chunk;
+  }
+
+  progress(): RemoteArtifactChunkSequenceProgress {
+    return {
+      chunksValidated: this.nextSequence,
+      bytesValidated: this.nextOffsetBytes,
+      completed: this.completed,
+    };
+  }
+
+  finish(): RemoteArtifactChunkSequenceProgress {
+    if (!this.completed) {
+      throw chunkSequenceError([], 'stream ended before a final chunk completed the transfer');
+    }
+    return this.progress();
+  }
+}
+
 export function validateRemoteArtifactChunkSequence(
   input: readonly unknown[],
   expectationInput: unknown
 ): RemoteArtifactChunk[] {
-  const expectation = remoteArtifactChunkSequenceExpectationSchema.parse(expectationInput);
-  return z
-    .array(remoteArtifactChunkSchema)
-    .min(1)
-    .superRefine((chunks, context) => {
-      let expectedOffset = 0;
-      chunks.forEach((chunk, index) => {
-        if (chunk.transferId !== expectation.transferId) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [index, 'transferId'],
-            message: 'must match the transfer expectation',
-          });
-        }
-        if (chunk.artifactRef !== expectation.artifactRef) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [index, 'artifactRef'],
-            message: 'must match the transfer expectation',
-          });
-        }
-        if (chunk.sequence !== index) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [index, 'sequence'],
-            message: 'must be contiguous and start at zero',
-          });
-        }
-        if (chunk.offsetBytes !== expectedOffset) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [index, 'offsetBytes'],
-            message: 'must be contiguous with the previous chunk',
-          });
-        }
-        if (chunk.final !== (index === chunks.length - 1)) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [index, 'final'],
-            message: 'must be true only for the final chunk',
-          });
-        }
-        expectedOffset += chunk.byteLength;
-      });
-      if (expectedOffset !== expectation.sizeBytes) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'decoded chunk bytes must equal the expected transfer size',
-        });
-      }
-    })
-    .parse(input);
+  const validator = new RemoteArtifactChunkSequenceValidator(expectationInput);
+  const chunks = input.map((chunk) => validator.push(chunk));
+  validator.finish();
+  return chunks;
+}
+
+function chunkSequenceError(path: Array<string | number>, message: string): z.ZodError {
+  return new z.ZodError([{ code: z.ZodIssueCode.custom, path, message }]);
 }
 
 function isBase64(value: string): boolean {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  RemoteArtifactChunkSequenceValidator,
   remoteArtifactChunkExample,
   remoteArtifactChunkSequenceExpectationExample,
   remoteArtifactDownloadRequestExample,
@@ -115,6 +116,48 @@ describe('Remote Sandbox Provider contract', () => {
         sizeBytes: 4,
       })
     ).toThrow();
+  });
+
+  it('validates streamed Artifact chunks incrementally without buffering the transfer', () => {
+    const validator = new RemoteArtifactChunkSequenceValidator(
+      remoteArtifactChunkSequenceExpectationExample
+    );
+    const first = {
+      ...remoteArtifactChunkExample,
+      content: 'YQ==',
+      byteLength: 1,
+      contentHash: 'sha256:chunk-a',
+      final: false,
+    };
+    const second = {
+      ...remoteArtifactChunkExample,
+      sequence: 1,
+      offsetBytes: 1,
+      content: 'YmM=',
+      byteLength: 2,
+      contentHash: 'sha256:chunk-bc',
+      final: true,
+    };
+
+    expect(validator.push(first)).toEqual(first);
+    expect(validator.progress()).toEqual({
+      chunksValidated: 1,
+      bytesValidated: 1,
+      completed: false,
+    });
+    expect(validator.push(second)).toEqual(second);
+    expect(validator.finish()).toEqual({
+      chunksValidated: 2,
+      bytesValidated: 3,
+      completed: true,
+    });
+    expect(() => validator.push(second)).toThrow('after the final chunk');
+
+    const truncated = new RemoteArtifactChunkSequenceValidator(
+      remoteArtifactChunkSequenceExpectationExample
+    );
+    truncated.push(first);
+    expect(() => truncated.finish()).toThrow('stream ended before a final chunk');
   });
 
   it('requires integrity evidence for completed transfer receipts', () => {
