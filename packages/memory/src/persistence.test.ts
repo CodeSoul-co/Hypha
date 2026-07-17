@@ -34,4 +34,17 @@ describe('memory persistence unit of work', () => {
     expect(await unitOfWork.recordStore.get(record.id, record.scope)).toBeNull();
     expect(await unitOfWork.outboxStore.list()).toEqual([]);
   });
+
+  it('removes current and historical versions during a hard delete', async () => {
+    const unitOfWork = new InMemoryMemoryPersistenceUnitOfWork();
+    const record = structuredClone(managedMemoryRecordExample);
+
+    await unitOfWork.recordStore.create(record);
+    await expect(unitOfWork.recordStore.history(record.id, record.scope)).resolves.toHaveLength(1);
+
+    await unitOfWork.recordStore.delete(record.id, record.scope);
+
+    await expect(unitOfWork.recordStore.get(record.id, record.scope)).resolves.toBeNull();
+    await expect(unitOfWork.recordStore.history(record.id, record.scope)).resolves.toEqual([]);
+  });
 });

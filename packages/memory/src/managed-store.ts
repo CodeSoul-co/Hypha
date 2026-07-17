@@ -182,6 +182,7 @@ export class InMemoryManagedMemoryRecordStore implements ManagedMemoryRecordStor
   async delete(id: string, scope: ManagedMemoryScope): Promise<void> {
     const key = recordKey(scope, id);
     this.records.delete(key);
+    this.versions.delete(key);
   }
 
   async history(id: string, scope: ManagedMemoryScope): Promise<ManagedMemoryRecord[]> {

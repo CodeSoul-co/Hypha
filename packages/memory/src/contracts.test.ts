@@ -60,6 +60,35 @@ describe('@hypha/memory production contracts', () => {
     );
   });
 
+  it('rejects unknown top-level fields consistently with exported JSON schemas', () => {
+    const cases: Array<() => unknown> = [
+      () => validateMemoryProfileSpec({ ...memoryProfileSpecExample, unexpectedSecret: 'value' }),
+      () =>
+        memoryManagementProviderSpecSchema.parse({
+          ...memoryManagementProviderSpecExample,
+          unexpectedSecret: 'value',
+        }),
+      () =>
+        validateWorkingMemoryStoreSpec({
+          ...workingMemoryStoreSpecExample,
+          unexpectedSecret: 'value',
+        }),
+      () =>
+        validateMemoryRecordStoreSpec({
+          ...memoryRecordStoreSpecExample,
+          unexpectedSecret: 'value',
+        }),
+      () => validateVectorStoreSpec({ ...vectorStoreSpecExample, unexpectedSecret: 'value' }),
+      () =>
+        validateEmbeddingProviderSpec({
+          ...embeddingProviderSpecExample,
+          unexpectedSecret: 'value',
+        }),
+    ];
+
+    for (const validate of cases) expect(validate).toThrow(/unrecognized/i);
+  });
+
   it('rejects profiles without an explicit user scope boundary', () => {
     expect(() =>
       validateMemoryProfileSpec({

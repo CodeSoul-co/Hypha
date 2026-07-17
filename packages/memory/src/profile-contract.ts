@@ -164,50 +164,52 @@ export const memoryManagementCapabilitiesSchema: ZodType<MemoryManagementCapabil
 });
 
 export const memoryManagementProviderSpecSchema: ZodType<MemoryManagementProviderSpec> =
-  versionedSpecSchema.extend({
-    revision: z.string().optional(),
-    name: z.string().optional(),
-    type: z.enum(['native', 'mem0', 'memorybank', 'custom']),
-    deployment: z.enum(['embedded', 'local', 'self_hosted', 'managed', 'remote']),
-    connectionRef: z.string().optional(),
-    config: metadataSchema.optional(),
-    capabilities: memoryManagementCapabilitiesSchema,
-    timeoutPolicy: z
-      .object({
-        timeoutMs: z.number().int().positive(),
-        operationTimeouts: z
-          .record(
-            z.enum(['add', 'search', 'get', 'list', 'update', 'delete']),
-            z.number().int().positive()
-          )
-          .optional(),
-      })
-      .optional(),
-    retryPolicy: z
-      .object({
-        maxAttempts: z.number().int().positive(),
-        initialDelayMs: z.number().int().min(0).optional(),
-        maxDelayMs: z.number().int().min(0).optional(),
-        backoff: z.enum(['fixed', 'exponential']).optional(),
-      })
-      .optional(),
-    circuitBreakerPolicy: z
-      .object({
-        failureThreshold: z.number().int().positive(),
-        resetAfterMs: z.number().int().positive(),
-      })
-      .optional(),
-    healthCheckPolicy: z
-      .object({
-        intervalMs: z.number().int().positive().optional(),
-        timeoutMs: z.number().int().positive().optional(),
-      })
-      .optional(),
-    metadata: metadataSchema.optional(),
-  });
+  versionedSpecSchema
+    .extend({
+      revision: z.string().optional(),
+      name: z.string().optional(),
+      type: z.enum(['native', 'mem0', 'memorybank', 'custom']),
+      deployment: z.enum(['embedded', 'local', 'self_hosted', 'managed', 'remote']),
+      connectionRef: z.string().optional(),
+      config: metadataSchema.optional(),
+      capabilities: memoryManagementCapabilitiesSchema,
+      timeoutPolicy: z
+        .object({
+          timeoutMs: z.number().int().positive(),
+          operationTimeouts: z
+            .record(
+              z.enum(['add', 'search', 'get', 'list', 'update', 'delete']),
+              z.number().int().positive()
+            )
+            .optional(),
+        })
+        .optional(),
+      retryPolicy: z
+        .object({
+          maxAttempts: z.number().int().positive(),
+          initialDelayMs: z.number().int().min(0).optional(),
+          maxDelayMs: z.number().int().min(0).optional(),
+          backoff: z.enum(['fixed', 'exponential']).optional(),
+        })
+        .optional(),
+      circuitBreakerPolicy: z
+        .object({
+          failureThreshold: z.number().int().positive(),
+          resetAfterMs: z.number().int().positive(),
+        })
+        .optional(),
+      healthCheckPolicy: z
+        .object({
+          intervalMs: z.number().int().positive().optional(),
+          timeoutMs: z.number().int().positive().optional(),
+        })
+        .optional(),
+      metadata: metadataSchema.optional(),
+    })
+    .strict();
 
-export const workingMemoryStoreSpecSchema: ZodType<WorkingMemoryStoreSpec> =
-  versionedSpecSchema.extend({
+export const workingMemoryStoreSpecSchema: ZodType<WorkingMemoryStoreSpec> = versionedSpecSchema
+  .extend({
     type: z.enum(['in_memory', 'redis', 'custom']),
     connectionRef: z.string().optional(),
     namespace: z.string().optional(),
@@ -216,10 +218,11 @@ export const workingMemoryStoreSpecSchema: ZodType<WorkingMemoryStoreSpec> =
     serialization: z.enum(['json', 'msgpack']).optional(),
     encryptionRef: z.string().optional(),
     metadata: metadataSchema.optional(),
-  });
+  })
+  .strict();
 
-export const embeddingProviderSpecSchema: ZodType<EmbeddingProviderSpec> =
-  versionedSpecSchema.extend({
+export const embeddingProviderSpecSchema: ZodType<EmbeddingProviderSpec> = versionedSpecSchema
+  .extend({
     provider: z.string().min(1),
     model: z.string().min(1),
     dimensions: z.number().int().positive().optional(),
@@ -229,10 +232,11 @@ export const embeddingProviderSpecSchema: ZodType<EmbeddingProviderSpec> =
     connectionRef: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     metadata: metadataSchema.optional(),
-  });
+  })
+  .strict();
 
-export const memoryRecordStoreSpecSchema: ZodType<MemoryRecordStoreSpec> =
-  versionedSpecSchema.extend({
+export const memoryRecordStoreSpecSchema: ZodType<MemoryRecordStoreSpec> = versionedSpecSchema
+  .extend({
     type: z.enum(['mongodb', 'sqlite', 'postgres', 'custom']),
     connectionRef: z.string().optional(),
     database: z.string().optional(),
@@ -241,7 +245,8 @@ export const memoryRecordStoreSpecSchema: ZodType<MemoryRecordStoreSpec> =
     historyMode: z.enum(['embedded_versions', 'separate_versions', 'event_projection']).optional(),
     encryptionRef: z.string().optional(),
     metadata: metadataSchema.optional(),
-  });
+  })
+  .strict();
 
 export const vectorStoreCapabilitiesSchema: ZodType<VectorStoreCapabilities> = z.object({
   denseSearch: z.boolean(),
@@ -258,44 +263,50 @@ export const vectorStoreCapabilitiesSchema: ZodType<VectorStoreCapabilities> = z
   localDeployment: z.boolean(),
 });
 
-export const vectorStoreSpecSchema: ZodType<VectorStoreSpec> = versionedSpecSchema.extend({
-  type: z.enum(['local', 'qdrant', 'milvus', 'chroma', 'pinecone', 'pgvector', 'custom']),
-  connectionRef: z.string().optional(),
-  collection: z.string().min(1),
-  namespaceStrategy: z.enum(['scope_hash', 'metadata_filter', 'collection_per_tenant']).optional(),
-  dimensions: z.number().int().positive().optional(),
-  distance: z.enum(['cosine', 'dot', 'l2']).optional(),
-  indexType: z.string().optional(),
-  capabilities: vectorStoreCapabilitiesSchema,
-  writeMode: z.enum(['sync', 'async_outbox', 'dual_write']).optional(),
-  metadata: metadataSchema.optional(),
-});
+export const vectorStoreSpecSchema: ZodType<VectorStoreSpec> = versionedSpecSchema
+  .extend({
+    type: z.enum(['local', 'qdrant', 'milvus', 'chroma', 'pinecone', 'pgvector', 'custom']),
+    connectionRef: z.string().optional(),
+    collection: z.string().min(1),
+    namespaceStrategy: z
+      .enum(['scope_hash', 'metadata_filter', 'collection_per_tenant'])
+      .optional(),
+    dimensions: z.number().int().positive().optional(),
+    distance: z.enum(['cosine', 'dot', 'l2']).optional(),
+    indexType: z.string().optional(),
+    capabilities: vectorStoreCapabilitiesSchema,
+    writeMode: z.enum(['sync', 'async_outbox', 'dual_write']).optional(),
+    metadata: metadataSchema.optional(),
+  })
+  .strict();
 
-export const memoryProfileSpecSchema: ZodType<MemoryProfileSpec> = versionedSpecSchema.extend({
-  revision: z.string().optional(),
-  name: z.string().optional(),
-  description: z.string().optional(),
-  enabled: z.boolean().optional(),
-  managementProviderRef: memoryContractSpecRefSchema,
-  workingStoreRef: memoryContractSpecRefSchema.optional(),
-  recordStoreRef: memoryContractSpecRefSchema,
-  vectorStoreRefs: z.array(memoryContractSpecRefSchema).optional(),
-  artifactStoreRef: memoryContractSpecRefSchema.optional(),
-  embeddingProviderRef: memoryContractSpecRefSchema.optional(),
-  rerankerProviderRef: memoryContractSpecRefSchema.optional(),
-  scopePolicy: memoryScopePolicySpecSchema,
-  retrievalPolicy: memoryRetrievalPolicySpecSchema,
-  writePolicy: memoryWritePolicySpecSchema,
-  retentionPolicy: memoryRetentionPolicySpecSchema,
-  consolidationPolicy: memoryConsolidationPolicySpecSchema.optional(),
-  conflictPolicy: memoryConflictPolicySpecSchema.optional(),
-  fallbackPolicy: memoryFallbackPolicySpecSchema.optional(),
-  privacyPolicy: memoryPrivacyPolicySpecSchema.optional(),
-  indexingPolicy: memoryIndexingPolicySpecSchema.optional(),
-  contextProfileRef: memoryContractSpecRefSchema.optional(),
-  tags: z.array(z.string()).optional(),
-  metadata: metadataSchema.optional(),
-});
+export const memoryProfileSpecSchema: ZodType<MemoryProfileSpec> = versionedSpecSchema
+  .extend({
+    revision: z.string().optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    enabled: z.boolean().optional(),
+    managementProviderRef: memoryContractSpecRefSchema,
+    workingStoreRef: memoryContractSpecRefSchema.optional(),
+    recordStoreRef: memoryContractSpecRefSchema,
+    vectorStoreRefs: z.array(memoryContractSpecRefSchema).optional(),
+    artifactStoreRef: memoryContractSpecRefSchema.optional(),
+    embeddingProviderRef: memoryContractSpecRefSchema.optional(),
+    rerankerProviderRef: memoryContractSpecRefSchema.optional(),
+    scopePolicy: memoryScopePolicySpecSchema,
+    retrievalPolicy: memoryRetrievalPolicySpecSchema,
+    writePolicy: memoryWritePolicySpecSchema,
+    retentionPolicy: memoryRetentionPolicySpecSchema,
+    consolidationPolicy: memoryConsolidationPolicySpecSchema.optional(),
+    conflictPolicy: memoryConflictPolicySpecSchema.optional(),
+    fallbackPolicy: memoryFallbackPolicySpecSchema.optional(),
+    privacyPolicy: memoryPrivacyPolicySpecSchema.optional(),
+    indexingPolicy: memoryIndexingPolicySpecSchema.optional(),
+    contextProfileRef: memoryContractSpecRefSchema.optional(),
+    tags: z.array(z.string()).optional(),
+    metadata: metadataSchema.optional(),
+  })
+  .strict();
 
 const allCapabilities: MemoryManagementCapabilities = {
   add: true,
