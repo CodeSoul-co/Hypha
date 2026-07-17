@@ -92,36 +92,6 @@ Runtime or Harness code remains responsible for capability negotiation, authoriz
 events, durable execution records, and Artifact persistence around provider calls. The local
 adapter only implements the provider boundary and bounded local side effects.
 
-## Docker Execution Provider
-
-`@hypha/adapters-local` exports three composable Docker surfaces:
-
-- `DockerCliCommandRunner` invokes one explicitly configured absolute `docker` executable without a
-  shell and bounds management time, stdout, stderr, and combined output.
-- `DockerEngineCli` translates typed operations into Docker `create`, `start`, `exec`, `inspect`,
-  `stats`, `stop`, `kill`, and `rm` argument arrays.
-- `DockerExecutionProvider` implements the governed `SandboxProvider` lifecycle over an injected
-  `DockerEngineClient`, which keeps provider contract tests independent of a local daemon.
-
-The provider requires an immutable `sha256` image digest, a numeric non-root user, read-only root
-filesystem, exactly one canonical Workspace bind mount, CPU, memory, and PID limits,
-`CAP_DROP=ALL`, no-new-privileges, no shell, no host environment inheritance, and no nested
-containers. Disabled networking maps to Docker's `none` network. Enabled bridge networking is
-available only through explicit provider configuration; restricted and task-authorized networking
-fail closed until a governed egress adapter exists.
-
-Sandboxes are single-use. After every command, including successful, failed, cancelled, timed-out,
-output-limited, and OOM-killed commands, the provider stops the complete container scope, verifies
-that it is no longer running, and force-kills it when graceful stop is insufficient. Cleanup removes
-the owned container and anonymous volumes idempotently. Results carry bounded output, host-visible
-Workspace mutation evidence, Docker inspection receipts, and bounded CPU percentage, memory,
-network, block-I/O, PID, and output metrics when Docker exposes them.
-
-Disk/write limits, volume snapshots, custom security profiles, signature policies, Secret
-injection, output redaction, and restricted egress require dedicated enforcement adapters and are
-rejected rather than silently ignored. Runtime or Harness still owns authorization, capability
-negotiation, lifecycle events, durable records, and Artifact persistence.
-
 ## Remote Sandbox Provider Contract
 
 `RemoteSandboxProvider` extends the common `SandboxProvider` lifecycle without exposing a remote
