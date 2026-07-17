@@ -4,6 +4,7 @@ import {
   inferenceConfig,
   redisConfig,
   reloadConfig,
+  servingCacheConfig,
   storageConfig,
   workCacheConfig,
 } from './index';
@@ -32,7 +33,11 @@ const trackedEnv = [
   'VLLM_BASE_URL',
   'LLAMA_CPP_BASE_URL',
   'OPENAI_INFERENCE_BASE_URL',
+  'HYPHA_SERVING_CACHE',
+  'HYPHA_SERVING_CACHE_ENABLED',
+  'HYPHA_SERVING_CACHE_MODE',
   'HYPHA_WORKCACHE',
+  'HYPHA_WORKCACHE_ENABLED',
   'HYPHA_WORKCACHE_SQLITE_PATH',
   'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
   'HYPHA_FILESYSTEM_WORKING_DIRECTORY',
@@ -154,6 +159,21 @@ describe('configuration storage taxonomy', () => {
       promptBudgetTokens: 2048,
       sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
     });
+
+    process.env.HYPHA_WORKCACHE = 'off';
+    expect(workCacheConfig()).toMatchObject({ enabled: false, store: 'off' });
+  });
+
+  it('gives explicit off stores precedence over cache enabled flags', () => {
+    process.env.HYPHA_SERVING_CACHE = 'off';
+    process.env.HYPHA_SERVING_CACHE_ENABLED = 'true';
+    process.env.HYPHA_SERVING_CACHE_MODE = 'readwrite';
+    process.env.HYPHA_WORKCACHE = 'off';
+    process.env.HYPHA_WORKCACHE_ENABLED = 'true';
+    reloadConfig();
+
+    expect(servingCacheConfig()).toMatchObject({ enabled: false, store: 'off', mode: 'off' });
+    expect(workCacheConfig()).toMatchObject({ enabled: false, store: 'off' });
   });
 
   it('loads a managed local Ollama runtime without changing the provider default', () => {

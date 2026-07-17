@@ -123,4 +123,25 @@ describe('EventRuntime WorkCache integration', () => {
     expect(ordered.map((event) => event.stepId)).toEqual(['order-1', 'order-2']);
     expect(Date.parse(ordered[1].timestamp)).toBeGreaterThan(Date.parse(ordered[0].timestamp));
   });
+
+  it('does not materialize WorkCache events when the store is explicitly off', async () => {
+    process.env.HYPHA_WORKCACHE = 'off';
+    const { getEventRuntime } = await import('./EventRuntime');
+    const runtime = getEventRuntime();
+    const handle = await runtime.startRun({
+      userId: 'workcache-disabled-user',
+      sessionId: 'workcache-disabled-session',
+      input: { purpose: 'workcache-disabled-test' },
+    });
+
+    await runtime.record(
+      handle.runId,
+      'context.build.completed',
+      { contextSnapshotRef: 'context:disabled' },
+      'disabled-context'
+    );
+
+    const events = await runtime.listEvents(handle.runId);
+    expect(events.some((event) => event.type === 'workcache.write')).toBe(false);
+  });
 });
