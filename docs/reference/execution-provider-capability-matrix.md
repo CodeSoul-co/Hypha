@@ -18,7 +18,7 @@ incompatible.
 | `pidsLimit`           | Declared process-count limit is enforced                                               |
 | `cancellation`        | An accepted execution can be cancelled with a terminal result                          |
 | `processTreeKill`     | Timeout, cancel, terminate, and cleanup cover every descendant in the execution scope  |
-| `snapshots`           | The provider can create the requested Workspace snapshot evidence                      |
+| `snapshots`           | The provider can create and restore the requested Workspace capture surface with verifiable snapshot evidence |
 | `imageDigestPinning`  | The executed image is selected and verified by immutable digest                        |
 | `remoteExecution`     | Work is executed by a remote provider with queryable identity and receipts             |
 
@@ -57,7 +57,7 @@ enforce; configuration, documentation, or best-effort cleanup is not sufficient 
 | Network isolation                  | Tests exercise disabled and restricted modes, direct IP access, redirects, DNS rebinding, IPv4 and IPv6 private ranges, metadata endpoints, ports, protocols, limits, and revocation |
 | CPU, memory, disk, and PID limits  | Provider-observed tests exceed each configured limit and verify bounded termination, normalized evidence, and cleanup without host-wide impact                                       |
 | Cancellation and process-tree kill | Platform tests create descendants, request graceful cancellation, force termination after the grace period, and prove no descendant or owned resource remains                        |
-| Snapshots                          | Snapshot and restore tests compare content digests, metadata, mutation evidence, and behavior across failure and retry                                                               |
+| Snapshots                          | The provider declares whether coverage is Tool mutation, filesystem, volume, or remote snapshot; tests include process-created changes when complete coverage is claimed, compare content digests, metadata, mutation evidence, restore confinement, stale-base conflicts, failure, and retry |
 | Image digest pinning               | Provider receipts identify the immutable digest actually executed; tag resolution alone is insufficient                                                                              |
 | Remote execution                   | Receipts bind provider identity, remote execution identity, request fingerprint, terminal state, and reconciliation after transport failure                                          |
 
@@ -65,3 +65,8 @@ Evidence is scoped to a provider implementation, version, platform, and effectiv
 A health check proves availability, not isolation. If an enforcement dependency is unavailable or
 cannot be verified, the provider reports the affected capability as `false` and negotiation is
 re-evaluated before any side effect.
+
+A governed Tool pre-write checkpoint is useful recovery evidence but does not by itself satisfy the
+provider `snapshots` capability: it cannot observe arbitrary shell or subprocess mutations. Provider
+documentation and receipts must name the capture surface so Runtime, Cache, and recovery logic do
+not infer broader coverage.

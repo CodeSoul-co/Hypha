@@ -45,6 +45,7 @@ it can actually guarantee.
 | Resource exhaustion                    | CPU, memory, PID, disk, output, connection, byte, idle, and wall-clock limits; deterministic cleanup                                                                                     | Timeout and output buffering alone do not constrain CPU, memory, descendants, or disk usage                          |
 | Container breakout                     | Non-root user, no new privileges, dropped capabilities, no privileged mode, no Docker socket, precise mounts, immutable image digest                                                     | A container is not a security boundary unless every declared control is enforced by its adapter and host runtime     |
 | Artifact substitution or corruption    | Algorithm-qualified content digest, verification on write and read, immutable blob identity, separate logical version and lineage                                                        | A path-derived identifier or unverified metadata hash is not content addressing                                      |
+| Incomplete or unsafe Workspace restore  | Declare the capture surface; snapshot governed mutations before the side effect; use provider/filesystem snapshots or post-execution manifests for process-created changes; revalidate the live root, links, policy, and expected base hash before restore | A Tool preview cannot discover arbitrary shell, subprocess, database, network, or concurrent external side effects   |
 | Replay repeats an external effect      | Replay reads persisted events, receipts, and Artifact references; it never calls the provider again                                                                                      | Ambiguous provider state remains conflict or recovery evidence and must not be guessed as success                    |
 | Cache returns unsafe output            | Fingerprint command, source, environment, network, dependency, image, Workspace, and secret versions; fail closed for external or irreversible effects                                   | Cache storage must not contain plaintext secrets or substitute for Artifact access control                           |
 
@@ -112,6 +113,27 @@ the harness, policy, trace, capability negotiation, and a provider adapter.
 Server-side path or URL installation features must not be treated as Execution providers. When they
 accept untrusted input, their owning application boundary must enforce canonical destination paths,
 authenticated authority, and controlled network egress.
+
+### Snapshot Coverage Boundaries
+
+Snapshot and rewind guarantees are defined by their capture surface rather than by the word
+"snapshot":
+
+- a governed-mutation snapshot can capture the pre-write state of Workspace operations whose
+  targets are known before execution;
+- a process or shell command may create, rename, or delete files that a Tool-level preview cannot
+  enumerate, so complete coverage requires a provider/filesystem snapshot or a verified
+  before-and-after manifest diff;
+- database writes, network calls, deployments, and other external effects are never made reversible
+  by a Workspace snapshot;
+- restore re-runs live Workspace authorization and final-target confinement, verifies the expected
+  base or snapshot hash, and reports a conflict rather than silently overwriting a concurrent
+  external edit;
+- snapshot manifests and events contain bounded metadata, hashes, and Artifact references; large
+  file contents remain in governed Artifact storage rather than event, cache, or checkpoint JSON.
+
+Providers and adapters must state which capture surface they implement. A Tool-level pre-write
+checkpoint must not be reported as complete provider snapshot capability.
 
 ### Docker, Network, and Secret Surfaces
 
