@@ -40,19 +40,8 @@ class FakeDockerEngine implements DockerEngineClient {
   running = false;
   removed = false;
   oomKilled = false;
-  statsCalls = 0;
   executeBehavior: (input: DockerContainerExecInput) => Promise<DockerCommandResult> = async () =>
     commandResult();
-  statsBehavior: () => Promise<DockerContainerStats> = async () => ({
-    cpuPercentage: 1.5,
-    memoryUsageBytes: 1024,
-    memoryLimitBytes: 128 * 1024 * 1024,
-    networkBytesReceived: 2,
-    networkBytesSent: 3,
-    readBytes: 4,
-    writtenBytes: 5,
-    pids: 2,
-  });
 
   async health(): Promise<{ serverVersion: string }> {
     return { serverVersion: '29.0.0' };
@@ -96,8 +85,16 @@ class FakeDockerEngine implements DockerEngineClient {
   }
 
   async statsContainer(): Promise<DockerContainerStats> {
-    this.statsCalls += 1;
-    return this.statsBehavior();
+    return {
+      cpuPercentage: 1.5,
+      memoryUsageBytes: 1024,
+      memoryLimitBytes: 128 * 1024 * 1024,
+      networkBytesReceived: 2,
+      networkBytesSent: 3,
+      readBytes: 4,
+      writtenBytes: 5,
+      pids: 2,
+    };
   }
 
   async stopContainer(): Promise<void> {
@@ -186,8 +183,7 @@ describe('DockerExecutionProvider', () => {
         processTreeKillScope: 'container',
         processTreeTerminationVerified: true,
         metricsCollected: true,
-        metricsSampleCount: 1,
-        cpuPercentagePeak: 1.5,
+        cpuPercentage: 1.5,
       },
     });
     expect(engine.executions[0]).toMatchObject({
@@ -210,35 +206,6 @@ describe('DockerExecutionProvider', () => {
     await expect(provider.status({ sandboxId: ready.id, principal })).resolves.toMatchObject({
       status: 'cleaned',
       revision: 7,
-    });
-  });
-
-  it('reports observed resource peaks from samples collected during execution', async () => {
-    const root = await temporaryWorkspace();
-    const engine = new FakeDockerEngine();
-    const samples: DockerContainerStats[] = [
-      { cpuPercentage: 1, memoryUsageBytes: 1024, pids: 2 },
-      { cpuPercentage: 4, memoryUsageBytes: 4096, pids: 5 },
-      { cpuPercentage: 2, memoryUsageBytes: 2048, pids: 3 },
-    ];
-    engine.statsBehavior = async () =>
-      samples[Math.min(engine.statsCalls - 1, samples.length - 1)]!;
-    engine.executeBehavior = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 225));
-      return commandResult();
-    };
-    const provider = createProvider(root, engine);
-    const ready = await createReadySandbox(provider);
-
-    const result = await provider.execute(command(ready.id, 'execution.docker.metrics'));
-
-    expect(result).toMatchObject({
-      resourceUsage: { peakMemoryBytes: 4096, processCountPeak: 5 },
-      metadata: {
-        metricsCollected: true,
-        metricsSampleCount: 3,
-        cpuPercentagePeak: 4,
-      },
     });
   });
 
