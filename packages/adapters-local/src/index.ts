@@ -41,6 +41,8 @@ import { HybridMemoryProvider } from '@hypha/memory';
 
 export * from './workspace-runtime';
 export * from './local-process-output-collector';
+export * from './execution-provider-error';
+export * from './local-process-policy';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
