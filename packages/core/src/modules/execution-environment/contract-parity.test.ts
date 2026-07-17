@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { z, type ZodRawShape, type ZodTypeAny } from 'zod';
-import type { JsonSchema } from '../../specs';
+import {
+  expectContractParity,
+  requireJsonSchemaItems,
+  requireJsonSchemaProperty,
+  type ContractSchemaPair,
+} from '../../../test-support/contract-schema-parity';
 import {
   executionEnvironmentSpecJsonSchema,
   executionEnvironmentSpecSchema,
@@ -17,81 +21,36 @@ import {
   secretInjectionPolicySpecSchema,
 } from './index';
 
-interface ContractSchemaPair {
-  name: string;
-  zod: ZodTypeAny;
-  json: JsonSchema;
-}
-
-function unwrapObjectSchema(schema: ZodTypeAny): z.ZodObject<ZodRawShape> {
-  let current = schema;
-  while (current instanceof z.ZodEffects) current = current.innerType();
-  if (!(current instanceof z.ZodObject)) {
-    throw new TypeError('contract parity requires an object Zod schema');
-  }
-  return current;
-}
-
-function requireProperty(schema: JsonSchema, property: string): JsonSchema {
-  const result = schema.properties?.[property];
-  if (!result) throw new TypeError(`missing JSON Schema property ${property}`);
-  return result;
-}
-
-function requireItems(schema: JsonSchema, property: string): JsonSchema {
-  const items = requireProperty(schema, property).items;
-  if (!items) throw new TypeError(`missing JSON Schema items for ${property}`);
-  return items;
-}
-
-function sorted(values: string[]): string[] {
-  return [...values].sort((left, right) => left.localeCompare(right));
-}
-
-function expectContractParity(pair: ContractSchemaPair): void {
-  const shape = unwrapObjectSchema(pair.zod).shape;
-  const zodKeys = sorted(Object.keys(shape));
-  const jsonKeys = sorted(Object.keys(pair.json.properties ?? {}));
-  const zodRequired = sorted(
-    Object.entries(shape)
-      .filter(([, field]) => !field.isOptional())
-      .map(([key]) => key)
-  );
-  const jsonRequired = sorted(pair.json.required ?? []);
-
-  expect(pair.json.type, pair.name).toBe('object');
-  expect(pair.json.additionalProperties, pair.name).toBe(false);
-  expect(jsonKeys, `${pair.name} property drift`).toEqual(zodKeys);
-  expect(jsonRequired, `${pair.name} required-field drift`).toEqual(zodRequired);
-}
-
-const filesystemJsonSchema = requireProperty(executionEnvironmentSpecJsonSchema, 'filesystem');
+const filesystemJsonSchema = requireJsonSchemaProperty(
+  executionEnvironmentSpecJsonSchema,
+  'filesystem'
+);
 
 const contractPairs: ContractSchemaPair[] = [
   {
     name: 'ExecutionImageSpec',
     zod: executionImageSpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'image'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'image'),
   },
   {
     name: 'ProcessPolicySpec',
     zod: processPolicySpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'process'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'process'),
   },
   {
     name: 'ResourceLimitSpec',
     zod: resourceLimitSpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'resources'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'resources'),
   },
   {
     name: 'SandboxMountSpec',
     zod: sandboxMountSpecSchema,
-    json: requireItems(filesystemJsonSchema, 'mounts'),
+    json: requireJsonSchemaItems(filesystemJsonSchema, 'mounts'),
   },
   {
     name: 'SandboxTmpfsSpec',
     zod: sandboxTmpfsSpecSchema,
-    json: requireItems(filesystemJsonSchema, 'tmpfs'),
+    json: requireJsonSchemaItems(filesystemJsonSchema, 'tmpfs'),
   },
   {
     name: 'SandboxFilesystemPolicySpec',
@@ -101,27 +60,27 @@ const contractPairs: ContractSchemaPair[] = [
   {
     name: 'NetworkPolicySpec',
     zod: networkPolicySpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'network'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'network'),
   },
   {
     name: 'SandboxSecurityPolicySpec',
     zod: sandboxSecurityPolicySpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'security'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'security'),
   },
   {
     name: 'SecretInjectionPolicySpec',
     zod: secretInjectionPolicySpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'secrets'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'secrets'),
   },
   {
     name: 'ExecutionLoggingPolicySpec',
     zod: executionLoggingPolicySpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'logging'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'logging'),
   },
   {
     name: 'SandboxLifecyclePolicySpec',
     zod: sandboxLifecyclePolicySpecSchema,
-    json: requireProperty(executionEnvironmentSpecJsonSchema, 'lifecycle'),
+    json: requireJsonSchemaProperty(executionEnvironmentSpecJsonSchema, 'lifecycle'),
   },
   {
     name: 'ExecutionEnvironmentSpec',
