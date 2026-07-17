@@ -63,13 +63,6 @@ changing the source result, and WorkCache can retain only revision-matched, reva
 knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
 [FSM anomaly recovery](docs/architecture/fsm-recovery.md).
 
-The event-first Runtime V2 contracts add scoped Event Store streams, Run projections, durable
-waits, Session Queue ordering, leases and fencing, provider-neutral Activity execution, startup
-recovery, and replay without repeated side effects. See [Runtime Semantics](docs/guides/runtime-semantics.md),
-[Workflow Authoring](docs/guides/workflow-authoring.md), [Runtime Recovery](docs/guides/runtime-recovery.md),
-and [Runtime Migration](docs/guides/runtime-migration.md). Current gaps are tracked in
-[Runtime Known Limitations](docs/reference/runtime-known-limitations.md).
-
 ## Inference Runtime
 
 Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
