@@ -90,6 +90,7 @@ export interface StructuredStoreProvider {
   get<T>(table: string, id: string): Promise<T | null>;
   insert<T extends { id: string }>(table: string, record: T): Promise<void>;
   update<T>(table: string, id: string, patch: Partial<T>): Promise<void>;
+  delete(table: string, id: string): Promise<void>;
   query<T>(table: string, query: StructuredQuery): Promise<T[]>;
   transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T>;
 }
@@ -706,5 +707,12 @@ export * from './record-contract';
 export * from './profile-contract';
 export * from './operations';
 export * from './operation-contract';
+export * from './lifecycle-contracts';
+export * from './lifecycle-schema';
+export * from './memory-utils';
+export * from './managed-store';
+export * from './structured-managed-store';
+export * from './index-outbox';
+export * from './lifecycle-workers';
 
 export * from './hybrid';
