@@ -520,14 +520,7 @@ function formatMount(mount: DockerContainerMount): string {
   if (!path.isAbsolute(mount.source)) throw new Error('Workspace mount source must be absolute.');
   safeDockerOptionValue(mount.source, 'Workspace mount source');
   safeContainerPath(mount.target, 'Workspace mount target');
-  const options = [
-    'type=bind',
-    `src=${mount.source}`,
-    `dst=${mount.target}`,
-    ...(mount.readOnly ? ['readonly'] : []),
-    'bind-propagation=rprivate',
-  ];
-  return options.join(',');
+  return `type=bind,src=${mount.source},dst=${mount.target},${mount.readOnly ? 'readonly' : 'rw'},bind-propagation=rprivate`;
 }
 
 function formatTmpfs(tmpfs: DockerContainerTmpfs): string {
