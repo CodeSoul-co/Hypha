@@ -844,6 +844,7 @@ export * from './lifecycle-schema';
 export * from './memory-utils';
 export * from './managed-store';
 export * from './structured-managed-store';
+export * from './structured-memory-persistence';
 export * from './index-outbox';
 export * from './lifecycle-workers';
 export * from './native-maintenance';
