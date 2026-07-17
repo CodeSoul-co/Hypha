@@ -138,6 +138,33 @@ successful Workspace-producing command and a timed-out command, and verifies con
 and removal in both paths. `HYPHA_DOCKER_SMOKE_TRACE=1` optionally exposes test-only Docker argument
 and stderr diagnostics; it must not be enabled in production execution paths.
 
+## Remote Sandbox Provider Contract
+
+`RemoteSandboxProvider` extends the common `SandboxProvider` lifecycle without exposing a remote
+vendor SDK to Core, Kernel, or Runtime. Create, start, execute, cancel, terminate, status, cleanup,
+health, command results, and remote execution receipts continue using the shared execution
+contracts. A remote implementation additionally provides:
+
+- `streamOutput()` as an async stream of the existing validated `CommandOutputChunk` contract;
+- `uploadArtifact()` with a principal-scoped, revision-aware, idempotent transfer request and a
+  validated async stream of `RemoteArtifactChunk` values;
+- `downloadArtifact()` with an explicit maximum byte limit and a validated async chunk stream; and
+- `RemoteArtifactTransferReceipt` as provider-neutral transfer completion and integrity evidence.
+
+Remote Artifact chunks are base64-encoded serializable values with a transfer id, Artifact
+reference, zero-based sequence, contiguous byte offset, decoded byte length, per-chunk content hash,
+and explicit final marker. `validateRemoteArtifactChunkSequence()` rejects mixed transfers, gaps,
+overlaps, early final markers, decoded-size mismatches, and total-size mismatches. A completed
+transfer receipt requires whole-content hash evidence.
+
+The contract requires `remoteExecution: true`; it does not define endpoints, credentials, queues,
+HTTP/RPC clients, object-store clients, provider job types, or retry transports. Concrete remote
+adapters remain responsible for validating every external response, normalizing vendor failures,
+and proving timeout, cancellation, idempotency, receipt, and cleanup behavior in contract tests.
+Closing an output iterator stops output consumption; cancelling execution still uses the governed
+`cancel()` operation. Runtime or Harness continues to own authorization, policy, events, replay,
+and durable records around all remote operations.
+
 ## Store, Lease, and Recovery Rules
 
 An `ExecutionRecord` is revisioned. Store adapters must apply compare-and-set atomically. When the
