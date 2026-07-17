@@ -73,3 +73,14 @@ Adapters may implement local processes, containers, or remote sandboxes, but Cor
 neutral. Side effects must be authorized before provider calls, recorded as events, and represented
 by bounded results or references. Domain-specific workflow, prompt, task, or business schema belongs
 in a DomainPack rather than these execution contracts.
+
+## Security and Provider References
+
+- [Execution Threat Model](execution-threat-model.md) defines assets, trust boundaries, required
+  controls, audited runtime surfaces, and residual limitations.
+- [Execution Provider Capability Matrix](../reference/execution-provider-capability-matrix.md)
+  defines the evidence represented by each capability and the minimum negotiation rules.
+- [ADR 0003](../adr/0003-content-addressed-execution-artifacts.md),
+  [ADR 0004](../adr/0004-execution-process-tree-termination.md), and
+  [ADR 0005](../adr/0005-execution-network-policy.md) define Artifact identity, termination, and
+  network enforcement decisions.

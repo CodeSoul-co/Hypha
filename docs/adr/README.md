@@ -6,3 +6,6 @@ ADRs record accepted architecture decisions for hypha. They should explain the d
 
 - [ADR 0001: Storage Configuration Taxonomy](0001-storage-configuration-taxonomy.md)
 - [ADR 0002: Governed Tool and MCP Execution](0002-governed-tool-mcp-execution.md)
+- [ADR 0003: Content-Addressed Execution Artifacts](0003-content-addressed-execution-artifacts.md)
+- [ADR 0004: Execution Process-Tree Termination](0004-execution-process-tree-termination.md)
+- [ADR 0005: Provider-Enforced Execution Network Policy](0005-execution-network-policy.md)
