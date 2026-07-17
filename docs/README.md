@@ -15,6 +15,8 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [Serving Cache](architecture/serving-cache.md): exact LLM response cache middleware, key fields, policies, stores, and trace events.
 - [Tool/MCP Architecture](architecture/tool-mcp.md): governed execution, Invocation lifecycle, MCP trust, drift, and Run snapshots.
 - [Execution Contracts](architecture/execution.md): provider-neutral Workspace, Sandbox, Command, Store, Event, and cache-fingerprint boundaries.
+- [Execution Threat Model](architecture/execution-threat-model.md): trust boundaries, audited runtime surfaces, required controls, and residual limitations.
+- [Execution Provider Matrix](reference/execution-provider-capability-matrix.md): provider guarantees and fail-closed capability negotiation.
 - [ADRs](adr/README.md): accepted architecture decisions.
 - [RFCs](rfc/README.md): proposed designs and extension plans.
 
