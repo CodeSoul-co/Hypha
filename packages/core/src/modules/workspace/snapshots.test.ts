@@ -129,9 +129,9 @@ describe('Workspace Snapshot, Diff, and Patch contracts', () => {
   });
 
   it('keeps Snapshot entry kind and manifest byte evidence consistent', () => {
-    expect(() =>
-      validateWorkspaceSnapshotEntry({ path: 'working/link', kind: 'symlink' })
-    ).toThrow(/required for symlink/u);
+    expect(() => validateWorkspaceSnapshotEntry({ path: 'working/link', kind: 'symlink' })).toThrow(
+      /required for symlink/u
+    );
     expect(() =>
       validateWorkspaceSnapshotEntry({
         path: 'working/file.txt',

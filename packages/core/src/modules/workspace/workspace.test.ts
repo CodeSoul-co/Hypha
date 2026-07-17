@@ -124,7 +124,9 @@ describe('WorkspaceSpec', () => {
 
     const pathPolicyJsonSchema = workspaceSpecJsonSchema.properties?.pathPolicy;
     expect(pathPolicyJsonSchema?.allOf).toHaveLength(1);
-    expect(pathPolicyJsonSchema?.properties?.deniedPaths.description).toMatch(/cannot be overridden/u);
+    expect(pathPolicyJsonSchema?.properties?.deniedPaths.description).toMatch(
+      /cannot be overridden/u
+    );
   });
 
   it('rejects undeclared WorkspaceSpec fields at every contract boundary', () => {
