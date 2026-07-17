@@ -91,6 +91,7 @@ export const commandExecutionRequestSchema = z
     causationId: nonEmptyString.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.principal.userId && value.principal.userId !== value.userId) {
       context.addIssue({
@@ -162,27 +163,31 @@ export const commandExecutionStatusTransitions: Readonly<
   quarantined: [],
 };
 
-export const executionResourceUsageSchema = z.object({
-  cpuTimeMs: nonNegativeNumber.optional(),
-  peakMemoryBytes: nonNegativeInteger.optional(),
-  readBytes: nonNegativeInteger.optional(),
-  writtenBytes: nonNegativeInteger.optional(),
-  networkBytesSent: nonNegativeInteger.optional(),
-  networkBytesReceived: nonNegativeInteger.optional(),
-  processCountPeak: nonNegativeInteger.optional(),
-  outputBytes: nonNegativeInteger.optional(),
-}) satisfies ZodType<ExecutionResourceUsage>;
+export const executionResourceUsageSchema = z
+  .object({
+    cpuTimeMs: nonNegativeNumber.optional(),
+    peakMemoryBytes: nonNegativeInteger.optional(),
+    readBytes: nonNegativeInteger.optional(),
+    writtenBytes: nonNegativeInteger.optional(),
+    networkBytesSent: nonNegativeInteger.optional(),
+    networkBytesReceived: nonNegativeInteger.optional(),
+    processCountPeak: nonNegativeInteger.optional(),
+    outputBytes: nonNegativeInteger.optional(),
+  })
+  .strict() satisfies ZodType<ExecutionResourceUsage>;
 
-export const executionReceiptSchema = z.object({
-  id: nonEmptyString,
-  providerId: nonEmptyString,
-  executionId: nonEmptyString,
-  providerExecutionRef: nonEmptyString.optional(),
-  status: z.enum(['accepted', 'completed', 'rejected', 'unknown']),
-  issuedAt: timestampSchema,
-  receiptHash: nonEmptyString,
-  metadata: z.record(z.unknown()).optional(),
-}) satisfies ZodType<ExecutionReceipt>;
+export const executionReceiptSchema = z
+  .object({
+    id: nonEmptyString,
+    providerId: nonEmptyString,
+    executionId: nonEmptyString,
+    providerExecutionRef: nonEmptyString.optional(),
+    status: z.enum(['accepted', 'completed', 'rejected', 'unknown']),
+    issuedAt: timestampSchema,
+    receiptHash: nonEmptyString,
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict() satisfies ZodType<ExecutionReceipt>;
 
 const terminalStatuses: readonly CommandExecutionStatus[] = [
   'cancelled',
@@ -220,6 +225,7 @@ export const commandExecutionResultSchema = z
     error: normalizedExecutionErrorSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     const terminal = terminalStatuses.includes(value.status);
     if (terminal && !value.completedAt) {
@@ -314,6 +320,7 @@ export const commandOutputChunkSchema = z
     emittedAt: timestampSchema,
     truncated: z.boolean().optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.encoding === 'base64' && !isBase64(value.content)) {
       context.addIssue({
@@ -324,17 +331,19 @@ export const commandOutputChunkSchema = z
     }
   }) satisfies ZodType<CommandOutputChunk>;
 
-export const executionCancelRequestSchema = z.object({
-  operationId: nonEmptyString,
-  executionId: nonEmptyString,
-  principal: executionPrincipalSchema,
-  expectedRevision: nonNegativeInteger,
-  reason: nonEmptyString.optional(),
-  gracePeriodMs: nonNegativeInteger.optional(),
-  idempotencyKey: nonEmptyString.optional(),
-  correlationId: nonEmptyString.optional(),
-  causationId: nonEmptyString.optional(),
-}) satisfies ZodType<ExecutionCancelRequest>;
+export const executionCancelRequestSchema = z
+  .object({
+    operationId: nonEmptyString,
+    executionId: nonEmptyString,
+    principal: executionPrincipalSchema,
+    expectedRevision: nonNegativeInteger,
+    reason: nonEmptyString.optional(),
+    gracePeriodMs: nonNegativeInteger.optional(),
+    idempotencyKey: nonEmptyString.optional(),
+    correlationId: nonEmptyString.optional(),
+    causationId: nonEmptyString.optional(),
+  })
+  .strict() satisfies ZodType<ExecutionCancelRequest>;
 
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 };
@@ -347,6 +356,7 @@ const specRefJsonSchema: JsonSchema = {
   properties: {
     id: nonEmptyStringJsonSchema,
     version: nonEmptyStringJsonSchema,
+    revision: nonEmptyStringJsonSchema,
   },
   additionalProperties: false,
 };

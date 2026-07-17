@@ -29,20 +29,22 @@ const timestampSchema = z.string().datetime({ offset: true });
 
 export { normalizedExecutionErrorSchema } from '../execution';
 
-export const sandboxProviderCapabilitiesSchema = z.object({
-  processIsolation: z.boolean(),
-  filesystemIsolation: z.boolean(),
-  networkIsolation: z.boolean(),
-  cpuLimits: z.boolean(),
-  memoryLimits: z.boolean(),
-  diskLimits: z.boolean(),
-  pidsLimit: z.boolean(),
-  cancellation: z.boolean(),
-  processTreeKill: z.boolean(),
-  snapshots: z.boolean(),
-  imageDigestPinning: z.boolean(),
-  remoteExecution: z.boolean(),
-}) satisfies ZodType<SandboxProviderCapabilities>;
+export const sandboxProviderCapabilitiesSchema = z
+  .object({
+    processIsolation: z.boolean(),
+    filesystemIsolation: z.boolean(),
+    networkIsolation: z.boolean(),
+    cpuLimits: z.boolean(),
+    memoryLimits: z.boolean(),
+    diskLimits: z.boolean(),
+    pidsLimit: z.boolean(),
+    cancellation: z.boolean(),
+    processTreeKill: z.boolean(),
+    snapshots: z.boolean(),
+    imageDigestPinning: z.boolean(),
+    remoteExecution: z.boolean(),
+  })
+  .strict() satisfies ZodType<SandboxProviderCapabilities>;
 
 export const sandboxStatusSchema = z.enum([
   'creating',
@@ -103,6 +105,7 @@ export const sandboxRecordSchema = z
     error: normalizedExecutionErrorSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (new Set(value.activeExecutionIds).size !== value.activeExecutionIds.length) {
       context.addIssue({
@@ -165,6 +168,7 @@ export const sandboxCreateRequestSchema = z
     idempotencyKey: nonEmptyString.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (value.principal.userId && value.principal.userId !== value.userId) {
       context.addIssue({
@@ -182,21 +186,25 @@ export const sandboxCreateRequestSchema = z
     }
   }) satisfies ZodType<SandboxCreateRequest>;
 
-const sandboxMutationRequestBase = z.object({
-  operationId: nonEmptyString,
-  sandboxId: nonEmptyString,
-  principal: executionPrincipalSchema,
-  expectedRevision: nonNegativeInteger,
-  idempotencyKey: nonEmptyString.optional(),
-});
+const sandboxMutationRequestBase = z
+  .object({
+    operationId: nonEmptyString,
+    sandboxId: nonEmptyString,
+    principal: executionPrincipalSchema,
+    expectedRevision: nonNegativeInteger,
+    idempotencyKey: nonEmptyString.optional(),
+  })
+  .strict();
 
 export const sandboxStartRequestSchema =
   sandboxMutationRequestBase satisfies ZodType<SandboxStartRequest>;
 
-export const sandboxStatusRequestSchema = z.object({
-  sandboxId: nonEmptyString,
-  principal: executionPrincipalSchema,
-}) satisfies ZodType<SandboxStatusRequest>;
+export const sandboxStatusRequestSchema = z
+  .object({
+    sandboxId: nonEmptyString,
+    principal: executionPrincipalSchema,
+  })
+  .strict() satisfies ZodType<SandboxStatusRequest>;
 
 export const sandboxTerminateRequestSchema = sandboxMutationRequestBase.extend({
   reason: nonEmptyString.optional(),
@@ -215,6 +223,7 @@ const specRefJsonSchema: JsonSchema = {
   properties: {
     id: nonEmptyStringJsonSchema,
     version: nonEmptyStringJsonSchema,
+    revision: nonEmptyStringJsonSchema,
   },
   additionalProperties: false,
 };
