@@ -8,8 +8,10 @@ import type {
 import {
   DefaultArtifactGarbageCollector,
   DefaultArtifactManager,
+  DefaultArtifactRetentionProcessor,
   EventingArtifactGarbageCollector,
   EventingArtifactManager,
+  EventingArtifactRetentionProcessor,
 } from '@hypha/core';
 import { hashArtifactBytes } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
@@ -176,6 +178,38 @@ describe('Artifact Event publication decorators', () => {
       error: { code: 'ARTIFACT_INTERNAL_ERROR', retryable: true },
     });
   });
+
+  it('applies deterministic retention expiry and publishes the resulting fact', async () => {
+    const fixture = createFixture();
+    const record = await fixture.manager.create(
+      createRequest('operation.retention-source', 'retention-content')
+    );
+    const processor = new EventingArtifactRetentionProcessor({
+      processor: new DefaultArtifactRetentionProcessor({
+        manager: fixture.manager,
+        repository: fixture.repository,
+      }),
+      publisher: fixture.publisher,
+      idGenerator: fixture.nextEventId,
+    });
+
+    await expect(
+      processor.process({
+        operationId: 'operation.retention-expired',
+        principal,
+        artifactId: record.id,
+        evaluatedAt: '2026-07-18T08:10:00.000Z',
+      })
+    ).resolves.toMatchObject({
+      applied: true,
+      decision: { action: 'delete', reason: 'delete_after' },
+    });
+    expect(fixture.publisher.byType('artifact.retention.expired')?.payload).toMatchObject({
+      artifactId: record.id,
+      versionId: record.versionId,
+      reason: 'delete_after',
+    });
+  });
 });
 
 class CapturingArtifactEventPublisher implements ArtifactEventPublisher {
@@ -216,6 +250,8 @@ function createFixture() {
       requiredDeleteScopes: ['artifact:delete'],
     },
     retention: {
+      archiveAfterSeconds: 60,
+      deleteAfterSeconds: 120,
       retainFinal: false,
       legalHoldSupported: true,
       garbageCollectUnreferenced: true,
@@ -241,6 +277,7 @@ function createFixture() {
     idGenerator: () => String(++eventId),
     now,
   });
+  const nextEventId = () => String(++eventId);
   const eventingCollector = () =>
     new EventingArtifactGarbageCollector({
       collector: new DefaultArtifactGarbageCollector({
@@ -255,7 +292,7 @@ function createFixture() {
       now,
       runId: 'run.maintenance',
     });
-  return { eventingCollector, manager, profile, publisher, repository, store };
+  return { eventingCollector, manager, nextEventId, profile, publisher, repository, store };
 }
 
 function createRequest(

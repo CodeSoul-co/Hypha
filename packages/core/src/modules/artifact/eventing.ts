@@ -23,6 +23,9 @@ import type {
   ArtifactReadRequest,
   ArtifactReadResult,
   ArtifactRecord,
+  ArtifactRetentionProcessRequest,
+  ArtifactRetentionProcessResult,
+  ArtifactRetentionProcessor,
   ArtifactVersionRequest,
   NormalizedArtifactError,
   ProviderHealth,
@@ -53,6 +56,17 @@ export interface EventingArtifactManagerOptions {
 
 export interface EventingArtifactGarbageCollectorOptions {
   collector: ArtifactGarbageCollector;
+  publisher: ArtifactEventPublisher;
+  idGenerator: () => string;
+  now?: () => string;
+  workspaceId?: string;
+  sessionId?: string;
+  runId?: string;
+  agentId?: string;
+}
+
+export interface EventingArtifactRetentionProcessorOptions {
+  processor: ArtifactRetentionProcessor;
   publisher: ArtifactEventPublisher;
   idGenerator: () => string;
   now?: () => string;
@@ -354,6 +368,36 @@ export class EventingArtifactGarbageCollector implements ArtifactGarbageCollecto
   }
 }
 
+export class EventingArtifactRetentionProcessor implements ArtifactRetentionProcessor {
+  private readonly processor: ArtifactRetentionProcessor;
+  private readonly events: ArtifactEventEmitter;
+  private readonly context: ArtifactEventContext;
+
+  constructor(options: EventingArtifactRetentionProcessorOptions) {
+    this.processor = options.processor;
+    this.events = new ArtifactEventEmitter(options);
+    this.context = publicationContext(options);
+  }
+
+  async process(request: ArtifactRetentionProcessRequest): Promise<ArtifactRetentionProcessResult> {
+    const result = await this.processor.process(request);
+    if (result.applied && result.decision.action === 'delete') {
+      await this.events.publish(
+        'artifact.retention.expired',
+        {
+          operationId: request.operationId,
+          artifactId: result.artifactId,
+          versionId: result.versionId,
+          workspaceId: result.workspaceId,
+          reason: result.decision.reason,
+        },
+        { ...this.context, workspaceId: result.workspaceId }
+      );
+    }
+    return result;
+  }
+}
+
 class ArtifactEventEmitter {
   private readonly publisher: ArtifactEventPublisher;
   private readonly idGenerator: () => string;
@@ -431,7 +475,7 @@ function recordContext(record: ArtifactRecord): ArtifactEventContext {
   };
 }
 
-function publicationContext(input: EventingArtifactGarbageCollectorOptions): ArtifactEventContext {
+function publicationContext(input: ArtifactEventContext): ArtifactEventContext {
   return {
     ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
