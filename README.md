@@ -49,6 +49,21 @@ hypha defaults to a single-user runtime for local and self-hosted deployments. T
 
 Internal APIs keep `userId` boundaries for sessions, memory, token usage, API keys, and session queues. This keeps default deployment simple while preserving the concurrency model required by multi-user clients.
 
+## Governed Runtime
+
+`@hypha/core` provides the event-first orchestration contracts and local reference implementations
+needed to run FSM work without hidden loops. The runtime includes versioned event schemas and
+upcasters, optimistic event-stream append, projections, scoped session commands, message
+inbox/outbox delivery, run leases and state claims with fencing, shared/exclusive resource claims,
+deterministic helpers, timers, pause/resume/signal controls, cancellation, checkpoints, recovery,
+replay, and query services. `@hypha/harness` adds a bounded FSM driver and execution context while
+keeping DomainPack workflows, provider adapters, and application state outside the runtime core.
+
+Every command and durable operation remains scoped by user, session, and run identity. Revision,
+lease, claim, event, and checkpoint evidence prevents stale workers or repeated loop iterations from
+being treated as progress. See the [Runtime Model](docs/reference/runtime-model.md) and
+[Framework API](docs/api/framework.md).
+
 ## Coordinated Recovery
 
 Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and
@@ -104,6 +119,12 @@ fingerprints. The contracts keep filesystem, process, container, remote-provider
 policy, and secret implementations behind adapter and harness boundaries. Paths, identities,
 transitions, terminal evidence, sensitive event fields, idempotency, and stale-writer fencing are
 validated before adapters perform side effects.
+
+The Artifact lifecycle is content-addressed and append-only. `DefaultArtifactManager` and its
+eventing wrapper govern create, read, list, version navigation, lineage, retention, garbage
+collection, and download access through principal-scoped policy checks. In-memory, local-file, and
+SQLite-backed reference components are available; concrete cloud providers remain adapter
+extensions and are not implied by the core contract.
 
 See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
 extension rules.
