@@ -1,13 +1,20 @@
 import { z, type ZodType } from 'zod';
 import { defineSpecSchema, exportSpecJsonSchemas, jsonSchemaSchema } from '../schemas';
 import type { JsonSchema } from '../specs';
-import { normalizedRuntimeErrorSchema, normalizedRuntimeErrorJsonSchema } from './runtime-schemas';
+import type { RuntimeObservationEventType } from '../events';
+import {
+  normalizedRuntimeErrorSchema,
+  normalizedRuntimeErrorJsonSchema,
+  runtimeScopeSchema,
+} from './runtime-schemas';
 import {
   RUNTIME_DETERMINISTIC_OBSERVATION_KINDS,
   RUNTIME_WAIT_INTENT_TYPES,
   type RuntimeDeterminismScope,
   type RuntimeDeterministicObservation,
+  type RuntimeHelperExecutionScope,
   type RuntimeJsonValue,
+  type RuntimeObservationEventInput,
   type RuntimeStateExecutionResult,
   type RuntimeTransitionProposal,
   type RuntimeWaitIntent,
@@ -26,6 +33,9 @@ const jsonValueSchema: ZodType<RuntimeJsonValue> = z.lazy(() =>
   ])
 );
 const jsonRecordSchema = z.record(jsonValueSchema);
+const runtimeObservationEventTypeSchema = z
+  .string()
+  .regex(/^runtime\.observation\.[a-z0-9][a-z0-9._-]*$/u) as ZodType<RuntimeObservationEventType>;
 
 export const runtimeTransitionProposalSchema = z
   .object({
@@ -102,6 +112,34 @@ export const runtimeDeterministicObservationSchema = z
     value: jsonValueSchema,
   })
   .strict() satisfies ZodType<RuntimeDeterministicObservation>;
+
+export const runtimeHelperExecutionScopeSchema = z
+  .object({
+    scope: runtimeScopeSchema,
+    stateId: nonEmptyStringSchema,
+    stateAttempt: z.number().int().positive(),
+    fencingToken: z.number().int().positive(),
+    correlationId: nonEmptyStringSchema,
+    causationId: nonEmptyStringSchema.optional(),
+  })
+  .strict() satisfies ZodType<RuntimeHelperExecutionScope>;
+
+const runtimeEventAppendOptionsSchema = z
+  .object({
+    idempotencyKey: nonEmptyStringSchema.optional(),
+    causationId: nonEmptyStringSchema.optional(),
+    parentEventId: nonEmptyStringSchema.optional(),
+    metadata: jsonRecordSchema.optional(),
+  })
+  .strict();
+
+export const runtimeObservationEventInputSchema = z
+  .object({
+    type: runtimeObservationEventTypeSchema,
+    payload: jsonValueSchema,
+    options: runtimeEventAppendOptionsSchema.optional(),
+  })
+  .strict() satisfies ZodType<RuntimeObservationEventInput>;
 
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
@@ -205,6 +243,29 @@ export const runtimeDeterministicObservationJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+export const runtimeObservationEventInputJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['type', 'payload'],
+  properties: {
+    type: {
+      type: 'string',
+      pattern: '^runtime\\.observation\\.[a-z0-9][a-z0-9._-]*$',
+    },
+    payload: jsonValueJsonSchema,
+    options: {
+      type: 'object',
+      properties: {
+        idempotencyKey: nonEmptyStringJsonSchema,
+        causationId: nonEmptyStringJsonSchema,
+        parentEventId: nonEmptyStringJsonSchema,
+        metadata: jsonRecordJsonSchema,
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
 export const runtimeTransitionProposalExample: RuntimeTransitionProposal = {
   to: 'Review',
   reason: 'Output requires approval',
@@ -240,6 +301,15 @@ export const runtimeDeterministicObservationExample: RuntimeDeterministicObserva
   value: '2026-07-18T08:00:00.000Z',
 };
 
+export const runtimeObservationEventInputExample: RuntimeObservationEventInput = {
+  type: 'runtime.observation.plan.created',
+  payload: { planRef: 'artifact://plan/example' },
+  options: {
+    idempotencyKey: 'observation:plan:example',
+    metadata: { source: 'state.plan' },
+  },
+};
+
 export const runtimeTransitionProposalDefinition = defineSpecSchema<RuntimeTransitionProposal>({
   id: 'RuntimeTransitionProposal',
   zod: runtimeTransitionProposalSchema,
@@ -269,11 +339,20 @@ export const runtimeDeterministicObservationDefinition =
     example: runtimeDeterministicObservationExample,
   });
 
+export const runtimeObservationEventInputDefinition =
+  defineSpecSchema<RuntimeObservationEventInput>({
+    id: 'RuntimeObservationEventInput',
+    zod: runtimeObservationEventInputSchema,
+    jsonSchema: runtimeObservationEventInputJsonSchema,
+    example: runtimeObservationEventInputExample,
+  });
+
 export const runtimeHelperContractDefinitions = [
   runtimeTransitionProposalDefinition,
   runtimeWaitIntentDefinition,
   runtimeStateExecutionResultDefinition,
   runtimeDeterministicObservationDefinition,
+  runtimeObservationEventInputDefinition,
 ] as const;
 
 export const runtimeHelperContractJsonSchemas = exportSpecJsonSchemas(
@@ -296,4 +375,12 @@ export function validateRuntimeDeterministicObservation(
   input: unknown
 ): RuntimeDeterministicObservation {
   return runtimeDeterministicObservationDefinition.parse(input);
+}
+
+export function validateRuntimeHelperExecutionScope(input: unknown): RuntimeHelperExecutionScope {
+  return runtimeHelperExecutionScopeSchema.parse(input);
+}
+
+export function validateRuntimeObservationEventInput(input: unknown): RuntimeObservationEventInput {
+  return runtimeObservationEventInputDefinition.parse(input);
 }

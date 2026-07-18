@@ -6,6 +6,9 @@ import {
   runtimeDeterministicObservationJsonSchema,
   runtimeDeterministicObservationSchema,
   runtimeHelperContractDefinitions,
+  runtimeObservationEventInputExample,
+  runtimeObservationEventInputJsonSchema,
+  runtimeObservationEventInputSchema,
   runtimeStateExecutionResultExample,
   runtimeStateExecutionResultJsonSchema,
   runtimeStateExecutionResultSchema,
@@ -39,12 +42,17 @@ describe('Runtime Helper contracts', () => {
         runtimeDeterministicObservationJsonSchema,
         runtimeDeterministicObservationExample,
       ],
+      [
+        runtimeObservationEventInputSchema,
+        runtimeObservationEventInputJsonSchema,
+        runtimeObservationEventInputExample,
+      ],
     ] as const;
     for (const [schema, jsonSchema, example] of examples) {
       expect(schema.parse(example)).toEqual(example);
       expect(ajv.validate(jsonSchema, example), JSON.stringify(ajv.errors)).toBe(true);
     }
-    expect(runtimeHelperContractDefinitions).toHaveLength(4);
+    expect(runtimeHelperContractDefinitions).toHaveLength(5);
   });
 
   it('enforces signal, timer, and pause wait requirements', () => {
@@ -65,6 +73,18 @@ describe('Runtime Helper contracts', () => {
       runtimeDeterministicObservationSchema.parse({
         ...runtimeDeterministicObservationExample,
         scope: { ...runtimeDeterministicObservationExample.scope, stateAttempt: 0 },
+      })
+    ).toThrow();
+    expect(() =>
+      runtimeObservationEventInputSchema.parse({
+        type: 'run.completed',
+        payload: {},
+      })
+    ).toThrow();
+    expect(() =>
+      runtimeObservationEventInputSchema.parse({
+        type: 'runtime.observation.Invalid Name',
+        payload: {},
       })
     ).toThrow();
   });

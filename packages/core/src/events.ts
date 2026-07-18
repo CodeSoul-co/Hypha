@@ -1,3 +1,5 @@
+export type RuntimeObservationEventType = `runtime.observation.${string}`;
+
 export type FrameworkEventType =
   | 'session.created'
   | 'session.updated'
@@ -191,7 +193,8 @@ export type FrameworkEventType =
   | 'network.authorization.revoked'
   | 'artifact.created'
   | 'artifact.updated'
-  | 'artifact.versioned';
+  | 'artifact.versioned'
+  | RuntimeObservationEventType;
 
 export interface FrameworkEvent<TPayload = unknown> {
   id: string;

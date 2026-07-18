@@ -128,7 +128,7 @@ describe('InMemorySessionQueue', () => {
   });
 
   it('does not partially mutate a claim when completion input is invalid', async () => {
-    const queue = new InMemorySessionQueue();
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
     await queue.enqueue(command('command.atomic-complete'));
     await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
 

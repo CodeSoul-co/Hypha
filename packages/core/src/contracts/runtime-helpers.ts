@@ -1,5 +1,12 @@
 import type { JsonSchema } from '../specs';
-import type { NormalizedRuntimeError } from './runtime';
+import type { EventCreateInput, FrameworkEvent, RuntimeObservationEventType } from '../events';
+import type {
+  RuntimeResourceClaim,
+  RuntimeResourceCoordinator,
+  RuntimeResourceRequest,
+  RunLeaseAuthorization,
+} from './runtime-coordination';
+import type { NormalizedRuntimeError, RuntimeScope } from './runtime';
 
 export type RuntimeJsonValue =
   | null
@@ -139,4 +146,83 @@ export interface RuntimeHelperSdk {
   readonly waits: RuntimeWaitHelper;
   readonly clock: RuntimeClockHelper;
   readonly ids: RuntimeIdHelper;
+}
+
+export interface RuntimeHelperExecutionScope {
+  scope: RuntimeScope;
+  stateId: string;
+  stateAttempt: number;
+  fencingToken: number;
+  correlationId: string;
+  causationId?: string;
+}
+
+export interface RuntimeEventAppendOptions {
+  idempotencyKey?: string;
+  causationId?: string;
+  parentEventId?: string;
+  metadata?: Record<string, RuntimeJsonValue>;
+}
+
+export interface RuntimeObservationEventInput<T extends RuntimeJsonValue = RuntimeJsonValue> {
+  type: RuntimeObservationEventType;
+  payload: T;
+  options?: RuntimeEventAppendOptions;
+}
+
+export interface RuntimeEventCommitRequest {
+  scope: RuntimeHelperExecutionScope;
+  events: EventCreateInput[];
+  fencingToken: number;
+  idempotencyKey: string;
+}
+
+export interface RuntimeEventCommitPort {
+  append(request: RuntimeEventCommitRequest): Promise<FrameworkEvent[]>;
+  readSince(scope: RuntimeScope, sequence: number): Promise<FrameworkEvent[]>;
+}
+
+export interface RuntimeEventHelper {
+  append<T extends RuntimeJsonValue>(
+    type: RuntimeObservationEventType,
+    payload: T,
+    options?: RuntimeEventAppendOptions
+  ): Promise<FrameworkEvent<T>>;
+  appendBatch(inputs: RuntimeObservationEventInput[]): Promise<FrameworkEvent[]>;
+  readSince(sequence: number): Promise<FrameworkEvent[]>;
+}
+
+export interface RuntimeResourceAcquireOptions {
+  ttlMs: number;
+  idempotencyKey?: string;
+}
+
+export interface RuntimeResourceRenewOptions {
+  ttlMs: number;
+}
+
+export interface RuntimeResourceHelper {
+  acquire(
+    resources: Omit<RuntimeResourceRequest, 'requestedClaimId'>[],
+    options: RuntimeResourceAcquireOptions
+  ): Promise<RuntimeResourceClaim[]>;
+  renew(
+    claims: RuntimeResourceClaim[],
+    options: RuntimeResourceRenewOptions
+  ): Promise<RuntimeResourceClaim[]>;
+  release(claims: RuntimeResourceClaim[]): Promise<void>;
+  assertCurrent(claim: RuntimeResourceClaim): Promise<RuntimeResourceClaim>;
+}
+
+export interface RuntimeIoHelperSdk {
+  readonly events: RuntimeEventHelper;
+  readonly resources: RuntimeResourceHelper;
+}
+
+export interface RuntimeResourceHelperDependencies {
+  runLease: RunLeaseAuthorization;
+  coordinator: RuntimeResourceCoordinator;
+  ids: RuntimeIdHelper;
+  clock: RuntimeClockHelper;
+  stateId: string;
 }
