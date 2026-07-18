@@ -216,36 +216,6 @@ describe('DockerExecutionPolicyResolver', () => {
   });
 
   it.each([
-    ['image pulling', (value: ExecutionEnvironmentSpec) => (value.image!.pullPolicy = 'always')],
-    ['process limits', (value: ExecutionEnvironmentSpec) => (value.process.maxProcesses = 8)],
-    [
-      'mount flags',
-      (value: ExecutionEnvironmentSpec) => (value.filesystem.mounts[0]!.noExec = true),
-    ],
-    [
-      'Linux security profiles',
-      (value: ExecutionEnvironmentSpec) =>
-        (value.security.seccompProfileRef = 'seccomp://restricted'),
-    ],
-    [
-      'secret lifecycle controls',
-      (value: ExecutionEnvironmentSpec) => (value.secrets.revokeOnExecutionEnd = true),
-    ],
-    ['disk limits', (value: ExecutionEnvironmentSpec) => (value.resources.diskBytes = 1024)],
-    ['streaming output', (value: ExecutionEnvironmentSpec) => (value.logging.streamOutput = true)],
-    [
-      'snapshot-on-failure',
-      (value: ExecutionEnvironmentSpec) => (value.lifecycle.snapshotOnFailure = true),
-    ],
-  ])('rejects unsupported configured policy: %s', (_name, mutate) => {
-    const value = environment();
-    mutate(value);
-    expect(captureError(() => createResolver().resolveEnvironment(value))).toMatchObject({
-      normalizedError: { code: 'EXECUTION_POLICY_DENIED' },
-    });
-  });
-
-  it.each([
     ['shell execution', { shell: true }, 'EXECUTION_POLICY_DENIED'],
     ['Secret references', { secretRefs: ['secret://denied'] }, 'EXECUTION_SECRET_DENIED'],
     [

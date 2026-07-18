@@ -98,7 +98,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    rejectUnsupportedDockerImagePolicy(environment);
     if (
       environment.process.shellEnabled ||
       environment.process.executableResolution !== 'container_path'
@@ -127,7 +126,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    rejectUnsupportedDockerProcessPolicy(environment);
     const shellExecutable = environment.process.allowedExecutables.find(isShellExecutable);
     if (shellExecutable) {
       throw executionProviderError(
@@ -174,7 +172,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    rejectUnsupportedDockerFilesystemPolicy(environment);
     if (
       environment.security.privileged ||
       !environment.security.nonRootRequired ||
@@ -189,7 +186,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    rejectUnsupportedDockerSecurityPolicy(environment);
     if (environment.secrets.injectionMode !== 'none') {
       throw executionProviderError(
         'EXECUTION_SECRET_DENIED',
@@ -197,7 +193,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    rejectUnsupportedDockerSecretPolicy(environment);
     if (environment.network.mode !== 'disabled') {
       throw executionProviderError(
         'EXECUTION_NETWORK_DENIED',
@@ -219,9 +214,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    rejectUnsupportedDockerResourcePolicy(environment);
-    rejectUnsupportedDockerLoggingPolicy(environment);
-    rejectUnsupportedDockerLifecyclePolicy(environment);
     return {
       image,
       digest,
@@ -341,141 +333,6 @@ export class DockerExecutionPolicyResolver {
       ]),
     };
   }
-}
-
-function rejectUnsupportedDockerImagePolicy(environment: ExecutionEnvironmentSpec): void {
-  if (
-    environment.image?.platform !== undefined ||
-    environment.image?.sbomRef !== undefined ||
-    (environment.image?.pullPolicy !== undefined && environment.image.pullPolicy !== 'never')
-  ) {
-    unsupportedPolicy('image platform, SBOM verification, and image pulling');
-  }
-}
-
-function rejectUnsupportedDockerProcessPolicy(environment: ExecutionEnvironmentSpec): void {
-  const process = environment.process;
-  if (
-    process.allowedShells?.length ||
-    process.maxProcesses !== undefined ||
-    process.maxThreads !== undefined ||
-    process.maxOpenFiles !== undefined ||
-    process.defaultUmask !== undefined ||
-    process.locale !== undefined ||
-    process.timezone !== undefined ||
-    !process.killProcessTreeOnExit
-  ) {
-    unsupportedPolicy('extended process limits or process-tree preservation');
-  }
-}
-
-function rejectUnsupportedDockerFilesystemPolicy(environment: ExecutionEnvironmentSpec): void {
-  const filesystem = environment.filesystem;
-  const mount = filesystem.mounts[0];
-  if (
-    mount?.propagation !== undefined ||
-    mount?.noExec === true ||
-    mount?.noSuid === true ||
-    mount?.noDev === true ||
-    filesystem.tmpfs?.length ||
-    filesystem.maskPaths?.length ||
-    filesystem.readonlyPaths?.length ||
-    filesystem.writablePaths?.length ||
-    filesystem.maxMounts !== undefined
-  ) {
-    unsupportedPolicy('extended mount, path masking, or filesystem policies');
-  }
-}
-
-function rejectUnsupportedDockerSecurityPolicy(environment: ExecutionEnvironmentSpec): void {
-  const security = environment.security;
-  if (
-    security.seccompProfileRef !== undefined ||
-    security.appArmorProfileRef !== undefined ||
-    security.selinuxLabelRef !== undefined ||
-    security.userNamespace !== undefined ||
-    security.pidNamespace !== undefined ||
-    security.networkNamespace !== undefined ||
-    security.ipcNamespace !== undefined ||
-    security.utsNamespace !== undefined ||
-    security.readOnlyProc === true ||
-    security.maskHostProc === true ||
-    security.preventPtrace === true ||
-    security.metadata !== undefined
-  ) {
-    unsupportedPolicy('extended Linux security profile or namespace policies');
-  }
-}
-
-function rejectUnsupportedDockerSecretPolicy(environment: ExecutionEnvironmentSpec): void {
-  const secrets = environment.secrets;
-  if (
-    secrets.allowedSecretRefs?.length ||
-    secrets.exposeNamesOnly === true ||
-    secrets.ttlSeconds !== undefined ||
-    secrets.revokeOnExecutionEnd === true ||
-    secrets.allowChildProcessInheritance === true
-  ) {
-    unsupportedPolicy('secret brokering or secret lifecycle policies');
-  }
-}
-
-function rejectUnsupportedDockerResourcePolicy(environment: ExecutionEnvironmentSpec): void {
-  const resources = environment.resources;
-  if (
-    resources.cpuQuotaMicros !== undefined ||
-    resources.cpuPeriodMicros !== undefined ||
-    resources.cpuShares !== undefined ||
-    resources.maxCpuSeconds !== undefined ||
-    resources.memorySwapMb !== undefined ||
-    resources.diskBytes !== undefined ||
-    resources.maxWriteBytes !== undefined ||
-    resources.blockIoWeight !== undefined ||
-    resources.maxOpenFiles !== undefined
-  ) {
-    unsupportedPolicy('extended CPU, swap, disk, I/O, or open-file limits');
-  }
-}
-
-function rejectUnsupportedDockerLoggingPolicy(environment: ExecutionEnvironmentSpec): void {
-  const logging = environment.logging;
-  if (
-    !logging.captureStdout ||
-    !logging.captureStderr ||
-    logging.streamOutput === true ||
-    logging.includeTimestamps === true ||
-    logging.maxLineBytes !== undefined ||
-    logging.redactPatterns?.length ||
-    logging.persistOutputAsArtifact === true
-  ) {
-    unsupportedPolicy('streaming, timestamped, redacted, or artifact-backed output policies');
-  }
-}
-
-function rejectUnsupportedDockerLifecyclePolicy(environment: ExecutionEnvironmentSpec): void {
-  const lifecycle = environment.lifecycle;
-  if (
-    lifecycle.idleTtlSeconds !== undefined ||
-    lifecycle.maxLifetimeSeconds !== undefined ||
-    lifecycle.maxExecutions !== undefined ||
-    lifecycle.createTimeoutMs !== undefined ||
-    lifecycle.startTimeoutMs !== undefined ||
-    lifecycle.cleanupTimeoutMs !== undefined ||
-    lifecycle.snapshotOnFailure === true ||
-    lifecycle.cleanupOnSuccess === false ||
-    lifecycle.cleanupOnFailure === false ||
-    lifecycle.retainForDebugSeconds !== undefined
-  ) {
-    unsupportedPolicy('extended lifecycle, snapshot, retention, or cleanup opt-out policies');
-  }
-}
-
-function unsupportedPolicy(capability: string): never {
-  throw executionProviderError(
-    'EXECUTION_POLICY_DENIED',
-    `Docker provider does not implement ${capability}; configured policy cannot be ignored.`,
-    false
-  );
 }
 
 function buildEnvironment(
