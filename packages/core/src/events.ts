@@ -1,13 +1,38 @@
+export type RuntimeObservationEventType = `runtime.observation.${string}`;
+
+export type RuntimeActivityEventType =
+  | 'runtime.activity.requested'
+  | 'runtime.activity.completed'
+  | 'runtime.activity.failed'
+  | 'runtime.activity.waiting'
+  | 'runtime.activity.cancelled';
+
 export type FrameworkEventType =
   | 'session.created'
   | 'session.updated'
   | 'session.closed'
   | 'run.created'
   | 'run.started'
+  | 'run.resume.requested'
+  | 'run.resumed'
+  | 'run.cancel.requested'
+  | 'run.cancelling'
   | 'run.waiting_human'
+  | 'run.waiting_signal'
+  | 'run.waiting_timer'
+  | 'run.paused'
   | 'run.completed'
   | 'run.failed'
   | 'run.cancelled'
+  | 'runtime.wait.created'
+  | 'runtime.wait.resolved'
+  | 'runtime.signal.received'
+  | 'runtime.timer.created'
+  | 'runtime.timer.fired'
+  | 'runtime.checkpoint.created'
+  | 'runtime.checkpoint.failed'
+  | 'runtime.cancellation.propagated'
+  | 'runtime.cancellation.failed'
   | 'recovery.case.opened'
   | 'recovery.strategy.selected'
   | 'recovery.attempt.started'
@@ -262,27 +287,64 @@ export type FrameworkEventType =
   | 'network.authorization.granted'
   | 'network.authorization.denied'
   | 'network.authorization.revoked'
+  | 'artifact.create.requested'
   | 'artifact.created'
+  | 'artifact.deduplicated'
+  | 'artifact.create.failed'
+  | 'artifact.read.requested'
+  | 'artifact.read.completed'
+  | 'artifact.version.created'
+  | 'artifact.finalized'
+  | 'artifact.archived'
+  | 'artifact.invalidated'
+  | 'artifact.delete.requested'
+  | 'artifact.delete.blocked'
+  | 'artifact.deleted'
+  | 'artifact.delete.failed'
+  | 'artifact.lineage.recorded'
+  | 'artifact.retention.expired'
+  | 'artifact.gc.completed'
+  | 'artifact.gc.failed'
+  /** @deprecated Use the explicit Artifact lifecycle event names. */
   | 'artifact.updated'
-  | 'artifact.versioned';
+  /** @deprecated Use artifact.version.created. */
+  | 'artifact.versioned'
+  | RuntimeObservationEventType
+  | RuntimeActivityEventType;
 
 export interface FrameworkEvent<TPayload = unknown> {
   id: string;
   type: FrameworkEventType;
+  version?: string;
+  tenantId?: string;
+  userId?: string;
   workspaceId?: string;
   sessionId?: string;
   runId: string;
   stepId?: string;
   agentId?: string;
   fsmState?: string;
+  branchId?: string;
+  sequence?: number;
+  globalSequence?: number;
+  correlationId?: string;
+  causationId?: string;
+  parentEventId?: string;
+  idempotencyKey?: string;
+  operationId?: string;
   timestamp: string;
+  recordedAt?: string;
   payload: TPayload;
+  payloadHash?: string;
   metadata?: Record<string, unknown>;
 }
 
 export interface EventCreateInput<TPayload = unknown> {
   id: string;
   type: FrameworkEventType;
+  version?: string;
+  tenantId?: string;
+  userId?: string;
   runId: string;
   payload: TPayload;
   workspaceId?: string;
@@ -290,8 +352,23 @@ export interface EventCreateInput<TPayload = unknown> {
   stepId?: string;
   agentId?: string;
   fsmState?: string;
+  branchId?: string;
+  correlationId?: string;
+  causationId?: string;
+  parentEventId?: string;
+  idempotencyKey?: string;
+  operationId?: string;
   timestamp?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface PersistedFrameworkEvent<TPayload = unknown> extends FrameworkEvent<TPayload> {
+  version: string;
+  userId: string;
+  sequence: number;
+  globalSequence: number;
+  recordedAt: string;
+  payloadHash: string;
 }
 
 export interface EventStore {
@@ -300,6 +377,8 @@ export interface EventStore {
 }
 
 export interface EventFilter {
+  tenantId?: string;
+  userId?: string;
   workspaceId?: string;
   sessionId?: string;
   runId?: string;
@@ -316,15 +395,24 @@ export function createFrameworkEvent<TPayload = unknown>(
   return {
     id: input.id,
     type: input.type,
-    workspaceId: input.workspaceId,
-    sessionId: input.sessionId,
+    ...(input.version === undefined ? {} : { version: input.version }),
+    ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
+    ...(input.userId === undefined ? {} : { userId: input.userId }),
+    ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
+    ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
     runId: input.runId,
-    stepId: input.stepId,
-    agentId: input.agentId,
-    fsmState: input.fsmState,
+    ...(input.stepId === undefined ? {} : { stepId: input.stepId }),
+    ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
+    ...(input.fsmState === undefined ? {} : { fsmState: input.fsmState }),
+    ...(input.branchId === undefined ? {} : { branchId: input.branchId }),
+    ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+    ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+    ...(input.parentEventId === undefined ? {} : { parentEventId: input.parentEventId }),
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    ...(input.operationId === undefined ? {} : { operationId: input.operationId }),
     timestamp: input.timestamp ?? new Date().toISOString(),
     payload: input.payload,
-    metadata: input.metadata,
+    ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
   };
 }
 
@@ -341,6 +429,8 @@ export class InMemoryEventStore implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     return this.events.filter((event) => {
+      if (filter.tenantId && event.tenantId !== filter.tenantId) return false;
+      if (filter.userId && event.userId !== filter.userId) return false;
       if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
       if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
       if (filter.runId && event.runId !== filter.runId) return false;
