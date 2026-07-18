@@ -110,6 +110,22 @@ describe('Artifact Event publication decorators', () => {
     });
   });
 
+  it('recovers a committed idempotent create after transient event publication failure', async () => {
+    const fixture = createFixture();
+    const request = createRequest('operation.publisher-retry', 'publisher-retry-content', {
+      idempotencyKey: 'request.publisher-retry',
+    });
+    fixture.publisher.failOnce('artifact.created');
+
+    await expect(fixture.manager.create(request)).rejects.toThrow(/event publication failed/u);
+    expect(await fixture.repository.list()).toHaveLength(1);
+    const recovered = await fixture.manager.create(request);
+
+    expect(await fixture.repository.list()).toHaveLength(1);
+    expect(recovered.id).toBe((await fixture.repository.list())[0]!.record.id);
+    expect(fixture.publisher.types()).toEqual(['artifact.create.requested', 'artifact.created']);
+  });
+
   it('publishes deduplication only when a committed Blob is actually reused', async () => {
     const fixture = createFixture();
     const first = await fixture.manager.create(
@@ -214,8 +230,14 @@ describe('Artifact Event publication decorators', () => {
 
 class CapturingArtifactEventPublisher implements ArtifactEventPublisher {
   readonly publications: ArtifactEventPublication[] = [];
+  private readonly failures = new Map<ArtifactEventPublication['type'], number>();
 
   async publish(publication: ArtifactEventPublication): Promise<void> {
+    const remainingFailures = this.failures.get(publication.type) ?? 0;
+    if (remainingFailures > 0) {
+      this.failures.set(publication.type, remainingFailures - 1);
+      throw new Error(`event publication failed for ${publication.type}`);
+    }
     const existing = this.publications.find(({ id }) => id === publication.id);
     if (existing) {
       expect({ ...publication, timestamp: existing.timestamp }).toEqual(existing);
@@ -230,6 +252,10 @@ class CapturingArtifactEventPublisher implements ArtifactEventPublisher {
 
   byType(type: ArtifactEventPublication['type']): ArtifactEventPublication | undefined {
     return this.publications.find((publication) => publication.type === type);
+  }
+
+  failOnce(type: ArtifactEventPublication['type']): void {
+    this.failures.set(type, (this.failures.get(type) ?? 0) + 1);
   }
 }
 

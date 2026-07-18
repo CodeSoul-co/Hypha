@@ -5,6 +5,7 @@ import {
   artifactRetentionContractJsonSchemas,
   artifactRetentionDecisionSchema,
   artifactRetentionEvaluationRequestSchema,
+  artifactRetentionProcessRequestSchema,
 } from './retention';
 import { expectContractParity } from '../../../test-support/contract-schema-parity';
 
@@ -21,6 +22,11 @@ describe('Artifact retention evaluation', () => {
       name: 'ArtifactRetentionDecision',
       zod: artifactRetentionDecisionSchema,
       json: artifactRetentionContractJsonSchemas.ArtifactRetentionDecision,
+    });
+    expectContractParity({
+      name: 'ArtifactRetentionProcessRequest',
+      zod: artifactRetentionProcessRequestSchema,
+      json: artifactRetentionContractJsonSchemas.ArtifactRetentionProcessRequest,
     });
   });
 
