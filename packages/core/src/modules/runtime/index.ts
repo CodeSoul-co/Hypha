@@ -2,6 +2,7 @@ export * from './canonical-json';
 export * from './event-schema-registry';
 export * from './event-store';
 export * from './event-runtime';
+export * from './projection';
 export * from './message-bus';
 export * from './message-inbox-outbox';
 export * from './session-queue';
