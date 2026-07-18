@@ -255,8 +255,27 @@ export type FrameworkEventType =
   | 'network.authorization.granted'
   | 'network.authorization.denied'
   | 'network.authorization.revoked'
+  | 'artifact.create.requested'
   | 'artifact.created'
+  | 'artifact.deduplicated'
+  | 'artifact.create.failed'
+  | 'artifact.read.requested'
+  | 'artifact.read.completed'
+  | 'artifact.version.created'
+  | 'artifact.finalized'
+  | 'artifact.archived'
+  | 'artifact.invalidated'
+  | 'artifact.delete.requested'
+  | 'artifact.delete.blocked'
+  | 'artifact.deleted'
+  | 'artifact.delete.failed'
+  | 'artifact.lineage.recorded'
+  | 'artifact.retention.expired'
+  | 'artifact.gc.completed'
+  | 'artifact.gc.failed'
+  /** @deprecated Use the explicit Artifact lifecycle event names. */
   | 'artifact.updated'
+  /** @deprecated Use artifact.version.created. */
   | 'artifact.versioned';
 
 export interface FrameworkEvent<TPayload = unknown> {
