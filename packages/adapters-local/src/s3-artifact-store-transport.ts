@@ -31,11 +31,6 @@ export interface S3ArtifactWriteResult {
   encrypted?: boolean;
 }
 
-export interface S3ArtifactDownloadAccessResult {
-  url: string;
-  headers?: Record<string, string>;
-}
-
 export interface S3ArtifactStoreTransport {
   upload(input: {
     bucket: string;
@@ -81,7 +76,7 @@ export interface S3ArtifactStoreTransport {
     expiresInSeconds: number;
     responseMimeType?: string;
     responseFilename?: string;
-  }): Promise<S3ArtifactDownloadAccessResult>;
+  }): Promise<string>;
   checkBucket(bucket: string): Promise<void>;
   close(): void;
 }
@@ -246,8 +241,8 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
 
   async createDownloadUrl(
     input: Parameters<S3ArtifactStoreTransport['createDownloadUrl']>[0]
-  ): Promise<S3ArtifactDownloadAccessResult> {
-    const url = await getSignedUrl(
+  ): Promise<string> {
+    return getSignedUrl(
       this.client,
       new GetObjectCommand({
         Bucket: input.bucket,
@@ -261,10 +256,6 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
       }),
       { expiresIn: input.expiresInSeconds }
     );
-    return {
-      url,
-      ...(input.ifMatch ? { headers: { 'If-Match': input.ifMatch } } : {}),
-    };
   }
 
   async checkBucket(bucket: string): Promise<void> {

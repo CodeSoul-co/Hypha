@@ -247,7 +247,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       );
       this.assertOwnedRef(request.ref);
       const state = await this.requireState(request.ref);
-      const access = await this.transport.createDownloadUrl({
+      const url = await this.transport.createDownloadUrl({
         bucket: this.bucket,
         key: request.ref.objectKey,
         versionId: request.ref.versionId,
@@ -258,9 +258,8 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       });
       return {
         method: 'GET',
-        url: access.url,
+        url,
         expiresAt: new Date(Date.parse(this.now()) + request.expiresInSeconds * 1000).toISOString(),
-        ...(access.headers ? { headers: access.headers } : {}),
       };
     });
   }

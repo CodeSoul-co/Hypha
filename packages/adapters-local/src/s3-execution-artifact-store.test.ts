@@ -123,7 +123,6 @@ describe('S3ExecutionArtifactStore', () => {
       method: 'GET',
       url: 'https://downloads.example/objects%2Fcopied.bin?expires=60',
       expiresAt: '2026-07-18T00:01:00.000Z',
-      headers: { 'If-Match': '"etag-2"' },
     });
     await store.delete(copy);
     await expect(store.delete(copy)).resolves.toBeUndefined();
@@ -260,13 +259,10 @@ class FakeS3ArtifactTransport implements S3ArtifactStoreTransport {
 
   async createDownloadUrl(
     input: Parameters<S3ArtifactStoreTransport['createDownloadUrl']>[0]
-  ): ReturnType<S3ArtifactStoreTransport['createDownloadUrl']> {
+  ): Promise<string> {
     this.throwNext();
     this.require(input.key, input.ifMatch);
-    return {
-      url: `https://downloads.example/${encodeURIComponent(input.key)}?expires=${input.expiresInSeconds}`,
-      ...(input.ifMatch ? { headers: { 'If-Match': input.ifMatch } } : {}),
-    };
+    return `https://downloads.example/${encodeURIComponent(input.key)}?expires=${input.expiresInSeconds}`;
   }
 
   async checkBucket(_bucket: string): Promise<void> {
