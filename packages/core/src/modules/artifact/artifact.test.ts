@@ -31,6 +31,12 @@ describe('ArtifactProfileSpec', () => {
     expect(() =>
       validateArtifactProfileSpec({
         ...artifactProfileSpecExample,
+        versioning: { strategy: 'replace_latest', retainPreviousVersions: true },
+      })
+    ).toThrow(/strategy/u);
+    expect(() =>
+      validateArtifactProfileSpec({
+        ...artifactProfileSpecExample,
         retention: { archiveAfterSeconds: 100, deleteAfterSeconds: 100 },
       })
     ).toThrow(/deleteAfterSeconds/u);

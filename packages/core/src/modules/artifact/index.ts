@@ -75,20 +75,11 @@ export const artifactContentAddressingSpecSchema = z
 
 export const artifactVersioningPolicySpecSchema = z
   .object({
-    strategy: z.enum(['append_only', 'replace_latest']),
-    retainPreviousVersions: z.boolean(),
+    strategy: z.literal('append_only'),
+    retainPreviousVersions: z.literal(true),
     maxVersions: positiveInteger.optional(),
   })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.strategy === 'append_only' && value.retainPreviousVersions !== true) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['retainPreviousVersions'],
-        message: 'must be true for append_only versioning',
-      });
-    }
-  }) satisfies ZodType<ArtifactVersioningPolicySpec>;
+  .strict() satisfies ZodType<ArtifactVersioningPolicySpec>;
 
 const principalTypeSchema = z.enum(['user', 'agent', 'service', 'system']);
 
@@ -421,8 +412,8 @@ export const artifactContentAddressingSpecJsonSchema: JsonSchema = strictObject(
 export const artifactVersioningPolicySpecJsonSchema: JsonSchema = strictObject(
   ['strategy', 'retainPreviousVersions'],
   {
-    strategy: { enum: ['append_only', 'replace_latest'] },
-    retainPreviousVersions: { type: 'boolean' },
+    strategy: { const: 'append_only' },
+    retainPreviousVersions: { const: true },
     maxVersions: positiveIntegerJsonSchema,
   }
 );

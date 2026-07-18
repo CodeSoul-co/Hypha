@@ -39,8 +39,9 @@ export interface ArtifactContentAddressingSpec {
 }
 
 export interface ArtifactVersioningPolicySpec {
-  strategy: 'append_only' | 'replace_latest';
-  retainPreviousVersions: boolean;
+  /** E4 guarantees immutable history; replacement semantics are deliberately unsupported. */
+  strategy: 'append_only';
+  retainPreviousVersions: true;
   maxVersions?: number;
 }
 
