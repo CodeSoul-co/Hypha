@@ -5,3 +5,5 @@ export * from './message-bus';
 export * from './message-inbox-outbox';
 export * from './session-queue';
 export * from './run-lease-store';
+export * from './state-execution-claim-store';
+export * from './resource-coordinator';

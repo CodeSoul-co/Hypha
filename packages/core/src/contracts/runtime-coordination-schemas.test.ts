@@ -6,8 +6,16 @@ import {
   fencedRunLeaseExample,
   fencedRunLeaseJsonSchema,
   fencedRunLeaseSchema,
+  runtimeResourceClaimDefinition,
+  runtimeResourceClaimExample,
+  runtimeResourceClaimJsonSchema,
+  runtimeResourceClaimSchema,
   runLeaseAcquireRequestSchema,
   runLeaseGuardSchema,
+  stateExecutionClaimDefinition,
+  stateExecutionClaimExample,
+  stateExecutionClaimJsonSchema,
+  stateExecutionClaimSchema,
 } from './runtime-coordination-schemas';
 
 describe('Runtime coordination contracts', () => {
@@ -41,6 +49,44 @@ describe('Runtime coordination contracts', () => {
         ttlMs: 0,
         acquiredAt: 'not-a-timestamp',
         idempotencyKey: 'acquire.1',
+      })
+    ).toThrow();
+  });
+
+  it('keeps state and resource claim examples aligned across schema formats', () => {
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+
+    expect(stateExecutionClaimSchema.parse(stateExecutionClaimExample)).toEqual(
+      stateExecutionClaimExample
+    );
+    expect(ajv.validate(stateExecutionClaimJsonSchema, stateExecutionClaimExample)).toBe(true);
+    expect(stateExecutionClaimDefinition.example).toEqual(stateExecutionClaimExample);
+
+    expect(runtimeResourceClaimSchema.parse(runtimeResourceClaimExample)).toEqual(
+      runtimeResourceClaimExample
+    );
+    expect(ajv.validate(runtimeResourceClaimJsonSchema, runtimeResourceClaimExample)).toBe(true);
+    expect(runtimeResourceClaimDefinition.example).toEqual(runtimeResourceClaimExample);
+  });
+
+  it('requires terminal state claim timestamps and valid resource claim lifetimes', () => {
+    expect(() =>
+      stateExecutionClaimSchema.parse({
+        ...stateExecutionClaimExample,
+        status: 'completed',
+      })
+    ).toThrow();
+    expect(() =>
+      stateExecutionClaimSchema.parse({
+        ...stateExecutionClaimExample,
+        status: 'released',
+      })
+    ).toThrow();
+    expect(() =>
+      runtimeResourceClaimSchema.parse({
+        ...runtimeResourceClaimExample,
+        expiresAt: runtimeResourceClaimExample.acquiredAt,
       })
     ).toThrow();
   });

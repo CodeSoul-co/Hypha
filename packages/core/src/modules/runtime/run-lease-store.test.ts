@@ -40,7 +40,15 @@ describe('InMemoryRunLeaseStore', () => {
     expect(lease).not.toBeNull();
     expect(reused).toEqual(lease);
     expect(blocked).toBeNull();
+    expect(await store.get(scope, '2026-07-18T05:59:59.000Z')).toBeNull();
     expect(await store.get(scope, '2026-07-18T06:00:02.000Z')).toEqual(lease);
+    await expect(
+      store.assertCurrent({
+        scope,
+        guard: runLeaseGuard(lease!),
+        checkedAt: '2026-07-18T05:59:59.000Z',
+      })
+    ).rejects.toThrow('must not precede acquiredAt');
   });
 
   it('increments fencing tokens on expired takeover and rejects the stale worker', async () => {

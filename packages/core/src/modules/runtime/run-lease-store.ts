@@ -86,7 +86,13 @@ export class InMemoryRunLeaseStore implements RunLeaseStore {
     if (!slot) return null;
     assertPartition(slot, validatedScope);
     const active = slot.active;
-    if (!active || isExpired(active, checkedAt)) return null;
+    if (
+      !active ||
+      Date.parse(checkedAt) < Date.parse(active.acquiredAt) ||
+      isExpired(active, checkedAt)
+    ) {
+      return null;
+    }
     return cloneLease(active);
   }
 
@@ -170,6 +176,9 @@ export class InMemoryRunLeaseStore implements RunLeaseStore {
   ): FencedRunLease {
     const current = slot.active;
     if (!current) fencingRejected(request.scope, request.guard, 'No active run lease exists');
+    if (Date.parse(checkedAt) < Date.parse(current.acquiredAt)) {
+      invalid('Lease operation time must not precede acquiredAt');
+    }
     if (isExpired(current, checkedAt)) {
       fencingRejected(request.scope, request.guard, 'Run lease has expired', current);
     }
