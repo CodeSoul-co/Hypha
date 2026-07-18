@@ -58,6 +58,23 @@ describe('InMemoryExecutionArtifactStore', () => {
     });
   });
 
+  it('rejects stale refs after an object key is overwritten', async () => {
+    const store = createStore();
+    const stale = await store.put(request('objects/current.bin', new Uint8Array([1])));
+    const current = await store.put(request('objects/current.bin', new Uint8Array([2])));
+
+    await expect(store.exists(stale)).resolves.toBe(false);
+    await expect(store.get({ ref: stale })).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    await expect(store.delete(stale)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    await expect(readArtifactStream((await store.get({ ref: current })).stream)).resolves.toEqual(
+      new Uint8Array([2])
+    );
+  });
+
   it('copies by reference and garbage-collects blobs after the last object is deleted', async () => {
     const store = createStore();
     const source = await store.put(request('objects/source.bin', new Uint8Array([5, 6, 7])));

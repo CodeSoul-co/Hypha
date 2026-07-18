@@ -61,6 +61,10 @@ export * from './docker-execution-provider';
 export * from './execution-provider-factories';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
+export * from './local-artifact-files';
+export * from './local-artifact-manifest';
+export * from './local-artifact-store-values';
+export * from './local-filesystem-execution-artifact-store';
 export {
   InMemoryExecutionArtifactStore,
   type InMemoryExecutionArtifactStoreOptions,

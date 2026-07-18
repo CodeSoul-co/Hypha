@@ -155,6 +155,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
     const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
     this.assertOwnedRef(request.ref);
     const object = this.requireObject(request.ref.objectKey);
+    this.assertCurrentRef(request.ref, object);
     const blob = this.requireBlob(object.contentHash);
     const actualHash = hashArtifactBytes(blob.bytes);
     if (actualHash !== object.contentHash) {
@@ -191,6 +192,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
     this.assertOwnedRef(ref);
     const object = this.objects.get(ref.objectKey);
     if (!object) return null;
+    this.assertCurrentRef(ref, object);
     return {
       contentHash: object.contentHash,
       sizeBytes: object.sizeBytes,
@@ -205,7 +207,9 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
     this.assertOpen();
     const ref = validateArtifactStoreInput(() => artifactStorageRefSchema.parse(input));
     this.assertOwnedRef(ref);
-    return this.objects.has(ref.objectKey);
+    const object = this.objects.get(ref.objectKey);
+    if (!object) return false;
+    return !ref.etag || ref.etag === object.etag;
   }
 
   async delete(input: ArtifactStorageRef): Promise<void> {
@@ -214,6 +218,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
     this.assertOwnedRef(ref);
     const object = this.objects.get(ref.objectKey);
     if (!object) return;
+    this.assertCurrentRef(ref, object);
     this.objects.delete(ref.objectKey);
     this.releaseBlob(object.contentHash);
   }
@@ -223,6 +228,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
     const request = validateArtifactStoreInput(() => artifactCopyRequestSchema.parse(input));
     this.assertOwnedRef(request.source);
     const source = this.requireObject(request.source.objectKey);
+    this.assertCurrentRef(request.source, source);
     const existing = this.objects.get(request.targetObjectKey);
     if (request.ifAbsent && existing) {
       throw artifactStoreError(
@@ -288,6 +294,24 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
         'ARTIFACT_INVALID_INPUT',
         `Artifact reference belongs to Store ${ref.storeId}, not ${this.id}.`,
         false
+      );
+    }
+    if (ref.versionId) {
+      throw artifactStoreError(
+        'ARTIFACT_INVALID_INPUT',
+        'In-memory Artifact Store does not support provider version IDs.',
+        false
+      );
+    }
+  }
+
+  private assertCurrentRef(ref: ArtifactStorageRef, object: StoredObject): void {
+    if (ref.etag && ref.etag !== object.etag) {
+      throw artifactStoreError(
+        'ARTIFACT_VERSION_CONFLICT',
+        'Artifact reference no longer identifies the current object content.',
+        false,
+        { expectedEtag: ref.etag, actualEtag: object.etag }
       );
     }
   }
