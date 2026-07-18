@@ -708,6 +708,49 @@ defaultWorkflow: workflow.file
     expect(compiled.memoryDependencySnapshot?.dependencyHash).toMatch(/^sha256:/);
   });
 
+  it('captures context and extraction dependencies without a managed Memory profile', () => {
+    const dependencyOnlyPack = validateDomainPackSpec({
+      ...domainPackSpecDefinition.example,
+      memoryProfiles: [],
+      contextProfiles: [contextProfileSpecExample],
+      extractionProfiles: [memoryExtractionProfileSpecExample],
+      sessionProfiles: [
+        {
+          ...domainPackSpecDefinition.example.sessionProfiles![0],
+          defaultMemoryProfileRef: undefined,
+          defaultContextProfileRef: contextProfileSpecExample.id,
+          defaultExtractionProfileRef: memoryExtractionProfileSpecExample.id,
+        },
+      ],
+      workflows: [
+        {
+          ...domainPackSpecDefinition.example.workflows[0],
+          states: domainPackSpecDefinition.example.workflows[0].states.map((state) => ({
+            ...state,
+            memoryProfileRef: undefined,
+            memoryAccessMode: 'none' as const,
+          })),
+        },
+      ],
+    });
+
+    const compiled = compileDomainPackToHarnessedSystem(dependencyOnlyPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      now: () => '2026-07-18T00:00:00.000Z',
+    });
+
+    expect(compiled.memoryDependencySnapshot).toMatchObject({
+      contextProfileRef: { id: contextProfileSpecExample.id, version: '1.0.0' },
+      extractionProfileRef: { id: memoryExtractionProfileSpecExample.id, version: '1.0.0' },
+    });
+    expect(compiled.memoryDependencySnapshot?.policyRefs).toEqual(
+      expect.arrayContaining([
+        memoryExtractionProfileSpecExample.writePolicyRef,
+        memoryExtractionProfileSpecExample.maintenancePolicyRef,
+      ])
+    );
+  });
+
   it('rejects managed Memory bindings with unresolved versions, scopes, or capabilities', () => {
     const base = {
       ...domainPackSpecDefinition.example,
@@ -749,6 +792,25 @@ defaultWorkflow: workflow.file
       })
     ).toThrow(/Memory provider capabilities are required/);
 
+    const invalidAutoCapture = validateDomainPackSpec({
+      ...valid,
+      workflows: [
+        {
+          ...valid.workflows[0],
+          states: valid.workflows[0].states.map((state) =>
+            state.id === 'Reasoning'
+              ? { ...state, memoryAccessMode: 'none' as const, autoCapture: true }
+              : state
+          ),
+        },
+      ],
+    });
+    expect(() =>
+      compileDomainPackToHarnessedSystem(invalidAutoCapture, {
+        agentRef: { id: 'agent.default', version: '0.0.0' },
+      })
+    ).toThrow(/autoCapture requires write or read_write access/);
+
     const missingScope = validateDomainPackSpec({
       ...valid,
       memoryProfiles: [
@@ -782,5 +844,17 @@ defaultWorkflow: workflow.file
         },
       })
     ).toThrow(/does not support add/);
+
+    expect(() =>
+      compileDomainPackToHarnessedSystem(valid, {
+        agentRef: { id: 'agent.default', version: '0.0.0' },
+        memoryProviderCapabilities: {
+          [memoryProfileSpecExample.managementProviderRef.id]: {
+            ...memoryManagementProviderSpecExample.capabilities,
+            hybridSearch: false,
+          },
+        },
+      })
+    ).toThrow(/does not support hybrid search/);
   });
 });
