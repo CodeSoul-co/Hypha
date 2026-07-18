@@ -7,12 +7,23 @@ import {
   validateCommandExecutionResult,
   validateSandboxRecord,
 } from '@hypha/core';
-import { MockExecutionProvider, MockExecutionProviderError } from './mock-execution-provider';
+import {
+  createMockExecutionProviderFactory,
+  MockExecutionProvider,
+  MockExecutionProviderError,
+} from './mock-execution-provider';
 
 const fixedNow = () => '2026-07-17T00:00:00.000Z';
 const principal = sandboxCreateRequestExample.principal;
 
 describe('MockExecutionProvider', () => {
+  it('exposes a deterministic Factory for root DI registration', async () => {
+    const factory = createMockExecutionProviderFactory({ id: 'provider.mock.test' });
+
+    expect(factory).toMatchObject({ providerType: 'mock', providerId: 'provider.mock.test' });
+    expect(await factory.create()).toMatchObject({ id: 'provider.mock.test' });
+  });
+
   it('runs a deterministic lifecycle with configured output and file evidence', async () => {
     const provider = new MockExecutionProvider({
       now: fixedNow,
