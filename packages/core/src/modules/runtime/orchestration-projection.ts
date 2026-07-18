@@ -11,6 +11,9 @@ const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.created',
   'run.started',
   'run.waiting_human',
+  'run.waiting_signal',
+  'run.waiting_timer',
+  'run.paused',
   'run.completed',
   'run.failed',
   'run.cancelled',
@@ -64,7 +67,13 @@ export function reduceRuntimeOrchestrationProjection(
     case 'run.started':
       return runStarted(state, event);
     case 'run.waiting_human':
-      return runWaitingHuman(state, event);
+      return runWaiting(state, event, 'waiting_human');
+    case 'run.waiting_signal':
+      return runWaiting(state, event, 'waiting_signal');
+    case 'run.waiting_timer':
+      return runWaiting(state, event, 'waiting_timer');
+    case 'run.paused':
+      return runWaiting(state, event, 'paused');
     case 'run.completed':
       return terminateRun(state, event, 'completed');
     case 'run.failed':
@@ -109,12 +118,13 @@ function runStarted(
   return validated({ ...state, runStatus: 'running' }, event);
 }
 
-function runWaitingHuman(
+function runWaiting(
   state: RuntimeOrchestrationProjection,
-  event: PersistedFrameworkEvent
+  event: PersistedFrameworkEvent,
+  runStatus: 'waiting_human' | 'waiting_signal' | 'waiting_timer' | 'paused'
 ): RuntimeOrchestrationProjection {
   requireActive(state, event);
-  return validated({ ...state, runStatus: 'waiting_human' }, event);
+  return validated({ ...state, runStatus }, event);
 }
 
 function terminateRun(

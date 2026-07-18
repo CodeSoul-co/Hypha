@@ -14,6 +14,7 @@ export * from './message-bus';
 export * from './recovery-loop';
 export * from './recovery-supervisor';
 export * from './execution-context';
+export * from './bounded-fsm-driver';
 
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;
