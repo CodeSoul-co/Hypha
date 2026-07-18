@@ -423,16 +423,33 @@ export class FencedBoundedFSMDriver {
     runLease: RunLeaseAuthorization
   ): Promise<RuntimeOrchestrationProjection> {
     const type = waitEventType(wait);
+    const waitId = this.nextId('wait');
+    const timestamp = this.timestamp('Runtime Wait');
     await this.appendLifecycle(
       input.scope,
       runLease,
       [
         this.event(
           input.scope,
-          type,
-          { stateId: projection.currentState, wait },
+          'runtime.wait.created',
+          {
+            waitId,
+            stateId: projection.currentState,
+            stateAttempt: projection.stateAttempt,
+            wait,
+            createdAt: timestamp,
+          },
           projection.currentState,
-          projection.stateAttempt
+          projection.stateAttempt,
+          timestamp
+        ),
+        this.event(
+          input.scope,
+          type,
+          { waitId, stateId: projection.currentState, wait },
+          projection.currentState,
+          projection.stateAttempt,
+          timestamp
         ),
       ],
       `wait:${wait.type}:${projection.currentState}:${projection.stateAttempt}`

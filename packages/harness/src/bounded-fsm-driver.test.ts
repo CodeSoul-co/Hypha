@@ -7,6 +7,7 @@ import {
   InMemoryStateExecutionClaimStore,
   DurableEventRuntime,
   ProjectionEngine,
+  RuntimeRunControlService,
   hashCanonicalJson,
   type EventCreateInput,
   type FrameworkEventType,
@@ -54,6 +55,8 @@ const process: FSMProcessSpec = {
 const driverEventTypes: FrameworkEventType[] = [
   'run.created',
   'run.started',
+  'run.resume.requested',
+  'run.resumed',
   'run.waiting_human',
   'run.waiting_signal',
   'run.waiting_timer',
@@ -61,6 +64,9 @@ const driverEventTypes: FrameworkEventType[] = [
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'runtime.wait.created',
+  'runtime.wait.resolved',
+  'runtime.signal.received',
   'fsm.state.entered',
   'fsm.state.exited',
   'fsm.transition.accepted',
@@ -102,13 +108,21 @@ async function fixture(
     now,
     nextId,
   });
+  const controls = new RuntimeRunControlService({
+    events,
+    projections,
+    projectionStore,
+    runLeases,
+    now,
+    nextId,
+  });
   await events.append({
     scope: streamScope(),
     events: [seedEvent('run.created', 'run.created', now())],
     expectedLastSequence: 0,
     idempotencyKey: 'seed.run.created',
   });
-  return { driver, events, projectionStore, runLeases, stateClaims, now, nextId };
+  return { driver, controls, events, projectionStore, runLeases, stateClaims, now, nextId };
 }
 
 function runInput(maxSteps: number, abortSignal?: AbortSignal) {
@@ -261,6 +275,67 @@ describe('FencedBoundedFSMDriver', () => {
     const repeated = await target.driver.run(runInput(3));
     expect(repeated).toMatchObject({ disposition: 'waiting', steps: 0 });
     expect(calls).toBe(1);
+  });
+
+  it('resumes a signal Wait as a new claimable State attempt', async () => {
+    const claims: string[] = [];
+    const target = await fixture((input) => {
+      claims.push(`${input.stateClaim.stateId}:${input.stateClaim.stateAttempt}`);
+      if (input.projection.stateAttempt === 1) {
+        return {
+          result: {
+            kind: 'waiting',
+            wait: {
+              type: 'signal',
+              key: 'approval.received',
+              expectedSchema: {
+                type: 'object',
+                required: ['approved'],
+                properties: { approved: { type: 'boolean' } },
+                additionalProperties: false,
+              },
+            },
+          },
+        };
+      }
+      expect(input.projection.lastResume).toMatchObject({
+        kind: 'signal',
+        payload: { approved: true },
+      });
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    });
+
+    await expect(target.driver.run(runInput(1))).resolves.toMatchObject({
+      disposition: 'waiting',
+      projection: { runStatus: 'waiting_signal', stateAttempt: 1 },
+    });
+    await expect(
+      target.controls.execute({
+        kind: 'signal',
+        commandId: 'signal.driver.approval',
+        scope,
+        principal: {
+          principalId: 'user.driver',
+          type: 'user',
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          permissionScopes: ['runtime.run.signal'],
+        },
+        ownerId: 'worker.control',
+        leaseTtlMs: 60_000,
+        key: 'approval.received',
+        payload: { approved: true },
+        sentAt: '2026-07-18T05:01:00.000Z',
+      })
+    ).resolves.toMatchObject({
+      disposition: 'applied',
+      projection: { runStatus: 'running', stateAttempt: 2 },
+    });
+    await expect(target.driver.run(runInput(1))).resolves.toMatchObject({
+      disposition: 'completed',
+      projection: { runStatus: 'completed', terminalState: 'Completed' },
+    });
+    expect(claims).toEqual(['Start:1', 'Start:2']);
   });
 
   it('routes failed State results to the declared failed terminal State', async () => {

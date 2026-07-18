@@ -1,15 +1,22 @@
 import type { FrameworkEventType, PersistedFrameworkEvent } from '../../events';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
+import type {
+  RuntimePendingWaitProjection,
+  RuntimeResumeProjection,
+} from '../../contracts/runtime-projection';
+import { RUNTIME_WAIT_INTENT_TYPES } from '../../contracts/runtime-helpers';
 import { validateRuntimeOrchestrationProjection } from '../../contracts/runtime-projection-schemas';
 import { FrameworkError } from '../../errors';
 import type { ProjectionDefinition } from './projection';
 
 export const RUNTIME_ORCHESTRATION_PROJECTION_ID = 'runtime.orchestration';
-export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.0.0';
+export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.1.0';
 
 const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.created',
   'run.started',
+  'run.resume.requested',
+  'run.resumed',
   'run.waiting_human',
   'run.waiting_signal',
   'run.waiting_timer',
@@ -17,6 +24,9 @@ const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'runtime.wait.created',
+  'runtime.wait.resolved',
+  'runtime.signal.received',
   'fsm.transition.accepted',
   'fsm.state.entered',
   'fsm.state.exited',
@@ -66,6 +76,10 @@ export function reduceRuntimeOrchestrationProjection(
       return runCreated(state, event);
     case 'run.started':
       return runStarted(state, event);
+    case 'run.resume.requested':
+      return runResumeRequested(state, event);
+    case 'run.resumed':
+      return runResumed(state, event);
     case 'run.waiting_human':
       return runWaiting(state, event, 'waiting_human');
     case 'run.waiting_signal':
@@ -80,6 +94,12 @@ export function reduceRuntimeOrchestrationProjection(
       return terminateRun(state, event, 'failed');
     case 'run.cancelled':
       return terminateRun(state, event, 'cancelled');
+    case 'runtime.wait.created':
+      return waitCreated(state, event);
+    case 'runtime.wait.resolved':
+      return waitResolved(state, event);
+    case 'runtime.signal.received':
+      return signalReceived(state, event);
     case 'fsm.transition.accepted':
       return transitionAccepted(state, event);
     case 'fsm.state.entered':
@@ -124,7 +144,185 @@ function runWaiting(
   runStatus: 'waiting_human' | 'waiting_signal' | 'waiting_timer' | 'paused'
 ): RuntimeOrchestrationProjection {
   requireActive(state, event);
-  return validated({ ...state, runStatus }, event);
+  const waitTypesByStatus = {
+    waiting_human: 'human',
+    waiting_signal: 'signal',
+    waiting_timer: 'timer',
+    paused: 'pause',
+  } as const;
+  const expectedWaitType: RuntimePendingWaitProjection['type'] = waitTypesByStatus[runStatus];
+  const withPendingWait = state.pendingWait
+    ? state
+    : projectLegacyPendingWait(state, event, expectedWaitType);
+  if (withPendingWait.pendingWait?.type !== expectedWaitType) {
+    divergence(`${event.type} requires a matching pending Wait`, event, {
+      expectedWaitType,
+      actualWaitType: withPendingWait.pendingWait?.type,
+    });
+  }
+  return validated({ ...withPendingWait, runStatus }, event);
+}
+
+function projectLegacyPendingWait(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent,
+  expectedWaitType: RuntimePendingWaitProjection['type']
+): RuntimeOrchestrationProjection {
+  if (!state.currentState || state.stateAttempt < 1) {
+    divergence('Legacy waiting Event requires a current State attempt', event);
+  }
+  const payload = payloadRecord(event);
+  const wait = recordValue(payload.wait);
+  if (!wait) divergence('Waiting Event requires wait details', event);
+  const type = requiredString(wait.type, 'wait type', event);
+  if (type !== expectedWaitType) {
+    divergence('Waiting Event type does not match its Run status', event, {
+      expectedWaitType,
+      actualWaitType: type,
+    });
+  }
+  const pendingWait: RuntimePendingWaitProjection = {
+    waitId: optionalString(payload.waitId) ?? `legacy-wait:${event.id}`,
+    stateId: state.currentState,
+    stateAttempt: state.stateAttempt,
+    type: expectedWaitType,
+    ...(optionalString(wait.key) === undefined ? {} : { key: optionalString(wait.key) }),
+    ...(recordValue(wait.expectedSchema) === null
+      ? {}
+      : { expectedSchema: recordValue(wait.expectedSchema) ?? undefined }),
+    ...(optionalString(wait.expiresAt) === undefined
+      ? {}
+      : { expiresAt: optionalString(wait.expiresAt) }),
+    createdAt: event.timestamp,
+  };
+  return { ...omitLastResume(state), pendingWait };
+}
+
+function runResumeRequested(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (!['paused', 'waiting_signal'].includes(state.runStatus)) {
+    divergence(`Run cannot resume from ${state.runStatus}`, event);
+  }
+  if (!state.pendingWait) divergence('Run resume requires a pending Wait', event);
+  return validated({ ...state, runStatus: 'acquiring' }, event);
+}
+
+function runResumed(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (state.runStatus !== 'acquiring') {
+    divergence(`run.resumed requires acquiring status, received ${state.runStatus}`, event);
+  }
+  if (state.pendingWait) divergence('Run cannot resume before its Wait is resolved', event);
+  const payload = payloadRecord(event);
+  const resume = recordValue(payload.resume);
+  if (!resume) divergence('run.resumed requires resume details', event);
+  const kind = requiredString(resume.kind, 'resume kind', event);
+  if (kind !== 'manual' && kind !== 'signal') {
+    divergence('run.resumed contains an unsupported resume kind', event, { kind });
+  }
+  const lastResume: RuntimeResumeProjection = {
+    commandId: requiredString(resume.commandId, 'resume commandId', event),
+    kind,
+    waitId: requiredString(resume.waitId, 'resume waitId', event),
+    principalId: requiredString(resume.principalId, 'resume principalId', event),
+    ...(optionalString(resume.key) === undefined ? {} : { key: optionalString(resume.key) }),
+    ...('payload' in resume
+      ? { payload: resume.payload as RuntimeResumeProjection['payload'] }
+      : {}),
+    resumedAt: requiredString(resume.resumedAt, 'resume resumedAt', event),
+  };
+  return validated({ ...state, runStatus: 'running', lastResume }, event);
+}
+
+function waitCreated(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireActive(state, event);
+  if (!state.currentState || state.stateAttempt < 1) {
+    divergence('A Wait requires a current FSM State attempt', event);
+  }
+  if (state.pendingWait) divergence('A Run cannot have more than one pending Wait', event);
+  const payload = payloadRecord(event);
+  const wait = recordValue(payload.wait);
+  if (!wait) divergence('runtime.wait.created requires wait details', event);
+  const type = requiredString(wait.type, 'wait type', event);
+  if (!RUNTIME_WAIT_INTENT_TYPES.includes(type as (typeof RUNTIME_WAIT_INTENT_TYPES)[number])) {
+    divergence('runtime.wait.created contains an unsupported wait type', event, { type });
+  }
+  const stateId = requiredString(payload.stateId, 'wait stateId', event);
+  const stateAttempt = positiveInteger(payload.stateAttempt, 'wait stateAttempt', event);
+  if (stateId !== state.currentState || stateAttempt !== state.stateAttempt) {
+    divergence('Pending Wait does not belong to the current State attempt', event, {
+      expectedStateId: state.currentState,
+      actualStateId: stateId,
+      expectedStateAttempt: state.stateAttempt,
+      actualStateAttempt: stateAttempt,
+    });
+  }
+  const pendingWait: RuntimePendingWaitProjection = {
+    waitId: requiredString(payload.waitId, 'waitId', event),
+    stateId,
+    stateAttempt,
+    type: type as RuntimePendingWaitProjection['type'],
+    ...(optionalString(wait.key) === undefined ? {} : { key: optionalString(wait.key) }),
+    ...(recordValue(wait.expectedSchema) === null
+      ? {}
+      : { expectedSchema: recordValue(wait.expectedSchema) ?? undefined }),
+    ...(optionalString(wait.expiresAt) === undefined
+      ? {}
+      : { expiresAt: optionalString(wait.expiresAt) }),
+    createdAt: requiredString(payload.createdAt, 'wait createdAt', event),
+  };
+  const withoutLastResume = omitLastResume(state);
+  return validated({ ...withoutLastResume, pendingWait }, event);
+}
+
+function waitResolved(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (state.runStatus !== 'acquiring') {
+    divergence('A Wait can only resolve during Run resume acquisition', event);
+  }
+  if (!state.pendingWait) divergence('Resolved Wait is not pending', event);
+  const waitId = requiredString(payloadRecord(event).waitId, 'waitId', event);
+  if (waitId !== state.pendingWait.waitId) {
+    divergence('Resolved Wait id does not match the pending Wait', event, {
+      expectedWaitId: state.pendingWait.waitId,
+      actualWaitId: waitId,
+    });
+  }
+  return validated(omitPendingWait(state), event);
+}
+
+function signalReceived(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (state.runStatus !== 'waiting_signal' || state.pendingWait?.type !== 'signal') {
+    divergence('Signal requires a signal-waiting Run', event);
+  }
+  const payload = payloadRecord(event);
+  const waitId = requiredString(payload.waitId, 'signal waitId', event);
+  const key = requiredString(payload.key, 'signal key', event);
+  if (waitId !== state.pendingWait.waitId || key !== state.pendingWait.key) {
+    divergence('Signal does not match the pending Wait', event, {
+      expectedWaitId: state.pendingWait.waitId,
+      actualWaitId: waitId,
+      expectedKey: state.pendingWait.key,
+      actualKey: key,
+    });
+  }
+  return structuredClone(state);
 }
 
 function terminateRun(
@@ -329,6 +527,29 @@ function omitPendingTransition(
   const { pendingTransition, ...remaining } = state;
   void pendingTransition;
   return remaining;
+}
+
+function omitPendingWait(
+  state: RuntimeOrchestrationProjection
+): Omit<RuntimeOrchestrationProjection, 'pendingWait'> {
+  const { pendingWait, ...remaining } = state;
+  void pendingWait;
+  return remaining;
+}
+
+function omitLastResume(
+  state: RuntimeOrchestrationProjection
+): Omit<RuntimeOrchestrationProjection, 'lastResume'> {
+  const { lastResume, ...remaining } = state;
+  void lastResume;
+  return remaining;
+}
+
+function positiveInteger(value: unknown, label: string, event: PersistedFrameworkEvent): number {
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    divergence(`Orchestration Event requires positive ${label}`, event);
+  }
+  return value as number;
 }
 
 function requiredString(value: unknown, label: string, event: PersistedFrameworkEvent): string {

@@ -21,6 +21,7 @@ const eventTypes: FrameworkEventType[] = [
   'run.created',
   'run.started',
   'run.waiting_human',
+  'run.waiting_signal',
   'run.completed',
   'run.failed',
   'run.cancelled',
@@ -169,6 +170,39 @@ describe('Runtime orchestration projection', () => {
         statePath: ['Acting', 'Acting'],
         stateVisitCounts: { Acting: 2 },
         stateAttempt: 2,
+      },
+    });
+  });
+
+  it('rebuilds legacy waiting Events that predate explicit Wait creation', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('legacy.waiting', 'run.waiting_signal', {
+        stateId: 'Acting',
+        wait: { type: 'signal', key: 'legacy.signal' },
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).resolves.toMatchObject({
+      projectionVersion: '1.1.0',
+      state: {
+        runStatus: 'waiting_signal',
+        pendingWait: {
+          waitId: 'legacy-wait:legacy.waiting',
+          stateId: 'Acting',
+          stateAttempt: 1,
+          type: 'signal',
+          key: 'legacy.signal',
+        },
       },
     });
   });

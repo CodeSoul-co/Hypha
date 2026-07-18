@@ -1,6 +1,7 @@
 import { z, type ZodType } from 'zod';
-import { defineSpecSchema, exportSpecJsonSchemas } from '../schemas';
+import { defineSpecSchema, exportSpecJsonSchemas, jsonSchemaSchema } from '../schemas';
 import type { JsonSchema } from '../specs';
+import { RUNTIME_WAIT_INTENT_TYPES, type RuntimeJsonValue } from './runtime-helpers';
 import { RUNTIME_RUN_STATUSES } from './runtime';
 import type {
   RuntimeOrchestrationProjection,
@@ -8,6 +9,17 @@ import type {
 } from './runtime-projection';
 
 const nonEmptyStringSchema = z.string().min(1);
+const timestampSchema = z.string().datetime({ offset: true });
+const jsonValueSchema: ZodType<RuntimeJsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number().finite(),
+    z.string(),
+    z.array(jsonValueSchema),
+    z.record(jsonValueSchema),
+  ])
+);
 const orchestrationRunStatuses = ['not_created', ...RUNTIME_RUN_STATUSES] as [
   RuntimeOrchestrationRunStatus,
   ...RuntimeOrchestrationRunStatus[],
@@ -29,6 +41,31 @@ export const runtimeOrchestrationProjectionSchema = z
         eventId: nonEmptyStringSchema,
         from: nonEmptyStringSchema,
         to: nonEmptyStringSchema,
+      })
+      .strict()
+      .optional(),
+    pendingWait: z
+      .object({
+        waitId: nonEmptyStringSchema,
+        stateId: nonEmptyStringSchema,
+        stateAttempt: z.number().int().positive(),
+        type: z.enum(RUNTIME_WAIT_INTENT_TYPES),
+        key: nonEmptyStringSchema.optional(),
+        expectedSchema: jsonSchemaSchema.optional(),
+        expiresAt: timestampSchema.optional(),
+        createdAt: timestampSchema,
+      })
+      .strict()
+      .optional(),
+    lastResume: z
+      .object({
+        commandId: nonEmptyStringSchema,
+        kind: z.enum(['manual', 'signal']),
+        waitId: nonEmptyStringSchema,
+        principalId: nonEmptyStringSchema,
+        key: nonEmptyStringSchema.optional(),
+        payload: jsonValueSchema.optional(),
+        resumedAt: timestampSchema,
       })
       .strict()
       .optional(),
@@ -57,6 +94,33 @@ export const runtimeOrchestrationProjectionSchema = z
         code: z.ZodIssueCode.custom,
         path: ['stateAttempt'],
         message: 'stateAttempt must match the current state visit count',
+      });
+    }
+    if (
+      projection.pendingWait &&
+      (projection.pendingWait.stateId !== projection.currentState ||
+        projection.pendingWait.stateAttempt !== projection.stateAttempt)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingWait'],
+        message: 'pendingWait must belong to the current State attempt',
+      });
+    }
+    const waitTypesByStatus: Partial<
+      Record<RuntimeOrchestrationRunStatus, (typeof RUNTIME_WAIT_INTENT_TYPES)[number]>
+    > = {
+      waiting_human: 'human',
+      waiting_signal: 'signal',
+      waiting_timer: 'timer',
+      paused: 'pause',
+    };
+    const expectedWaitType = waitTypesByStatus[projection.runStatus];
+    if (expectedWaitType !== undefined && projection.pendingWait?.type !== expectedWaitType) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingWait'],
+        message: `${projection.runStatus} requires a matching pendingWait`,
       });
     }
     if (projection.runStatus === 'not_created' && projection.statePath.length > 0) {
@@ -111,6 +175,35 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
       },
       additionalProperties: false,
     },
+    pendingWait: {
+      type: 'object',
+      required: ['waitId', 'stateId', 'stateAttempt', 'type', 'createdAt'],
+      properties: {
+        waitId: nonEmptyStringJsonSchema,
+        stateId: nonEmptyStringJsonSchema,
+        stateAttempt: { type: 'integer', minimum: 1 },
+        type: { type: 'string', enum: [...RUNTIME_WAIT_INTENT_TYPES] },
+        key: nonEmptyStringJsonSchema,
+        expectedSchema: { type: 'object', additionalProperties: true },
+        expiresAt: { type: 'string', format: 'date-time' },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+      additionalProperties: false,
+    },
+    lastResume: {
+      type: 'object',
+      required: ['commandId', 'kind', 'waitId', 'principalId', 'resumedAt'],
+      properties: {
+        commandId: nonEmptyStringJsonSchema,
+        kind: { type: 'string', enum: ['manual', 'signal'] },
+        waitId: nonEmptyStringJsonSchema,
+        principalId: nonEmptyStringJsonSchema,
+        key: nonEmptyStringJsonSchema,
+        payload: {},
+        resumedAt: { type: 'string', format: 'date-time' },
+      },
+      additionalProperties: false,
+    },
     pendingActivityIds: {
       type: 'array',
       items: nonEmptyStringJsonSchema,
@@ -134,7 +227,10 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
         },
         required: ['runStatus'],
       },
-      then: { required: ['terminalState'] },
+      then: {
+        required: ['terminalState'],
+        properties: { terminalState: nonEmptyStringJsonSchema },
+      },
     },
   ],
   additionalProperties: false,
