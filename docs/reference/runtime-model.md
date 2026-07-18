@@ -228,9 +228,18 @@ These events contain summaries and decisions, not raw hidden chain-of-thought. R
 
 ## Context and Memory
 
-Memory is persisted state; context is the bounded model-call view built for one run. `MemoryContextBuilder` resolves the active `MemoryScope`, searches the configured semantic, episodic, procedural, or other memory types, applies `ContextBudget`, and injects selected records into the model request as tagged system context. Each included memory item carries `ContextProvenance` with record id, type, score, original provenance, and inclusion time.
+Memory is persisted state; context is the bounded model-call view built for one run. Managed memory
+operations carry a principal, explicit user scope, operation id, and profile ref. Structured records
+are revisioned and remain the source of truth; vector indexes are rebuildable projections updated
+through an atomic outbox. Idempotency, history, deletion, provider mappings, retrieval snapshots,
+and cache validity all remain scope-qualified.
 
-Memory writes should use `MemoryManager.write()` with explicit `MemoryWritePolicy`. Long-term records require provenance and an explicit long-term allowance. `createEpisodicMemorySync()` can be attached to `ReActRunner` so verified observations become episodic memory through the same policy and trace path.
+`DefaultMemoryContextBuilder` resolves registered sources, searches authorized records, applies hard
+scope/policy filters, sensitivity rules, stable ordering, deduplication, per-source and total token
+budgets, and deterministic compaction. Every included item carries `ContextProvenance`; injection
+keeps memory data separated from model instructions. The compatibility kernel
+`MemoryContextBuilder` and `createEpisodicMemorySync()` remain available for existing ReAct assembly.
+See [Governed Memory](../architecture/memory.md).
 
 ## Side Effects
 
