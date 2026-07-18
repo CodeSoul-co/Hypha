@@ -34,6 +34,8 @@ describe('LocalProcessOutputCollector', () => {
     const snapshot = collector.snapshot();
     expect(snapshot.observedStdoutBytes).toBe(6);
     expect(snapshot.capturedStdoutBytes).toBe(4);
+    expect(snapshot.stdout).toBe('你');
+    expect(Buffer.byteLength(snapshot.stdout)).toBeLessThanOrEqual(4);
   });
 
   it('reports the combined boundary before a later stream boundary', () => {

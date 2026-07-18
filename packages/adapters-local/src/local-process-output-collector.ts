@@ -70,14 +70,29 @@ export class LocalProcessOutputCollector {
 
   snapshot(): LocalProcessOutputSnapshot {
     return {
-      stdout: Buffer.concat(this.stdout).toString('utf8'),
-      stderr: Buffer.concat(this.stderr).toString('utf8'),
+      stdout: decodeBoundedUtf8(this.stdout, this.capturedStdoutBytes),
+      stderr: decodeBoundedUtf8(this.stderr, this.capturedStderrBytes),
       capturedStdoutBytes: this.capturedStdoutBytes,
       capturedStderrBytes: this.capturedStderrBytes,
       observedStdoutBytes: this.observedStdoutBytes,
       observedStderrBytes: this.observedStderrBytes,
     };
   }
+}
+
+function decodeBoundedUtf8(chunks: Buffer[], maxBytes: number): string {
+  const decoded = Buffer.concat(chunks).toString('utf8');
+  if (Buffer.byteLength(decoded) <= maxBytes) return decoded;
+
+  const output: string[] = [];
+  let outputBytes = 0;
+  for (const character of decoded) {
+    const characterBytes = Buffer.byteLength(character);
+    if (outputBytes + characterBytes > maxBytes) break;
+    output.push(character);
+    outputBytes += characterBytes;
+  }
+  return output.join('');
 }
 
 function validateLimits(limits: LocalProcessOutputLimits): void {
