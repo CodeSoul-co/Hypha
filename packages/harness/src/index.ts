@@ -13,6 +13,7 @@ export * from './runtime';
 export * from './message-bus';
 export * from './recovery-loop';
 export * from './recovery-supervisor';
+export * from './execution-context';
 
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;

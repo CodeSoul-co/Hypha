@@ -1,5 +1,12 @@
 export type RuntimeObservationEventType = `runtime.observation.${string}`;
 
+export type RuntimeActivityEventType =
+  | 'runtime.activity.requested'
+  | 'runtime.activity.completed'
+  | 'runtime.activity.failed'
+  | 'runtime.activity.waiting'
+  | 'runtime.activity.cancelled';
+
 export type FrameworkEventType =
   | 'session.created'
   | 'session.updated'
@@ -194,7 +201,8 @@ export type FrameworkEventType =
   | 'artifact.created'
   | 'artifact.updated'
   | 'artifact.versioned'
-  | RuntimeObservationEventType;
+  | RuntimeObservationEventType
+  | RuntimeActivityEventType;
 
 export interface FrameworkEvent<TPayload = unknown> {
   id: string;
