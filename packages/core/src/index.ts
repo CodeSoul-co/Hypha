@@ -33,4 +33,8 @@ export * from './modules/sandbox';
 export * from './modules/artifact';
 export * from './modules/artifact/store';
 export * from './modules/artifact/manager';
+export * from './modules/artifact/manager-error';
+export * from './modules/artifact/manager-policy';
+export * from './modules/artifact/manager-content';
+export * from './modules/artifact/runtime';
 export * from './telemetry';

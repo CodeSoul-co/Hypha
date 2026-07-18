@@ -62,6 +62,25 @@ export interface ArtifactFromWorkspaceRequest {
   metadata?: Record<string, unknown>;
 }
 
+export interface ArtifactWorkspaceContentRequest {
+  principal: ExecutionPrincipal;
+  workspaceId: string;
+  relativePath: string;
+  maxBytes?: number;
+}
+
+export interface ArtifactWorkspaceContent {
+  content: ArtifactByteSource;
+  contentHash?: string;
+  sizeBytes?: number;
+  mimeType?: string;
+}
+
+/** Governed Workspace port used by ArtifactManager; it never accepts a host path. */
+export interface ArtifactWorkspaceContentReader {
+  read(request: ArtifactWorkspaceContentRequest): Promise<ArtifactWorkspaceContent>;
+}
+
 export interface ArtifactVersionRequest {
   operationId: string;
   principal: ExecutionPrincipal;

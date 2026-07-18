@@ -456,6 +456,10 @@ export function validateArtifactVersionRequest(input: unknown): ArtifactVersionR
   return artifactVersionRequestSchema.parse(input);
 }
 
+export function validateArtifactGetRecordRequest(input: unknown): ArtifactGetRecordRequest {
+  return artifactGetRecordRequestSchema.parse(input);
+}
+
 export function validateArtifactReadRequest(input: unknown): ArtifactReadRequest {
   return artifactReadRequestSchema.parse(input);
 }
