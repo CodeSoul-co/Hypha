@@ -41,4 +41,5 @@ export * from './modules/artifact/manager-content';
 export * from './modules/artifact/runtime';
 export * from './modules/artifact/gc';
 export * from './modules/artifact/events';
+export * from './modules/artifact/eventing';
 export * from './telemetry';

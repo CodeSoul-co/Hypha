@@ -51,7 +51,7 @@ export class DefaultArtifactGarbageCollector implements ArtifactGarbageCollector
   }
 
   async collect(input: ArtifactGarbageCollectionRequest): Promise<ArtifactGarbageCollectionResult> {
-    const request = validateRequest(input);
+    const request = validateArtifactGarbageCollectionRequest(input);
     const startedAt = this.timestamp();
     const staleBefore = new Date(
       Date.parse(startedAt) - (request.claimTtlSeconds ?? 300) * 1000
@@ -182,7 +182,7 @@ export class DefaultArtifactGarbageCollector implements ArtifactGarbageCollector
   }
 }
 
-function validateRequest(
+export function validateArtifactGarbageCollectionRequest(
   request: ArtifactGarbageCollectionRequest
 ): ArtifactGarbageCollectionRequest {
   if (!request.operationId?.trim()) throw new TypeError('operationId is required.');

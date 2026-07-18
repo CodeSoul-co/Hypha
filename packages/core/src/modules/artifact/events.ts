@@ -3,6 +3,7 @@ import type {
   ArtifactEventCreateInput,
   ArtifactEventPayload,
   ArtifactEventPayloadMap,
+  ArtifactEventPublication,
   ArtifactFrameworkEvent,
   ArtifactFrameworkEventType,
 } from '../../contracts/artifact-events';
@@ -125,7 +126,7 @@ export const artifactEventPayloadRequirements = {
     errorCodes: ['ARTIFACT_DELETE_BLOCKED'],
   },
   'artifact.deleted': {
-    required: ['operationId', 'artifactId', 'versionId', 'status'],
+    required: ['operationId', 'artifactId', 'status'],
     status: 'deleted',
   },
   'artifact.delete.failed': { required: ['operationId', 'artifactId', 'error'] },
@@ -161,6 +162,21 @@ export const artifactFrameworkEventEnvelopeSchema = z
       message: 'payload is required',
     }),
     metadata: eventMetadataSchema.optional(),
+  })
+  .strict();
+
+export const artifactEventPublicationSchema = z
+  .object({
+    id: nonEmptyString,
+    type: artifactFrameworkEventTypeSchema,
+    timestamp: timestampSchema,
+    workspaceId: nonEmptyString.optional(),
+    sessionId: nonEmptyString.optional(),
+    runId: nonEmptyString.optional(),
+    agentId: nonEmptyString.optional(),
+    payload: z.unknown().refine((value) => value !== undefined, {
+      message: 'payload is required',
+    }),
   })
   .strict();
 
@@ -238,9 +254,26 @@ export const artifactFrameworkEventJsonSchema: JsonSchema = {
   }),
 };
 
+export const artifactEventPublicationJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'type', 'timestamp', 'payload'],
+  properties: {
+    id: nonEmptyStringJsonSchema,
+    type: { enum: [...artifactFrameworkEventTypes] },
+    timestamp: { type: 'string', format: 'date-time' },
+    workspaceId: nonEmptyStringJsonSchema,
+    sessionId: nonEmptyStringJsonSchema,
+    runId: nonEmptyStringJsonSchema,
+    agentId: nonEmptyStringJsonSchema,
+    payload: artifactEventPayloadJsonSchema,
+  },
+  additionalProperties: false,
+};
+
 export const artifactEventJsonSchemas: Record<string, JsonSchema> = {
   ArtifactEventPayload: artifactEventPayloadJsonSchema,
   ArtifactFrameworkEvent: artifactFrameworkEventJsonSchema,
+  ArtifactEventPublication: artifactEventPublicationJsonSchema,
 };
 
 export const artifactFrameworkEventExample: ArtifactFrameworkEvent<'artifact.created'> = {
@@ -327,6 +360,25 @@ export function validateArtifactFrameworkEvent(input: unknown): ArtifactFramewor
     ]);
   }
   return { ...event, payload } as ArtifactFrameworkEvent;
+}
+
+export function validateArtifactEventPublication(input: unknown): ArtifactEventPublication {
+  const publication = artifactEventPublicationSchema.parse(input);
+  const payload = validateArtifactEventPayloadForType(publication.type, publication.payload);
+  if (
+    publication.workspaceId &&
+    payload.workspaceId &&
+    publication.workspaceId !== payload.workspaceId
+  ) {
+    throw new z.ZodError([
+      {
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'workspaceId'],
+        message: 'must match the publication workspaceId',
+      },
+    ]);
+  }
+  return { ...publication, payload } as ArtifactEventPublication;
 }
 
 export function createArtifactFrameworkEvent<TType extends ArtifactFrameworkEventType>(

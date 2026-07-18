@@ -6,6 +6,7 @@ import {
 import {
   artifactEventJsonSchemas,
   artifactEventPayloadSchema,
+  artifactEventPublicationSchema,
   artifactFrameworkEventEnvelopeSchema,
 } from './events';
 
@@ -19,6 +20,11 @@ const contractPairs: ContractSchemaPair[] = [
     name: 'ArtifactFrameworkEvent',
     zod: artifactFrameworkEventEnvelopeSchema,
     json: artifactEventJsonSchemas.ArtifactFrameworkEvent,
+  },
+  {
+    name: 'ArtifactEventPublication',
+    zod: artifactEventPublicationSchema,
+    json: artifactEventJsonSchemas.ArtifactEventPublication,
   },
 ];
 

@@ -81,7 +81,9 @@ export type ArtifactEventPayloadMap = {
   'artifact.delete.blocked': ArtifactEventPayloadWithRequired<
     'operationId' | 'artifactId' | 'error'
   >;
-  'artifact.deleted': ArtifactStatusEventPayload<'deleted'>;
+  'artifact.deleted': ArtifactEventPayloadWithRequired<
+    'operationId' | 'artifactId' | 'status'
+  > & { status: 'deleted' };
   'artifact.delete.failed': ArtifactEventPayloadWithRequired<
     'operationId' | 'artifactId' | 'error'
   >;
@@ -104,3 +106,21 @@ export type ArtifactFrameworkEvent<
 export type ArtifactEventCreateInput<
   TType extends ArtifactFrameworkEventType = ArtifactFrameworkEventType,
 > = Omit<EventCreateInput<ArtifactEventPayloadMap[TType]>, 'type'> & { type: TType };
+
+export type ArtifactEventPublication<
+  TType extends ArtifactFrameworkEventType = ArtifactFrameworkEventType,
+> = {
+  id: string;
+  type: TType;
+  timestamp: string;
+  payload: ArtifactEventPayloadMap[TType];
+  workspaceId?: string;
+  sessionId?: string;
+  runId?: string;
+  agentId?: string;
+};
+
+/** Runtime-owned adapters must durably and idempotently publish by publication ID. */
+export interface ArtifactEventPublisher {
+  publish(publication: ArtifactEventPublication): Promise<void>;
+}

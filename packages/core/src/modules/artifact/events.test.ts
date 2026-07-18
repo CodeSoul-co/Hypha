@@ -29,6 +29,9 @@ describe('Artifact lifecycle Event contracts', () => {
     expect(artifactEventJsonSchemas.ArtifactEventPayload).toBe(
       artifactEventJsonSchemas.ArtifactFrameworkEvent.properties?.payload
     );
+    expect(artifactEventJsonSchemas.ArtifactEventPayload).toBe(
+      artifactEventJsonSchemas.ArtifactEventPublication.properties?.payload
+    );
     expect(artifactEventJsonSchemas.ArtifactFrameworkEvent.allOf).toHaveLength(
       artifactFrameworkEventTypes.length
     );
