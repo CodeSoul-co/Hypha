@@ -31,8 +31,8 @@ and cache records also need a stable identity without embedding large content.
    the current attempt from a previously committed mutation so the same deterministic lifecycle
    event can be republished without deleting content twice.
 8. Artifact code defines bounded event payloads and publication ids. The Runtime-owned publisher
-   remains responsible for durable, idempotent acceptance and for Bus/Outbox retry transport; that
-   E5 responsibility is not reimplemented inside an Artifact store or manager.
+   remains responsible for durable, idempotent acceptance and for Bus/Outbox retry transport. An
+   Artifact store or manager must not implement a competing event transport.
 
 ## Consequences
 
