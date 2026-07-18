@@ -6,6 +6,8 @@ import {
   createMemoryCacheValidityInput,
   memoryCacheValidityHash,
   memoryManagementProviderSpecExample,
+  memoryProfileSpecExample,
+  validateMemoryProfileCapabilities,
   validateMemoryBindingCapabilities,
   type MemoryActivityRequest,
   type MemoryActivityResult,
@@ -153,7 +155,11 @@ describe('memory integration contracts', () => {
         stateBindings: [
           {
             stateId: 'Write',
-            binding: { memoryAccessMode: 'write', memoryProfileRef: { id: 'memory.default' } },
+            binding: {
+              memoryAccessMode: 'write',
+              memoryProfileRef: { id: 'memory.default' },
+              allowedMemoryTypes: ['semantic', 'episodic'],
+            },
           },
           {
             stateId: 'Read',
@@ -166,13 +172,23 @@ describe('memory integration contracts', () => {
     const snapshotB = createDomainMemoryDependencySnapshot(
       {
         domainPackRef: { id: 'domain.example', version: '1.0.0' },
-        providerRefs: [...snapshotA.providerRefs].reverse(),
+        providerRefs: [...snapshotA.providerRefs, snapshotA.providerRefs[0]].reverse(),
         policyRefs: [...snapshotA.policyRefs].reverse(),
         capabilitySnapshot: { search: true, add: true },
         capabilitySnapshots: Object.fromEntries(
           Object.entries(snapshotA.capabilitySnapshots!).reverse()
         ),
-        stateBindings: [...snapshotA.stateBindings!].reverse(),
+        stateBindings: [...snapshotA.stateBindings!].reverse().map((state) =>
+          state.stateId === 'Write'
+            ? {
+                ...state,
+                binding: {
+                  ...state.binding,
+                  allowedMemoryTypes: [...state.binding.allowedMemoryTypes!].reverse(),
+                },
+              }
+            : state
+        ),
       },
       '2026-07-18T00:00:00.000Z'
     );
@@ -184,6 +200,8 @@ describe('memory integration contracts', () => {
       'provider.record',
       'provider.vector',
     ]);
+    expect(snapshotA.providerRefs).toHaveLength(2);
+    expect(snapshotB.providerRefs).toHaveLength(2);
   });
 
   it('validates workflow bindings against negotiated provider capabilities', () => {
@@ -210,6 +228,35 @@ describe('memory integration contracts', () => {
       'Memory provider does not support search required by the workflow state.',
       'Memory provider does not support add required by the workflow state.',
       'A memory profile reference is required when memory access is enabled.',
+    ]);
+  });
+
+  it('validates managed profile policies against negotiated provider capabilities', () => {
+    const capabilities = memoryManagementProviderSpecExample.capabilities;
+
+    expect(validateMemoryProfileCapabilities(memoryProfileSpecExample, capabilities)).toEqual([]);
+    expect(
+      validateMemoryProfileCapabilities(
+        {
+          ...memoryProfileSpecExample,
+          consolidationPolicy: { enabled: true, trigger: 'scheduled' },
+          indexingPolicy: { mode: 'async_outbox', rebuildable: true },
+        },
+        {
+          ...capabilities,
+          hybridSearch: false,
+          history: false,
+          conflictDetection: false,
+          consolidate: false,
+          asyncWrite: false,
+        }
+      )
+    ).toEqual([
+      'Memory provider does not support hybrid search required by the retrieval policy.',
+      'Memory provider does not support conflict detection required by the write policy.',
+      'Memory provider does not support history required by the retention policy.',
+      'Memory provider does not support consolidation required by the consolidation policy.',
+      'Memory provider does not support asynchronous writes required by the indexing policy.',
     ]);
   });
 

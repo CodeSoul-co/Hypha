@@ -69,10 +69,12 @@ export const domainMemoryDependencySnapshotSchema: ZodType<DomainMemoryDependenc
     capabilitySnapshots: z.record(partialMemoryManagementCapabilitiesSchema).optional(),
     stateBindings: z
       .array(
-        z.object({
-          stateId: z.string().min(1),
-          binding: workflowStateMemoryBindingSchema,
-        })
+        z
+          .object({
+            stateId: z.string().min(1),
+            binding: workflowStateMemoryBindingSchema,
+          })
+          .strict()
       )
       .optional(),
     dependencyHash: z.string().min(1),

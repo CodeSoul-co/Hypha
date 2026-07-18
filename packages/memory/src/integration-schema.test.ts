@@ -65,6 +65,17 @@ describe('memory integration schemas', () => {
     expect(
       domainMemoryDependencySnapshotSchema.safeParse({ ...snapshot, createdAt: 'today' }).success
     ).toBe(false);
+    expect(
+      domainMemoryDependencySnapshotSchema.safeParse({
+        ...snapshot,
+        stateBindings: [
+          {
+            ...snapshot.stateBindings![0],
+            businessPrompt: 'must not enter a dependency snapshot',
+          },
+        ],
+      }).success
+    ).toBe(false);
   });
 
   it('validates cache, replay and evaluation fixtures', () => {

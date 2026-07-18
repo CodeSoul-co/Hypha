@@ -5,6 +5,7 @@ import type {
   MemoryManagementCapabilities,
   MemoryPrincipal,
   NormalizedMemoryError,
+  MemoryProfileSpec,
 } from './contracts';
 import type {
   ContextBuildInput,
@@ -477,7 +478,15 @@ export function createDomainMemoryDependencySnapshot(
   now = new Date().toISOString()
 ): DomainMemoryDependencySnapshot {
   const stateBindings = input.stateBindings
-    ? [...input.stateBindings].sort((left, right) => left.stateId.localeCompare(right.stateId))
+    ? input.stateBindings
+        .map((state) => ({
+          ...state,
+          binding: {
+            ...state.binding,
+            allowedMemoryTypes: normalizeStrings(state.binding.allowedMemoryTypes),
+          },
+        }))
+        .sort((left, right) => left.stateId.localeCompare(right.stateId))
     : undefined;
   const capabilitySnapshots = input.capabilitySnapshots
     ? Object.fromEntries(
@@ -488,8 +497,8 @@ export function createDomainMemoryDependencySnapshot(
     : undefined;
   const normalized = {
     ...input,
-    providerRefs: [...input.providerRefs].sort(compareSpecRefs),
-    policyRefs: [...input.policyRefs].sort(compareSpecRefs),
+    providerRefs: normalizeSpecRefs(input.providerRefs),
+    policyRefs: normalizeSpecRefs(input.policyRefs),
     capabilitySnapshots,
     stateBindings,
   };
@@ -517,6 +526,39 @@ export function validateMemoryBindingCapabilities(
   }
   if (binding.autoCapture && access !== 'write' && access !== 'read_write') {
     errors.push('autoCapture requires write or read_write access.');
+  }
+  return errors;
+}
+export function validateMemoryProfileCapabilities(
+  profile: MemoryProfileSpec,
+  capabilities: MemoryManagementCapabilities
+): string[] {
+  const errors: string[] = [];
+  if (profile.retrievalPolicy.defaultMode === 'hybrid' && !capabilities.hybridSearch) {
+    errors.push('Memory provider does not support hybrid search required by the retrieval policy.');
+  }
+  if (profile.writePolicy.conflictDetection && !capabilities.conflictDetection) {
+    errors.push(
+      'Memory provider does not support conflict detection required by the write policy.'
+    );
+  }
+  if (profile.retentionPolicy.retainHistory && !capabilities.history) {
+    errors.push('Memory provider does not support history required by the retention policy.');
+  }
+  if (profile.consolidationPolicy?.enabled && !capabilities.consolidate) {
+    errors.push(
+      'Memory provider does not support consolidation required by the consolidation policy.'
+    );
+  }
+  if (profile.conflictPolicy?.detectOnWrite && !capabilities.conflictDetection) {
+    errors.push(
+      'Memory provider does not support conflict detection required by the conflict policy.'
+    );
+  }
+  if (profile.indexingPolicy?.mode === 'async_outbox' && !capabilities.asyncWrite) {
+    errors.push(
+      'Memory provider does not support asynchronous writes required by the indexing policy.'
+    );
   }
   return errors;
 }
@@ -618,5 +660,19 @@ function sameSpecRef(left: SpecRef, right: SpecRef): boolean {
 }
 
 function compareSpecRefs(left: SpecRef, right: SpecRef): number {
-  return `${left.id}@${left.version ?? ''}`.localeCompare(`${right.id}@${right.version ?? ''}`);
+  return specRefKey(left).localeCompare(specRefKey(right));
+}
+
+function normalizeSpecRefs(refs: SpecRef[]): SpecRef[] {
+  const unique = new Map<string, SpecRef>();
+  for (const ref of refs) unique.set(specRefKey(ref), ref);
+  return [...unique.values()].sort(compareSpecRefs);
+}
+
+function specRefKey(ref: SpecRef): string {
+  return `${ref.id}@${ref.version ?? ''}#${ref.revision ?? ''}`;
+}
+
+function normalizeStrings<T extends string>(values: T[] | undefined): T[] | undefined {
+  return values ? [...new Set(values)].sort((left, right) => left.localeCompare(right)) : undefined;
 }
