@@ -164,6 +164,28 @@ handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
 `message.dead_lettered`. Constructor options bound delivery attempts and retry delay/multiplier;
 `fail({ retry: true })` requeues only inside that budget.
 
+Durable runtime orchestration contracts are exported from `@hypha/core`:
+
+| API                                                     | Contract                                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `DurableEventStore`, `DurableEventRuntime`              | Expected-revision event append, idempotent batches, schema validation/upcasting, scoped reads, and checksum-verified import/export. |
+| `ProjectionEngine`                                      | Deterministic state reduction from ordered event streams with projection revisions.                                                 |
+| `SessionQueue`                                          | User/session-scoped command enqueue, claim/release, complete, fail, retry, and dead-letter behavior.                                |
+| `RuntimeMessageInboxStore`, `RuntimeMessageOutboxStore` | Idempotent inbound handling and durable outbound delivery boundaries.                                                               |
+| `RunLeaseStore`, `StateExecutionClaimStore`             | Lease epoch, fencing token, revision guard, heartbeat/renewal, completion, and stale-worker rejection.                              |
+| `RuntimeResourceCoordinator`                            | Shared or exclusive resource claims scoped to a run and protected by lease guards.                                                  |
+| `RuntimeRunControlService`, `DurableRuntimeTimerWorker` | Persisted pause/resume/signal commands and due-timer delivery.                                                                      |
+| `RuntimeCancellationService`                            | Scoped cancellation fan-out with per-target results and idempotent command reuse.                                                   |
+| `RuntimeCheckpointService`, `RuntimeRecoveryService`    | Lease-guarded checkpoint creation/load and event-derived recovery decisions.                                                        |
+| `RuntimeReplayService`, `RuntimeQueryService`           | Read-only replay verification and query views derived from persisted runtime evidence.                                              |
+
+`createRuntimeHelperSdk()` and `createRuntimeIoHelperSdk()` provide deterministic transition, wait,
+clock, id, event, and resource helpers. `DefaultRuntimeActivityHelper` dispatches tool, memory,
+model, execution, or custom work through a port and commits the corresponding lifecycle observation;
+it does not execute provider-specific side effects in core. `BoundedFSMDriver` and
+`RuntimeExecutionContext` are exported by `@hypha/harness` for budgeted FSM advancement using those
+ports.
+
 ## Evaluation, Replay, and Regression
 
 `@hypha/testing` provides deterministic runtime verification APIs. These APIs derive results from events and supplied contracts; they do not call models, tools, or MCP servers during evaluation.
