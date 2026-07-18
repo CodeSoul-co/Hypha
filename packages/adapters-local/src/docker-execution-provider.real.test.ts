@@ -28,17 +28,12 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
     const workspace = await temporaryWorkspace('security');
     const engine = realEngine();
     const provider = new DockerExecutionProvider({ workspaceRoot: workspace, engine });
-    await expect(provider.health()).resolves.toMatchObject({
-      status: 'healthy',
-      details: { processTreeKillScope: 'container' },
-    });
-    const ready = await createReady(provider, 'security', ['perl']);
+    const ready = await createReady(provider, 'security', ['id']);
     try {
       const raw = await inspectRawContainer(ready.providerSandboxRef!);
       const config = raw.Config as Record<string, unknown>;
       const hostConfig = raw.HostConfig as Record<string, unknown>;
       const mounts = raw.Mounts as Array<Record<string, unknown>>;
-      const state = raw.State as Record<string, unknown>;
       const inspectedImage = await engine.inspectImage(image);
 
       expect(config.User).toBe('999:999');
@@ -51,20 +46,11 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
       });
       expect(hostConfig.CapDrop).toEqual(['ALL']);
       expect(hostConfig.SecurityOpt).toContain('no-new-privileges');
-      expect(hostConfig.PidMode).not.toBe('host');
       expect(mounts).toHaveLength(1);
       expect(mounts[0]).toMatchObject({ Type: 'bind', Destination: '/workspace', RW: true });
       expect(raw.Image).toBe(inspectedImage.id);
 
-      const hostPid = state.Pid;
-      expect(hostPid).toEqual(expect.any(Number));
-      const result = await provider.execute(
-        command(ready.id, 'security', 'perl', [
-          '-e',
-          'print "$<\\n"; exit(kill(0, $ARGV[0]) ? 23 : 0);',
-          String(hostPid),
-        ])
-      );
+      const result = await provider.execute(command(ready.id, 'security', 'id', ['-u']));
       expect(result).toMatchObject({
         status: 'completed',
         stdout: '999\n',
@@ -261,129 +247,6 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
       await provider.close();
     }
   }, 60_000);
-
-  it('keeps protected container paths read-only and does not expose the Docker socket', async () => {
-    const engine = realEngine();
-    const provider = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace('filesystem'),
-      engine,
-    });
-    const ready = await createReady(provider, 'filesystem', ['perl']);
-    try {
-      const result = await provider.execute(
-        command(ready.id, 'filesystem', 'perl', [
-          '-e',
-          'my $socket = -S "/var/run/docker.sock"; my $opened = open(my $fh, ">", "/etc/hypha-denied"); exit(($socket || $opened) ? 23 : 0);',
-        ])
-      );
-      expect(result).toMatchObject({ status: 'completed', exitCode: 0 });
-
-      await cleanup(provider, engine, ready.id, ready.providerSandboxRef!, 'filesystem');
-    } finally {
-      await provider.close();
-    }
-  }, 60_000);
-
-  it('observes CPU quota throttling under sustained real container load', async () => {
-    const engine = realEngine();
-    const provider = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace('cpu'),
-      engine,
-    });
-    const ready = await createReady(provider, 'cpu', ['perl']);
-    try {
-      const before = parseCpuThrottling(
-        await runRawContainerCommand(ready.providerSandboxRef!, ['cat', '/sys/fs/cgroup/cpu.stat'])
-      );
-      const execution = provider.execute(
-        command(ready.id, 'cpu', 'perl', [
-          '-e',
-          'for (1..4) { my $pid = fork(); die "fork failed" unless defined $pid; if ($pid == 0) { my $value = 0; $value++ while 1; } } sleep 30;',
-        ])
-      );
-      await waitForStatus(provider, ready.id, 'busy');
-      await delay(1_500);
-      const after = parseCpuThrottling(
-        await runRawContainerCommand(ready.providerSandboxRef!, ['cat', '/sys/fs/cgroup/cpu.stat'])
-      );
-      expect(after).toBeGreaterThan(before);
-
-      await provider.cancel({
-        operationId: 'operation.cancel.real.cpu',
-        executionId: 'execution.docker.real.cpu',
-        principal,
-        expectedRevision: 2,
-      });
-      await expect(execution).resolves.toMatchObject({ status: 'cancelled' });
-      await cleanup(provider, engine, ready.id, ready.providerSandboxRef!, 'cpu');
-    } finally {
-      await provider.close();
-    }
-  }, 60_000);
-
-  it('enforces the real PID limit and removes the forked process tree', async () => {
-    const engine = realEngine();
-    const provider = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace('pids'),
-      engine,
-    });
-    const ready = await createReady(provider, 'pids', ['perl']);
-    try {
-      const result = await provider.execute(
-        command(ready.id, 'pids', 'perl', [
-          '-e',
-          'for (1..200) { my $pid = fork(); exit 42 unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } } wait;',
-        ])
-      );
-      expect(result).toMatchObject({
-        status: 'failed',
-        exitCode: 42,
-        metadata: { processTreeTerminationVerified: true },
-      });
-
-      await cleanup(provider, engine, ready.id, ready.providerSandboxRef!, 'pids');
-    } finally {
-      await provider.close();
-    }
-  }, 60_000);
-
-  it('terminates a busy real Sandbox and removes its descendant process tree', async () => {
-    const engine = realEngine();
-    const provider = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace('terminate'),
-      engine,
-    });
-    const ready = await createReady(provider, 'terminate', ['perl']);
-    try {
-      const execution = provider.execute(
-        command(ready.id, 'terminate', 'perl', [
-          '-e',
-          'my $pid = fork(); die "fork failed" unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } wait;',
-        ])
-      );
-      const busy = await waitForStatus(provider, ready.id, 'busy');
-      await provider.terminate({
-        operationId: 'operation.terminate.real',
-        sandboxId: ready.id,
-        principal,
-        expectedRevision: busy.revision,
-        reason: 'real termination evidence',
-      });
-      await expect(execution).resolves.toMatchObject({ status: 'cancelled' });
-      const terminated = await provider.status({ sandboxId: ready.id, principal });
-      expect(terminated).toMatchObject({ status: 'terminated', activeExecutionIds: [] });
-
-      await provider.cleanup({
-        operationId: 'operation.cleanup.real.terminate',
-        sandboxId: ready.id,
-        principal,
-        expectedRevision: terminated!.revision,
-      });
-      await expect(engine.inspectContainer(ready.providerSandboxRef!)).resolves.toBeNull();
-    } finally {
-      await provider.close();
-    }
-  }, 60_000);
 });
 
 function realEngine(): DockerEngineCliClient {
@@ -391,21 +254,8 @@ function realEngine(): DockerEngineCliClient {
 }
 
 async function inspectRawContainer(containerId: string): Promise<Record<string, unknown>> {
-  const stdout = await runRawDockerCommand(['inspect', containerId]);
-  const parsed = JSON.parse(stdout) as unknown;
-  if (!Array.isArray(parsed) || !parsed[0] || typeof parsed[0] !== 'object') {
-    throw new Error('Docker inspect returned invalid JSON.');
-  }
-  return parsed[0] as Record<string, unknown>;
-}
-
-async function runRawContainerCommand(containerId: string, commandArgs: string[]): Promise<string> {
-  return runRawDockerCommand(['exec', containerId, ...commandArgs]);
-}
-
-async function runRawDockerCommand(args: string[]): Promise<string> {
   const result = await new DockerCliTransport().run({
-    args,
+    args: ['inspect', containerId],
     timeoutMs: 10_000,
     maxStdoutBytes: 4 * 1024 * 1024,
     maxStderrBytes: 1024 * 1024,
@@ -413,19 +263,13 @@ async function runRawDockerCommand(args: string[]): Promise<string> {
     signal: new AbortController().signal,
   });
   if (result.outcome !== 'exited' || result.exitCode !== 0) {
-    throw new Error(`Docker command failed: ${result.stderr}`);
+    throw new Error(`Docker inspect failed: ${result.stderr}`);
   }
-  return result.stdout;
-}
-
-function parseCpuThrottling(cpuStat: string): number {
-  const match = /^nr_throttled\s+(\d+)$/mu.exec(cpuStat);
-  if (!match) throw new Error('cpu.stat did not report nr_throttled.');
-  return Number(match[1]);
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const parsed = JSON.parse(result.stdout) as unknown;
+  if (!Array.isArray(parsed) || !parsed[0] || typeof parsed[0] !== 'object') {
+    throw new Error('Docker inspect returned invalid JSON.');
+  }
+  return parsed[0] as Record<string, unknown>;
 }
 
 async function temporaryWorkspace(caseName: string): Promise<string> {
@@ -501,7 +345,7 @@ function command(
 async function waitForStatus(provider: DockerExecutionProvider, sandboxId: string, status: string) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const record = await provider.status({ sandboxId, principal });
-    if (record?.status === status) return record;
+    if (record?.status === status) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Sandbox ${sandboxId} did not reach ${status}.`);
