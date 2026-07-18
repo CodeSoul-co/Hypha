@@ -6,6 +6,8 @@ import {
   createMemoryCacheValidityInput,
   memoryCacheValidityHash,
   memoryManagementProviderSpecExample,
+  memoryProfileSpecExample,
+  validateMemoryProfileCapabilities,
   validateMemoryBindingCapabilities,
   type MemoryActivityRequest,
   type MemoryActivityResult,
@@ -152,7 +154,7 @@ describe('memory integration contracts', () => {
     const snapshotB = createDomainMemoryDependencySnapshot(
       {
         domainPackRef: { id: 'domain.example', version: '1.0.0' },
-        providerRefs: [...snapshotA.providerRefs].reverse(),
+        providerRefs: [...snapshotA.providerRefs, snapshotA.providerRefs[0]].reverse(),
         policyRefs: [...snapshotA.policyRefs].reverse(),
         capabilitySnapshot: { search: true, add: true },
       },
@@ -187,6 +189,35 @@ describe('memory integration contracts', () => {
       'Memory provider does not support search required by the workflow state.',
       'Memory provider does not support add required by the workflow state.',
       'A memory profile reference is required when memory access is enabled.',
+    ]);
+  });
+
+  it('validates managed profile policies against negotiated provider capabilities', () => {
+    const capabilities = memoryManagementProviderSpecExample.capabilities;
+
+    expect(validateMemoryProfileCapabilities(memoryProfileSpecExample, capabilities)).toEqual([]);
+    expect(
+      validateMemoryProfileCapabilities(
+        {
+          ...memoryProfileSpecExample,
+          consolidationPolicy: { enabled: true, trigger: 'scheduled' },
+          indexingPolicy: { mode: 'async_outbox', rebuildable: true },
+        },
+        {
+          ...capabilities,
+          hybridSearch: false,
+          history: false,
+          conflictDetection: false,
+          consolidate: false,
+          asyncWrite: false,
+        }
+      )
+    ).toEqual([
+      'Memory provider does not support hybrid search required by the retrieval policy.',
+      'Memory provider does not support conflict detection required by the write policy.',
+      'Memory provider does not support history required by the retention policy.',
+      'Memory provider does not support consolidation required by the consolidation policy.',
+      'Memory provider does not support asynchronous writes required by the indexing policy.',
     ]);
   });
 
