@@ -31,6 +31,16 @@ import type {
 const metadataSchema = z.record(z.unknown());
 const unitIntervalSchema = z.number().min(0).max(1);
 
+export const memoryContractSpecRefJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id'],
+  properties: {
+    id: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
+    revision: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+};
 export const memoryContractSpecRefSchema = specRefSchema.extend({
   revision: z.string().min(1).optional(),
 }) satisfies ZodType<MemoryContractSpecRef>;
@@ -46,60 +56,68 @@ const scopeDimensionSchema = z.enum([
   'domainPackId',
 ]);
 
-export const memoryScopePolicySpecSchema: ZodType<MemoryScopePolicySpec> = z.object({
-  requiredDimensions: z.array(scopeDimensionSchema).min(1),
-  allowedReadScopes: z.array(scopeDimensionSchema).min(1),
-  allowedWriteScopes: z.array(scopeDimensionSchema).min(1),
-  inheritanceOrder: z.array(scopeDimensionSchema).optional(),
-  crossUserRead: z.enum(['deny', 'policy']).optional(),
-  crossWorkspaceRead: z.enum(['deny', 'policy']).optional(),
-  enforceTenantBoundary: z.boolean().optional(),
-});
+export const memoryScopePolicySpecSchema: ZodType<MemoryScopePolicySpec> = z
+  .object({
+    requiredDimensions: z.array(scopeDimensionSchema).min(1),
+    allowedReadScopes: z.array(scopeDimensionSchema).min(1),
+    allowedWriteScopes: z.array(scopeDimensionSchema).min(1),
+    inheritanceOrder: z.array(scopeDimensionSchema).optional(),
+    crossUserRead: z.enum(['deny', 'policy']).optional(),
+    crossWorkspaceRead: z.enum(['deny', 'policy']).optional(),
+    enforceTenantBoundary: z.boolean().optional(),
+  })
+  .strict();
 
-export const memoryRetrievalPolicySpecSchema: ZodType<MemoryRetrievalPolicySpec> = z.object({
-  defaultMode: z.enum(['structured', 'semantic', 'keyword', 'hybrid']),
-  maxCandidates: z.number().int().positive(),
-  defaultTopK: z.number().int().positive(),
-  scoreThreshold: unitIntervalSchema.optional(),
-  memoryTypePriority: z.record(managedMemoryTypeSchema, z.number()).optional(),
-  sourcePriority: z.record(memorySourceSchema.shape.type, z.number()).optional(),
-  recencyWeight: z.number().min(0).optional(),
-  importanceWeight: z.number().min(0).optional(),
-  confidenceWeight: z.number().min(0).optional(),
-  reinforcementWeight: z.number().min(0).optional(),
-  deduplication: z.enum(['none', 'id', 'hash', 'semantic']),
-  semanticDedupThreshold: unitIntervalSchema.optional(),
-  conflictHandling: z
-    .enum(['include_marked', 'prefer_latest', 'prefer_verified', 'exclude_conflicts'])
-    .optional(),
-  rerank: z.enum(['none', 'score_fusion', 'provider', 'custom']).optional(),
-});
+export const memoryRetrievalPolicySpecSchema: ZodType<MemoryRetrievalPolicySpec> = z
+  .object({
+    defaultMode: z.enum(['structured', 'semantic', 'keyword', 'hybrid']),
+    maxCandidates: z.number().int().positive(),
+    defaultTopK: z.number().int().positive(),
+    scoreThreshold: unitIntervalSchema.optional(),
+    memoryTypePriority: z.record(managedMemoryTypeSchema, z.number()).optional(),
+    sourcePriority: z.record(memorySourceSchema.shape.type, z.number()).optional(),
+    recencyWeight: z.number().min(0).optional(),
+    importanceWeight: z.number().min(0).optional(),
+    confidenceWeight: z.number().min(0).optional(),
+    reinforcementWeight: z.number().min(0).optional(),
+    deduplication: z.enum(['none', 'id', 'hash', 'semantic']),
+    semanticDedupThreshold: unitIntervalSchema.optional(),
+    conflictHandling: z
+      .enum(['include_marked', 'prefer_latest', 'prefer_verified', 'exclude_conflicts'])
+      .optional(),
+    rerank: z.enum(['none', 'score_fusion', 'provider', 'custom']).optional(),
+  })
+  .strict();
 
-export const memoryWritePolicySpecSchema: ZodType<MemoryWritePolicySpec> = z.object({
-  allowedTypes: z.array(managedMemoryTypeSchema).min(1),
-  autoCaptureSources: z.array(memorySourceSchema.shape.type).optional(),
-  requireHumanVerificationFor: z.array(managedMemoryTypeSchema).optional(),
-  minConfidence: unitIntervalSchema.optional(),
-  deduplicateBeforeWrite: z.boolean().optional(),
-  conflictDetection: z.boolean().optional(),
-  immutableTypes: z.array(managedMemoryTypeSchema).optional(),
-  maxContentBytes: z.number().int().positive().optional(),
-  sensitiveDataMode: z.enum(['reject', 'redact', 'encrypt', 'allow_by_policy']).optional(),
-});
+export const memoryWritePolicySpecSchema: ZodType<MemoryWritePolicySpec> = z
+  .object({
+    allowedTypes: z.array(managedMemoryTypeSchema).min(1),
+    autoCaptureSources: z.array(memorySourceSchema.shape.type).optional(),
+    requireHumanVerificationFor: z.array(managedMemoryTypeSchema).optional(),
+    minConfidence: unitIntervalSchema.optional(),
+    deduplicateBeforeWrite: z.boolean().optional(),
+    conflictDetection: z.boolean().optional(),
+    immutableTypes: z.array(managedMemoryTypeSchema).optional(),
+    maxContentBytes: z.number().int().positive().optional(),
+    sensitiveDataMode: z.enum(['reject', 'redact', 'encrypt', 'allow_by_policy']).optional(),
+  })
+  .strict();
 
-export const memoryRetentionPolicySpecSchema: ZodType<MemoryRetentionPolicySpec> = z.object({
-  defaultTtlSeconds: z.number().int().positive().optional(),
-  ttlByType: z.record(managedMemoryTypeSchema, z.number().int().positive()).optional(),
-  archiveAfterSeconds: z.number().int().positive().optional(),
-  deleteAfterSeconds: z.number().int().positive().optional(),
-  retainHistory: z.boolean().optional(),
-  maxVersions: z.number().int().positive().optional(),
-  legalHoldSupported: z.boolean().optional(),
-  deletionMode: z.enum(['soft', 'hard']).optional(),
-});
+export const memoryRetentionPolicySpecSchema: ZodType<MemoryRetentionPolicySpec> = z
+  .object({
+    defaultTtlSeconds: z.number().int().positive().optional(),
+    ttlByType: z.record(managedMemoryTypeSchema, z.number().int().positive()).optional(),
+    archiveAfterSeconds: z.number().int().positive().optional(),
+    deleteAfterSeconds: z.number().int().positive().optional(),
+    retainHistory: z.boolean().optional(),
+    maxVersions: z.number().int().positive().optional(),
+    legalHoldSupported: z.boolean().optional(),
+    deletionMode: z.enum(['soft', 'hard']).optional(),
+  })
+  .strict();
 
-export const memoryConsolidationPolicySpecSchema: ZodType<MemoryConsolidationPolicySpec> = z.object(
-  {
+export const memoryConsolidationPolicySpecSchema: ZodType<MemoryConsolidationPolicySpec> = z
+  .object({
     enabled: z.boolean(),
     trigger: z.enum(['scheduled', 'count', 'token_pressure', 'manual']),
     minRecords: z.number().int().positive().optional(),
@@ -108,60 +126,76 @@ export const memoryConsolidationPolicySpecSchema: ZodType<MemoryConsolidationPol
     preserveSourceRecords: z.boolean().optional(),
     summaryMemoryType: managedMemoryTypeSchema.optional(),
     requireVerification: z.boolean().optional(),
-  }
-);
+  })
+  .strict();
 
-export const memoryConflictPolicySpecSchema: ZodType<MemoryConflictPolicySpec> = z.object({
-  detectOnWrite: z.boolean(),
-  matchingMode: z.enum(['same_key', 'semantic', 'entity_relation', 'custom']),
-  resolution: z.enum(['keep_both', 'prefer_latest', 'prefer_verified', 'require_human', 'custom']),
-  markRelations: z.boolean().optional(),
-});
+export const memoryConflictPolicySpecSchema: ZodType<MemoryConflictPolicySpec> = z
+  .object({
+    detectOnWrite: z.boolean(),
+    matchingMode: z.enum(['same_key', 'semantic', 'entity_relation', 'custom']),
+    resolution: z.enum([
+      'keep_both',
+      'prefer_latest',
+      'prefer_verified',
+      'require_human',
+      'custom',
+    ]),
+    markRelations: z.boolean().optional(),
+  })
+  .strict();
 
-export const memoryPrivacyPolicySpecSchema: ZodType<MemoryPrivacyPolicySpec> = z.object({
-  sensitiveDataMode: z.enum(['reject', 'redact', 'encrypt', 'allow_by_policy']),
-  encryptionRef: memoryContractSpecRefSchema.optional(),
-  redactFields: z.array(z.string()).optional(),
-  allowCrossUserRead: z.boolean().optional(),
-  allowCrossWorkspaceRead: z.boolean().optional(),
-  complianceDelete: z.boolean().optional(),
-});
+export const memoryPrivacyPolicySpecSchema: ZodType<MemoryPrivacyPolicySpec> = z
+  .object({
+    sensitiveDataMode: z.enum(['reject', 'redact', 'encrypt', 'allow_by_policy']),
+    encryptionRef: memoryContractSpecRefSchema.optional(),
+    redactFields: z.array(z.string()).optional(),
+    allowCrossUserRead: z.boolean().optional(),
+    allowCrossWorkspaceRead: z.boolean().optional(),
+    complianceDelete: z.boolean().optional(),
+  })
+  .strict();
 
-export const memoryIndexingPolicySpecSchema: ZodType<MemoryIndexingPolicySpec> = z.object({
-  mode: z.enum(['sync', 'async_outbox', 'disabled']),
-  batchSize: z.number().int().positive().optional(),
-  maxAttempts: z.number().int().positive().optional(),
-  retryDelayMs: z.number().int().min(0).optional(),
-  deadLetterAfterAttempts: z.number().int().positive().optional(),
-  rebuildable: z.boolean(),
-});
+export const memoryIndexingPolicySpecSchema: ZodType<MemoryIndexingPolicySpec> = z
+  .object({
+    mode: z.enum(['sync', 'async_outbox', 'disabled']),
+    batchSize: z.number().int().positive().optional(),
+    maxAttempts: z.number().int().positive().optional(),
+    retryDelayMs: z.number().int().min(0).optional(),
+    deadLetterAfterAttempts: z.number().int().positive().optional(),
+    rebuildable: z.boolean(),
+  })
+  .strict();
 
-export const memoryFallbackPolicySpecSchema: ZodType<MemoryFallbackPolicySpec> = z.object({
-  onProviderUnavailable: z.enum(['fail', 'native', 'record_store_only', 'skip']),
-  onVectorUnavailable: z.enum(['structured_only', 'keyword', 'fail']),
-  onRerankerUnavailable: z.enum(['score_fusion', 'no_rerank', 'fail']),
-  maxFallbackDepth: z.number().int().min(0).optional(),
-});
+export const memoryFallbackPolicySpecSchema: ZodType<MemoryFallbackPolicySpec> = z
+  .object({
+    onProviderUnavailable: z.enum(['fail', 'native', 'record_store_only', 'skip']),
+    onVectorUnavailable: z.enum(['structured_only', 'keyword', 'fail']),
+    onRerankerUnavailable: z.enum(['score_fusion', 'no_rerank', 'fail']),
+    maxFallbackDepth: z.number().int().min(0).optional(),
+  })
+  .strict();
 
-export const memoryManagementCapabilitiesSchema: ZodType<MemoryManagementCapabilities> = z.object({
-  add: z.boolean(),
-  search: z.boolean(),
-  get: z.boolean(),
-  list: z.boolean(),
-  update: z.boolean(),
-  delete: z.boolean(),
-  deleteByFilter: z.boolean(),
-  history: z.boolean(),
-  summarize: z.boolean(),
-  consolidate: z.boolean(),
-  decay: z.boolean(),
-  reinforce: z.boolean(),
-  conflictDetection: z.boolean(),
-  hybridSearch: z.boolean(),
-  graphRelations: z.boolean(),
-  asyncWrite: z.boolean(),
-  batchOperations: z.boolean(),
-});
+export const memoryManagementCapabilitiesSchema: ZodType<MemoryManagementCapabilities> = z
+  .object({
+    add: z.boolean(),
+    search: z.boolean(),
+    get: z.boolean(),
+    list: z.boolean(),
+    update: z.boolean(),
+    delete: z.boolean(),
+    deleteByFilter: z.boolean(),
+    history: z.boolean(),
+    summarize: z.boolean(),
+    consolidate: z.boolean(),
+    decay: z.boolean(),
+    reinforce: z.boolean(),
+    conflictDetection: z.boolean(),
+    hybridSearch: z.boolean(),
+    graphRelations: z.boolean(),
+    asyncWrite: z.boolean(),
+    batchOperations: z.boolean(),
+  })
+  .strict();
 
 export const memoryManagementProviderSpecSchema: ZodType<MemoryManagementProviderSpec> =
   versionedSpecSchema
@@ -183,6 +217,7 @@ export const memoryManagementProviderSpecSchema: ZodType<MemoryManagementProvide
             )
             .optional(),
         })
+        .strict()
         .optional(),
       retryPolicy: z
         .object({
@@ -191,18 +226,21 @@ export const memoryManagementProviderSpecSchema: ZodType<MemoryManagementProvide
           maxDelayMs: z.number().int().min(0).optional(),
           backoff: z.enum(['fixed', 'exponential']).optional(),
         })
+        .strict()
         .optional(),
       circuitBreakerPolicy: z
         .object({
           failureThreshold: z.number().int().positive(),
           resetAfterMs: z.number().int().positive(),
         })
+        .strict()
         .optional(),
       healthCheckPolicy: z
         .object({
           intervalMs: z.number().int().positive().optional(),
           timeoutMs: z.number().int().positive().optional(),
         })
+        .strict()
         .optional(),
       metadata: metadataSchema.optional(),
     })
@@ -248,20 +286,22 @@ export const memoryRecordStoreSpecSchema: ZodType<MemoryRecordStoreSpec> = versi
   })
   .strict();
 
-export const vectorStoreCapabilitiesSchema: ZodType<VectorStoreCapabilities> = z.object({
-  denseSearch: z.boolean(),
-  sparseSearch: z.boolean(),
-  hybridSearch: z.boolean(),
-  metadataFilter: z.boolean(),
-  fullTextFilter: z.boolean(),
-  namespaces: z.boolean(),
-  multiVector: z.boolean(),
-  batchUpsert: z.boolean(),
-  deleteByFilter: z.boolean(),
-  payloadUpdate: z.boolean(),
-  scoreThreshold: z.boolean(),
-  localDeployment: z.boolean(),
-});
+export const vectorStoreCapabilitiesSchema: ZodType<VectorStoreCapabilities> = z
+  .object({
+    denseSearch: z.boolean(),
+    sparseSearch: z.boolean(),
+    hybridSearch: z.boolean(),
+    metadataFilter: z.boolean(),
+    fullTextFilter: z.boolean(),
+    namespaces: z.boolean(),
+    multiVector: z.boolean(),
+    batchUpsert: z.boolean(),
+    deleteByFilter: z.boolean(),
+    payloadUpdate: z.boolean(),
+    scoreThreshold: z.boolean(),
+    localDeployment: z.boolean(),
+  })
+  .strict();
 
 export const vectorStoreSpecSchema: ZodType<VectorStoreSpec> = versionedSpecSchema
   .extend({
@@ -380,24 +420,303 @@ export const memoryProfileSpecExample: MemoryProfileSpec = {
   },
 };
 
+const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
+const positiveIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 1 };
+const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 };
+const nonNegativeNumberJsonSchema: JsonSchema = { type: 'number', minimum: 0 };
+const unitIntervalJsonSchema: JsonSchema = { type: 'number', minimum: 0, maximum: 1 };
+const openMetadataJsonSchema: JsonSchema = { type: 'object', additionalProperties: true };
+
+function strictObjectJsonSchema(
+  required: string[],
+  properties: Record<string, JsonSchema>
+): JsonSchema {
+  return { type: 'object', required, properties, additionalProperties: false };
+}
+
+const managedMemoryTypeJsonSchema: JsonSchema = {
+  type: 'string',
+  enum: [
+    'working',
+    'episodic',
+    'semantic',
+    'procedural',
+    'preference',
+    'artifact',
+    'governance',
+    'reflection',
+    'custom',
+  ],
+};
+const scopeDimensionJsonSchema: JsonSchema = {
+  type: 'string',
+  enum: [
+    'tenantId',
+    'userId',
+    'workspaceId',
+    'projectId',
+    'sessionId',
+    'runId',
+    'agentId',
+    'domainPackId',
+  ],
+};
+const memorySourceTypeJsonSchema: JsonSchema = {
+  type: 'string',
+  enum: [
+    'user_message',
+    'assistant_message',
+    'tool_result',
+    'artifact',
+    'workflow_state',
+    'human_review',
+    'import',
+    'derived',
+    'system',
+  ],
+};
+
+const memoryScopePolicySpecJsonSchema = strictObjectJsonSchema(
+  ['requiredDimensions', 'allowedReadScopes', 'allowedWriteScopes'],
+  {
+    requiredDimensions: { type: 'array', items: scopeDimensionJsonSchema, minItems: 1 },
+    allowedReadScopes: { type: 'array', items: scopeDimensionJsonSchema, minItems: 1 },
+    allowedWriteScopes: { type: 'array', items: scopeDimensionJsonSchema, minItems: 1 },
+    inheritanceOrder: { type: 'array', items: scopeDimensionJsonSchema },
+    crossUserRead: { type: 'string', enum: ['deny', 'policy'] },
+    crossWorkspaceRead: { type: 'string', enum: ['deny', 'policy'] },
+    enforceTenantBoundary: { type: 'boolean' },
+  }
+);
+
+const memoryRetrievalPolicySpecJsonSchema = strictObjectJsonSchema(
+  ['defaultMode', 'maxCandidates', 'defaultTopK', 'deduplication'],
+  {
+    defaultMode: { type: 'string', enum: ['structured', 'semantic', 'keyword', 'hybrid'] },
+    maxCandidates: positiveIntegerJsonSchema,
+    defaultTopK: positiveIntegerJsonSchema,
+    scoreThreshold: unitIntervalJsonSchema,
+    memoryTypePriority: { type: 'object', additionalProperties: { type: 'number' } },
+    sourcePriority: { type: 'object', additionalProperties: { type: 'number' } },
+    recencyWeight: nonNegativeNumberJsonSchema,
+    importanceWeight: nonNegativeNumberJsonSchema,
+    confidenceWeight: nonNegativeNumberJsonSchema,
+    reinforcementWeight: nonNegativeNumberJsonSchema,
+    deduplication: { type: 'string', enum: ['none', 'id', 'hash', 'semantic'] },
+    semanticDedupThreshold: unitIntervalJsonSchema,
+    conflictHandling: {
+      type: 'string',
+      enum: ['include_marked', 'prefer_latest', 'prefer_verified', 'exclude_conflicts'],
+    },
+    rerank: { type: 'string', enum: ['none', 'score_fusion', 'provider', 'custom'] },
+  }
+);
+
+const memoryWritePolicySpecJsonSchema = strictObjectJsonSchema(['allowedTypes'], {
+  allowedTypes: { type: 'array', items: managedMemoryTypeJsonSchema, minItems: 1 },
+  autoCaptureSources: { type: 'array', items: memorySourceTypeJsonSchema },
+  requireHumanVerificationFor: { type: 'array', items: managedMemoryTypeJsonSchema },
+  minConfidence: unitIntervalJsonSchema,
+  deduplicateBeforeWrite: { type: 'boolean' },
+  conflictDetection: { type: 'boolean' },
+  immutableTypes: { type: 'array', items: managedMemoryTypeJsonSchema },
+  maxContentBytes: positiveIntegerJsonSchema,
+  sensitiveDataMode: {
+    type: 'string',
+    enum: ['reject', 'redact', 'encrypt', 'allow_by_policy'],
+  },
+});
+
+const memoryRetentionPolicySpecJsonSchema = strictObjectJsonSchema([], {
+  defaultTtlSeconds: positiveIntegerJsonSchema,
+  ttlByType: { type: 'object', additionalProperties: positiveIntegerJsonSchema },
+  archiveAfterSeconds: positiveIntegerJsonSchema,
+  deleteAfterSeconds: positiveIntegerJsonSchema,
+  retainHistory: { type: 'boolean' },
+  maxVersions: positiveIntegerJsonSchema,
+  legalHoldSupported: { type: 'boolean' },
+  deletionMode: { type: 'string', enum: ['soft', 'hard'] },
+});
+
+const memoryConsolidationPolicySpecJsonSchema = strictObjectJsonSchema(['enabled', 'trigger'], {
+  enabled: { type: 'boolean' },
+  trigger: { type: 'string', enum: ['scheduled', 'count', 'token_pressure', 'manual'] },
+  minRecords: positiveIntegerJsonSchema,
+  intervalSeconds: positiveIntegerJsonSchema,
+  similarityThreshold: unitIntervalJsonSchema,
+  preserveSourceRecords: { type: 'boolean' },
+  summaryMemoryType: managedMemoryTypeJsonSchema,
+  requireVerification: { type: 'boolean' },
+});
+
+const memoryConflictPolicySpecJsonSchema = strictObjectJsonSchema(
+  ['detectOnWrite', 'matchingMode', 'resolution'],
+  {
+    detectOnWrite: { type: 'boolean' },
+    matchingMode: { type: 'string', enum: ['same_key', 'semantic', 'entity_relation', 'custom'] },
+    resolution: {
+      type: 'string',
+      enum: ['keep_both', 'prefer_latest', 'prefer_verified', 'require_human', 'custom'],
+    },
+    markRelations: { type: 'boolean' },
+  }
+);
+
+const memoryPrivacyPolicySpecJsonSchema = strictObjectJsonSchema(['sensitiveDataMode'], {
+  sensitiveDataMode: {
+    type: 'string',
+    enum: ['reject', 'redact', 'encrypt', 'allow_by_policy'],
+  },
+  encryptionRef: memoryContractSpecRefJsonSchema,
+  redactFields: { type: 'array', items: { type: 'string' } },
+  allowCrossUserRead: { type: 'boolean' },
+  allowCrossWorkspaceRead: { type: 'boolean' },
+  complianceDelete: { type: 'boolean' },
+});
+
+const memoryIndexingPolicySpecJsonSchema = strictObjectJsonSchema(['mode', 'rebuildable'], {
+  mode: { type: 'string', enum: ['sync', 'async_outbox', 'disabled'] },
+  batchSize: positiveIntegerJsonSchema,
+  maxAttempts: positiveIntegerJsonSchema,
+  retryDelayMs: nonNegativeIntegerJsonSchema,
+  deadLetterAfterAttempts: positiveIntegerJsonSchema,
+  rebuildable: { type: 'boolean' },
+});
+
+const memoryFallbackPolicySpecJsonSchema = strictObjectJsonSchema(
+  ['onProviderUnavailable', 'onVectorUnavailable', 'onRerankerUnavailable'],
+  {
+    onProviderUnavailable: {
+      type: 'string',
+      enum: ['fail', 'native', 'record_store_only', 'skip'],
+    },
+    onVectorUnavailable: { type: 'string', enum: ['structured_only', 'keyword', 'fail'] },
+    onRerankerUnavailable: { type: 'string', enum: ['score_fusion', 'no_rerank', 'fail'] },
+    maxFallbackDepth: nonNegativeIntegerJsonSchema,
+  }
+);
+
+const memoryManagementCapabilitiesJsonSchema = strictObjectJsonSchema(
+  [
+    'add',
+    'search',
+    'get',
+    'list',
+    'update',
+    'delete',
+    'deleteByFilter',
+    'history',
+    'summarize',
+    'consolidate',
+    'decay',
+    'reinforce',
+    'conflictDetection',
+    'hybridSearch',
+    'graphRelations',
+    'asyncWrite',
+    'batchOperations',
+  ],
+  Object.fromEntries(
+    [
+      'add',
+      'search',
+      'get',
+      'list',
+      'update',
+      'delete',
+      'deleteByFilter',
+      'history',
+      'summarize',
+      'consolidate',
+      'decay',
+      'reinforce',
+      'conflictDetection',
+      'hybridSearch',
+      'graphRelations',
+      'asyncWrite',
+      'batchOperations',
+    ].map((name) => [name, { type: 'boolean' } satisfies JsonSchema])
+  )
+);
+
+const providerTimeoutPolicyJsonSchema = strictObjectJsonSchema(['timeoutMs'], {
+  timeoutMs: positiveIntegerJsonSchema,
+  operationTimeouts: strictObjectJsonSchema(
+    [],
+    Object.fromEntries(
+      ['add', 'search', 'get', 'list', 'update', 'delete'].map((name) => [
+        name,
+        positiveIntegerJsonSchema,
+      ])
+    )
+  ),
+});
+const providerRetryPolicyJsonSchema = strictObjectJsonSchema(['maxAttempts'], {
+  maxAttempts: positiveIntegerJsonSchema,
+  initialDelayMs: nonNegativeIntegerJsonSchema,
+  maxDelayMs: nonNegativeIntegerJsonSchema,
+  backoff: { type: 'string', enum: ['fixed', 'exponential'] },
+});
+const circuitBreakerPolicyJsonSchema = strictObjectJsonSchema(
+  ['failureThreshold', 'resetAfterMs'],
+  { failureThreshold: positiveIntegerJsonSchema, resetAfterMs: positiveIntegerJsonSchema }
+);
+const healthCheckPolicyJsonSchema = strictObjectJsonSchema([], {
+  intervalMs: positiveIntegerJsonSchema,
+  timeoutMs: positiveIntegerJsonSchema,
+});
+
+const vectorStoreCapabilitiesJsonSchema = strictObjectJsonSchema(
+  [
+    'denseSearch',
+    'sparseSearch',
+    'hybridSearch',
+    'metadataFilter',
+    'fullTextFilter',
+    'namespaces',
+    'multiVector',
+    'batchUpsert',
+    'deleteByFilter',
+    'payloadUpdate',
+    'scoreThreshold',
+    'localDeployment',
+  ],
+  Object.fromEntries(
+    [
+      'denseSearch',
+      'sparseSearch',
+      'hybridSearch',
+      'metadataFilter',
+      'fullTextFilter',
+      'namespaces',
+      'multiVector',
+      'batchUpsert',
+      'deleteByFilter',
+      'payloadUpdate',
+      'scoreThreshold',
+      'localDeployment',
+    ].map((name) => [name, { type: 'boolean' } satisfies JsonSchema])
+  )
+);
+
 const providerJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'type', 'deployment', 'capabilities'],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
     revision: { type: 'string' },
     name: { type: 'string' },
     type: { enum: ['native', 'mem0', 'memorybank', 'custom'] },
     deployment: { enum: ['embedded', 'local', 'self_hosted', 'managed', 'remote'] },
     connectionRef: { type: 'string' },
-    config: { type: 'object' },
-    capabilities: { type: 'object' },
-    timeoutPolicy: { type: 'object' },
-    retryPolicy: { type: 'object' },
-    circuitBreakerPolicy: { type: 'object' },
-    healthCheckPolicy: { type: 'object' },
-    metadata: { type: 'object' },
+    config: openMetadataJsonSchema,
+    capabilities: memoryManagementCapabilitiesJsonSchema,
+    timeoutPolicy: providerTimeoutPolicyJsonSchema,
+    retryPolicy: providerRetryPolicyJsonSchema,
+    circuitBreakerPolicy: circuitBreakerPolicyJsonSchema,
+    healthCheckPolicy: healthCheckPolicyJsonSchema,
+    metadata: openMetadataJsonSchema,
   },
   additionalProperties: false,
 };
@@ -415,29 +734,29 @@ export const memoryProfileSpecJsonSchema: JsonSchema = {
     'retentionPolicy',
   ],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
     revision: { type: 'string' },
     name: { type: 'string' },
     description: { type: 'string' },
     enabled: { type: 'boolean' },
-    managementProviderRef: { type: 'object' },
-    workingStoreRef: { type: 'object' },
-    recordStoreRef: { type: 'object' },
-    vectorStoreRefs: { type: 'array', items: { type: 'object' } },
-    artifactStoreRef: { type: 'object' },
-    embeddingProviderRef: { type: 'object' },
-    rerankerProviderRef: { type: 'object' },
-    scopePolicy: { type: 'object' },
-    retrievalPolicy: { type: 'object' },
-    writePolicy: { type: 'object' },
-    retentionPolicy: { type: 'object' },
-    consolidationPolicy: { type: 'object' },
-    conflictPolicy: { type: 'object' },
-    fallbackPolicy: { type: 'object' },
-    privacyPolicy: { type: 'object' },
-    indexingPolicy: { type: 'object' },
-    contextProfileRef: { type: 'object' },
+    managementProviderRef: memoryContractSpecRefJsonSchema,
+    workingStoreRef: memoryContractSpecRefJsonSchema,
+    recordStoreRef: memoryContractSpecRefJsonSchema,
+    vectorStoreRefs: { type: 'array', items: memoryContractSpecRefJsonSchema },
+    artifactStoreRef: memoryContractSpecRefJsonSchema,
+    embeddingProviderRef: memoryContractSpecRefJsonSchema,
+    rerankerProviderRef: memoryContractSpecRefJsonSchema,
+    scopePolicy: memoryScopePolicySpecJsonSchema,
+    retrievalPolicy: memoryRetrievalPolicySpecJsonSchema,
+    writePolicy: memoryWritePolicySpecJsonSchema,
+    retentionPolicy: memoryRetentionPolicySpecJsonSchema,
+    consolidationPolicy: memoryConsolidationPolicySpecJsonSchema,
+    conflictPolicy: memoryConflictPolicySpecJsonSchema,
+    fallbackPolicy: memoryFallbackPolicySpecJsonSchema,
+    privacyPolicy: memoryPrivacyPolicySpecJsonSchema,
+    indexingPolicy: memoryIndexingPolicySpecJsonSchema,
+    contextProfileRef: memoryContractSpecRefJsonSchema,
     tags: { type: 'array', items: { type: 'string' } },
     metadata: { type: 'object' },
   },
@@ -502,13 +821,13 @@ const workingMemoryStoreSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'type'],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
     type: { enum: ['in_memory', 'redis', 'custom'] },
     connectionRef: { type: 'string' },
     namespace: { type: 'string' },
-    defaultTtlSeconds: { type: 'integer' },
-    maxItemBytes: { type: 'integer' },
+    defaultTtlSeconds: positiveIntegerJsonSchema,
+    maxItemBytes: positiveIntegerJsonSchema,
     serialization: { enum: ['json', 'msgpack'] },
     encryptionRef: { type: 'string' },
     metadata: { type: 'object' },
@@ -520,8 +839,8 @@ const memoryRecordStoreSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'type'],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
     type: { enum: ['mongodb', 'sqlite', 'postgres', 'custom'] },
     connectionRef: { type: 'string' },
     database: { type: 'string' },
@@ -538,16 +857,16 @@ const vectorStoreSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'type', 'collection', 'capabilities'],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
     type: { enum: ['local', 'qdrant', 'milvus', 'chroma', 'pinecone', 'pgvector', 'custom'] },
     connectionRef: { type: 'string' },
-    collection: { type: 'string' },
+    collection: nonEmptyStringJsonSchema,
     namespaceStrategy: { enum: ['scope_hash', 'metadata_filter', 'collection_per_tenant'] },
-    dimensions: { type: 'integer' },
+    dimensions: positiveIntegerJsonSchema,
     distance: { enum: ['cosine', 'dot', 'l2'] },
     indexType: { type: 'string' },
-    capabilities: { type: 'object' },
+    capabilities: vectorStoreCapabilitiesJsonSchema,
     writeMode: { enum: ['sync', 'async_outbox', 'dual_write'] },
     metadata: { type: 'object' },
   },
@@ -558,16 +877,16 @@ const embeddingProviderSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'version', 'provider', 'model'],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: nonEmptyStringJsonSchema,
+    version: nonEmptyStringJsonSchema,
     provider: { type: 'string' },
     model: { type: 'string' },
-    dimensions: { type: 'integer' },
+    dimensions: positiveIntegerJsonSchema,
     normalized: { type: 'boolean' },
-    maxBatchSize: { type: 'integer' },
-    maxInputTokens: { type: 'integer' },
+    maxBatchSize: positiveIntegerJsonSchema,
+    maxInputTokens: positiveIntegerJsonSchema,
     connectionRef: { type: 'string' },
-    timeoutMs: { type: 'integer' },
+    timeoutMs: positiveIntegerJsonSchema,
     metadata: { type: 'object' },
   },
   additionalProperties: false,
