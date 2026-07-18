@@ -19,3 +19,5 @@ export * from './runtime-cancellation-service';
 export * from './runtime-recovery-service';
 export * from './runtime-checkpoint-store';
 export * from './runtime-checkpoint-service';
+export * from './runtime-replay-service';
+export * from './runtime-query-service';
