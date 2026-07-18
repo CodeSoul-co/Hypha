@@ -409,6 +409,11 @@ export interface SessionMemoryBinding {
   sessionScopeMode?: 'isolated' | 'user_shared' | 'workspace_shared';
 }
 
+export interface DomainMemoryWorkflowStateSnapshot {
+  stateId: string;
+  binding: WorkflowStateMemoryBinding;
+}
+
 export interface DomainMemoryDependencySnapshot {
   domainPackRef: SpecRef;
   memoryProfileRef?: SpecRef;
@@ -418,6 +423,8 @@ export interface DomainMemoryDependencySnapshot {
   policyRefs: SpecRef[];
   scopeTemplate?: Partial<ManagedMemoryScope>;
   capabilitySnapshot: Partial<MemoryManagementCapabilities>;
+  capabilitySnapshots?: Record<string, Partial<MemoryManagementCapabilities>>;
+  stateBindings?: DomainMemoryWorkflowStateSnapshot[];
   dependencyHash: string;
   createdAt: string;
 }
@@ -469,10 +476,22 @@ export function createDomainMemoryDependencySnapshot(
   input: Omit<DomainMemoryDependencySnapshot, 'dependencyHash' | 'createdAt'>,
   now = new Date().toISOString()
 ): DomainMemoryDependencySnapshot {
+  const stateBindings = input.stateBindings
+    ? [...input.stateBindings].sort((left, right) => left.stateId.localeCompare(right.stateId))
+    : undefined;
+  const capabilitySnapshots = input.capabilitySnapshots
+    ? Object.fromEntries(
+        Object.entries(input.capabilitySnapshots).sort(([left], [right]) =>
+          left.localeCompare(right)
+        )
+      )
+    : undefined;
   const normalized = {
     ...input,
     providerRefs: [...input.providerRefs].sort(compareSpecRefs),
     policyRefs: [...input.policyRefs].sort(compareSpecRefs),
+    capabilitySnapshots,
+    stateBindings,
   };
   return {
     ...normalized,

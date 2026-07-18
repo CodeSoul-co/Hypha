@@ -50,6 +50,13 @@ describe('memory integration schemas', () => {
         policyRefs: [{ id: 'policy.memory.read', version: '1.0.0' }],
         scopeTemplate: { workspaceId: 'workspace:default' },
         capabilitySnapshot: { add: true, search: true },
+        capabilitySnapshots: { 'provider.memory.native': { add: true, search: true } },
+        stateBindings: [
+          {
+            stateId: 'Reasoning',
+            binding: workflowStateMemoryBindingExample,
+          },
+        ],
       },
       '2026-07-17T00:00:00.000Z'
     );

@@ -146,6 +146,20 @@ describe('memory integration contracts', () => {
           { id: 'policy.read', version: '1.0.0' },
         ],
         capabilitySnapshot: { search: true, add: true },
+        capabilitySnapshots: {
+          'provider.vector': { search: true },
+          'provider.record': { add: true },
+        },
+        stateBindings: [
+          {
+            stateId: 'Write',
+            binding: { memoryAccessMode: 'write', memoryProfileRef: { id: 'memory.default' } },
+          },
+          {
+            stateId: 'Read',
+            binding: { memoryAccessMode: 'read', memoryProfileRef: { id: 'memory.default' } },
+          },
+        ],
       },
       '2026-07-17T00:00:00.000Z'
     );
@@ -155,12 +169,21 @@ describe('memory integration contracts', () => {
         providerRefs: [...snapshotA.providerRefs].reverse(),
         policyRefs: [...snapshotA.policyRefs].reverse(),
         capabilitySnapshot: { search: true, add: true },
+        capabilitySnapshots: Object.fromEntries(
+          Object.entries(snapshotA.capabilitySnapshots!).reverse()
+        ),
+        stateBindings: [...snapshotA.stateBindings!].reverse(),
       },
       '2026-07-18T00:00:00.000Z'
     );
 
     expect(snapshotA.dependencyHash).toBe(snapshotB.dependencyHash);
     expect(snapshotA.createdAt).not.toBe(snapshotB.createdAt);
+    expect(snapshotA.stateBindings?.map((state) => state.stateId)).toEqual(['Read', 'Write']);
+    expect(Object.keys(snapshotA.capabilitySnapshots ?? {})).toEqual([
+      'provider.record',
+      'provider.vector',
+    ]);
   });
 
   it('validates workflow bindings against negotiated provider capabilities', () => {
