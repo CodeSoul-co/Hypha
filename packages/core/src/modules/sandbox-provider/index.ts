@@ -17,6 +17,8 @@ import {
   sandboxProviderCapabilitiesSchema,
 } from '../sandbox';
 
+export * from './registry';
+
 export const sandboxCapabilityNames = [
   'processIsolation',
   'filesystemIsolation',

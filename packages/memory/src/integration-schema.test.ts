@@ -58,6 +58,18 @@ describe('memory integration schemas', () => {
     expect(
       domainMemoryDependencySnapshotSchema.safeParse({ ...snapshot, createdAt: 'today' }).success
     ).toBe(false);
+    expect(
+      domainMemoryDependencySnapshotSchema.safeParse({
+        ...snapshot,
+        capabilitySnapshots: { 'provider.memory.native': { search: true } },
+      }).success
+    ).toBe(false);
+    expect(
+      domainMemoryDependencySnapshotSchema.safeParse({
+        ...snapshot,
+        stateBindings: [{ stateId: 'Reasoning', binding: workflowStateMemoryBindingExample }],
+      }).success
+    ).toBe(false);
   });
 
   it('validates cache, replay and evaluation fixtures', () => {
