@@ -46,7 +46,10 @@ export interface ArtifactRetentionProcessResult {
   versionId: string;
   workspaceId: string;
   decision: ArtifactRetentionDecision;
+  /** True when this invocation applied the retention mutation. */
   applied: boolean;
+  /** True when the same idempotent mutation was committed by an earlier attempt. */
+  replayed: boolean;
   dryRun: boolean;
 }
 

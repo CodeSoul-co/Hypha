@@ -104,20 +104,7 @@ export class DefaultArtifactRetentionEvaluator implements ArtifactRetentionEvalu
     }
 
     const evaluatedAtMs = Date.parse(evaluatedAt);
-    const deleteDue = earliestDue([
-      (record.retention.expiresAt ?? record.expiresAt)
-        ? {
-            effectiveAt: (record.retention.expiresAt ?? record.expiresAt)!,
-            reason: 'expired',
-          }
-        : undefined,
-      profile.retention.deleteAfterSeconds
-        ? {
-            effectiveAt: addSeconds(record.createdAt, profile.retention.deleteAfterSeconds),
-            reason: 'delete_after',
-          }
-        : undefined,
-    ]);
+    const deleteDue = retentionDeleteDue(record, profile);
 
     if (deleteDue && evaluatedAtMs >= Date.parse(deleteDue.effectiveAt)) {
       const retained = retentionBlock(record, profile);
@@ -169,6 +156,55 @@ export class DefaultArtifactRetentionProcessor implements ArtifactRetentionProce
         `Artifact ${request.artifactId} was not found.`
       );
     }
+    if (request.idempotencyKey) {
+      const replayed = await this.options.repository.findIdempotency(
+        `${request.operationId}:delete`,
+        request.idempotencyKey
+      );
+      if (replayed && replayed.record.id !== stored.record.id) {
+        throw artifactManagerError(
+          'ARTIFACT_VERSION_CONFLICT',
+          'Retention idempotency key is already bound to another Artifact.'
+        );
+      }
+      if (
+        request.dryRun !== true &&
+        replayed?.record.id === stored.record.id &&
+        stored.record.status === 'deleted'
+      ) {
+        const profile = await this.options.manager.profile(stored.profileRef);
+        if (!profile) {
+          throw artifactManagerError(
+            'ARTIFACT_VALIDATION_FAILED',
+            `Artifact profile ${stored.profileRef.id} is unavailable.`
+          );
+        }
+        const decision = retentionDeleteDue(stored.record, profile);
+        if (!decision) {
+          throw artifactManagerError(
+            'ARTIFACT_INTERNAL_ERROR',
+            'Committed retention deletion cannot be reconstructed from its stable policy inputs.'
+          );
+        }
+        await this.options.manager.delete({
+          operationId: `${request.operationId}:delete`,
+          principal: request.principal,
+          artifactId: stored.record.id,
+          expectedRevision: stored.record.revision,
+          reason: decision.reason,
+          idempotencyKey: request.idempotencyKey,
+        });
+        return {
+          artifactId: stored.record.id,
+          versionId: stored.record.versionId,
+          workspaceId: stored.record.workspaceId,
+          decision: { action: 'delete', ...decision },
+          applied: false,
+          replayed: true,
+          dryRun: request.dryRun ?? false,
+        };
+      }
+    }
     const visible = await this.options.manager.get({
       principal: request.principal,
       artifactId: request.artifactId,
@@ -217,6 +253,7 @@ export class DefaultArtifactRetentionProcessor implements ArtifactRetentionProce
       workspaceId: stored.record.workspaceId,
       decision,
       applied,
+      replayed: false,
       dryRun,
     };
   }
@@ -272,6 +309,26 @@ function earliestDue(
   return values
     .filter((value): value is NonNullable<typeof value> => Boolean(value))
     .sort((left, right) => Date.parse(left.effectiveAt) - Date.parse(right.effectiveAt))[0];
+}
+
+function retentionDeleteDue(
+  record: ArtifactRetentionEvaluationRequest['record'],
+  profile: ArtifactRetentionEvaluationRequest['profile']
+): { effectiveAt: string; reason: 'expired' | 'delete_after' } | undefined {
+  return earliestDue([
+    (record.retention.expiresAt ?? record.expiresAt)
+      ? {
+          effectiveAt: (record.retention.expiresAt ?? record.expiresAt)!,
+          reason: 'expired',
+        }
+      : undefined,
+    profile.retention.deleteAfterSeconds
+      ? {
+          effectiveAt: addSeconds(record.createdAt, profile.retention.deleteAfterSeconds),
+          reason: 'delete_after',
+        }
+      : undefined,
+  ]);
 }
 
 function addSeconds(timestamp: string, seconds: number): string {

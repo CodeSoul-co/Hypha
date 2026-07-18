@@ -380,8 +380,18 @@ export class EventingArtifactRetentionProcessor implements ArtifactRetentionProc
   }
 
   async process(request: ArtifactRetentionProcessRequest): Promise<ArtifactRetentionProcessResult> {
+    if (!request.idempotencyKey?.trim()) {
+      throw artifactManagerError(
+        'ARTIFACT_INVALID_INPUT',
+        'Eventing Artifact retention requires an idempotencyKey for publication recovery.'
+      );
+    }
     const result = await this.processor.process(request);
-    if (result.applied && result.decision.action === 'delete') {
+    if (
+      !result.dryRun &&
+      (result.applied || result.replayed) &&
+      result.decision.action === 'delete'
+    ) {
       await this.events.publish(
         'artifact.retention.expired',
         {

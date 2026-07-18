@@ -215,15 +215,71 @@ describe('Artifact Event publication decorators', () => {
         principal,
         artifactId: record.id,
         evaluatedAt: '2026-07-18T08:10:00.000Z',
+        idempotencyKey: 'retention.expired',
       })
     ).resolves.toMatchObject({
       applied: true,
+      replayed: false,
       decision: { action: 'delete', reason: 'delete_after' },
     });
     expect(fixture.publisher.byType('artifact.retention.expired')?.payload).toMatchObject({
       artifactId: record.id,
       versionId: record.versionId,
       reason: 'delete_after',
+    });
+  });
+
+  it('replays a committed retention deletion after transient event publication failure', async () => {
+    const fixture = createFixture();
+    const record = await fixture.manager.create(
+      createRequest('operation.retention-replay-source', 'retention-replay-content')
+    );
+    const processor = fixture.eventingRetentionProcessor();
+    const request = {
+      operationId: 'operation.retention-replay',
+      principal,
+      artifactId: record.id,
+      evaluatedAt: '2026-07-18T08:10:00.000Z',
+      idempotencyKey: 'retention.replay',
+    };
+    fixture.publisher.failOnce('artifact.retention.expired');
+
+    await expect(processor.process(request)).rejects.toThrow(/event publication failed/u);
+    await expect(processor.process({ ...request, dryRun: true })).resolves.toMatchObject({
+      applied: false,
+      replayed: false,
+      dryRun: true,
+      decision: { action: 'retain', reason: 'already_terminal' },
+    });
+    expect(
+      fixture.publisher.publications.filter(({ type }) => type === 'artifact.retention.expired')
+    ).toHaveLength(0);
+    await expect(processor.process(request)).resolves.toMatchObject({
+      applied: false,
+      replayed: true,
+      decision: { action: 'delete', reason: 'delete_after' },
+    });
+    expect(
+      fixture.publisher.publications.filter(({ type }) => type === 'artifact.retention.expired')
+    ).toHaveLength(1);
+  });
+
+  it('rejects eventing retention without a recovery idempotency key before mutation', async () => {
+    const fixture = createFixture();
+    const record = await fixture.manager.create(
+      createRequest('operation.retention-key-source', 'retention-key-content')
+    );
+
+    await expect(
+      fixture.eventingRetentionProcessor().process({
+        operationId: 'operation.retention-without-key',
+        principal,
+        artifactId: record.id,
+        evaluatedAt: '2026-07-18T08:10:00.000Z',
+      })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_INVALID_INPUT' } });
+    await expect(fixture.manager.get({ principal, artifactId: record.id })).resolves.toMatchObject({
+      status: 'draft',
     });
   });
 });
@@ -304,6 +360,13 @@ function createFixture() {
     now,
   });
   const nextEventId = () => String(++eventId);
+  const eventingRetentionProcessor = () =>
+    new EventingArtifactRetentionProcessor({
+      processor: new DefaultArtifactRetentionProcessor({ manager, repository }),
+      publisher,
+      idGenerator: nextEventId,
+      now,
+    });
   const eventingCollector = () =>
     new EventingArtifactGarbageCollector({
       collector: new DefaultArtifactGarbageCollector({
@@ -318,7 +381,16 @@ function createFixture() {
       now,
       runId: 'run.maintenance',
     });
-  return { eventingCollector, manager, nextEventId, profile, publisher, repository, store };
+  return {
+    eventingCollector,
+    eventingRetentionProcessor,
+    manager,
+    nextEventId,
+    profile,
+    publisher,
+    repository,
+    store,
+  };
 }
 
 function createRequest(
