@@ -677,7 +677,6 @@ defaultWorkflow: workflow.file
 
     const compiled = compileDomainPackToHarnessedSystem(managedPack, {
       agentRef: { id: 'agent.default', version: '0.0.0' },
-      memoryProviders: [memoryManagementProviderSpecExample],
       memoryProviderCapabilities: {
         [memoryProfileSpecExample.managementProviderRef.id]:
           memoryManagementProviderSpecExample.capabilities,
@@ -790,30 +789,8 @@ defaultWorkflow: workflow.file
     expect(() =>
       compileDomainPackToHarnessedSystem(valid, {
         agentRef: { id: 'agent.default', version: '0.0.0' },
-        memoryProviders: [memoryManagementProviderSpecExample],
       })
     ).toThrow(/Memory provider capabilities are required/);
-
-    expect(() =>
-      compileDomainPackToHarnessedSystem(valid, {
-        agentRef: { id: 'agent.default', version: '0.0.0' },
-        memoryProviderCapabilities: {
-          [memoryProfileSpecExample.managementProviderRef.id]:
-            memoryManagementProviderSpecExample.capabilities,
-        },
-      })
-    ).toThrow(/Memory provider registration is required/);
-
-    expect(() =>
-      compileDomainPackToHarnessedSystem(valid, {
-        agentRef: { id: 'agent.default', version: '0.0.0' },
-        memoryProviders: [{ ...memoryManagementProviderSpecExample, version: '9.0.0' }],
-        memoryProviderCapabilities: {
-          [memoryProfileSpecExample.managementProviderRef.id]:
-            memoryManagementProviderSpecExample.capabilities,
-        },
-      })
-    ).toThrow(/Memory provider version mismatch/);
 
     const invalidAutoCapture = validateDomainPackSpec({
       ...valid,
@@ -849,7 +826,6 @@ defaultWorkflow: workflow.file
     expect(() =>
       compileDomainPackToHarnessedSystem(missingScope, {
         agentRef: { id: 'agent.default', version: '0.0.0' },
-        memoryProviders: [memoryManagementProviderSpecExample],
         memoryProviderCapabilities: {
           [memoryProfileSpecExample.managementProviderRef.id]:
             memoryManagementProviderSpecExample.capabilities,
@@ -860,7 +836,6 @@ defaultWorkflow: workflow.file
     expect(() =>
       compileDomainPackToHarnessedSystem(valid, {
         agentRef: { id: 'agent.default', version: '0.0.0' },
-        memoryProviders: [memoryManagementProviderSpecExample],
         memoryProviderCapabilities: {
           [memoryProfileSpecExample.managementProviderRef.id]: {
             ...memoryManagementProviderSpecExample.capabilities,
@@ -873,7 +848,6 @@ defaultWorkflow: workflow.file
     expect(() =>
       compileDomainPackToHarnessedSystem(valid, {
         agentRef: { id: 'agent.default', version: '0.0.0' },
-        memoryProviders: [memoryManagementProviderSpecExample],
         memoryProviderCapabilities: {
           [memoryProfileSpecExample.managementProviderRef.id]: {
             ...memoryManagementProviderSpecExample.capabilities,

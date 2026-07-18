@@ -55,7 +55,6 @@ import {
   type ManagedMemoryType,
   type MemoryExtractionProfileSpec,
   type MemoryManagementCapabilities,
-  type MemoryManagementProviderSpec,
   type MemoryProfileSpec,
   type MemorySpec,
   type WorkflowStateMemoryBinding,
@@ -127,7 +126,6 @@ export interface DomainCompileOptions {
   extractionProfileId?: string;
   reasoningProfileId?: string;
   memoryProviderCapabilities?: Record<string, MemoryManagementCapabilities>;
-  memoryProviders?: MemoryManagementProviderSpec[];
   now?: () => string;
   policyRefs?: string[];
   evaluationRefs?: string[];
@@ -705,7 +703,6 @@ export function compileDomainPackToHarnessedSystem(
     domainPack.memoryProfiles,
     workflowStateBindings.map((state) => state.memory.memoryProfileRef)
   );
-  validateCompiledMemoryProviders(compiledMemoryProfiles, options);
   const compiledContextProfiles = selectProfilesByRefs(
     domainPack.contextProfiles,
     workflowStateBindings.map((state) => state.memory.contextProfileRef)
@@ -974,37 +971,6 @@ function isManagedMemoryProfile(
   return Boolean(profile && 'managementProviderRef' in profile);
 }
 
-function resolveRegisteredMemoryProvider(
-  profile: MemoryProfileSpec,
-  options: DomainCompileOptions
-): MemoryManagementProviderSpec {
-  const ref = profile.managementProviderRef;
-  const provider = options.memoryProviders?.find((candidate) => candidate.id === ref.id);
-  if (!provider) {
-    throw new Error(`Memory provider registration is required: ${ref.id}`);
-  }
-  if (ref.version && provider.version !== ref.version) {
-    throw new Error(
-      `Memory provider version mismatch: ${ref.id}: expected ${ref.version}, received ${provider.version}`
-    );
-  }
-  if (ref.revision && provider.revision !== ref.revision) {
-    throw new Error(
-      `Memory provider revision mismatch: ${ref.id}: expected ${ref.revision}, received ${provider.revision ?? '<none>'}`
-    );
-  }
-  return provider;
-}
-
-function validateCompiledMemoryProviders(
-  profiles: DomainMemoryProfileSpec[],
-  options: DomainCompileOptions
-): void {
-  for (const profile of profiles) {
-    if (isManagedMemoryProfile(profile)) resolveRegisteredMemoryProvider(profile, options);
-  }
-}
-
 function resolveMemoryCapabilities(
   profile: DomainMemoryProfileSpec | undefined,
   options: DomainCompileOptions
@@ -1054,7 +1020,6 @@ function validateCompiledMemoryBindings(
     }
 
     if (isManagedMemoryProfile(profile)) {
-      resolveRegisteredMemoryProvider(profile, options);
       assertMemoryScopeCanBeInitialized(profile, session, state.stateId);
       const capabilities = resolveMemoryCapabilities(profile, options);
       if (!capabilities) {
