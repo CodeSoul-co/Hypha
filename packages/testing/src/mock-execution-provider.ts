@@ -22,7 +22,6 @@ import {
   type SandboxCleanupRequest,
   type SandboxCreateRequest,
   type SandboxProvider,
-  type SandboxProviderFactory,
   type SandboxProviderCapabilities,
   type SandboxRecord,
   type SandboxStartRequest,
@@ -508,17 +507,6 @@ export class MockExecutionProvider implements SandboxProvider {
       );
     }
   }
-}
-
-export function createMockExecutionProviderFactory(
-  options: MockExecutionProviderOptions = {}
-): SandboxProviderFactory {
-  const providerId = options.id ?? 'provider.mock';
-  return {
-    providerType: 'mock',
-    providerId,
-    create: () => new MockExecutionProvider({ ...options, id: providerId }),
-  };
 }
 
 export class MockExecutionProviderError extends Error {
