@@ -6,6 +6,8 @@ import {
   artifactRetentionDecisionSchema,
   artifactRetentionEvaluationRequestSchema,
   artifactRetentionProcessRequestSchema,
+  artifactRetentionProcessResultSchema,
+  validateArtifactRetentionProcessResult,
 } from './retention';
 import { expectContractParity } from '../../../test-support/contract-schema-parity';
 
@@ -28,6 +30,27 @@ describe('Artifact retention evaluation', () => {
       zod: artifactRetentionProcessRequestSchema,
       json: artifactRetentionContractJsonSchemas.ArtifactRetentionProcessRequest,
     });
+    expectContractParity({
+      name: 'ArtifactRetentionProcessResult',
+      zod: artifactRetentionProcessResultSchema,
+      json: artifactRetentionContractJsonSchemas.ArtifactRetentionProcessResult,
+    });
+  });
+
+  it('validates strict and internally consistent retention process results', () => {
+    const result = {
+      artifactId: 'artifact.example',
+      versionId: 'artifact-version.example',
+      workspaceId: 'workspace.example',
+      decision: { action: 'delete' as const, reason: 'delete_after' as const },
+      applied: false,
+      replayed: true,
+      dryRun: false,
+    };
+    expect(validateArtifactRetentionProcessResult(result)).toEqual(result);
+    expect(() => validateArtifactRetentionProcessResult({ ...result, unexpected: true })).toThrow();
+    expect(() => validateArtifactRetentionProcessResult({ ...result, applied: true })).toThrow();
+    expect(() => validateArtifactRetentionProcessResult({ ...result, dryRun: true })).toThrow();
   });
 
   it('selects archive and delete actions from deterministic policy times', () => {

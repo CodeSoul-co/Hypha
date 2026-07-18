@@ -60,6 +60,41 @@ export const artifactRetentionProcessRequestSchema = z
   })
   .strict() satisfies ZodType<ArtifactRetentionProcessRequest>;
 
+export const artifactRetentionProcessResultSchema = z
+  .object({
+    artifactId: nonEmptyString,
+    versionId: nonEmptyString,
+    workspaceId: nonEmptyString,
+    decision: artifactRetentionDecisionSchema,
+    applied: z.boolean(),
+    replayed: z.boolean(),
+    dryRun: z.boolean(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.applied && value.replayed) {
+      context.addIssue({
+        code: 'custom',
+        path: ['replayed'],
+        message: 'A retention result cannot be applied and replayed by the same invocation.',
+      });
+    }
+    if ((value.dryRun || value.decision.action === 'retain') && (value.applied || value.replayed)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['applied'],
+        message: 'Dry-run and retain decisions cannot report a committed mutation.',
+      });
+    }
+    if (value.replayed && value.decision.action !== 'delete') {
+      context.addIssue({
+        code: 'custom',
+        path: ['decision', 'action'],
+        message: 'Only a committed retention deletion can currently be replayed.',
+      });
+    }
+  }) satisfies ZodType<ArtifactRetentionProcessResult>;
+
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
 
@@ -90,10 +125,57 @@ export const artifactRetentionProcessRequestJsonSchema: JsonSchema = strictObjec
   }
 );
 
+export const artifactRetentionProcessResultJsonSchema: JsonSchema = {
+  ...strictObject(
+    ['artifactId', 'versionId', 'workspaceId', 'decision', 'applied', 'replayed', 'dryRun'],
+    {
+      artifactId: nonEmptyStringJsonSchema,
+      versionId: nonEmptyStringJsonSchema,
+      workspaceId: nonEmptyStringJsonSchema,
+      decision: artifactRetentionDecisionJsonSchema,
+      applied: { type: 'boolean' },
+      replayed: { type: 'boolean' },
+      dryRun: { type: 'boolean' },
+    }
+  ),
+  allOf: [
+    {
+      not: {
+        properties: { applied: { const: true }, replayed: { const: true } },
+        required: ['applied', 'replayed'],
+      },
+    },
+    {
+      if: { properties: { dryRun: { const: true } }, required: ['dryRun'] },
+      then: {
+        properties: { applied: { const: false }, replayed: { const: false } },
+      },
+    },
+    {
+      if: {
+        properties: { decision: { properties: { action: { const: 'retain' } } } },
+        required: ['decision'],
+      },
+      then: {
+        properties: { applied: { const: false }, replayed: { const: false } },
+      },
+    },
+    {
+      if: { properties: { replayed: { const: true } }, required: ['replayed'] },
+      then: {
+        properties: {
+          decision: { properties: { action: { const: 'delete' } }, required: ['action'] },
+        },
+      },
+    },
+  ],
+};
+
 export const artifactRetentionContractJsonSchemas: Record<string, JsonSchema> = {
   ArtifactRetentionEvaluationRequest: artifactRetentionEvaluationRequestJsonSchema,
   ArtifactRetentionDecision: artifactRetentionDecisionJsonSchema,
   ArtifactRetentionProcessRequest: artifactRetentionProcessRequestJsonSchema,
+  ArtifactRetentionProcessResult: artifactRetentionProcessResultJsonSchema,
 };
 
 export class DefaultArtifactRetentionEvaluator implements ArtifactRetentionEvaluator {
@@ -194,7 +276,7 @@ export class DefaultArtifactRetentionProcessor implements ArtifactRetentionProce
           reason: decision.reason,
           idempotencyKey: request.idempotencyKey,
         });
-        return {
+        return validateArtifactRetentionProcessResult({
           artifactId: stored.record.id,
           versionId: stored.record.versionId,
           workspaceId: stored.record.workspaceId,
@@ -202,7 +284,7 @@ export class DefaultArtifactRetentionProcessor implements ArtifactRetentionProce
           applied: false,
           replayed: true,
           dryRun: request.dryRun ?? false,
-        };
+        });
       }
     }
     const visible = await this.options.manager.get({
@@ -247,7 +329,7 @@ export class DefaultArtifactRetentionProcessor implements ArtifactRetentionProce
       });
       applied = true;
     }
-    return {
+    return validateArtifactRetentionProcessResult({
       artifactId: stored.record.id,
       versionId: stored.record.versionId,
       workspaceId: stored.record.workspaceId,
@@ -255,7 +337,7 @@ export class DefaultArtifactRetentionProcessor implements ArtifactRetentionProce
       applied,
       replayed: false,
       dryRun,
-    };
+    });
   }
 
   private timestamp(): string {
@@ -277,6 +359,12 @@ export function validateArtifactRetentionProcessRequest(
   input: unknown
 ): ArtifactRetentionProcessRequest {
   return artifactRetentionProcessRequestSchema.parse(input);
+}
+
+export function validateArtifactRetentionProcessResult(
+  input: unknown
+): ArtifactRetentionProcessResult {
+  return artifactRetentionProcessResultSchema.parse(input);
 }
 
 function retentionBlock(
