@@ -1,5 +1,5 @@
 import type { PersistedFrameworkEvent } from '../../events';
-import { FrameworkError } from '../../errors';
+import { FrameworkError, isFrameworkError } from '../../errors';
 import { hashCanonicalJson } from './canonical-json';
 import type { EventRuntime } from './event-runtime';
 import { eventStreamKey, type EventStreamScope } from './event-store';
@@ -137,6 +137,7 @@ export class ProjectionEngine {
         }
       }
     } catch (error) {
+      if (isFrameworkError(error) && error.code === 'RUNTIME_REPLAY_DIVERGENCE') throw error;
       throw new FrameworkError({
         code: 'RUNTIME_PROJECTION_FAILED',
         message: `Projection ${definition.id} failed while reducing events`,
