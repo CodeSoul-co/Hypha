@@ -29,6 +29,8 @@ describe('DefaultArtifactManager', () => {
     const second = await fixture.manager.create(createRequest('create-2', bytes));
 
     expect(first.id).not.toBe(second.id);
+    expect(first.deduplicated).toBe(false);
+    expect(second.deduplicated).toBe(true);
     expect(first.contentHash).toBe(hashArtifactBytes(bytes));
     expect(first.storageRef.objectKey).toBe(second.storageRef.objectKey);
     expect(fixture.store.stats()).toEqual({

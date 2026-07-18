@@ -166,6 +166,8 @@ export interface ArtifactRecord {
   contentHash: string;
   hashAlgorithm: ArtifactHashAlgorithm;
   storageRef: ArtifactStorageRef;
+  /** True when this version reused an already committed content-addressed Blob. */
+  deduplicated?: boolean;
   logicalArtifactId: string;
   parentVersionId?: string;
   previousVersionId?: string;

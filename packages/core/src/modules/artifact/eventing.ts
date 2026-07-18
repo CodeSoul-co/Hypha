@@ -96,6 +96,7 @@ export class EventingArtifactManager implements ArtifactManager {
       recordPayload(request.operationId, record),
       recordContext(record)
     );
+    await this.publishDeduplication(request.operationId, record);
     await this.publishLineage(request.operationId, record);
     return record;
   }
@@ -236,6 +237,7 @@ export class EventingArtifactManager implements ArtifactManager {
       recordPayload(request.operationId, record),
       recordContext(record)
     );
+    await this.publishDeduplication(request.operationId, record);
     await this.publishLineage(request.operationId, record);
     return record;
   }
@@ -273,6 +275,22 @@ export class EventingArtifactManager implements ArtifactManager {
         versionId: record.versionId,
         workspaceId: record.workspaceId,
         artifactRefs: [...new Set(record.sourceArtifactIds)],
+      },
+      recordContext(record)
+    );
+  }
+
+  private async publishDeduplication(operationId: string, record: ArtifactRecord): Promise<void> {
+    if (!record.deduplicated) return;
+    await this.events.publish(
+      'artifact.deduplicated',
+      {
+        operationId,
+        artifactId: record.id,
+        versionId: record.versionId,
+        workspaceId: record.workspaceId,
+        contentHash: record.contentHash,
+        deduplicated: true,
       },
       recordContext(record)
     );

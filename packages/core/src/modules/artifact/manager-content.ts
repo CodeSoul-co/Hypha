@@ -23,6 +23,12 @@ export interface PersistedArtifactContent {
   contentHash: string;
   sizeBytes: number;
   mimeType?: string;
+  deduplicated: boolean;
+}
+
+interface PromotedArtifactObject {
+  storageRef: ArtifactStorageRef;
+  deduplicated: boolean;
 }
 
 export async function persistArtifactContent(
@@ -55,11 +61,12 @@ export async function persistArtifactContent(
     const finalKey = request.profile.contentAddressing.deduplicate
       ? `blobs/sha256/${digest}`
       : `objects/sha256/${digest}/${safeObjectSegment(request.nonce)}`;
-    const finalRef = await promoteArtifactObject(request, stagingRef, finalKey, staged);
+    const promoted = await promoteArtifactObject(request, stagingRef, finalKey, staged);
     return {
-      storageRef: finalRef,
+      storageRef: promoted.storageRef,
       contentHash: staged.contentHash,
       sizeBytes: staged.sizeBytes,
+      deduplicated: promoted.deduplicated,
       ...(staged.mimeType ? { mimeType: staged.mimeType } : {}),
     };
   } finally {
@@ -72,22 +79,23 @@ async function promoteArtifactObject(
   stagingRef: ArtifactStorageRef,
   finalKey: string,
   staged: ArtifactObjectMetadata
-): Promise<ArtifactStorageRef> {
+): Promise<PromotedArtifactObject> {
   const candidate = { ...stagingRef, objectKey: finalKey, versionId: undefined, etag: undefined };
   if (request.profile.contentAddressing.deduplicate) {
     const existing = await request.store.head(candidate);
     if (existing) {
       assertSameContent(existing, staged);
-      return metadataRef(candidate, existing);
+      return { storageRef: metadataRef(candidate, existing), deduplicated: true };
     }
   }
   try {
-    return await request.store.copy({
+    const storageRef = await request.store.copy({
       operationId: `${request.operationId}:promote`,
       source: stagingRef,
       targetObjectKey: finalKey,
       ifAbsent: true,
     });
+    return { storageRef, deduplicated: false };
   } catch (error) {
     if (
       request.profile.contentAddressing.deduplicate &&
@@ -96,7 +104,7 @@ async function promoteArtifactObject(
       const existing = await request.store.head(candidate);
       if (existing) {
         assertSameContent(existing, staged);
-        return metadataRef(candidate, existing);
+        return { storageRef: metadataRef(candidate, existing), deduplicated: true };
       }
     }
     throw error;
@@ -129,10 +137,7 @@ function assertProfileSize(profile: ArtifactProfileSpec, sizeBytes: number): voi
   }
 }
 
-function assertSameContent(
-  existing: ArtifactObjectMetadata,
-  staged: ArtifactObjectMetadata
-): void {
+function assertSameContent(existing: ArtifactObjectMetadata, staged: ArtifactObjectMetadata): void {
   if (existing.contentHash !== staged.contentHash || existing.sizeBytes !== staged.sizeBytes) {
     throw artifactManagerError(
       'ARTIFACT_HASH_MISMATCH',

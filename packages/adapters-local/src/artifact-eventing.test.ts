@@ -108,6 +108,31 @@ describe('Artifact Event publication decorators', () => {
     });
   });
 
+  it('publishes deduplication only when a committed Blob is actually reused', async () => {
+    const fixture = createFixture();
+    const first = await fixture.manager.create(
+      createRequest('operation.deduplicate.first', 'same-content')
+    );
+    const second = await fixture.manager.create(
+      createRequest('operation.deduplicate.second', 'same-content')
+    );
+
+    expect(first.deduplicated).toBe(false);
+    expect(second.deduplicated).toBe(true);
+    expect(
+      fixture.publisher.publications.filter(({ type }) => type === 'artifact.deduplicated')
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          artifactId: second.id,
+          versionId: second.versionId,
+          contentHash: second.contentHash,
+          deduplicated: true,
+        }),
+      }),
+    ]);
+  });
+
   it('publishes GC completion and partial-failure summaries without object content', async () => {
     const successful = createFixture();
     const record = await successful.manager.create(
