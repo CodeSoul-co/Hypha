@@ -154,7 +154,14 @@ const safeResponseMimeTypeSchema = z
   .string()
   .min(1)
   .max(255)
-  .regex(/^[^\u0000-\u001f\u007f]+$/u, 'must not contain control characters');
+  .refine(
+    (value) =>
+      Array.from(value).every((character) => {
+        const codePoint = character.codePointAt(0)!;
+        return codePoint > 31 && codePoint !== 127;
+      }),
+    'must not contain control characters'
+  );
 
 export const artifactCreateDownloadAccessRequestSchema = artifactGetRecordRequestSchema
   .extend({
