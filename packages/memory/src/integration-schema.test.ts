@@ -61,12 +61,13 @@ describe('memory integration schemas', () => {
     expect(
       domainMemoryDependencySnapshotSchema.safeParse({
         ...snapshot,
-        stateBindings: [
-          {
-            ...snapshot.stateBindings![0],
-            businessPrompt: 'must not enter a dependency snapshot',
-          },
-        ],
+        capabilitySnapshots: { 'provider.memory.native': { search: true } },
+      }).success
+    ).toBe(false);
+    expect(
+      domainMemoryDependencySnapshotSchema.safeParse({
+        ...snapshot,
+        stateBindings: [{ stateId: 'Reasoning', binding: workflowStateMemoryBindingExample }],
       }).success
     ).toBe(false);
   });

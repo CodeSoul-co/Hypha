@@ -78,7 +78,7 @@ describe('memory JSON Schema parity', () => {
     }
   });
 
-  it('keeps integration nested references and state snapshots strict', () => {
+  it('keeps integration nested references and capability snapshots strict', () => {
     const workflow = memoryIntegrationJsonSchemas.WorkflowStateMemoryBinding;
     expectStrictSpecRef(property(workflow, 'memoryProfileRef'));
     expectStrictSpecRef(property(workflow, 'contextProfileRef'));
@@ -88,9 +88,9 @@ describe('memory JSON Schema parity', () => {
     expectStrictSpecRef(property(snapshot, 'domainPackRef'));
     expectStrictSpecRef(arrayItems(property(snapshot, 'providerRefs')));
     expectStrictSpecRef(arrayItems(property(snapshot, 'policyRefs')));
-    const state = arrayItems(property(snapshot, 'stateBindings'));
-    expect(state.additionalProperties).toBe(false);
-    expect(property(state, 'binding')).toBe(workflow);
+    expect(property(snapshot, 'capabilitySnapshot').additionalProperties).toBe(false);
+    expect(snapshot.properties).not.toHaveProperty('capabilitySnapshots');
+    expect(snapshot.properties).not.toHaveProperty('stateBindings');
   });
 
   it('keeps nested profile, provider, vector, lifecycle and context objects strict', () => {

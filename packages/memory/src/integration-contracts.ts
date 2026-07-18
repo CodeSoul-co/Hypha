@@ -472,8 +472,8 @@ export function createDomainMemoryDependencySnapshot(
 ): DomainMemoryDependencySnapshot {
   const normalized = {
     ...input,
-    providerRefs: [...input.providerRefs].sort(compareSpecRefs),
-    policyRefs: [...input.policyRefs].sort(compareSpecRefs),
+    providerRefs: normalizeSpecRefs(input.providerRefs),
+    policyRefs: normalizeSpecRefs(input.policyRefs),
   };
   return {
     ...normalized,
@@ -634,6 +634,12 @@ function sameSpecRef(left: SpecRef, right: SpecRef): boolean {
 
 function compareSpecRefs(left: SpecRef, right: SpecRef): number {
   return specRefKey(left).localeCompare(specRefKey(right));
+}
+
+function normalizeSpecRefs(refs: readonly SpecRef[]): SpecRef[] {
+  const unique = new Map<string, SpecRef>();
+  for (const ref of refs) unique.set(specRefKey(ref), { ...ref });
+  return [...unique.values()].sort(compareSpecRefs);
 }
 
 function specRefKey(ref: SpecRef): string {

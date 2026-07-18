@@ -117,16 +117,6 @@ export const sessionMemoryBindingJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
-const domainMemoryWorkflowStateSnapshotJsonSchema: JsonSchema = {
-  type: 'object',
-  required: ['stateId', 'binding'],
-  properties: {
-    stateId: nonEmptyStringJsonSchema,
-    binding: workflowStateMemoryBindingJsonSchema,
-  },
-  additionalProperties: false,
-};
-
 export const domainMemoryDependencySnapshotJsonSchema: JsonSchema = {
   type: 'object',
   required: [
@@ -146,11 +136,6 @@ export const domainMemoryDependencySnapshotJsonSchema: JsonSchema = {
     policyRefs: { type: 'array', items: memoryContractSpecRefJsonSchema },
     scopeTemplate: managedMemoryScopeTemplateJsonSchema,
     capabilitySnapshot: partialMemoryManagementCapabilitiesJsonSchema,
-    capabilitySnapshots: {
-      type: 'object',
-      additionalProperties: partialMemoryManagementCapabilitiesJsonSchema,
-    },
-    stateBindings: { type: 'array', items: domainMemoryWorkflowStateSnapshotJsonSchema },
     dependencyHash: nonEmptyStringJsonSchema,
     createdAt: { type: 'string', format: 'date-time' },
   },
@@ -243,8 +228,6 @@ export const domainMemoryDependencySnapshotExample: DomainMemoryDependencySnapsh
   policyRefs: [{ id: 'policy.memory.read', version: '1.0.0' }],
   scopeTemplate: { workspaceId: 'workspace:default' },
   capabilitySnapshot: { add: true, search: true },
-  capabilitySnapshots: { 'memory.provider.native': { add: true, search: true } },
-  stateBindings: [{ stateId: 'Reasoning', binding: workflowStateMemoryBindingExample }],
   dependencyHash: 'sha256:dependency-snapshot',
   createdAt: '2026-07-18T00:00:00.000Z',
 };
