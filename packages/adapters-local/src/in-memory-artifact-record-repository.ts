@@ -7,8 +7,13 @@ import type {
 } from '@hypha/core';
 import {
   ArtifactRecordRepositoryConflictError,
-  validateArtifactRecord,
 } from '@hypha/core';
+import {
+  artifactIdempotencyMapKey,
+  cloneStoredArtifactRecord,
+  compareStoredArtifactRecords,
+  validateStoredArtifactRecord,
+} from './artifact-record-repository-values';
 
 export interface InMemoryArtifactRecordRepositoryOptions {
   id?: string;
@@ -29,28 +34,28 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
   async get(artifactId: string, versionId?: string): Promise<StoredArtifactRecord | null> {
     if (versionId) {
       const stored = this.recordsByVersion.get(versionId);
-      return stored?.record.id === artifactId ? cloneStoredRecord(stored) : null;
+      return stored?.record.id === artifactId ? cloneStoredArtifactRecord(stored) : null;
     }
     const latest = this.latestForArtifact(artifactId);
-    return latest ? cloneStoredRecord(latest) : null;
+    return latest ? cloneStoredArtifactRecord(latest) : null;
   }
 
   async getByVersionId(versionId: string): Promise<StoredArtifactRecord | null> {
     const stored = this.recordsByVersion.get(versionId);
-    return stored ? cloneStoredRecord(stored) : null;
+    return stored ? cloneStoredArtifactRecord(stored) : null;
   }
 
   async list(): Promise<StoredArtifactRecord[]> {
     return [...this.recordsByVersion.values()]
       .sort(compareStoredRecords)
-      .map(cloneStoredRecord);
+      .map(cloneStoredArtifactRecord);
   }
 
   async findIdempotency(
     operationId: string,
     idempotencyKey: string
   ): Promise<StoredArtifactRecord | null> {
-    const result = this.idempotency.get(idempotencyMapKey(operationId, idempotencyKey));
+    const result = this.idempotency.get(artifactIdempotencyMapKey(operationId, idempotencyKey));
     if (!result) return null;
     return this.get(result.artifactId, result.versionId);
   }
@@ -60,16 +65,16 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
       throw new TypeError('Artifact record commit must include at least one record.');
     }
     this.assertRevisionFence(request);
-    const validated = request.records.map(validateStoredRecord);
+    const validated = request.records.map(validateStoredArtifactRecord);
     this.assertRecordUpdates(validated);
-    this.assertIdempotency(request.idempotency);
+    this.assertIdempotency(request.idempotency, validated);
 
     for (const stored of validated) {
-      this.recordsByVersion.set(stored.record.versionId, cloneStoredRecord(stored));
+      this.recordsByVersion.set(stored.record.versionId, cloneStoredArtifactRecord(stored));
     }
     if (request.idempotency) {
       this.idempotency.set(
-        idempotencyMapKey(
+        artifactIdempotencyMapKey(
           request.idempotency.operationId,
           request.idempotency.idempotencyKey
         ),
@@ -128,10 +133,13 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
     }
   }
 
-  private assertIdempotency(result?: ArtifactIdempotencyRecord): void {
+  private assertIdempotency(
+    result: ArtifactIdempotencyRecord | undefined,
+    records: StoredArtifactRecord[]
+  ): void {
     if (!result) return;
     const existing = this.idempotency.get(
-      idempotencyMapKey(result.operationId, result.idempotencyKey)
+      artifactIdempotencyMapKey(result.operationId, result.idempotencyKey)
     );
     if (
       existing &&
@@ -147,6 +155,20 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
         }
       );
     }
+    const targetInCommit = records.some(
+      (stored) =>
+        stored.record.id === result.artifactId && stored.record.versionId === result.versionId
+    );
+    const targetPersisted = this.recordsByVersion.get(result.versionId);
+    if (
+      !targetInCommit &&
+      (!targetPersisted || targetPersisted.record.id !== result.artifactId)
+    ) {
+      throw new ArtifactRecordRepositoryConflictError(
+        'Artifact idempotency result must reference a committed Artifact version.',
+        { artifactId: result.artifactId, versionId: result.versionId }
+      );
+    }
   }
 
   private latestForArtifact(artifactId: string): StoredArtifactRecord | undefined {
@@ -156,26 +178,6 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
   }
 }
 
-function validateStoredRecord(stored: StoredArtifactRecord): StoredArtifactRecord {
-  if (!stored.profileRef.id.trim()) throw new TypeError('Artifact profileRef.id is required.');
-  return {
-    record: validateArtifactRecord(stored.record),
-    profileRef: { ...stored.profileRef },
-  };
-}
-
-function cloneStoredRecord(stored: StoredArtifactRecord): StoredArtifactRecord {
-  return structuredClone(stored);
-}
-
 function compareStoredRecords(left: StoredArtifactRecord, right: StoredArtifactRecord): number {
-  return (
-    left.record.createdAt.localeCompare(right.record.createdAt) ||
-    left.record.id.localeCompare(right.record.id) ||
-    left.record.versionNumber - right.record.versionNumber
-  );
-}
-
-function idempotencyMapKey(operationId: string, idempotencyKey: string): string {
-  return `${operationId}\u0000${idempotencyKey}`;
+  return compareStoredArtifactRecords(left, right);
 }

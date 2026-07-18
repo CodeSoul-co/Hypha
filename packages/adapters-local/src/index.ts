@@ -68,6 +68,7 @@ export * from './local-filesystem-execution-artifact-store';
 export * from './s3-artifact-store-transport';
 export * from './s3-execution-artifact-store';
 export * from './in-memory-artifact-record-repository';
+export * from './sqlite-artifact-record-repository';
 export {
   InMemoryExecutionArtifactStore,
   type InMemoryExecutionArtifactStoreOptions,

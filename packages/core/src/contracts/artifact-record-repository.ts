@@ -40,6 +40,7 @@ export interface ArtifactRecordRepository {
   ): Promise<StoredArtifactRecord | null>;
   commit(request: ArtifactRecordCommitRequest): Promise<void>;
   health(): Promise<ProviderHealth>;
+  close?(): Promise<void>;
 }
 
 export class ArtifactRecordRepositoryConflictError extends Error {
@@ -49,5 +50,16 @@ export class ArtifactRecordRepositoryConflictError extends Error {
   ) {
     super(message);
     this.name = 'ArtifactRecordRepositoryConflictError';
+  }
+}
+
+export class ArtifactRecordRepositoryError extends Error {
+  constructor(
+    readonly code: 'ARTIFACT_RECORD_REPOSITORY_UNAVAILABLE' | 'ARTIFACT_RECORD_REPOSITORY_CORRUPT',
+    message: string,
+    readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = 'ArtifactRecordRepositoryError';
   }
 }

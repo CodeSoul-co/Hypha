@@ -25,7 +25,10 @@ import type {
   SpecRef,
   StoredArtifactRecord,
 } from '../..';
-import { ArtifactRecordRepositoryConflictError } from '../../contracts/artifact-record-repository';
+import {
+  ArtifactRecordRepositoryConflictError,
+  ArtifactRecordRepositoryError,
+} from '../../contracts/artifact-record-repository';
 import {
   validateArtifactProfileSpec,
   validateArtifactRecord,
@@ -173,7 +176,7 @@ export class DefaultArtifactManager implements ArtifactManager {
           'Deleted Artifacts cannot receive a new version.'
         );
       }
-      const versions = (await this.repository.list()).filter(
+      const versions = (await this.repositoryOperation(() => this.repository.list())).filter(
         (stored) => stored.record.id === previous.record.id
       );
       if (
@@ -229,27 +232,35 @@ export class DefaultArtifactManager implements ArtifactManager {
         deletedAt: undefined,
         metadata: request.metadata ?? previous.record.metadata,
       });
-      await this.commitRecords(
-        [
-          { record: updatedPrevious, profileRef: previous.profileRef },
-          { record: next, profileRef: previous.profileRef },
-        ],
-        {
-          artifactId: previous.record.id,
-          versionId: previous.record.versionId,
-          revision: request.expectedRevision,
-        },
-        idempotencyResult(request, next)
-      );
-      return next;
+      try {
+        await this.commitRecords(
+          [
+            { record: updatedPrevious, profileRef: previous.profileRef },
+            { record: next, profileRef: previous.profileRef },
+          ],
+          {
+            artifactId: previous.record.id,
+            versionId: previous.record.versionId,
+            revision: request.expectedRevision,
+          },
+          idempotencyResult(request, next)
+        );
+        return next;
+      } catch (error) {
+        return this.reconcileIdempotency(error, request, request.principal, 'write');
+      }
     });
   }
 
   async get(request: ArtifactGetRecordRequest): Promise<ArtifactRecord | null> {
     const validated = validateArtifactManagerInput(() => validateArtifactGetRecordRequest(request));
-    const latest = await this.repository.get(validated.artifactId);
+    const latest = await this.repositoryOperation(() =>
+      this.repository.get(validated.artifactId)
+    );
     if (!latest || latest.record.status === 'deleted') return null;
-    const stored = await this.repository.get(validated.artifactId, validated.versionId);
+    const stored = await this.repositoryOperation(() =>
+      this.repository.get(validated.artifactId, validated.versionId)
+    );
     if (!stored) return null;
     assertRecordPermission(
       this.requireProfile(stored.profileRef),
@@ -287,7 +298,9 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async list(input: ArtifactListRequest): Promise<ArtifactRecord[]> {
     const request = validateArtifactManagerInput(() => validateArtifactListRequest(input));
-    const latest = latestStoredByArtifact(await this.repository.list());
+    const latest = latestStoredByArtifact(
+      await this.repositoryOperation(() => this.repository.list())
+    );
     return latest
       .filter((stored) => stored.record.workspaceId === request.workspaceId)
       .filter((stored) => request.includeDeleted || stored.record.status !== 'deleted')
@@ -373,16 +386,20 @@ export class DefaultArtifactManager implements ArtifactManager {
         updatedAt: timestamp,
         deletedAt: timestamp,
       });
-      await this.commitRecords(
-        [{ record: deleted, profileRef: stored.profileRef }],
-        latestFence(stored),
-        idempotencyResult(request, deleted)
-      );
+      try {
+        await this.commitRecords(
+          [{ record: deleted, profileRef: stored.profileRef }],
+          latestFence(stored),
+          idempotencyResult(request, deleted)
+        );
+      } catch (error) {
+        await this.reconcileIdempotency(error, request, request.principal, 'delete');
+      }
     });
   }
 
   async traceLineage(artifactId: string): Promise<ArtifactLineage> {
-    const all = await this.repository.list();
+    const all = await this.repositoryOperation(() => this.repository.list());
     const versions = all
       .filter((stored) => stored.record.id === artifactId)
       .map((stored) => stored.record)
@@ -400,7 +417,7 @@ export class DefaultArtifactManager implements ArtifactManager {
   }
 
   async latest(logicalArtifactId: string): Promise<ArtifactRecord | null> {
-    const candidates = (await this.repository.list())
+    const candidates = (await this.repositoryOperation(() => this.repository.list()))
       .filter((stored) => stored.record.logicalArtifactId === logicalArtifactId)
       .sort((left, right) => right.record.versionNumber - left.record.versionNumber);
     const latest = candidates[0]?.record;
@@ -408,9 +425,17 @@ export class DefaultArtifactManager implements ArtifactManager {
   }
 
   async previous(versionId: string): Promise<ArtifactRecord | null> {
-    const stored = await this.repository.getByVersionId(versionId);
+    const stored = await this.repositoryOperation(() =>
+      this.repository.getByVersionId(versionId)
+    );
     if (!stored?.record.previousVersionId) return null;
-    return (await this.repository.getByVersionId(stored.record.previousVersionId))?.record ?? null;
+    return (
+      (
+        await this.repositoryOperation(() =>
+          this.repository.getByVersionId(stored.record.previousVersionId!)
+        )
+      )?.record ?? null
+    );
   }
 
   async profile(ref: SpecRef): Promise<ArtifactProfileSpec | null> {
@@ -420,7 +445,11 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async health(): Promise<Record<string, ProviderHealth>> {
     const results: Record<string, ProviderHealth> = {
-      'artifact-records': await this.repository.health(),
+      'artifact-records': await this.repository.health().catch((error) => ({
+        status: 'unhealthy',
+        checkedAt: this.timestamp(),
+        message: error instanceof Error ? error.message : String(error),
+      })),
     };
     for (const [id, store] of this.stores) results[id] = await store.health();
     return results;
@@ -494,12 +523,16 @@ export class DefaultArtifactManager implements ArtifactManager {
       expiresAt: retention.expiresAt,
       metadata: request.metadata,
     });
-    await this.commitRecords(
-      [{ record, profileRef: profileReference(profile) }],
-      undefined,
-      idempotencyResult(request, record)
-    );
-    return record;
+    try {
+      await this.commitRecords(
+        [{ record, profileRef: profileReference(profile) }],
+        undefined,
+        idempotencyResult(request, record)
+      );
+      return record;
+    } catch (error) {
+      return this.reconcileIdempotency(error, request, request.principal, 'write');
+    }
   }
 
   private async mutate(
@@ -544,12 +577,16 @@ export class DefaultArtifactManager implements ArtifactManager {
             ? { ...stored.record.retention, archivedAt: timestamp }
             : stored.record.retention,
       });
-      await this.commitRecords(
-        [{ record, profileRef: stored.profileRef }],
-        latestFence(stored),
-        idempotencyResult(request, record)
-      );
-      return record;
+      try {
+        await this.commitRecords(
+          [{ record, profileRef: stored.profileRef }],
+          latestFence(stored),
+          idempotencyResult(request, record)
+        );
+        return record;
+      } catch (error) {
+        return this.reconcileIdempotency(error, request, request.principal, 'write');
+      }
     });
   }
 
@@ -647,7 +684,9 @@ export class DefaultArtifactManager implements ArtifactManager {
     artifactId: string,
     versionId?: string
   ): Promise<StoredArtifactRecord> {
-    const stored = await this.repository.get(artifactId, versionId);
+    const stored = await this.repositoryOperation(() =>
+      this.repository.get(artifactId, versionId)
+    );
     if (!stored) {
       throw artifactManagerError('ARTIFACT_NOT_FOUND', `Artifact ${artifactId} was not found.`);
     }
@@ -659,7 +698,9 @@ export class DefaultArtifactManager implements ArtifactManager {
     idempotencyKey?: string
   ): Promise<StoredArtifactRecord | null> {
     return idempotencyKey
-      ? this.repository.findIdempotency(operationId, idempotencyKey)
+      ? this.repositoryOperation(() =>
+          this.repository.findIdempotency(operationId, idempotencyKey)
+        )
       : Promise.resolve(null);
   }
 
@@ -673,8 +714,14 @@ export class DefaultArtifactManager implements ArtifactManager {
       versionId: string;
     }
   ): Promise<void> {
+    await this.repositoryOperation(() =>
+      this.repository.commit({ records, expectedLatest, idempotency })
+    );
+  }
+
+  private async repositoryOperation<T>(operation: () => Promise<T>): Promise<T> {
     try {
-      await this.repository.commit({ records, expectedLatest, idempotency });
+      return await operation();
     } catch (error) {
       if (error instanceof ArtifactRecordRepositoryConflictError) {
         throw artifactManagerError(
@@ -684,8 +731,42 @@ export class DefaultArtifactManager implements ArtifactManager {
           error.details
         );
       }
+      if (error instanceof ArtifactRecordRepositoryError) {
+        throw artifactManagerError(
+          error.code === 'ARTIFACT_RECORD_REPOSITORY_UNAVAILABLE'
+            ? 'ARTIFACT_STORE_UNAVAILABLE'
+            : 'ARTIFACT_INTERNAL_ERROR',
+          error.message,
+          error.code === 'ARTIFACT_RECORD_REPOSITORY_UNAVAILABLE',
+          { repositoryCode: error.code }
+        );
+      }
       throw error;
     }
+  }
+
+  private async reconcileIdempotency(
+    error: unknown,
+    request: { operationId: string; idempotencyKey?: string },
+    principal: ArtifactReadRequest['principal'],
+    permission: 'write' | 'delete'
+  ): Promise<ArtifactRecord> {
+    if (
+      !(error instanceof ArtifactManagerError) ||
+      error.normalizedError.code !== 'ARTIFACT_VERSION_CONFLICT' ||
+      !request.idempotencyKey
+    ) {
+      throw error;
+    }
+    const committed = await this.findIdempotent(request.operationId, request.idempotencyKey);
+    if (!committed) throw error;
+    assertRecordPermission(
+      this.requireProfile(committed.profileRef),
+      committed.record,
+      principal,
+      permission
+    );
+    return committed.record;
   }
 
   private nextId(prefix: string): string {
