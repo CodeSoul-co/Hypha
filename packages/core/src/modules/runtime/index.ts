@@ -17,3 +17,5 @@ export * from './run-control';
 export * from './runtime-timer-worker';
 export * from './runtime-cancellation-service';
 export * from './runtime-recovery-service';
+export * from './runtime-checkpoint-store';
+export * from './runtime-checkpoint-service';

@@ -29,6 +29,8 @@ export type FrameworkEventType =
   | 'runtime.signal.received'
   | 'runtime.timer.created'
   | 'runtime.timer.fired'
+  | 'runtime.checkpoint.created'
+  | 'runtime.checkpoint.failed'
   | 'runtime.cancellation.propagated'
   | 'runtime.cancellation.failed'
   | 'recovery.case.opened'
