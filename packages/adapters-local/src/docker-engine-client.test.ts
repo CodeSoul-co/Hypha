@@ -9,40 +9,13 @@ import { DockerEngineCliClient } from './docker-engine-client';
 const digest = `sha256:${'a'.repeat(64)}`;
 
 describe('DockerEngineCliClient', () => {
-  it('falls back from a broken tag inspect to a digest-bearing immutable image ID', async () => {
-    const transport = new FakeTransport([
-      result('', 'Error response from daemon: No such image: redis:latest', 1),
-      result(
-        `${JSON.stringify({
-          Repository: 'redis',
-          Tag: 'latest',
-          Digest: digest,
-          ID: 'immutable123',
-        })}\n`
-      ),
-      result(JSON.stringify({ Id: 'sha256:immutable123', RepoDigests: [`redis@${digest}`] })),
-    ]);
-
-    await expect(
-      new DockerEngineCliClient(transport).inspectImage('redis:latest')
-    ).resolves.toEqual({
-      id: 'sha256:immutable123',
-      repoDigests: [`redis@${digest}`],
-    });
-    expect(transport.requests.map((request) => request.args)).toEqual([
-      ['image', 'inspect', 'redis:latest', '--format', '{{json .}}'],
-      ['image', 'ls', '--digests', '--format', '{{json .}}'],
-      ['image', 'inspect', 'immutable123', '--format', '{{json .}}'],
-    ]);
-  });
-
   it('builds a hardened, digest-pinned container create command', async () => {
     const transport = new FakeTransport([result('container123\n')]);
     const client = new DockerEngineCliClient(transport);
     await expect(
       client.createContainer({
         name: 'hypha-sandbox-1',
-        image: `sha256:${'b'.repeat(64)}`,
+        image: 'redis',
         imageDigest: digest,
         user: '999:999',
         workingDirectory: '/workspace',
@@ -68,7 +41,7 @@ describe('DockerEngineCliClient', () => {
         'no-new-privileges',
         '--pids-limit',
         '64',
-        `sha256:${'b'.repeat(64)}`,
+        `redis@${digest}`,
       ])
     );
     expect(args.join(' ')).not.toContain('docker.sock');

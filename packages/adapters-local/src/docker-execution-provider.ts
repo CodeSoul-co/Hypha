@@ -120,7 +120,9 @@ export class DockerExecutionProvider implements SandboxProvider {
     const request = validateSandboxCreateRequest(input);
     const environmentPolicy = this.policy.resolveEnvironment(request.environment);
     const mount = await this.workspaceMount.resolve(environmentPolicy.workspaceReadOnly);
-    const image = await this.engine.inspectImage(environmentPolicy.image);
+    const image = await this.engine.inspectImage(
+      `${environmentPolicy.image}@${environmentPolicy.digest}`
+    );
     if (!image.repoDigests.some((entry) => entry.endsWith(`@${environmentPolicy.digest}`))) {
       throw executionProviderError(
         'EXECUTION_IMAGE_UNTRUSTED',
@@ -134,7 +136,7 @@ export class DockerExecutionProvider implements SandboxProvider {
     try {
       containerId = await this.engine.createContainer({
         name: `hypha-${shortExecutionHash(sandboxId, 20)}`,
-        image: image.id,
+        image: environmentPolicy.image,
         imageDigest: environmentPolicy.digest,
         user: environmentPolicy.user,
         workingDirectory: this.workspaceMount.containerWorkspaceRoot,

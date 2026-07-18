@@ -76,24 +76,7 @@ export class DockerEngineCliClient implements DockerEngineClient {
   }
 
   async inspectImage(reference: string): Promise<{ id: string; repoDigests: string[] }> {
-    let result = await this.transport.run(
-      defaultRequest(['image', 'inspect', reference, '--format', '{{json .}}'])
-    );
-    if (result.exitCode !== 0 && result.stderr.toLowerCase().includes('no such image')) {
-      const listed = await this.command(['image', 'ls', '--digests', '--format', '{{json .}}']);
-      const expected = reference.includes(':') ? reference : `${reference}:latest`;
-      const match = listed.stdout
-        .split(/\r?\n/u)
-        .filter(Boolean)
-        .map((line) => parseRecord(line, 'Docker image list entry'))
-        .find((entry) => `${entry.Repository}:${entry.Tag}` === expected);
-      if (!match || typeof match.ID !== 'string') {
-        throw dockerFailure('Docker image inspection failed.', result);
-      }
-      result = await this.command(['image', 'inspect', match.ID, '--format', '{{json .}}']);
-    } else if (result.exitCode !== 0) {
-      throw dockerFailure('Docker image inspection failed.', result);
-    }
+    const result = await this.command(['image', 'inspect', reference, '--format', '{{json .}}']);
     const value = parseRecord(result.stdout, 'Docker image inspection');
     return {
       id: requiredString(value.Id, 'image Id'),
@@ -137,7 +120,7 @@ export class DockerEngineCliClient implements DockerEngineClient {
         throw new Error('Docker label values cannot contain NUL bytes.');
       args.push('--label', `${name}=${value}`);
     }
-    args.push(input.image, 'sleep', 'infinity');
+    args.push(`${input.image}@${input.imageDigest}`, 'sleep', 'infinity');
     const result = await this.command(args, 30_000);
     return requiredString(result.stdout.trim(), 'container id');
   }
@@ -259,7 +242,7 @@ function formatMount(mount: DockerWorkspaceMount): string {
   if (mount.source.includes(',') || mount.target.includes(',')) {
     throw new Error('Docker mount paths cannot contain commas.');
   }
-  return `type=bind,src=${mount.source},dst=${mount.target}${mount.readOnly ? ',readonly' : ''}`;
+  return `type=bind,src=${mount.source},dst=${mount.target},${mount.readOnly ? 'readonly' : 'rw'}`;
 }
 
 function safeContainerId(value: string): string {

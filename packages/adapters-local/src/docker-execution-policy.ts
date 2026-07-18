@@ -331,7 +331,10 @@ function normalizeImage(reference: string, digest: string): string {
       false
     );
   }
-  return at >= 0 ? reference.slice(0, at) : reference;
+  const withoutDigest = at >= 0 ? reference.slice(0, at) : reference;
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const lastColon = withoutDigest.lastIndexOf(':');
+  return lastColon > lastSlash ? withoutDigest.slice(0, lastColon) : withoutDigest;
 }
 
 function validateTrustedRegistry(reference: string, trusted?: string[]): void {
