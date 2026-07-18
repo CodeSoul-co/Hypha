@@ -48,7 +48,6 @@ import {
   memoryProfileSpecSchema,
   memorySpecSchema,
   validateMemoryBindingCapabilities,
-  validateMemoryProfileCapabilities,
   type ContextProfileSpec,
   type DomainMemoryDependencySnapshot,
   type ManagedMemoryScope,
@@ -759,8 +758,7 @@ export function compileDomainPackToHarnessedSystem(
     ...compiledExtractionProfiles.map(toSpecRef),
   ]);
   const compiledContextRefs = uniqueSpecRefs(compiledContextProfiles.map(toSpecRef));
-  const hasMemoryDependencies = compiledMemoryRefs.length > 0 || compiledContextRefs.length > 0;
-  const memoryDependencySnapshot = hasMemoryDependencies
+  const memoryDependencySnapshot = compiledMemoryProfiles.length
     ? createDomainMemoryDependencySnapshot(
         {
           domainPackRef: toSpecRef(domainPack),
@@ -768,11 +766,7 @@ export function compileDomainPackToHarnessedSystem(
           contextProfileRef: toOptionalSpecRef(contextProfile),
           extractionProfileRef: toOptionalSpecRef(extractionProfile),
           providerRefs: uniqueSpecRefs(compiledMemoryProfiles.flatMap(memoryProviderRefs)),
-          policyRefs: memoryPolicyRefs(
-            workflowStateBindings,
-            domainPack.policies,
-            compiledExtractionProfiles
-          ),
+          policyRefs: memoryPolicyRefs(workflowStateBindings, domainPack.policies),
           scopeTemplate: sessionInitialization.memoryScopeTemplate,
           capabilitySnapshot: memoryCapabilities ?? {},
           capabilitySnapshots,
@@ -1007,11 +1001,6 @@ function validateCompiledMemoryBindings(
 ): void {
   for (const state of bindings) {
     const access = state.memory.memoryAccessMode ?? 'none';
-    if (state.memory.autoCapture && access !== 'write' && access !== 'read_write') {
-      throw new Error(
-        `Workflow state Memory capability mismatch: ${state.stateId}: autoCapture requires write or read_write access.`
-      );
-    }
     if (access === 'none') continue;
 
     const profile = profileForRef(domainPack.memoryProfiles, state.memory.memoryProfileRef);
@@ -1027,10 +1016,7 @@ function validateCompiledMemoryBindings(
           `Memory provider capabilities are required to compile state ${state.stateId}: ${profile.managementProviderRef.id}`
         );
       }
-      const errors = [
-        ...validateMemoryBindingCapabilities(state.memory, capabilities),
-        ...validateMemoryProfileCapabilities(profile, capabilities),
-      ];
+      const errors = validateMemoryBindingCapabilities(state.memory, capabilities);
       if (errors.length > 0) {
         throw new Error(
           `Workflow state Memory capability mismatch: ${state.stateId}: ${errors.join(' ')}`
@@ -1088,12 +1074,11 @@ function memoryProviderRefs(profile: DomainMemoryProfileSpec): SpecRef[] {
 
 function memoryPolicyRefs(
   bindings: WorkflowStateBinding[],
-  policies: PolicySpec[] | undefined,
-  extractionProfiles: MemoryExtractionProfileSpec[]
+  policies: PolicySpec[] | undefined
 ): SpecRef[] {
   const policiesById = new Map((policies ?? []).map((policy) => [policy.id, policy]));
-  return uniqueSpecRefs([
-    ...bindings.flatMap((state) => [
+  return uniqueSpecRefs(
+    bindings.flatMap((state) => [
       state.memory.readPolicyRef,
       state.memory.writePolicyRef,
       state.memoryPolicyRef
@@ -1101,13 +1086,8 @@ function memoryPolicyRefs(
             id: state.memoryPolicyRef,
           })
         : undefined,
-    ]),
-    ...extractionProfiles.flatMap((profile) => [
-      profile.writePolicyRef,
-      profile.maintenancePolicyRef,
-      profile.sensitiveDataPolicyRef,
-    ]),
-  ]);
+    ])
+  );
 }
 
 function uniqueSpecRefs(refs: Array<SpecRef | undefined>): SpecRef[] {
