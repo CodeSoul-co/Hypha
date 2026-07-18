@@ -4,3 +4,4 @@ export * from './event-store';
 export * from './message-bus';
 export * from './message-inbox-outbox';
 export * from './session-queue';
+export * from './run-lease-store';
