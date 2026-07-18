@@ -20,6 +20,8 @@ const scope: EventStreamScope = {
 const eventTypes: FrameworkEventType[] = [
   'run.created',
   'run.started',
+  'run.cancel.requested',
+  'run.cancelling',
   'run.waiting_human',
   'run.waiting_signal',
   'run.completed',
@@ -174,6 +176,44 @@ describe('Runtime orchestration projection', () => {
     });
   });
 
+  it('projects a durable cancelling lifecycle before terminal cancellation', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('cancel.requested', 'run.cancel.requested', {
+        commandId: 'cancel.1',
+        principalId: 'principal.1',
+        reason: 'operator request',
+        requestedAt: '2026-07-18T04:00:00.000Z',
+      }),
+      event('run.cancelling', 'run.cancelling', { commandId: 'cancel.1' }),
+    ]);
+
+    const definition = createRuntimeOrchestrationProjectionDefinition(scope.runId);
+    await expect(
+      target.engine.update(definition, target.projectionStore, scope)
+    ).resolves.toMatchObject({
+      projectionVersion: '1.3.0',
+      state: {
+        runStatus: 'cancelling',
+        cancellation: {
+          commandId: 'cancel.1',
+          principalId: 'principal.1',
+          reason: 'operator request',
+        },
+      },
+    });
+
+    await append(target, [event('run.cancelled', 'run.cancelled', { terminalState: 'Acting' })]);
+    await expect(
+      target.engine.update(definition, target.projectionStore, scope)
+    ).resolves.toMatchObject({
+      state: { runStatus: 'cancelled', terminalState: 'Acting' },
+    });
+  });
+
   it('rebuilds legacy waiting Events that predate explicit Wait creation', async () => {
     const target = await fixture();
     await append(target, [
@@ -193,7 +233,7 @@ describe('Runtime orchestration projection', () => {
         scope
       )
     ).resolves.toMatchObject({
-      projectionVersion: '1.2.0',
+      projectionVersion: '1.3.0',
       state: {
         runStatus: 'waiting_signal',
         pendingWait: {

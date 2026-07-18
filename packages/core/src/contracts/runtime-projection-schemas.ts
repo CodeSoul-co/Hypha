@@ -69,6 +69,15 @@ export const runtimeOrchestrationProjectionSchema = z
       })
       .strict()
       .optional(),
+    cancellation: z
+      .object({
+        commandId: nonEmptyStringSchema,
+        principalId: nonEmptyStringSchema,
+        reason: nonEmptyStringSchema,
+        requestedAt: timestampSchema,
+      })
+      .strict()
+      .optional(),
     pendingActivityIds: z
       .array(nonEmptyStringSchema)
       .refine((ids) => new Set(ids).size === ids.length, {
@@ -121,6 +130,13 @@ export const runtimeOrchestrationProjectionSchema = z
         code: z.ZodIssueCode.custom,
         path: ['pendingWait'],
         message: `${projection.runStatus} requires a matching pendingWait`,
+      });
+    }
+    if (projection.runStatus === 'cancelling' && projection.cancellation === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['cancellation'],
+        message: 'cancelling Runs require cancellation details',
       });
     }
     if (projection.runStatus === 'not_created' && projection.statePath.length > 0) {
@@ -204,6 +220,17 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
       },
       additionalProperties: false,
     },
+    cancellation: {
+      type: 'object',
+      required: ['commandId', 'principalId', 'reason', 'requestedAt'],
+      properties: {
+        commandId: nonEmptyStringJsonSchema,
+        principalId: nonEmptyStringJsonSchema,
+        reason: nonEmptyStringJsonSchema,
+        requestedAt: { type: 'string', format: 'date-time' },
+      },
+      additionalProperties: false,
+    },
     pendingActivityIds: {
       type: 'array',
       items: nonEmptyStringJsonSchema,
@@ -230,6 +257,25 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
       then: {
         required: ['terminalState'],
         properties: { terminalState: nonEmptyStringJsonSchema },
+      },
+    },
+    {
+      if: { properties: { runStatus: { const: 'cancelling' } }, required: ['runStatus'] },
+      then: {
+        required: ['cancellation'],
+        properties: {
+          cancellation: {
+            type: 'object',
+            required: ['commandId', 'principalId', 'reason', 'requestedAt'],
+            properties: {
+              commandId: nonEmptyStringJsonSchema,
+              principalId: nonEmptyStringJsonSchema,
+              reason: nonEmptyStringJsonSchema,
+              requestedAt: { type: 'string', format: 'date-time' },
+            },
+            additionalProperties: false,
+          },
+        },
       },
     },
   ],

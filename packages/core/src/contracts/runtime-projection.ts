@@ -31,6 +31,13 @@ export interface RuntimeResumeProjection {
   resumedAt: string;
 }
 
+export interface RuntimeCancellationProjection {
+  commandId: string;
+  principalId: string;
+  reason: string;
+  requestedAt: string;
+}
+
 export interface RuntimeOrchestrationProjection {
   runId: string;
   runStatus: RuntimeOrchestrationRunStatus;
@@ -42,5 +49,6 @@ export interface RuntimeOrchestrationProjection {
   pendingTransition?: RuntimePendingTransitionProjection;
   pendingWait?: RuntimePendingWaitProjection;
   lastResume?: RuntimeResumeProjection;
+  cancellation?: RuntimeCancellationProjection;
   pendingActivityIds: string[];
 }

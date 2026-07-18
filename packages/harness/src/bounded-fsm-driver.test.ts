@@ -9,6 +9,7 @@ import {
   DurableRuntimeTimerWorker,
   ProjectionEngine,
   RuntimeRunControlService,
+  RuntimeCancellationService,
   hashCanonicalJson,
   type EventCreateInput,
   type FrameworkEventType,
@@ -58,6 +59,8 @@ const driverEventTypes: FrameworkEventType[] = [
   'run.started',
   'run.resume.requested',
   'run.resumed',
+  'run.cancel.requested',
+  'run.cancelling',
   'run.waiting_human',
   'run.waiting_signal',
   'run.waiting_timer',
@@ -70,6 +73,8 @@ const driverEventTypes: FrameworkEventType[] = [
   'runtime.signal.received',
   'runtime.timer.created',
   'runtime.timer.fired',
+  'runtime.cancellation.propagated',
+  'runtime.cancellation.failed',
   'fsm.state.entered',
   'fsm.state.exited',
   'fsm.transition.accepted',
@@ -127,6 +132,29 @@ async function fixture(
     now,
     nextId,
   });
+  const cancellations = new RuntimeCancellationService({
+    events,
+    projections,
+    projectionStore,
+    runLeases,
+    activities: {
+      cancel: async (request) => ({
+        targetType: 'activity',
+        targetId: request.activityId,
+        status: 'cancelled',
+      }),
+    },
+    children: {
+      listChildren: async () => [],
+      cancel: async (request) => ({
+        targetType: 'child_run',
+        targetId: request.childRunId,
+        status: 'cancelled',
+      }),
+    },
+    now,
+    nextId,
+  });
   await events.append({
     scope: streamScope(),
     events: [seedEvent('run.created', 'run.created', now())],
@@ -137,6 +165,7 @@ async function fixture(
     driver,
     controls,
     timers,
+    cancellations,
     events,
     projectionStore,
     runLeases,
@@ -465,5 +494,51 @@ describe('FencedBoundedFSMDriver', () => {
       projection: { runStatus: 'cancelled', terminalState: 'Start' },
     });
     expect(calls).toBe(0);
+  });
+
+  it('preempts an executing driver and rejects its stale State commit', async () => {
+    let notifyStarted = (): void => undefined;
+    let continueExecution = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const executionGate = new Promise<void>((resolve) => {
+      continueExecution = resolve;
+    });
+    const target = await fixture(async () => {
+      notifyStarted();
+      await executionGate;
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    });
+
+    const running = target.driver.run(runInput(1));
+    await started;
+    await expect(
+      target.cancellations.cancel({
+        commandId: 'cancel.executing-driver',
+        scope,
+        principal: {
+          principalId: 'operator.driver',
+          type: 'user',
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          permissionScopes: ['runtime.run.cancel'],
+        },
+        ownerId: 'worker.cancellation',
+        leaseTtlMs: 60_000,
+        reason: 'operator request',
+        policy: { propagation: 'all_descendants', cancelRunningActivities: true },
+        requestedAt: '2026-07-18T05:00:30.000Z',
+      })
+    ).resolves.toMatchObject({
+      disposition: 'applied',
+      projection: { runStatus: 'cancelled', terminalState: 'Start' },
+    });
+
+    continueExecution();
+    await expect(running).rejects.toMatchObject({ code: 'RUNTIME_FENCING_REJECTED' });
+    const afterCancellation = await target.events.read({ scope: streamScope() });
+    expect(afterCancellation.at(-1)?.type).toBe('run.cancelled');
+    expect(afterCancellation.some((item) => item.type === 'fsm.transition.accepted')).toBe(false);
   });
 });

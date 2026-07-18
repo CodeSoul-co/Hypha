@@ -30,6 +30,8 @@ export * from './contracts/runtime-control';
 export * from './contracts/runtime-control-schemas';
 export * from './contracts/runtime-timer';
 export * from './contracts/runtime-timer-schemas';
+export * from './contracts/runtime-cancellation';
+export * from './contracts/runtime-cancellation-schemas';
 export * from './modules/workspace';
 export * from './modules/workspace/operations';
 export * from './modules/workspace/snapshots';

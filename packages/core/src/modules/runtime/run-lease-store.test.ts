@@ -86,6 +86,38 @@ describe('InMemoryRunLeaseStore', () => {
     ).resolves.toEqual(second);
   });
 
+  it('preempts an active Lease only for cancellation and fences the old worker immediately', async () => {
+    const store = new InMemoryRunLeaseStore();
+    const first = await store.acquire(
+      acquireRequest('lease.active', 'worker.active', '2026-07-18T06:00:00.000Z')
+    );
+    const request = {
+      ...acquireRequest('lease.cancel', 'worker.cancel', '2026-07-18T06:00:01.000Z', {
+        idempotencyKey: 'preempt:cancel',
+      }),
+      reason: 'cancellation' as const,
+    };
+
+    const cancellation = await store.preempt(request);
+    expect(cancellation).toMatchObject({ fencingToken: 2, revision: 2 });
+    await expect(store.preempt(request)).resolves.toEqual(cancellation);
+    await expect(
+      store.heartbeat({
+        scope,
+        guard: runLeaseGuard(first!),
+        ttlMs: 30_000,
+        heartbeatAt: '2026-07-18T06:00:02.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_FENCING_REJECTED' });
+    await expect(
+      store.assertCurrent({
+        scope,
+        guard: runLeaseGuard(cancellation),
+        checkedAt: '2026-07-18T06:00:02.000Z',
+      })
+    ).resolves.toEqual(cancellation);
+  });
+
   it('heartbeats, releases, and preserves fencing high-water marks', async () => {
     const store = new InMemoryRunLeaseStore();
     const first = (await store.acquire(

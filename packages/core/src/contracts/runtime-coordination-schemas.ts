@@ -14,6 +14,7 @@ import type {
   RunLeaseAssertionRequest,
   RunLeaseGuard,
   RunLeaseHeartbeatRequest,
+  RunLeasePreemptRequest,
   RunLeaseReleaseRequest,
   RunLeaseScope,
   StateExecutionClaim,
@@ -111,6 +112,10 @@ export const runLeaseAcquireRequestSchema = z
     idempotencyKey: nonEmptyStringSchema,
   })
   .strict() satisfies ZodType<RunLeaseAcquireRequest>;
+
+export const runLeasePreemptRequestSchema = runLeaseAcquireRequestSchema
+  .extend({ reason: z.literal('cancellation') })
+  .strict() satisfies ZodType<RunLeasePreemptRequest>;
 
 export const runLeaseHeartbeatRequestSchema = z
   .object({
@@ -567,6 +572,10 @@ export function validateFencedRunLease(input: unknown): FencedRunLease {
 
 export function validateRunLeaseAcquireRequest(input: unknown): RunLeaseAcquireRequest {
   return runLeaseAcquireRequestSchema.parse(input);
+}
+
+export function validateRunLeasePreemptRequest(input: unknown): RunLeasePreemptRequest {
+  return runLeasePreemptRequestSchema.parse(input);
 }
 
 export function validateRunLeaseHeartbeatRequest(input: unknown): RunLeaseHeartbeatRequest {

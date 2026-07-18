@@ -3,6 +3,7 @@ import type {
   RunLeaseAcquireRequest,
   RunLeaseAssertionRequest,
   RunLeaseHeartbeatRequest,
+  RunLeasePreemptRequest,
   RunLeaseReleaseRequest,
   RunLeaseScope,
   RunLeaseStore,
@@ -13,6 +14,7 @@ import {
   validateRunLeaseAcquireRequest,
   validateRunLeaseAssertionRequest,
   validateRunLeaseHeartbeatRequest,
+  validateRunLeasePreemptRequest,
   validateRunLeaseReleaseRequest,
 } from '../../contracts/runtime-coordination-schemas';
 import { FrameworkError } from '../../errors';
@@ -48,6 +50,11 @@ export class InMemoryRunLeaseStore implements RunLeaseStore {
   async acquire(request: RunLeaseAcquireRequest): Promise<FencedRunLease | null> {
     const validated = validateRunLeaseAcquireRequest(request);
     return this.exclusive(() => this.acquireExclusive(structuredClone(validated)));
+  }
+
+  async preempt(request: RunLeasePreemptRequest): Promise<FencedRunLease> {
+    const validated = validateRunLeasePreemptRequest(request);
+    return this.exclusive(() => this.preemptExclusive(structuredClone(validated)));
   }
 
   async heartbeat(request: RunLeaseHeartbeatRequest): Promise<FencedRunLease> {
@@ -132,6 +139,59 @@ export class InMemoryRunLeaseStore implements RunLeaseStore {
       });
     }
 
+    slot ??= {
+      partitionKey: request.partitionKey,
+      fencingTokenHighWater: 0,
+      revisionHighWater: 0,
+    };
+    const lease = validateFencedRunLease({
+      id: request.requestedLeaseId,
+      ...(request.tenantId === undefined ? {} : { tenantId: request.tenantId }),
+      userId: request.userId,
+      runId: request.runId,
+      partitionKey: request.partitionKey,
+      ownerId: request.ownerId,
+      acquiredAt: request.acquiredAt,
+      heartbeatAt: request.acquiredAt,
+      expiresAt: expiryFrom(request.acquiredAt, request.ttlMs),
+      revision: slot.revisionHighWater + 1,
+      fencingToken: slot.fencingTokenHighWater + 1,
+    });
+    slot.active = cloneLease(lease);
+    slot.fencingTokenHighWater = lease.fencingToken;
+    slot.revisionHighWater = lease.revision;
+    this.slots.set(slotKey, slot);
+    this.usedLeaseIds.add(lease.id);
+    this.acquireIdempotency.set(idempotencyKey, {
+      requestHash,
+      result: cloneLease(lease),
+    });
+    return cloneLease(lease);
+  }
+
+  private preemptExclusive(request: RunLeasePreemptRequest): FencedRunLease {
+    const scope = scopeFromAcquire(request);
+    const slotKey = runLeaseScopeKey(scope);
+    const idempotencyKey = `${slotKey}\u0000preempt\u0000${request.idempotencyKey}`;
+    const requestHash = hashCanonicalJson(requestWithoutUndefined(request));
+    const prior = this.acquireIdempotency.get(idempotencyKey);
+    if (prior) {
+      if (prior.requestHash !== requestHash || !prior.result) {
+        conflict('RUNTIME_IDEMPOTENCY_CONFLICT', 'Lease preemption idempotency key was reused', {
+          runId: request.runId,
+          idempotencyKey: request.idempotencyKey,
+        });
+      }
+      return cloneLease(prior.result);
+    }
+    if (this.usedLeaseIds.has(request.requestedLeaseId)) {
+      conflict('RUNTIME_IDEMPOTENCY_CONFLICT', 'Run lease id cannot be reused', {
+        leaseId: request.requestedLeaseId,
+        runId: request.runId,
+      });
+    }
+    let slot = this.slots.get(slotKey);
+    if (slot) assertPartition(slot, scope);
     slot ??= {
       partitionKey: request.partitionKey,
       fencingTokenHighWater: 0,

@@ -1,6 +1,7 @@
 import type { FrameworkEventType, PersistedFrameworkEvent } from '../../events';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type {
+  RuntimeCancellationProjection,
   RuntimePendingWaitProjection,
   RuntimeResumeProjection,
 } from '../../contracts/runtime-projection';
@@ -10,13 +11,15 @@ import { FrameworkError } from '../../errors';
 import type { ProjectionDefinition } from './projection';
 
 export const RUNTIME_ORCHESTRATION_PROJECTION_ID = 'runtime.orchestration';
-export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.2.0';
+export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.3.0';
 
 const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.created',
   'run.started',
   'run.resume.requested',
   'run.resumed',
+  'run.cancel.requested',
+  'run.cancelling',
   'run.waiting_human',
   'run.waiting_signal',
   'run.waiting_timer',
@@ -82,6 +85,10 @@ export function reduceRuntimeOrchestrationProjection(
       return runResumeRequested(state, event);
     case 'run.resumed':
       return runResumed(state, event);
+    case 'run.cancel.requested':
+      return runCancelRequested(state, event);
+    case 'run.cancelling':
+      return runCancelling(state, event);
     case 'run.waiting_human':
       return runWaiting(state, event, 'waiting_human');
     case 'run.waiting_signal':
@@ -142,6 +149,46 @@ function runStarted(
     divergence(`Terminal Run cannot start from ${state.runStatus}`, event);
   }
   return validated({ ...state, runStatus: 'running' }, event);
+}
+
+function runCancelRequested(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (TERMINAL_RUN_STATUSES.has(state.runStatus)) {
+    divergence(`Terminal Run cannot cancel from ${state.runStatus}`, event);
+  }
+  if (!state.currentState || state.stateAttempt < 1) {
+    divergence('Run cancellation requires a current State attempt', event);
+  }
+  if (state.cancellation) divergence('Run cancellation was requested more than once', event);
+  const payload = payloadRecord(event);
+  const cancellation: RuntimeCancellationProjection = {
+    commandId: requiredString(payload.commandId, 'cancellation commandId', event),
+    principalId: requiredString(payload.principalId, 'cancellation principalId', event),
+    reason: requiredString(payload.reason, 'cancellation reason', event),
+    requestedAt: requiredString(payload.requestedAt, 'cancellation requestedAt', event),
+  };
+  return validated({ ...state, runStatus: 'cancelling', cancellation }, event);
+}
+
+function runCancelling(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (state.runStatus !== 'cancelling' || !state.cancellation) {
+    divergence(`run.cancelling requires cancelling status, received ${state.runStatus}`, event);
+  }
+  const commandId = requiredString(payloadRecord(event).commandId, 'cancellation commandId', event);
+  if (commandId !== state.cancellation.commandId) {
+    divergence('run.cancelling command does not match the pending cancellation', event, {
+      expectedCommandId: state.cancellation.commandId,
+      actualCommandId: commandId,
+    });
+  }
+  return structuredClone(state);
 }
 
 function runWaiting(

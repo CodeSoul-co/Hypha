@@ -36,6 +36,10 @@ export interface RunLeaseAcquireRequest extends RunLeaseScope {
   idempotencyKey: string;
 }
 
+export interface RunLeasePreemptRequest extends RunLeaseAcquireRequest {
+  reason: 'cancellation';
+}
+
 export interface RunLeaseHeartbeatRequest {
   scope: RunLeaseScope;
   guard: RunLeaseGuard;
@@ -57,6 +61,7 @@ export interface RunLeaseAssertionRequest {
 
 export interface RunLeaseStore {
   acquire(request: RunLeaseAcquireRequest): Promise<FencedRunLease | null>;
+  preempt(request: RunLeasePreemptRequest): Promise<FencedRunLease>;
   heartbeat(request: RunLeaseHeartbeatRequest): Promise<FencedRunLease>;
   release(request: RunLeaseReleaseRequest): Promise<void>;
   get(scope: RunLeaseScope, checkedAt?: string): Promise<FencedRunLease | null>;
