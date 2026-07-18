@@ -1,5 +1,8 @@
 import type {
   ArtifactIdempotencyRecord,
+  ArtifactGarbageCollectionCandidate,
+  ArtifactGarbageCollectionClaimRequest,
+  ArtifactGarbageCollectionScanRequest,
   ArtifactRecordCommitRequest,
   ArtifactRecordRepository,
   ProviderHealth,
@@ -14,6 +17,12 @@ import {
   compareStoredArtifactRecords,
   validateStoredArtifactRecord,
 } from './artifact-record-repository-values';
+import {
+  artifactStorageKey,
+  buildArtifactGarbageCollectionCandidates,
+  sameCandidateVersions,
+  type ArtifactGarbageCollectionRecordState,
+} from './artifact-gc-values';
 
 export interface InMemoryArtifactRecordRepositoryOptions {
   id?: string;
@@ -25,6 +34,7 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
   private readonly now: () => string;
   private readonly recordsByVersion = new Map<string, StoredArtifactRecord>();
   private readonly idempotency = new Map<string, ArtifactIdempotencyRecord>();
+  private readonly garbageCollection = new Map<string, ArtifactGarbageCollectionRecordState>();
 
   constructor(options: InMemoryArtifactRecordRepositoryOptions = {}) {
     this.id = options.id ?? 'artifact-record-repository.in-memory.execution';
@@ -68,9 +78,16 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
     const validated = request.records.map(validateStoredArtifactRecord);
     this.assertRecordUpdates(validated);
     this.assertIdempotency(request.idempotency, validated);
+    this.assertGarbageCollectionClaims(validated);
 
     for (const stored of validated) {
       this.recordsByVersion.set(stored.record.versionId, cloneStoredArtifactRecord(stored));
+      const key = artifactStorageKey(stored.record.storageRef);
+      const existing = this.garbageCollection.get(stored.record.versionId);
+      this.garbageCollection.set(
+        stored.record.versionId,
+        existing?.storageKey === key ? existing : { storageKey: key }
+      );
     }
     if (request.idempotency) {
       this.idempotency.set(
@@ -83,6 +100,46 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
     }
   }
 
+  async listGarbageCollectionCandidates(
+    request: ArtifactGarbageCollectionScanRequest
+  ): Promise<ArtifactGarbageCollectionCandidate[]> {
+    return buildArtifactGarbageCollectionCandidates(this.garbageCollectionEntries(), request);
+  }
+
+  async claimGarbageCollection(request: ArtifactGarbageCollectionClaimRequest): Promise<boolean> {
+    const current = buildArtifactGarbageCollectionCandidates(this.garbageCollectionEntries(), {
+      staleBefore: request.staleBefore,
+    }).find((candidate) => sameCandidateVersions(candidate, request.candidate));
+    if (!current) return false;
+    for (const versionId of current.versionIds) {
+      const state = this.garbageCollection.get(versionId)!;
+      if (state.completedAt) continue;
+      this.garbageCollection.set(versionId, {
+        ...state,
+        claimId: request.claimId,
+        claimedAt: request.claimedAt,
+      });
+    }
+    return true;
+  }
+
+  async completeGarbageCollection(claimId: string, completedAt: string): Promise<void> {
+    for (const [versionId, state] of this.garbageCollection) {
+      if (state.claimId !== claimId) continue;
+      this.garbageCollection.set(versionId, {
+        storageKey: state.storageKey,
+        completedAt,
+      });
+    }
+  }
+
+  async releaseGarbageCollection(claimId: string): Promise<void> {
+    for (const [versionId, state] of this.garbageCollection) {
+      if (state.claimId !== claimId) continue;
+      this.garbageCollection.set(versionId, { storageKey: state.storageKey });
+    }
+  }
+
   async health(): Promise<ProviderHealth> {
     return {
       status: 'healthy',
@@ -91,6 +148,9 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
         repositoryId: this.id,
         records: this.recordsByVersion.size,
         idempotencyRecords: this.idempotency.size,
+        garbageCollectionClaims: [...this.garbageCollection.values()].filter(
+          (state) => state.claimId
+        ).length,
       },
     };
   }
@@ -175,6 +235,28 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
     return [...this.recordsByVersion.values()]
       .filter((stored) => stored.record.id === artifactId)
       .sort((left, right) => right.record.versionNumber - left.record.versionNumber)[0];
+  }
+
+  private assertGarbageCollectionClaims(records: StoredArtifactRecord[]): void {
+    for (const stored of records) {
+      const key = artifactStorageKey(stored.record.storageRef);
+      const claimed = [...this.garbageCollection.values()].some(
+        (state) => state.storageKey === key && state.claimId && !state.completedAt
+      );
+      if (claimed) {
+        throw new ArtifactRecordRepositoryConflictError(
+          'Artifact storage reference is currently claimed by garbage collection.',
+          { storeId: stored.record.storageRef.storeId, objectKey: stored.record.storageRef.objectKey }
+        );
+      }
+    }
+  }
+
+  private garbageCollectionEntries() {
+    return [...this.recordsByVersion.values()].map((stored) => ({
+      stored: cloneStoredArtifactRecord(stored),
+      state: { ...this.garbageCollection.get(stored.record.versionId)! },
+    }));
   }
 }
 

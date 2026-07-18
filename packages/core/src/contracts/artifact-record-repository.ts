@@ -1,6 +1,11 @@
 import type { ArtifactRecord } from './artifact';
 import type { ProviderHealth } from './execution';
 import type { SpecRef } from '../specs';
+import type {
+  ArtifactGarbageCollectionCandidate,
+  ArtifactGarbageCollectionClaimRequest,
+  ArtifactGarbageCollectionScanRequest,
+} from './artifact-gc';
 
 export interface StoredArtifactRecord {
   record: ArtifactRecord;
@@ -39,6 +44,12 @@ export interface ArtifactRecordRepository {
     idempotencyKey: string
   ): Promise<StoredArtifactRecord | null>;
   commit(request: ArtifactRecordCommitRequest): Promise<void>;
+  listGarbageCollectionCandidates(
+    request: ArtifactGarbageCollectionScanRequest
+  ): Promise<ArtifactGarbageCollectionCandidate[]>;
+  claimGarbageCollection(request: ArtifactGarbageCollectionClaimRequest): Promise<boolean>;
+  completeGarbageCollection(claimId: string, completedAt: string): Promise<void>;
+  releaseGarbageCollection(claimId: string): Promise<void>;
   health(): Promise<ProviderHealth>;
   close?(): Promise<void>;
 }

@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
   ArtifactIdempotencyRecord,
+  ArtifactGarbageCollectionCandidate,
+  ArtifactGarbageCollectionClaimRequest,
+  ArtifactGarbageCollectionScanRequest,
   ArtifactRecordCommitRequest,
   ArtifactRecordRepository,
   ProviderHealth,
@@ -16,6 +19,12 @@ import {
   parseStoredArtifactRecord,
   validateStoredArtifactRecord,
 } from './artifact-record-repository-values';
+import {
+  artifactStorageKey,
+  buildArtifactGarbageCollectionCandidates,
+  sameCandidateVersions,
+  type ArtifactGarbageCollectionRecordEntry,
+} from './artifact-gc-values';
 
 interface SQLiteStatement {
   get(...params: unknown[]): Record<string, unknown> | undefined;
@@ -61,6 +70,7 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
       this.database.exec('PRAGMA journal_mode = WAL');
       this.database.exec('PRAGMA foreign_keys = ON');
       this.database.exec(SCHEMA_SQL);
+      this.backfillGarbageCollectionState();
       if (process.platform !== 'win32') fs.chmodSync(this.filename, 0o600);
     } catch (error) {
       throw repositoryError(
@@ -145,6 +155,7 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
       this.assertRevisionFence(request);
       this.assertRecordUpdates(records);
       this.assertIdempotency(request.idempotency, records);
+      this.assertGarbageCollectionClaims(records);
       const upsert = this.database.prepare(
         'INSERT INTO artifact_records ' +
           '(version_id, artifact_id, version_number, created_at, record_json, profile_ref_json) ' +
@@ -163,6 +174,20 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
           JSON.stringify(stored.record),
           JSON.stringify(stored.profileRef)
         );
+        const storageKey = artifactStorageKey(stored.record.storageRef);
+        this.database
+          .prepare(
+            'INSERT INTO artifact_gc_state (version_id, storage_key) VALUES (?, ?) ' +
+              'ON CONFLICT(version_id) DO UPDATE SET ' +
+              'storage_key = excluded.storage_key, ' +
+              'claim_id = CASE WHEN artifact_gc_state.storage_key = excluded.storage_key ' +
+              'THEN artifact_gc_state.claim_id ELSE NULL END, ' +
+              'claimed_at = CASE WHEN artifact_gc_state.storage_key = excluded.storage_key ' +
+              'THEN artifact_gc_state.claimed_at ELSE NULL END, ' +
+              'completed_at = CASE WHEN artifact_gc_state.storage_key = excluded.storage_key ' +
+              'THEN artifact_gc_state.completed_at ELSE NULL END'
+          )
+          .run(stored.record.versionId, storageKey);
       }
       if (request.idempotency) {
         this.database
@@ -178,6 +203,56 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
             request.idempotency.versionId
           );
       }
+    });
+  }
+
+  async listGarbageCollectionCandidates(
+    request: ArtifactGarbageCollectionScanRequest
+  ): Promise<ArtifactGarbageCollectionCandidate[]> {
+    this.assertOpen();
+    return this.readOperation(() =>
+      buildArtifactGarbageCollectionCandidates(this.garbageCollectionEntries(), request)
+    );
+  }
+
+  async claimGarbageCollection(request: ArtifactGarbageCollectionClaimRequest): Promise<boolean> {
+    this.assertOpen();
+    return this.writeOperation(() => {
+      const current = buildArtifactGarbageCollectionCandidates(this.garbageCollectionEntries(), {
+        staleBefore: request.staleBefore,
+      }).find((candidate) => sameCandidateVersions(candidate, request.candidate));
+      if (!current) return false;
+      const statement = this.database.prepare(
+        'UPDATE artifact_gc_state SET claim_id = ?, claimed_at = ? ' +
+          'WHERE version_id = ? AND completed_at IS NULL'
+      );
+      for (const versionId of current.versionIds) {
+        statement.run(request.claimId, request.claimedAt, versionId);
+      }
+      return true;
+    });
+  }
+
+  async completeGarbageCollection(claimId: string, completedAt: string): Promise<void> {
+    this.assertOpen();
+    this.writeOperation(() => {
+      this.database
+        .prepare(
+          'UPDATE artifact_gc_state SET claim_id = NULL, claimed_at = NULL, completed_at = ? ' +
+            'WHERE claim_id = ?'
+        )
+        .run(completedAt, claimId);
+    });
+  }
+
+  async releaseGarbageCollection(claimId: string): Promise<void> {
+    this.assertOpen();
+    this.writeOperation(() => {
+      this.database
+        .prepare(
+          'UPDATE artifact_gc_state SET claim_id = NULL, claimed_at = NULL WHERE claim_id = ?'
+        )
+        .run(claimId);
     });
   }
 
@@ -198,12 +273,20 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
         this.database.prepare('SELECT COUNT(*) AS count FROM artifact_idempotency').get()?.count ??
           0
       );
+      const garbageCollectionClaims = Number(
+        this.database
+          .prepare(
+            'SELECT COUNT(*) AS count FROM artifact_gc_state ' +
+              'WHERE claim_id IS NOT NULL AND completed_at IS NULL'
+          )
+          .get()?.count ?? 0
+      );
       const result = String(Object.values(check ?? {})[0] ?? 'unknown');
       return {
         status: result === 'ok' ? 'healthy' : 'unhealthy',
         checkedAt: this.now(),
         ...(result === 'ok' ? {} : { message: `SQLite quick_check returned ${result}.` }),
-        details: { repositoryId: this.id, records, idempotencyRecords },
+        details: { repositoryId: this.id, records, idempotencyRecords, garbageCollectionClaims },
       };
     } catch (error) {
       return {
@@ -310,6 +393,63 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
     }
   }
 
+  private assertGarbageCollectionClaims(records: StoredArtifactRecord[]): void {
+    const statement = this.database.prepare(
+      'SELECT claim_id FROM artifact_gc_state ' +
+        'WHERE storage_key = ? AND claim_id IS NOT NULL AND completed_at IS NULL LIMIT 1'
+    );
+    for (const stored of records) {
+      const claimed = statement.get(artifactStorageKey(stored.record.storageRef));
+      if (claimed) {
+        throw new ArtifactRecordRepositoryConflictError(
+          'Artifact storage reference is currently claimed by garbage collection.',
+          {
+            storeId: stored.record.storageRef.storeId,
+            objectKey: stored.record.storageRef.objectKey,
+            claimId: claimed.claim_id,
+          }
+        );
+      }
+    }
+  }
+
+  private garbageCollectionEntries(): ArtifactGarbageCollectionRecordEntry[] {
+    return this.database
+      .prepare(
+        'SELECT r.record_json, r.profile_ref_json, g.storage_key, g.claim_id, ' +
+          'g.claimed_at, g.completed_at FROM artifact_records r ' +
+          'JOIN artifact_gc_state g ON g.version_id = r.version_id'
+      )
+      .all()
+      .map((row) => ({
+        stored: parseStoredRow(row),
+        state: {
+          storageKey: String(row.storage_key),
+          ...(row.claim_id ? { claimId: String(row.claim_id) } : {}),
+          ...(row.claimed_at ? { claimedAt: String(row.claimed_at) } : {}),
+          ...(row.completed_at ? { completedAt: String(row.completed_at) } : {}),
+        },
+      }));
+  }
+
+  private backfillGarbageCollectionState(): void {
+    const insert = this.database.prepare(
+      'INSERT INTO artifact_gc_state (version_id, storage_key) VALUES (?, ?) ' +
+        'ON CONFLICT(version_id) DO NOTHING'
+    );
+    for (const row of this.database
+      .prepare('SELECT version_id, record_json, profile_ref_json FROM artifact_records')
+      .all()) {
+      try {
+        const stored = parseStoredRow(row);
+        insert.run(stored.record.versionId, artifactStorageKey(stored.record.storageRef));
+      } catch (error) {
+        if (isCorruptRecordError(error)) continue;
+        throw error;
+      }
+    }
+  }
+
   private readOperation<T>(operation: () => T): T {
     try {
       return operation();
@@ -330,11 +470,12 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
     }
   }
 
-  private writeOperation(operation: () => void): void {
+  private writeOperation<T>(operation: () => T): T {
     try {
       this.database.exec('BEGIN IMMEDIATE');
-      operation();
+      const result = operation();
       this.database.exec('COMMIT');
+      return result;
     } catch (error) {
       try {
         this.database.exec('ROLLBACK');
@@ -380,6 +521,16 @@ CREATE TABLE IF NOT EXISTS artifact_idempotency (
   PRIMARY KEY (operation_id, idempotency_key),
   FOREIGN KEY (version_id) REFERENCES artifact_records(version_id)
 );
+CREATE TABLE IF NOT EXISTS artifact_gc_state (
+  version_id TEXT PRIMARY KEY,
+  storage_key TEXT NOT NULL,
+  claim_id TEXT,
+  claimed_at TEXT,
+  completed_at TEXT,
+  FOREIGN KEY (version_id) REFERENCES artifact_records(version_id)
+);
+CREATE INDEX IF NOT EXISTS artifact_gc_storage
+  ON artifact_gc_state (storage_key, claim_id, completed_at);
 `;
 
 function prepareRepositoryRoot(rootPath: string): string {
@@ -449,6 +600,13 @@ function positiveInteger(value: number, name: string): number {
     throw new TypeError(`${name} must be a positive safe integer.`);
   }
   return value;
+}
+
+function isCorruptRecordError(error: unknown): boolean {
+  return (
+    error instanceof ArtifactRecordRepositoryError &&
+    error.code === 'ARTIFACT_RECORD_REPOSITORY_CORRUPT'
+  );
 }
 
 function repositoryError(

@@ -160,6 +160,52 @@ describe('SQLiteArtifactRecordRepository', () => {
     );
     await expect(repository.health()).resolves.toMatchObject({ status: 'unhealthy' });
   });
+
+  it('persists GC claims, recovers stale claims, and blocks concurrent references', async () => {
+    const root = await temporaryRoot();
+    const first = new SQLiteArtifactRecordRepository({ rootPath: root });
+    const deleted = tombstonedRecord();
+    await first.commit({ records: [deleted] });
+    const [candidate] = await first.listGarbageCollectionCandidates({
+      staleBefore: '2026-07-18T00:00:00.000Z',
+    });
+    await expect(
+      first.claimGarbageCollection({
+        claimId: 'claim.first',
+        claimedAt: '2026-07-18T01:00:00.000Z',
+        staleBefore: '2026-07-18T00:00:00.000Z',
+        candidate: candidate!,
+      })
+    ).resolves.toBe(true);
+    await first.close();
+
+    const reopened = new SQLiteArtifactRecordRepository({ rootPath: root });
+    await expect(
+      reopened.listGarbageCollectionCandidates({ staleBefore: '2026-07-18T00:30:00.000Z' })
+    ).resolves.toEqual([]);
+    const [stale] = await reopened.listGarbageCollectionCandidates({
+      staleBefore: '2026-07-18T02:00:00.000Z',
+    });
+    await expect(
+      reopened.claimGarbageCollection({
+        claimId: 'claim.recovered',
+        claimedAt: '2026-07-18T02:01:00.000Z',
+        staleBefore: '2026-07-18T02:00:00.000Z',
+        candidate: stale!,
+      })
+    ).resolves.toBe(true);
+    await expect(reopened.commit({ records: [activeSharedRecord()] })).rejects.toBeInstanceOf(
+      ArtifactRecordRepositoryConflictError
+    );
+    await reopened.completeGarbageCollection(
+      'claim.recovered',
+      '2026-07-18T02:02:00.000Z'
+    );
+    await expect(
+      reopened.listGarbageCollectionCandidates({ staleBefore: '2026-07-18T03:00:00.000Z' })
+    ).resolves.toEqual([]);
+    await reopened.close();
+  });
 });
 
 function nextVersion(): StoredArtifactRecord {
@@ -174,6 +220,37 @@ function nextVersion(): StoredArtifactRecord {
       parentVersionId: artifactRecordExample.versionId,
       createdAt: '2026-07-18T00:00:02.000Z',
       updatedAt: '2026-07-18T00:00:02.000Z',
+    },
+  };
+}
+
+function tombstonedRecord(): StoredArtifactRecord {
+  return {
+    ...storedExample,
+    record: {
+      ...artifactRecordExample,
+      status: 'deleted',
+      revision: 1,
+      retention: { referencedByCount: 0 },
+      deletedAt: '2026-07-18T00:00:02.000Z',
+      updatedAt: '2026-07-18T00:00:02.000Z',
+    },
+  };
+}
+
+function activeSharedRecord(): StoredArtifactRecord {
+  return {
+    ...storedExample,
+    record: {
+      ...artifactRecordExample,
+      id: 'artifact.concurrent',
+      logicalArtifactId: 'artifact.logical.concurrent',
+      versionId: 'artifact.concurrent:v1:sha256-example',
+      status: 'draft',
+      finalizedAt: undefined,
+      retention: { referencedByCount: 0 },
+      createdAt: '2026-07-18T02:01:30.000Z',
+      updatedAt: '2026-07-18T02:01:30.000Z',
     },
   };
 }
