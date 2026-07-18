@@ -255,6 +255,10 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
     await this.backend.update(table, id, patch);
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    await this.backend.delete(table, id);
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     return this.backend.query(table, query);
   }
@@ -585,6 +589,11 @@ class NodeSQLiteStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    this.ensureTable(table);
+    this.db.prepare('DELETE FROM ' + quoteIdentifier(table) + ' WHERE id = ?').run(id);
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     this.ensureTable(table);
     const rows = this.db.prepare(`SELECT record FROM ${quoteIdentifier(table)}`).all();
@@ -645,6 +654,13 @@ class JsonStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    validateIdentifier(table);
+    if (!this.tables[table]) return;
+    delete this.tables[table][id];
+    this.flush();
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     validateIdentifier(table);
     const records = Object.values(this.tables[table] ?? {});
@@ -688,6 +704,10 @@ export class InMemoryStructuredStore implements StructuredStoreProvider {
     const existing = records?.get(id);
     if (!records || !existing) return;
     records.set(id, { ...existing, ...(patch as Record<string, unknown>) });
+  }
+
+  async delete(table: string, id: string): Promise<void> {
+    this.tables.get(table)?.delete(id);
   }
 
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
