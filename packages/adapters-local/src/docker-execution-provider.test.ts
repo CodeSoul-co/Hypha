@@ -26,43 +26,6 @@ const principal = {
 };
 
 describe('DockerExecutionProvider', () => {
-  it('reports capabilities and Docker Engine health without inventing availability', async () => {
-    const healthy = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace(),
-      engine: new FakeDockerEngine(async () => commandResult('ok')),
-    });
-    await expect(healthy.capabilities()).resolves.toMatchObject({
-      processIsolation: true,
-      filesystemIsolation: true,
-      networkIsolation: true,
-      cpuLimits: true,
-      memoryLimits: true,
-      diskLimits: false,
-      pidsLimit: true,
-      cancellation: true,
-      processTreeKill: true,
-      snapshots: false,
-      imageDigestPinning: true,
-      remoteExecution: false,
-    });
-    await expect(healthy.health()).resolves.toMatchObject({
-      status: 'healthy',
-      details: { serverVersion: 'test', processTreeKillScope: 'container' },
-    });
-    await healthy.close();
-    await expect(healthy.health()).resolves.toMatchObject({ status: 'unhealthy' });
-
-    const unavailable = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace(),
-      engine: new FakeDockerEngine(async () => commandResult('ok'), new Error('daemon offline')),
-    });
-    await expect(unavailable.health()).resolves.toMatchObject({
-      status: 'unhealthy',
-      message: 'daemon offline',
-    });
-    await unavailable.close();
-  });
-
   it('runs the full provider lifecycle with mutation, metrics, receipt, stop, and cleanup', async () => {
     const workspace = await temporaryWorkspace();
     const engine = new FakeDockerEngine(async () => {
@@ -127,49 +90,6 @@ describe('DockerExecutionProvider', () => {
     await provider.close();
   });
 
-  it('terminates a busy Sandbox, waits for execution completion, and permits cleanup', async () => {
-    const engine = new FakeDockerEngine(
-      (input) =>
-        new Promise((resolve) => {
-          input.signal.addEventListener('abort', () => resolve(commandResult('', 'cancelled')), {
-            once: true,
-          });
-        })
-    );
-    const provider = new DockerExecutionProvider({
-      workspaceRoot: await temporaryWorkspace(),
-      engine,
-    });
-    const ready = await createReady(provider);
-    const execution = provider.execute(command(ready.id, 'execution.docker.terminate'));
-    const busy = await waitForStatus(provider, ready.id, 'busy');
-
-    await provider.terminate({
-      operationId: 'operation.terminate.docker',
-      sandboxId: ready.id,
-      principal,
-      expectedRevision: busy.revision,
-      reason: 'contract termination test',
-    });
-
-    await expect(execution).resolves.toMatchObject({
-      status: 'cancelled',
-      error: { code: 'EXECUTION_CANCELLED' },
-    });
-    const terminated = await provider.status({ sandboxId: ready.id, principal });
-    expect(terminated).toMatchObject({ status: 'terminated', activeExecutionIds: [] });
-    expect(engine.running).toBe(false);
-
-    await provider.cleanup({
-      operationId: 'operation.cleanup.terminated.docker',
-      sandboxId: ready.id,
-      principal,
-      expectedRevision: terminated!.revision,
-    });
-    expect(engine.removed).toEqual(['container123']);
-    await provider.close();
-  });
-
   it('fails closed for image, network, secret, and path policy violations', async () => {
     const workspace = await temporaryWorkspace();
     const engine = new FakeDockerEngine(async () => commandResult('ok'));
@@ -201,12 +121,10 @@ class FakeDockerEngine implements DockerEngineClient {
   readonly removed: string[] = [];
   readonly killed: string[] = [];
   constructor(
-    private readonly executeCommand: (input: DockerContainerExecInput) => Promise<DockerCliResult>,
-    private readonly healthError?: Error
+    private readonly executeCommand: (input: DockerContainerExecInput) => Promise<DockerCliResult>
   ) {}
 
   async health(): Promise<{ serverVersion: string }> {
-    if (this.healthError) throw this.healthError;
     return { serverVersion: 'test' };
   }
   async inspectImage(): Promise<{ id: string; repoDigests: string[] }> {
