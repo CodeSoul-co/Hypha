@@ -27,6 +27,12 @@ and cache records also need a stable identity without embedding large content.
    raw bytes. Cache reuse revalidates Artifact existence, access, retention, and digest.
 6. A digest collision, content mismatch, incomplete upload, or publication race is an integrity
    failure. The store must not silently overwrite or alias conflicting bytes.
+7. Eventing retention requires an idempotency key. Its result distinguishes a mutation applied by
+   the current attempt from a previously committed mutation so the same deterministic lifecycle
+   event can be republished without deleting content twice.
+8. Artifact code defines bounded event payloads and publication ids. The Runtime-owned publisher
+   remains responsible for durable, idempotent acceptance and for Bus/Outbox retry transport. An
+   Artifact store or manager must not implement a competing event transport.
 
 ## Consequences
 
@@ -36,3 +42,5 @@ and cache records also need a stable identity without embedding large content.
   checks; path-and-length identifiers are not conforming content identities.
 - Garbage collection operates on logical reachability and retention before deleting unreferenced
   blobs.
+- A retention worker must retry with the same operation id, evaluation inputs, and idempotency key
+  after an event-publication failure.
