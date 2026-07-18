@@ -31,6 +31,7 @@ export interface InMemorySessionQueueOptions {
   duplicatePolicy?: 'reuse' | 'reject';
   maxPendingPerSession?: number;
   maxConcurrentSessions?: number;
+  priorityAgingMs?: number;
 }
 
 interface IdempotencyRecord {
@@ -49,6 +50,7 @@ export class InMemorySessionQueue implements SessionQueue {
   private readonly duplicatePolicy: 'reuse' | 'reject';
   private readonly maxPendingPerSession: number;
   private readonly maxConcurrentSessions: number;
+  private readonly priorityAgingMs: number;
 
   constructor(options: InMemorySessionQueueOptions = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -61,9 +63,11 @@ export class InMemorySessionQueue implements SessionQueue {
       options.maxConcurrentSessions ?? Number.MAX_SAFE_INTEGER,
       'maxConcurrentSessions'
     );
+    this.priorityAgingMs = positive(options.priorityAgingMs ?? 30_000, 'priorityAgingMs');
     if (
       !Number.isInteger(this.maxPendingPerSession) ||
-      !Number.isInteger(this.maxConcurrentSessions)
+      !Number.isInteger(this.maxConcurrentSessions) ||
+      !Number.isInteger(this.priorityAgingMs)
     ) {
       throw busError('RUNTIME_INVALID_INPUT', 'Session queue limits must be integers');
     }
@@ -156,7 +160,9 @@ export class InMemorySessionQueue implements SessionQueue {
       .filter(
         (record) => record.status === 'queued' && isAtOrBefore(record.availableAt, request.now)
       )
-      .sort(compareClaimCandidates)[0];
+      .sort((left, right) =>
+        compareClaimCandidates(left, right, request.now, this.priorityAgingMs)
+      )[0];
     if (!candidate) return null;
 
     candidate.status = 'claimed';
@@ -367,12 +373,30 @@ function enqueueFingerprint(request: EnqueueSessionCommandRequest): string {
   });
 }
 
-function compareClaimCandidates(left: SessionCommandRecord, right: SessionCommandRecord): number {
+function compareClaimCandidates(
+  left: SessionCommandRecord,
+  right: SessionCommandRecord,
+  now: string,
+  priorityAgingMs: number
+): number {
   return (
-    right.priority - left.priority ||
+    effectivePriority(right, now, priorityAgingMs) -
+      effectivePriority(left, now, priorityAgingMs) ||
     Date.parse(left.availableAt) - Date.parse(right.availableAt) ||
     Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
     sessionKey(scopeFromCommand(left)).localeCompare(sessionKey(scopeFromCommand(right)))
+  );
+}
+
+function effectivePriority(
+  record: SessionCommandRecord,
+  now: string,
+  priorityAgingMs: number
+): number {
+  const waitingMs = Math.max(0, Date.parse(now) - Date.parse(record.availableAt));
+  return Math.min(
+    Number.MAX_SAFE_INTEGER,
+    record.priority + Math.floor(waitingMs / priorityAgingMs)
   );
 }
 

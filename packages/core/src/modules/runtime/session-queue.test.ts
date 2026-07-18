@@ -90,6 +90,47 @@ describe('InMemorySessionQueue', () => {
     ).resolves.toMatchObject({ id: 'command.low' });
   });
 
+  it('ages an older low-priority Session so new high-priority work cannot starve it', async () => {
+    const queue = new InMemorySessionQueue({ priorityAgingMs: 10 });
+    await queue.enqueue(command('command.low', { priority: 0 }));
+    await queue.enqueue(
+      command('command.high.1', {
+        userId: 'user.high.1',
+        sessionId: 'session.high.1',
+        priority: 100,
+        createdAt: '2026-07-18T06:00:00.100Z',
+      })
+    );
+
+    const high = await queue.claim({
+      workerId: 'worker.1',
+      now: '2026-07-18T06:00:00.100Z',
+      leaseMs: 1_000,
+    });
+    expect(high?.id).toBe('command.high.1');
+    await queue.complete({
+      commandId: high!.id,
+      workerId: 'worker.1',
+      completedAt: '2026-07-18T06:00:00.200Z',
+    });
+    await queue.enqueue(
+      command('command.high.2', {
+        userId: 'user.high.2',
+        sessionId: 'session.high.2',
+        priority: 100,
+        createdAt: '2026-07-18T06:00:01.000Z',
+      })
+    );
+
+    await expect(
+      queue.claim({
+        workerId: 'worker.2',
+        now: '2026-07-18T06:00:01.000Z',
+        leaseMs: 1_000,
+      })
+    ).resolves.toMatchObject({ id: 'command.low' });
+  });
+
   it('enforces the global concurrent-session limit', async () => {
     const queue = new InMemorySessionQueue({ maxConcurrentSessions: 1 });
     await queue.enqueue(command('command.session.1'));
