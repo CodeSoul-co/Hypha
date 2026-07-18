@@ -400,7 +400,8 @@ function rejectUnsupportedDockerSecurityPolicy(environment: ExecutionEnvironment
     security.utsNamespace !== undefined ||
     security.readOnlyProc === true ||
     security.maskHostProc === true ||
-    security.preventPtrace === true
+    security.preventPtrace === true ||
+    security.metadata !== undefined
   ) {
     unsupportedPolicy('extended Linux security profile or namespace policies');
   }

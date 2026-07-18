@@ -245,12 +245,6 @@ describe('DockerExecutionPolicyResolver', () => {
     });
   });
 
-  it('preserves opaque security metadata without treating it as an enforcement policy', () => {
-    const value = environment();
-    value.security.metadata = { policyOwner: 'execution' };
-    expect(createResolver().resolveEnvironment(value)).toMatchObject({ image: 'redis', digest });
-  });
-
   it.each([
     ['shell execution', { shell: true }, 'EXECUTION_POLICY_DENIED'],
     ['Secret references', { secretRefs: ['secret://denied'] }, 'EXECUTION_SECRET_DENIED'],
