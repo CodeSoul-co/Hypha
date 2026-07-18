@@ -91,29 +91,24 @@ A reviewed surface is acceptable only when all applicable statements are true:
 
 ### Process and Shell Surfaces
 
-| Surface                                                             | Existing control                                                                                              | Security classification                                                                                |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `packages/adapters-local/src/workspace-runtime.ts`                  | `execFile`, `shell: false`, argument array, execute-root checks, minimal environment, timeout, output bound   | Trusted local Workspace adapter; not an OS sandbox and does not prove process-tree termination         |
-| `packages/adapters-local/src/local-process-supervisor.ts`           | `spawn`, `shell: false`, bounded output, cancellation and timeout, POSIX process groups or Windows `taskkill` | Local process supervision; descendant termination is verified on POSIX and best effort on Windows      |
-| `packages/adapters-local/src/docker-cli-transport.ts`               | Shell-free Docker CLI argv, empty environment, bounded output, cancellation and timeout                       | Supervises the Docker CLI process; stopping the CLI does not by itself prove container termination     |
-| `packages/adapters-local/src/docker-engine-client.ts`               | Explicit create/start/wait/stop/remove lifecycle and fail-closed container arguments                          | Concrete Docker boundary; isolation depends on daemon configuration and enforced policy capabilities   |
-| `packages/inference/src/drivers.ts`                                 | `spawn`, `shell: false`, argument array, graceful and forced direct-child signals                             | Adjacent inference supervisor; inherits the host environment and does not prove descendant termination |
-| MCP SDK stdio transport in `packages/mcp/src/connection-manager.ts` | Command and arguments are separate; environment comes from explicit references and an allowlist               | Adjacent transport boundary; SDK lifecycle does not by itself prove process-tree cleanup               |
-| `tests/integration/full-test.ts`                                    | Literal Redis test commands                                                                                   | Test-only shell usage; not a runtime provider surface                                                  |
+| Surface                                                             | Existing control                                                                                            | Security classification                                                                                |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `packages/adapters-local/src/workspace-runtime.ts`                  | `execFile`, `shell: false`, argument array, execute-root checks, minimal environment, timeout, output bound | Trusted local Workspace adapter; not an OS sandbox and does not prove process-tree termination         |
+| `packages/inference/src/drivers.ts`                                 | `spawn`, `shell: false`, argument array, graceful and forced direct-child signals                           | Adjacent inference supervisor; inherits the host environment and does not prove descendant termination |
+| MCP SDK stdio transport in `packages/mcp/src/connection-manager.ts` | Command and arguments are separate; environment comes from explicit references and an allowlist             | Adjacent transport boundary; SDK lifecycle does not by itself prove process-tree cleanup               |
+| `tests/integration/full-test.ts`                                    | Literal Redis test commands                                                                                 | Test-only shell usage; not a runtime provider surface                                                  |
 
 Agent and Tool code must not call these process surfaces directly. Governed execution flows through
 the harness, policy, trace, capability negotiation, and a provider adapter.
 
 ### Filesystem Surfaces
 
-| Surface group                                                        | Existing control                                                                                                                       | Boundary implication                                                                                                                           |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local Workspace runtime                                              | Configured roots, `path.relative` confinement, `realpath` checks for existing targets and ancestors, separate read/write/execute roots | Stronger than string-prefix validation, but still local confinement with filesystem race limitations                                           |
-| Local Filesystem Execution Artifact store                            | Content-addressed SHA-256 blobs, manifests, canonical root checks, link rejection, bounded streaming, and read-time hash verification  | Concrete local Artifact adapter; filesystem race resistance is strengthened but local races remain a residual risk                             |
-| S3 Execution Artifact store                                          | Streaming size/hash verification, content-hash metadata, conditional writes, signed access, and S3-compatible transport                | Concrete remote Artifact adapter; transport, bucket policy, encryption, credentials, and backend durability remain deployment responsibilities |
-| In-memory Execution Artifact store                                   | Content-addressed test implementation with bounded contract validation                                                                 | Test and local-development substrate; not durable and must not be represented as production persistence                                        |
-| Config, prompt, workflow, Skill, CLI, logging, and ToolManager files | Application-specific paths and administrative configuration                                                                            | These surfaces are outside Execution and require their own authentication, canonical-path, and input controls                                  |
-| Storage, serving-cache, testing, and build files                     | Adapter-owned data paths or test fixtures                                                                                              | These paths do not inherit Workspace or Sandbox guarantees                                                                                     |
+| Surface group                                                        | Existing control                                                                                                                       | Boundary implication                                                                                                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local Workspace runtime                                              | Configured roots, `path.relative` confinement, `realpath` checks for existing targets and ancestors, separate read/write/execute roots | Stronger than string-prefix validation, but still local confinement with filesystem race limitations                                          |
+| Local Artifact store                                                 | Root-relative path resolution and SHA-256 metadata hash                                                                                | Existing storage substrate is not a content-addressed Execution Artifact manager; link confinement and read-time integrity are not guaranteed |
+| Config, prompt, workflow, Skill, CLI, logging, and ToolManager files | Application-specific paths and administrative configuration                                                                            | These surfaces are outside Execution and require their own authentication, canonical-path, and input controls                                 |
+| Storage, serving-cache, testing, and build files                     | Adapter-owned data paths or test fixtures                                                                                              | These paths do not inherit Workspace or Sandbox guarantees                                                                                    |
 
 Server-side path or URL installation features must not be treated as Execution providers. When they
 accept untrusted input, their owning application boundary must enforce canonical destination paths,
@@ -142,14 +137,10 @@ checkpoint must not be reported as complete provider snapshot capability.
 
 ### Docker, Network, and Secret Surfaces
 
-- The local Docker provider uses a shell-free CLI transport and a concrete engine client for
-  create/start/wait/stop/remove. It enforces digest pinning, non-root execution, read-only RootFS,
-  `no-new-privileges`, `CAP_DROP=ALL`, disabled networking, resource limits, a single governed
-  Workspace mount, bounded output, and single-use cleanup. Configured policies the provider cannot
-  enforce are rejected rather than silently accepted.
-- Docker networking is currently fail-closed to `disabled`. Network policy has schemas, hashes,
-  events, and capability requirements, but no concrete Execution adapter currently implements
-  restricted-domain or task-authorized governed egress.
+- No production Docker daemon, Docker socket, Docker SDK, or Docker CLI call is present. Docker is
+  represented by environment validation and provider contracts only.
+- Network policy has schemas, hashes, events, and capability requirements, but no concrete
+  Execution adapter currently enforces namespaces, firewall rules, or governed egress.
 - Execution environment contracts use Secret references rather than values and reject secret-shaped
   event and cache content. The local Workspace runtime inherits only a small operational
   environment allowlist.
