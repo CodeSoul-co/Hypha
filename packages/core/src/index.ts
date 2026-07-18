@@ -12,6 +12,8 @@ export * from './contracts/execution-cache';
 export * from './contracts/recovery';
 export * from './contracts/workspace';
 export * from './contracts/sandbox';
+export * from './contracts/runtime';
+export * from './contracts/runtime-schemas';
 export * from './modules/workspace';
 export * from './modules/workspace/operations';
 export * from './modules/workspace/snapshots';
