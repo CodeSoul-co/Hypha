@@ -39,25 +39,7 @@ import {
 } from '@hypha/core';
 import type { FSMProcessSpec, FSMStateSpec, FSMTransitionSpec } from '@hypha/fsm';
 import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@hypha/mcp';
-import {
-  contextProfileSpecSchema,
-  createDomainMemoryDependencySnapshot,
-  managedMemoryScopeSchema,
-  managedMemoryTypeSchema,
-  memoryExtractionProfileSpecSchema,
-  memoryProfileSpecSchema,
-  memorySpecSchema,
-  validateMemoryBindingCapabilities,
-  type ContextProfileSpec,
-  type DomainMemoryDependencySnapshot,
-  type ManagedMemoryScope,
-  type ManagedMemoryType,
-  type MemoryExtractionProfileSpec,
-  type MemoryManagementCapabilities,
-  type MemoryProfileSpec,
-  type MemorySpec,
-  type WorkflowStateMemoryBinding,
-} from '@hypha/memory';
+import { memorySpecSchema, type MemorySpec } from '@hypha/memory';
 import type { SkillRef } from '@hypha/skills';
 import { toolSpecSchema, type ToolSpec } from '@hypha/tools';
 
@@ -73,9 +55,8 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   skillPolicies?: SkillPolicyBinding[];
   tools?: ToolSpec[];
   mcpProfiles?: MCPIntegrationSpec[];
-  memoryProfiles?: DomainMemoryProfileSpec[];
-  contextProfiles?: DomainContextProfileSpec[];
-  extractionProfiles?: MemoryExtractionProfileSpec[];
+  memoryProfiles?: MemorySpec[];
+  contextProfiles?: ContextSpec[];
   reasoningProfiles?: ReasoningSpec[];
   defaultReasoningProfile?: string;
   businessRules?: BusinessRuleSpec[];
@@ -85,10 +66,6 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   deploymentProfile?: DeploymentSpec;
   metadata?: Record<string, unknown>;
 }
-
-/** Legacy profile inputs remain readable while managed Memory contracts become canonical. */
-export type DomainMemoryProfileSpec = MemorySpec | MemoryProfileSpec;
-export type DomainContextProfileSpec = ContextSpec | ContextProfileSpec;
 
 export interface SkillPolicyBinding extends VersionedSpec, SpecMetadata {
   skillRef: SkillRef;
@@ -122,10 +99,7 @@ export interface DomainCompileOptions {
   memoryProfileId?: string;
   mcpProfileId?: string;
   contextProfileId?: string;
-  extractionProfileId?: string;
   reasoningProfileId?: string;
-  memoryProviderCapabilities?: Record<string, MemoryManagementCapabilities>;
-  now?: () => string;
   policyRefs?: string[];
   evaluationRefs?: string[];
   traceRef?: SpecRef;
@@ -148,6 +122,7 @@ export interface DomainAgentPatch {
 }
 
 export interface DomainAgentPatchTarget {
+  [key: string]: unknown;
   id?: string;
   version?: string;
   name?: string;
@@ -171,7 +146,6 @@ export interface WorkflowStateBinding {
   reasoningProfileRef?: string;
   policyRefs: string[];
   evaluationRefs: string[];
-  memory: WorkflowStateMemoryBinding;
 }
 
 export interface DomainBindingResolution {
@@ -180,13 +154,9 @@ export interface DomainBindingResolution {
   outputContract?: OutputContractSpec;
   sessionProfile?: SessionProfileSpec;
   workflow: WorkflowSpec;
-  memoryProfile?: DomainMemoryProfileSpec;
-  memoryProfiles: DomainMemoryProfileSpec[];
+  memoryProfile?: MemorySpec;
   mcpProfile?: MCPIntegrationSpec;
-  contextProfile?: DomainContextProfileSpec;
-  contextProfiles: DomainContextProfileSpec[];
-  extractionProfile?: MemoryExtractionProfileSpec;
-  extractionProfiles: MemoryExtractionProfileSpec[];
+  contextProfile?: ContextSpec;
   reasoningProfile?: ReasoningSpec;
   mcpProfiles: MCPIntegrationSpec[];
   reasoningProfiles: ReasoningSpec[];
@@ -208,7 +178,6 @@ export interface DomainCompilationResult {
   harnessedSystem: HarnessedAgentSystemSpec;
   agentPatch: DomainAgentPatch;
   sessionInitialization: DomainSessionInitialization;
-  memoryDependencySnapshot?: DomainMemoryDependencySnapshot;
 }
 
 export type DomainPackOverlayCollection =
@@ -223,7 +192,6 @@ export type DomainPackOverlayCollection =
   | 'mcpProfiles'
   | 'memoryProfiles'
   | 'contextProfiles'
-  | 'extractionProfiles'
   | 'reasoningProfiles'
   | 'businessRules'
   | 'policies'
@@ -248,9 +216,6 @@ export interface SessionProfileSpec extends VersionedSpec, SpecMetadata {
   defaultMetadata?: Record<string, unknown>;
   defaultMemoryProfileRef?: string;
   defaultContextProfileRef?: string;
-  defaultExtractionProfileRef?: string;
-  memoryScopeTemplate?: Partial<ManagedMemoryScope>;
-  sessionScopeMode?: 'isolated' | 'user_shared' | 'workspace_shared';
   defaultReasoningProfileRef?: string;
   defaultToolProfileRef?: string;
   defaultMCPProfileRef?: string;
@@ -264,9 +229,6 @@ export interface DomainSessionInitialization {
   metadata: Record<string, unknown>;
   memoryProfileRef?: string;
   contextProfileRef?: string;
-  extractionProfileRef?: string;
-  memoryScopeTemplate?: Partial<ManagedMemoryScope>;
-  sessionScopeMode?: 'isolated' | 'user_shared' | 'workspace_shared';
   reasoningProfileRef?: string;
   toolProfileRef?: string;
   mcpProfileRef?: string;
@@ -355,14 +317,6 @@ export interface WorkflowStateSpec extends SpecMetadata {
   requiredSkills?: string[];
   allowedMCPProfiles?: string[];
   memoryPolicyRef?: string;
-  memoryProfileRef?: SpecRef;
-  contextProfileRef?: SpecRef;
-  extractionProfileRef?: SpecRef;
-  readPolicyRef?: SpecRef;
-  writePolicyRef?: SpecRef;
-  allowedMemoryTypes?: ManagedMemoryType[];
-  memoryAccessMode?: 'none' | 'read' | 'write' | 'read_write';
-  autoCapture?: boolean;
   reasoningProfileRef?: string;
   policyRefs?: string[];
   evaluationRefs?: string[];
@@ -406,9 +360,6 @@ export function initializeDomainSession(
     },
     memoryProfileRef: profile?.defaultMemoryProfileRef,
     contextProfileRef: profile?.defaultContextProfileRef,
-    extractionProfileRef: profile?.defaultExtractionProfileRef,
-    memoryScopeTemplate: profile?.memoryScopeTemplate,
-    sessionScopeMode: profile?.sessionScopeMode,
     reasoningProfileRef: profile?.defaultReasoningProfileRef,
     toolProfileRef: profile?.defaultToolProfileRef,
     mcpProfileRef: profile?.defaultMCPProfileRef,
@@ -616,11 +567,6 @@ export function extendDomainPack(base: DomainPackSpec, overlay: DomainPackOverla
       patch.contextProfiles,
       remove?.contextProfiles
     ),
-    extractionProfiles: upsertById(
-      base.extractionProfiles,
-      patch.extractionProfiles,
-      remove?.extractionProfiles
-    ),
     reasoningProfiles: upsertById(
       base.reasoningProfiles,
       patch.reasoningProfiles,
@@ -676,11 +622,6 @@ export function compileDomainPackToHarnessedSystem(
     options.contextProfileId ?? sessionInitialization.contextProfileRef,
     'Context profile'
   );
-  const extractionProfile = selectProfileById(
-    domainPack.extractionProfiles,
-    options.extractionProfileId ?? sessionInitialization.extractionProfileRef,
-    'Memory extraction profile'
-  );
   const reasoningProfile = selectProfileById(
     domainPack.reasoningProfiles,
     options.reasoningProfileId ??
@@ -688,29 +629,7 @@ export function compileDomainPackToHarnessedSystem(
       domainPack.defaultReasoningProfile,
     'Reasoning profile'
   );
-  const defaultMemoryBinding = {
-    memoryProfileRef: toOptionalSpecRef(memoryProfile),
-    contextProfileRef: toOptionalSpecRef(contextProfile),
-    extractionProfileRef: toOptionalSpecRef(extractionProfile),
-  };
-  const workflowStateBindings = workflow.states.map((state) =>
-    resolveWorkflowStateBinding(state, defaultMemoryBinding)
-  );
-  const memoryCapabilities = resolveMemoryCapabilities(memoryProfile, options);
-  validateCompiledMemoryBindings(workflowStateBindings, domainPack, sessionInitialization, options);
-  const compiledMemoryProfiles = selectProfilesByRefs(
-    domainPack.memoryProfiles,
-    workflowStateBindings.map((state) => state.memory.memoryProfileRef)
-  );
-  const compiledContextProfiles = selectProfilesByRefs(
-    domainPack.contextProfiles,
-    workflowStateBindings.map((state) => state.memory.contextProfileRef)
-  );
-  const compiledExtractionProfiles = selectProfilesByRefs(
-    domainPack.extractionProfiles,
-    workflowStateBindings.map((state) => state.memory.extractionProfileRef)
-  );
-  const capabilitySnapshots = memoryCapabilitySnapshots(compiledMemoryProfiles, options);
+  const workflowStateBindings = workflow.states.map((state) => resolveWorkflowStateBinding(state));
   const requiredSkillRefs = resolveSkillRefsByIds(
     workflowStateBindings.flatMap((state) => state.requiredSkills),
     domainPack.allowedSkills
@@ -753,31 +672,6 @@ export function compileDomainPackToHarnessedSystem(
     fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
     agentRef: options.agentRef,
   });
-  const compiledMemoryRefs = uniqueSpecRefs([
-    ...compiledMemoryProfiles.map(toSpecRef),
-    ...compiledExtractionProfiles.map(toSpecRef),
-  ]);
-  const compiledContextRefs = uniqueSpecRefs(compiledContextProfiles.map(toSpecRef));
-  const memoryDependencySnapshot = compiledMemoryProfiles.length
-    ? createDomainMemoryDependencySnapshot(
-        {
-          domainPackRef: toSpecRef(domainPack),
-          memoryProfileRef: toOptionalSpecRef(memoryProfile),
-          contextProfileRef: toOptionalSpecRef(contextProfile),
-          extractionProfileRef: toOptionalSpecRef(extractionProfile),
-          providerRefs: uniqueSpecRefs(compiledMemoryProfiles.flatMap(memoryProviderRefs)),
-          policyRefs: memoryPolicyRefs(workflowStateBindings, domainPack.policies),
-          scopeTemplate: sessionInitialization.memoryScopeTemplate,
-          capabilitySnapshot: memoryCapabilities ?? {},
-          capabilitySnapshots,
-          stateBindings: workflowStateBindings.map((state) => ({
-            stateId: state.stateId,
-            binding: state.memory,
-          })),
-        },
-        options.now?.()
-      )
-    : undefined;
   const harnessedSystem: HarnessedAgentSystemSpec = {
     id: options.systemId ?? `${domainPack.id}.${workflow.id}.system`,
     version: options.systemVersion ?? domainPack.version,
@@ -790,11 +684,11 @@ export function compileDomainPackToHarnessedSystem(
       version: domainPack.version,
     },
     policyRefs: idsToRefs(policyIds, domainPack.policies),
-    memoryRefs: compiledMemoryRefs.length ? compiledMemoryRefs : undefined,
+    memoryRefs: memoryProfile ? [toSpecRef(memoryProfile)] : undefined,
     toolRefs: idsToRefs(selectedToolIds, domainPack.tools),
     skillRefs: selectedSkillRefs.length ? selectedSkillRefs : undefined,
     mcpRefs: idsToRefs(mcpProfileIds, domainPack.mcpProfiles),
-    contextRefs: compiledContextRefs.length ? compiledContextRefs : undefined,
+    contextRefs: contextProfile ? [toSpecRef(contextProfile)] : undefined,
     reasoningRefs: idsToRefs(reasoningProfileIds, domainPack.reasoningProfiles),
     outputContractRefs: outputContract ? [toSpecRef(outputContract)] : undefined,
     businessRuleRefs: domainPack.businessRules?.map(toSpecRef),
@@ -821,8 +715,6 @@ export function compileDomainPackToHarnessedSystem(
       outputContractRef: toOptionalSpecRef(outputContract),
       mcpProfileSpecRef: toOptionalSpecRef(mcpProfile),
       reasoningProfileSpecRef: toOptionalSpecRef(reasoningProfile),
-      extractionProfileSpecRef: toOptionalSpecRef(extractionProfile),
-      memoryDependencySnapshot,
       workflowStateBindings,
     },
   };
@@ -836,12 +728,8 @@ export function compileDomainPackToHarnessedSystem(
       sessionProfile: selectSessionProfile(domainPack, options.sessionProfileId),
       workflow,
       memoryProfile,
-      memoryProfiles: compiledMemoryProfiles,
       mcpProfile,
       contextProfile,
-      contextProfiles: compiledContextProfiles,
-      extractionProfile,
-      extractionProfiles: compiledExtractionProfiles,
       reasoningProfile,
       mcpProfiles: selectSpecsByIds(domainPack.mcpProfiles, mcpProfileIds),
       reasoningProfiles: selectSpecsByIds(domainPack.reasoningProfiles, reasoningProfileIds),
@@ -859,7 +747,6 @@ export function compileDomainPackToHarnessedSystem(
     harnessedSystem,
     agentPatch,
     sessionInitialization,
-    memoryDependencySnapshot,
   };
 }
 
@@ -928,23 +815,7 @@ function selectProfileById<TSpec extends VersionedSpec>(
   return spec;
 }
 
-function resolveWorkflowStateBinding(
-  state: WorkflowStateSpec,
-  defaults: Pick<
-    WorkflowStateMemoryBinding,
-    'memoryProfileRef' | 'contextProfileRef' | 'extractionProfileRef'
-  >
-): WorkflowStateBinding {
-  const memory: WorkflowStateMemoryBinding = {
-    memoryProfileRef: state.memoryProfileRef ?? defaults.memoryProfileRef,
-    contextProfileRef: state.contextProfileRef ?? defaults.contextProfileRef,
-    extractionProfileRef: state.extractionProfileRef ?? defaults.extractionProfileRef,
-    readPolicyRef: state.readPolicyRef,
-    writePolicyRef: state.writePolicyRef,
-    allowedMemoryTypes: state.allowedMemoryTypes,
-    memoryAccessMode: state.memoryAccessMode,
-    autoCapture: state.autoCapture,
-  };
+function resolveWorkflowStateBinding(state: WorkflowStateSpec): WorkflowStateBinding {
   return {
     stateId: state.id,
     allowedTools: state.allowedTools ?? [],
@@ -955,148 +826,7 @@ function resolveWorkflowStateBinding(
     reasoningProfileRef: state.reasoningProfileRef,
     policyRefs: state.policyRefs ?? [],
     evaluationRefs: state.evaluationRefs ?? [],
-    memory,
   };
-}
-
-function isManagedMemoryProfile(
-  profile: DomainMemoryProfileSpec | undefined
-): profile is MemoryProfileSpec {
-  return Boolean(profile && 'managementProviderRef' in profile);
-}
-
-function resolveMemoryCapabilities(
-  profile: DomainMemoryProfileSpec | undefined,
-  options: DomainCompileOptions
-): MemoryManagementCapabilities | undefined {
-  if (!isManagedMemoryProfile(profile)) return undefined;
-  return options.memoryProviderCapabilities?.[profile.managementProviderRef.id];
-}
-
-function selectProfilesByRefs<TSpec extends VersionedSpec>(
-  profiles: TSpec[] | undefined,
-  refs: Array<SpecRef | undefined>
-): TSpec[] {
-  const ids = new Set(refs.filter((ref): ref is SpecRef => Boolean(ref)).map((ref) => ref.id));
-  return (profiles ?? []).filter((profile) => ids.has(profile.id));
-}
-
-function memoryCapabilitySnapshots(
-  profiles: DomainMemoryProfileSpec[],
-  options: DomainCompileOptions
-): Record<string, Partial<MemoryManagementCapabilities>> | undefined {
-  const snapshots = profiles.flatMap((profile) => {
-    if (!isManagedMemoryProfile(profile)) return [];
-    const capabilities = resolveMemoryCapabilities(profile, options);
-    return capabilities ? [[profile.managementProviderRef.id, capabilities] as const] : [];
-  });
-  return snapshots.length ? Object.fromEntries(snapshots) : undefined;
-}
-
-function validateCompiledMemoryBindings(
-  bindings: WorkflowStateBinding[],
-  domainPack: DomainPackSpec,
-  session: DomainSessionInitialization,
-  options: DomainCompileOptions
-): void {
-  for (const state of bindings) {
-    const access = state.memory.memoryAccessMode ?? 'none';
-    if (access === 'none') continue;
-
-    const profile = profileForRef(domainPack.memoryProfiles, state.memory.memoryProfileRef);
-    if (!profile) {
-      throw new Error(`Workflow state Memory profile not found: ${state.stateId}`);
-    }
-
-    if (isManagedMemoryProfile(profile)) {
-      assertMemoryScopeCanBeInitialized(profile, session, state.stateId);
-      const capabilities = resolveMemoryCapabilities(profile, options);
-      if (!capabilities) {
-        throw new Error(
-          `Memory provider capabilities are required to compile state ${state.stateId}: ${profile.managementProviderRef.id}`
-        );
-      }
-      const errors = validateMemoryBindingCapabilities(state.memory, capabilities);
-      if (errors.length > 0) {
-        throw new Error(
-          `Workflow state Memory capability mismatch: ${state.stateId}: ${errors.join(' ')}`
-        );
-      }
-    }
-  }
-}
-
-function assertMemoryScopeCanBeInitialized(
-  profile: MemoryProfileSpec,
-  session: DomainSessionInitialization,
-  stateId: string
-): void {
-  const runtimeDimensions = new Set(['userId', 'sessionId', 'runId', 'agentId']);
-  const template = session.memoryScopeTemplate ?? {};
-  const missing = profile.scopePolicy.requiredDimensions.filter(
-    (dimension) => !runtimeDimensions.has(dimension) && !template[dimension]
-  );
-  if (missing.length > 0) {
-    throw new Error(
-      `Workflow state Memory scope cannot be initialized: ${stateId}: ${missing.join(', ')}`
-    );
-  }
-}
-
-function profileForRef<TSpec extends VersionedSpec>(
-  profiles: TSpec[] | undefined,
-  ref: SpecRef | undefined
-): TSpec | undefined {
-  if (!ref) return undefined;
-  return profiles?.find((profile) => profile.id === ref.id);
-}
-
-function memoryProviderRefs(profile: DomainMemoryProfileSpec): SpecRef[] {
-  if (isManagedMemoryProfile(profile)) {
-    return uniqueSpecRefs([
-      profile.managementProviderRef,
-      profile.workingStoreRef,
-      profile.recordStoreRef,
-      ...(profile.vectorStoreRefs ?? []),
-      profile.artifactStoreRef,
-      profile.embeddingProviderRef,
-      profile.rerankerProviderRef,
-    ]);
-  }
-  return uniqueSpecRefs([
-    ...profile.providers.map((provider) => ({ id: provider.providerRef })),
-    profile.structuredStoreRef ? { id: profile.structuredStoreRef } : undefined,
-    profile.vectorIndexRef ? { id: profile.vectorIndexRef } : undefined,
-    profile.artifactStoreRef ? { id: profile.artifactStoreRef } : undefined,
-    profile.embeddingProviderRef ? { id: profile.embeddingProviderRef } : undefined,
-  ]);
-}
-
-function memoryPolicyRefs(
-  bindings: WorkflowStateBinding[],
-  policies: PolicySpec[] | undefined
-): SpecRef[] {
-  const policiesById = new Map((policies ?? []).map((policy) => [policy.id, policy]));
-  return uniqueSpecRefs(
-    bindings.flatMap((state) => [
-      state.memory.readPolicyRef,
-      state.memory.writePolicyRef,
-      state.memoryPolicyRef
-        ? (toOptionalSpecRef(policiesById.get(state.memoryPolicyRef)) ?? {
-            id: state.memoryPolicyRef,
-          })
-        : undefined,
-    ])
-  );
-}
-
-function uniqueSpecRefs(refs: Array<SpecRef | undefined>): SpecRef[] {
-  const unique = new Map<string, SpecRef>();
-  for (const ref of refs) {
-    if (!ref) continue;
-    unique.set(`${ref.id}:${ref.version ?? ''}:${ref.revision ?? ''}`, ref);
-  }
-  return Array.from(unique.values()).sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function upsertById<TSpec extends { id: string }>(
@@ -1272,9 +1002,6 @@ export const sessionProfileSpecSchema = versionedSpecSchema.merge(specMetadataSc
   defaultMetadata: z.record(z.unknown()).optional(),
   defaultMemoryProfileRef: z.string().optional(),
   defaultContextProfileRef: z.string().optional(),
-  defaultExtractionProfileRef: z.string().optional(),
-  memoryScopeTemplate: managedMemoryScopeSchema.partial().strict().optional(),
-  sessionScopeMode: z.enum(['isolated', 'user_shared', 'workspace_shared']).optional(),
   defaultReasoningProfileRef: z.string().optional(),
   defaultToolProfileRef: z.string().optional(),
   defaultMCPProfileRef: z.string().optional(),
@@ -1312,14 +1039,6 @@ export const workflowStateSpecSchema = specMetadataSchema.extend({
   requiredSkills: z.array(z.string()).optional(),
   allowedMCPProfiles: z.array(z.string()).optional(),
   memoryPolicyRef: z.string().optional(),
-  memoryProfileRef: specRefSchema.optional(),
-  contextProfileRef: specRefSchema.optional(),
-  extractionProfileRef: specRefSchema.optional(),
-  readPolicyRef: specRefSchema.optional(),
-  writePolicyRef: specRefSchema.optional(),
-  allowedMemoryTypes: z.array(managedMemoryTypeSchema).optional(),
-  memoryAccessMode: z.enum(['none', 'read', 'write', 'read_write']).optional(),
-  autoCapture: z.boolean().optional(),
   reasoningProfileRef: z.string().optional(),
   policyRefs: z.array(z.string()).optional(),
   evaluationRefs: z.array(z.string()).optional(),
@@ -1357,9 +1076,8 @@ export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   skillPolicies: z.array(skillPolicyBindingSchema).optional(),
   tools: z.array(toolSpecSchema).optional(),
   mcpProfiles: z.array(mcpIntegrationSpecSchema).optional(),
-  memoryProfiles: z.array(z.union([memorySpecSchema, memoryProfileSpecSchema])).optional(),
-  contextProfiles: z.array(z.union([contextSpecSchema, contextProfileSpecSchema])).optional(),
-  extractionProfiles: z.array(memoryExtractionProfileSpecSchema).optional(),
+  memoryProfiles: z.array(memorySpecSchema).optional(),
+  contextProfiles: z.array(contextSpecSchema).optional(),
   reasoningProfiles: z.array(reasoningSpecSchema).optional(),
   defaultReasoningProfile: z.string().optional(),
   businessRules: z.array(businessRuleSpecSchema).optional(),
@@ -1391,14 +1109,6 @@ export const workflowSpecJsonSchema: JsonSchema = {
           allowedTools: { type: 'array', items: { type: 'string' } },
           allowedSkills: { type: 'array', items: { type: 'string' } },
           requiredSkills: { type: 'array', items: { type: 'string' } },
-          memoryProfileRef: { type: 'object' },
-          contextProfileRef: { type: 'object' },
-          extractionProfileRef: { type: 'object' },
-          readPolicyRef: { type: 'object' },
-          writePolicyRef: { type: 'object' },
-          allowedMemoryTypes: { type: 'array', items: { type: 'string' } },
-          memoryAccessMode: { enum: ['none', 'read', 'write', 'read_write'] },
-          autoCapture: { type: 'boolean' },
           reasoningProfileRef: { type: 'string' },
           policyRefs: { type: 'array', items: { type: 'string' } },
           humanReviewPolicy: { type: 'object' },
@@ -1484,7 +1194,6 @@ export const domainPackSpecJsonSchema: JsonSchema = {
     mcpProfiles: { type: 'array', items: { type: 'object' } },
     memoryProfiles: { type: 'array', items: { type: 'object' } },
     contextProfiles: { type: 'array', items: { type: 'object' } },
-    extractionProfiles: { type: 'array', items: { type: 'object' } },
     reasoningProfiles: { type: 'array', items: reasoningSpecJsonSchema },
     defaultReasoningProfile: { type: 'string' },
     businessRules: { type: 'array', items: businessRuleSpecJsonSchema },
@@ -1763,21 +1472,10 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
   const workflowIds = idSet(domainPack.workflows);
   const outputContractIds = idSet(domainPack.outputContracts);
   const memoryProfileIds = idSet(domainPack.memoryProfiles);
-  const memoryProfilesById = new Map(
-    (domainPack.memoryProfiles ?? []).map((spec) => [spec.id, spec])
-  );
   const mcpProfileIds = idSet(domainPack.mcpProfiles);
   const contextProfileIds = idSet(domainPack.contextProfiles);
-  const contextProfilesById = new Map(
-    (domainPack.contextProfiles ?? []).map((spec) => [spec.id, spec])
-  );
-  const extractionProfileIds = idSet(domainPack.extractionProfiles);
-  const extractionProfilesById = new Map(
-    (domainPack.extractionProfiles ?? []).map((spec) => [spec.id, spec])
-  );
   const reasoningProfileIds = idSet(domainPack.reasoningProfiles);
   const policyIds = idSet(domainPack.policies);
-  const policiesById = new Map((domainPack.policies ?? []).map((spec) => [spec.id, spec]));
   const evaluationIds = idSet(domainPack.evaluationProfiles);
   const skillPolicyIds = idSet(domainPack.skillPolicies);
   const toolIds = idSet(domainPack.tools);
@@ -1815,12 +1513,6 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
       sessionProfile.id
     );
     assertKnownId(
-      sessionProfile.defaultExtractionProfileRef,
-      extractionProfileIds,
-      'Session default extraction profile',
-      sessionProfile.id
-    );
-    assertKnownId(
       sessionProfile.defaultMCPProfileRef,
       mcpProfileIds,
       'Session default MCP profile',
@@ -1843,24 +1535,9 @@ function validateDomainReferences(domainPack: DomainPackSpec): void {
     }
   }
 
-  for (const memoryProfile of domainPack.memoryProfiles ?? []) {
-    if (isManagedMemoryProfile(memoryProfile) && memoryProfile.contextProfileRef) {
-      assertKnownSpecRef(
-        memoryProfile.contextProfileRef,
-        contextProfilesById,
-        'Memory profile Context profile',
-        memoryProfile.id
-      );
-    }
-  }
-
   for (const workflow of domainPack.workflows) {
     validateWorkflowReferences(workflow, {
       toolIds,
-      memoryProfiles: memoryProfilesById,
-      contextProfiles: contextProfilesById,
-      extractionProfiles: extractionProfilesById,
-      policies: policiesById,
       mcpProfileIds,
       reasoningProfileIds,
       policyIds,
@@ -1904,10 +1581,6 @@ function validateWorkflowReferences(
   workflow: WorkflowSpec,
   refs: {
     toolIds: Set<string>;
-    memoryProfiles: Map<string, DomainMemoryProfileSpec>;
-    contextProfiles: Map<string, DomainContextProfileSpec>;
-    extractionProfiles: Map<string, MemoryExtractionProfileSpec>;
-    policies: Map<string, PolicySpec>;
     mcpProfileIds: Set<string>;
     reasoningProfileIds: Set<string>;
     policyIds: Set<string>;
@@ -1926,35 +1599,6 @@ function validateWorkflowReferences(
   for (const state of workflow.states) {
     for (const toolRef of state.allowedTools ?? []) {
       assertKnownId(toolRef, refs.toolIds, 'Workflow state tool', state.id);
-    }
-    if (state.memoryProfileRef) {
-      assertKnownSpecRef(
-        state.memoryProfileRef,
-        refs.memoryProfiles,
-        'Workflow state Memory profile',
-        state.id
-      );
-    }
-    if (state.contextProfileRef) {
-      assertKnownSpecRef(
-        state.contextProfileRef,
-        refs.contextProfiles,
-        'Workflow state Context profile',
-        state.id
-      );
-    }
-    if (state.extractionProfileRef) {
-      assertKnownSpecRef(
-        state.extractionProfileRef,
-        refs.extractionProfiles,
-        'Workflow state extraction profile',
-        state.id
-      );
-    }
-    for (const policyRef of [state.readPolicyRef, state.writePolicyRef]) {
-      if (policyRef) {
-        assertKnownSpecRef(policyRef, refs.policies, 'Workflow state Memory policy', state.id);
-      }
     }
     assertKnownId(state.memoryPolicyRef, refs.policyIds, 'Workflow state memory policy', state.id);
     for (const mcpProfileRef of state.allowedMCPProfiles ?? []) {
@@ -1987,7 +1631,6 @@ function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
   assertUniqueIds(domainPack.mcpProfiles, 'DomainPack mcpProfiles');
   assertUniqueIds(domainPack.memoryProfiles, 'DomainPack memoryProfiles');
   assertUniqueIds(domainPack.contextProfiles, 'DomainPack contextProfiles');
-  assertUniqueIds(domainPack.extractionProfiles, 'DomainPack extractionProfiles');
   assertUniqueIds(domainPack.reasoningProfiles, 'DomainPack reasoningProfiles');
   assertUniqueIds(domainPack.businessRules, 'DomainPack businessRules');
   assertUniqueIds(domainPack.policies, 'DomainPack policies');
@@ -2063,22 +1706,5 @@ function assertKnownId(
   if (!id) return;
   if (!allowed.has(id)) {
     throw new Error(`${label} not found for ${owner}: ${id}`);
-  }
-}
-
-function assertKnownSpecRef<TSpec extends VersionedSpec>(
-  ref: SpecRef,
-  available: Map<string, TSpec>,
-  label: string,
-  owner: string
-): void {
-  const spec = available.get(ref.id);
-  if (!spec) {
-    throw new Error(`${label} not found for ${owner}: ${ref.id}`);
-  }
-  if (ref.version && ref.version !== spec.version) {
-    throw new Error(
-      `${label} version mismatch for ${owner}: ${ref.id} requested ${ref.version}, available ${spec.version}`
-    );
   }
 }

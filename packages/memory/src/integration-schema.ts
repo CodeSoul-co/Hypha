@@ -34,28 +34,6 @@ export const sessionMemoryBindingSchema: ZodType<SessionMemoryBinding> = z
   })
   .strict();
 
-const partialMemoryManagementCapabilitiesSchema = z
-  .object({
-    add: z.boolean().optional(),
-    search: z.boolean().optional(),
-    get: z.boolean().optional(),
-    list: z.boolean().optional(),
-    update: z.boolean().optional(),
-    delete: z.boolean().optional(),
-    deleteByFilter: z.boolean().optional(),
-    history: z.boolean().optional(),
-    summarize: z.boolean().optional(),
-    consolidate: z.boolean().optional(),
-    decay: z.boolean().optional(),
-    reinforce: z.boolean().optional(),
-    conflictDetection: z.boolean().optional(),
-    hybridSearch: z.boolean().optional(),
-    graphRelations: z.boolean().optional(),
-    asyncWrite: z.boolean().optional(),
-    batchOperations: z.boolean().optional(),
-  })
-  .strict();
-
 export const domainMemoryDependencySnapshotSchema: ZodType<DomainMemoryDependencySnapshot> = z
   .object({
     domainPackRef: memoryContractSpecRefSchema,
@@ -65,18 +43,27 @@ export const domainMemoryDependencySnapshotSchema: ZodType<DomainMemoryDependenc
     providerRefs: z.array(memoryContractSpecRefSchema),
     policyRefs: z.array(memoryContractSpecRefSchema),
     scopeTemplate: managedMemoryScopeSchema.partial().strict().optional(),
-    capabilitySnapshot: partialMemoryManagementCapabilitiesSchema,
-    capabilitySnapshots: z.record(partialMemoryManagementCapabilitiesSchema).optional(),
-    stateBindings: z
-      .array(
-        z
-          .object({
-            stateId: z.string().min(1),
-            binding: workflowStateMemoryBindingSchema,
-          })
-          .strict()
-      )
-      .optional(),
+    capabilitySnapshot: z
+      .object({
+        add: z.boolean().optional(),
+        search: z.boolean().optional(),
+        get: z.boolean().optional(),
+        list: z.boolean().optional(),
+        update: z.boolean().optional(),
+        delete: z.boolean().optional(),
+        deleteByFilter: z.boolean().optional(),
+        history: z.boolean().optional(),
+        summarize: z.boolean().optional(),
+        consolidate: z.boolean().optional(),
+        decay: z.boolean().optional(),
+        reinforce: z.boolean().optional(),
+        conflictDetection: z.boolean().optional(),
+        hybridSearch: z.boolean().optional(),
+        graphRelations: z.boolean().optional(),
+        asyncWrite: z.boolean().optional(),
+        batchOperations: z.boolean().optional(),
+      })
+      .strict(),
     dependencyHash: z.string().min(1),
     createdAt: z.string().datetime(),
   })
