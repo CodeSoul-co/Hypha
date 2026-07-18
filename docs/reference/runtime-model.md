@@ -50,6 +50,28 @@ The exact event sequence depends on the route, workflow, tools, memory writes, p
 
 `RunManager` is the canonical package-level writer for run lifecycle events. It records run start/completion/failure, human-review waits, FSM transition acceptance, FSM state entry, context build events, and ReAct step completion. Application surfaces should call runtime APIs instead of constructing ad hoc run state.
 
+## Durable Orchestration Building Blocks
+
+`@hypha/core` exposes provider-neutral runtime contracts together with in-memory reference
+implementations. Durable adapters can implement the same interfaces without changing FSM or
+DomainPack semantics.
+
+| Boundary     | Public contract and reference behavior                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Event log    | `DurableEventStore`, `DurableEventRuntime`, `EventSchemaRegistry`, optimistic expected revision, idempotency key, canonical hash, import/export checksum, and schema upcasting. |
+| Projection   | `ProjectionEngine` and `RuntimeOrchestrationProjection` rebuild run, wait, transition, cancellation, and resume state from events.                                              |
+| Session work | `SessionQueue` serializes scoped commands and uses claim token, attempt budget, lease expiry, retry, completion, and failure records.                                           |
+| Messaging    | `MessageBus`, inbox, outbox, and dispatcher isolate delivery from handling and deduplicate by scope and idempotency evidence.                                                   |
+| Coordination | `RunLeaseStore`, `StateExecutionClaimStore`, and `RuntimeResourceCoordinator` use fencing and guarded revisions to reject stale workers and conflicting resource claims.        |
+| Determinism  | Runtime helper APIs provide recorded transition, wait, clock, id, event, resource, and activity observations instead of reading untracked process state.                        |
+| Lifecycle    | Control, timer, cancellation, checkpoint, recovery, replay, and query services persist commands and observations before deriving the next action.                               |
+
+`BoundedFSMDriver` in `@hypha/harness` advances an FSM only while a transition is supported by
+current event-derived state and the configured step/time budgets. It returns an explicit completed,
+waiting, yielded, cancelled, failed, or exhausted result; exhaustion is never converted into another
+unbounded loop. `RuntimeExecutionContext` carries the scoped runtime ports used by the driver and
+does not give core code direct access to a provider SDK or application store.
+
 ## Evaluation, Replay, and Regression
 
 Replay and evaluation are deterministic views over events. They must not call
