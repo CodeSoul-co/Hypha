@@ -106,18 +106,9 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
       workspaceRoot: await temporaryWorkspace('timeout'),
       engine,
     });
-    const ready = await createReady(provider, 'timeout', ['perl']);
+    const ready = await createReady(provider, 'timeout', ['sh']);
     const result = await provider.execute(
-      command(
-        ready.id,
-        'timeout',
-        'perl',
-        [
-          '-e',
-          'my $pid = fork(); die "fork failed" unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } wait;',
-        ],
-        { timeoutMs: 250 }
-      )
+      command(ready.id, 'timeout', 'sh', ['-c', 'sleep 30 & wait'], { timeoutMs: 250 })
     );
     expect(result).toMatchObject({
       status: 'timed_out',
@@ -180,13 +171,12 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
       workspaceRoot: await temporaryWorkspace('cgroup'),
       engine,
     });
-    const ready = await createReady(provider, 'cgroup', ['cat']);
+    const ready = await createReady(provider, 'cgroup', ['sh']);
     try {
       const result = await provider.execute(
-        command(ready.id, 'cgroup', 'cat', [
-          '/sys/fs/cgroup/cpu.max',
-          '/sys/fs/cgroup/memory.max',
-          '/sys/fs/cgroup/pids.max',
+        command(ready.id, 'cgroup', 'sh', [
+          '-c',
+          'cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max',
         ])
       );
       expect(result).toMatchObject({ status: 'completed', exitCode: 0 });

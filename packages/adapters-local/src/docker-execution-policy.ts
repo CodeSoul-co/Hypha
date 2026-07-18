@@ -3,24 +3,6 @@ import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@hypha/c
 import { executionProviderError } from './execution-provider-error';
 import type { DockerWorkspaceMountResolver } from './docker-workspace-mount';
 
-const shellExecutables = new Set([
-  'ash',
-  'bash',
-  'cmd',
-  'cmd.exe',
-  'csh',
-  'dash',
-  'fish',
-  'ksh',
-  'powershell',
-  'powershell.exe',
-  'pwsh',
-  'pwsh.exe',
-  'sh',
-  'tcsh',
-  'zsh',
-]);
-
 export interface DockerEnvironmentPolicy {
   image: string;
   digest: string;
@@ -123,14 +105,6 @@ export class DockerExecutionPolicyResolver {
       throw executionProviderError(
         'EXECUTION_POLICY_DENIED',
         'Docker execution requires an explicit executable allowlist.',
-        false
-      );
-    }
-    const shellExecutable = environment.process.allowedExecutables.find(isShellExecutable);
-    if (shellExecutable) {
-      throw executionProviderError(
-        'EXECUTION_POLICY_DENIED',
-        `Shell executable ${shellExecutable} cannot be allowlisted while Docker shell execution is disabled.`,
         false
       );
     }
@@ -276,13 +250,6 @@ export class DockerExecutionPolicyResolver {
         false
       );
     }
-    if (isShellExecutable(request.executable)) {
-      throw executionProviderError(
-        'EXECUTION_POLICY_DENIED',
-        'Docker shell executables are disabled even when supplied as a direct argv command.',
-        false
-      );
-    }
     if (!request.executable.startsWith('/') && /[\\/]/u.test(request.executable)) {
       throw executionProviderError(
         'EXECUTION_POLICY_DENIED',
@@ -410,11 +377,6 @@ function deriveCpuCores(environment: ExecutionEnvironmentSpec): number {
     );
   }
   return value;
-}
-
-function isShellExecutable(executable: string): boolean {
-  const normalized = executable.replace(/\\/gu, '/').split('/').at(-1)?.toLowerCase();
-  return shellExecutables.has(normalized ?? '');
 }
 
 function minimum(values: Array<number | undefined>): number {
