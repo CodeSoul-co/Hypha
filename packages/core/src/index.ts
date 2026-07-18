@@ -20,6 +20,8 @@ export * from './contracts/session-queue';
 export * from './contracts/session-queue-schemas';
 export * from './contracts/runtime-coordination';
 export * from './contracts/runtime-coordination-schemas';
+export * from './contracts/runtime-helpers';
+export * from './contracts/runtime-helper-schemas';
 export * from './modules/workspace';
 export * from './modules/workspace/operations';
 export * from './modules/workspace/snapshots';
