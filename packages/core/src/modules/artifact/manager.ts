@@ -5,9 +5,12 @@ import type {
   ArtifactFromWorkspaceRequest,
   ArtifactGetRecordRequest,
   ArtifactListRequest,
+  ArtifactLatestRequest,
   ArtifactMutationRequest,
+  ArtifactPreviousRequest,
   ArtifactReadRequest,
   ArtifactReadResult,
+  ArtifactTraceLineageRequest,
   ArtifactVersionRequest,
   NormalizedArtifactError,
 } from '../../contracts/artifact-manager';
@@ -189,6 +192,27 @@ export const artifactListRequestSchema = z
     validateUniqueValues(value.statuses, ['statuses'], context);
     validateUniqueValues(value.tags, ['tags'], context);
   }) satisfies ZodType<ArtifactListRequest>;
+
+export const artifactTraceLineageRequestSchema = z
+  .object({
+    principal: executionPrincipalSchema,
+    artifactId: nonEmptyString,
+  })
+  .strict() satisfies ZodType<ArtifactTraceLineageRequest>;
+
+export const artifactLatestRequestSchema = z
+  .object({
+    principal: executionPrincipalSchema,
+    logicalArtifactId: nonEmptyString,
+  })
+  .strict() satisfies ZodType<ArtifactLatestRequest>;
+
+export const artifactPreviousRequestSchema = z
+  .object({
+    principal: executionPrincipalSchema,
+    versionId: nonEmptyString,
+  })
+  .strict() satisfies ZodType<ArtifactPreviousRequest>;
 
 export const artifactMutationRequestSchema = z
   .object({
@@ -399,6 +423,30 @@ export const artifactListRequestJsonSchema: JsonSchema = strictObject(
   }
 );
 
+export const artifactTraceLineageRequestJsonSchema: JsonSchema = strictObject(
+  ['principal', 'artifactId'],
+  {
+    principal: executionPrincipalJsonSchema,
+    artifactId: nonEmptyStringJsonSchema,
+  }
+);
+
+export const artifactLatestRequestJsonSchema: JsonSchema = strictObject(
+  ['principal', 'logicalArtifactId'],
+  {
+    principal: executionPrincipalJsonSchema,
+    logicalArtifactId: nonEmptyStringJsonSchema,
+  }
+);
+
+export const artifactPreviousRequestJsonSchema: JsonSchema = strictObject(
+  ['principal', 'versionId'],
+  {
+    principal: executionPrincipalJsonSchema,
+    versionId: nonEmptyStringJsonSchema,
+  }
+);
+
 export const artifactMutationRequestJsonSchema: JsonSchema = strictObject(
   ['operationId', 'principal', 'artifactId', 'expectedRevision'],
   {
@@ -432,6 +480,9 @@ export const artifactManagerContractJsonSchemas: Record<string, JsonSchema> = {
   ArtifactCreateDownloadAccessRequest: artifactCreateDownloadAccessRequestJsonSchema,
   ArtifactDownloadAccess: artifactDownloadAccessJsonSchema,
   ArtifactListRequest: artifactListRequestJsonSchema,
+  ArtifactTraceLineageRequest: artifactTraceLineageRequestJsonSchema,
+  ArtifactLatestRequest: artifactLatestRequestJsonSchema,
+  ArtifactPreviousRequest: artifactPreviousRequestJsonSchema,
   ArtifactMutationRequest: artifactMutationRequestJsonSchema,
   NormalizedArtifactError: normalizedArtifactErrorJsonSchema,
 };
@@ -541,6 +592,18 @@ export function validateArtifactCreateDownloadAccessRequest(
 
 export function validateArtifactListRequest(input: unknown): ArtifactListRequest {
   return artifactListRequestSchema.parse(input);
+}
+
+export function validateArtifactTraceLineageRequest(input: unknown): ArtifactTraceLineageRequest {
+  return artifactTraceLineageRequestSchema.parse(input);
+}
+
+export function validateArtifactLatestRequest(input: unknown): ArtifactLatestRequest {
+  return artifactLatestRequestSchema.parse(input);
+}
+
+export function validateArtifactPreviousRequest(input: unknown): ArtifactPreviousRequest {
+  return artifactPreviousRequestSchema.parse(input);
 }
 
 export function validateArtifactMutationRequest(input: unknown): ArtifactMutationRequest {

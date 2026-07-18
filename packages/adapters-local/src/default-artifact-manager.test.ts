@@ -84,8 +84,12 @@ describe('DefaultArtifactManager', () => {
       parentVersionId: first.versionId,
       status: 'draft',
     });
-    await expect(fixture.manager.latest(first.logicalArtifactId)).resolves.toEqual(second);
-    await expect(fixture.manager.previous(second.versionId)).resolves.toMatchObject({
+    await expect(
+      fixture.manager.latest({ principal: owner, logicalArtifactId: first.logicalArtifactId })
+    ).resolves.toEqual(second);
+    await expect(
+      fixture.manager.previous({ principal: owner, versionId: second.versionId })
+    ).resolves.toMatchObject({
       versionId: first.versionId,
       nextVersionId: second.versionId,
     });
@@ -135,6 +139,9 @@ describe('DefaultArtifactManager', () => {
     await expect(
       fixture.manager.list({ principal: stranger, workspaceId: 'workspace.example' })
     ).resolves.toEqual([]);
+    await expect(
+      fixture.manager.list({ principal: owner, workspaceId: 'workspace.example' })
+    ).resolves.toEqual([record]);
   });
 
   it('creates governed signed download access within the profile TTL', async () => {
@@ -201,11 +208,16 @@ describe('DefaultArtifactManager', () => {
       },
     });
 
-    const lineage = await fixture.manager.traceLineage(derived.id);
+    const lineage = await fixture.manager.traceLineage({
+      principal: owner,
+      artifactId: derived.id,
+    });
     expect(lineage.ancestors).toEqual([
       expect.objectContaining({ artifactId: source.id, versionId: source.versionId }),
     ]);
-    await expect(fixture.manager.traceLineage(source.id)).resolves.toMatchObject({
+    await expect(
+      fixture.manager.traceLineage({ principal: owner, artifactId: source.id })
+    ).resolves.toMatchObject({
       descendants: [expect.objectContaining({ artifactId: derived.id })],
     });
 
@@ -311,6 +323,51 @@ describe('DefaultArtifactManager', () => {
           permissionScopes: ['artifact:write'],
         },
       })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+  });
+
+  it('governs lineage and version-navigation metadata with record read access', async () => {
+    const fixture = createFixture();
+    const firstBytes = new TextEncoder().encode('private-version-one');
+    const secondBytes = new TextEncoder().encode('private-version-two');
+    const first = await fixture.manager.create({
+      ...createRequest('private-version', firstBytes),
+      access: {
+        visibility: 'private',
+        ownerPrincipalId: owner.principalId,
+        workspaceId: 'workspace.example',
+      },
+    });
+    const second = await fixture.manager.createVersion({
+      operationId: 'private-version-two',
+      principal: owner,
+      artifactId: first.id,
+      expectedRevision: first.revision,
+      content: secondBytes,
+      expectedContentHash: hashArtifactBytes(secondBytes),
+      expectedSizeBytes: secondBytes.byteLength,
+      provenance: {
+        sourceType: 'derived',
+        createdBy: owner.principalId,
+        sourceArtifactIds: [first.id],
+        transformation: 'update private version',
+      },
+    });
+    const stranger: ExecutionPrincipal = {
+      principalId: 'user.stranger',
+      type: 'user',
+      userId: 'user.stranger',
+      permissionScopes: ['artifact:read'],
+    };
+
+    await expect(
+      fixture.manager.traceLineage({ principal: stranger, artifactId: first.id })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+    await expect(
+      fixture.manager.latest({ principal: stranger, logicalArtifactId: first.logicalArtifactId })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+    await expect(
+      fixture.manager.previous({ principal: stranger, versionId: second.versionId })
     ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
   });
 });

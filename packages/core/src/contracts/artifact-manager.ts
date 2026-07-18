@@ -133,6 +133,21 @@ export interface ArtifactListRequest {
   limit?: number;
 }
 
+export interface ArtifactTraceLineageRequest {
+  principal: ExecutionPrincipal;
+  artifactId: string;
+}
+
+export interface ArtifactLatestRequest {
+  principal: ExecutionPrincipal;
+  logicalArtifactId: string;
+}
+
+export interface ArtifactPreviousRequest {
+  principal: ExecutionPrincipal;
+  versionId: string;
+}
+
 export interface ArtifactMutationRequest {
   operationId: string;
   principal: ExecutionPrincipal;
@@ -183,9 +198,9 @@ export interface ArtifactManager {
   archive(request: ArtifactArchiveRequest): Promise<ArtifactRecord>;
   invalidate(request: ArtifactInvalidateRequest): Promise<ArtifactRecord>;
   delete(request: ArtifactDeleteRequest): Promise<void>;
-  traceLineage(artifactId: string): Promise<ArtifactLineage>;
-  latest(logicalArtifactId: string): Promise<ArtifactRecord | null>;
-  previous(versionId: string): Promise<ArtifactRecord | null>;
+  traceLineage(request: ArtifactTraceLineageRequest): Promise<ArtifactLineage>;
+  latest(request: ArtifactLatestRequest): Promise<ArtifactRecord | null>;
+  previous(request: ArtifactPreviousRequest): Promise<ArtifactRecord | null>;
   profile(ref: SpecRef): Promise<ArtifactProfileSpec | null>;
   health(): Promise<Record<string, ProviderHealth>>;
 }

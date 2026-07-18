@@ -16,16 +16,19 @@ import type {
   ArtifactGetRecordRequest,
   ArtifactInvalidateRequest,
   ArtifactLineage,
+  ArtifactLatestRequest,
   ArtifactListRequest,
   ArtifactManager,
   ArtifactMutationRequest,
   ArtifactProfileSpec,
+  ArtifactPreviousRequest,
   ArtifactReadRequest,
   ArtifactReadResult,
   ArtifactRecord,
   ArtifactRetentionProcessRequest,
   ArtifactRetentionProcessResult,
   ArtifactRetentionProcessor,
+  ArtifactTraceLineageRequest,
   ArtifactVersionRequest,
   NormalizedArtifactError,
   ProviderHealth,
@@ -197,16 +200,16 @@ export class EventingArtifactManager implements ArtifactManager {
     });
   }
 
-  traceLineage(artifactId: string): Promise<ArtifactLineage> {
-    return this.manager.traceLineage(artifactId);
+  traceLineage(request: ArtifactTraceLineageRequest): Promise<ArtifactLineage> {
+    return this.manager.traceLineage(request);
   }
 
-  latest(logicalArtifactId: string): Promise<ArtifactRecord | null> {
-    return this.manager.latest(logicalArtifactId);
+  latest(request: ArtifactLatestRequest): Promise<ArtifactRecord | null> {
+    return this.manager.latest(request);
   }
 
-  previous(versionId: string): Promise<ArtifactRecord | null> {
-    return this.manager.previous(versionId);
+  previous(request: ArtifactPreviousRequest): Promise<ArtifactRecord | null> {
+    return this.manager.previous(request);
   }
 
   profile(ref: SpecRef): Promise<ArtifactProfileSpec | null> {

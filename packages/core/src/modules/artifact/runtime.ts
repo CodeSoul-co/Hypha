@@ -11,16 +11,19 @@ import type {
   ArtifactInvalidateRequest,
   ArtifactLineage,
   ArtifactLineageNode,
+  ArtifactLatestRequest,
   ArtifactListRequest,
   ArtifactManager,
   ArtifactMutationRequest,
   ArtifactProfileSpec,
+  ArtifactPreviousRequest,
   ArtifactReadRequest,
   ArtifactReadResult,
   ArtifactRecord,
   ArtifactRecordRepository,
   ArtifactRetentionRecord,
   ArtifactStoreProvider,
+  ArtifactTraceLineageRequest,
   ArtifactVersionRequest,
   ArtifactWorkspaceContentReader,
   ProviderHealth,
@@ -38,8 +41,11 @@ import {
   validateArtifactFromWorkspaceRequest,
   validateArtifactGetRecordRequest,
   validateArtifactListRequest,
+  validateArtifactLatestRequest,
   validateArtifactMutationRequest,
+  validateArtifactPreviousRequest,
   validateArtifactReadRequest,
+  validateArtifactTraceLineageRequest,
   validateArtifactVersionRequest,
 } from './manager';
 import { persistArtifactContent } from './manager-content';
@@ -357,7 +363,7 @@ export class DefaultArtifactManager implements ArtifactManager {
     const latest = latestStoredByArtifact(
       await this.repositoryOperation(() => this.repository.list())
     );
-    return latest
+    const records = latest
       .filter((stored) => stored.record.workspaceId === request.workspaceId)
       .filter((stored) => request.includeDeleted || stored.record.status !== 'deleted')
       .filter(
@@ -378,8 +384,8 @@ export class DefaultArtifactManager implements ArtifactManager {
           hasRequiredReadScopes(profile, request.principal.permissionScopes)
         );
       })
-      .slice(0, request.limit)
       .map((stored) => stored.record);
+    return request.limit === undefined ? records : records.slice(0, request.limit);
   }
 
   finalize(request: ArtifactFinalizeRequest): Promise<ArtifactRecord> {
@@ -447,20 +453,34 @@ export class DefaultArtifactManager implements ArtifactManager {
     });
   }
 
-  async traceLineage(artifactId: string): Promise<ArtifactLineage> {
+  async traceLineage(input: ArtifactTraceLineageRequest): Promise<ArtifactLineage> {
+    const request = validateArtifactManagerInput(() => validateArtifactTraceLineageRequest(input));
     const all = await this.repositoryOperation(() => this.repository.list());
-    const versions = all
-      .filter((stored) => stored.record.id === artifactId)
+    const storedVersions = all.filter((stored) => stored.record.id === request.artifactId);
+    if (!storedVersions.length) {
+      throw artifactManagerError(
+        'ARTIFACT_NOT_FOUND',
+        `Artifact ${request.artifactId} was not found.`
+      );
+    }
+    for (const stored of storedVersions) {
+      assertRecordPermission(
+        this.requireProfile(stored.profileRef),
+        stored.record,
+        request.principal,
+        'read'
+      );
+    }
+    const versions = storedVersions
       .map((stored) => stored.record)
       .sort((left, right) => left.versionNumber - right.versionNumber);
-    if (!versions.length) {
-      throw artifactManagerError('ARTIFACT_NOT_FOUND', `Artifact ${artifactId} was not found.`);
-    }
-    const latest = latestStoredByArtifact(all);
+    const latest = latestStoredByArtifact(all).filter((stored) =>
+      this.canReadStoredRecord(stored, request.principal)
+    );
     return {
-      artifactId,
-      ancestors: collectAncestors(artifactId, latest),
-      descendants: collectDescendants(artifactId, latest),
+      artifactId: request.artifactId,
+      ancestors: collectAncestors(request.artifactId, latest),
+      descendants: collectDescendants(request.artifactId, latest),
       versions,
     };
   }
@@ -488,24 +508,47 @@ export class DefaultArtifactManager implements ArtifactManager {
     }
   }
 
-  async latest(logicalArtifactId: string): Promise<ArtifactRecord | null> {
+  async latest(input: ArtifactLatestRequest): Promise<ArtifactRecord | null> {
+    const request = validateArtifactManagerInput(() => validateArtifactLatestRequest(input));
     const candidates = (await this.repositoryOperation(() => this.repository.list()))
-      .filter((stored) => stored.record.logicalArtifactId === logicalArtifactId)
+      .filter((stored) => stored.record.logicalArtifactId === request.logicalArtifactId)
       .sort((left, right) => right.record.versionNumber - left.record.versionNumber);
-    const latest = candidates[0]?.record;
-    return latest?.status === 'deleted' ? null : (latest ?? null);
+    const latest = candidates[0];
+    if (!latest || latest.record.status === 'deleted') return null;
+    assertRecordPermission(
+      this.requireProfile(latest.profileRef),
+      latest.record,
+      request.principal,
+      'read'
+    );
+    return latest.record;
   }
 
-  async previous(versionId: string): Promise<ArtifactRecord | null> {
-    const stored = await this.repositoryOperation(() => this.repository.getByVersionId(versionId));
-    if (!stored?.record.previousVersionId) return null;
-    return (
-      (
-        await this.repositoryOperation(() =>
-          this.repository.getByVersionId(stored.record.previousVersionId!)
-        )
-      )?.record ?? null
+  async previous(input: ArtifactPreviousRequest): Promise<ArtifactRecord | null> {
+    const request = validateArtifactManagerInput(() => validateArtifactPreviousRequest(input));
+    const stored = await this.repositoryOperation(() =>
+      this.repository.getByVersionId(request.versionId)
     );
+    if (stored) {
+      assertRecordPermission(
+        this.requireProfile(stored.profileRef),
+        stored.record,
+        request.principal,
+        'read'
+      );
+    }
+    if (!stored?.record.previousVersionId) return null;
+    const previous = await this.repositoryOperation(() =>
+      this.repository.getByVersionId(stored.record.previousVersionId!)
+    );
+    if (!previous) return null;
+    assertRecordPermission(
+      this.requireProfile(previous.profileRef),
+      previous.record,
+      request.principal,
+      'read'
+    );
+    return previous.record;
   }
 
   async profile(ref: SpecRef): Promise<ArtifactProfileSpec | null> {
@@ -746,6 +789,18 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   private resolveProfile(ref: SpecRef): ArtifactProfileSpec | null {
     return resolveProfileRef(this.profiles, ref);
+  }
+
+  private canReadStoredRecord(
+    stored: StoredArtifactRecord,
+    principal: ArtifactReadRequest['principal']
+  ): boolean {
+    const profile = this.resolveProfile(stored.profileRef);
+    return Boolean(
+      profile &&
+      canAccessRecord(stored.record, principal) &&
+      hasRequiredReadScopes(profile, principal.permissionScopes)
+    );
   }
 
   private requireStore(profile: ArtifactProfileSpec): ArtifactStoreProvider {
