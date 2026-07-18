@@ -19,7 +19,7 @@ export interface EventReadRequest {
   types?: FrameworkEventType[];
 }
 
-export interface EventExportRequest extends EventReadRequest {}
+export type EventExportRequest = EventReadRequest;
 
 export interface EventExportResult {
   formatVersion: '1.0.0';
