@@ -39,7 +39,7 @@ export interface DockerSandboxLifecycleOptions {
   sandboxId?: (request: SandboxCreateRequest) => string;
 }
 
-type DockerSandboxState = DockerSandboxStateView;
+interface DockerSandboxState extends DockerSandboxStateView {}
 
 export class DockerSandboxLifecycle {
   private readonly providerId: string;
