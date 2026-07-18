@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
+import { LocalProcessOutputCollector } from './local-process-output-collector';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,12 +79,11 @@ export class LocalProcessSupervisor {
       let terminationPromise: Promise<boolean> | undefined;
       let timeout: NodeJS.Timeout | undefined;
       let idleTimeout: NodeJS.Timeout | undefined;
-      let observedStdoutBytes = 0;
-      let observedStderrBytes = 0;
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      let capturedStdoutBytes = 0;
-      let capturedStderrBytes = 0;
+      const output = new LocalProcessOutputCollector({
+        maxStdoutBytes: request.maxStdoutBytes,
+        maxStderrBytes: request.maxStderrBytes,
+        maxCombinedOutputBytes: request.maxCombinedOutputBytes,
+      });
 
       const requestTermination = (
         outcome: Exclude<LocalProcessOutcome, 'exited' | 'start_failed'>
@@ -102,33 +102,9 @@ export class LocalProcessSupervisor {
       };
 
       const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-        if (stream === 'stdout') observedStdoutBytes += chunk.byteLength;
-        else observedStderrBytes += chunk.byteLength;
-        const observedCombined = observedStdoutBytes + observedStderrBytes;
-        const currentBytes = stream === 'stdout' ? capturedStdoutBytes : capturedStderrBytes;
-        const streamLimit = stream === 'stdout' ? request.maxStdoutBytes : request.maxStderrBytes;
-        const capturedCombined = capturedStdoutBytes + capturedStderrBytes;
-        const remaining = Math.max(
-          0,
-          Math.min(streamLimit - currentBytes, request.maxCombinedOutputBytes - capturedCombined)
-        );
-        if (remaining > 0) {
-          const captured = chunk.subarray(0, remaining);
-          if (stream === 'stdout') {
-            stdout.push(captured);
-            capturedStdoutBytes += captured.byteLength;
-          } else {
-            stderr.push(captured);
-            capturedStderrBytes += captured.byteLength;
-          }
-        }
-        if (observedCombined > request.maxCombinedOutputBytes) {
-          outputLimitStream = 'combined';
-          requestTermination('output_limit');
-        } else if (
-          (stream === 'stdout' ? observedStdoutBytes : observedStderrBytes) > streamLimit
-        ) {
-          outputLimitStream = stream;
+        const appended = output.append(stream, chunk);
+        if (appended.limitExceeded) {
+          outputLimitStream = appended.limitExceeded;
           requestTermination('output_limit');
         }
         resetIdleTimeout();
@@ -163,16 +139,17 @@ export class LocalProcessSupervisor {
             request.gracefulTerminationMs
           );
         }
+        const capturedOutput = output.snapshot();
         const completedAt = this.now();
         resolve({
           outcome: startError ? 'start_failed' : (terminationOutcome ?? 'exited'),
           exitCode,
           ...(signal ? { signal } : {}),
-          stdout: Buffer.concat(stdout).toString('utf8'),
-          stderr: Buffer.concat(stderr).toString('utf8'),
+          stdout: capturedOutput.stdout,
+          stderr: capturedOutput.stderr,
           ...(outputLimitStream ? { outputLimitStream } : {}),
-          observedStdoutBytes,
-          observedStderrBytes,
+          observedStdoutBytes: capturedOutput.observedStdoutBytes,
+          observedStderrBytes: capturedOutput.observedStderrBytes,
           startedAt,
           completedAt,
           latencyMs: Math.max(0, this.monotonicNow() - startedTick),
