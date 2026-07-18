@@ -1,7 +1,11 @@
 import { z, type ZodType } from 'zod';
 import { defineSpecSchema, exportSpecJsonSchemas } from '../schemas';
 import type { JsonSchema } from '../specs';
-import { normalizedRuntimeErrorSchema, runtimeScopeSchema } from './runtime-schemas';
+import {
+  normalizedRuntimeErrorJsonSchema,
+  normalizedRuntimeErrorSchema,
+  runtimeScopeSchema,
+} from './runtime-schemas';
 import {
   RUNTIME_ACTIVITY_EFFECTS,
   RUNTIME_ACTIVITY_OBSERVATION_STATUSES,
@@ -143,6 +147,22 @@ export const runtimeActivityRequestJsonSchema: JsonSchema = {
       },
       additionalProperties: false,
     },
+  },
+  additionalProperties: false,
+};
+
+export const runtimeActivityObservationJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['activityId', 'status', 'eventIds'],
+  properties: {
+    activityId: nonEmptyStringJsonSchema,
+    status: { type: 'string', enum: [...RUNTIME_ACTIVITY_OBSERVATION_STATUSES] },
+    eventIds: { type: 'array', items: nonEmptyStringJsonSchema },
+    output: {},
+    artifactRefs: { type: 'array', items: nonEmptyStringJsonSchema },
+    retryable: { type: 'boolean' },
+    error: normalizedRuntimeErrorJsonSchema,
+    metadata: { type: 'object', additionalProperties: {} },
   },
   additionalProperties: false,
 };

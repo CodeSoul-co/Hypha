@@ -339,6 +339,7 @@ export class RuntimeCancellationService {
           reason: command.reason,
           policy: command.policy,
           requestedAt: command.requestedAt,
+          command: logicalCommand(command),
         },
         projection,
         command.requestedAt
@@ -484,10 +485,14 @@ export class RuntimeCancellationService {
 }
 
 function logicalCommandHash(command: RuntimeCancelCommand): string {
+  return hashCanonicalJson(logicalCommand(command));
+}
+
+function logicalCommand(command: RuntimeCancelCommand) {
   const { ownerId, leaseTtlMs, ...logical } = command;
   void ownerId;
   void leaseTtlMs;
-  return hashCanonicalJson(logical);
+  return logical;
 }
 
 function operationId(command: RuntimeCancelCommand): string {

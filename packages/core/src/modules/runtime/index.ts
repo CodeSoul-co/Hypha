@@ -16,3 +16,4 @@ export * from './runtime-activity-helper';
 export * from './run-control';
 export * from './runtime-timer-worker';
 export * from './runtime-cancellation-service';
+export * from './runtime-recovery-service';
