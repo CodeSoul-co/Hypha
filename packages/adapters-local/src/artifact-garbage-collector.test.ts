@@ -38,7 +38,9 @@ describe('DefaultArtifactGarbageCollector', () => {
     expect(fixture.store.stats()).toMatchObject({ objects: 1, blobs: 1 });
 
     await deleteArtifact(fixture.manager, first.id, first.revision, 'delete-first');
-    await expect(fixture.collector.collect({ operationId: 'gc-active-ref' })).resolves.toMatchObject({
+    await expect(
+      fixture.collector.collect({ operationId: 'gc-active-ref' })
+    ).resolves.toMatchObject({
       candidateObjects: 0,
       deletedObjects: 0,
     });
@@ -75,6 +77,43 @@ describe('DefaultArtifactGarbageCollector', () => {
       deletedObjects: 0,
     });
     expect(fixture.store.stats().objects).toBe(1);
+  });
+
+  it('tombstones every logical version before collecting their distinct Blobs', async () => {
+    const fixture = createFixture();
+    const firstBytes = new TextEncoder().encode('version-one');
+    const secondBytes = new TextEncoder().encode('version-two');
+    const first = await fixture.manager.create(createRequest('versioned', firstBytes));
+    const second = await fixture.manager.createVersion({
+      operationId: 'versioned-second',
+      principal,
+      artifactId: first.id,
+      expectedRevision: first.revision,
+      content: secondBytes,
+      expectedContentHash: hashArtifactBytes(secondBytes),
+      expectedSizeBytes: secondBytes.byteLength,
+      provenance: {
+        sourceType: 'derived',
+        createdBy: principal.principalId,
+        sourceArtifactIds: [first.id],
+      },
+    });
+    expect(fixture.store.stats()).toMatchObject({ objects: 2, blobs: 2 });
+
+    await deleteArtifact(fixture.manager, second.id, second.revision, 'delete-versioned');
+    expect(
+      (await fixture.repository.list())
+        .filter(({ record }) => record.id === first.id)
+        .map(({ record }) => record.status)
+    ).toEqual(['deleted', 'deleted']);
+    await expect(fixture.collector.collect({ operationId: 'gc-versioned' })).resolves.toMatchObject(
+      {
+        candidateObjects: 2,
+        deletedObjects: 2,
+        failures: [],
+      }
+    );
+    expect(fixture.store.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
   });
 
   it('releases a failed claim so Store deletion can be retried', async () => {
@@ -116,7 +155,9 @@ describe('DefaultArtifactGarbageCollector', () => {
       deletedObjects: 0,
       failures: [],
     });
-    await expect(fixture.collector.collect({ operationId: 'gc-missing-repeat' })).resolves.toMatchObject({
+    await expect(
+      fixture.collector.collect({ operationId: 'gc-missing-repeat' })
+    ).resolves.toMatchObject({
       candidateObjects: 0,
     });
   });
@@ -142,7 +183,9 @@ describe('DefaultArtifactGarbageCollector', () => {
       fixture.manager.create(createRequest('concurrent', content))
     ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' } });
     await fixture.repository.releaseGarbageCollection('claim.concurrent');
-    await expect(fixture.manager.create(createRequest('after-release', content))).resolves.toMatchObject({
+    await expect(
+      fixture.manager.create(createRequest('after-release', content))
+    ).resolves.toMatchObject({
       contentHash: record.contentHash,
     });
   });

@@ -413,39 +413,33 @@ export class DefaultArtifactManager implements ArtifactManager {
       if (stored.record.revision !== request.expectedRevision) {
         throw revisionConflict(stored.record, request.expectedRevision);
       }
-      if (stored.record.retention.legalHold) {
-        throw artifactManagerError(
-          'ARTIFACT_DELETE_BLOCKED',
-          'Artifact is protected by a legal hold.'
-        );
-      }
-      if ((stored.record.retention.referencedByCount ?? 0) > 0) {
-        throw artifactManagerError(
-          'ARTIFACT_DELETE_BLOCKED',
-          'Artifact is still referenced and cannot be deleted.',
-          false,
-          { referencedByCount: stored.record.retention.referencedByCount }
-        );
-      }
-      if (stored.record.status === 'final' && profile.retention.retainFinal) {
-        throw artifactManagerError(
-          'ARTIFACT_DELETE_BLOCKED',
-          'Final Artifact retention policy blocks deletion.'
-        );
+      const versions = (await this.repositoryOperation(() => this.repository.list())).filter(
+        (candidate) => candidate.record.id === stored.record.id
+      );
+      for (const version of versions) {
+        const versionProfile = this.requireProfile(version.profileRef);
+        assertRecordPermission(versionProfile, version.record, request.principal, 'delete');
+        this.assertDeletionAllowed(version.record, versionProfile);
       }
       const timestamp = this.timestamp();
-      const deleted = validateArtifactRecord({
-        ...stored.record,
-        status: 'deleted',
-        revision: stored.record.revision + 1,
-        updatedAt: timestamp,
-        deletedAt: timestamp,
-      });
+      const deletedVersions = versions.map((version) => ({
+        record: validateArtifactRecord({
+          ...version.record,
+          status: 'deleted',
+          revision: version.record.revision + 1,
+          updatedAt: timestamp,
+          deletedAt: timestamp,
+        }),
+        profileRef: version.profileRef,
+      }));
+      const deletedLatest = deletedVersions.find(
+        (version) => version.record.versionId === stored.record.versionId
+      )!;
       try {
         await this.commitRecords(
-          [{ record: deleted, profileRef: stored.profileRef }],
+          deletedVersions,
           latestFence(stored),
-          idempotencyResult(request, deleted)
+          idempotencyResult(request, deletedLatest.record)
         );
       } catch (error) {
         await this.reconcileIdempotency(error, request, request.principal, 'delete');
@@ -469,6 +463,29 @@ export class DefaultArtifactManager implements ArtifactManager {
       descendants: collectDescendants(artifactId, latest),
       versions,
     };
+  }
+
+  private assertDeletionAllowed(record: ArtifactRecord, profile: ArtifactProfileSpec): void {
+    if (record.retention.legalHold) {
+      throw artifactManagerError(
+        'ARTIFACT_DELETE_BLOCKED',
+        'Artifact is protected by a legal hold.'
+      );
+    }
+    if ((record.retention.referencedByCount ?? 0) > 0) {
+      throw artifactManagerError(
+        'ARTIFACT_DELETE_BLOCKED',
+        'Artifact is still referenced and cannot be deleted.',
+        false,
+        { referencedByCount: record.retention.referencedByCount }
+      );
+    }
+    if (record.status === 'final' && profile.retention.retainFinal) {
+      throw artifactManagerError(
+        'ARTIFACT_DELETE_BLOCKED',
+        'Final Artifact retention policy blocks deletion.'
+      );
+    }
   }
 
   async latest(logicalArtifactId: string): Promise<ArtifactRecord | null> {
