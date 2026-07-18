@@ -14,3 +14,4 @@ export * from './runtime-helper-sdk';
 export * from './runtime-io-helpers';
 export * from './runtime-activity-helper';
 export * from './run-control';
+export * from './runtime-timer-worker';

@@ -23,7 +23,7 @@ export interface RuntimePendingWaitProjection {
 
 export interface RuntimeResumeProjection {
   commandId: string;
-  kind: 'manual' | 'signal';
+  kind: 'manual' | 'signal' | 'timer';
   waitId: string;
   principalId: string;
   key?: string;

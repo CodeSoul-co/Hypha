@@ -25,6 +25,8 @@ export type FrameworkEventType =
   | 'runtime.wait.created'
   | 'runtime.wait.resolved'
   | 'runtime.signal.received'
+  | 'runtime.timer.created'
+  | 'runtime.timer.fired'
   | 'recovery.case.opened'
   | 'recovery.strategy.selected'
   | 'recovery.attempt.started'

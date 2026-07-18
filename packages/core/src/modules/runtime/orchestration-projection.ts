@@ -10,7 +10,7 @@ import { FrameworkError } from '../../errors';
 import type { ProjectionDefinition } from './projection';
 
 export const RUNTIME_ORCHESTRATION_PROJECTION_ID = 'runtime.orchestration';
-export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.1.0';
+export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.2.0';
 
 const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.created',
@@ -27,6 +27,8 @@ const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'runtime.wait.created',
   'runtime.wait.resolved',
   'runtime.signal.received',
+  'runtime.timer.created',
+  'runtime.timer.fired',
   'fsm.transition.accepted',
   'fsm.state.entered',
   'fsm.state.exited',
@@ -100,6 +102,10 @@ export function reduceRuntimeOrchestrationProjection(
       return waitResolved(state, event);
     case 'runtime.signal.received':
       return signalReceived(state, event);
+    case 'runtime.timer.created':
+      return timerCreated(state, event);
+    case 'runtime.timer.fired':
+      return timerFired(state, event);
     case 'fsm.transition.accepted':
       return transitionAccepted(state, event);
     case 'fsm.state.entered':
@@ -203,7 +209,7 @@ function runResumeRequested(
   event: PersistedFrameworkEvent
 ): RuntimeOrchestrationProjection {
   requireCreated(state, event);
-  if (!['paused', 'waiting_signal'].includes(state.runStatus)) {
+  if (!['paused', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
     divergence(`Run cannot resume from ${state.runStatus}`, event);
   }
   if (!state.pendingWait) divergence('Run resume requires a pending Wait', event);
@@ -223,7 +229,7 @@ function runResumed(
   const resume = recordValue(payload.resume);
   if (!resume) divergence('run.resumed requires resume details', event);
   const kind = requiredString(resume.kind, 'resume kind', event);
-  if (kind !== 'manual' && kind !== 'signal') {
+  if (kind !== 'manual' && kind !== 'signal' && kind !== 'timer') {
     divergence('run.resumed contains an unsupported resume kind', event, { kind });
   }
   const lastResume: RuntimeResumeProjection = {
@@ -320,6 +326,55 @@ function signalReceived(
       actualWaitId: waitId,
       expectedKey: state.pendingWait.key,
       actualKey: key,
+    });
+  }
+  return structuredClone(state);
+}
+
+function timerCreated(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireActive(state, event);
+  if (state.pendingWait?.type !== 'timer') {
+    divergence('Timer creation requires a pending Timer Wait', event);
+  }
+  const payload = payloadRecord(event);
+  const waitId = requiredString(payload.waitId, 'timer waitId', event);
+  const timerId = requiredString(payload.timerId, 'timerId', event);
+  const fireAt = requiredString(payload.fireAt, 'timer fireAt', event);
+  if (
+    waitId !== state.pendingWait.waitId ||
+    timerId !== state.pendingWait.waitId ||
+    fireAt !== state.pendingWait.expiresAt
+  ) {
+    divergence('Timer creation does not match the pending Wait', event, {
+      expectedWaitId: state.pendingWait.waitId,
+      actualWaitId: waitId,
+      timerId,
+      expectedFireAt: state.pendingWait.expiresAt,
+      actualFireAt: fireAt,
+    });
+  }
+  return structuredClone(state);
+}
+
+function timerFired(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (state.runStatus !== 'waiting_timer' || state.pendingWait?.type !== 'timer') {
+    divergence('Timer firing requires a Timer-waiting Run', event);
+  }
+  const payload = payloadRecord(event);
+  const waitId = requiredString(payload.waitId, 'timer waitId', event);
+  const timerId = requiredString(payload.timerId, 'timerId', event);
+  if (waitId !== state.pendingWait.waitId || timerId !== state.pendingWait.waitId) {
+    divergence('Fired Timer does not match the pending Wait', event, {
+      expectedWaitId: state.pendingWait.waitId,
+      actualWaitId: waitId,
+      timerId,
     });
   }
   return structuredClone(state);

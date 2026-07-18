@@ -60,7 +60,7 @@ export const runtimeOrchestrationProjectionSchema = z
     lastResume: z
       .object({
         commandId: nonEmptyStringSchema,
-        kind: z.enum(['manual', 'signal']),
+        kind: z.enum(['manual', 'signal', 'timer']),
         waitId: nonEmptyStringSchema,
         principalId: nonEmptyStringSchema,
         key: nonEmptyStringSchema.optional(),
@@ -195,7 +195,7 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
       required: ['commandId', 'kind', 'waitId', 'principalId', 'resumedAt'],
       properties: {
         commandId: nonEmptyStringJsonSchema,
-        kind: { type: 'string', enum: ['manual', 'signal'] },
+        kind: { type: 'string', enum: ['manual', 'signal', 'timer'] },
         waitId: nonEmptyStringJsonSchema,
         principalId: nonEmptyStringJsonSchema,
         key: nonEmptyStringJsonSchema,

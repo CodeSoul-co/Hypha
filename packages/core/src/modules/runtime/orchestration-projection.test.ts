@@ -193,7 +193,7 @@ describe('Runtime orchestration projection', () => {
         scope
       )
     ).resolves.toMatchObject({
-      projectionVersion: '1.1.0',
+      projectionVersion: '1.2.0',
       state: {
         runStatus: 'waiting_signal',
         pendingWait: {

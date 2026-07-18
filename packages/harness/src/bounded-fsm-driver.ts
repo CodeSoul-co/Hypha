@@ -425,33 +425,51 @@ export class FencedBoundedFSMDriver {
     const type = waitEventType(wait);
     const waitId = this.nextId('wait');
     const timestamp = this.timestamp('Runtime Wait');
+    if (wait.type === 'timer' && wait.expiresAt === undefined) {
+      invalid('Timer Wait requires expiresAt');
+    }
+    const events: EventCreateInput[] = [
+      this.event(
+        input.scope,
+        'runtime.wait.created',
+        {
+          waitId,
+          stateId: projection.currentState,
+          stateAttempt: projection.stateAttempt,
+          wait,
+          createdAt: timestamp,
+        },
+        projection.currentState,
+        projection.stateAttempt,
+        timestamp
+      ),
+    ];
+    if (wait.type === 'timer') {
+      events.push(
+        this.event(
+          input.scope,
+          'runtime.timer.created',
+          { timerId: waitId, waitId, fireAt: wait.expiresAt },
+          projection.currentState,
+          projection.stateAttempt,
+          timestamp
+        )
+      );
+    }
+    events.push(
+      this.event(
+        input.scope,
+        type,
+        { waitId, stateId: projection.currentState, wait },
+        projection.currentState,
+        projection.stateAttempt,
+        timestamp
+      )
+    );
     await this.appendLifecycle(
       input.scope,
       runLease,
-      [
-        this.event(
-          input.scope,
-          'runtime.wait.created',
-          {
-            waitId,
-            stateId: projection.currentState,
-            stateAttempt: projection.stateAttempt,
-            wait,
-            createdAt: timestamp,
-          },
-          projection.currentState,
-          projection.stateAttempt,
-          timestamp
-        ),
-        this.event(
-          input.scope,
-          type,
-          { waitId, stateId: projection.currentState, wait },
-          projection.currentState,
-          projection.stateAttempt,
-          timestamp
-        ),
-      ],
+      events,
       `wait:${wait.type}:${projection.currentState}:${projection.stateAttempt}`
     );
     return this.project(input);

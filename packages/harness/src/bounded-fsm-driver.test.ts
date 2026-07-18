@@ -6,6 +6,7 @@ import {
   InMemoryRunLeaseStore,
   InMemoryStateExecutionClaimStore,
   DurableEventRuntime,
+  DurableRuntimeTimerWorker,
   ProjectionEngine,
   RuntimeRunControlService,
   hashCanonicalJson,
@@ -67,6 +68,8 @@ const driverEventTypes: FrameworkEventType[] = [
   'runtime.wait.created',
   'runtime.wait.resolved',
   'runtime.signal.received',
+  'runtime.timer.created',
+  'runtime.timer.fired',
   'fsm.state.entered',
   'fsm.state.exited',
   'fsm.transition.accepted',
@@ -116,13 +119,31 @@ async function fixture(
     now,
     nextId,
   });
+  const timers = new DurableRuntimeTimerWorker({
+    events,
+    projections,
+    projectionStore,
+    runLeases,
+    now,
+    nextId,
+  });
   await events.append({
     scope: streamScope(),
     events: [seedEvent('run.created', 'run.created', now())],
     expectedLastSequence: 0,
     idempotencyKey: 'seed.run.created',
   });
-  return { driver, controls, events, projectionStore, runLeases, stateClaims, now, nextId };
+  return {
+    driver,
+    controls,
+    timers,
+    events,
+    projectionStore,
+    runLeases,
+    stateClaims,
+    now,
+    nextId,
+  };
 }
 
 function runInput(maxSteps: number, abortSignal?: AbortSignal) {
@@ -331,6 +352,51 @@ describe('FencedBoundedFSMDriver', () => {
       disposition: 'applied',
       projection: { runStatus: 'running', stateAttempt: 2 },
     });
+    await expect(target.driver.run(runInput(1))).resolves.toMatchObject({
+      disposition: 'completed',
+      projection: { runStatus: 'completed', terminalState: 'Completed' },
+    });
+    expect(claims).toEqual(['Start:1', 'Start:2']);
+  });
+
+  it('continues from a persisted Timer as a new claimable State attempt', async () => {
+    const claims: string[] = [];
+    const target = await fixture((input) => {
+      claims.push(`${input.stateClaim.stateId}:${input.stateClaim.stateAttempt}`);
+      if (input.projection.stateAttempt === 1) {
+        return {
+          result: {
+            kind: 'waiting',
+            wait: { type: 'timer', expiresAt: '2026-07-18T05:01:00.000Z' },
+          },
+        };
+      }
+      expect(input.projection.lastResume).toMatchObject({
+        kind: 'timer',
+        payload: {
+          scheduledFor: '2026-07-18T05:01:00.000Z',
+          firedAt: '2026-07-18T05:02:00.000Z',
+        },
+      });
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    });
+
+    await expect(target.driver.run(runInput(1))).resolves.toMatchObject({
+      disposition: 'waiting',
+      projection: {
+        runStatus: 'waiting_timer',
+        stateAttempt: 1,
+        pendingWait: { type: 'timer', expiresAt: '2026-07-18T05:01:00.000Z' },
+      },
+    });
+    await expect(
+      target.timers.sweep({
+        ownerId: 'worker.timer',
+        leaseTtlMs: 60_000,
+        limit: 10,
+        firedAt: '2026-07-18T05:02:00.000Z',
+      })
+    ).resolves.toMatchObject({ fired: 1 });
     await expect(target.driver.run(runInput(1))).resolves.toMatchObject({
       disposition: 'completed',
       projection: { runStatus: 'completed', terminalState: 'Completed' },
