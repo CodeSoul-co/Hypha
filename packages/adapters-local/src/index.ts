@@ -60,8 +60,8 @@ export * from './docker-process-result';
 export * from './docker-execution-provider';
 export * from './execution-provider-factories';
 export * from './artifact-content-io';
+export * from './artifact-store-adapter-error';
 export {
-  ArtifactStoreAdapterError,
   InMemoryExecutionArtifactStore,
   type InMemoryExecutionArtifactStoreOptions,
   type InMemoryExecutionArtifactStoreStats,

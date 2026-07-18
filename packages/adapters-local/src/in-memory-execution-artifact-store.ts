@@ -7,7 +7,6 @@ import type {
   ArtifactStorageRef,
   ArtifactStoreCapabilities,
   ArtifactStoreProvider,
-  NormalizedArtifactError,
   ProviderHealth,
 } from '@hypha/core';
 import {
@@ -16,13 +15,19 @@ import {
   validateArtifactGetRequest,
   validateArtifactPutRequest,
 } from '@hypha/core';
-import { ZodError } from 'zod';
 import {
   ArtifactContentLimitError,
   collectArtifactContent,
   hashArtifactBytes,
   streamArtifactBytes,
 } from './artifact-content-io';
+import {
+  ArtifactStoreAdapterError,
+  artifactStoreError,
+  validateArtifactStoreInput,
+} from './artifact-store-adapter-error';
+
+export { ArtifactStoreAdapterError } from './artifact-store-adapter-error';
 
 export interface InMemoryExecutionArtifactStoreOptions {
   id?: string;
@@ -81,7 +86,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
 
   async put(input: ArtifactPutRequest): Promise<ArtifactStorageRef> {
     this.assertOpen();
-    const request = validateStoreInput(() => validateArtifactPutRequest(input));
+    const request = validateArtifactStoreInput(() => validateArtifactPutRequest(input));
     let collected;
     try {
       collected = await collectArtifactContent(request.content, this.maxObjectBytes);
@@ -147,7 +152,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
 
   async get(input: ArtifactGetRequest): Promise<ArtifactContent> {
     this.assertOpen();
-    const request = validateStoreInput(() => validateArtifactGetRequest(input));
+    const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
     this.assertOwnedRef(request.ref);
     const object = this.requireObject(request.ref.objectKey);
     const blob = this.requireBlob(object.contentHash);
@@ -182,7 +187,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
 
   async head(input: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null> {
     this.assertOpen();
-    const ref = validateStoreInput(() => artifactStorageRefSchema.parse(input));
+    const ref = validateArtifactStoreInput(() => artifactStorageRefSchema.parse(input));
     this.assertOwnedRef(ref);
     const object = this.objects.get(ref.objectKey);
     if (!object) return null;
@@ -198,14 +203,14 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
 
   async exists(input: ArtifactStorageRef): Promise<boolean> {
     this.assertOpen();
-    const ref = validateStoreInput(() => artifactStorageRefSchema.parse(input));
+    const ref = validateArtifactStoreInput(() => artifactStorageRefSchema.parse(input));
     this.assertOwnedRef(ref);
     return this.objects.has(ref.objectKey);
   }
 
   async delete(input: ArtifactStorageRef): Promise<void> {
     this.assertOpen();
-    const ref = validateStoreInput(() => artifactStorageRefSchema.parse(input));
+    const ref = validateArtifactStoreInput(() => artifactStorageRefSchema.parse(input));
     this.assertOwnedRef(ref);
     const object = this.objects.get(ref.objectKey);
     if (!object) return;
@@ -215,7 +220,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
 
   async copy(input: ArtifactCopyRequest): Promise<ArtifactStorageRef> {
     this.assertOpen();
-    const request = validateStoreInput(() => artifactCopyRequestSchema.parse(input));
+    const request = validateArtifactStoreInput(() => artifactCopyRequestSchema.parse(input));
     this.assertOwnedRef(request.source);
     const source = this.requireObject(request.source.objectKey);
     const existing = this.objects.get(request.targetObjectKey);
@@ -341,44 +346,6 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
       etag: contentHash,
       encrypted: false,
     };
-  }
-}
-
-export class ArtifactStoreAdapterError extends Error {
-  constructor(readonly normalizedError: NormalizedArtifactError) {
-    super(normalizedError.message);
-    this.name = 'ArtifactStoreAdapterError';
-  }
-}
-
-function artifactStoreError(
-  code: NormalizedArtifactError['code'],
-  message: string,
-  retryable: boolean,
-  details?: Record<string, unknown>
-): ArtifactStoreAdapterError {
-  return new ArtifactStoreAdapterError({
-    code,
-    message,
-    retryable,
-    ...(details ? { details } : {}),
-  });
-}
-
-function validateStoreInput<T>(validate: () => T): T {
-  try {
-    return validate();
-  } catch (error) {
-    if (error instanceof ArtifactStoreAdapterError) throw error;
-    if (error instanceof ZodError) {
-      throw artifactStoreError(
-        'ARTIFACT_INVALID_INPUT',
-        'Artifact Store request failed contract validation.',
-        false,
-        { issues: error.issues }
-      );
-    }
-    throw error;
   }
 }
 
