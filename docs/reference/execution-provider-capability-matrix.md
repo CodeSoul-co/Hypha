@@ -24,13 +24,37 @@ incompatible.
 
 ## Provider Requirements and Available Surfaces
 
-| Provider kind    | Isolation expectation                                                                                       | Required lifecycle behavior                                                                                                           | Available framework surface                                                                                                |
-| ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `mock`           | No external process, filesystem, or network side effect                                                     | Deterministic result and lifecycle for tests                                                                                          | Contracts and test doubles; never a security sandbox                                                                       |
-| `local_process`  | No process or network isolation may be assumed; managed-root checks provide only filesystem confinement     | Cancellation and process-tree kill require a platform process group or Job Object before those capabilities may be reported           | `LocalWorkspaceRuntime` provides bounded file execution but does not implement `SandboxProvider`                           |
-| `docker`         | Process, filesystem, namespace, resource, mount, security, network, and image-digest controls are mandatory | Stop, forced kill, receipt capture, and container cleanup are idempotent and reconciled                                               | Environment validation and capability requirements; no concrete Docker adapter                                             |
-| `remote_sandbox` | Provider contract attests enforceable process, filesystem, network, resource, and tenant isolation          | Create, execute, output stream, Artifact transfer, cancel, terminate, cleanup, health, and remote receipt reconciliation are required | `RemoteSandboxProvider` defines the provider-neutral port and requires `remoteExecution: true`; no concrete remote adapter |
-| `custom`         | No capability is inferred from the provider name                                                            | Every claimed capability requires adapter contract tests and runtime health evidence                                                  | Provider-neutral extension port                                                                                            |
+| Provider kind    | Isolation expectation                                                                                                       | Required lifecycle behavior                                                                                                                                    | Available framework surface                                                                                                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mock`           | No external process, filesystem, or network side effect                                                                     | Deterministic result and lifecycle for tests                                                                                                                   | Contracts and test doubles; never a security sandbox                                                                                                                                                                                                      |
+| `local_process`  | No process, filesystem, or network isolation may be assumed; managed-root checks provide application-level confinement only | Cancellation and process-tree kill require a verified platform process group or Job Object; the Windows `taskkill` fallback is trusted-development opt-in only | `LocalProcessExecutionProvider` implements the common lifecycle for trusted development and reports unsupported isolation and resource capabilities as `false`                                                                                            |
+| `docker`         | Process, filesystem, namespace, resource, mount, security, network, and image-digest controls are mandatory                 | Stop, forced kill, receipt capture, and container cleanup are idempotent and reconciled                                                                        | `DockerExecutionProvider` implements a single-use, digest-pinned container lifecycle with a read-only root, one governed Workspace mount, disabled networking, non-root execution, dropped capabilities, CPU/memory/PID limits, cancellation, and cleanup |
+| `remote_sandbox` | Provider contract attests enforceable process, filesystem, network, resource, and tenant isolation                          | Create, execute, output stream, Artifact transfer, cancel, terminate, cleanup, health, and remote receipt reconciliation are required                          | `RemoteSandboxProvider` defines the provider-neutral port and requires `remoteExecution: true`; no concrete remote adapter                                                                                                                                |
+| `custom`         | No capability is inferred from the provider name                                                                            | Every claimed capability requires adapter contract tests and runtime health evidence                                                                           | Provider-neutral extension port                                                                                                                                                                                                                           |
+
+## Implemented Provider Declarations
+
+| Capability           | `LocalProcessExecutionProvider` | `DockerExecutionProvider`  |
+| -------------------- | ------------------------------- | -------------------------- |
+| Process isolation    | `false`                         | `true`                     |
+| Filesystem isolation | `false`                         | `true`                     |
+| Network isolation    | `false`                         | `true`, disabled mode only |
+| CPU limits           | `false`                         | `true`                     |
+| Memory limits        | `false`                         | `true`                     |
+| Disk limits          | `false`                         | `false`                    |
+| PID limits           | `false`                         | `true`                     |
+| Cancellation         | `true`                          | `true`                     |
+| Process-tree kill    | Platform dependent              | `true`, container scope    |
+| Snapshots            | `false`                         | `false`                    |
+| Image digest pinning | `false`                         | `true`                     |
+| Remote execution     | `false`                         | `false`                    |
+
+The Docker adapter deliberately rejects enabled or restricted networking, secret injection,
+host-path or device mounts, writable roots, privileged execution, added capabilities, container
+reuse, shell-mode requests, and images without the required immutable digest. It does not claim
+disk limits, snapshots, remote execution, or domain-restricted networking. The local-process
+adapter remains a trusted-development surface and is not a security substitute for Docker or a
+remote sandbox.
 
 ## Minimum Negotiation Rules
 
