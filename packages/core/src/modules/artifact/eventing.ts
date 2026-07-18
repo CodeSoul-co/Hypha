@@ -1,7 +1,9 @@
 import type {
   ArtifactArchiveRequest,
+  ArtifactCreateDownloadAccessRequest,
   ArtifactCreateRequest,
   ArtifactDeleteRequest,
+  ArtifactDownloadAccess,
   ArtifactEventPayloadMap,
   ArtifactEventPublication,
   ArtifactEventPublisher,
@@ -125,6 +127,12 @@ export class EventingArtifactManager implements ArtifactManager {
     return result;
   }
 
+  createDownloadAccess(
+    request: ArtifactCreateDownloadAccessRequest
+  ): Promise<ArtifactDownloadAccess> {
+    return this.manager.createDownloadAccess(request);
+  }
+
   list(request: ArtifactListRequest): Promise<ArtifactRecord[]> {
     return this.manager.list(request);
   }
@@ -232,7 +240,9 @@ export class EventingArtifactManager implements ArtifactManager {
     return record;
   }
 
-  private async mutate<TType extends 'artifact.finalized' | 'artifact.archived' | 'artifact.invalidated'>(
+  private async mutate<
+    TType extends 'artifact.finalized' | 'artifact.archived' | 'artifact.invalidated',
+  >(
     request: ArtifactMutationRequest,
     type: TType,
     mutation: () => Promise<ArtifactRecord>
@@ -366,14 +376,18 @@ class ArtifactEventEmitter {
 
   private nextId(): string {
     const value = this.idGenerator().trim();
-    if (!value) throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'idGenerator returned empty.');
+    if (!value)
+      throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'idGenerator returned empty.');
     return value;
   }
 
   private timestamp(): string {
     const value = this.now();
     if (!Number.isFinite(Date.parse(value))) {
-      throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'Artifact event clock returned invalid time.');
+      throw artifactManagerError(
+        'ARTIFACT_INTERNAL_ERROR',
+        'Artifact event clock returned invalid time.'
+      );
     }
     return value;
   }
@@ -441,7 +455,11 @@ function normalizeArtifactEventError(error: unknown): NormalizedArtifactError {
   };
 }
 
-function normalizeGcFailure(code: string, message: string, retryable: boolean): NormalizedArtifactError {
+function normalizeGcFailure(
+  code: string,
+  message: string,
+  retryable: boolean
+): NormalizedArtifactError {
   const parsed = normalizedArtifactErrorSchema.shape.code.safeParse(code);
   return {
     code: parsed.success ? parsed.data : 'ARTIFACT_INTERNAL_ERROR',
@@ -454,13 +472,7 @@ function eventId<TType extends ArtifactFrameworkEventType>(
   type: TType,
   payload: ArtifactEventPayloadMap[TType]
 ): string {
-  return [
-    'artifact-event',
-    type,
-    payload.operationId,
-    payload.artifactId,
-    payload.versionId,
-  ]
+  return ['artifact-event', type, payload.operationId, payload.artifactId, payload.versionId]
     .filter((value): value is string => Boolean(value))
     .map(safeEventSegment)
     .join('.');

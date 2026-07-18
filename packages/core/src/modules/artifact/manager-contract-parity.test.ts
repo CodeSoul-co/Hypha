@@ -5,6 +5,7 @@ import {
 } from '../../../test-support/contract-schema-parity';
 import {
   artifactCreateRequestSchema,
+  artifactCreateDownloadAccessRequestSchema,
   artifactFromWorkspaceRequestSchema,
   artifactGetRecordRequestSchema,
   artifactListRequestSchema,
@@ -15,6 +16,7 @@ import {
   artifactVersionRequestSchema,
   normalizedArtifactErrorSchema,
 } from './manager';
+import { artifactDownloadAccessSchema } from './store';
 
 const contractPairs: ContractSchemaPair[] = [
   ['ArtifactCreateRequest', artifactCreateRequestSchema],
@@ -23,6 +25,8 @@ const contractPairs: ContractSchemaPair[] = [
   ['ArtifactGetRecordRequest', artifactGetRecordRequestSchema],
   ['ArtifactReadRequest', artifactReadRequestSchema],
   ['ArtifactReadResult', artifactReadResultSchema],
+  ['ArtifactCreateDownloadAccessRequest', artifactCreateDownloadAccessRequestSchema],
+  ['ArtifactDownloadAccess', artifactDownloadAccessSchema],
   ['ArtifactListRequest', artifactListRequestSchema],
   ['ArtifactMutationRequest', artifactMutationRequestSchema],
   ['NormalizedArtifactError', normalizedArtifactErrorSchema],

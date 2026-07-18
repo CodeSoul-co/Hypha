@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   artifactCreateRequestExample,
+  artifactCreateDownloadAccessRequestExample,
   artifactFromWorkspaceRequestExample,
   artifactVersionRequestExample,
   validateArtifactCreateRequest,
+  validateArtifactCreateDownloadAccessRequest,
   validateArtifactFromWorkspaceRequest,
   validateArtifactListRequest,
   validateArtifactMutationRequest,
@@ -22,7 +24,22 @@ describe('ArtifactManager contracts', () => {
     expect(validateArtifactVersionRequest(artifactVersionRequestExample)).toEqual(
       artifactVersionRequestExample
     );
+    expect(
+      validateArtifactCreateDownloadAccessRequest(artifactCreateDownloadAccessRequestExample)
+    ).toEqual(artifactCreateDownloadAccessRequestExample);
   });
+
+  it.each(['../report.json', 'nested/report.json', 'report\r\nmalicious.txt'])(
+    'rejects unsafe download filename %s',
+    (responseFilename) => {
+      expect(() =>
+        validateArtifactCreateDownloadAccessRequest({
+          ...artifactCreateDownloadAccessRequestExample,
+          responseFilename,
+        })
+      ).toThrow();
+    }
+  );
 
   it('binds caller identity and access scope to the requested owner', () => {
     expect(() =>

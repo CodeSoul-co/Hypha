@@ -7,7 +7,12 @@ import type {
   ArtifactRecord,
   ArtifactRetentionRecord,
 } from './artifact';
-import type { ArtifactByteRange, ArtifactByteSource, ArtifactContent } from './artifact-store';
+import type {
+  ArtifactByteRange,
+  ArtifactByteSource,
+  ArtifactContent,
+  ArtifactDownloadAccess,
+} from './artifact-store';
 import type { ExecutionPrincipal, ProviderHealth } from './execution';
 import type { SpecRef } from '../specs';
 
@@ -110,6 +115,13 @@ export interface ArtifactReadResult {
   content: ArtifactContent;
 }
 
+export interface ArtifactCreateDownloadAccessRequest extends ArtifactGetRecordRequest {
+  operationId: string;
+  expiresInSeconds?: number;
+  responseMimeType?: string;
+  responseFilename?: string;
+}
+
 export interface ArtifactListRequest {
   principal: ExecutionPrincipal;
   workspaceId: string;
@@ -163,6 +175,9 @@ export interface ArtifactManager {
   createVersion(request: ArtifactVersionRequest): Promise<ArtifactRecord>;
   get(request: ArtifactGetRecordRequest): Promise<ArtifactRecord | null>;
   read(request: ArtifactReadRequest): Promise<ArtifactReadResult>;
+  createDownloadAccess(
+    request: ArtifactCreateDownloadAccessRequest
+  ): Promise<ArtifactDownloadAccess>;
   list(request: ArtifactListRequest): Promise<ArtifactRecord[]>;
   finalize(request: ArtifactFinalizeRequest): Promise<ArtifactRecord>;
   archive(request: ArtifactArchiveRequest): Promise<ArtifactRecord>;

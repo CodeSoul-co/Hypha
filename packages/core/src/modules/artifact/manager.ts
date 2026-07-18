@@ -1,6 +1,7 @@
 import { z, type ZodType } from 'zod';
 import type {
   ArtifactCreateRequest,
+  ArtifactCreateDownloadAccessRequest,
   ArtifactFromWorkspaceRequest,
   ArtifactGetRecordRequest,
   ArtifactListRequest,
@@ -28,6 +29,7 @@ import {
   artifactStatusSchema,
 } from './index';
 import {
+  artifactDownloadAccessJsonSchema,
   artifactByteRangeJsonSchema,
   artifactByteRangeSchema,
   artifactByteSourceSchema,
@@ -141,6 +143,27 @@ export const artifactReadResultSchema = z
     content: artifactContentSchema,
   })
   .strict() satisfies ZodType<ArtifactReadResult>;
+
+const safeDownloadFilenameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[^\\/\r\n]+$/u, 'must be a filename without path separators or line breaks');
+
+const safeResponseMimeTypeSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[^\u0000-\u001f\u007f]+$/u, 'must not contain control characters');
+
+export const artifactCreateDownloadAccessRequestSchema = artifactGetRecordRequestSchema
+  .extend({
+    operationId: nonEmptyString,
+    expiresInSeconds: positiveInteger.optional(),
+    responseMimeType: safeResponseMimeTypeSchema.optional(),
+    responseFilename: safeDownloadFilenameSchema.optional(),
+  })
+  .strict() satisfies ZodType<ArtifactCreateDownloadAccessRequest>;
 
 export const artifactListRequestSchema = z
   .object({
@@ -332,6 +355,29 @@ export const artifactReadResultJsonSchema: JsonSchema = strictObject(['record', 
   content: artifactContentJsonSchema,
 });
 
+export const artifactCreateDownloadAccessRequestJsonSchema: JsonSchema = strictObject(
+  ['operationId', 'principal', 'artifactId'],
+  {
+    operationId: nonEmptyStringJsonSchema,
+    principal: executionPrincipalJsonSchema,
+    artifactId: nonEmptyStringJsonSchema,
+    versionId: nonEmptyStringJsonSchema,
+    expiresInSeconds: positiveIntegerJsonSchema,
+    responseMimeType: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 255,
+      pattern: '^[^\\u0000-\\u001f\\u007f]+$',
+    },
+    responseFilename: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 255,
+      pattern: '^[^\\\\/\\r\\n]+$',
+    },
+  }
+);
+
 export const artifactListRequestJsonSchema: JsonSchema = strictObject(
   ['principal', 'workspaceId'],
   {
@@ -376,6 +422,8 @@ export const artifactManagerContractJsonSchemas: Record<string, JsonSchema> = {
   ArtifactGetRecordRequest: artifactGetRecordRequestJsonSchema,
   ArtifactReadRequest: artifactReadRequestJsonSchema,
   ArtifactReadResult: artifactReadResultJsonSchema,
+  ArtifactCreateDownloadAccessRequest: artifactCreateDownloadAccessRequestJsonSchema,
+  ArtifactDownloadAccess: artifactDownloadAccessJsonSchema,
   ArtifactListRequest: artifactListRequestJsonSchema,
   ArtifactMutationRequest: artifactMutationRequestJsonSchema,
   NormalizedArtifactError: normalizedArtifactErrorJsonSchema,
@@ -444,6 +492,20 @@ export const artifactVersionRequestExample: ArtifactVersionRequest = {
   idempotencyKey: 'artifact-version:artifact.example:1',
 };
 
+export const artifactCreateDownloadAccessRequestExample: ArtifactCreateDownloadAccessRequest = {
+  operationId: 'operation.artifact.download-access.example',
+  principal: {
+    principalId: 'user.example',
+    type: 'user',
+    userId: 'user.example',
+    permissionScopes: ['artifact:read'],
+  },
+  artifactId: 'artifact.example',
+  expiresInSeconds: 300,
+  responseMimeType: 'application/json',
+  responseFilename: 'report.json',
+};
+
 export function validateArtifactCreateRequest(input: unknown): ArtifactCreateRequest {
   return artifactCreateRequestSchema.parse(input);
 }
@@ -462,6 +524,12 @@ export function validateArtifactGetRecordRequest(input: unknown): ArtifactGetRec
 
 export function validateArtifactReadRequest(input: unknown): ArtifactReadRequest {
   return artifactReadRequestSchema.parse(input);
+}
+
+export function validateArtifactCreateDownloadAccessRequest(
+  input: unknown
+): ArtifactCreateDownloadAccessRequest {
+  return artifactCreateDownloadAccessRequestSchema.parse(input);
 }
 
 export function validateArtifactListRequest(input: unknown): ArtifactListRequest {

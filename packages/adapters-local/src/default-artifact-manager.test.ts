@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type {
   ArtifactCreateRequest,
+  ArtifactDownloadAccess,
+  ArtifactDownloadAccessRequest,
   ArtifactProfileSpec,
+  ArtifactStoreCapabilities,
   ExecutionPrincipal,
 } from '@hypha/core';
 import { ArtifactManagerError, DefaultArtifactManager } from '@hypha/core';
@@ -94,7 +97,11 @@ describe('DefaultArtifactManager', () => {
         expectedRevision: first.revision,
         content: secondBytes,
         expectedContentHash: hashArtifactBytes(secondBytes),
-        provenance: { sourceType: 'derived', createdBy: owner.principalId, sourceArtifactIds: [first.id] },
+        provenance: {
+          sourceType: 'derived',
+          createdBy: owner.principalId,
+          sourceArtifactIds: [first.id],
+        },
       })
     ).rejects.toMatchObject({
       normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
@@ -126,6 +133,55 @@ describe('DefaultArtifactManager', () => {
     await expect(
       fixture.manager.list({ principal: stranger, workspaceId: 'workspace.example' })
     ).resolves.toEqual([]);
+  });
+
+  it('creates governed signed download access within the profile TTL', async () => {
+    const fixture = createFixture({ signedAccess: true });
+    const bytes = new TextEncoder().encode('downloadable');
+    const record = await fixture.manager.create(createRequest('downloadable', bytes));
+
+    await expect(
+      fixture.manager.createDownloadAccess({
+        operationId: 'download-access',
+        principal: owner,
+        artifactId: record.id,
+        expiresInSeconds: 120,
+      })
+    ).resolves.toMatchObject({
+      method: 'GET',
+      url: expect.stringContaining(encodeURIComponent(record.storageRef.objectKey)),
+    });
+    expect(fixture.store.downloadRequests).toEqual([
+      expect.objectContaining({
+        ref: record.storageRef,
+        expiresInSeconds: 120,
+        responseMimeType: 'text/plain',
+        responseFilename: 'downloadable.txt',
+      }),
+    ]);
+
+    await expect(
+      fixture.manager.createDownloadAccess({
+        operationId: 'download-too-long',
+        principal: owner,
+        artifactId: record.id,
+        expiresInSeconds: 301,
+      })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+  });
+
+  it('fails closed when the Artifact Store cannot issue signed access', async () => {
+    const fixture = createFixture();
+    const bytes = new TextEncoder().encode('local-only');
+    const record = await fixture.manager.create(createRequest('local-only', bytes));
+
+    await expect(
+      fixture.manager.createDownloadAccess({
+        operationId: 'download-unsupported',
+        principal: owner,
+        artifactId: record.id,
+      })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_DOWNLOAD_FAILED' } });
   });
 
   it('records lineage, lifecycle transitions, and logical tombstones', async () => {
@@ -164,7 +220,9 @@ describe('DefaultArtifactManager', () => {
       artifactId: derived.id,
       expectedRevision: finalized.revision,
     });
-    await expect(fixture.manager.get({ principal: owner, artifactId: derived.id })).resolves.toBeNull();
+    await expect(
+      fixture.manager.get({ principal: owner, artifactId: derived.id })
+    ).resolves.toBeNull();
     await expect(
       fixture.manager.read({ principal: owner, artifactId: derived.id })
     ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_NOT_FOUND' } });
@@ -255,11 +313,17 @@ describe('DefaultArtifactManager', () => {
   });
 });
 
-function createFixture(overrides: {
-  retainFinal?: boolean;
-  workspaceReader?: ConstructorParameters<typeof DefaultArtifactManager>[0]['workspaceReader'];
-} = {}) {
-  const store = new InMemoryExecutionArtifactStore({ id: 'artifact-store.test' });
+function createFixture(
+  overrides: {
+    retainFinal?: boolean;
+    signedAccess?: boolean;
+    workspaceReader?: ConstructorParameters<typeof DefaultArtifactManager>[0]['workspaceReader'];
+  } = {}
+) {
+  const store = new SignedInMemoryArtifactStore({
+    id: 'artifact-store.test',
+    signedAccess: overrides.signedAccess ?? false,
+  });
   const repository = new InMemoryArtifactRecordRepository();
   const profile: ArtifactProfileSpec = {
     id: 'artifact-profile.test',
@@ -273,6 +337,7 @@ function createFixture(overrides: {
       requiredReadScopes: ['artifact:read'],
       requiredWriteScopes: ['artifact:write'],
       requiredDeleteScopes: ['artifact:delete'],
+      signedUrlTtlSeconds: 300,
       allowRangeRead: true,
     },
     retention: {
@@ -296,6 +361,32 @@ function createFixture(overrides: {
     now: () => new Date(Date.UTC(2026, 6, 18, 0, 0, tick++)).toISOString(),
   });
   return { manager, profile, repository, store };
+}
+
+class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
+  readonly downloadRequests: ArtifactDownloadAccessRequest[] = [];
+  private readonly signedAccess: boolean;
+
+  constructor(options: { id: string; signedAccess: boolean }) {
+    super({ id: options.id });
+    this.signedAccess = options.signedAccess;
+  }
+
+  override async capabilities(): Promise<ArtifactStoreCapabilities> {
+    return { ...(await super.capabilities()), signedAccess: this.signedAccess };
+  }
+
+  async createDownloadAccess(
+    request: ArtifactDownloadAccessRequest
+  ): Promise<ArtifactDownloadAccess> {
+    if (!this.signedAccess) throw new Error('signed access is disabled');
+    this.downloadRequests.push(structuredClone(request));
+    return {
+      method: 'GET',
+      url: `https://artifacts.example/${encodeURIComponent(request.ref.objectKey)}`,
+      expiresAt: new Date(Date.UTC(2026, 6, 18, 0, 0, request.expiresInSeconds)).toISOString(),
+    };
+  }
 }
 
 function createRequest(operationId: string, content: Uint8Array): ArtifactCreateRequest {

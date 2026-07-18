@@ -1,8 +1,10 @@
 import type {
   ArtifactAccessRecord,
   ArtifactArchiveRequest,
+  ArtifactCreateDownloadAccessRequest,
   ArtifactCreateRequest,
   ArtifactDeleteRequest,
+  ArtifactDownloadAccess,
   ArtifactFinalizeRequest,
   ArtifactFromWorkspaceRequest,
   ArtifactGetRecordRequest,
@@ -29,12 +31,10 @@ import {
   ArtifactRecordRepositoryConflictError,
   ArtifactRecordRepositoryError,
 } from '../../contracts/artifact-record-repository';
-import {
-  validateArtifactProfileSpec,
-  validateArtifactRecord,
-} from './index';
+import { validateArtifactProfileSpec, validateArtifactRecord } from './index';
 import {
   validateArtifactCreateRequest,
+  validateArtifactCreateDownloadAccessRequest,
   validateArtifactFromWorkspaceRequest,
   validateArtifactGetRecordRequest,
   validateArtifactListRequest,
@@ -254,9 +254,7 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async get(request: ArtifactGetRecordRequest): Promise<ArtifactRecord | null> {
     const validated = validateArtifactManagerInput(() => validateArtifactGetRecordRequest(request));
-    const latest = await this.repositoryOperation(() =>
-      this.repository.get(validated.artifactId)
-    );
+    const latest = await this.repositoryOperation(() => this.repository.get(validated.artifactId));
     if (!latest || latest.record.status === 'deleted') return null;
     const stored = await this.repositoryOperation(() =>
       this.repository.get(validated.artifactId, validated.versionId)
@@ -296,6 +294,63 @@ export class DefaultArtifactManager implements ArtifactManager {
     return { record: stored.record, content };
   }
 
+  async createDownloadAccess(
+    input: ArtifactCreateDownloadAccessRequest
+  ): Promise<ArtifactDownloadAccess> {
+    const request = validateArtifactManagerInput(() =>
+      validateArtifactCreateDownloadAccessRequest(input)
+    );
+    const latest = await this.requireStoredRecord(request.artifactId);
+    if (latest.record.status === 'deleted') {
+      throw artifactManagerError('ARTIFACT_NOT_FOUND', 'Artifact has been deleted.');
+    }
+    const stored = await this.requireStoredRecord(request.artifactId, request.versionId);
+    const profile = this.requireProfile(stored.profileRef);
+    assertRecordPermission(profile, stored.record, request.principal, 'read');
+
+    const maximumTtl = profile.access.signedUrlTtlSeconds;
+    if (maximumTtl === undefined) {
+      throw artifactManagerError(
+        'ARTIFACT_PERMISSION_DENIED',
+        'Artifact profile does not allow signed download access.'
+      );
+    }
+    const expiresInSeconds = request.expiresInSeconds ?? maximumTtl;
+    if (expiresInSeconds > maximumTtl) {
+      throw artifactManagerError(
+        'ARTIFACT_PERMISSION_DENIED',
+        'Requested download access lifetime exceeds the Artifact profile limit.',
+        false,
+        { requestedTtlSeconds: expiresInSeconds, maximumTtlSeconds: maximumTtl }
+      );
+    }
+    if (
+      request.responseMimeType &&
+      stored.record.mimeType &&
+      request.responseMimeType.toLowerCase() !== stored.record.mimeType.toLowerCase()
+    ) {
+      throw artifactManagerError(
+        'ARTIFACT_TYPE_DENIED',
+        'Download response MIME type must match the stored Artifact MIME type.'
+      );
+    }
+
+    const store = this.requireStore(profile);
+    const capabilities = await store.capabilities();
+    if (!capabilities.signedAccess || !store.createDownloadAccess) {
+      throw artifactManagerError(
+        'ARTIFACT_DOWNLOAD_FAILED',
+        `Artifact Store ${store.id} does not support signed download access.`
+      );
+    }
+    return store.createDownloadAccess({
+      ref: stored.record.storageRef,
+      expiresInSeconds,
+      ...(stored.record.mimeType ? { responseMimeType: stored.record.mimeType } : {}),
+      responseFilename: request.responseFilename ?? stored.record.name,
+    });
+  }
+
   async list(input: ArtifactListRequest): Promise<ArtifactRecord[]> {
     const request = validateArtifactManagerInput(() => validateArtifactListRequest(input));
     const latest = latestStoredByArtifact(
@@ -312,15 +367,14 @@ export class DefaultArtifactManager implements ArtifactManager {
       .filter((stored) => !request.kinds || request.kinds.includes(stored.record.kind))
       .filter((stored) => !request.statuses || request.statuses.includes(stored.record.status))
       .filter(
-        (stored) =>
-          !request.tags || request.tags.every((tag) => stored.record.tags?.includes(tag))
+        (stored) => !request.tags || request.tags.every((tag) => stored.record.tags?.includes(tag))
       )
       .filter((stored) => {
         const profile = this.resolveProfile(stored.profileRef);
         return Boolean(
           profile &&
-            canAccessRecord(stored.record, request.principal) &&
-            hasRequiredReadScopes(profile, request.principal.permissionScopes)
+          canAccessRecord(stored.record, request.principal) &&
+          hasRequiredReadScopes(profile, request.principal.permissionScopes)
         );
       })
       .slice(0, request.limit)
@@ -425,9 +479,7 @@ export class DefaultArtifactManager implements ArtifactManager {
   }
 
   async previous(versionId: string): Promise<ArtifactRecord | null> {
-    const stored = await this.repositoryOperation(() =>
-      this.repository.getByVersionId(versionId)
-    );
+    const stored = await this.repositoryOperation(() => this.repository.getByVersionId(versionId));
     if (!stored?.record.previousVersionId) return null;
     return (
       (
@@ -471,7 +523,13 @@ export class DefaultArtifactManager implements ArtifactManager {
     }
     const profile = this.requireProfile(request.profileRef);
     assertProfilePermission(profile, request.principal, 'write');
-    this.assertContentPolicy(profile, request.kind, request.mimeType, request, trustedWorkspaceSource);
+    this.assertContentPolicy(
+      profile,
+      request.kind,
+      request.mimeType,
+      request,
+      trustedWorkspaceSource
+    );
     const access: ArtifactAccessRecord = request.access ?? {
       visibility: profile.access.defaultVisibility,
       ownerPrincipalId: request.principal.principalId,
@@ -645,7 +703,9 @@ export class DefaultArtifactManager implements ArtifactManager {
     const expiresAt =
       requested?.expiresAt ??
       (profile.retention.defaultTtlSeconds
-        ? new Date(Date.parse(this.timestamp()) + profile.retention.defaultTtlSeconds * 1000).toISOString()
+        ? new Date(
+            Date.parse(this.timestamp()) + profile.retention.defaultTtlSeconds * 1000
+          ).toISOString()
         : undefined);
     return {
       ...(requested ?? {}),
@@ -684,9 +744,7 @@ export class DefaultArtifactManager implements ArtifactManager {
     artifactId: string,
     versionId?: string
   ): Promise<StoredArtifactRecord> {
-    const stored = await this.repositoryOperation(() =>
-      this.repository.get(artifactId, versionId)
-    );
+    const stored = await this.repositoryOperation(() => this.repository.get(artifactId, versionId));
     if (!stored) {
       throw artifactManagerError('ARTIFACT_NOT_FOUND', `Artifact ${artifactId} was not found.`);
     }
@@ -698,9 +756,7 @@ export class DefaultArtifactManager implements ArtifactManager {
     idempotencyKey?: string
   ): Promise<StoredArtifactRecord | null> {
     return idempotencyKey
-      ? this.repositoryOperation(() =>
-          this.repository.findIdempotency(operationId, idempotencyKey)
-        )
+      ? this.repositoryOperation(() => this.repository.findIdempotency(operationId, idempotencyKey))
       : Promise.resolve(null);
   }
 
@@ -771,14 +827,18 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   private nextId(prefix: string): string {
     const value = this.idGenerator().trim();
-    if (!value) throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'idGenerator returned empty.');
+    if (!value)
+      throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'idGenerator returned empty.');
     return `${prefix}.${value}`;
   }
 
   private timestamp(): string {
     const value = this.now();
     if (!Number.isFinite(Date.parse(value))) {
-      throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'Artifact clock returned invalid time.');
+      throw artifactManagerError(
+        'ARTIFACT_INTERNAL_ERROR',
+        'Artifact clock returned invalid time.'
+      );
     }
     return value;
   }
