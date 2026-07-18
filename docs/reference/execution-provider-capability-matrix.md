@@ -72,6 +72,19 @@ remote sandbox.
 Capability negotiation is fail-closed. A local adapter reports `false` for a guarantee it cannot
 enforce; configuration, documentation, or best-effort cleanup is not sufficient evidence.
 
+## Provider Registration and Selection
+
+Concrete Providers are exposed through `SandboxProviderFactory` and registered in the
+provider-neutral `SandboxProviderRegistry`. The Registry selects by the Environment's `provider`
+and optional `providerRef`; when more than one Provider is registered for a kind, omitting
+`providerRef` is rejected as ambiguous. Duplicate registrations, unknown references, and a runtime
+Provider id that differs from its Factory registration are rejected before execution.
+
+The existing testing and local-adapter package surfaces export factories for
+`MockExecutionProvider`, `LocalProcessExecutionProvider`, and `DockerExecutionProvider`. Core owns
+only the Factory and Registry contracts and does not import concrete adapters. A remote
+implementation can register the same way without changing the common Sandbox lifecycle.
+
 ## Evidence Required for Capability Claims
 
 | Capability group                   | Minimum evidence before reporting `true`                                                                                                                                                                                                                                                      |
