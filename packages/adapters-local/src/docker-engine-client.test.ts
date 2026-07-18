@@ -125,6 +125,7 @@ describe('DockerEngineCliClient', () => {
             Image: digest,
             State: {
               Running: true,
+              OOMKilled: false,
               Status: 'running',
               ExitCode: 0,
               StartedAt: '2026-07-17T00:00:00.000Z',
@@ -145,6 +146,7 @@ describe('DockerEngineCliClient', () => {
     const client = new DockerEngineCliClient(transport);
     await expect(client.inspectContainer('container123')).resolves.toMatchObject({
       running: true,
+      oomKilled: false,
       imageDigest: digest,
     });
     await expect(client.resourceSnapshot('container123')).resolves.toEqual({

@@ -105,6 +105,29 @@ describe('buildDockerProcessResult', () => {
     });
   });
 
+  it('normalizes Docker Engine OOM evidence as resource exhaustion', () => {
+    const result = buildDockerProcessResult({
+      providerId: 'provider.docker',
+      request: request(),
+      executionId: 'execution.docker.result',
+      command: command('exited', 137),
+      inspection: inspection(digest, true),
+      changedFiles: [],
+      accountant: new DockerResourceAccountant(),
+    });
+
+    expect(result).toMatchObject({
+      status: 'oom_killed',
+      exitCode: 137,
+      error: {
+        code: 'EXECUTION_OOM_KILLED',
+        retryable: false,
+        details: { oomKilled: true },
+      },
+      metadata: { oomKilled: true },
+    });
+  });
+
   it('binds the receipt hash to immutable container evidence', () => {
     const first = build('exited', 0);
     const repeated = build('exited', 0);
@@ -167,10 +190,11 @@ function command(
   };
 }
 
-function inspection(imageDigest: string): DockerContainerInspection {
+function inspection(imageDigest: string, oomKilled = false): DockerContainerInspection {
   return {
     id: 'container123',
     running: false,
+    oomKilled,
     status: 'exited',
     exitCode: 0,
     imageDigest,

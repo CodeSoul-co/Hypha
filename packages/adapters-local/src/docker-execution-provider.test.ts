@@ -143,6 +143,7 @@ class FakeDockerEngine implements DockerEngineClient {
     return {
       id: 'container123',
       running: this.running,
+      oomKilled: false,
       status: this.running ? 'running' : 'exited',
       exitCode: 0,
       imageDigest: digest,

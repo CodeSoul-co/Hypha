@@ -39,6 +39,7 @@ export interface DockerContainerExecInput {
 export interface DockerContainerInspection {
   id: string;
   running: boolean;
+  oomKilled: boolean;
   status: string;
   exitCode: number;
   imageDigest: string;
@@ -187,6 +188,7 @@ export class DockerEngineCliClient implements DockerEngineClient {
     return {
       id: requiredString(record.Id, 'container Id'),
       running: Boolean(state.Running),
+      oomKilled: Boolean(state.OOMKilled),
       status: requiredString(state.Status, 'container status'),
       exitCode: typeof state.ExitCode === 'number' ? state.ExitCode : 0,
       imageDigest: requiredString(record.Image, 'container image digest'),

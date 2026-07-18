@@ -23,7 +23,7 @@ export interface BuildDockerProcessResultInput {
 export function buildDockerProcessResult(
   input: BuildDockerProcessResultInput
 ): CommandExecutionResult {
-  const terminal = mapOutcome(input.command);
+  const terminal = mapOutcome(input.command, input.inspection?.oomKilled ?? false);
   const resource = input.accountant.account(input.command, input.resourceSnapshot);
   const receiptMetadata = {
     containerId: input.inspection?.id ?? input.request.sandboxId!,
@@ -59,11 +59,15 @@ export function buildDockerProcessResult(
       ...resource.metadata,
       processTreeKillScope: 'container',
       processTreeTerminationVerified: input.inspection ? !input.inspection.running : false,
+      oomKilled: input.inspection?.oomKilled ?? false,
     },
   };
 }
 
-function mapOutcome(command: DockerCliResult): {
+function mapOutcome(
+  command: DockerCliResult,
+  oomKilled: boolean
+): {
   status: CommandExecutionResult['status'];
   exitCode: number | null;
   error?: NormalizedExecutionError;
@@ -73,6 +77,18 @@ function mapOutcome(command: DockerCliResult): {
     observedStderrBytes: command.observedStderrBytes,
     ...(command.outputLimitStream ? { outputLimitStream: command.outputLimitStream } : {}),
   };
+  if (oomKilled) {
+    return {
+      status: 'oom_killed',
+      exitCode: command.exitCode,
+      error: normalized(
+        'EXECUTION_OOM_KILLED',
+        'Docker execution exceeded its memory limit.',
+        false,
+        { ...details, oomKilled: true }
+      ),
+    };
+  }
   if (command.outcome === 'exited' && command.exitCode === 0) {
     return { status: 'completed', exitCode: 0 };
   }
