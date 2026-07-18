@@ -16,6 +16,7 @@ export * from './contracts/sandbox';
 export * from './contracts/artifact';
 export * from './contracts/artifact-store';
 export * from './contracts/artifact-manager';
+export * from './contracts/artifact-record-repository';
 export * from './modules/workspace';
 export * from './modules/workspace/events';
 export * from './modules/workspace/operations';
