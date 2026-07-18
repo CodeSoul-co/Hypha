@@ -8,9 +8,7 @@ import type {
   ProviderHealth,
   StoredArtifactRecord,
 } from '@hypha/core';
-import {
-  ArtifactRecordRepositoryConflictError,
-} from '@hypha/core';
+import { ArtifactRecordRepositoryConflictError } from '@hypha/core';
 import {
   artifactIdempotencyMapKey,
   cloneStoredArtifactRecord,
@@ -220,10 +218,7 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
         stored.record.id === result.artifactId && stored.record.versionId === result.versionId
     );
     const targetPersisted = this.recordsByVersion.get(result.versionId);
-    if (
-      !targetInCommit &&
-      (!targetPersisted || targetPersisted.record.id !== result.artifactId)
-    ) {
+    if (!targetInCommit && (!targetPersisted || targetPersisted.record.id !== result.artifactId)) {
       throw new ArtifactRecordRepositoryConflictError(
         'Artifact idempotency result must reference a committed Artifact version.',
         { artifactId: result.artifactId, versionId: result.versionId }
@@ -246,7 +241,10 @@ export class InMemoryArtifactRecordRepository implements ArtifactRecordRepositor
       if (claimed) {
         throw new ArtifactRecordRepositoryConflictError(
           'Artifact storage reference is currently claimed by garbage collection.',
-          { storeId: stored.record.storageRef.storeId, objectKey: stored.record.storageRef.objectKey }
+          {
+            storeId: stored.record.storageRef.storeId,
+            objectKey: stored.record.storageRef.objectKey,
+          }
         );
       }
     }

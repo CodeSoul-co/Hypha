@@ -19,7 +19,12 @@ export interface ArtifactGarbageCollectionRecordEntry {
 }
 
 export function artifactStorageKey(ref: ArtifactStorageRef): string {
-  return JSON.stringify([ref.storeId, ref.bucketOrNamespace ?? '', ref.objectKey, ref.versionId ?? '']);
+  return JSON.stringify([
+    ref.storeId,
+    ref.bucketOrNamespace ?? '',
+    ref.objectKey,
+    ref.versionId ?? '',
+  ]);
 }
 
 export function buildArtifactGarbageCollectionCandidates(
@@ -43,8 +48,7 @@ export function buildArtifactGarbageCollectionCandidates(
     if (
       group.some(
         ({ stored }) =>
-          stored.record.retention.legalHold ||
-          (stored.record.retention.referencedByCount ?? 0) > 0
+          stored.record.retention.legalHold || (stored.record.retention.referencedByCount ?? 0) > 0
       )
     ) {
       continue;
@@ -62,10 +66,13 @@ export function buildArtifactGarbageCollectionCandidates(
     if (
       group.some(
         ({ stored }) =>
-          stored.record.contentHash !== first.contentHash || stored.record.sizeBytes !== first.sizeBytes
+          stored.record.contentHash !== first.contentHash ||
+          stored.record.sizeBytes !== first.sizeBytes
       )
     ) {
-      throw corruptRepository('Shared Artifact storage reference has inconsistent content metadata.');
+      throw corruptRepository(
+        'Shared Artifact storage reference has inconsistent content metadata.'
+      );
     }
     candidates.push({
       storageRef: structuredClone(first.storageRef),
@@ -75,7 +82,9 @@ export function buildArtifactGarbageCollectionCandidates(
       profileRefs: uniqueProfileRefs(group.map(({ stored }) => stored.profileRef)),
     });
   }
-  candidates.sort((left, right) => artifactStorageKey(left.storageRef).localeCompare(artifactStorageKey(right.storageRef)));
+  candidates.sort((left, right) =>
+    artifactStorageKey(left.storageRef).localeCompare(artifactStorageKey(right.storageRef))
+  );
   return candidates.slice(0, request.limit ?? candidates.length);
 }
 
@@ -90,7 +99,9 @@ export function sameCandidateVersions(
   );
 }
 
-function uniqueProfileRefs(refs: StoredArtifactRecord['profileRef'][]): StoredArtifactRecord['profileRef'][] {
+function uniqueProfileRefs(
+  refs: StoredArtifactRecord['profileRef'][]
+): StoredArtifactRecord['profileRef'][] {
   const unique = new Map<string, StoredArtifactRecord['profileRef']>();
   for (const ref of refs) unique.set(JSON.stringify(ref), structuredClone(ref));
   return [...unique.values()];

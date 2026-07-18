@@ -10,10 +10,7 @@ import type {
   ProviderHealth,
   StoredArtifactRecord,
 } from '@hypha/core';
-import {
-  ArtifactRecordRepositoryConflictError,
-  ArtifactRecordRepositoryError,
-} from '@hypha/core';
+import { ArtifactRecordRepositoryConflictError, ArtifactRecordRepositoryError } from '@hypha/core';
 import {
   compareStoredArtifactRecords,
   parseStoredArtifactRecord,
@@ -105,9 +102,7 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
     this.assertOpen();
     return this.readOperation(() => {
       const row = this.database
-        .prepare(
-          'SELECT record_json, profile_ref_json FROM artifact_records WHERE version_id = ?'
-        )
+        .prepare('SELECT record_json, profile_ref_json FROM artifact_records WHERE version_id = ?')
         .get(versionId);
       return row ? parseStoredRow(row) : null;
     });
@@ -381,9 +376,7 @@ export class SQLiteArtifactRecordRepository implements ArtifactRecordRepository 
         stored.record.id === result.artifactId && stored.record.versionId === result.versionId
     );
     const targetPersisted = this.database
-      .prepare(
-        'SELECT 1 AS found FROM artifact_records WHERE artifact_id = ? AND version_id = ?'
-      )
+      .prepare('SELECT 1 AS found FROM artifact_records WHERE artifact_id = ? AND version_id = ?')
       .get(result.artifactId, result.versionId);
     if (!targetInCommit && !targetPersisted) {
       throw new ArtifactRecordRepositoryConflictError(
@@ -588,7 +581,11 @@ function assertUniqueCommitVersions(records: StoredArtifactRecord[]): void {
     if (owner && owner !== stored.record.id) {
       throw new ArtifactRecordRepositoryConflictError(
         'Artifact commit contains a version ID owned by multiple Artifacts.',
-        { versionId: stored.record.versionId, artifactId: stored.record.id, existingArtifactId: owner }
+        {
+          versionId: stored.record.versionId,
+          artifactId: stored.record.id,
+          existingArtifactId: owner,
+        }
       );
     }
     owners.set(stored.record.versionId, stored.record.id);

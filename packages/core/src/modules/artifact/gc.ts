@@ -138,10 +138,13 @@ export class DefaultArtifactGarbageCollector implements ArtifactGarbageCollector
   }
 
   private allowsGarbageCollection(refs: SpecRef[]): boolean {
-    return refs.length > 0 && refs.every((ref) => {
-      const profile = resolveProfileRef(this.profiles, ref);
-      return profile?.retention.garbageCollectUnreferenced === true;
-    });
+    return (
+      refs.length > 0 &&
+      refs.every((ref) => {
+        const profile = resolveProfileRef(this.profiles, ref);
+        return profile?.retention.garbageCollectUnreferenced === true;
+      })
+    );
   }
 
   private async releaseClaim(claimId: string): Promise<void> {
@@ -176,7 +179,10 @@ export class DefaultArtifactGarbageCollector implements ArtifactGarbageCollector
   private timestamp(): string {
     const value = this.now();
     if (!Number.isFinite(Date.parse(value))) {
-      throw artifactManagerError('ARTIFACT_INTERNAL_ERROR', 'Artifact GC clock returned invalid time.');
+      throw artifactManagerError(
+        'ARTIFACT_INTERNAL_ERROR',
+        'Artifact GC clock returned invalid time.'
+      );
     }
     return value;
   }

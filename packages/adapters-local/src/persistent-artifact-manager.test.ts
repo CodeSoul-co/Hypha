@@ -47,9 +47,9 @@ describe('persistent Artifact Manager composition', () => {
     await first.store.close();
 
     const reopened = composition(root, 'reopened');
-    await expect(
-      reopened.manager.get({ principal, artifactId: created.id })
-    ).resolves.toEqual(created);
+    await expect(reopened.manager.get({ principal, artifactId: created.id })).resolves.toEqual(
+      created
+    );
     const read = await reopened.manager.read({ principal, artifactId: created.id });
     await expect(collect(read.content.stream)).resolves.toEqual(content);
     await expect(reopened.manager.create(request)).resolves.toEqual(created);

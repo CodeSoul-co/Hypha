@@ -384,7 +384,9 @@ export function validateArtifactEventPublication(input: unknown): ArtifactEventP
 export function createArtifactFrameworkEvent<TType extends ArtifactFrameworkEventType>(
   input: ArtifactEventCreateInput<TType>
 ): ArtifactFrameworkEvent<TType> {
-  return validateArtifactFrameworkEvent(createFrameworkEvent(input)) as ArtifactFrameworkEvent<TType>;
+  return validateArtifactFrameworkEvent(
+    createFrameworkEvent(input)
+  ) as ArtifactFrameworkEvent<TType>;
 }
 
 function addPayloadSecurityIssues(value: ArtifactEventPayload, context: z.RefinementCtx): void {

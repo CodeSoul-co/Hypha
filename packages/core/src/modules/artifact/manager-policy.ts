@@ -90,10 +90,7 @@ export function assertCreateAccess(
   }
 }
 
-export function canAccessRecord(
-  record: ArtifactRecord,
-  principal: ExecutionPrincipal
-): boolean {
+export function canAccessRecord(record: ArtifactRecord, principal: ExecutionPrincipal): boolean {
   if (
     record.access.ownerPrincipalId === principal.principalId ||
     record.userId === principal.userId ||
@@ -141,9 +138,7 @@ function hasPermissionScope(principal: ExecutionPrincipal, required: string): bo
     return true;
   }
   const separator = required.indexOf(':');
-  return (
-    separator > 0 && principal.permissionScopes.includes(`${required.slice(0, separator)}:*`)
-  );
+  return separator > 0 && principal.permissionScopes.includes(`${required.slice(0, separator)}:*`);
 }
 
 function principalMetadataContains(

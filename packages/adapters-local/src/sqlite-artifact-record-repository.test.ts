@@ -197,10 +197,7 @@ describe('SQLiteArtifactRecordRepository', () => {
     await expect(reopened.commit({ records: [activeSharedRecord()] })).rejects.toBeInstanceOf(
       ArtifactRecordRepositoryConflictError
     );
-    await reopened.completeGarbageCollection(
-      'claim.recovered',
-      '2026-07-18T02:02:00.000Z'
-    );
+    await reopened.completeGarbageCollection('claim.recovered', '2026-07-18T02:02:00.000Z');
     await expect(
       reopened.listGarbageCollectionCandidates({ staleBefore: '2026-07-18T03:00:00.000Z' })
     ).resolves.toEqual([]);

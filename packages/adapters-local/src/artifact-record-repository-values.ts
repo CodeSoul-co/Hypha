@@ -33,9 +33,6 @@ export function compareStoredArtifactRecords(
   );
 }
 
-export function artifactIdempotencyMapKey(
-  operationId: string,
-  idempotencyKey: string
-): string {
+export function artifactIdempotencyMapKey(operationId: string, idempotencyKey: string): string {
   return `${operationId}\u0000${idempotencyKey}`;
 }

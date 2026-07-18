@@ -45,8 +45,8 @@ export interface ArtifactEventPayload {
   metadata?: Record<string, unknown>;
 }
 
-type ArtifactEventPayloadWithRequired<K extends keyof ArtifactEventPayload> =
-  ArtifactEventPayload & Required<Pick<ArtifactEventPayload, K>>;
+type ArtifactEventPayloadWithRequired<K extends keyof ArtifactEventPayload> = ArtifactEventPayload &
+  Required<Pick<ArtifactEventPayload, K>>;
 
 type ArtifactStatusEventPayload<S extends ArtifactStatus> = ArtifactEventPayloadWithRequired<
   'operationId' | 'artifactId' | 'versionId' | 'status'
@@ -67,12 +67,7 @@ export type ArtifactEventPayloadMap = {
     'artifactId' | 'versionId' | 'contentHash' | 'sizeBytes'
   >;
   'artifact.version.created': ArtifactEventPayloadWithRequired<
-    | 'operationId'
-    | 'artifactId'
-    | 'versionId'
-    | 'logicalArtifactId'
-    | 'contentHash'
-    | 'status'
+    'operationId' | 'artifactId' | 'versionId' | 'logicalArtifactId' | 'contentHash' | 'status'
   >;
   'artifact.finalized': ArtifactStatusEventPayload<'final'>;
   'artifact.archived': ArtifactStatusEventPayload<'archived'>;
@@ -81,20 +76,16 @@ export type ArtifactEventPayloadMap = {
   'artifact.delete.blocked': ArtifactEventPayloadWithRequired<
     'operationId' | 'artifactId' | 'error'
   >;
-  'artifact.deleted': ArtifactEventPayloadWithRequired<
-    'operationId' | 'artifactId' | 'status'
-  > & { status: 'deleted' };
+  'artifact.deleted': ArtifactEventPayloadWithRequired<'operationId' | 'artifactId' | 'status'> & {
+    status: 'deleted';
+  };
   'artifact.delete.failed': ArtifactEventPayloadWithRequired<
     'operationId' | 'artifactId' | 'error'
   >;
   'artifact.lineage.recorded': ArtifactEventPayloadWithRequired<'artifactId' | 'artifactRefs'>;
   'artifact.retention.expired': ArtifactEventPayloadWithRequired<'artifactId' | 'versionId'>;
   'artifact.gc.completed': ArtifactEventPayloadWithRequired<
-    | 'operationId'
-    | 'candidateObjects'
-    | 'deletedObjects'
-    | 'missingObjects'
-    | 'reclaimedBytes'
+    'operationId' | 'candidateObjects' | 'deletedObjects' | 'missingObjects' | 'reclaimedBytes'
   >;
   'artifact.gc.failed': ArtifactEventPayloadWithRequired<'operationId' | 'error'>;
 };

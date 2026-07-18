@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { artifactProfileSpecExample, artifactRecordExample } from '@hypha/core';
-import {
-  ArtifactRecordRepositoryConflictError,
-  type StoredArtifactRecord,
-} from '@hypha/core';
+import { ArtifactRecordRepositoryConflictError, type StoredArtifactRecord } from '@hypha/core';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 
 const storedExample: StoredArtifactRecord = {
