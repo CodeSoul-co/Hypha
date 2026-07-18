@@ -27,7 +27,7 @@ const nonNegativeInteger = z.number().int().nonnegative();
 const positiveInteger = z.number().int().positive();
 const timestampSchema = z.string().datetime({ offset: true });
 const contentHashPattern = /^(sha256|blake3):[0-9a-f]{64}$/u;
-const contentHashSchema = z.string().regex(contentHashPattern);
+export const artifactContentHashSchema = z.string().regex(contentHashPattern);
 
 export const artifactKindSchema = z.enum([
   'document',
@@ -224,8 +224,8 @@ export const artifactProvenanceSchema = z
     workflowState: nonEmptyString.optional(),
     sourceArtifactIds: z.array(nonEmptyString).optional(),
     transformation: nonEmptyString.optional(),
-    environmentHash: contentHashSchema.optional(),
-    commandHash: contentHashSchema.optional(),
+    environmentHash: artifactContentHashSchema.optional(),
+    commandHash: artifactContentHashSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict()
@@ -282,7 +282,7 @@ export const artifactRecordSchema = z
     mimeType: nonEmptyString.optional(),
     encoding: nonEmptyString.optional(),
     sizeBytes: nonNegativeInteger,
-    contentHash: contentHashSchema,
+    contentHash: artifactContentHashSchema,
     hashAlgorithm: artifactHashAlgorithmSchema,
     storageRef: artifactStorageRefSchema,
     logicalArtifactId: nonEmptyString,
@@ -350,7 +350,7 @@ export const artifactRefSchema = z
   .object({
     artifactId: nonEmptyString,
     versionId: nonEmptyString.optional(),
-    contentHash: contentHashSchema,
+    contentHash: artifactContentHashSchema,
     kind: artifactKindSchema.optional(),
     mimeType: nonEmptyString.optional(),
     sizeBytes: nonNegativeInteger.optional(),
@@ -363,7 +363,7 @@ export const artifactLineageNodeSchema = z
     artifactId: nonEmptyString,
     versionId: nonEmptyString,
     logicalArtifactId: nonEmptyString,
-    contentHash: contentHashSchema,
+    contentHash: artifactContentHashSchema,
     kind: artifactKindSchema.optional(),
     transformation: nonEmptyString.optional(),
   })
