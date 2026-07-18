@@ -119,6 +119,13 @@ describe('DockerExecutionPolicyResolver', () => {
       'EXECUTION_POLICY_DENIED',
     ],
     [
+      'a shell executable allowlist bypass',
+      (value: ExecutionEnvironmentSpec) => {
+        value.process.allowedExecutables = ['/bin/sh'];
+      },
+      'EXECUTION_POLICY_DENIED',
+    ],
+    [
       'Sandbox reuse',
       (value: ExecutionEnvironmentSpec) => {
         value.lifecycle.reuse = 'run';
@@ -239,6 +246,14 @@ describe('DockerExecutionPolicyResolver', () => {
       ).toMatchObject({ normalizedError: { code } });
     }
   );
+
+  it('rejects a shell executable even if command resolution is called independently', () => {
+    const value = environment();
+    value.process.allowedExecutables = ['sh'];
+    expect(
+      captureError(() => createResolver().resolveCommand(value, command({ executable: 'sh' })))
+    ).toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+  });
 
   it('rejects invalid provider-level limits before accepting work', () => {
     expect(
