@@ -1,4 +1,8 @@
 import type { RiskLevel, SideEffectLevel } from '../specs';
+import type { CommandExecutionRequest } from './command-execution';
+import type { WorkspaceOperationRequest } from './execution-activities';
+import type { ExecutionEnvironmentSpec } from './sandbox';
+import type { WorkspaceSpec } from './workspace';
 
 export const EXECUTION_TOOL_OPERATIONS = [
   'file_read',
@@ -31,4 +35,17 @@ export interface ExecutionRiskAssessment {
   requiresApproval: boolean;
   recommendedSandboxLevel?: ExecutionSandboxLevel;
   evaluatedAt: string;
+}
+
+export interface ExecutionRiskEvaluationInput {
+  assessmentId: string;
+  binding: ExecutionToolBinding;
+  request: CommandExecutionRequest | WorkspaceOperationRequest;
+  environment: ExecutionEnvironmentSpec;
+  workspace: WorkspaceSpec;
+  evaluatedAt: string;
+}
+
+export interface ExecutionRiskEvaluator {
+  evaluate(input: ExecutionRiskEvaluationInput): ExecutionRiskAssessment;
 }
