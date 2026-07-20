@@ -249,27 +249,47 @@ inference:
 
 servingCache:
   # API-level LLM response cache. Default off keeps provider behavior unchanged.
-  # Set HYPHA_SERVING_CACHE=memory or sqlite to enable exact request caching.
-  enabled: "${HYPHA_SERVING_CACHE_ENABLED:false}"
+  # The store is the single enable switch: memory, sqlite, or redis enables it.
   store: "${HYPHA_SERVING_CACHE:off}"
   mode: "${HYPHA_SERVING_CACHE_MODE:readwrite}"
   ttlMs: "${HYPHA_SERVING_CACHE_TTL_MS:86400000}"
-  cacheErrors: "${HYPHA_SERVING_CACHE_ERRORS:false}"
-  cacheStreaming: "${HYPHA_SERVING_CACHE_STREAMING:false}"
   respectNoCache: "${HYPHA_SERVING_CACHE_RESPECT_NO_CACHE:true}"
+  failureMode: "${HYPHA_SERVING_CACHE_FAILURE_MODE:bypass}"
+  scopeRequirement: "${HYPHA_SERVING_CACHE_SCOPE_REQUIREMENT:user}"
+  operationTimeoutMs: "${HYPHA_SERVING_CACHE_OPERATION_TIMEOUT_MS:250}"
+  singleflight: "${HYPHA_SERVING_CACHE_SINGLEFLIGHT:true}"
+  maxEntryBytes: "${HYPHA_SERVING_CACHE_MAX_ENTRY_BYTES:1048576}"
+  circuitBreaker:
+    failureThreshold: "${HYPHA_SERVING_CACHE_CIRCUIT_FAILURE_THRESHOLD:3}"
+    resetTimeoutMs: "${HYPHA_SERVING_CACHE_CIRCUIT_RESET_TIMEOUT_MS:30000}"
+  memory:
+    maxEntries: "${HYPHA_SERVING_CACHE_MEMORY_MAX_ENTRIES:5000}"
+    maxBytes: "${HYPHA_SERVING_CACHE_MEMORY_MAX_BYTES:67108864}"
   sqlite:
     path: "${HYPHA_SERVING_CACHE_SQLITE_PATH:./data/runtime/cache/hypha-serving-cache.sqlite}"
+    maxEntries: "${HYPHA_SERVING_CACHE_SQLITE_MAX_ENTRIES:50000}"
+  redis:
+    prefix: "${HYPHA_SERVING_CACHE_REDIS_PREFIX:serving-cache:v1:}"
 
 workCache:
   # Event-derived typed runtime cache. cache-base defaults to memory so tree
   # and WorkGraph updates are collected without extra environment flags.
-  enabled: "${HYPHA_WORKCACHE_ENABLED:true}"
   store: "${HYPHA_WORKCACHE:memory}"
+  failureMode: "${HYPHA_WORKCACHE_FAILURE_MODE:bypass}"
+  scopeRequirement: "${HYPHA_WORKCACHE_SCOPE_REQUIREMENT:user}"
+  operationTimeoutMs: "${HYPHA_WORKCACHE_OPERATION_TIMEOUT_MS:500}"
+  maxBlockBytes: "${HYPHA_WORKCACHE_MAX_BLOCK_BYTES:2097152}"
   promptBudgetTokens: "${HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS:4096}"
   unknownEventPolicy: "${HYPHA_WORKCACHE_UNKNOWN_EVENT_POLICY:ignore}"
   allowExtensionEvents: "${HYPHA_WORKCACHE_ALLOW_EXTENSION_EVENTS:false}"
   sqlite:
     path: "${HYPHA_WORKCACHE_SQLITE_PATH:./data/runtime/cache/hypha-workcache.sqlite}"
+  memory:
+    maxEntries: "${HYPHA_WORKCACHE_MEMORY_MAX_ENTRIES:8000}"
+    maxBytes: "${HYPHA_WORKCACHE_MEMORY_MAX_BYTES:134217728}"
+  redis:
+    prefix: "${HYPHA_WORKCACHE_REDIS_PREFIX:workcache:v1:}"
+    invalidationChannel: "${HYPHA_WORKCACHE_REDIS_INVALIDATION_CHANNEL:workcache:v1:invalidate}"
   trees:
     PlanTree:
       enabled: true
@@ -294,6 +314,10 @@ workCache:
     MemoryTree:
       enabled: true
       ttlMs: "${HYPHA_WORKCACHE_MEMORY_TTL_MS:86400000}"
+      maxEntries: 1000
+    RecoveryTree:
+      enabled: true
+      ttlMs: "${HYPHA_WORKCACHE_RECOVERY_TTL_MS:21600000}"
       maxEntries: 1000
     PromptPrefixTree:
       enabled: true

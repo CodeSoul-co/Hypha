@@ -1,14 +1,19 @@
 import { createHash } from 'crypto';
-import type { CacheTreeType, WorkNodeType } from './types';
+import type { CacheTreeType, WorkCacheScope, WorkNodeType } from './types';
 
 export interface WorkCacheKeyInput {
   treeType: CacheTreeType;
   nodeType: WorkNodeType;
   identity: unknown;
+  scope?: WorkCacheScope;
 }
 
 export function createWorkCacheKey(input: WorkCacheKeyInput): string {
-  return `workcache:${input.treeType}:${input.nodeType}:sha256:${hashStableJson(input.identity)}`;
+  return `workcache:${input.treeType}:${input.nodeType}:sha256:${hashStableJson({
+    keyVersion: '1',
+    scope: input.scope,
+    identity: input.identity,
+  })}`;
 }
 
 export function createWorkBlockId(input: WorkCacheKeyInput & { sourceEventId: string }): string {
@@ -16,6 +21,7 @@ export function createWorkBlockId(input: WorkCacheKeyInput & { sourceEventId: st
     treeType: input.treeType,
     nodeType: input.nodeType,
     sourceEventId: input.sourceEventId,
+    scope: input.scope,
     identity: input.identity,
   })}`;
 }

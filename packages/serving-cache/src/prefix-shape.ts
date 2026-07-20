@@ -23,6 +23,8 @@ interface PrefixCacheShapeSnapshot {
 export class PrefixCacheShapeTracker {
   private readonly snapshots = new Map<string, PrefixCacheShapeSnapshot>();
 
+  constructor(private readonly maxSnapshots = 5000) {}
+
   observe(input: PrefixCacheShapeInput): PrefixCacheShapeObservation {
     const key = trackerKey(input);
     const previous = this.snapshots.get(key);
@@ -32,7 +34,13 @@ export class PrefixCacheShapeTracker {
       domainPackHash: input.prefixMetadata.domainPackHash,
       dynamicSuffixHash: input.prefixMetadata.dynamicSuffixHash,
     };
+    this.snapshots.delete(key);
     this.snapshots.set(key, current);
+    while (this.snapshots.size > this.maxSnapshots) {
+      const oldest = this.snapshots.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.snapshots.delete(oldest);
+    }
 
     const stablePrefixChanged = !previous || previous.prefixHash !== current.prefixHash;
     const dynamicSuffixChanged =

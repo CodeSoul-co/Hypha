@@ -1,5 +1,6 @@
 import { createLLMCacheKey } from './key';
 import { normalizeCachePolicy } from './policies';
+import { validateServingCacheJsonValue } from './schemas';
 import type {
   CacheEntry,
   CacheLookupResult,
@@ -13,6 +14,18 @@ export interface ServingCacheManagerOptions {
   store: CacheStore;
   policy?: Partial<CachePolicy>;
   now?: () => number;
+}
+
+export class CacheEntryTooLargeError extends Error {
+  readonly code = 'CACHE_ENTRY_TOO_LARGE';
+
+  constructor(
+    readonly sizeBytes: number,
+    readonly maxEntryBytes: number
+  ) {
+    super(`Cache entry is ${sizeBytes} bytes; maximum is ${maxEntryBytes} bytes.`);
+    this.name = 'CacheEntryTooLargeError';
+  }
 }
 
 export class ServingCacheManager {
@@ -60,10 +73,19 @@ export class ServingCacheManager {
     metadata: CacheMetadata,
     ttlMs: number | undefined = this.policy.ttlMs
   ): Promise<void> {
+    assertNoUnsupportedJson(value);
+    const serializedValue = JSON.stringify(value);
+    if (serializedValue === undefined) {
+      throw new TypeError('Cache values must be JSON serializable.');
+    }
+    const normalizedValue = JSON.parse(serializedValue) as T;
+    validateServingCacheJsonValue(normalizedValue);
     const createdAt = this.now();
-    const entry: CacheEntry<T> = {
+    const candidate: CacheEntry<T> = {
+      schemaVersion: '1.0',
+      keyVersion: '1',
       key,
-      value,
+      value: normalizedValue,
       createdAt,
       expiresAt: ttlMs ? createdAt + ttlMs : undefined,
       metadata: {
@@ -71,6 +93,13 @@ export class ServingCacheManager {
         hitCount: metadata.hitCount ?? 0,
       },
     };
+    const serializedEntry = JSON.stringify(candidate);
+    const sizeBytes = Buffer.byteLength(serializedEntry, 'utf8');
+    const maxEntryBytes = this.policy.maxEntryBytes;
+    if (maxEntryBytes !== undefined && sizeBytes > maxEntryBytes) {
+      throw new CacheEntryTooLargeError(sizeBytes, maxEntryBytes);
+    }
+    const entry = { ...(JSON.parse(serializedEntry) as CacheEntry<T>), sizeBytes };
     await this.store.set(key, entry);
   }
 
@@ -80,5 +109,34 @@ export class ServingCacheManager {
 
   async clear(): Promise<void> {
     await this.store.clear?.();
+  }
+}
+
+function assertNoUnsupportedJson(
+  value: unknown,
+  inArray = false,
+  ancestors = new Set<object>()
+): void {
+  if (value === undefined) {
+    if (inArray) throw new TypeError('Cache arrays cannot contain undefined values.');
+    return;
+  }
+  if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
+    throw new TypeError(`Cache values cannot contain ${typeof value} values.`);
+  }
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) throw new TypeError('Cache values cannot contain cycles.');
+    ancestors.add(value);
+    for (const item of value) assertNoUnsupportedJson(item, true, ancestors);
+    ancestors.delete(value);
+    return;
+  }
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    if (ancestors.has(value)) throw new TypeError('Cache values cannot contain cycles.');
+    ancestors.add(value);
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      assertNoUnsupportedJson(item, false, ancestors);
+    }
+    ancestors.delete(value);
   }
 }

@@ -3,6 +3,7 @@ import {
   ReasoningOrchestrator,
   type InferenceProvider,
   type InferenceRequest,
+  type InferenceResponse,
 } from '@hypha/inference';
 import { WorkCacheManager } from './manager';
 import { WorkCachedInferenceProvider } from './reasoning-inference-cache';
@@ -183,6 +184,54 @@ describe('WorkCachedInferenceProvider', () => {
     });
 
     expect(providerCalls).toBe(2);
+  });
+
+  it('stores a bounded inference projection and hydrates a fresh response identity', async () => {
+    const store = new MemoryWorkCacheStore();
+    let providerCalls = 0;
+    const cached = new WorkCachedInferenceProvider({
+      provider: {
+        id: 'projection-provider',
+        async infer() {
+          return {
+            id: `provider-response-${++providerCalls}`,
+            output: { content: 'answer' },
+            usage: { totalTokens: 12 },
+            raw: { secret: 'provider-internal' },
+            nextKvCacheValue: { secretHandle: true },
+            metadata: { debug: true },
+          };
+        },
+      },
+      manager: new WorkCacheManager({
+        store,
+        policy: { enabled: true, store: 'memory' },
+      }),
+    });
+    const firstRequest = {
+      ...request('run-1', 'step-1', 'session-1'),
+      reasoning: { method: 'direct' as const, strategyVersion: '1' },
+      metadata: {
+        userId: 'user-1',
+        sessionId: 'session-1',
+        reasoningCacheIdentity: 'stable-node',
+      },
+    };
+    const first = await cached.infer(firstRequest);
+    const second = await cached.infer({ ...firstRequest, runId: 'run-2', stepId: 'step-2' });
+
+    expect(providerCalls).toBe(1);
+    expect(first.raw).toEqual({ secret: 'provider-internal' });
+    expect(second.id).toBe('run-2:step-2:thinking-cache');
+    expect(second.raw).toBeUndefined();
+    expect(second.nextKvCacheValue).toBeUndefined();
+    const blocks = await store.list<{ value: InferenceResponse }>('ComputationTree');
+    expect(blocks[0]?.value.value).toMatchObject({
+      id: 'thinking-cache-projection',
+      output: { content: 'answer' },
+    });
+    expect(blocks[0]?.value.value).not.toHaveProperty('raw');
+    expect(blocks[0]?.value.value).not.toHaveProperty('nextKvCacheValue');
   });
 
   it('fails open without reading or writing when WorkCache is disabled', async () => {

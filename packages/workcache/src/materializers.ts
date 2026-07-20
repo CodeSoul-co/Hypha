@@ -8,6 +8,7 @@ import type {
   PromptPrefixBlockValue,
   RecoveryKnowledgeBlockValue,
   WorkNodeType,
+  WorkCacheScope,
 } from './types';
 
 export function materializeGenericBlock(event: NormalizedWorkEvent): CacheBlock[] {
@@ -442,20 +443,25 @@ export function createBlock<T = unknown>(
     tags?: string[];
   }
 ): CacheBlock<T> {
+  const scope = workCacheScopeFromEvent(event.sourceEvent);
   const cacheKey = createWorkCacheKey({
     treeType: event.treeType,
     nodeType: event.nodeType,
+    scope,
     identity: input.identity,
   });
   const blockId = createWorkBlockId({
     treeType: event.treeType,
     nodeType: event.nodeType,
     sourceEventId: event.sourceEventId,
+    scope,
     identity: input.identity,
   });
   const timestamp = Date.parse(event.sourceEvent.timestamp);
   const now = Number.isFinite(timestamp) ? timestamp : Date.now();
   return {
+    schemaVersion: '1.0',
+    keyVersion: '1',
     id: blockId,
     treeType: event.treeType,
     nodeType: event.nodeType,
@@ -465,6 +471,7 @@ export function createBlock<T = unknown>(
     updatedAt: now,
     sourceEventId: event.sourceEventId,
     sourceEventType: event.sourceEventType,
+    scope,
     provenance: input.provenance,
     validity: input.validity,
     utility: { score: 1 },
@@ -488,10 +495,24 @@ export function fallbackAuditIdentity(
     sourceEventType: event.type,
     reason,
   };
+  const scope = workCacheScopeFromEvent(event);
   return {
-    blockId: createWorkBlockId({ treeType, nodeType, sourceEventId: event.id, identity }),
-    cacheKey: createWorkCacheKey({ treeType, nodeType, identity }),
+    blockId: createWorkBlockId({ treeType, nodeType, sourceEventId: event.id, scope, identity }),
+    cacheKey: createWorkCacheKey({ treeType, nodeType, scope, identity }),
   };
+}
+
+export function workCacheScopeFromEvent(event: FrameworkEvent): WorkCacheScope | undefined {
+  const metadata = recordFromUnknown(event.metadata);
+  const scope: WorkCacheScope = {
+    tenantId: stringValue(event.tenantId),
+    userId: stringValue(event.userId),
+    workspaceId: stringValue(event.workspaceId),
+    sessionId: stringValue(event.sessionId),
+    agentId: stringValue(event.agentId),
+    domainPackId: stringValue(metadata.domainPackId),
+  };
+  return Object.values(scope).some(Boolean) ? scope : undefined;
 }
 
 function promptPrefixMetadataFrom(

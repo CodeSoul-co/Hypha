@@ -92,11 +92,12 @@ Agent inference is a packages-layer pipeline: `PromptCompiler` normalizes runtim
 ## Serving Cache
 
 `@hypha/serving-cache` wraps `ModelProvider.generate()` when
-`HYPHA_SERVING_CACHE=memory` or `sqlite`. It computes an exact request key from
+`HYPHA_SERVING_CACHE=memory`, `sqlite`, or `redis`. It computes an exact request key from
 provider, model, system/prefix content, messages, tools, generation params, and
-scope metadata. Fresh hits return the cached `ModelResponse`; misses call the
-inner provider and may write the response. Streaming requests bypass cache in
-the first version.
+scope metadata. The default policy requires a user scope. Misses call the
+inner provider and may write a bounded `CachedModelResponseProjection`; hits
+hydrate a new response id and never restore provider raw payloads or arbitrary
+metadata. Streaming requests always bypass cache.
 
 The layer records prompt prefix metadata and emits `llm.cache.lookup`,
 `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`
@@ -124,11 +125,11 @@ WorkCache also maintains a rebuildable `WorkGraph` from source events. Each
 normalized event becomes one typed work node, dependency edges are derived from
 input refs, provenance, environment deps, and cache links, and `DemandSignal`
 records update tree-local block utility. The cache tree runtime model is a
-three-layer structure: source events as the rebuildable log, CPU memory for the
-current WorkGraph plus hot cache index, and memory/SQLite as the backing store.
-Current-run updates are synchronous for immediate reuse; heavier pruning or
-rebuild work belongs behind the same graph/store interfaces and should not
-block an agent step.
+three-layer structure: source events as the rebuildable log, bounded CPU memory
+for the current WorkGraph plus hot cache index, and memory/SQLite/Redis as the
+backing store. Keys and blocks are scoped, unknown validity is not reusable,
+store operations are time-bounded, and Redis invalidation updates peer hot
+indexes.
 
 PromptPrefixTree is managed at prompt-block granularity. Serving Cache
 `llm.cache.write` metadata is split into stable `system`, `tool-schema`,
@@ -139,8 +140,8 @@ materialization selects a prefix group and assembles ordered blocks under the
 configured token budget.
 
 The bundled server configuration enables it with `HYPHA_WORKCACHE=memory`. Set
-`HYPHA_WORKCACHE=off` to disable it or `HYPHA_WORKCACHE=sqlite` to persist cache
-blocks. Derived audit events are `workcache.lookup`, `workcache.hit`,
+`HYPHA_WORKCACHE=off` to disable it, `HYPHA_WORKCACHE=sqlite` to persist locally,
+or `HYPHA_WORKCACHE=redis` for a shared store. Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.miss`, `workcache.write`, `workcache.invalidate`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each event links back
 to the source event id/type, tree type, block id, and cache key.

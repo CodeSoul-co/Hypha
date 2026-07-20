@@ -66,6 +66,7 @@ export class PromptManager {
 
   register(template: PromptTemplate): void {
     const key = this.getTemplateKey(template.id, template.category);
+    this.cache.delete(key);
     this.templates.set(key, template);
     const agentPrompt = toAgentPromptSpec(template);
     if (agentPrompt) this.agentPrompts.register(agentPrompt, { replace: true });

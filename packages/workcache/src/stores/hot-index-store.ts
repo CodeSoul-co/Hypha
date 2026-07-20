@@ -1,9 +1,4 @@
-import type {
-  CacheBlock,
-  CacheBlockUtility,
-  CacheTreeType,
-  WorkCacheStore,
-} from '../types';
+import type { CacheBlock, CacheBlockUtility, CacheTreeType, WorkCacheStore } from '../types';
 
 export interface HotIndexedWorkCacheStoreOptions {
   maxEntries?: number;
@@ -23,7 +18,11 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
 
   async get<T = unknown>(blockId: string): Promise<CacheBlock<T> | null> {
     const hot = this.blocks.get(blockId);
-    if (hot) return hot as CacheBlock<T>;
+    if (hot) {
+      this.blocks.delete(blockId);
+      this.blocks.set(blockId, hot);
+      return hot as CacheBlock<T>;
+    }
     const block = await this.backing.get<T>(blockId);
     if (block) this.index(block);
     return block;
@@ -36,7 +35,11 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
     const hotId = this.keyIndex.get(indexKey(treeType, cacheKey));
     if (hotId) {
       const hot = this.blocks.get(hotId);
-      if (hot) return hot as CacheBlock<T>;
+      if (hot) {
+        this.blocks.delete(hotId);
+        this.blocks.set(hotId, hot);
+        return hot as CacheBlock<T>;
+      }
       this.keyIndex.delete(indexKey(treeType, cacheKey));
     }
     const block = await this.backing.getByCacheKey<T>(treeType, cacheKey);
