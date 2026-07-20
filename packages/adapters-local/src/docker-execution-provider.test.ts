@@ -71,6 +71,9 @@ describe('DockerExecutionProvider', () => {
     });
     const provider = new DockerExecutionProvider({ workspaceRoot: workspace, engine });
     const ready = await createReady(provider);
+    expect(engine.created).toEqual([
+      expect.objectContaining({ image: 'redis', imageDigest: digest }),
+    ]);
     const result = await provider.execute(
       command(ready.id, 'execution.docker.success', { captureFileMutations: true })
     );
@@ -198,6 +201,7 @@ describe('DockerExecutionProvider', () => {
 
 class FakeDockerEngine implements DockerEngineClient {
   running = false;
+  readonly created: DockerContainerCreateInput[] = [];
   readonly removed: string[] = [];
   readonly killed: string[] = [];
   constructor(
@@ -212,7 +216,8 @@ class FakeDockerEngine implements DockerEngineClient {
   async inspectImage(): Promise<{ id: string; repoDigests: string[] }> {
     return { id: digest, repoDigests: [`redis@${digest}`] };
   }
-  async createContainer(_input: DockerContainerCreateInput): Promise<string> {
+  async createContainer(input: DockerContainerCreateInput): Promise<string> {
+    this.created.push(input);
     return 'container123';
   }
   async startContainer(): Promise<void> {
