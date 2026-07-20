@@ -151,9 +151,11 @@ agent interfaces, and does not implement MessageTree or KVPrefixTree in V1.
 
 `RecoveryTree` is the recovery-specific cache boundary. It consumes completed/resolved/escalated
 recovery events and exposes a `RecoveryKnowledgePort` through `WorkCacheManager`. Keys include the
-failure fingerprint, participant, and policy/spec/provider revisions; expiry or revision drift
-deletes stale blocks. A hit is a revalidated strategy hint only—the FSM snapshot, events, and
-provider receipts still determine whether recovery succeeded.
+tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
+policy/spec/provider revisions. Strict runtime validation rejects unscoped or malformed persisted
+hints; expiry or revision drift deletes stale blocks only inside the same scope. A hit is a
+revalidated strategy hint only—the FSM snapshot, events, and provider receipts still determine
+whether recovery succeeded.
 
 ## Extension Boundaries
 

@@ -420,7 +420,7 @@ Core exports:
 | `SQLiteWorkCacheStore`            | Bounded persistent store backed by `workcache_blocks`.                                          |
 | `RedisWorkCacheStore`             | Shared, TTL-aware store with atomic latest-key maintenance.                                     |
 | `TimeoutWorkCacheStore`           | Bounds provider-neutral store calls.                                                            |
-| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                     |
+| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                    |
 
 Default source event alignment:
 
@@ -453,10 +453,12 @@ Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
 `sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
 
-`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by failure
-fingerprint, participant, and policy/spec/provider revision. Values include strategy, outcome,
-evidence hash, expiry, and verified/negative validation. Expired or mismatched blocks are removed;
-the runtime supervisor revalidates hits and remains the only component that advances the FSM case.
+`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by structured
+tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
+policy/spec/provider revision. Core exports strict Zod and JSON Schemas for scoped recovery
+knowledge. Values include strategy, outcome, evidence hash, expiry, and verified/negative
+validation. Unscoped, malformed, expired, or mismatched blocks are rejected or removed; the runtime
+supervisor revalidates hits and remains the only component that advances the FSM case.
 
 ## Inference
 

@@ -119,13 +119,14 @@ ordering/template metadata. Dynamic suffix hashes and request ids are trace
 metadata only; they do not invalidate stable prefix blocks. A template content
 or version change should produce a new block hash and therefore a new block.
 
-Recovery knowledge is keyed by failure fingerprint, participant id, and
-policy/spec/provider revisions. `WorkCacheManager.getRecoveryKnowledgePort()`
-stores verified and negative outcomes with an evidence hash and TTL. Lookup
-removes expired entries; a new revision removes stale entries for the same
-failure and participant. The recovery supervisor still revalidates every hit
-and uses only a verified strategy for a handler declared by the current
-participant. Negative knowledge records a failed strategy but does not
+Recovery knowledge is keyed by tenant/user/workspace/session/agent/DomainPack
+scope, failure fingerprint, participant id, and policy/spec/provider revisions.
+`WorkCacheManager.getRecoveryKnowledgePort()` validates scoped knowledge with
+the Core runtime schema before persistence and removes malformed legacy blocks.
+A new revision removes stale entries only inside the same scope; invalidation
+cannot remove another user's hint. The recovery supervisor still revalidates
+every hit and uses only a verified strategy for a handler declared by the
+current participant. Negative knowledge records a failed strategy but does not
 authorize a different side effect. Store outages bypass recovery hints rather
 than interrupting the recovery supervisor.
 

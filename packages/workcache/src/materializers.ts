@@ -1,4 +1,8 @@
-import type { FrameworkEvent, RecoveryKnowledge } from '@hypha/core';
+import {
+  parseScopedRecoveryKnowledge,
+  type FrameworkEvent,
+  type RecoveryKnowledge,
+} from '@hypha/core';
 import { createWorkBlockId, createWorkCacheKey, hashStableJson, stableJson } from './key';
 import type {
   CacheBlock,
@@ -290,31 +294,28 @@ export function materializeMessageBlock(event: NormalizedWorkEvent): CacheBlock[
 
 export function materializeRecoveryKnowledgeBlock(event: NormalizedWorkEvent): CacheBlock[] {
   const payload = recordFromUnknown(event.payload);
-  const rawKnowledge = recordFromUnknown(payload.knowledge);
-  const rawKey = recordFromUnknown(rawKnowledge.key);
-  const validation = recordFromUnknown(rawKnowledge.validation);
-  const fingerprint = stringValue(rawKey.fingerprint);
-  const participantId = stringValue(rawKey.participantId);
-  const strategy = stringValue(rawKnowledge.strategy);
-  const outcome = stringValue(rawKnowledge.outcome);
-  const learnedAt = stringValue(rawKnowledge.learnedAt);
-  const validationStatus = stringValue(validation.status);
+  let knowledge: RecoveryKnowledge;
+  try {
+    knowledge = parseScopedRecoveryKnowledge(payload.knowledge);
+  } catch {
+    return [];
+  }
   if (
-    !fingerprint ||
-    !participantId ||
-    !strategy ||
-    !outcome ||
-    !learnedAt ||
-    (validationStatus !== 'verified' && validationStatus !== 'negative')
+    (event.sourceEvent.userId && knowledge.key.scope?.userId !== event.sourceEvent.userId) ||
+    (event.sourceEvent.sessionId &&
+      knowledge.key.scope?.sessionId &&
+      knowledge.key.scope.sessionId !== event.sourceEvent.sessionId)
   ) {
     return [];
   }
-  const knowledge = rawKnowledge as unknown as RecoveryKnowledge;
+  const { fingerprint, participantId } = knowledge.key;
+  const { strategy, outcome, learnedAt, validation } = knowledge;
+  const validationStatus = validation.status;
   const sourceHashes = Object.fromEntries(
     [
-      ['policy', stringValue(rawKey.policyRevision)],
-      ['spec', stringValue(rawKey.specRevision)],
-      ['provider', stringValue(rawKey.providerRevision)],
+      ['policy', knowledge.key.policyRevision],
+      ['spec', knowledge.key.specRevision],
+      ['provider', knowledge.key.providerRevision],
     ].filter((entry): entry is [string, string] => Boolean(entry[1]))
   );
   return [
@@ -323,7 +324,7 @@ export function materializeRecoveryKnowledgeBlock(event: NormalizedWorkEvent): C
       value: knowledge,
       validity: {
         status: 'valid',
-        proof: recordFromUnknown(validation.proof),
+        proof: validation.proof,
         sourceHashes,
         provenanceHash: hashStableJson({ key: knowledge.key, validation }),
       },
