@@ -11,6 +11,7 @@ import type {
   ArtifactStoreProvider,
   ProviderHealth,
 } from '@hypha/core';
+import { finished } from 'node:stream/promises';
 import {
   artifactCopyRequestSchema,
   artifactDownloadAccessRequestSchema,
@@ -124,20 +125,27 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
             }
           );
         }
-        const result = await this.transport.upload({
-          bucket: this.bucket,
-          key: request.objectKey,
-          body: staged.createReadStream(),
-          contentLength: staged.sizeBytes,
-          contentType: request.mimeType,
-          metadata: encodeS3ArtifactMetadata(
-            staged.contentHash,
-            request.metadata,
-            this.maxMetadataBytes
-          ),
-          ifAbsent: request.ifAbsent ?? false,
-        });
-        return this.storageRef(request.objectKey, result);
+        const metadata = encodeS3ArtifactMetadata(
+          staged.contentHash,
+          request.metadata,
+          this.maxMetadataBytes
+        );
+        const body = staged.createReadStream();
+        try {
+          const result = await this.transport.upload({
+            bucket: this.bucket,
+            key: request.objectKey,
+            body,
+            contentLength: staged.sizeBytes,
+            contentType: request.mimeType,
+            metadata,
+            ifAbsent: request.ifAbsent ?? false,
+          });
+          return this.storageRef(request.objectKey, result);
+        } finally {
+          if (!body.destroyed) body.destroy();
+          await finished(body).catch(() => undefined);
+        }
       } finally {
         await staged.cleanup();
       }

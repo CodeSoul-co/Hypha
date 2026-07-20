@@ -49,7 +49,13 @@ export async function stageS3ArtifactContent(
     contentHash: `sha256:${hash.digest('hex')}`,
     sizeBytes,
     createReadStream: () => fs.createReadStream(filename),
-    cleanup: () => fsPromises.rm(directory, { recursive: true, force: true }),
+    cleanup: () =>
+      fsPromises.rm(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 20,
+      }),
   };
 }
 

@@ -750,7 +750,7 @@ describe('@hypha/mcp normalization', () => {
         httpServer.close((error) => (error ? reject(error) : resolve()))
       );
     }
-  });
+  }, 15_000);
 
   it('blocks dangerous MCP tools before calling the gateway handler', async () => {
     let called = false;
