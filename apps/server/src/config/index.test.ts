@@ -6,6 +6,7 @@ import {
   reloadConfig,
   servingCacheConfig,
   storageConfig,
+  toolResultCacheConfig,
   workCacheConfig,
 } from './index';
 
@@ -47,6 +48,13 @@ const trackedEnv = [
   'HYPHA_FILESYSTEM_EXECUTION_ENABLED',
   'HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS',
   'HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES',
+  'HYPHA_TOOL_RESULT_CACHE',
+  'HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE',
+  'HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS',
+  'HYPHA_TOOL_RESULT_CACHE_MAX_ENTRIES',
+  'HYPHA_TOOL_RESULT_CACHE_MAX_ENTRY_BYTES',
+  'HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS',
+  'HYPHA_TOOL_RESULT_CACHE_NAMESPACE',
   'FILESYSTEM_TOOL_ROOT',
 ] as const;
 
@@ -174,6 +182,33 @@ describe('configuration storage taxonomy', () => {
 
     expect(servingCacheConfig()).toMatchObject({ enabled: false, store: 'off', mode: 'off' });
     expect(workCacheConfig()).toMatchObject({ enabled: false, store: 'off' });
+  });
+
+  it('configures bounded local or shared Tool result caching without changing the default', () => {
+    expect(toolResultCacheConfig()).toMatchObject({
+      store: 'off',
+      failureMode: 'bypass',
+      operationTimeoutMs: 250,
+    });
+
+    process.env.HYPHA_TOOL_RESULT_CACHE = 'redis';
+    process.env.HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE = 'strict';
+    process.env.HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS = '500';
+    process.env.HYPHA_TOOL_RESULT_CACHE_MAX_ENTRIES = '64';
+    process.env.HYPHA_TOOL_RESULT_CACHE_MAX_ENTRY_BYTES = '4096';
+    process.env.HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS = '60000';
+    process.env.HYPHA_TOOL_RESULT_CACHE_NAMESPACE = 'tools:test:v1';
+    reloadConfig();
+
+    expect(toolResultCacheConfig()).toEqual({
+      store: 'redis',
+      failureMode: 'strict',
+      operationTimeoutMs: 500,
+      maxEntries: 64,
+      maxEntryBytes: 4096,
+      redisDefaultTtlMs: 60000,
+      namespace: 'tools:test:v1',
+    });
   });
 
   it('loads a managed local Ollama runtime without changing the provider default', () => {

@@ -7,6 +7,7 @@ import {
   InMemoryToolApprovalStore,
   InMemoryToolInvocationStore,
   InMemoryToolResultCache,
+  RedisToolResultCache,
   LocalFunctionToolAdapter,
   MCPToolAdapter,
   MockToolAdapter,
@@ -24,9 +25,11 @@ import {
   ocrRequestSchema,
   videoSourceRequestSchema,
   hashToolContract,
+  createToolCacheValidityKey,
   toolSpecDefinition,
   toolSpecJsonSchemas,
   validateToolInput,
+  validateToolResultCacheEntry,
   validateToolSpec,
 } from './index';
 
@@ -1178,6 +1181,313 @@ describe('@hypha/tools governed runner', () => {
         expect.objectContaining({ type: 'tool.cache.bypass' }),
       ])
     );
+  });
+
+  it('keeps cache failures fail-open and emits operation-specific bypass evidence', async () => {
+    const registry = new ToolRegistry();
+    const trace = new InMemoryEventStore();
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.cache-failure',
+        version: '1.0.0',
+        revision: 'cache-failure-v1',
+        description: 'Cache failure fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+        },
+      },
+      async () => ({ calls: ++calls })
+    );
+    const runner = new GovernedToolRunner(registry, trace, undefined, {
+      resultCache: {
+        async get() {
+          throw Object.assign(new Error('cache unavailable'), { code: 'CACHE_UNAVAILABLE' });
+        },
+        async set() {
+          throw Object.assign(new Error('cache unavailable'), { code: 'CACHE_UNAVAILABLE' });
+        },
+      },
+    });
+
+    await expect(
+      runner.run({
+        toolId: 'tool.cache-failure',
+        input: {},
+        context: {
+          runId: 'run_tool_cache_failure',
+          stepId: 'step_cache_failure',
+          invocationId: 'invocation_cache_failure',
+          metadata: { externalStateVersion: 'cache-failure-state-v1' },
+        },
+      })
+    ).resolves.toMatchObject({ status: 'completed', output: { calls: 1 } });
+    expect(calls).toBe(1);
+    const events = await trace.list({ runId: 'run_tool_cache_failure' });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.cache.bypass',
+          payload: expect.objectContaining({ cacheOperation: 'get', code: 'CACHE_UNAVAILABLE' }),
+        }),
+        expect.objectContaining({
+          type: 'tool.cache.bypass',
+          payload: expect.objectContaining({ cacheOperation: 'set', code: 'CACHE_UNAVAILABLE' }),
+        }),
+      ])
+    );
+  });
+
+  it('bounds result-cache memory and never reuses invocation or receipt fields', async () => {
+    const registry = new ToolRegistry();
+    const resultCache = new InMemoryToolResultCache({ maxEntries: 2 });
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.bounded-cache',
+        version: '1.0.0',
+        revision: 'bounded-cache-v1',
+        description: 'Bounded cache fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+        },
+      },
+      async (input) => {
+        const value = (input as { value: number }).value;
+        return {
+          kind: 'tool_execution_envelope',
+          output: { value, calls: ++calls },
+          externalReceipt: { receiptId: `receipt-${calls}`, status: 'observed' },
+        };
+      }
+    );
+    const runner = new GovernedToolRunner(registry, new InMemoryEventStore(), undefined, {
+      resultCache,
+    });
+    const run = (value: number, invocationId: string) =>
+      runner.run({
+        toolId: 'tool.bounded-cache',
+        input: { value },
+        context: {
+          runId: 'run_bounded_tool_cache',
+          stepId: 'read',
+          invocationId,
+          metadata: { externalStateVersion: 'bounded-state-v1' },
+        },
+      });
+
+    await run(1, 'bounded-1');
+    const hit = await run(1, 'bounded-1-hit');
+    expect(hit).toMatchObject({
+      invocationId: 'bounded-1-hit',
+      output: { value: 1, calls: 1 },
+      attempts: 0,
+    });
+    expect(hit.externalReceipt).toBeUndefined();
+    await run(2, 'bounded-2');
+    await run(3, 'bounded-3');
+    expect(resultCache.size()).toBe(2);
+    await run(1, 'bounded-1-after-eviction');
+    expect(calls).toBe(4);
+  });
+
+  it('rejects corrupt or validity-mismatched Store records instead of spreading them into results', async () => {
+    const registry = new ToolRegistry();
+    const trace = new InMemoryEventStore();
+    let calls = 0;
+    let stored: unknown;
+    let deleteCalls = 0;
+    let poisonNextRead = false;
+    registry.register(
+      {
+        id: 'tool.cache-integrity',
+        version: '1.0.0',
+        revision: 'cache-integrity-v1',
+        description: 'Cache integrity fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+          ttlSeconds: 60,
+        },
+      },
+      async () => ({ calls: ++calls })
+    );
+    const runner = new GovernedToolRunner(registry, trace, undefined, {
+      resultCache: {
+        async get() {
+          if (!poisonNextRead || !stored) return null;
+          const entry = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>;
+          entry.result = {
+            ...((entry.result as Record<string, unknown>) ?? {}),
+            externalReceipt: { receiptId: 'forged-receipt' },
+            invocationId: 'forged-invocation',
+          };
+          return entry as never;
+        },
+        async set(entry) {
+          stored = entry;
+        },
+        async delete() {
+          deleteCalls += 1;
+        },
+      },
+    });
+    const run = (invocationId: string) =>
+      runner.run({
+        toolId: 'tool.cache-integrity',
+        input: {},
+        context: {
+          runId: 'run_cache_integrity',
+          stepId: 'read',
+          invocationId,
+          metadata: { externalStateVersion: 'state-v1' },
+        },
+      });
+
+    await run('cache-integrity-1');
+    poisonNextRead = true;
+    await expect(run('cache-integrity-2')).resolves.toMatchObject({
+      status: 'completed',
+      output: { calls: 2 },
+      invocationId: 'cache-integrity-2',
+    });
+    expect(deleteCalls).toBe(1);
+    await expect(trace.list({ runId: 'run_cache_integrity' })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.cache.bypass',
+          payload: expect.objectContaining({ reason: 'cache_entry_corrupt_or_mismatched' }),
+        }),
+      ])
+    );
+  });
+
+  it('requires external-state validity for read caches and Artifact verification for references', async () => {
+    const registry = new ToolRegistry();
+    let readCalls = 0;
+    registry.register(
+      {
+        id: 'tool.cache-artifact',
+        version: '1.0.0',
+        revision: 'cache-artifact-v1',
+        description: 'Artifact cache fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+        },
+      },
+      async () => ({
+        kind: 'tool_execution_envelope',
+        output: { calls: ++readCalls },
+        artifactRefs: ['artifact:tool-output'],
+      })
+    );
+    const cache = new InMemoryToolResultCache();
+    const withoutVerifier = new GovernedToolRunner(registry, new InMemoryEventStore(), undefined, {
+      resultCache: cache,
+    });
+    const request = (invocationId: string, externalStateVersion?: string) => ({
+      toolId: 'tool.cache-artifact',
+      input: {},
+      context: {
+        runId: 'run_cache_artifact',
+        stepId: 'read',
+        invocationId,
+        metadata: externalStateVersion ? { externalStateVersion } : undefined,
+      },
+    });
+
+    await withoutVerifier.run(request('artifact-no-state-1'));
+    await withoutVerifier.run(request('artifact-no-state-2'));
+    await withoutVerifier.run(request('artifact-no-verifier-1', 'state-v1'));
+    await withoutVerifier.run(request('artifact-no-verifier-2', 'state-v1'));
+    expect(readCalls).toBe(4);
+    expect(cache.size()).toBe(0);
+
+    const withVerifier = new GovernedToolRunner(registry, new InMemoryEventStore(), undefined, {
+      resultCache: cache,
+      resultCacheArtifactVerifier: {
+        async verify() {
+          return true;
+        },
+      },
+    });
+    await withVerifier.run(request('artifact-verified-1', 'state-v2'));
+    await withVerifier.run(request('artifact-verified-2', 'state-v2'));
+    expect(readCalls).toBe(5);
+  });
+
+  it('persists only versioned, key-bound records through the Redis-compatible Tool cache', async () => {
+    const values = new Map<string, string>();
+    const client = {
+      async get(key: string) {
+        return values.get(key) ?? null;
+      },
+      async set(key: string, value: string) {
+        values.set(key, value);
+        return 'OK';
+      },
+      async del(...keys: string[]) {
+        let deleted = 0;
+        for (const key of keys) deleted += values.delete(key) ? 1 : 0;
+        return deleted;
+      },
+    };
+    const now = '2026-07-21T00:00:00.000Z';
+    const validityInput = {
+      toolId: 'tool.redis-cache',
+      toolRevision: 'revision-v1',
+      inputHash: 'input-v1',
+      scopeHash: 'scope-v1',
+      policyRevision: 'policy-v1',
+      externalStateVersion: 'state-v1',
+    };
+    const key = createToolCacheValidityKey(validityInput);
+    const entry = {
+      schemaVersion: '1.0' as const,
+      keyVersion: '1' as const,
+      validity: {
+        ...validityInput,
+        key,
+        validUntil: '2026-07-21T00:01:00.000Z',
+      },
+      result: { output: { ok: true } },
+      createdAt: now,
+    };
+    const cache = new RedisToolResultCache({ client, namespace: 'test:tools', now: () => now });
+
+    await cache.set(entry);
+    await expect(cache.get(key)).resolves.toEqual(validateToolResultCacheEntry(entry));
+    const physicalKey = `test:tools:${key}`;
+    const mismatchedInput = { ...validityInput, externalStateVersion: 'state-v2' };
+    const mismatchedKey = createToolCacheValidityKey(mismatchedInput);
+    values.set(
+      physicalKey,
+      JSON.stringify({
+        ...entry,
+        validity: { ...mismatchedInput, key: mismatchedKey },
+      })
+    );
+    await expect(cache.get(key)).resolves.toBeNull();
+    expect(values.has(physicalKey)).toBe(false);
   });
 
   it('honors audit inclusion and redaction policies', async () => {

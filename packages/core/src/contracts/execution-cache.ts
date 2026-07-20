@@ -87,8 +87,98 @@ export interface ExecutionCacheEntryProjection {
   artifacts: ExecutionCacheArtifactReference[];
 }
 
+/** Mandatory ownership boundary for persisted Execution Cache records. */
+export interface ExecutionCacheScope {
+  tenantId?: string;
+  userId: string;
+  workspaceId: string;
+}
+
+/** Versioned envelope persisted by an Execution Result Cache store. */
+export interface ExecutionCacheRecord {
+  schemaVersion: '1.0';
+  keyVersion: '1';
+  key: string;
+  scope: ExecutionCacheScope;
+  projection: ExecutionCacheEntryProjection;
+  createdAt: number;
+  expiresAt?: number;
+  sizeBytes?: number;
+}
+
+export interface ExecutionCacheStore {
+  get(key: string): Promise<ExecutionCacheRecord | null>;
+  set(key: string, record: ExecutionCacheRecord): Promise<void>;
+  delete(key: string): Promise<void>;
+  clear?(): Promise<void>;
+  close?(): Promise<void>;
+}
+
+export interface ExecutionCacheArtifactVerifier {
+  verify(
+    scope: ExecutionCacheScope,
+    artifacts: ExecutionCacheArtifactReference[]
+  ): Promise<boolean>;
+}
+
+export type ExecutionCacheFailureMode = 'bypass' | 'strict';
+
+export type ExecutionCacheMissReason =
+  | 'not_found'
+  | 'expired'
+  | 'scope_mismatch'
+  | 'key_mismatch'
+  | 'validity_changed'
+  | 'artifact_verification_unavailable'
+  | 'artifact_verification_failed'
+  | 'environment_fingerprint_unavailable'
+  | 'workspace_write'
+  | 'external_side_effect'
+  | 'irreversible_side_effect'
+  | 'not_cacheable_status'
+  | 'store_unavailable'
+  | 'entry_oversized'
+  | 'corrupt';
+
+export interface ExecutionCacheLookupInput {
+  scope: ExecutionCacheScope;
+  command: ExecutionCommandFingerprintInput;
+  validity: ExecutionCacheValidityInput;
+  sideEffectLevel: SideEffectLevel;
+  environmentFingerprintStatus: ExecutionEnvironmentFingerprintResolution['status'];
+}
+
+export interface ExecutionCacheWriteInput extends ExecutionCacheLookupInput {
+  projection: ExecutionCacheEntryProjection;
+  ttlMs?: number;
+}
+
+export type ExecutionCacheLookupResult =
+  | {
+      hit: true;
+      key: string;
+      projection: ExecutionCacheEntryProjection;
+      ageMs: number;
+    }
+  | { hit: false; reason: ExecutionCacheMissReason; key?: string };
+
+export interface ExecutionCacheEvent {
+  type:
+    | 'execution.cache.lookup'
+    | 'execution.cache.hit'
+    | 'execution.cache.miss'
+    | 'execution.cache.write'
+    | 'execution.cache.invalidate'
+    | 'execution.cache.bypass';
+  key?: string;
+  scope: ExecutionCacheScope;
+  reason?: ExecutionCacheMissReason;
+  ageMs?: number;
+}
+
 export type ExecutionCacheReuseBlockReason =
   | 'environment_fingerprint_unavailable'
+  | 'workspace_write'
   | 'external_side_effect'
   | 'irreversible_side_effect';
 
