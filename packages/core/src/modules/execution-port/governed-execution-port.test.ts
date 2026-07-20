@@ -166,11 +166,54 @@ describe('GovernedExecutionPort', () => {
       .fn()
       .mockReturnValueOnce('2026-07-20T12:01:00.000Z')
       .mockReturnValue('2026-07-20T12:06:00.000Z');
+    const { dispatcher } = fixture({ clock });
+    const request: ExecutionDispatchRequest = {
+      ...executionDispatchRequestExample,
+      activity: {
+        ...executionDispatchRequestExample.activity,
+        deadlineAt: '2026-07-20T12:10:00.000Z',
+      },
+    };
+    const verifier = {
+      verify: vi.fn().mockResolvedValue({
+        ...executionAuthorizationVerificationResultExample,
+        expiresAt: '2026-07-20T12:10:00.000Z',
+      }),
+    };
+    const governedPort = new GovernedExecutionPort(verifier, dispatcher, clock);
+
+    await expectFrameworkError(
+      governedPort.execute(request, signal()),
+      'EXECUTION_APPROVAL_REQUIRED'
+    );
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects an expired activity deadline before authorization or dispatch', async () => {
+    const { port, verifier, dispatcher } = fixture();
+    const request: ExecutionDispatchRequest = {
+      ...executionDispatchRequestExample,
+      activity: {
+        ...executionDispatchRequestExample.activity,
+        deadlineAt: '2026-07-20T12:00:30.000Z',
+      },
+    };
+
+    await expectFrameworkError(port.execute(request, signal()), 'EXECUTION_TIMEOUT');
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the activity deadline after authorization verification completes', async () => {
+    const clock = vi
+      .fn()
+      .mockReturnValueOnce('2026-07-20T12:01:00.000Z')
+      .mockReturnValue('2026-07-20T12:06:00.000Z');
     const { port, dispatcher } = fixture({ clock });
 
     await expectFrameworkError(
       port.execute(executionDispatchRequestExample, signal()),
-      'EXECUTION_APPROVAL_REQUIRED'
+      'EXECUTION_TIMEOUT'
     );
     expect(dispatcher.dispatch).not.toHaveBeenCalled();
   });

@@ -135,4 +135,20 @@ describe('Execution Activity boundary contracts', () => {
       })
     ).toThrow(/completed activity/u);
   });
+
+  it.each(['failed', 'timeout', 'cancelled', 'unknown'] as const)(
+    'requires normalized error evidence for the %s terminal status',
+    (status) => {
+      const result = {
+        ...executionActivityResultExample,
+        status,
+      };
+
+      expect(() => validateExecutionActivityResult(result)).toThrow(/unsuccessful activity/u);
+
+      const ajv = new Ajv({ strict: true, allErrors: true });
+      addFormats(ajv);
+      expect(ajv.validate(executionActivityResultJsonSchema, result)).toBe(false);
+    }
+  );
 });

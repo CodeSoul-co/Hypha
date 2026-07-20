@@ -96,6 +96,49 @@ describe('DefaultExecutionOutputCollector', () => {
     expect(artifacts.finalize).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['user', { userId: 'user.other' }],
+    ['tenant', { tenantId: 'tenant.other' }],
+    [
+      'Workspace',
+      {
+        workspaceId: 'workspace.other',
+        access: { ...artifactRecord().access, workspaceId: 'workspace.other' },
+      },
+    ],
+    ['Run', { runId: 'run.other' }],
+    ['path', { relativePath: 'outputs/other.json' }],
+  ] as const)(
+    'fails closed when Artifact Manager returns another %s scope',
+    async (_name, patch) => {
+      const artifacts = artifactManager(artifactRecord(patch));
+      const collector = new DefaultExecutionOutputCollector(artifacts);
+
+      await expect(collector.collect(collectionPlan(), collectionContext())).rejects.toMatchObject({
+        code: 'EXECUTION_INTERNAL_ERROR',
+      });
+      expect(artifacts.finalize).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a finalize result for a different Artifact version', async () => {
+    const draft = artifactRecord({ status: 'draft' });
+    const unrelatedFinal = artifactRecord({
+      id: 'artifact.other',
+      logicalArtifactId: 'artifact.other',
+      versionId: 'artifact.other:v1',
+      revision: 1,
+      status: 'final',
+      finalizedAt: '2026-07-20T00:00:01.000Z',
+    });
+    const artifacts = artifactManager(draft, unrelatedFinal);
+    const collector = new DefaultExecutionOutputCollector(artifacts);
+
+    await expect(collector.collect(collectionPlan(), collectionContext())).rejects.toMatchObject({
+      code: 'EXECUTION_INTERNAL_ERROR',
+    });
+  });
+
   it('rejects mismatched collection identity before calling Artifact Manager', async () => {
     const artifacts = artifactManager(artifactRecord());
     const collector = new DefaultExecutionOutputCollector(artifacts);
@@ -171,8 +214,10 @@ function artifactRecord(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord
     versionId: 'artifact.output:v1',
     versionNumber: 1,
     revision: 0,
+    tenantId: 'tenant.example',
     userId: 'user.example',
     workspaceId: 'workspace.example',
+    runId: 'run.example',
     name: 'report.json',
     relativePath: 'outputs/report.json',
     kind: 'dataset',
@@ -196,6 +241,9 @@ function artifactRecord(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord
     status: 'draft',
     createdAt: '2026-07-20T00:00:00.000Z',
     updatedAt: '2026-07-20T00:00:00.000Z',
+    ...(overrides.status === 'final' && overrides.finalizedAt === undefined
+      ? { finalizedAt: '2026-07-20T00:00:01.000Z' }
+      : {}),
     ...overrides,
   };
 }

@@ -68,6 +68,20 @@ const permissionExecutables = new Set(['chmod', 'chown', 'icacls', 'setfacl', 't
 
 const backgroundExecutables = new Set(['nohup', 'start', 'start-process']);
 
+const shellExecutables = new Set([
+  'bash',
+  'cmd',
+  'csh',
+  'dash',
+  'fish',
+  'ksh',
+  'powershell',
+  'pwsh',
+  'sh',
+  'tcsh',
+  'zsh',
+]);
+
 const packageInstallCommands: Readonly<Record<string, readonly string[]>> = {
   apt: ['install'],
   'apt-get': ['install'],
@@ -164,7 +178,7 @@ function assessCommand(
   const args = (request.args ?? []).map((argument) => argument.toLowerCase());
   const commandText = [executable, ...args].join(' ');
 
-  if (request.shell) {
+  if (request.shell || shellExecutables.has(executable)) {
     matches.push(match(EXECUTION_RISK_RULE_IDS.shellExecution, 'shell_execution', 'high'));
   }
   if (isRecursiveDelete(executable, args)) {
@@ -275,8 +289,11 @@ function isWorkspacePathRequest(
 }
 
 function executableName(executable: string): string {
-  const normalized = executable.replace(/\\/gu, '/');
-  return normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase();
+  const normalized = executable.normalize('NFKC').replace(/\\/gu, '/');
+  return normalized
+    .slice(normalized.lastIndexOf('/') + 1)
+    .toLocaleLowerCase('en-US')
+    .replace(/\.(?:bat|cmd|com|exe)$/u, '');
 }
 
 function isRecursiveDelete(executable: string, args: readonly string[]): boolean {

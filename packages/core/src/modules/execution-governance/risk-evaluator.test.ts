@@ -188,6 +188,57 @@ describe('DefaultExecutionRiskEvaluator', () => {
     expect(assessment.matchedRules).toContain(EXECUTION_RISK_RULE_IDS.recursiveDelete);
   });
 
+  it.each([
+    {
+      name: 'a Windows network executable',
+      executable: 'C:\\Windows\\System32\\curl.exe',
+      args: ['https://example.invalid'],
+      ruleId: EXECUTION_RISK_RULE_IDS.networkAccess,
+      level: 'high',
+    },
+    {
+      name: 'a Windows package-manager shim',
+      executable: 'C:\\Tools\\npm.CMD',
+      args: ['install', 'example-package'],
+      ruleId: EXECUTION_RISK_RULE_IDS.packageInstall,
+      level: 'high',
+    },
+    {
+      name: 'a Windows external publish command',
+      executable: 'C:\\Program Files\\Git\\bin\\git.exe',
+      args: ['push', 'origin', 'main'],
+      ruleId: EXECUTION_RISK_RULE_IDS.externalPublish,
+      level: 'critical',
+    },
+    {
+      name: 'a directly invoked shell interpreter',
+      executable: '/usr/bin/bash',
+      args: ['scripts/build.sh'],
+      ruleId: EXECUTION_RISK_RULE_IDS.shellExecution,
+      level: 'high',
+    },
+    {
+      name: 'a directly invoked Windows shell',
+      executable: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      args: ['-Command', 'Write-Output ok'],
+      ruleId: EXECUTION_RISK_RULE_IDS.shellExecution,
+      level: 'high',
+    },
+  ] as const)(
+    'normalizes $name before applying risk rules',
+    ({ executable, args, ruleId, level }) => {
+      const assessment = evaluator.evaluate(
+        input({
+          request: command({ executable, args: [...args] }),
+          environment: environment({ allowedExecutables: [executable] }),
+        })
+      );
+
+      expect(assessment.level).toBe(level);
+      expect(assessment.matchedRules).toContain(ruleId);
+    }
+  );
+
   it('detects executable allowlist and deny-list violations separately', () => {
     const notAllowed = evaluator.evaluate(
       input({

@@ -32,7 +32,9 @@ export class GovernedExecutionPort implements ExecutionPort {
     const request = parseDispatchRequest(input);
     assertOperationMatches(request);
 
-    assertNotExpired(request.authorization.expiresAt, parseCurrentTime(this.now()), request);
+    const dispatchStartedAt = parseCurrentTime(this.now());
+    assertActivityWithinDeadline(request, dispatchStartedAt);
+    assertNotExpired(request.authorization.expiresAt, dispatchStartedAt, request);
 
     const verification = validateVerificationResult(
       await this.authorizationVerifier.verify(request, abortSignal)
@@ -51,12 +53,10 @@ export class GovernedExecutionPort implements ExecutionPort {
         },
       });
     }
-    assertNotExpired(
-      verification.expiresAt,
-      parseCurrentTime(this.now()),
-      request,
-      verification.verificationRef
-    );
+    const verifiedAt = parseCurrentTime(this.now());
+    assertActivityWithinDeadline(request, verifiedAt);
+    assertNotExpired(request.authorization.expiresAt, verifiedAt, request);
+    assertNotExpired(verification.expiresAt, verifiedAt, request, verification.verificationRef);
 
     const result = validateActivityResult(
       await this.dispatcher.dispatch(request.activity, abortSignal)
@@ -127,6 +127,22 @@ function validateActivityResult(input: unknown): ExecutionActivityResult {
       error
     );
   }
+}
+
+function assertActivityWithinDeadline(request: ExecutionDispatchRequest, now: number): void {
+  if (!request.activity.deadlineAt || Date.parse(request.activity.deadlineAt) > now) {
+    return;
+  }
+  throw new FrameworkError({
+    code: 'EXECUTION_TIMEOUT',
+    message: 'Execution activity deadline has expired',
+    context: {
+      activityId: request.activity.activityId,
+      runId: request.activity.runId,
+      stateAttemptId: request.activity.stateAttemptId,
+      deadlineAt: request.activity.deadlineAt,
+    },
+  });
 }
 
 function assertOperationMatches(request: ExecutionDispatchRequest): void {

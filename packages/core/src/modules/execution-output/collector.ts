@@ -1,12 +1,15 @@
+import type { ArtifactRecord } from '../../contracts/artifact';
 import type {
   CollectedExecutionOutput,
   ExecutionOutputArtifactManager,
   ExecutionOutputCollectionContext,
+  ExecutionOutputCollectionItem,
   ExecutionOutputCollectionPlan,
   ExecutionOutputCollectionResult,
   ExecutionOutputCollector,
 } from '../../contracts/execution-output';
 import { FrameworkError } from '../../errors';
+import { validateArtifactRecord } from '../artifact';
 import { validateExecutionOutputCollectionPlan } from './contracts';
 
 export class DefaultExecutionOutputCollector implements ExecutionOutputCollector {
@@ -30,41 +33,47 @@ export class DefaultExecutionOutputCollector implements ExecutionOutputCollector
       }
 
       const identity = collectionIdentity(context, plan.executionId, item.relativePath, index);
-      let record = await this.artifacts.createFromWorkspace({
-        operationId: identity.createOperationId,
-        principal: context.principal,
-        profileRef: context.profileRef,
-        userId: context.userId,
-        ...(context.tenantId ? { tenantId: context.tenantId } : {}),
-        workspaceId: context.workspaceId,
-        ...(context.sessionId ? { sessionId: context.sessionId } : {}),
-        ...(context.runId ? { runId: context.runId } : {}),
-        ...(context.agentId ? { agentId: context.agentId } : {}),
-        relativePath: item.relativePath,
-        kind: item.kind,
-        ...(item.mimeType ? { mimeType: item.mimeType } : {}),
-        expectedContentHash: item.contentHash,
-        expectedSizeBytes: item.sizeBytes,
-        provenance: {
-          sourceType: 'command_generated',
-          createdBy: context.principal.principalId,
-          executionId: plan.executionId,
-        },
-        idempotencyKey: identity.createIdempotencyKey,
-      });
+      let record = validateArtifactManagerRecord(
+        await this.artifacts.createFromWorkspace({
+          operationId: identity.createOperationId,
+          principal: context.principal,
+          profileRef: context.profileRef,
+          userId: context.userId,
+          ...(context.tenantId ? { tenantId: context.tenantId } : {}),
+          workspaceId: context.workspaceId,
+          ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+          ...(context.runId ? { runId: context.runId } : {}),
+          ...(context.agentId ? { agentId: context.agentId } : {}),
+          relativePath: item.relativePath,
+          kind: item.kind,
+          ...(item.mimeType ? { mimeType: item.mimeType } : {}),
+          expectedContentHash: item.contentHash,
+          expectedSizeBytes: item.sizeBytes,
+          provenance: {
+            sourceType: 'command_generated',
+            createdBy: context.principal.principalId,
+            executionId: plan.executionId,
+          },
+          idempotencyKey: identity.createIdempotencyKey,
+        })
+      );
 
-      assertCollectedRecordMatchesPlan(record, item.relativePath, item.contentHash, item.sizeBytes);
+      assertCollectedRecordMatchesPlan(record, item, context, plan.executionId);
 
       if (plan.finalize) {
         if (record.status === 'draft') {
-          record = await this.artifacts.finalize({
-            operationId: identity.finalizeOperationId,
-            principal: context.principal,
-            artifactId: record.id,
-            expectedRevision: record.revision,
-            reason: `Execution ${plan.executionId} completed successfully`,
-            idempotencyKey: identity.finalizeIdempotencyKey,
-          });
+          const createdRecord = record;
+          record = validateArtifactManagerRecord(
+            await this.artifacts.finalize({
+              operationId: identity.finalizeOperationId,
+              principal: context.principal,
+              artifactId: record.id,
+              expectedRevision: record.revision,
+              reason: `Execution ${plan.executionId} completed successfully`,
+              idempotencyKey: identity.finalizeIdempotencyKey,
+            })
+          );
+          assertSameArtifactVersion(createdRecord, record);
         }
         if (record.status !== 'final') {
           throw new FrameworkError({
@@ -78,12 +87,7 @@ export class DefaultExecutionOutputCollector implements ExecutionOutputCollector
           });
         }
         finalizedArtifactRefs.push(record.id);
-        assertCollectedRecordMatchesPlan(
-          record,
-          item.relativePath,
-          item.contentHash,
-          item.sizeBytes
-        );
+        assertCollectedRecordMatchesPlan(record, item, context, plan.executionId);
       }
 
       collected.push({
@@ -160,21 +164,75 @@ function collectionIdentity(
 }
 
 function assertCollectedRecordMatchesPlan(
-  record: Awaited<ReturnType<ExecutionOutputArtifactManager['createFromWorkspace']>>,
-  relativePath: string,
-  expectedContentHash: string,
-  expectedSizeBytes: number
+  record: ArtifactRecord,
+  item: ExecutionOutputCollectionItem,
+  context: ExecutionOutputCollectionContext,
+  executionId: string
 ): void {
-  if (record.contentHash !== expectedContentHash || record.sizeBytes !== expectedSizeBytes) {
+  const matchesPlan =
+    record.contentHash === item.contentHash &&
+    record.sizeBytes === item.sizeBytes &&
+    record.relativePath === item.relativePath &&
+    record.kind === item.kind &&
+    (item.mimeType === undefined || record.mimeType === item.mimeType);
+  const matchesScope =
+    record.userId === context.userId &&
+    record.tenantId === context.tenantId &&
+    record.workspaceId === context.workspaceId &&
+    record.sessionId === context.sessionId &&
+    record.runId === context.runId &&
+    record.agentId === context.agentId &&
+    record.access.ownerPrincipalId === context.principal.principalId &&
+    record.access.workspaceId === context.workspaceId;
+  const matchesProvenance =
+    record.provenance.sourceType === 'command_generated' &&
+    record.provenance.createdBy === context.principal.principalId &&
+    record.provenance.executionId === executionId;
+  const hasCollectableStatus = record.status === 'draft' || record.status === 'final';
+
+  if (!matchesPlan || !matchesScope || !matchesProvenance || !hasCollectableStatus) {
     throw new FrameworkError({
       code: 'EXECUTION_INTERNAL_ERROR',
-      message: 'Artifact Manager returned output that does not match the collection plan',
+      message: 'Artifact Manager returned output that does not match the collection boundary',
       context: {
-        relativePath,
-        expectedContentHash,
+        relativePath: item.relativePath,
+        expectedContentHash: item.contentHash,
         actualContentHash: record.contentHash,
-        expectedSizeBytes,
+        expectedSizeBytes: item.sizeBytes,
         actualSizeBytes: record.sizeBytes,
+        artifactRef: record.id,
+      },
+    });
+  }
+}
+
+function validateArtifactManagerRecord(input: unknown): ArtifactRecord {
+  try {
+    return validateArtifactRecord(input);
+  } catch (error) {
+    throw new FrameworkError({
+      code: 'EXECUTION_INTERNAL_ERROR',
+      message: 'Artifact Manager returned an invalid Artifact record',
+      cause: error,
+    });
+  }
+}
+
+function assertSameArtifactVersion(created: ArtifactRecord, finalized: ArtifactRecord): void {
+  if (
+    finalized.id !== created.id ||
+    finalized.versionId !== created.versionId ||
+    finalized.logicalArtifactId !== created.logicalArtifactId ||
+    finalized.versionNumber !== created.versionNumber
+  ) {
+    throw new FrameworkError({
+      code: 'EXECUTION_INTERNAL_ERROR',
+      message: 'Artifact Manager finalized a different Artifact version',
+      context: {
+        expectedArtifactRef: created.id,
+        actualArtifactRef: finalized.id,
+        expectedVersionId: created.versionId,
+        actualVersionId: finalized.versionId,
       },
     });
   }

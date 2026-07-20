@@ -135,6 +135,13 @@ export const executionActivityResultSchema = z
         message: 'must not be present for a completed activity',
       });
     }
+    if (value.status !== 'completed' && !value.error) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: 'is required for an unsuccessful activity',
+      });
+    }
   }) satisfies ZodType<ExecutionActivityResult>;
 
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
@@ -193,6 +200,13 @@ export const executionActivityResultJsonSchema: JsonSchema = {
     eventIds: { type: 'array', items: nonEmptyStringJsonSchema, minItems: 1, uniqueItems: true },
     error: normalizedExecutionErrorJsonSchema,
   },
+  allOf: [
+    {
+      if: { properties: { status: { const: 'completed' } }, required: ['status'] },
+      then: { not: { properties: { error: {} }, required: ['error'] } },
+      else: { required: ['error'] },
+    },
+  ],
   additionalProperties: false,
 };
 
@@ -210,7 +224,7 @@ export const executionActivityRequestExample: ExecutionActivityRequest = {
   workspaceId: commandExecutionRequestExample.workspaceId,
   request: commandExecutionRequestExample,
   fencingToken: 7,
-  deadlineAt: '2026-07-20T12:00:00.000Z',
+  deadlineAt: '2026-07-20T12:05:00.000Z',
   idempotencyKey: commandExecutionRequestExample.idempotencyKey,
 };
 
