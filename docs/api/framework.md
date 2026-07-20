@@ -201,9 +201,13 @@ strict Zod/JSON Schema validators:
 | `GovernedExecutionPort`           | Fails closed on invalid scope, operation, approval, cancellation, deadline, authorization, or verifier evidence before calling an injected `ExecutionOperationDispatcher`.       |
 | `DefaultExecutionOutputPlanner`   | Selects final file mutations using safe relative patterns, integrity evidence, Artifact/byte budgets, and deterministic ordering.                                                |
 | `DefaultExecutionOutputCollector` | Creates/finalizes output Artifacts through an injected manager and verifies returned schema, scope, provenance, integrity, status, and version identity.                         |
+| `ExecutionResultCache`            | Reuses only completed, deterministic read-only result projections under an exact user/Workspace scope, bounded Store timeout, validity hashes, and Artifact integrity checks.    |
 
 Concrete process, container, remote sandbox, or object-store implementations remain adapter-owned.
 An implementation is not implied merely because the framework contract or registry entry exists.
+An Execution Cache hit is a reusable projection, not a new execution receipt: Workspace writes,
+external effects, irreversible operations, unstable environments, failed results, and unverifiable
+Artifact references always bypass or invalidate the Cache.
 
 ## Evaluation, Replay, and Regression
 
@@ -417,7 +421,10 @@ Core exports:
 | `WorkCachePolicy`                 | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
 | `WorkCacheRecoveryKnowledgeStore` | Revision-safe `RecoveryKnowledgePort` backed by `RecoveryTree` blocks.                          |
 | `MemoryWorkCacheStore`            | In-memory store.                                                                                |
-| `SQLiteWorkCacheStore`            | Persistent store backed by `workcache_blocks`.                                                  |
+| `SQLiteWorkCacheStore`            | Bounded persistent store backed by `workcache_blocks`.                                          |
+| `RedisWorkCacheStore`             | Shared, TTL-aware store with atomic latest-key maintenance.                                     |
+| `TimeoutWorkCacheStore`           | Bounds provider-neutral store calls.                                                            |
+| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                    |
 
 Default source event alignment:
 
@@ -432,9 +439,10 @@ Default source event alignment:
 | `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `RecoveryTree`     |
 | `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
-Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
+Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite|redis`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
-per-tree TTL fields under `workCache.trees` in `config.yaml`.
+per-tree TTL fields under `workCache.trees` in `config.yaml`. The default
+scope requirement is `user`; `unknown` validity is a miss, not a reusable hit.
 
 `PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
 prompt block. A block value contains `id`, `type`, `hash`, `content`,
@@ -449,10 +457,12 @@ Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
 `sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
 
-`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by failure
-fingerprint, participant, and policy/spec/provider revision. Values include strategy, outcome,
-evidence hash, expiry, and verified/negative validation. Expired or mismatched blocks are removed;
-the runtime supervisor revalidates hits and remains the only component that advances the FSM case.
+`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by structured
+tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
+policy/spec/provider revision. Core exports strict Zod and JSON Schemas for scoped recovery
+knowledge. Values include strategy, outcome, evidence hash, expiry, and verified/negative
+validation. Unscoped, malformed, expired, or mismatched blocks are rejected or removed; the runtime
+supervisor revalidates hits and remains the only component that advances the FSM case.
 
 ## Inference
 
@@ -508,6 +518,16 @@ optional `history`, capabilities, health, and close. Requests carry `operationId
 `working`, `episodic`, `semantic`, `procedural`, `preference`, `artifact`, `governance`,
 `reflection`, and `custom`.
 
+`CachedMemoryManagementProvider` optionally wraps any managed provider with a versioned,
+scope-qualified search cache. Its identity includes principal roles/permission scopes and retrieval
+semantics; `operationId` and trace metadata are excluded. It caches only searches that explicitly
+set `updateAccessStats: false`, validates returned records at runtime, bounds entry size and Store
+latency, coalesces only identical scoped reads, and invalidates the scope after every successful
+mutation. Monotonic scope revisions fence searches that overlap mutations; retries are bounded and
+failed invalidation quarantines that scope before another lookup. `InMemoryMemorySearchCacheStore`
+is the bounded local implementation and `RedisMemorySearchCacheStore` provides the same key-bound,
+TTL-limited contract for shared local, self-hosted, or managed Redis.
+
 `ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
 and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
 hash, and timestamps. `ManagedMemoryRecordStore` uses compare-and-set revisions and scope-qualified
@@ -542,6 +562,12 @@ artifactizes large output, records observations, applies validity-aware result r
 MCP events, and supports recovery. Calls return structured results such as `completed`, `failed`,
 `denied`, `conflict`, `cancelled`, or `human_review_required`. Audit inclusion and redaction apply to
 both request and completion events.
+
+`ToolResultCache` is an optional acceleration boundary. The package exports bounded
+`InMemoryToolResultCache`, shared `RedisToolResultCache`, strict runtime/JSON schemas, and an
+Artifact verification port. Cache entries are versioned, key-bound safe projections. `read` Tools
+must provide `context.metadata.externalStateVersion`; Tools with sensitive output declarations or
+side effects bypass result reuse.
 
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
@@ -643,13 +669,16 @@ same policy and trace path. See [Governed Memory](../architecture/memory.md).
 
 `@hypha/adapters-local` provides development and self-hosted adapters:
 
-| Adapter                    | Storage                 | Purpose                                                                                                                                                                                      |
-| -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SQLiteEventStore`         | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
-| `SQLiteStructuredStore`    | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
-| `LocalVectorIndexProvider` | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
-| `FileArtifactStore`        | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
-| `MockEmbeddingProvider`    | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| Adapter                          | Storage                 | Purpose                                                                                                                                                                                      |
+| -------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SQLiteEventStore`               | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
+| `SQLiteStructuredStore`          | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
+| `LocalVectorIndexProvider`       | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
+| `FileArtifactStore`              | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
+| `MockEmbeddingProvider`          | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| `InMemoryExecutionCacheStore`    | bounded memory          | Local `ExecutionCacheStore` with LRU-style eviction, byte limits, defensive copies, and strict physical/logical key binding.                                                                 |
+| `RedisExecutionCacheStore`       | Redis-compatible KV     | Shared local/self-hosted/managed Store with TTL, serialized-size limits, runtime validation, and physical/logical key binding.                                                               |
+| `NodeExecutionFingerprintHasher` | Node crypto             | SHA-256 implementation for canonical Execution command, validity, scope, and Result Cache keys.                                                                                              |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.
 

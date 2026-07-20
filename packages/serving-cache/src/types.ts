@@ -2,7 +2,9 @@ import type { ModelProvider, ModelRequest, ModelResponse } from '@hypha/models';
 
 export type CacheType = 'exact' | 'prefix-metadata' | 'semantic';
 export type CacheMode = 'off' | 'read' | 'write' | 'readwrite';
-export type ServingCacheStoreKind = 'off' | 'noop' | 'memory' | 'sqlite';
+export type ServingCacheStoreKind = 'off' | 'noop' | 'memory' | 'sqlite' | 'redis';
+export type CacheFailureMode = 'bypass' | 'strict';
+export type CacheScopeRequirement = 'none' | 'user' | 'session';
 
 export interface CacheStore<T = unknown> {
   get<TValue = T>(key: string): Promise<CacheEntry<TValue> | null>;
@@ -10,14 +12,32 @@ export interface CacheStore<T = unknown> {
   delete(key: string): Promise<void>;
   clear?(): Promise<void>;
   touch?(key: string, timestamp: number): Promise<void>;
+  stats?(): Promise<CacheStoreStats>;
+  health?(): Promise<CacheStoreHealth>;
+  close?(): Promise<void>;
 }
 
 export interface CacheEntry<T = unknown> {
+  schemaVersion?: '1.0';
+  keyVersion?: '1';
   key: string;
   value: T;
   createdAt: number;
   expiresAt?: number;
+  sizeBytes?: number;
   metadata?: CacheMetadata;
+}
+
+export interface CacheStoreStats {
+  entries: number;
+  sizeBytes?: number;
+  evictions?: number;
+}
+
+export interface CacheStoreHealth {
+  status: 'healthy' | 'degraded' | 'unavailable';
+  checkedAt: string;
+  details?: Record<string, unknown>;
 }
 
 export interface CacheMetadata {
@@ -29,6 +49,9 @@ export interface CacheMetadata {
   requestHash?: string;
   hitCount?: number;
   tags?: string[];
+  scope?: CacheScope;
+  projectionType?: string;
+  classification?: 'public' | 'internal' | 'confidential' | 'restricted';
   prefixMetadata?: PromptPrefixMetadata;
 }
 
@@ -83,7 +106,9 @@ export interface PromptPrefixMetadata {
   blocks: PromptPrefixBlock[];
 }
 
-export interface PromptPrefixBlock extends Required<Pick<PromptPrefixBlockInput, 'id' | 'type' | 'hash'>> {
+export interface PromptPrefixBlock extends Required<
+  Pick<PromptPrefixBlockInput, 'id' | 'type' | 'hash'>
+> {
   stable: boolean;
   content?: string;
   tokenEstimate?: number;
@@ -134,9 +159,16 @@ export interface CachePolicy {
   enabled: boolean;
   mode: CacheMode;
   ttlMs?: number;
-  cacheErrors?: boolean;
-  cacheStreaming?: boolean;
   respectNoCache?: boolean;
+  failureMode?: CacheFailureMode;
+  scopeRequirement?: CacheScopeRequirement;
+  operationTimeoutMs?: number;
+  singleflight?: boolean;
+  maxEntryBytes?: number;
+  circuitBreaker?: {
+    failureThreshold: number;
+    resetTimeoutMs: number;
+  };
 }
 
 export type ServingCacheMissReason =
@@ -146,7 +178,11 @@ export type ServingCacheMissReason =
   | 'streaming'
   | 'no_cache'
   | 'mode_off'
-  | 'read_disabled';
+  | 'read_disabled'
+  | 'scope_missing'
+  | 'store_unavailable'
+  | 'entry_oversized'
+  | 'corrupt';
 
 export type ServingCacheEvent =
   | {
@@ -197,6 +233,9 @@ export type ServingCacheEvent =
   | {
       type: 'llm.cache.bypass';
       reason: ServingCacheMissReason;
+      operation?: 'lookup' | 'write' | 'delete' | 'trace';
+      code?: string;
+      key?: string;
       provider?: string;
       model?: string;
       scope?: CacheScope;
@@ -240,4 +279,14 @@ export interface CachedLLMProviderOptions {
   scopeResolver?: (request: ModelRequest) => CacheScope | undefined;
   paramsResolver?: (request: ModelRequest) => Record<string, unknown> | undefined;
   promptBlocksResolver?: (request: ModelRequest) => PromptPrefixBlockInput[] | undefined;
+  responseIdFactory?: (request: ModelRequest, key: string) => string;
+}
+
+export interface CachedModelResponseProjection {
+  schemaVersion: '1.0';
+  providerId?: string;
+  model?: string;
+  content: ModelResponse['content'];
+  toolCalls?: ModelResponse['toolCalls'];
+  usage?: ModelResponse['usage'];
 }

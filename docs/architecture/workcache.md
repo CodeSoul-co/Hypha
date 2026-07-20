@@ -66,7 +66,8 @@ serialized block JSON, timestamps, expiry, and source event linkage.
 `HotIndexedWorkCacheStore` wraps either store and keeps an in-process index by
 block id and tree/cache key. Runtime lookup checks the hot index first, writes
 through to the backing store, and evicts low-utility entries by demand score and
-last update time.
+last update time. Hot and Redis indexes verify their tree/key binding before a
+hit; stale aliases are removed instead of returning a differently keyed block.
 
 The intended runtime layout is:
 
@@ -74,14 +75,14 @@ The intended runtime layout is:
 source events in event log
   -> WorkGraphIndex and DemandSignal in CPU memory
   -> HotIndexedWorkCacheStore in CPU memory
-  -> MemoryWorkCacheStore or SQLiteWorkCacheStore backing store
+  -> MemoryWorkCacheStore, SQLiteWorkCacheStore, or RedisWorkCacheStore
 ```
 
-SQLite mode gives persistent cache trees; the event log remains the rebuild
-source of truth. Current-run graph and tree updates happen synchronously so a
-fresh block can be reused immediately. More expensive maintenance such as
-global pruning, graph compaction, or cross-run rebuilds should run behind the
-same store and graph interfaces without blocking an agent step.
+SQLite and Redis modes give persistent or shared cache trees; the event log
+remains the rebuild source of truth. Cache blocks and keys include tenant,
+user, workspace, session, agent, and DomainPack scope where available. The
+default policy requires `userId`. Unscoped events bypass caching, scope
+mismatches miss, and `validity.status=unknown` is never reusable.
 
 Configure the server with:
 
@@ -89,9 +90,22 @@ Configure the server with:
 HYPHA_WORKCACHE=off
 HYPHA_WORKCACHE=memory  # bundled server default
 HYPHA_WORKCACHE=sqlite
+HYPHA_WORKCACHE=redis
 HYPHA_WORKCACHE_SQLITE_PATH=./data/runtime/cache/hypha-workcache.sqlite
 HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS=4096
+HYPHA_WORKCACHE_FAILURE_MODE=bypass
+HYPHA_WORKCACHE_SCOPE_REQUIREMENT=user
 ```
+
+Memory and tree stores enforce configured entry and byte limits. WorkGraph
+history and demand signals are also bounded. Redis mode publishes versioned
+invalidation messages so peer hot indexes cannot continue serving a deleted
+block; Redis index replacement and deletion use atomic operations when the
+client supports them. Store calls are time-bounded and optional cache failures
+do not change the source event, inference result, or recovery outcome.
+Thinking Cache also requires the configured WorkCache scope before it can use
+its in-process singleflight map, so an unscoped request cannot be coalesced with
+another request even when no persistent write occurs.
 
 ## Reuse Rules
 
@@ -109,14 +123,16 @@ ordering/template metadata. Dynamic suffix hashes and request ids are trace
 metadata only; they do not invalidate stable prefix blocks. A template content
 or version change should produce a new block hash and therefore a new block.
 
-Recovery knowledge is keyed by failure fingerprint, participant id, and
-policy/spec/provider revisions. `WorkCacheManager.getRecoveryKnowledgePort()`
-stores verified and negative outcomes with an evidence hash and TTL. Lookup
-removes expired entries; a new revision removes stale entries for the same
-failure and participant. The recovery supervisor still revalidates every hit
-and uses only a verified strategy for a handler declared by the current
-participant. Negative knowledge records a failed strategy but does not
-authorize a different side effect.
+Recovery knowledge is keyed by tenant/user/workspace/session/agent/DomainPack
+scope, failure fingerprint, participant id, and policy/spec/provider revisions.
+`WorkCacheManager.getRecoveryKnowledgePort()` validates scoped knowledge with
+the Core runtime schema before persistence and removes malformed legacy blocks.
+A new revision removes stale entries only inside the same scope; invalidation
+cannot remove another user's hint. The recovery supervisor still revalidates
+every hit and uses only a verified strategy for a handler declared by the
+current participant. Negative knowledge records a failed strategy but does not
+authorize a different side effect. Store outages bypass recovery hints rather
+than interrupting the recovery supervisor.
 
 ## Audit Events
 

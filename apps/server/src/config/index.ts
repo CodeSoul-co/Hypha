@@ -167,22 +167,50 @@ const inferenceConfigSchema = z
   })
   .default({});
 
-const servingCacheStoreSchema = z.enum(['off', 'noop', 'memory', 'sqlite']);
+const servingCacheStoreSchema = z.enum(['off', 'noop', 'memory', 'sqlite', 'redis']);
 const servingCacheModeSchema = z.enum(['off', 'read', 'write', 'readwrite']);
-const workCacheStoreSchema = z.enum(['off', 'memory', 'sqlite']);
+const workCacheStoreSchema = z.enum(['off', 'memory', 'sqlite', 'redis']);
 
 const servingCacheConfigSchema = z
   .object({
-    enabled: booleanishSchema.default(false),
     store: servingCacheStoreSchema.default('off'),
     mode: servingCacheModeSchema.default('readwrite'),
     ttlMs: z.coerce.number().default(1000 * 60 * 60 * 24),
-    cacheErrors: booleanishSchema.default(false),
-    cacheStreaming: booleanishSchema.default(false),
     respectNoCache: booleanishSchema.default(true),
+    failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+    scopeRequirement: z.enum(['none', 'user', 'session']).default('user'),
+    operationTimeoutMs: z.coerce.number().int().positive().default(250),
+    singleflight: booleanishSchema.default(true),
+    maxEntryBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1024 * 1024),
+    circuitBreaker: z
+      .object({
+        failureThreshold: z.coerce.number().int().positive().default(3),
+        resetTimeoutMs: z.coerce.number().int().positive().default(30000),
+      })
+      .default({}),
+    memory: z
+      .object({
+        maxEntries: z.coerce.number().int().positive().default(5000),
+        maxBytes: z.coerce
+          .number()
+          .int()
+          .positive()
+          .default(64 * 1024 * 1024),
+      })
+      .default({}),
     sqlite: z
       .object({
         path: z.string().default('./data/runtime/cache/hypha-serving-cache.sqlite'),
+        maxEntries: z.coerce.number().int().positive().default(50000),
+      })
+      .default({}),
+    redis: z
+      .object({
+        prefix: z.string().min(1).default('serving-cache:v1:'),
       })
       .default({}),
   })
@@ -198,14 +226,37 @@ const workCacheTreeConfigSchema = z
 
 const workCacheConfigSchema = z
   .object({
-    enabled: booleanishSchema.default(false),
     store: workCacheStoreSchema.default('off'),
+    failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+    scopeRequirement: z.enum(['none', 'user', 'session']).default('user'),
+    operationTimeoutMs: z.coerce.number().int().positive().default(500),
+    maxBlockBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(2 * 1024 * 1024),
     promptBudgetTokens: z.coerce.number().default(4096),
     unknownEventPolicy: z.enum(['ignore', 'reject']).default('ignore'),
     allowExtensionEvents: booleanishSchema.default(false),
     sqlite: z
       .object({
         path: z.string().default('./data/runtime/cache/hypha-workcache.sqlite'),
+      })
+      .default({}),
+    memory: z
+      .object({
+        maxEntries: z.coerce.number().int().positive().default(8000),
+        maxBytes: z.coerce
+          .number()
+          .int()
+          .positive()
+          .default(128 * 1024 * 1024),
+      })
+      .default({}),
+    redis: z
+      .object({
+        prefix: z.string().min(1).default('workcache:v1:'),
+        invalidationChannel: z.string().min(1).default('workcache:v1:invalidate'),
       })
       .default({}),
     trees: z
@@ -238,6 +289,11 @@ const workCacheConfigSchema = z
         MemoryTree: workCacheTreeConfigSchema.default({
           enabled: true,
           ttlMs: 1000 * 60 * 60 * 24,
+          maxEntries: 1000,
+        }),
+        RecoveryTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60 * 6,
           maxEntries: 1000,
         }),
         PromptPrefixTree: workCacheTreeConfigSchema.default({
@@ -507,6 +563,17 @@ const configSchema = z.object({
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
+    resultCache: z
+      .object({
+        store: z.enum(['off', 'memory', 'redis']).default('off'),
+        failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+        operationTimeoutMs: z.coerce.number().int().positive().default(250),
+        maxEntries: z.coerce.number().int().positive().default(1000),
+        maxEntryBytes: z.coerce.number().int().positive().default(1048576),
+        redisDefaultTtlMs: z.coerce.number().int().positive().default(86400000),
+        namespace: z.string().min(1).default('tool-result-cache:v1'),
+      })
+      .default({}),
     filesystem: z
       .object({
         workingDirectory: z.string().default('.'),
@@ -760,6 +827,7 @@ export const workCacheConfig = () => {
 };
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
+export const toolResultCacheConfig = () => getConfig().tools.resultCache;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;
 export const filesystemToolConfig = () => {
@@ -800,7 +868,12 @@ export default getConfig;
 function normalizeServingCacheStore(value: unknown): Config['servingCache']['store'] {
   if (typeof value !== 'string') return 'off';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'memory' || normalized === 'sqlite' || normalized === 'noop') {
+  if (
+    normalized === 'memory' ||
+    normalized === 'sqlite' ||
+    normalized === 'redis' ||
+    normalized === 'noop'
+  ) {
     return normalized;
   }
   return 'off';
@@ -809,6 +882,8 @@ function normalizeServingCacheStore(value: unknown): Config['servingCache']['sto
 function normalizeWorkCacheStore(value: unknown): Config['workCache']['store'] {
   if (typeof value !== 'string') return 'off';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'memory' || normalized === 'sqlite') return normalized;
+  if (normalized === 'memory' || normalized === 'sqlite' || normalized === 'redis') {
+    return normalized;
+  }
   return 'off';
 }
