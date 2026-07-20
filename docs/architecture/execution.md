@@ -84,6 +84,19 @@ access, background processes, and external publishing. The evaluator never autho
 adapters must still enforce environment policy and `GovernedToolRunner` must still complete policy
 and approval before dispatch.
 
+`GovernedExecutionPort` is the side-effect boundary after Tool governance. A dispatch binds the
+validated activity, Tool binding, risk assessment, and authorization evidence to the
+same Run, principal, operation, and Tool. The port checks required scopes, required approval,
+operation compatibility, cancellation, and expiry before it asks an injected
+`ExecutionAuthorizationVerifier` to validate the durable Tool, Policy, and Approval records. Only a
+valid verification result reaches the injected `ExecutionOperationDispatcher`.
+
+Execution does not trust an `approvalRef` by itself, issue approvals, read Tool-owned stores, or
+reimplement the Tool input hash. The evidence carries the Tool runner's lowercase SHA-256 input
+digest, while the composition root supplies a verifier that resolves the authoritative records.
+Runtime pause and resume, durable Event emission, and concrete Command or Workspace dispatch remain
+separate integration responsibilities.
+
 ## Deterministic Mock Provider
 
 `@hypha/testing` exports `MockExecutionProvider` for provider contract tests, replay fixtures, and
