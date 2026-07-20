@@ -201,9 +201,13 @@ strict Zod/JSON Schema validators:
 | `GovernedExecutionPort`           | Fails closed on invalid scope, operation, approval, cancellation, deadline, authorization, or verifier evidence before calling an injected `ExecutionOperationDispatcher`.       |
 | `DefaultExecutionOutputPlanner`   | Selects final file mutations using safe relative patterns, integrity evidence, Artifact/byte budgets, and deterministic ordering.                                                |
 | `DefaultExecutionOutputCollector` | Creates/finalizes output Artifacts through an injected manager and verifies returned schema, scope, provenance, integrity, status, and version identity.                         |
+| `ExecutionResultCache`            | Reuses only completed, deterministic read-only result projections under an exact user/Workspace scope, bounded Store timeout, validity hashes, and Artifact integrity checks.    |
 
 Concrete process, container, remote sandbox, or object-store implementations remain adapter-owned.
 An implementation is not implied merely because the framework contract or registry entry exists.
+An Execution Cache hit is a reusable projection, not a new execution receipt: Workspace writes,
+external effects, irreversible operations, unstable environments, failed results, and unverifiable
+Artifact references always bypass or invalidate the Cache.
 
 ## Evaluation, Replay, and Regression
 
@@ -571,13 +575,15 @@ same policy and trace path. See [Governed Memory](../architecture/memory.md).
 
 `@hypha/adapters-local` provides development and self-hosted adapters:
 
-| Adapter                    | Storage                 | Purpose                                                                                                                                                                                      |
-| -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SQLiteEventStore`         | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
-| `SQLiteStructuredStore`    | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
-| `LocalVectorIndexProvider` | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
-| `FileArtifactStore`        | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
-| `MockEmbeddingProvider`    | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| Adapter                          | Storage                 | Purpose                                                                                                                                                                                      |
+| -------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SQLiteEventStore`               | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
+| `SQLiteStructuredStore`          | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
+| `LocalVectorIndexProvider`       | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
+| `FileArtifactStore`              | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
+| `MockEmbeddingProvider`          | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| `InMemoryExecutionCacheStore`    | bounded memory          | Local `ExecutionCacheStore` with LRU-style eviction, byte limits, defensive copies, and strict physical/logical key binding.                                                                 |
+| `NodeExecutionFingerprintHasher` | Node crypto             | SHA-256 implementation for canonical Execution command, validity, scope, and Result Cache keys.                                                                                              |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.
 
