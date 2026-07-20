@@ -5,6 +5,7 @@ import { InMemoryWorkCacheInvalidationBus } from './invalidation-bus';
 import { WorkCacheManager } from './manager';
 import { validateCacheBlock } from './schemas';
 import { MemoryWorkCacheStore } from './stores/memory-store';
+import { HotIndexedWorkCacheStore } from './stores/hot-index-store';
 import { RedisWorkCacheStore, type RedisWorkCacheClient } from './stores/redis-store';
 
 describe('@hypha/workcache hardening', () => {
@@ -196,6 +197,59 @@ describe('@hypha/workcache hardening', () => {
     });
   });
 
+  it('removes stale hot-index aliases when a block identity changes', async () => {
+    const backing = new MemoryWorkCacheStore();
+    const hot = new HotIndexedWorkCacheStore(backing);
+    const original = validCacheBlock('shared-block', 'old-key');
+    await hot.set(original);
+    await hot.set({ ...original, cacheKey: 'new-key', updatedAt: 1001 });
+
+    expect(await hot.getByCacheKey('ToolTree', 'old-key')).toBeNull();
+    expect(await hot.getByCacheKey('ToolTree', 'new-key')).toMatchObject({
+      id: 'shared-block',
+      cacheKey: 'new-key',
+    });
+  });
+
+  it('quarantines a Redis index that points at a block with a different key', async () => {
+    const values = new Map<string, string>();
+    const client: RedisWorkCacheClient = {
+      async get(key) {
+        return values.get(key) ?? null;
+      },
+      async set(key, value) {
+        values.set(key, value);
+        return 'OK';
+      },
+      async del(...keys) {
+        let deleted = 0;
+        for (const key of keys) deleted += Number(values.delete(key));
+        return deleted;
+      },
+      async scan() {
+        return ['0', [...values.keys()]];
+      },
+    };
+    const block = validCacheBlock('poison-block', 'actual-key');
+    values.set('binding:block:poison-block', JSON.stringify(block));
+    values.set('binding:index:ToolTree:requested-key', 'poison-block');
+    const store = new RedisWorkCacheStore({ client, prefix: 'binding:' });
+
+    expect(await store.getByCacheKey('ToolTree', 'requested-key')).toBeNull();
+    expect(values.has('binding:index:ToolTree:requested-key')).toBe(false);
+    expect(values.has('binding:block:poison-block')).toBe(true);
+  });
+
+  it('rejects invalid runtime policy values before creating a manager', () => {
+    expect(
+      () =>
+        new WorkCacheManager({
+          store: new MemoryWorkCacheStore(),
+          policy: { enabled: true, store: 'memory', operationTimeoutMs: 0 },
+        })
+    ).toThrow();
+  });
+
   it('rejects missing block values and bypasses non-JSON cache payloads', async () => {
     expect(() =>
       validateCacheBlock({
@@ -281,4 +335,23 @@ function baseEvent(
 
 function eventScope(event: FrameworkEvent) {
   return { userId: event.userId, sessionId: event.sessionId };
+}
+
+function validCacheBlock(id: string, cacheKey: string) {
+  return {
+    schemaVersion: '1.0' as const,
+    keyVersion: '1' as const,
+    id,
+    treeType: 'ToolTree' as const,
+    nodeType: 'tool' as const,
+    cacheKey,
+    value: { output: 'ok' },
+    createdAt: 1000,
+    updatedAt: 1000,
+    sourceEventId: 'event',
+    sourceEventType: 'tool.call.completed' as const,
+    scope: { userId: 'owner' },
+    validity: { status: 'valid' as const, provenanceHash: 'sha256:proof' },
+    utility: { score: 1 },
+  };
 }

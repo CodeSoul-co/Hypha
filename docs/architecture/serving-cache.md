@@ -103,6 +103,9 @@ never cached.
 `@hypha/serving-cache` exposes `CacheStore`, `NoopCacheStore`,
 `MemoryCacheStore`, `SQLiteCacheStore`, and `RedisCacheStore`. Store
 implementations persist versioned, runtime-validated `CacheEntry` records.
+Every store verifies that the physical lookup key matches `CacheEntry.key`;
+malformed or mismatched records are removed and treated as misses. Cache policy
+values are runtime-validated before a manager or middleware is created.
 Only `CachedModelResponseProjection` is persisted: content, tool calls, and
 usage. Provider `raw` payloads, old response ids, and arbitrary response
 metadata are excluded; every hit receives a new runtime response id. Memory,

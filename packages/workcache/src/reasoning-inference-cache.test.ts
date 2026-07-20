@@ -266,6 +266,41 @@ describe('WorkCachedInferenceProvider', () => {
     expect(providerCalls).toBe(2);
     expect(await store.list()).toEqual([]);
   });
+
+  it('does not coalesce unscoped computations under the default user boundary', async () => {
+    let providerCalls = 0;
+    const store = new MemoryWorkCacheStore();
+    const cached = new WorkCachedInferenceProvider({
+      provider: {
+        id: 'unscoped-provider',
+        async infer() {
+          providerCalls += 1;
+          await Promise.resolve();
+          return { id: `response-${providerCalls}`, output: { content: 'private' } };
+        },
+      },
+      manager: new WorkCacheManager({
+        store,
+        policy: { enabled: true, store: 'memory' },
+      }),
+    });
+    const unscoped: InferenceRequest = {
+      runId: 'run-unscoped',
+      stepId: 'step-1',
+      sessionId: 'session-shared',
+      modelAlias: 'model-a',
+      input: { messages: [{ role: 'user', content: 'private' }] },
+      metadata: { reasoningCacheIdentity: 'same-node' },
+    };
+
+    await Promise.all([
+      cached.infer(unscoped),
+      cached.infer({ ...unscoped, runId: 'run-other', stepId: 'step-2' }),
+    ]);
+
+    expect(providerCalls).toBe(2);
+    expect(await store.list('ComputationTree')).toEqual([]);
+  });
 });
 
 function request(

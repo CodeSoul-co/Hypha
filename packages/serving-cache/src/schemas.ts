@@ -98,7 +98,7 @@ export const cacheEntrySchema = z
         classification: z.enum(['public', 'internal', 'confidential', 'restricted']).optional(),
         prefixMetadata: z.unknown().optional(),
       })
-      .passthrough()
+      .strict()
       .optional(),
   })
   .strict();
@@ -163,6 +163,10 @@ export const servingCacheJsonSchemas = {
 
 export function validateCacheEntry<T = unknown>(input: unknown): CacheEntry<T> {
   return cacheEntrySchema.parse(input) as CacheEntry<T>;
+}
+
+export function validateCachePolicy(input: unknown): CachePolicy {
+  return cachePolicySchema.parse(input);
 }
 
 export function validateCachedModelResponseProjection(
