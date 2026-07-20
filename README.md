@@ -74,13 +74,13 @@ reconciliation, compatible fallback, degradation, compensation, human review, qu
 cancellation, and failure are explicit strategies with trace events.
 
 Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
-changing the source result, and WorkCache can retain only revision-matched, revalidated recovery
-knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
+changing the source result, and WorkCache can retain only user-scoped, revision-matched, revalidated
+recovery knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
 [FSM anomaly recovery](docs/architecture/fsm-recovery.md).
 
 ## Inference Runtime
 
-Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
+Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, user-scoped and bounded Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
 
 Configure the default backend and endpoints in `config.yaml` or `.env`, for example `HYPHA_INFERENCE_DEFAULT_BACKEND=sglang` and `SGLANG_BASE_URL=http://localhost:30000`.
 
