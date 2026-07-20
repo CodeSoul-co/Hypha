@@ -482,6 +482,12 @@ MCP events, and supports recovery. Calls return structured results such as `comp
 `denied`, `conflict`, `cancelled`, or `human_review_required`. Audit inclusion and redaction apply to
 both request and completion events.
 
+`ToolResultCache` is an optional acceleration boundary. The package exports bounded
+`InMemoryToolResultCache`, shared `RedisToolResultCache`, strict runtime/JSON schemas, and an
+Artifact verification port. Cache entries are versioned, key-bound safe projections. `read` Tools
+must provide `context.metadata.externalStateVersion`; Tools with sensitive output declarations or
+side effects bypass result reuse.
+
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
 The server also registers `utility.json`, `utility.text`, and `utility.hash`. Their pure executors and
