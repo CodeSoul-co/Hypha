@@ -14,8 +14,6 @@ belong in adapters and must pass through the harness governance and trace path.
 | Environment         | `ExecutionEnvironmentSpec`                                                                | Provider choice, image pinning, process policy, resources, mounts, network, security, secrets, logging, and lifecycle policy.           |
 | Sandbox             | `SandboxRecord`, lifecycle requests, `SandboxProvider`                                    | Revisioned sandbox state and the adapter boundary for create, start, execute, cancel, status, terminate, cleanup, and close.            |
 | Command             | `CommandExecutionRequest`, `CommandExecutionResult`, `CommandOutputChunk`                 | Governed command input, bounded output, terminal evidence, resource usage, cancellation, and receipts.                                  |
-| Activity boundary   | `ExecutionActivityRequest`, `ExecutionActivityResult`                                     | Fenced Runtime-to-Execution dispatch for governed Command and Workspace operations, with event and Artifact evidence.                   |
-| Tool governance     | `ExecutionToolBinding`, `ExecutionRiskAssessment`                                         | Permission, side-effect, human-review, risk evidence, and recommended isolation inputs for governed Tool execution.                     |
 | Persistence         | `ExecutionStore`, record, lease, fencing, idempotency, and recovery contracts             | Compare-and-set updates, exclusive workers, stale-writer rejection, and restart-safe reconciliation evidence.                           |
 | Events              | typed Sandbox, Command, and Network Authorization events                                  | Bounded lifecycle evidence without raw output, host paths, environment values, or plaintext secrets.                                    |
 | Cache boundary      | execution validity, environment fingerprint, and result projection contracts              | Deterministic reuse inputs without placing cache policy or storage inside Core.                                                         |
@@ -46,58 +44,10 @@ envelope, payload, and matching Workspace identity before the event can be recor
 Sandbox and command states have explicit transition tables. Providers return normalized records and
 results rather than SDK objects. Command results bind execution and sandbox identity, distinguish
 terminal states, require normalized error evidence for unsuccessful terminals, and use artifact
-references when bounded inline output is truncated. Bounded inline stdout and stderr carry SHA-256
-content hashes; a truncated inline value is only a summary and must reference the preserved full
-output Artifact.
+references when bounded inline output is truncated.
 
 `SandboxProviderCapabilities` and capability negotiation keep environment requirements separate
 from a concrete provider. Runtime code can reject an incompatible provider before any side effect.
-
-## Runtime Activity Boundary
-
-`ExecutionActivityRequest` is the provider-neutral handoff from Runtime scheduling to Execution. It
-binds the activity, operation, Run, FSM state attempt, Workspace, fencing token, optional deadline,
-and idempotency identity to one validated `CommandExecutionRequest` or Workspace operation. Boundary
-validation rejects conflicting operation, Run, Workspace, and idempotency identities before an
-adapter is called.
-
-`ExecutionActivityResult` returns a terminal activity status plus bounded Execution, Artifact,
-snapshot, Event, and normalized-error references. Event evidence is mandatory and references must
-be unique. These contracts do not schedule FSM transitions, pause or resume a Run, approve a Tool,
-or select a provider; those responsibilities remain with Runtime, Tool governance, and adapters.
-
-## Tool Governance Boundary
-
-Command, file, Sandbox, and Artifact capabilities are registered as governed Tools through an
-`ExecutionToolBinding`. The binding declares the Execution operation, profile, required permission
-scopes, side-effect level, and optional human-review policy reference. It does not bypass
-`GovernedToolRunner` or invoke a provider directly.
-
-`ExecutionRiskAssessment` carries bounded reasons, matched rule identifiers, approval requirement,
-recommended isolation, and evaluation time. High and critical risk fail closed unless approval is
-required. Execution supplies these risk facts and constraints; Tool policy and Human Approval own
-the approval decision and grant lifecycle.
-
-`DefaultExecutionRiskEvaluator` deterministically derives those facts from a validated Tool binding,
-Command or Workspace request, `ExecutionEnvironmentSpec`, and `WorkspaceSpec`. Its framework rules
-cover shell execution, recursive deletion, input-directory mutation, network access, package
-installation, downloaded-script execution, permission changes, executable policy drift, Secret
-access, background processes, and external publishing. The evaluator never authorizes a request;
-adapters must still enforce environment policy and `GovernedToolRunner` must still complete policy
-and approval before dispatch.
-
-`GovernedExecutionPort` is the side-effect boundary after Tool governance. A dispatch binds the
-validated activity, Tool binding, risk assessment, and authorization evidence to the
-same Run, principal, operation, and Tool. The port checks required scopes, required approval,
-operation compatibility, cancellation, and expiry before it asks an injected
-`ExecutionAuthorizationVerifier` to validate the durable Tool, Policy, and Approval records. Only a
-valid verification result reaches the injected `ExecutionOperationDispatcher`.
-
-Execution does not trust an `approvalRef` by itself, issue approvals, read Tool-owned stores, or
-reimplement the Tool input hash. The evidence carries the Tool runner's lowercase SHA-256 input
-digest, while the composition root supplies a verifier that resolves the authoritative records.
-Runtime pause and resume, durable Event emission, and concrete Command or Workspace dispatch remain
-separate integration responsibilities.
 
 ## Deterministic Mock Provider
 
@@ -141,26 +91,6 @@ and proving timeout, cancellation, idempotency, receipt, and cleanup behavior in
 Closing an output iterator stops output consumption; cancelling execution still uses the governed
 `cancel()` operation. Runtime or Harness continues to own authorization, policy, events, replay,
 and durable records around all remote operations.
-
-## Output Collection Contract
-
-`ExecutionOutputCollectionPolicy` governs which final Workspace file mutations are eligible for
-Artifact collection. It supports safe relative include and exclude patterns, bounded Artifact count
-and total bytes, optional framework-level extension classification, and finalization after a
-successful Execution. Excludes take precedence over includes.
-
-`DefaultExecutionOutputPlanner` validates a terminal `CommandExecutionResult`, collapses its mutation
-stream to the final state of each path, rejects entries without content hash and size evidence, and
-applies limits in stable path order. Its plan contains bounded skip counts rather than file contents
-or an unbounded rejection list. Existing stdout, stderr, and generated Artifact references are
-deduplicated and carried separately so they are not collected again.
-
-The planner is side-effect free. `DefaultExecutionOutputCollector` executes its validated plan
-through a narrow Artifact Manager port. Each Workspace read is fenced by the planned content hash
-and byte size, retries carry stable idempotency keys, existing Artifact references are not recreated,
-and only outputs from successful Executions are finalized. The collector does not read host paths,
-bypass Artifact authorization, decide a business-specific output schema, or emit Runtime events;
-business output contracts stay in Domain configuration.
 
 ## Store, Lease, and Recovery Rules
 

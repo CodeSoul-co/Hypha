@@ -84,10 +84,6 @@ export interface CommandExecutionResult {
   signal?: string;
   stdout?: string;
   stderr?: string;
-  /** SHA-256 content hash of the bounded inline stdout value. */
-  stdoutContentHash?: string;
-  /** SHA-256 content hash of the bounded inline stderr value. */
-  stderrContentHash?: string;
   stdoutTruncated?: boolean;
   stderrTruncated?: boolean;
   stdoutArtifactRef?: string;

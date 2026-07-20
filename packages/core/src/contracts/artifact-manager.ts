@@ -59,8 +59,6 @@ export interface ArtifactFromWorkspaceRequest {
   name?: string;
   kind: ArtifactKind;
   mimeType?: string;
-  expectedContentHash?: string;
-  expectedSizeBytes?: number;
   logicalArtifactId?: string;
   provenance: ArtifactProvenance;
   sensitive?: boolean;

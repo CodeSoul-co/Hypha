@@ -4,11 +4,7 @@ import type {
   FileMutation,
   NormalizedExecutionError,
 } from '@hypha/core';
-import {
-  hashExecutionText,
-  hashExecutionValue,
-  shortExecutionHash,
-} from './execution-provider-values';
+import { hashExecutionValue, shortExecutionHash } from './execution-provider-values';
 import { LocalProcessResourceAccountant } from './local-process-resource-accounting';
 import type { LocalProcessRunResult } from './local-process-supervisor';
 
@@ -42,8 +38,6 @@ export function buildLocalProcessResult(
     ...(input.processResult.signal ? { signal: input.processResult.signal } : {}),
     stdout: input.processResult.stdout,
     stderr: input.processResult.stderr,
-    stdoutContentHash: hashExecutionText(input.processResult.stdout),
-    stderrContentHash: hashExecutionText(input.processResult.stderr),
     changedFiles: input.changedFiles,
     generatedArtifactRefs: [],
     resourceUsage: resource.usage,

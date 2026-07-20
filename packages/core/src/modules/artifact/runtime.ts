@@ -149,9 +149,8 @@ export class DefaultArtifactManager implements ArtifactManager {
           name: request.name ?? artifactNameFromPath(request.relativePath),
           content: source.content,
           mimeType: request.mimeType ?? source.mimeType,
-          expectedContentHash:
-            request.expectedContentHash ?? qualifiedContentHash(source.contentHash),
-          expectedSizeBytes: request.expectedSizeBytes ?? source.sizeBytes,
+          expectedContentHash: qualifiedContentHash(source.contentHash),
+          expectedSizeBytes: source.sizeBytes,
         },
         true
       );

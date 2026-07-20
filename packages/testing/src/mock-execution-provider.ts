@@ -384,8 +384,6 @@ export class MockExecutionProvider implements SandboxProvider {
       ...(behavior.signal ? { signal: behavior.signal } : {}),
       ...(behavior.stdout !== undefined ? { stdout: behavior.stdout } : {}),
       ...(behavior.stderr !== undefined ? { stderr: behavior.stderr } : {}),
-      ...(behavior.stdout !== undefined ? { stdoutContentHash: hashText(behavior.stdout) } : {}),
-      ...(behavior.stderr !== undefined ? { stderrContentHash: hashText(behavior.stderr) } : {}),
       ...(behavior.stdoutTruncated !== undefined
         ? { stdoutTruncated: behavior.stdoutTruncated }
         : {}),
@@ -561,10 +559,6 @@ function hashValue(value: unknown): string {
 
 function stableDigest(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
-}
-
-function hashText(value: string): string {
-  return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`;
 }
 
 function stableStringify(value: unknown): string {

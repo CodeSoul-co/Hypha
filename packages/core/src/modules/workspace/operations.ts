@@ -248,16 +248,8 @@ export const workspaceOperationJsonSchemas: Record<string, JsonSchema> = {
       idempotencyKey: { type: 'string', minLength: 1 },
     },
     oneOf: [
-      {
-        properties: { content: {} },
-        required: ['content'],
-        not: { properties: { artifactRef: {} }, required: ['artifactRef'] },
-      },
-      {
-        properties: { artifactRef: {} },
-        required: ['artifactRef'],
-        not: { properties: { content: {} }, required: ['content'] },
-      },
+      { required: ['content'], not: { required: ['artifactRef'] } },
+      { required: ['artifactRef'], not: { required: ['content'] } },
     ],
     additionalProperties: false,
   },

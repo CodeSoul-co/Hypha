@@ -305,10 +305,7 @@ export const workspaceSnapshotJsonSchemas: Record<string, JsonSchema> = {
     allOf: [
       {
         if: { properties: { type: { const: 'incremental' } }, required: ['type'] },
-        then: {
-          properties: { baseSnapshotRef: {} },
-          required: ['baseSnapshotRef'],
-        },
+        then: { required: ['baseSnapshotRef'] },
       },
     ],
     additionalProperties: false,
@@ -405,10 +402,7 @@ export const workspaceSnapshotJsonSchemas: Record<string, JsonSchema> = {
     allOf: [
       {
         if: { properties: { mode: { const: 'apply' } }, required: ['mode'] },
-        then: {
-          properties: { expectedBaseSnapshotHash: {} },
-          required: ['expectedBaseSnapshotHash'],
-        },
+        then: { required: ['expectedBaseSnapshotHash'] },
       },
     ],
     additionalProperties: false,

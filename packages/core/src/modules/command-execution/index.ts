@@ -209,8 +209,6 @@ export const commandExecutionResultSchema = z
     signal: nonEmptyString.optional(),
     stdout: z.string().optional(),
     stderr: z.string().optional(),
-    stdoutContentHash: nonEmptyString.optional(),
-    stderrContentHash: nonEmptyString.optional(),
     stdoutTruncated: z.boolean().optional(),
     stderrTruncated: z.boolean().optional(),
     stdoutArtifactRef: nonEmptyString.optional(),
@@ -285,20 +283,6 @@ export const commandExecutionResultSchema = z
         code: z.ZodIssueCode.custom,
         path: ['stderrArtifactRef'],
         message: 'is required when stderr is truncated',
-      });
-    }
-    if (value.stdout !== undefined && !value.stdoutContentHash) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['stdoutContentHash'],
-        message: 'is required when inline stdout is present',
-      });
-    }
-    if (value.stderr !== undefined && !value.stderrContentHash) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['stderrContentHash'],
-        message: 'is required when inline stderr is present',
       });
     }
     if (new Set(value.generatedArtifactRefs).size !== value.generatedArtifactRefs.length) {
@@ -499,8 +483,6 @@ export const commandExecutionResultJsonSchema: JsonSchema = {
     signal: nonEmptyStringJsonSchema,
     stdout: { type: 'string' },
     stderr: { type: 'string' },
-    stdoutContentHash: nonEmptyStringJsonSchema,
-    stderrContentHash: nonEmptyStringJsonSchema,
     stdoutTruncated: { type: 'boolean' },
     stderrTruncated: { type: 'boolean' },
     stdoutArtifactRef: nonEmptyStringJsonSchema,
@@ -523,28 +505,11 @@ export const commandExecutionResultJsonSchema: JsonSchema = {
   },
   allOf: [
     {
-      if: { properties: { stdout: { type: 'string' } }, required: ['stdout'] },
-      then: {
-        properties: { stdoutContentHash: nonEmptyStringJsonSchema },
-        required: ['stdoutContentHash'],
-      },
-    },
-    {
-      if: { properties: { stderr: { type: 'string' } }, required: ['stderr'] },
-      then: {
-        properties: { stderrContentHash: nonEmptyStringJsonSchema },
-        required: ['stderrContentHash'],
-      },
-    },
-    {
       if: {
         properties: { status: { enum: terminalStatuses } },
         required: ['status'],
       },
-      then: {
-        properties: { completedAt: timestampJsonSchema },
-        required: ['completedAt'],
-      },
+      then: { required: ['completedAt'] },
     },
     {
       if: {
@@ -553,14 +518,14 @@ export const commandExecutionResultJsonSchema: JsonSchema = {
       },
       then: {
         properties: { exitCode: { type: 'null' } },
-        not: { properties: { completedAt: timestampJsonSchema }, required: ['completedAt'] },
+        not: { required: ['completedAt'] },
       },
     },
     {
       if: { properties: { status: { const: 'completed' } }, required: ['status'] },
       then: {
         properties: { exitCode: { type: 'integer' } },
-        not: { properties: { error: normalizedExecutionErrorJsonSchema }, required: ['error'] },
+        not: { required: ['error'] },
       },
     },
     {
@@ -579,30 +544,21 @@ export const commandExecutionResultJsonSchema: JsonSchema = {
         },
         required: ['status'],
       },
-      then: {
-        properties: { error: normalizedExecutionErrorJsonSchema },
-        required: ['error'],
-      },
+      then: { required: ['error'] },
     },
     {
       if: {
         properties: { stdoutTruncated: { const: true } },
         required: ['stdoutTruncated'],
       },
-      then: {
-        properties: { stdoutArtifactRef: nonEmptyStringJsonSchema },
-        required: ['stdoutArtifactRef'],
-      },
+      then: { required: ['stdoutArtifactRef'] },
     },
     {
       if: {
         properties: { stderrTruncated: { const: true } },
         required: ['stderrTruncated'],
       },
-      then: {
-        properties: { stderrArtifactRef: nonEmptyStringJsonSchema },
-        required: ['stderrArtifactRef'],
-      },
+      then: { required: ['stderrArtifactRef'] },
     },
   ],
   additionalProperties: false,
@@ -710,8 +666,6 @@ export const commandExecutionResultExample: CommandExecutionResult = {
   exitCode: 0,
   stdout: '{"ok":true}\n',
   stderr: '',
-  stdoutContentHash: 'sha256:e5f1eb4d806641698a35efe20e098efd20d7d57a9b90ee69079d5bb650920726',
-  stderrContentHash: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
   stdoutTruncated: false,
   stderrTruncated: false,
   changedFiles: [
