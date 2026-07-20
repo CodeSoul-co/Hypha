@@ -66,7 +66,8 @@ serialized block JSON, timestamps, expiry, and source event linkage.
 `HotIndexedWorkCacheStore` wraps either store and keeps an in-process index by
 block id and tree/cache key. Runtime lookup checks the hot index first, writes
 through to the backing store, and evicts low-utility entries by demand score and
-last update time.
+last update time. Hot and Redis indexes verify their tree/key binding before a
+hit; stale aliases are removed instead of returning a differently keyed block.
 
 The intended runtime layout is:
 
@@ -102,6 +103,9 @@ invalidation messages so peer hot indexes cannot continue serving a deleted
 block; Redis index replacement and deletion use atomic operations when the
 client supports them. Store calls are time-bounded and optional cache failures
 do not change the source event, inference result, or recovery outcome.
+Thinking Cache also requires the configured WorkCache scope before it can use
+its in-process singleflight map, so an unscoped request cannot be coalesced with
+another request even when no persistent write occurs.
 
 ## Reuse Rules
 

@@ -30,7 +30,12 @@ export class RedisCacheStore implements CacheStore {
     const raw = await this.options.client.get(this.key(key));
     if (!raw) return null;
     try {
-      return validateCacheEntry<T>(JSON.parse(raw));
+      const entry = validateCacheEntry<T>(JSON.parse(raw));
+      if (entry.key !== key) {
+        await this.options.client.del(this.key(key));
+        return null;
+      }
+      return entry;
     } catch {
       await this.options.client.del(this.key(key));
       return null;
@@ -39,6 +44,9 @@ export class RedisCacheStore implements CacheStore {
 
   async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {
     validateCacheEntry(entry);
+    if (entry.key !== key) {
+      throw new Error('Serving Cache store key does not match CacheEntry.key.');
+    }
     const ttlMs = entry.expiresAt === undefined ? undefined : entry.expiresAt - this.now();
     if (ttlMs !== undefined && ttlMs <= 0) {
       await this.delete(key);

@@ -87,6 +87,9 @@ export class SQLiteCacheStore implements CacheStore {
 
   async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {
     validateCacheEntry(entry);
+    if (entry.key !== key) {
+      throw new Error('Serving Cache store key does not match CacheEntry.key.');
+    }
     this.db
       .prepare(
         'INSERT OR REPLACE INTO cache_entries ' +

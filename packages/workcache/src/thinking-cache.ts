@@ -108,6 +108,13 @@ export class ThinkingCache {
         metadata: { hit: false, kind: identity.kind, ...location },
       };
     }
+    if (!scopeSatisfies(identity.scope, this.manager.policy.scopeRequirement)) {
+      return {
+        hit: false,
+        reason: 'scope_missing',
+        metadata: { hit: false, kind: identity.kind, ...location },
+      };
+    }
     try {
       const result = await this.manager.lookup<ThinkingCacheEntry<T>>({
         treeType: 'ComputationTree',
@@ -167,6 +174,7 @@ export class ThinkingCache {
       source: 'computed',
     };
     if (!this.enabled) return metadata;
+    if (!scopeSatisfies(identity.scope, this.manager.policy.scopeRequirement)) return metadata;
 
     const timestamp = this.now();
     const ttlMs = this.manager.policy.trees.ComputationTree.ttlMs;
@@ -232,6 +240,18 @@ export class ThinkingCache {
       hydrateCached?: (value: T, source: 'store' | 'in_flight') => T;
     }
   ): Promise<{ value: T; metadata: ThinkingCacheMetadata }> {
+    if (!scopeSatisfies(options.identity.scope, this.manager.policy.scopeRequirement)) {
+      const location = thinkingCacheLocation(options.identity);
+      return {
+        value: await options.compute(),
+        metadata: {
+          hit: false,
+          kind: options.identity.kind,
+          ...location,
+          source: 'computed',
+        },
+      };
+    }
     const lookup = await this.lookup<T>(options.identity, options.context);
     if (lookup.hit) {
       return {
@@ -296,6 +316,15 @@ export class ThinkingCache {
       // Cache observability is best effort and cannot change inference behavior.
     }
   }
+}
+
+function scopeSatisfies(
+  scope: ThinkingCacheScope,
+  requirement: WorkCacheManager['policy']['scopeRequirement']
+): boolean {
+  if (requirement === 'none') return true;
+  if (requirement === 'session') return Boolean(scope.userId && scope.sessionId);
+  return Boolean(scope.userId);
 }
 
 function thinkingCacheLocation(identity: ThinkingCacheIdentity): {

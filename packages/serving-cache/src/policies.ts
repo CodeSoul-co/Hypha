@@ -1,4 +1,5 @@
 import type { CacheMode, CachePolicy } from './types';
+import { validateCachePolicy } from './schemas';
 
 export const defaultCachePolicy: CachePolicy = {
   enabled: false,
@@ -26,9 +27,9 @@ export function normalizeCachePolicy(policy: Partial<CachePolicy> = {}): CachePo
     },
   };
   if (normalized.mode === 'off') {
-    return { ...normalized, enabled: false };
+    return validateCachePolicy({ ...normalized, enabled: false });
   }
-  return normalized;
+  return validateCachePolicy(normalized);
 }
 
 export function cacheModeAllowsRead(mode: CacheMode): boolean {

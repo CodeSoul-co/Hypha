@@ -1,4 +1,5 @@
 import type { CacheTreeType, PartialWorkCachePolicy, WorkCachePolicy } from './types';
+import { validateWorkCachePolicy } from './schemas';
 
 export const WORKCACHE_TREE_TYPES: CacheTreeType[] = [
   'PlanTree',
@@ -35,7 +36,7 @@ export const defaultWorkCachePolicy: WorkCachePolicy = {
 
 export function normalizeWorkCachePolicy(policy: PartialWorkCachePolicy = {}): WorkCachePolicy {
   const enabled = policy.enabled ?? (policy.store !== undefined && policy.store !== 'off');
-  return {
+  return validateWorkCachePolicy({
     ...defaultWorkCachePolicy,
     ...policy,
     enabled,
@@ -58,5 +59,5 @@ export function normalizeWorkCachePolicy(policy: PartialWorkCachePolicy = {}): W
       },
       {} as WorkCachePolicy['trees']
     ),
-  };
+  });
 }

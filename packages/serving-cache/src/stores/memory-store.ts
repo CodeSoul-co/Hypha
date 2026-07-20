@@ -35,6 +35,7 @@ export class MemoryCacheStore implements CacheStore {
 
   async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {
     validateCacheEntry(entry);
+    assertCacheKeyBinding(key, entry.key);
     const existing = this.entries.get(key);
     if (existing) this.sizeBytes -= entrySize(existing);
     this.entries.delete(key);
@@ -86,6 +87,12 @@ export class MemoryCacheStore implements CacheStore {
       this.entries.delete(oldestKey);
       this.evictions += 1;
     }
+  }
+}
+
+function assertCacheKeyBinding(requestedKey: string, entryKey: string): void {
+  if (requestedKey !== entryKey) {
+    throw new Error('Serving Cache store key does not match CacheEntry.key.');
   }
 }
 

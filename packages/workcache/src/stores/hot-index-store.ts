@@ -13,7 +13,7 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
     private readonly backing: WorkCacheStore,
     options: HotIndexedWorkCacheStoreOptions = {}
   ) {
-    this.maxEntries = options.maxEntries ?? 5000;
+    this.maxEntries = Math.max(1, options.maxEntries ?? 5000);
   }
 
   async get<T = unknown>(blockId: string): Promise<CacheBlock<T> | null> {
@@ -35,14 +35,17 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
     const hotId = this.keyIndex.get(indexKey(treeType, cacheKey));
     if (hotId) {
       const hot = this.blocks.get(hotId);
-      if (hot) {
+      if (hot && hot.treeType === treeType && hot.cacheKey === cacheKey) {
         this.blocks.delete(hotId);
         this.blocks.set(hotId, hot);
         return hot as CacheBlock<T>;
       }
-      this.keyIndex.delete(indexKey(treeType, cacheKey));
+      this.deleteKeyBinding(treeType, cacheKey, hotId);
     }
     const block = await this.backing.getByCacheKey<T>(treeType, cacheKey);
+    if (block && (block.treeType !== treeType || block.cacheKey !== cacheKey)) {
+      return null;
+    }
     if (block) this.index(block);
     return block;
   }
@@ -54,7 +57,7 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
 
   async delete(blockId: string): Promise<void> {
     const hot = this.blocks.get(blockId);
-    if (hot) this.keyIndex.delete(indexKey(hot.treeType, hot.cacheKey));
+    if (hot) this.deleteKeyBinding(hot.treeType, hot.cacheKey, blockId);
     this.blocks.delete(blockId);
     await this.backing.delete(blockId);
   }
@@ -119,6 +122,13 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
   }
 
   private index<T>(block: CacheBlock<T>): void {
+    const previous = this.blocks.get(block.id);
+    if (
+      previous &&
+      (previous.treeType !== block.treeType || previous.cacheKey !== block.cacheKey)
+    ) {
+      this.deleteKeyBinding(previous.treeType, previous.cacheKey, block.id);
+    }
     this.blocks.set(block.id, block as CacheBlock);
     this.keyIndex.set(indexKey(block.treeType, block.cacheKey), block.id);
     this.evictIfNeeded();
@@ -134,8 +144,13 @@ export class HotIndexedWorkCacheStore implements WorkCacheStore {
       })[0];
       if (!candidate) return;
       this.blocks.delete(candidate.id);
-      this.keyIndex.delete(indexKey(candidate.treeType, candidate.cacheKey));
+      this.deleteKeyBinding(candidate.treeType, candidate.cacheKey, candidate.id);
     }
+  }
+
+  private deleteKeyBinding(treeType: CacheTreeType, cacheKey: string, blockId: string): void {
+    const key = indexKey(treeType, cacheKey);
+    if (this.keyIndex.get(key) === blockId) this.keyIndex.delete(key);
   }
 }
 

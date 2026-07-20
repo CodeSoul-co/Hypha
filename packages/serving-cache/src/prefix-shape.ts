@@ -22,8 +22,11 @@ interface PrefixCacheShapeSnapshot {
 
 export class PrefixCacheShapeTracker {
   private readonly snapshots = new Map<string, PrefixCacheShapeSnapshot>();
+  private readonly maxSnapshots: number;
 
-  constructor(private readonly maxSnapshots = 5000) {}
+  constructor(maxSnapshots = 5000) {
+    this.maxSnapshots = Math.max(1, maxSnapshots);
+  }
 
   observe(input: PrefixCacheShapeInput): PrefixCacheShapeObservation {
     const key = trackerKey(input);

@@ -45,7 +45,10 @@ export class RedisWorkCacheStore implements WorkCacheStore {
     const blockId = await this.options.client.get(indexKey);
     if (!blockId) return null;
     const block = await this.get<T>(blockId);
-    if (!block) await this.options.client.del(indexKey);
+    if (!block || block.treeType !== treeType || block.cacheKey !== cacheKey) {
+      await this.options.client.del(indexKey);
+      return null;
+    }
     return block;
   }
 

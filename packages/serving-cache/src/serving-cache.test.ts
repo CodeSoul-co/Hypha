@@ -6,6 +6,7 @@ import type { ModelProvider, ModelRequest, ModelResponse } from '@hypha/models';
 import { ServingCacheManager } from './cache-manager';
 import { buildPromptPrefixMetadata, createLLMCacheKey } from './key';
 import { CachedLLMProvider } from './middleware/llm-cache-middleware';
+import { normalizeCachePolicy } from './policies';
 import { MemoryCacheStore } from './stores/memory-store';
 import { RedisCacheStore, type RedisCacheClient } from './stores/redis-store';
 import { SQLiteCacheStore } from './stores/sqlite-store';
@@ -472,6 +473,67 @@ describe('@hypha/serving-cache', () => {
       )
     ).rejects.toThrow(/maximum/);
     expect(await store.get('large')).toBeNull();
+  });
+
+  it('rejects unknown metadata and invalid runtime policy values', () => {
+    expect(() =>
+      validateCacheEntry({
+        key: 'strict-metadata',
+        value: { content: 'ok' },
+        createdAt: 1,
+        metadata: {
+          provider: 'mock',
+          model: 'model',
+          cacheType: 'exact',
+          secretValue: 'must-not-pass-through',
+        },
+      })
+    ).toThrow(/Unrecognized key/u);
+    expect(() => normalizeCachePolicy({ operationTimeoutMs: 0 })).toThrow();
+    expect(() => normalizeCachePolicy({ maxEntryBytes: -1 })).toThrow();
+  });
+
+  it('enforces physical-to-logical key binding in cache stores', async () => {
+    const memory = new MemoryCacheStore();
+    await expect(
+      memory.set('physical-key', {
+        key: 'different-logical-key',
+        value: { content: 'poison' },
+        createdAt: 1,
+      })
+    ).rejects.toThrow(/does not match/u);
+
+    const values = new Map<string, string>();
+    const client: RedisCacheClient = {
+      async get(key) {
+        return values.get(key) ?? null;
+      },
+      async set(key, value) {
+        values.set(key, value);
+        return 'OK';
+      },
+      async del(...keys) {
+        let deleted = 0;
+        for (const key of keys) deleted += Number(values.delete(key));
+        return deleted;
+      },
+      async scan() {
+        return ['0', [...values.keys()]];
+      },
+    };
+    values.set(
+      'binding:physical-key',
+      JSON.stringify({
+        schemaVersion: '1.0',
+        keyVersion: '1',
+        key: 'different-logical-key',
+        value: { content: 'poison' },
+        createdAt: 1,
+      })
+    );
+    const redis = new RedisCacheStore({ client, prefix: 'binding:' });
+    expect(await redis.get('physical-key')).toBeNull();
+    expect(values.has('binding:physical-key')).toBe(false);
   });
 
   it('round-trips and clears versioned entries through a Redis-compatible store', async () => {
