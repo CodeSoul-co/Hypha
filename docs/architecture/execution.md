@@ -15,6 +15,7 @@ belong in adapters and must pass through the harness governance and trace path.
 | Sandbox             | `SandboxRecord`, lifecycle requests, `SandboxProvider`                                    | Revisioned sandbox state and the adapter boundary for create, start, execute, cancel, status, terminate, cleanup, and close.            |
 | Command             | `CommandExecutionRequest`, `CommandExecutionResult`, `CommandOutputChunk`                 | Governed command input, bounded output, terminal evidence, resource usage, cancellation, and receipts.                                  |
 | Activity boundary   | `ExecutionActivityRequest`, `ExecutionActivityResult`                                     | Fenced Runtime-to-Execution dispatch for governed Command and Workspace operations, with event and Artifact evidence.                   |
+| Tool governance     | `ExecutionToolBinding`, `ExecutionRiskAssessment`                                         | Permission, side-effect, human-review, risk evidence, and recommended isolation inputs for governed Tool execution.                     |
 | Persistence         | `ExecutionStore`, record, lease, fencing, idempotency, and recovery contracts             | Compare-and-set updates, exclusive workers, stale-writer rejection, and restart-safe reconciliation evidence.                           |
 | Events              | typed Sandbox, Command, and Network Authorization events                                  | Bounded lifecycle evidence without raw output, host paths, environment values, or plaintext secrets.                                    |
 | Cache boundary      | execution validity, environment fingerprint, and result projection contracts              | Deterministic reuse inputs without placing cache policy or storage inside Core.                                                         |
@@ -62,6 +63,18 @@ adapter is called.
 snapshot, Event, and normalized-error references. Event evidence is mandatory and references must
 be unique. These contracts do not schedule FSM transitions, pause or resume a Run, approve a Tool,
 or select a provider; those responsibilities remain with Runtime, Tool governance, and adapters.
+
+## Tool Governance Boundary
+
+Command, file, Sandbox, and Artifact capabilities are registered as governed Tools through an
+`ExecutionToolBinding`. The binding declares the Execution operation, profile, required permission
+scopes, side-effect level, and optional human-review policy reference. It does not bypass
+`GovernedToolRunner` or invoke a provider directly.
+
+`ExecutionRiskAssessment` carries bounded reasons, matched rule identifiers, approval requirement,
+recommended isolation, and evaluation time. High and critical risk fail closed unless approval is
+required. Execution supplies these risk facts and constraints; Tool policy and Human Approval own
+the approval decision and grant lifecycle.
 
 ## Deterministic Mock Provider
 
