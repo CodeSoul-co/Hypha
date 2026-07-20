@@ -140,6 +140,7 @@ export interface InferenceManagerOptions {
   prefixCache?: PrefixCacheProvider;
   kvCache?: KvCacheProvider;
   cacheFailureMode?: 'bypass' | 'strict';
+  cacheOperationTimeoutMs?: number;
   providerRevision?: string;
   policyRevision?: string;
   specRevision?: string;
