@@ -134,7 +134,7 @@ export class DockerExecutionProvider implements SandboxProvider {
     try {
       containerId = await this.engine.createContainer({
         name: `hypha-${shortExecutionHash(sandboxId, 20)}`,
-        image: image.id,
+        image: environmentPolicy.image,
         imageDigest: environmentPolicy.digest,
         user: environmentPolicy.user,
         workingDirectory: this.workspaceMount.containerWorkspaceRoot,
