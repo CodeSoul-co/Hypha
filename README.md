@@ -130,6 +130,19 @@ policy, and secret implementations behind adapter and harness boundaries. Paths,
 transitions, terminal evidence, sensitive event fields, idempotency, and stale-writer fencing are
 validated before adapters perform side effects.
 
+Runtime work crosses into Execution through a validated `ExecutionActivityRequest` that binds the
+Run, FSM state attempt, Workspace, fencing token, deadline, principal, and idempotency identity.
+`DefaultExecutionRiskEvaluator` derives provider-neutral risk evidence, while
+`GovernedExecutionPort` verifies Tool binding, permission scopes, Policy/Human Approval evidence,
+cancellation, deadlines, and authorization expiry immediately before dispatch. Unsuccessful
+activity terminals require normalized errors and durable Event references.
+
+`DefaultExecutionOutputPlanner` deterministically selects bounded, content-addressed Workspace
+mutations. `DefaultExecutionOutputCollector` then creates and optionally finalizes Artifacts only
+when returned records match the planned hash, size, path, principal, user, tenant, Workspace, Run,
+provenance, and Artifact version. These components expose framework ports; they do not imply a
+particular container, cloud object store, or remote execution provider.
+
 The Artifact lifecycle is content-addressed and append-only. `DefaultArtifactManager` and its
 eventing wrapper govern create, read, list, version navigation, lineage, retention, garbage
 collection, and download access through principal-scoped policy checks. In-memory, local-file, and

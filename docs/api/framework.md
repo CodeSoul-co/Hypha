@@ -37,7 +37,7 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
+Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Activity, Tool binding and risk evidence, authorization dispatch, output collection, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
 
 `createPolicySpecEngine(policy)` creates a basic `PolicyEngine` from `PolicySpec`. Rules are evaluated in order and can match `sideEffectLevels`, `scopes`, and simple expressions `true` or `default`. Effects map to allow, deny, or human-review-required decisions; unmatched rules use `defaultEffect`.
 
@@ -185,6 +185,25 @@ model, execution, or custom work through a port and commits the corresponding li
 it does not execute provider-specific side effects in core. `BoundedFSMDriver` and
 `RuntimeExecutionContext` are exported by `@hypha/harness` for budgeted FSM advancement using those
 ports.
+
+## Execution Activity, Governance, and Output
+
+The Runtime-to-Execution boundary is exported from `@hypha/core` as provider-neutral contracts and
+strict Zod/JSON Schema validators:
+
+| API                               | Contract                                                                                                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ExecutionActivityRequest`        | Binds activity, operation, Run, FSM state attempt, Workspace, fencing token, optional deadline, and idempotency identity to one Command or Workspace operation.                  |
+| `ExecutionActivityResult`         | Returns one terminal status with unique durable Event references, optional Artifact/snapshot references, and required normalized error evidence for every unsuccessful terminal. |
+| `ExecutionToolBinding`            | Declares the governed Tool operation, Execution profile, required permission scopes, side-effect level, and optional Human Review policy.                                        |
+| `DefaultExecutionRiskEvaluator`   | Derives deterministic risk rules and isolation recommendations from validated Tool, request, environment, and Workspace specs; it does not authorize the operation.              |
+| `ExecutionAuthorizationEvidence`  | Binds Invocation, Activity, Run, Tool revision, principal, input hash, Policy decision, risk assessment, optional approval, and validity window.                                 |
+| `GovernedExecutionPort`           | Fails closed on invalid scope, operation, approval, cancellation, deadline, authorization, or verifier evidence before calling an injected `ExecutionOperationDispatcher`.       |
+| `DefaultExecutionOutputPlanner`   | Selects final file mutations using safe relative patterns, integrity evidence, Artifact/byte budgets, and deterministic ordering.                                                |
+| `DefaultExecutionOutputCollector` | Creates/finalizes output Artifacts through an injected manager and verifies returned schema, scope, provenance, integrity, status, and version identity.                         |
+
+Concrete process, container, remote sandbox, or object-store implementations remain adapter-owned.
+An implementation is not implied merely because the framework contract or registry entry exists.
 
 ## Evaluation, Replay, and Regression
 
