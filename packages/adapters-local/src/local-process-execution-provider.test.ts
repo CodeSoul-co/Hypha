@@ -41,6 +41,8 @@ describe('LocalProcessExecutionProvider', () => {
       status: 'completed',
       exitCode: 0,
       stdout: 'visible',
+      stdoutContentHash: 'sha256:d42ef1497900bc6e542c641a896c88694d15069b8a11247f66ba7342b6c21cd9',
+      stderrContentHash: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       changedFiles: [{ path: 'result.txt', operation: 'created' }],
       resourceUsage: { outputBytes: 7, processCountPeak: 1 },
       externalReceipt: {

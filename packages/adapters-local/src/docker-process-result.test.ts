@@ -19,6 +19,8 @@ describe('buildDockerProcessResult', () => {
       exitCode: 0,
       stdout: 'hello',
       stderr: 'err',
+      stdoutContentHash: 'sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+      stderrContentHash: 'sha256:d9eb253e06987fa74a5d3189f73d9f7a8104cca786fafbb52bc9555972f5477f',
       changedFiles: [
         { path: 'result.txt', operation: 'created', detectedAt: '2026-07-18T00:00:01.000Z' },
       ],
