@@ -1,5 +1,8 @@
-import type { ArtifactKind } from './artifact';
+import type { ArtifactKind, ArtifactRecord, ArtifactStatus } from './artifact';
+import type { ArtifactFinalizeRequest, ArtifactFromWorkspaceRequest } from './artifact-manager';
 import type { CommandExecutionResult, CommandExecutionStatus } from './command-execution';
+import type { ExecutionPrincipal } from './execution';
+import type { SpecRef } from '../specs';
 
 export type ExecutionOutputTerminalStatus = Exclude<
   CommandExecutionStatus,
@@ -50,4 +53,48 @@ export interface ExecutionOutputPlanner {
     result: CommandExecutionResult,
     policy: ExecutionOutputCollectionPolicy
   ): ExecutionOutputCollectionPlan;
+}
+
+/** Identity and Artifact policy context supplied by the Execution composition root. */
+export interface ExecutionOutputCollectionContext {
+  operationId: string;
+  principal: ExecutionPrincipal;
+  profileRef: SpecRef;
+  userId: string;
+  tenantId?: string;
+  workspaceId: string;
+  sessionId?: string;
+  runId?: string;
+  agentId?: string;
+  idempotencyKeyPrefix?: string;
+}
+
+/** Minimal Artifact Manager port required by output collection. */
+export interface ExecutionOutputArtifactManager {
+  createFromWorkspace(request: ArtifactFromWorkspaceRequest): Promise<ArtifactRecord>;
+  finalize(request: ArtifactFinalizeRequest): Promise<ArtifactRecord>;
+}
+
+export interface CollectedExecutionOutput {
+  relativePath: string;
+  artifactRef: string;
+  versionId: string;
+  contentHash: string;
+  sizeBytes: number;
+  status: ArtifactStatus;
+}
+
+export interface ExecutionOutputCollectionResult {
+  executionId: string;
+  collected: CollectedExecutionOutput[];
+  existingArtifactRefs: string[];
+  artifactRefs: string[];
+  finalizedArtifactRefs: string[];
+}
+
+export interface ExecutionOutputCollector {
+  collect(
+    plan: ExecutionOutputCollectionPlan,
+    context: ExecutionOutputCollectionContext
+  ): Promise<ExecutionOutputCollectionResult>;
 }

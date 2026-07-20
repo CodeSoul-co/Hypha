@@ -6,7 +6,7 @@ import type {
   ExecutionOutputSkipReason,
 } from '../../contracts/execution-output';
 import type { JsonSchema } from '../../specs';
-import { artifactKindSchema } from '../artifact';
+import { artifactContentHashSchema, artifactKindSchema } from '../artifact';
 import { workspaceRelativePathSchema } from '../workspace';
 import { relativePathJsonSchema } from '../workspace/operations';
 
@@ -90,7 +90,7 @@ export const executionOutputTerminalStatusSchema = z.enum([
 export const executionOutputCollectionItemSchema = z
   .object({
     relativePath: workspaceRelativePathSchema,
-    contentHash: nonEmptyString,
+    contentHash: artifactContentHashSchema,
     sizeBytes: nonNegativeInteger,
     kind: artifactKindSchema,
     mimeType: nonEmptyString.optional(),
@@ -159,6 +159,10 @@ export const executionOutputCollectionPlanSchema = z
 
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 };
+const contentHashJsonSchema: JsonSchema = {
+  type: 'string',
+  pattern: '^(sha256|blake3):[0-9a-f]{64}$',
+};
 const patternJsonSchema: JsonSchema = {
   type: 'string',
   minLength: 1,
@@ -204,7 +208,7 @@ export const executionOutputCollectionItemJsonSchema: JsonSchema = {
   required: ['relativePath', 'contentHash', 'sizeBytes', 'kind'],
   properties: {
     relativePath: relativePathJsonSchema,
-    contentHash: nonEmptyStringJsonSchema,
+    contentHash: contentHashJsonSchema,
     sizeBytes: nonNegativeIntegerJsonSchema,
     kind: { enum: artifactKindSchema.options },
     mimeType: nonEmptyStringJsonSchema,
@@ -276,7 +280,7 @@ export const executionOutputCollectionPlanExample: ExecutionOutputCollectionPlan
   items: [
     {
       relativePath: 'outputs/report.json',
-      contentHash: 'sha256:report',
+      contentHash: `sha256:${'a'.repeat(64)}`,
       sizeBytes: 12,
       kind: 'dataset',
       mimeType: 'application/json',

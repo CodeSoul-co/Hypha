@@ -155,10 +155,12 @@ applies limits in stable path order. Its plan contains bounded skip counts rathe
 or an unbounded rejection list. Existing stdout, stderr, and generated Artifact references are
 deduplicated and carried separately so they are not collected again.
 
-The planner is side-effect free. It does not read a Workspace, create or finalize an Artifact,
-decide a business-specific output schema, or emit Runtime events. An authorized composition layer
-may execute the validated plan through Workspace and Artifact ports; business output contracts stay
-in Domain configuration.
+The planner is side-effect free. `DefaultExecutionOutputCollector` executes its validated plan
+through a narrow Artifact Manager port. Each Workspace read is fenced by the planned content hash
+and byte size, retries carry stable idempotency keys, existing Artifact references are not recreated,
+and only outputs from successful Executions are finalized. The collector does not read host paths,
+bypass Artifact authorization, decide a business-specific output schema, or emit Runtime events;
+business output contracts stay in Domain configuration.
 
 ## Store, Lease, and Recovery Rules
 
