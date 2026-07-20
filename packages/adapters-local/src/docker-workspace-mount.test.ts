@@ -58,7 +58,7 @@ describe('DockerWorkspaceMountResolver', () => {
       workspaceRoot: await temporaryDirectory(),
     });
 
-    expect(() => resolver.resolveWorkingDirectory('bad\u0000path')).toThrow('NUL bytes');
+    expect(() => resolver.resolveWorkingDirectory('bad\u0000path')).toThrow('NUL byte');
     expect(() => validateContainerPath('/', 'root')).toThrow('cannot be the container root');
     expect(() => validateContainerPath('/workspace/../escape', 'root')).toThrow(
       'must be normalized'
