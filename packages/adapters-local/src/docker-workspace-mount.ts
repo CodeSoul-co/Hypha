@@ -45,7 +45,13 @@ export class DockerWorkspaceMountResolver {
 
   resolveWorkingDirectory(requested?: string): string {
     if (requested === undefined || requested === '') return this.containerWorkspaceRoot;
-    nonEmptyNoNul(requested, 'Docker command working directory');
+    if (typeof requested !== 'string' || requested.includes('\u0000')) {
+      throw executionProviderError(
+        'EXECUTION_PATH_ESCAPE',
+        'Docker command working directory contains a NUL byte.',
+        false
+      );
+    }
     const normalizedSeparators = requested.replaceAll('\\', '/');
     const normalized = path.posix.resolve(this.containerWorkspaceRoot, normalizedSeparators);
     const relative = path.posix.relative(this.containerWorkspaceRoot, normalized);
