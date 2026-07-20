@@ -445,7 +445,10 @@ scope-qualified search cache. Its identity includes principal roles/permission s
 semantics; `operationId` and trace metadata are excluded. It caches only searches that explicitly
 set `updateAccessStats: false`, validates returned records at runtime, bounds entry size and Store
 latency, coalesces only identical scoped reads, and invalidates the scope after every successful
-mutation. `InMemoryMemorySearchCacheStore` is the bounded local reference implementation.
+mutation. Monotonic scope revisions fence searches that overlap mutations; retries are bounded and
+failed invalidation quarantines that scope before another lookup. `InMemoryMemorySearchCacheStore`
+is the bounded local implementation and `RedisMemorySearchCacheStore` provides the same key-bound,
+TTL-limited contract for shared local, self-hosted, or managed Redis.
 
 `ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
 and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
