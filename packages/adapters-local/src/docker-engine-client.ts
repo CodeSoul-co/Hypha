@@ -328,7 +328,8 @@ function successful(result: DockerCliResult): boolean {
 }
 
 function formatMount(mount: DockerBindMount): string {
-  return `type=bind,src=${mount.source},dst=${mount.target},${mount.readOnly ? 'readonly' : 'rw'}`;
+  const base = `type=bind,src=${mount.source},dst=${mount.target}`;
+  return mount.readOnly ? `${base},readonly` : base;
 }
 
 function validateMount(mount: DockerBindMount): void {
