@@ -140,6 +140,24 @@ Closing an output iterator stops output consumption; cancelling execution still 
 `cancel()` operation. Runtime or Harness continues to own authorization, policy, events, replay,
 and durable records around all remote operations.
 
+## Output Collection Contract
+
+`ExecutionOutputCollectionPolicy` governs which final Workspace file mutations are eligible for
+Artifact collection. It supports safe relative include and exclude patterns, bounded Artifact count
+and total bytes, optional framework-level extension classification, and finalization after a
+successful Execution. Excludes take precedence over includes.
+
+`DefaultExecutionOutputPlanner` validates a terminal `CommandExecutionResult`, collapses its mutation
+stream to the final state of each path, rejects entries without content hash and size evidence, and
+applies limits in stable path order. Its plan contains bounded skip counts rather than file contents
+or an unbounded rejection list. Existing stdout, stderr, and generated Artifact references are
+deduplicated and carried separately so they are not collected again.
+
+The planner is side-effect free. It does not read a Workspace, create or finalize an Artifact,
+decide a business-specific output schema, or emit Runtime events. An authorized composition layer
+may execute the validated plan through Workspace and Artifact ports; business output contracts stay
+in Domain configuration.
+
 ## Store, Lease, and Recovery Rules
 
 An `ExecutionRecord` is revisioned. Store adapters must apply compare-and-set atomically. When the
