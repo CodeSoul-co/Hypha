@@ -112,7 +112,7 @@ export function classifyExecutionOutput(relativePath: string): ArtifactClassific
   }
 
   const extension = lowerPath.includes('.') ? lowerPath.slice(lowerPath.lastIndexOf('.')) : '';
-  return EXTENSION_CLASSIFICATIONS[extension] ?? { kind: 'other' };
+  return { ...(EXTENSION_CLASSIFICATIONS[extension] ?? { kind: 'other' }) };
 }
 
 function reduceToFinalMutations(mutations: FileMutation[]): Map<string, FileMutation> {

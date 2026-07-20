@@ -23,11 +23,12 @@ export const executionOutputPatternSchema = z
       normalized.includes('\0') ||
       normalized.includes('\\') ||
       normalized.startsWith('/') ||
-      /^[A-Za-z]:/u.test(normalized)
+      /^[A-Za-z]:/u.test(normalized) ||
+      /%[0-9A-Fa-f]{2}/u.test(value)
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'must be a safe relative POSIX-style pattern',
+        message: 'must be a decoded safe relative POSIX-style pattern',
       });
     }
 
@@ -162,14 +163,15 @@ const patternJsonSchema: JsonSchema = {
   type: 'string',
   minLength: 1,
   maxLength: 512,
-  pattern: '^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*[\\[\\]{}])[^\\u0000]+$',
+  pattern: '^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*%[0-9A-Fa-f]{2})(?!.*[\\[\\]{}])[^\\u0000]+$',
   not: {
     anyOf: [
       { pattern: '(^|/)\\.{1,2}(/|$)' },
       { pattern: '(^|/)(?:[^/]+\\*\\*|\\*\\*[^/]+)(/|$)' },
     ],
   },
-  description: 'Safe relative POSIX-style pattern using path segments plus *, **, and ? wildcards.',
+  description:
+    'Decoded safe relative POSIX-style pattern using path segments plus *, **, and ? wildcards.',
 };
 
 export const executionOutputCollectionPolicyJsonSchema: JsonSchema = {

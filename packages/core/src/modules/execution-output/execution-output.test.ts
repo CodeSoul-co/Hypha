@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { CommandExecutionResult } from '../../contracts/command-execution';
 import { FrameworkError } from '../../errors';
 import {
+  classifyExecutionOutput,
   DefaultExecutionOutputPlanner,
   executionOutputCollectionPlanExample,
   executionOutputCollectionPlanJsonSchema,
@@ -40,6 +41,7 @@ describe('Execution output boundary contracts', () => {
   it.each([
     '../outputs/**',
     '%2e%2e/outputs/**',
+    'outputs/%2A.json',
     '/outputs/**',
     'C:/outputs/**',
     'outputs\\**',
@@ -51,20 +53,36 @@ describe('Execution output boundary contracts', () => {
     expect(() => validateExecutionOutputCollectionPolicy({ includePatterns: [pattern] })).toThrow();
   });
 
-  it.each(['../outputs/**', '/outputs/**', 'C:/outputs/**', 'outputs\\**', 'outputs/**.json'])(
-    'rejects unsafe pattern %s at the JSON Schema boundary',
-    (pattern) => {
-      const ajv = new Ajv({ strict: true });
-      expect(
-        ajv.validate(executionOutputCollectionPolicyJsonSchema, { includePatterns: [pattern] })
-      ).toBe(false);
-    }
-  );
+  it.each([
+    '../outputs/**',
+    '%2e%2e/outputs/**',
+    'outputs/%2A.json',
+    '/outputs/**',
+    'C:/outputs/**',
+    'outputs\\**',
+    'outputs/**.json',
+  ])('rejects unsafe pattern %s at the JSON Schema boundary', (pattern) => {
+    const ajv = new Ajv({ strict: true });
+    expect(
+      ajv.validate(executionOutputCollectionPolicyJsonSchema, { includePatterns: [pattern] })
+    ).toBe(false);
+  });
 
   it('rejects patterns duplicated after Unicode normalization', () => {
     expect(() =>
       validateExecutionOutputCollectionPolicy({ includePatterns: ['café/*', 'cafe\u0301/*'] })
     ).toThrow(/duplicates another pattern/u);
+  });
+
+  it('bounds pattern length and count', () => {
+    expect(() =>
+      validateExecutionOutputCollectionPolicy({ includePatterns: ['a'.repeat(513)] })
+    ).toThrow();
+    expect(() =>
+      validateExecutionOutputCollectionPolicy({
+        includePatterns: Array.from({ length: 65 }, (_, index) => `outputs/${index}.json`),
+      })
+    ).toThrow();
   });
 
   it('rejects duplicate collected paths and inconsistent byte totals', () => {
@@ -97,6 +115,24 @@ describe('Execution output boundary contracts', () => {
 });
 
 describe('DefaultExecutionOutputPlanner', () => {
+  it.each([
+    ['outputs/report.pdf', 'document', 'application/pdf'],
+    ['outputs/table.csv', 'table', 'text/csv'],
+    ['outputs/tests.junit.xml', 'test_report', 'application/xml'],
+    ['outputs/app.ts', 'code', 'text/typescript'],
+    ['outputs/change.diff', 'patch', 'text/x-diff'],
+    ['outputs/bundle.zip', 'archive', 'application/zip'],
+    ['outputs/unknown.bin', 'other', undefined],
+  ])('classifies %s as %s without exposing mutable shared state', (path, kind, mimeType) => {
+    const first = classifyExecutionOutput(path);
+    expect(first).toEqual({ kind, ...(mimeType ? { mimeType } : {}) });
+    (first as { kind: string }).kind = 'log';
+    expect(classifyExecutionOutput(path)).toEqual({
+      kind,
+      ...(mimeType ? { mimeType } : {}),
+    });
+  });
+
   it('applies include and exclude patterns, classifies files, and carries existing refs', () => {
     const result = completedResult({
       stdoutArtifactRef: 'artifact:shared',
@@ -197,6 +233,30 @@ describe('DefaultExecutionOutputPlanner', () => {
     const countLimited = planner.plan(result, { maxArtifacts: 1 });
     expect(countLimited.items.map((item) => item.relativePath)).toEqual(['outputs/a.txt']);
     expect(countLimited.skipped.artifact_limit).toBe(2);
+  });
+
+  it('supports zero limits, empty files, question marks, and zero-or-more globstar segments', () => {
+    const result = completedResult({
+      changedFiles: [
+        mutation('report.json', 0),
+        mutation('outputs/a.json', 1),
+        mutation('outputs/nested/b.json', 2),
+        mutation('outputs/nested/long.json', 3),
+      ],
+    });
+
+    expect(
+      planner
+        .plan(result, { includePatterns: ['**/?.json'] })
+        .items.map((item) => item.relativePath)
+    ).toEqual(['outputs/a.json', 'outputs/nested/b.json']);
+    expect(
+      planner.plan(result, { includePatterns: ['**/report.json'] }).items[0]?.relativePath
+    ).toBe('report.json');
+    expect(planner.plan(result, { maxArtifacts: 0 }).items).toEqual([]);
+    expect(
+      planner.plan(result, { maxTotalBytes: 0 }).items.map((item) => item.relativePath)
+    ).toEqual(['report.json']);
   });
 
   it('does not finalize failed output collection', () => {
