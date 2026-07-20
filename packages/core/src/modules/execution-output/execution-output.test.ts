@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import Ajv from 'ajv';
 import { describe, expect, it } from 'vitest';
 import type { CommandExecutionResult } from '../../contracts/command-execution';
@@ -102,6 +103,17 @@ describe('Execution output boundary contracts', () => {
     ).toThrow(/must equal the sum/u);
   });
 
+  it('requires qualified content hashes in collection plans', () => {
+    const invalid = {
+      ...executionOutputCollectionPlanExample,
+      items: [{ ...executionOutputCollectionPlanExample.items[0], contentHash: 'sha256:short' }],
+    };
+
+    expect(() => validateExecutionOutputCollectionPlan(invalid)).toThrow();
+    const ajv = new Ajv({ strict: true });
+    expect(ajv.validate(executionOutputCollectionPlanJsonSchema, invalid)).toBe(false);
+  });
+
   it('rejects finalization for any non-success terminal status in both schemas', () => {
     const invalidPlan = {
       ...executionOutputCollectionPlanExample,
@@ -154,7 +166,7 @@ describe('DefaultExecutionOutputPlanner', () => {
     expect(plan.items).toEqual([
       {
         relativePath: 'outputs/report.json',
-        contentHash: 'sha256:outputs/report.json',
+        contentHash: outputHash('outputs/report.json'),
         sizeBytes: 12,
         kind: 'dataset',
         mimeType: 'application/json',
@@ -301,9 +313,13 @@ function mutation(path: string, size: number, artifactRef?: string) {
   return {
     path,
     operation: 'created' as const,
-    afterHash: `sha256:${path}`,
+    afterHash: outputHash(path),
     afterSizeBytes: size,
     ...(artifactRef ? { artifactRef } : {}),
     detectedAt: '2026-07-20T00:00:02.000Z',
   };
+}
+
+function outputHash(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
