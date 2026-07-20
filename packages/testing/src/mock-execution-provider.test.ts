@@ -67,6 +67,8 @@ describe('MockExecutionProvider', () => {
       revision: 3,
       exitCode: 0,
       stdout: '{"ok":true}\n',
+      stdoutContentHash: 'sha256:e5f1eb4d806641698a35efe20e098efd20d7d57a9b90ee69079d5bb650920726',
+      stderrContentHash: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       changedFiles: [expect.objectContaining({ path: 'outputs/report.json' })],
       generatedArtifactRefs: ['artifact:report'],
     });

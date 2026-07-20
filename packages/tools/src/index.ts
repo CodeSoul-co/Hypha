@@ -280,14 +280,50 @@ export interface ToolReceiptReconciler {
 
 export interface ToolResultCacheEntry {
   validity: ToolCacheValidityRecord;
-  result: ToolCallResult;
+  result: ToolCachedResultProjection;
   createdAt: string;
+}
+
+/** Only stable, replay-safe output fields may cross invocation boundaries. */
+export interface ToolCachedResultProjection {
+  output?: unknown;
+  content?: ToolResultContent[];
+  artifactRefs?: string[];
 }
 
 export interface ToolResultCache {
   get(key: string): Promise<ToolResultCacheEntry | null>;
   set(entry: ToolResultCacheEntry): Promise<void>;
   delete?(key: string): Promise<void>;
+}
+
+export interface InMemoryToolResultCacheOptions {
+  maxEntries?: number;
+  maxEntryBytes?: number;
+}
+
+export class ToolResultCacheEntryTooLargeError extends Error {
+  readonly code = 'TOOL_RESULT_CACHE_ENTRY_TOO_LARGE';
+
+  constructor(
+    readonly actualBytes: number,
+    readonly maxEntryBytes: number
+  ) {
+    super(`Tool result cache entry is ${actualBytes} bytes; limit is ${maxEntryBytes} bytes.`);
+    this.name = 'ToolResultCacheEntryTooLargeError';
+  }
+}
+
+export class ToolResultCacheOperationTimeoutError extends Error {
+  readonly code = 'TOOL_RESULT_CACHE_TIMEOUT';
+
+  constructor(
+    readonly operation: 'get' | 'set' | 'delete',
+    readonly timeoutMs: number
+  ) {
+    super(`Tool result cache ${operation} timed out after ${timeoutMs}ms.`);
+    this.name = 'ToolResultCacheOperationTimeoutError';
+  }
 }
 
 export interface ToolObservationPort {
@@ -307,17 +343,44 @@ export interface ToolObservationPort {
 
 export class InMemoryToolResultCache implements ToolResultCache {
   private readonly entries = new Map<string, ToolResultCacheEntry>();
+  private readonly maxEntries: number;
+  private readonly maxEntryBytes: number;
+
+  constructor(options: InMemoryToolResultCacheOptions = {}) {
+    this.maxEntries = Math.max(1, options.maxEntries ?? 1_000);
+    this.maxEntryBytes = Math.max(1, options.maxEntryBytes ?? 1024 * 1024);
+  }
 
   async get(key: string): Promise<ToolResultCacheEntry | null> {
-    return this.entries.get(key) ?? null;
+    const entry = this.entries.get(key);
+    if (!entry) return null;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return cloneToolCacheValue(entry);
   }
 
   async set(entry: ToolResultCacheEntry): Promise<void> {
-    this.entries.set(entry.validity.key, entry);
+    const serialized = JSON.stringify(entry);
+    const actualBytes = Buffer.byteLength(serialized, 'utf8');
+    if (actualBytes > this.maxEntryBytes) {
+      throw new ToolResultCacheEntryTooLargeError(actualBytes, this.maxEntryBytes);
+    }
+    const copy = cloneToolCacheValue(entry);
+    this.entries.delete(entry.validity.key);
+    this.entries.set(entry.validity.key, copy);
+    while (this.entries.size > this.maxEntries) {
+      const oldestKey = this.entries.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.entries.delete(oldestKey);
+    }
   }
 
   async delete(key: string): Promise<void> {
     this.entries.delete(key);
+  }
+
+  size(): number {
+    return this.entries.size;
   }
 }
 
@@ -1035,6 +1098,8 @@ export class GovernedToolRunner implements ToolRunner {
   private readonly snapshotStore?: ToolContractSnapshotStore;
   private readonly receiptReconciler?: ToolReceiptReconciler;
   private readonly resultCache?: ToolResultCache;
+  private readonly resultCacheFailureMode: 'bypass' | 'strict';
+  private readonly resultCacheTimeoutMs: number;
   private readonly observationPort?: ToolObservationPort;
   private readonly telemetry?: TelemetryRecorder;
   private readonly inFlight = new Map<string, Promise<ToolCallResult>>();
@@ -1057,6 +1122,8 @@ export class GovernedToolRunner implements ToolRunner {
       snapshotStore?: ToolContractSnapshotStore;
       receiptReconciler?: ToolReceiptReconciler;
       resultCache?: ToolResultCache;
+      resultCacheFailureMode?: 'bypass' | 'strict';
+      resultCacheTimeoutMs?: number;
       observationPort?: ToolObservationPort;
       telemetry?: TelemetryRecorder;
       now?: () => string;
@@ -1070,6 +1137,8 @@ export class GovernedToolRunner implements ToolRunner {
     this.snapshotStore = options.snapshotStore;
     this.receiptReconciler = options.receiptReconciler;
     this.resultCache = options.resultCache;
+    this.resultCacheFailureMode = options.resultCacheFailureMode ?? 'bypass';
+    this.resultCacheTimeoutMs = Math.max(1, options.resultCacheTimeoutMs ?? 250);
     this.observationPort = options.observationPort;
     this.telemetry = options.telemetry;
     this.now = options.now ?? (() => new Date().toISOString());
@@ -1973,6 +2042,27 @@ export class GovernedToolRunner implements ToolRunner {
       return result;
     }
 
+    const cacheOperation = async <T>(
+      operation: 'get' | 'set' | 'delete',
+      task: () => Promise<T>,
+      fallback: T,
+      cacheKey?: string
+    ): Promise<T> => {
+      try {
+        return await runToolCacheOperation(operation, task, this.resultCacheTimeoutMs);
+      } catch (error) {
+        await record('tool.cache.bypass', `cache-${operation}-failed`, {
+          ...basePayload,
+          reason: 'cache_operation_failed',
+          cacheOperation: operation,
+          cacheKey,
+          code: toolCacheErrorCode(error),
+        });
+        if (this.resultCacheFailureMode === 'strict') throw error;
+        return fallback;
+      }
+    };
+
     let cacheValidity: ToolCacheValidityRecord | undefined;
     const cachePolicy = spec.cache;
     const cacheAllowed = Boolean(
@@ -2009,7 +2099,7 @@ export class GovernedToolRunner implements ToolRunner {
           : undefined,
       };
       await record('tool.cache.lookup', 'cache-lookup', { ...basePayload, cacheKey: key });
-      const cached = await this.resultCache!.get(key);
+      const cached = await cacheOperation('get', () => this.resultCache!.get(key), null, key);
       if (
         cached &&
         (!cached.validity.validUntil ||
@@ -2021,9 +2111,18 @@ export class GovernedToolRunner implements ToolRunner {
           cacheHit: true,
           durationMs: Date.now() - startedAt,
         });
-        return { ...cached.result, toolId: request.toolId, invocationId, status: 'completed' };
+        return {
+          ...cached.result,
+          toolId: request.toolId,
+          invocationId,
+          status: 'completed',
+          attempts: 0,
+          durationMs: Date.now() - startedAt,
+        };
       }
-      if (cached) await this.resultCache!.delete?.(key);
+      if (cached && this.resultCache!.delete) {
+        await cacheOperation('delete', () => this.resultCache!.delete!(key), undefined, key);
+      }
       await record('tool.cache.miss', 'cache-miss', { ...basePayload, cacheKey: key });
     } else if (cachePolicy?.mode !== 'disabled') {
       await record('tool.cache.bypass', 'cache-bypass', {
@@ -2306,15 +2405,25 @@ export class GovernedToolRunner implements ToolRunner {
           durationMs,
         };
         if (cacheValidity && this.resultCache) {
-          await this.resultCache.set({
-            validity: cacheValidity,
-            result,
-            createdAt: this.now(),
-          });
-          await record('tool.cache.write', 'cache-write', {
-            ...basePayload,
-            cacheKey: cacheValidity.key,
-          });
+          const wrote = await cacheOperation(
+            'set',
+            async () => {
+              await this.resultCache!.set({
+                validity: cacheValidity,
+                result: projectToolResultForCache(result),
+                createdAt: this.now(),
+              });
+              return true;
+            },
+            false,
+            cacheValidity.key
+          );
+          if (wrote) {
+            await record('tool.cache.write', 'cache-write', {
+              ...basePayload,
+              cacheKey: cacheValidity.key,
+            });
+          }
         }
         return result;
       } catch (error) {
@@ -3425,6 +3534,47 @@ function stringKeyword(schema: JsonSchema, key: string): string | undefined {
 
 function isJsonSchema(value: unknown): value is JsonSchema {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function projectToolResultForCache(result: ToolCallResult): ToolCachedResultProjection {
+  return cloneToolCacheValue({
+    output: result.output,
+    content: result.content,
+    artifactRefs: result.artifactRefs,
+  });
+}
+
+function cloneToolCacheValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function runToolCacheOperation<T>(
+  operation: 'get' | 'set' | 'delete',
+  task: () => Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new ToolResultCacheOperationTimeoutError(operation, timeoutMs)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function toolCacheErrorCode(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return 'TOOL_RESULT_CACHE_ERROR';
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {

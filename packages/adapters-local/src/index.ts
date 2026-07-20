@@ -40,6 +40,30 @@ import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
 
 export * from './workspace-runtime';
+export * from './local-process-output-collector';
+export * from './execution-provider-error';
+export * from './local-process-policy';
+export * from './local-workspace-adapter';
+export * from './local-process-resource-accounting';
+export * from './execution-provider-values';
+export * from './local-sandbox-lifecycle';
+export * from './local-active-execution-registry';
+export * from './local-process-result';
+export * from './local-process-execution-provider';
+export * from './in-memory-execution-cache-store';
+export * from './artifact-content-io';
+export * from './artifact-store-adapter-error';
+export * from './local-artifact-files';
+export * from './local-artifact-manifest';
+export * from './local-artifact-store-values';
+export * from './local-filesystem-execution-artifact-store';
+export * from './in-memory-artifact-record-repository';
+export * from './sqlite-artifact-record-repository';
+export {
+  InMemoryExecutionArtifactStore,
+  type InMemoryExecutionArtifactStoreOptions,
+  type InMemoryExecutionArtifactStoreStats,
+} from './in-memory-execution-artifact-store';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;

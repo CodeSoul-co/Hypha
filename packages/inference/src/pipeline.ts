@@ -96,6 +96,7 @@ export class HyphaInferencePipeline implements InferenceProvider {
       agentId: request.agentId,
       modelAlias: request.modelAlias,
       backendId: backend.id,
+      cacheScope: request.cacheScope ?? inferenceCacheScopeFromMetadata(request.metadata),
       segmentation,
       kvCache: request.cachePolicy?.kvCache ?? request.kvCache,
       resolvedKvCacheValue: request.resolvedKvCacheValue,
@@ -158,6 +159,22 @@ export class HyphaInferencePipeline implements InferenceProvider {
       raw: response.raw,
     };
   }
+}
+
+function inferenceCacheScopeFromMetadata(
+  metadata: Record<string, unknown> | undefined
+): InferenceRequest['cacheScope'] {
+  const userId = stringMetadata(metadata?.userId);
+  if (!userId) return undefined;
+  return {
+    userId,
+    tenantId: stringMetadata(metadata?.tenantId),
+    workspaceId: stringMetadata(metadata?.workspaceId),
+  };
+}
+
+function stringMetadata(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function numberFromMetadata(value: unknown): number | undefined {

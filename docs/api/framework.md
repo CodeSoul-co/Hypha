@@ -37,7 +37,7 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
+Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Activity, Tool binding and risk evidence, authorization dispatch, output collection, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
 
 `createPolicySpecEngine(policy)` creates a basic `PolicyEngine` from `PolicySpec`. Rules are evaluated in order and can match `sideEffectLevels`, `scopes`, and simple expressions `true` or `default`. Effects map to allow, deny, or human-review-required decisions; unmatched rules use `defaultEffect`.
 
@@ -163,6 +163,51 @@ handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
 `message.delivered`, `message.retrying`, `message.acknowledged`, `message.failed`, and
 `message.dead_lettered`. Constructor options bound delivery attempts and retry delay/multiplier;
 `fail({ retry: true })` requeues only inside that budget.
+
+Durable runtime orchestration contracts are exported from `@hypha/core`:
+
+| API                                                     | Contract                                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `DurableEventStore`, `DurableEventRuntime`              | Expected-revision event append, idempotent batches, schema validation/upcasting, scoped reads, and checksum-verified import/export. |
+| `ProjectionEngine`                                      | Deterministic state reduction from ordered event streams with projection revisions.                                                 |
+| `SessionQueue`                                          | User/session-scoped command enqueue, claim/release, complete, fail, retry, and dead-letter behavior.                                |
+| `RuntimeMessageInboxStore`, `RuntimeMessageOutboxStore` | Idempotent inbound handling and durable outbound delivery boundaries.                                                               |
+| `RunLeaseStore`, `StateExecutionClaimStore`             | Lease epoch, fencing token, revision guard, heartbeat/renewal, completion, and stale-worker rejection.                              |
+| `RuntimeResourceCoordinator`                            | Shared or exclusive resource claims scoped to a run and protected by lease guards.                                                  |
+| `RuntimeRunControlService`, `DurableRuntimeTimerWorker` | Persisted pause/resume/signal commands and due-timer delivery.                                                                      |
+| `RuntimeCancellationService`                            | Scoped cancellation fan-out with per-target results and idempotent command reuse.                                                   |
+| `RuntimeCheckpointService`, `RuntimeRecoveryService`    | Lease-guarded checkpoint creation/load and event-derived recovery decisions.                                                        |
+| `RuntimeReplayService`, `RuntimeQueryService`           | Read-only replay verification and query views derived from persisted runtime evidence.                                              |
+
+`createRuntimeHelperSdk()` and `createRuntimeIoHelperSdk()` provide deterministic transition, wait,
+clock, id, event, and resource helpers. `DefaultRuntimeActivityHelper` dispatches tool, memory,
+model, execution, or custom work through a port and commits the corresponding lifecycle observation;
+it does not execute provider-specific side effects in core. `BoundedFSMDriver` and
+`RuntimeExecutionContext` are exported by `@hypha/harness` for budgeted FSM advancement using those
+ports.
+
+## Execution Activity, Governance, and Output
+
+The Runtime-to-Execution boundary is exported from `@hypha/core` as provider-neutral contracts and
+strict Zod/JSON Schema validators:
+
+| API                               | Contract                                                                                                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ExecutionActivityRequest`        | Binds activity, operation, Run, FSM state attempt, Workspace, fencing token, optional deadline, and idempotency identity to one Command or Workspace operation.                  |
+| `ExecutionActivityResult`         | Returns one terminal status with unique durable Event references, optional Artifact/snapshot references, and required normalized error evidence for every unsuccessful terminal. |
+| `ExecutionToolBinding`            | Declares the governed Tool operation, Execution profile, required permission scopes, side-effect level, and optional Human Review policy.                                        |
+| `DefaultExecutionRiskEvaluator`   | Derives deterministic risk rules and isolation recommendations from validated Tool, request, environment, and Workspace specs; it does not authorize the operation.              |
+| `ExecutionAuthorizationEvidence`  | Binds Invocation, Activity, Run, Tool revision, principal, input hash, Policy decision, risk assessment, optional approval, and validity window.                                 |
+| `GovernedExecutionPort`           | Fails closed on invalid scope, operation, approval, cancellation, deadline, authorization, or verifier evidence before calling an injected `ExecutionOperationDispatcher`.       |
+| `DefaultExecutionOutputPlanner`   | Selects final file mutations using safe relative patterns, integrity evidence, Artifact/byte budgets, and deterministic ordering.                                                |
+| `DefaultExecutionOutputCollector` | Creates/finalizes output Artifacts through an injected manager and verifies returned schema, scope, provenance, integrity, status, and version identity.                         |
+| `ExecutionResultCache`            | Reuses only completed, deterministic read-only result projections under an exact user/Workspace scope, bounded Store timeout, validity hashes, and Artifact integrity checks.    |
+
+Concrete process, container, remote sandbox, or object-store implementations remain adapter-owned.
+An implementation is not implied merely because the framework contract or registry entry exists.
+An Execution Cache hit is a reusable projection, not a new execution receipt: Workspace writes,
+external effects, irreversible operations, unstable environments, failed results, and unverifiable
+Artifact references always bypass or invalidate the Cache.
 
 ## Evaluation, Replay, and Regression
 
@@ -530,13 +575,15 @@ same policy and trace path. See [Governed Memory](../architecture/memory.md).
 
 `@hypha/adapters-local` provides development and self-hosted adapters:
 
-| Adapter                    | Storage                 | Purpose                                                                                                                                                                                      |
-| -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SQLiteEventStore`         | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
-| `SQLiteStructuredStore`    | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
-| `LocalVectorIndexProvider` | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
-| `FileArtifactStore`        | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
-| `MockEmbeddingProvider`    | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| Adapter                          | Storage                 | Purpose                                                                                                                                                                                      |
+| -------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SQLiteEventStore`               | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
+| `SQLiteStructuredStore`          | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
+| `LocalVectorIndexProvider`       | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
+| `FileArtifactStore`              | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
+| `MockEmbeddingProvider`          | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| `InMemoryExecutionCacheStore`    | bounded memory          | Local `ExecutionCacheStore` with LRU-style eviction, byte limits, defensive copies, and strict physical/logical key binding.                                                                 |
+| `NodeExecutionFingerprintHasher` | Node crypto             | SHA-256 implementation for canonical Execution command, validity, scope, and Result Cache keys.                                                                                              |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.
 

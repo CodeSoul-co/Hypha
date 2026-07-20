@@ -1180,6 +1180,118 @@ describe('@hypha/tools governed runner', () => {
     );
   });
 
+  it('keeps cache failures fail-open and emits operation-specific bypass evidence', async () => {
+    const registry = new ToolRegistry();
+    const trace = new InMemoryEventStore();
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.cache-failure',
+        version: '1.0.0',
+        revision: 'cache-failure-v1',
+        description: 'Cache failure fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+        },
+      },
+      async () => ({ calls: ++calls })
+    );
+    const runner = new GovernedToolRunner(registry, trace, undefined, {
+      resultCache: {
+        async get() {
+          throw Object.assign(new Error('cache unavailable'), { code: 'CACHE_UNAVAILABLE' });
+        },
+        async set() {
+          throw Object.assign(new Error('cache unavailable'), { code: 'CACHE_UNAVAILABLE' });
+        },
+      },
+    });
+
+    await expect(
+      runner.run({
+        toolId: 'tool.cache-failure',
+        input: {},
+        context: {
+          runId: 'run_tool_cache_failure',
+          stepId: 'step_cache_failure',
+          invocationId: 'invocation_cache_failure',
+        },
+      })
+    ).resolves.toMatchObject({ status: 'completed', output: { calls: 1 } });
+    expect(calls).toBe(1);
+    const events = await trace.list({ runId: 'run_tool_cache_failure' });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.cache.bypass',
+          payload: expect.objectContaining({ cacheOperation: 'get', code: 'CACHE_UNAVAILABLE' }),
+        }),
+        expect.objectContaining({
+          type: 'tool.cache.bypass',
+          payload: expect.objectContaining({ cacheOperation: 'set', code: 'CACHE_UNAVAILABLE' }),
+        }),
+      ])
+    );
+  });
+
+  it('bounds result-cache memory and never reuses invocation or receipt fields', async () => {
+    const registry = new ToolRegistry();
+    const resultCache = new InMemoryToolResultCache({ maxEntries: 2 });
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.bounded-cache',
+        version: '1.0.0',
+        revision: 'bounded-cache-v1',
+        description: 'Bounded cache fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+        },
+      },
+      async (input) => {
+        const value = (input as { value: number }).value;
+        return {
+          kind: 'tool_execution_envelope',
+          output: { value, calls: ++calls },
+          externalReceipt: { receiptId: `receipt-${calls}`, status: 'observed' },
+        };
+      }
+    );
+    const runner = new GovernedToolRunner(registry, new InMemoryEventStore(), undefined, {
+      resultCache,
+    });
+    const run = (value: number, invocationId: string) =>
+      runner.run({
+        toolId: 'tool.bounded-cache',
+        input: { value },
+        context: { runId: 'run_bounded_tool_cache', stepId: 'read', invocationId },
+      });
+
+    await run(1, 'bounded-1');
+    const hit = await run(1, 'bounded-1-hit');
+    expect(hit).toMatchObject({
+      invocationId: 'bounded-1-hit',
+      output: { value: 1, calls: 1 },
+      attempts: 0,
+    });
+    expect(hit.externalReceipt).toBeUndefined();
+    await run(2, 'bounded-2');
+    await run(3, 'bounded-3');
+    expect(resultCache.size()).toBe(2);
+    await run(1, 'bounded-1-after-eviction');
+    expect(calls).toBe(4);
+  });
+
   it('honors audit inclusion and redaction policies', async () => {
     const registry = new ToolRegistry();
     registry.register(
