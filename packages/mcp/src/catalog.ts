@@ -240,14 +240,29 @@ export interface MCPSchemaCacheEntry {
   cachedAt: string;
 }
 
+export interface MCPSchemaCacheOptions {
+  maxEntries?: number;
+  now?: () => string;
+}
+
 export class MCPSchemaCache {
   private readonly entries = new Map<string, MCPSchemaCacheEntry>();
+  private readonly maxEntries: number;
+  private readonly now: () => string;
+
+  constructor(options: MCPSchemaCacheOptions = {}) {
+    this.maxEntries = Math.max(1, options.maxEntries ?? 10_000);
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
 
   get(ref: MCPCapabilityRef & { protocolVersion?: string }): MCPSchemaCacheEntry | null {
     if (!ref.capabilityHash) return null;
-    return clone(
-      this.entries.get(schemaCacheKey({ ...ref, capabilityHash: ref.capabilityHash })) ?? null
-    );
+    const key = schemaCacheKey({ ...ref, capabilityHash: ref.capabilityHash });
+    const entry = this.entries.get(key);
+    if (!entry) return null;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return clone(entry);
   }
 
   set(record: MCPCapabilityRecord): MCPSchemaCacheEntry {
@@ -258,9 +273,15 @@ export class MCPSchemaCache {
       capabilityHash: record.capabilityHash,
       protocolVersion: record.protocolVersion,
       schema: record.normalizedToolSpec?.inputSchema,
-      cachedAt: new Date().toISOString(),
+      cachedAt: this.now(),
     };
+    this.entries.delete(entry.key);
     this.entries.set(entry.key, entry);
+    while (this.entries.size > this.maxEntries) {
+      const oldestKey = this.entries.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.entries.delete(oldestKey);
+    }
     return clone(entry);
   }
 
@@ -273,6 +294,10 @@ export class MCPSchemaCache {
       }
     }
     return removed;
+  }
+
+  size(): number {
+    return this.entries.size;
   }
 }
 
