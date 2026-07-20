@@ -35,10 +35,12 @@ const trackedEnv = [
   'LLAMA_CPP_BASE_URL',
   'OPENAI_INFERENCE_BASE_URL',
   'HYPHA_SERVING_CACHE',
-  'HYPHA_SERVING_CACHE_ENABLED',
   'HYPHA_SERVING_CACHE_MODE',
+  'HYPHA_SERVING_CACHE_FAILURE_MODE',
+  'HYPHA_SERVING_CACHE_SCOPE_REQUIREMENT',
   'HYPHA_WORKCACHE',
-  'HYPHA_WORKCACHE_ENABLED',
+  'HYPHA_WORKCACHE_FAILURE_MODE',
+  'HYPHA_WORKCACHE_SCOPE_REQUIREMENT',
   'HYPHA_WORKCACHE_SQLITE_PATH',
   'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
   'HYPHA_FILESYSTEM_WORKING_DIRECTORY',
@@ -172,16 +174,38 @@ describe('configuration storage taxonomy', () => {
     expect(workCacheConfig()).toMatchObject({ enabled: false, store: 'off' });
   });
 
-  it('gives explicit off stores precedence over cache enabled flags', () => {
+  it('uses the store as the single cache enable switch', () => {
     process.env.HYPHA_SERVING_CACHE = 'off';
-    process.env.HYPHA_SERVING_CACHE_ENABLED = 'true';
     process.env.HYPHA_SERVING_CACHE_MODE = 'readwrite';
     process.env.HYPHA_WORKCACHE = 'off';
-    process.env.HYPHA_WORKCACHE_ENABLED = 'true';
     reloadConfig();
 
     expect(servingCacheConfig()).toMatchObject({ enabled: false, store: 'off', mode: 'off' });
     expect(workCacheConfig()).toMatchObject({ enabled: false, store: 'off' });
+  });
+
+  it('loads Redis cache stores and hardened failure and scope policies', () => {
+    process.env.HYPHA_SERVING_CACHE = 'redis';
+    process.env.HYPHA_SERVING_CACHE_FAILURE_MODE = 'strict';
+    process.env.HYPHA_SERVING_CACHE_SCOPE_REQUIREMENT = 'session';
+    process.env.HYPHA_WORKCACHE = 'redis';
+    process.env.HYPHA_WORKCACHE_FAILURE_MODE = 'strict';
+    process.env.HYPHA_WORKCACHE_SCOPE_REQUIREMENT = 'session';
+    reloadConfig();
+
+    expect(servingCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'redis',
+      failureMode: 'strict',
+      scopeRequirement: 'session',
+    });
+    expect(workCacheConfig()).toMatchObject({
+      enabled: true,
+      store: 'redis',
+      failureMode: 'strict',
+      scopeRequirement: 'session',
+      trees: { RecoveryTree: { enabled: true } },
+    });
   });
 
   it('configures bounded local or shared Tool result caching without changing the default', () => {

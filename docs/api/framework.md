@@ -421,7 +421,10 @@ Core exports:
 | `WorkCachePolicy`                 | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
 | `WorkCacheRecoveryKnowledgeStore` | Revision-safe `RecoveryKnowledgePort` backed by `RecoveryTree` blocks.                          |
 | `MemoryWorkCacheStore`            | In-memory store.                                                                                |
-| `SQLiteWorkCacheStore`            | Persistent store backed by `workcache_blocks`.                                                  |
+| `SQLiteWorkCacheStore`            | Bounded persistent store backed by `workcache_blocks`.                                          |
+| `RedisWorkCacheStore`             | Shared, TTL-aware store with atomic latest-key maintenance.                                     |
+| `TimeoutWorkCacheStore`           | Bounds provider-neutral store calls.                                                            |
+| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                    |
 
 Default source event alignment:
 
@@ -436,9 +439,10 @@ Default source event alignment:
 | `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `RecoveryTree`     |
 | `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
-Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
+Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite|redis`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
-per-tree TTL fields under `workCache.trees` in `config.yaml`.
+per-tree TTL fields under `workCache.trees` in `config.yaml`. The default
+scope requirement is `user`; `unknown` validity is a miss, not a reusable hit.
 
 `PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
 prompt block. A block value contains `id`, `type`, `hash`, `content`,
@@ -453,10 +457,12 @@ Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
 `sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
 
-`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by failure
-fingerprint, participant, and policy/spec/provider revision. Values include strategy, outcome,
-evidence hash, expiry, and verified/negative validation. Expired or mismatched blocks are removed;
-the runtime supervisor revalidates hits and remains the only component that advances the FSM case.
+`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by structured
+tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
+policy/spec/provider revision. Core exports strict Zod and JSON Schemas for scoped recovery
+knowledge. Values include strategy, outcome, evidence hash, expiry, and verified/negative
+validation. Unscoped, malformed, expired, or mismatched blocks are rejected or removed; the runtime
+supervisor revalidates hits and remains the only component that advances the FSM case.
 
 ## Inference
 

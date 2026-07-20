@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { validateCacheBlock } from '../schemas';
 import type { CacheBlock, CacheBlockUtility, CacheTreeType, WorkCacheStore } from '../types';
 
 interface SqliteDatabaseSync {
@@ -57,7 +58,13 @@ export class SQLiteWorkCacheStore implements WorkCacheStore {
     const row = this.db
       .prepare('SELECT block_json FROM workcache_blocks WHERE id = ?')
       .get(blockId);
-    return row ? parseBlock<T>(row.block_json) : null;
+    if (!row) return null;
+    try {
+      return parseBlock<T>(row.block_json);
+    } catch {
+      await this.delete(blockId);
+      return null;
+    }
   }
 
   async getByCacheKey<T = unknown>(
@@ -69,10 +76,23 @@ export class SQLiteWorkCacheStore implements WorkCacheStore {
         'SELECT block_json FROM workcache_blocks WHERE tree_type = ? AND cache_key = ? ORDER BY updated_at DESC LIMIT 1'
       )
       .get(treeType, cacheKey);
-    return row ? parseBlock<T>(row.block_json) : null;
+    if (!row) return null;
+    try {
+      return parseBlock<T>(row.block_json);
+    } catch {
+      const raw = row.block_json;
+      if (typeof raw === 'string') {
+        try {
+          const parsed = JSON.parse(raw) as { id?: unknown };
+          if (typeof parsed.id === 'string') await this.delete(parsed.id);
+        } catch {}
+      }
+      return null;
+    }
   }
 
   async set<T = unknown>(block: CacheBlock<T>): Promise<void> {
+    validateCacheBlock(block);
     this.db
       .prepare(
         'INSERT OR REPLACE INTO workcache_blocks ' +
@@ -106,7 +126,15 @@ export class SQLiteWorkCacheStore implements WorkCacheStore {
           )
           .all(treeType)
       : this.db.prepare('SELECT block_json FROM workcache_blocks ORDER BY created_at ASC').all();
-    return rows.map((row) => parseBlock<T>(row.block_json));
+    const blocks: Array<CacheBlock<T>> = [];
+    for (const row of rows) {
+      try {
+        blocks.push(parseBlock<T>(row.block_json));
+      } catch {
+        // Corrupt rows are quarantined from reads; point lookups remove them by id.
+      }
+    }
+    return blocks;
   }
 
   async clear(): Promise<void> {
@@ -148,7 +176,7 @@ function parseBlock<T>(value: unknown): CacheBlock<T> {
   if (typeof value !== 'string') {
     throw new Error('Invalid WorkCache SQLite block payload.');
   }
-  return JSON.parse(value) as CacheBlock<T>;
+  return validateCacheBlock<T>(JSON.parse(value));
 }
 
 function loadSqlite(required = false): SqliteModule | null {

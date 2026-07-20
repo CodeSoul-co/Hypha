@@ -1,4 +1,8 @@
-import type { FrameworkEvent, RecoveryKnowledge } from '@hypha/core';
+import {
+  parseScopedRecoveryKnowledge,
+  type FrameworkEvent,
+  type RecoveryKnowledge,
+} from '@hypha/core';
 import { createWorkBlockId, createWorkCacheKey, hashStableJson, stableJson } from './key';
 import type {
   CacheBlock,
@@ -8,6 +12,7 @@ import type {
   PromptPrefixBlockValue,
   RecoveryKnowledgeBlockValue,
   WorkNodeType,
+  WorkCacheScope,
 } from './types';
 
 export function materializeGenericBlock(event: NormalizedWorkEvent): CacheBlock[] {
@@ -289,31 +294,28 @@ export function materializeMessageBlock(event: NormalizedWorkEvent): CacheBlock[
 
 export function materializeRecoveryKnowledgeBlock(event: NormalizedWorkEvent): CacheBlock[] {
   const payload = recordFromUnknown(event.payload);
-  const rawKnowledge = recordFromUnknown(payload.knowledge);
-  const rawKey = recordFromUnknown(rawKnowledge.key);
-  const validation = recordFromUnknown(rawKnowledge.validation);
-  const fingerprint = stringValue(rawKey.fingerprint);
-  const participantId = stringValue(rawKey.participantId);
-  const strategy = stringValue(rawKnowledge.strategy);
-  const outcome = stringValue(rawKnowledge.outcome);
-  const learnedAt = stringValue(rawKnowledge.learnedAt);
-  const validationStatus = stringValue(validation.status);
+  let knowledge: RecoveryKnowledge;
+  try {
+    knowledge = parseScopedRecoveryKnowledge(payload.knowledge);
+  } catch {
+    return [];
+  }
   if (
-    !fingerprint ||
-    !participantId ||
-    !strategy ||
-    !outcome ||
-    !learnedAt ||
-    (validationStatus !== 'verified' && validationStatus !== 'negative')
+    (event.sourceEvent.userId && knowledge.key.scope?.userId !== event.sourceEvent.userId) ||
+    (event.sourceEvent.sessionId &&
+      knowledge.key.scope?.sessionId &&
+      knowledge.key.scope.sessionId !== event.sourceEvent.sessionId)
   ) {
     return [];
   }
-  const knowledge = rawKnowledge as unknown as RecoveryKnowledge;
+  const { fingerprint, participantId } = knowledge.key;
+  const { strategy, outcome, learnedAt, validation } = knowledge;
+  const validationStatus = validation.status;
   const sourceHashes = Object.fromEntries(
     [
-      ['policy', stringValue(rawKey.policyRevision)],
-      ['spec', stringValue(rawKey.specRevision)],
-      ['provider', stringValue(rawKey.providerRevision)],
+      ['policy', knowledge.key.policyRevision],
+      ['spec', knowledge.key.specRevision],
+      ['provider', knowledge.key.providerRevision],
     ].filter((entry): entry is [string, string] => Boolean(entry[1]))
   );
   return [
@@ -322,7 +324,7 @@ export function materializeRecoveryKnowledgeBlock(event: NormalizedWorkEvent): C
       value: knowledge,
       validity: {
         status: 'valid',
-        proof: recordFromUnknown(validation.proof),
+        proof: validation.proof,
         sourceHashes,
         provenanceHash: hashStableJson({ key: knowledge.key, validation }),
       },
@@ -442,20 +444,25 @@ export function createBlock<T = unknown>(
     tags?: string[];
   }
 ): CacheBlock<T> {
+  const scope = workCacheScopeFromEvent(event.sourceEvent);
   const cacheKey = createWorkCacheKey({
     treeType: event.treeType,
     nodeType: event.nodeType,
+    scope,
     identity: input.identity,
   });
   const blockId = createWorkBlockId({
     treeType: event.treeType,
     nodeType: event.nodeType,
     sourceEventId: event.sourceEventId,
+    scope,
     identity: input.identity,
   });
   const timestamp = Date.parse(event.sourceEvent.timestamp);
   const now = Number.isFinite(timestamp) ? timestamp : Date.now();
   return {
+    schemaVersion: '1.0',
+    keyVersion: '1',
     id: blockId,
     treeType: event.treeType,
     nodeType: event.nodeType,
@@ -465,6 +472,7 @@ export function createBlock<T = unknown>(
     updatedAt: now,
     sourceEventId: event.sourceEventId,
     sourceEventType: event.sourceEventType,
+    scope,
     provenance: input.provenance,
     validity: input.validity,
     utility: { score: 1 },
@@ -488,10 +496,24 @@ export function fallbackAuditIdentity(
     sourceEventType: event.type,
     reason,
   };
+  const scope = workCacheScopeFromEvent(event);
   return {
-    blockId: createWorkBlockId({ treeType, nodeType, sourceEventId: event.id, identity }),
-    cacheKey: createWorkCacheKey({ treeType, nodeType, identity }),
+    blockId: createWorkBlockId({ treeType, nodeType, sourceEventId: event.id, scope, identity }),
+    cacheKey: createWorkCacheKey({ treeType, nodeType, scope, identity }),
   };
+}
+
+export function workCacheScopeFromEvent(event: FrameworkEvent): WorkCacheScope | undefined {
+  const metadata = recordFromUnknown(event.metadata);
+  const scope: WorkCacheScope = {
+    tenantId: stringValue(event.tenantId),
+    userId: stringValue(event.userId),
+    workspaceId: stringValue(event.workspaceId),
+    sessionId: stringValue(event.sessionId),
+    agentId: stringValue(event.agentId),
+    domainPackId: stringValue(metadata.domainPackId),
+  };
+  return Object.values(scope).some(Boolean) ? scope : undefined;
 }
 
 function promptPrefixMetadataFrom(

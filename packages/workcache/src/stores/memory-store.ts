@@ -1,4 +1,5 @@
 import type { CacheBlock, CacheBlockUtility, CacheTreeType, WorkCacheStore } from '../types';
+import { validateCacheBlock } from '../schemas';
 
 export class NoopWorkCacheStore implements WorkCacheStore {
   async get<T = unknown>(): Promise<CacheBlock<T> | null> {
@@ -22,9 +23,21 @@ export class NoopWorkCacheStore implements WorkCacheStore {
 
 export class MemoryWorkCacheStore implements WorkCacheStore {
   private readonly blocks = new Map<string, CacheBlock>();
+  private readonly maxEntries: number;
+  private readonly maxBytes: number;
+  private sizeBytes = 0;
+
+  constructor(options: { maxEntries?: number; maxBytes?: number } = {}) {
+    this.maxEntries = Math.max(1, options.maxEntries ?? 8000);
+    this.maxBytes = Math.max(1, options.maxBytes ?? 128 * 1024 * 1024);
+  }
 
   async get<T = unknown>(blockId: string): Promise<CacheBlock<T> | null> {
-    return (this.blocks.get(blockId) as CacheBlock<T> | undefined) ?? null;
+    const block = this.blocks.get(blockId);
+    if (!block) return null;
+    this.blocks.delete(blockId);
+    this.blocks.set(blockId, block);
+    return block as CacheBlock<T>;
   }
 
   async getByCacheKey<T = unknown>(
@@ -38,10 +51,18 @@ export class MemoryWorkCacheStore implements WorkCacheStore {
   }
 
   async set<T = unknown>(block: CacheBlock<T>): Promise<void> {
+    validateCacheBlock(block);
+    const existing = this.blocks.get(block.id);
+    if (existing) this.sizeBytes -= blockSize(existing);
+    this.blocks.delete(block.id);
     this.blocks.set(block.id, block as CacheBlock);
+    this.sizeBytes += blockSize(block);
+    this.evictIfNeeded();
   }
 
   async delete(blockId: string): Promise<void> {
+    const existing = this.blocks.get(blockId);
+    if (existing) this.sizeBytes -= blockSize(existing);
     this.blocks.delete(blockId);
   }
 
@@ -53,12 +74,13 @@ export class MemoryWorkCacheStore implements WorkCacheStore {
 
   async clear(): Promise<void> {
     this.blocks.clear();
+    this.sizeBytes = 0;
   }
 
   async touch(blockId: string, timestamp: number): Promise<void> {
     const block = this.blocks.get(blockId);
     if (!block) return;
-    this.blocks.set(blockId, {
+    await this.set({
       ...block,
       updatedAt: timestamp,
       utility: {
@@ -75,7 +97,7 @@ export class MemoryWorkCacheStore implements WorkCacheStore {
   ): Promise<void> {
     const block = this.blocks.get(blockId);
     if (!block) return;
-    this.blocks.set(blockId, {
+    await this.set({
       ...block,
       updatedAt: timestamp,
       utility: {
@@ -84,4 +106,18 @@ export class MemoryWorkCacheStore implements WorkCacheStore {
       },
     });
   }
+
+  private evictIfNeeded(): void {
+    while (this.blocks.size > this.maxEntries || this.sizeBytes > this.maxBytes) {
+      const blockId = this.blocks.keys().next().value as string | undefined;
+      if (!blockId) return;
+      const block = this.blocks.get(blockId);
+      if (block) this.sizeBytes -= blockSize(block);
+      this.blocks.delete(blockId);
+    }
+  }
+}
+
+function blockSize(block: CacheBlock): number {
+  return block.sizeBytes ?? Buffer.byteLength(JSON.stringify(block), 'utf8');
 }

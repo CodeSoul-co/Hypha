@@ -74,13 +74,13 @@ reconciliation, compatible fallback, degradation, compensation, human review, qu
 cancellation, and failure are explicit strategies with trace events.
 
 Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
-changing the source result, and WorkCache can retain only revision-matched, revalidated recovery
-knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
+changing the source result, and WorkCache can retain only user-scoped, revision-matched, revalidated
+recovery knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
 [FSM anomaly recovery](docs/architecture/fsm-recovery.md).
 
 ## Inference Runtime
 
-Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
+Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, user-scoped and bounded Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
 
 Configure the default backend and endpoints in `config.yaml` or `.env`, for example `HYPHA_INFERENCE_DEFAULT_BACKEND=sglang` and `SGLANG_BASE_URL=http://localhost:30000`.
 
@@ -90,7 +90,7 @@ Hypha Serving Cache is a lightweight middleware for LLM provider calls. It provi
 
 The exact cache key is derived from the resolved provider, model, system or prefix content, messages, tools/function schemas, generation params, and optional scope fields such as `userId`, `sessionId`, `projectId`, and `domainPackId`. Request ids, timestamps, and undefined values are excluded before hashing.
 
-Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`; the default `off` mode keeps provider calls on the original path. `HYPHA_SERVING_CACHE_MODE` supports `off`, `read`, `write`, and `readwrite`, and `HYPHA_SERVING_CACHE_TTL_MS` controls expiry. SQLite entries use `HYPHA_SERVING_CACHE_SQLITE_PATH`.
+Enable it with `HYPHA_SERVING_CACHE=memory`, `sqlite`, or `redis`; the default `off` mode keeps provider calls on the original path. The default policy requires `userId`, bounds entries and store latency, coalesces concurrent misses, and persists only a safe response projection. Streaming always bypasses. SQLite uses `HYPHA_SERVING_CACHE_SQLITE_PATH`; Redis uses the configured Redis deployment.
 
 Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
 
@@ -100,7 +100,7 @@ For provider-side prefix cache, Hypha keeps request shape stable by canonicalizi
 
 `@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, `RecoveryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
 
-The bundled server configuration uses `HYPHA_WORKCACHE=memory`. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
+The bundled server configuration uses `HYPHA_WORKCACHE=memory`. Set `HYPHA_WORKCACHE=off` to disable it, `sqlite` for local persistence, or `redis` for a shared store with peer invalidation. Cache keys and blocks are user-scoped by default, unknown validity never hits, and stores plus WorkGraph history are bounded. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
 
 WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes. Recovery blocks are revision-matched, expiring strategy hints and never replace FSM, event, or receipt evidence.
 
