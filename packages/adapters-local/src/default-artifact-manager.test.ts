@@ -269,6 +269,8 @@ describe('DefaultArtifactManager', () => {
       workspaceId: 'workspace.example',
       relativePath: 'outputs/report.txt',
       kind: 'report',
+      expectedContentHash: hashArtifactBytes(bytes),
+      expectedSizeBytes: bytes.byteLength,
       provenance: { sourceType: 'command_generated', createdBy: owner.principalId },
     });
 
@@ -279,6 +281,39 @@ describe('DefaultArtifactManager', () => {
         relativePath: 'outputs/report.txt',
       }),
     ]);
+  });
+
+  it('rejects Workspace output that changed after collection was planned', async () => {
+    const bytes = new TextEncoder().encode('changed-output');
+    const fixture = createFixture({
+      workspaceReader: {
+        async read() {
+          return {
+            content: bytes,
+            contentHash: hashArtifactBytes(bytes),
+            sizeBytes: bytes.byteLength,
+            mimeType: 'text/plain',
+          };
+        },
+      },
+    });
+
+    await expect(
+      fixture.manager.createFromWorkspace({
+        operationId: 'collect-changed-workspace',
+        principal: owner,
+        profileRef: { id: fixture.profile.id, version: fixture.profile.version },
+        userId: owner.userId!,
+        tenantId: owner.tenantId,
+        workspaceId: 'workspace.example',
+        relativePath: 'outputs/report.txt',
+        kind: 'report',
+        expectedContentHash: `sha256:${'0'.repeat(64)}`,
+        expectedSizeBytes: bytes.byteLength,
+        provenance: { sourceType: 'command_generated', createdBy: owner.principalId },
+      })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_HASH_MISMATCH' } });
+    expect(fixture.store.stats().objects).toBe(0);
   });
 
   it('blocks legal-hold deletion without deleting the underlying blob', async () => {
