@@ -235,7 +235,11 @@ function minioClient(options: { maxAttempts?: number } = {}): S3Client {
   });
 }
 
-async function waitForMultipartUpload(s3: S3Client, bucketName: string, key: string): Promise<void> {
+async function waitForMultipartUpload(
+  s3: S3Client,
+  bucketName: string,
+  key: string
+): Promise<void> {
   await waitUntil(async () => {
     const result = await s3.send(new ListMultipartUploadsCommand({ Bucket: bucketName }));
     return (result.Uploads ?? []).some((upload) => upload.Key === key);

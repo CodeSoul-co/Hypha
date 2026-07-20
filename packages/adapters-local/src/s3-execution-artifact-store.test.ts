@@ -51,9 +51,7 @@ describe('S3ExecutionArtifactStore', () => {
   it('verifies full downloads and supports inclusive range reads', async () => {
     const transport = new FakeS3ArtifactTransport();
     const store = createStore(transport);
-    const ref = await store.put(
-      request('objects/range.bin', Uint8Array.from([0, 1, 2, 3, 4]))
-    );
+    const ref = await store.put(request('objects/range.bin', Uint8Array.from([0, 1, 2, 3, 4])));
 
     const full = await store.get({ ref });
     await expect(readArtifactStream(full.stream)).resolves.toEqual(
@@ -152,7 +150,9 @@ describe('S3ExecutionArtifactStore', () => {
     const store = createStore(transport);
     transport.nextError = providerError('AccessDenied', 403);
 
-    await expect(store.put(request('objects/denied.bin', Uint8Array.from([1])))).rejects.toMatchObject({
+    await expect(
+      store.put(request('objects/denied.bin', Uint8Array.from([1])))
+    ).rejects.toMatchObject({
       normalizedError: {
         code: 'ARTIFACT_PERMISSION_DENIED',
         retryable: false,
@@ -173,9 +173,7 @@ describe('S3ExecutionArtifactStore', () => {
   });
 
   it('rejects invalid retry configuration before constructing an SDK client', () => {
-    expect(() => new AwsSdkS3ArtifactStoreTransport({ maxAttempts: 0 })).toThrow(
-      /maxAttempts/u
-    );
+    expect(() => new AwsSdkS3ArtifactStoreTransport({ maxAttempts: 0 })).toThrow(/maxAttempts/u);
   });
 
   it('reports only configured capabilities and checks bucket health', async () => {
@@ -216,7 +214,8 @@ class FakeS3ArtifactTransport implements S3ArtifactStoreTransport {
     input: Parameters<S3ArtifactStoreTransport['upload']>[0]
   ): Promise<S3ArtifactWriteResult> {
     this.throwNext();
-    if (input.ifAbsent && this.objects.has(input.key)) throw providerError('PreconditionFailed', 412);
+    if (input.ifAbsent && this.objects.has(input.key))
+      throw providerError('PreconditionFailed', 412);
     const bytes = await readNodeStream(input.body);
     const version = ++this.sequence;
     const state: FakeObject = {

@@ -1,9 +1,5 @@
 import { createHash } from 'node:crypto';
-import type {
-  ArtifactByteRange,
-  ArtifactGetRequest,
-  ArtifactObjectMetadata,
-} from '@hypha/core';
+import type { ArtifactByteRange, ArtifactGetRequest, ArtifactObjectMetadata } from '@hypha/core';
 import { ArtifactStoreAdapterError, artifactStoreError } from './artifact-store-adapter-error';
 import type { S3ArtifactObjectState } from './s3-artifact-store-transport';
 
@@ -168,9 +164,14 @@ export function normalizeS3ArtifactStoreError(
     );
   }
   if (status === 416 || name === 'InvalidRange') {
-    return artifactStoreError('ARTIFACT_INVALID_INPUT', 'S3 rejected the Artifact byte range.', false, {
-      operation,
-    });
+    return artifactStoreError(
+      'ARTIFACT_INVALID_INPUT',
+      'S3 rejected the Artifact byte range.',
+      false,
+      {
+        operation,
+      }
+    );
   }
   if (status !== undefined && (status >= 500 || status === 429)) {
     return artifactStoreError(
