@@ -705,6 +705,7 @@ class EventRuntimeService {
       sessionId: runContext?.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
+      cacheScope: { userId: runContext?.userId ?? 'single-user' },
       input: {
         messages: input.messages,
         options: {
@@ -1060,6 +1061,7 @@ class EventRuntimeService {
       sessionId: runContext?.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
+      cacheScope: { userId: runContext?.userId ?? 'single-user' },
       input: {
         messages: input.messages,
         options: {
@@ -1743,9 +1745,11 @@ class EventRuntimeService {
     const result = await runRecoverySupervisor({
       fsm: recoveryFsm,
       caseId: input.caseId,
+      userId: context.userId,
       participants: [input.participant],
       knowledge: this.recoveryKnowledge,
       sessionId: context.sessionId,
+      domainPackId: context.domainPackId,
       stepId: input.stepId,
       metadata: {
         userId: context.userId,
@@ -1794,12 +1798,18 @@ class EventRuntimeService {
     if (failure.module !== 'cache') return;
     const runId = stringValue(failure.metadata?.runId);
     if (!runId || !this.runs.has(runId)) return;
+    const context = this.runs.get(runId)!;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
     const knowledge: RecoveryKnowledge = {
       key: {
         fingerprint,
         participantId: 'inference-cache',
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          domainPackId: context.domainPackId,
+        },
         policyRevision: failure.evidence.policyRevision,
         specRevision: failure.evidence.specRevision,
         providerRevision: failure.evidence.providerRevision,
