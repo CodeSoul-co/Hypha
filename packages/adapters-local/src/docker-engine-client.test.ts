@@ -35,7 +35,7 @@ describe('DockerEngineCliClient', () => {
       '--security-opt',
       'no-new-privileges=true',
       '--mount',
-      'type=bind,src=D:\\workspace,dst=/workspace,rw',
+      'type=bind,src=D:\\workspace,dst=/workspace',
       '--tmpfs',
       '/tmp:rw,noexec,nosuid,nodev,size=16777216',
       '--init',
@@ -78,6 +78,22 @@ describe('DockerEngineCliClient', () => {
     await expect(
       client.createContainer(createInput(overrides as Partial<DockerContainerCreateInput>))
     ).rejects.toThrow(message);
+  });
+
+  it('encodes a read-only bind mount with Docker mount syntax', async () => {
+    const transport = new FakeTransport([result('container123\n')]);
+    const client = new DockerEngineCliClient(transport);
+
+    await client.createContainer(
+      createInput({
+        workspaceMount: { source: 'D:\\workspace', target: '/workspace', readOnly: true },
+      })
+    );
+
+    const mountIndex = transport.requests[0].args.indexOf('--mount');
+    expect(transport.requests[0].args[mountIndex + 1]).toBe(
+      'type=bind,src=D:\\workspace,dst=/workspace,readonly'
+    );
   });
 
   it('executes literal argv and approved non-secret environment without a shell', async () => {
