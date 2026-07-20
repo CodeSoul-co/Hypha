@@ -76,6 +76,14 @@ recommended isolation, and evaluation time. High and critical risk fail closed u
 required. Execution supplies these risk facts and constraints; Tool policy and Human Approval own
 the approval decision and grant lifecycle.
 
+`DefaultExecutionRiskEvaluator` deterministically derives those facts from a validated Tool binding,
+Command or Workspace request, `ExecutionEnvironmentSpec`, and `WorkspaceSpec`. Its framework rules
+cover shell execution, recursive deletion, input-directory mutation, network access, package
+installation, downloaded-script execution, permission changes, executable policy drift, Secret
+access, background processes, and external publishing. The evaluator never authorizes a request;
+adapters must still enforce environment policy and `GovernedToolRunner` must still complete policy
+and approval before dispatch.
+
 ## Deterministic Mock Provider
 
 `@hypha/testing` exports `MockExecutionProvider` for provider contract tests, replay fixtures, and
