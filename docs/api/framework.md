@@ -440,6 +440,13 @@ optional `history`, capabilities, health, and close. Requests carry `operationId
 `working`, `episodic`, `semantic`, `procedural`, `preference`, `artifact`, `governance`,
 `reflection`, and `custom`.
 
+`CachedMemoryManagementProvider` optionally wraps any managed provider with a versioned,
+scope-qualified search cache. Its identity includes principal roles/permission scopes and retrieval
+semantics; `operationId` and trace metadata are excluded. It caches only searches that explicitly
+set `updateAccessStats: false`, validates returned records at runtime, bounds entry size and Store
+latency, coalesces only identical scoped reads, and invalidates the scope after every successful
+mutation. `InMemoryMemorySearchCacheStore` is the bounded local reference implementation.
+
 `ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
 and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
 hash, and timestamps. `ManagedMemoryRecordStore` uses compare-and-set revisions and scope-qualified
