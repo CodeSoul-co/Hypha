@@ -51,6 +51,7 @@ export * from './local-active-execution-registry';
 export * from './local-process-result';
 export * from './local-process-execution-provider';
 export * from './docker-cli-transport';
+export * from './docker-engine-client';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
