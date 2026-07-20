@@ -45,6 +45,7 @@ export interface S3ArtifactStoreTransport {
     contentType?: string;
     metadata: Record<string, string>;
     ifAbsent: boolean;
+    abortSignal?: AbortSignal;
   }): Promise<S3ArtifactWriteResult>;
   get(input: {
     bucket: string;
@@ -93,6 +94,7 @@ export interface AwsSdkS3ArtifactStoreTransportOptions {
   forcePathStyle?: boolean;
   multipartPartSizeBytes?: number;
   multipartQueueSize?: number;
+  maxAttempts?: number;
   serverSideEncryption?: ServerSideEncryption;
   kmsKeyId?: string;
 }
@@ -106,12 +108,19 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
   private readonly kmsKeyId?: string;
 
   constructor(options: AwsSdkS3ArtifactStoreTransportOptions = {}) {
+    if (
+      options.maxAttempts !== undefined &&
+      (!Number.isSafeInteger(options.maxAttempts) || options.maxAttempts <= 0)
+    ) {
+      throw new TypeError('maxAttempts must be a positive safe integer.');
+    }
     this.client =
       options.client ??
       new S3Client({
         region: options.region ?? 'us-east-1',
         endpoint: options.endpoint,
         forcePathStyle: options.forcePathStyle,
+        maxAttempts: options.maxAttempts,
       });
     this.ownsClient = !options.client;
     this.multipartPartSizeBytes = options.multipartPartSizeBytes ?? 8 * 1024 * 1024;
@@ -129,8 +138,13 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
   async upload(
     input: Parameters<S3ArtifactStoreTransport['upload']>[0]
   ): Promise<S3ArtifactWriteResult> {
+    const abortController = new AbortController();
+    const abort = (): void => abortController.abort();
+    if (input.abortSignal?.aborted) abort();
+    else input.abortSignal?.addEventListener('abort', abort, { once: true });
     const upload = new Upload({
       client: this.client,
+      abortController,
       queueSize: this.multipartQueueSize,
       partSize: this.multipartPartSizeBytes,
       leavePartsOnError: false,
@@ -146,12 +160,16 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
         SSEKMSKeyId: this.kmsKeyId,
       },
     });
-    const result = await upload.done();
-    return {
-      etag: result.ETag,
-      versionId: result.VersionId,
-      encrypted: Boolean(result.ServerSideEncryption ?? this.serverSideEncryption),
-    };
+    try {
+      const result = await upload.done();
+      return {
+        etag: result.ETag,
+        versionId: result.VersionId,
+        encrypted: Boolean(result.ServerSideEncryption ?? this.serverSideEncryption),
+      };
+    } finally {
+      input.abortSignal?.removeEventListener('abort', abort);
+    }
   }
 
   async get(
