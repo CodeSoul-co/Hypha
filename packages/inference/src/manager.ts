@@ -1,4 +1,5 @@
 import { FrameworkError, type RecoveryFailure } from '@hypha/core';
+import { inferenceCacheScopeHash } from './cache';
 import { isKvCacheExpired } from './cache';
 import { classifyInferenceCacheFailure, classifyInferenceFailure } from './recovery';
 import type {
@@ -329,43 +330,127 @@ export class InferenceManager {
   }
 }
 
+export interface InMemoryPrefixCacheProviderOptions {
+  maxEntries?: number;
+  maxEntryBytes?: number;
+  maxTotalBytes?: number;
+}
+
+export interface InMemoryKvCacheProviderOptions {
+  maxEntries?: number;
+}
+
+export class InferenceCacheCapacityError extends Error {
+  readonly code = 'INFERENCE_CACHE_CAPACITY_EXCEEDED';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'InferenceCacheCapacityError';
+  }
+}
+
 export class InMemoryPrefixCacheProvider implements PrefixCacheProvider {
-  private readonly records = new Map<string, string>();
+  private readonly records = new Map<string, { content: string; bytes: number }>();
+  private readonly maxEntries: number;
+  private readonly maxEntryBytes: number;
+  private readonly maxTotalBytes: number;
+  private totalBytes = 0;
+
+  constructor(options: InMemoryPrefixCacheProviderOptions = {}) {
+    this.maxEntries = Math.max(1, options.maxEntries ?? 1_000);
+    this.maxEntryBytes = Math.max(1, options.maxEntryBytes ?? 4 * 1024 * 1024);
+    this.maxTotalBytes = Math.max(this.maxEntryBytes, options.maxTotalBytes ?? 64 * 1024 * 1024);
+  }
 
   async get(ref: PrefixCacheRef): Promise<string | null> {
-    return this.records.get(this.key(ref)) ?? null;
+    const key = this.key(ref);
+    const record = this.records.get(key);
+    if (!record) return null;
+    this.records.delete(key);
+    this.records.set(key, record);
+    return record.content;
   }
 
   async put(ref: PrefixCacheRef, content: string): Promise<void> {
-    this.records.set(this.key(ref), content);
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > this.maxEntryBytes) {
+      throw new InferenceCacheCapacityError(
+        `Prefix cache entry is ${bytes} bytes; limit is ${this.maxEntryBytes} bytes.`
+      );
+    }
+    const key = this.key(ref);
+    const previous = this.records.get(key);
+    if (previous) this.totalBytes -= previous.bytes;
+    this.records.delete(key);
+    this.records.set(key, { content, bytes });
+    this.totalBytes += bytes;
+    this.prune();
   }
 
   async invalidate(ref: PrefixCacheRef): Promise<void> {
-    this.records.delete(this.key(ref));
+    const key = this.key(ref);
+    const existing = this.records.get(key);
+    if (existing) this.totalBytes -= existing.bytes;
+    this.records.delete(key);
+  }
+
+  stats(): { entries: number; totalBytes: number } {
+    return { entries: this.records.size, totalBytes: this.totalBytes };
   }
 
   private key(ref: PrefixCacheRef): string {
-    return `${ref.id}:${ref.version}:${ref.contentHash}`;
+    return `${inferenceCacheScopeHash(ref.cacheScope)}:${ref.id}:${ref.version}:${ref.contentHash}`;
+  }
+
+  private prune(): void {
+    while (this.records.size > this.maxEntries || this.totalBytes > this.maxTotalBytes) {
+      const oldestKey = this.records.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      const oldest = this.records.get(oldestKey);
+      if (oldest) this.totalBytes -= oldest.bytes;
+      this.records.delete(oldestKey);
+    }
   }
 }
 
 export class InMemoryKvCacheProvider implements KvCacheProvider {
   private readonly records = new Map<string, unknown>();
+  private readonly maxEntries: number;
+
+  constructor(options: InMemoryKvCacheProviderOptions = {}) {
+    this.maxEntries = Math.max(1, options.maxEntries ?? 1_000);
+  }
 
   async get(ref: KvCacheRef): Promise<unknown | null> {
-    const value = this.records.get(this.key(ref));
+    const key = this.key(ref);
+    const value = this.records.get(key);
+    if (value !== undefined) {
+      this.records.delete(key);
+      this.records.set(key, value);
+    }
     return value === undefined ? null : value;
   }
 
   async put(ref: KvCacheRef, value: unknown): Promise<void> {
-    this.records.set(this.key(ref), value);
+    const key = this.key(ref);
+    this.records.delete(key);
+    this.records.set(key, value);
+    while (this.records.size > this.maxEntries) {
+      const oldestKey = this.records.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.records.delete(oldestKey);
+    }
   }
 
   async invalidate(ref: KvCacheRef): Promise<void> {
     this.records.delete(this.key(ref));
   }
 
+  size(): number {
+    return this.records.size;
+  }
+
   private key(ref: KvCacheRef): string {
-    return `${ref.scope}:${ref.provider}:${ref.modelAlias}:${ref.id}`;
+    return `${inferenceCacheScopeHash(ref.cacheScope)}:${ref.scope}:${ref.provider}:${ref.modelAlias}:${ref.id}`;
   }
 }

@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import type {
+  InferenceCacheScope,
   KvCacheProvider,
   KvCacheRef,
   KvCacheScope,
@@ -12,6 +13,7 @@ export interface PrefixCacheCreateInput {
   version: string;
   content: string;
   tokenCount?: number;
+  cacheScope?: InferenceCacheScope;
   metadata?: Record<string, unknown>;
 }
 
@@ -20,6 +22,7 @@ export interface KvCacheCreateInput {
   provider: string;
   modelAlias: string;
   scope: KvCacheScope;
+  cacheScope?: InferenceCacheScope;
   ttlMs?: number;
   metadata?: Record<string, unknown>;
 }
@@ -43,6 +46,7 @@ export class InferenceCacheManager {
       version: input.version,
       contentHash: hashContent(input.content),
       tokenCount: input.tokenCount,
+      cacheScope: input.cacheScope,
       metadata: input.metadata,
     };
     await this.options.prefixCache.put(ref, input.content);
@@ -54,14 +58,16 @@ export class InferenceCacheManager {
   }
 
   async putKv(input: KvCacheCreateInput, value: unknown): Promise<KvCacheRef> {
-    const expiresAt = input.ttlMs !== undefined
-      ? new Date(this.now().getTime() + input.ttlMs).toISOString()
-      : undefined;
+    const expiresAt =
+      input.ttlMs !== undefined
+        ? new Date(this.now().getTime() + input.ttlMs).toISOString()
+        : undefined;
     const ref: KvCacheRef = {
       id: input.id,
       provider: input.provider,
       modelAlias: input.modelAlias,
       scope: input.scope,
+      cacheScope: input.cacheScope,
       expiresAt,
       metadata: input.metadata,
     };
@@ -80,6 +86,13 @@ export class InferenceCacheManager {
 
 export function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+export function inferenceCacheScopeHash(scope: InferenceCacheScope | undefined): string {
+  if (!scope?.userId) return 'unscoped';
+  return createHash('sha256')
+    .update([scope.tenantId ?? '', scope.userId, scope.workspaceId ?? ''].join('\u0000'))
+    .digest('hex');
 }
 
 export function isKvCacheExpired(ref: KvCacheRef, now: Date = new Date()): boolean {

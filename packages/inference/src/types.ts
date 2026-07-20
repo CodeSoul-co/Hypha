@@ -10,12 +10,19 @@ export interface InferenceRequest<TInput = unknown> {
   options?: InferenceGenerationOptions;
   tools?: InferenceToolDescriptor[];
   cachePolicy?: InferenceCachePolicy;
+  cacheScope?: InferenceCacheScope;
   prefix?: PrefixCacheRef;
   resolvedPrefixContent?: string;
   kvCache?: KvCacheRef;
   resolvedKvCacheValue?: unknown;
   trace?: boolean;
   metadata?: Record<string, unknown>;
+}
+
+export interface InferenceCacheScope {
+  tenantId?: string;
+  userId: string;
+  workspaceId?: string;
 }
 
 export interface InferenceToolDescriptor {
@@ -58,6 +65,7 @@ export interface PrefixCacheRef {
   version: string;
   contentHash: string;
   tokenCount?: number;
+  cacheScope?: InferenceCacheScope;
   metadata?: Record<string, unknown>;
 }
 
@@ -66,6 +74,7 @@ export interface KvCacheRef {
   provider: string;
   modelAlias: string;
   scope: KvCacheScope;
+  cacheScope?: InferenceCacheScope;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
 }
@@ -253,6 +262,7 @@ export interface PlasmodHotLayerPrepareInput {
   agentId?: string;
   modelAlias: string;
   backendId: string;
+  cacheScope?: InferenceCacheScope;
   segmentation: PrefixSegmentationResult;
   kvCache?: KvCacheRef;
   resolvedKvCacheValue?: unknown;
