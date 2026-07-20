@@ -108,6 +108,17 @@ Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`To
 
 `@hypha/core` 提供 provider-neutral 的受管 Workspace、sandbox environment、command execution、带 revision 的 record/lease、生命周期 event 与确定性 cache fingerprint 契约。文件系统、进程、容器、远端 provider、存储、artifact、policy 与 secret 的具体实现都保留在 adapter 和 harness 边界之后。Adapter 执行副作用之前，框架会验证路径、身份、状态转换、终态证据、敏感事件字段、幂等边界与 stale-writer fencing。
 
+Runtime 通过经过验证的 `ExecutionActivityRequest` 进入 Execution 边界；请求会绑定 Run、FSM state
+attempt、Workspace、fencing token、deadline、principal 与幂等身份。`DefaultExecutionRiskEvaluator`
+生成 provider-neutral 风险证据，`GovernedExecutionPort` 则在 dispatch 前验证 Tool binding、权限 scope、
+Policy/Human Approval 证据、取消状态、deadline 与授权有效期。所有非成功 Activity 终态都必须携带
+标准化错误和持久 Event 引用。
+
+`DefaultExecutionOutputPlanner` 确定性筛选有界、content-addressed 的 Workspace mutation；
+`DefaultExecutionOutputCollector` 仅在返回记录与计划中的 hash、size、path、principal、user、tenant、
+Workspace、Run、provenance 和 Artifact version 全部一致时创建或 finalize Artifact。这些能力是框架
+port，不代表内置了某个容器、云对象存储或远端 Execution Provider。
+
 Artifact 生命周期采用 content-addressed、append-only 语义。`DefaultArtifactManager` 及其 eventing
 wrapper 通过 principal-scoped policy 管理创建、读取、列表、版本导航、lineage、retention、垃圾回收
 与下载授权。框架提供内存、本地文件和 SQLite 参考组件；具体云 Provider 仍属于 Adapter 扩展，
