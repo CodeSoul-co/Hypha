@@ -14,6 +14,10 @@ export const WORKCACHE_TREE_TYPES: CacheTreeType[] = [
 export const defaultWorkCachePolicy: WorkCachePolicy = {
   enabled: false,
   store: 'off',
+  failureMode: 'bypass',
+  scopeRequirement: 'user',
+  operationTimeoutMs: 500,
+  maxBlockBytes: 2 * 1024 * 1024,
   promptBudgetTokens: 4096,
   unknownEventPolicy: 'ignore',
   allowExtensionEvents: false,
@@ -36,6 +40,10 @@ export function normalizeWorkCachePolicy(policy: PartialWorkCachePolicy = {}): W
     ...policy,
     enabled,
     store: policy.store ?? defaultWorkCachePolicy.store,
+    failureMode: policy.failureMode ?? defaultWorkCachePolicy.failureMode,
+    scopeRequirement: policy.scopeRequirement ?? defaultWorkCachePolicy.scopeRequirement,
+    operationTimeoutMs: policy.operationTimeoutMs ?? defaultWorkCachePolicy.operationTimeoutMs,
+    maxBlockBytes: policy.maxBlockBytes ?? defaultWorkCachePolicy.maxBlockBytes,
     promptBudgetTokens: policy.promptBudgetTokens ?? defaultWorkCachePolicy.promptBudgetTokens,
     unknownEventPolicy: policy.unknownEventPolicy ?? defaultWorkCachePolicy.unknownEventPolicy,
     allowExtensionEvents:

@@ -7,7 +7,9 @@ import { ServingCacheManager } from './cache-manager';
 import { buildPromptPrefixMetadata, createLLMCacheKey } from './key';
 import { CachedLLMProvider } from './middleware/llm-cache-middleware';
 import { MemoryCacheStore } from './stores/memory-store';
+import { RedisCacheStore, type RedisCacheClient } from './stores/redis-store';
 import { SQLiteCacheStore } from './stores/sqlite-store';
+import { validateCacheEntry, validateCachedModelResponseProjection } from './schemas';
 import type { ServingCacheEvent } from './types';
 
 class CountingProvider implements ModelProvider<ModelRequest, ModelResponse> {
@@ -106,9 +108,7 @@ describe('@hypha/serving-cache', () => {
       ],
     });
 
-    expect(createLLMCacheKey({ ...request, promptBlocks: metadata.blocks })).toBe(
-      keyWithoutBlocks
-    );
+    expect(createLLMCacheKey({ ...request, promptBlocks: metadata.blocks })).toBe(keyWithoutBlocks);
     expect(metadata.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -148,7 +148,7 @@ describe('@hypha/serving-cache', () => {
       instructions: 'system',
       input: [{ role: 'user', content: 'hello' }],
       temperature: 0,
-      metadata: { provider: 'mock', sessionId: 'session_1' },
+      metadata: { provider: 'mock', userId: 'user_1', sessionId: 'session_1' },
     };
 
     const first = await provider.generate(request);
@@ -161,6 +161,7 @@ describe('@hypha/serving-cache', () => {
       hit: true,
       source: 'hypha-serving-cache',
     });
+    expect(second.id).not.toBe(first.id);
     expect(events.map((event) => event.type)).toEqual([
       'llm.cache.lookup',
       'llm.cache.miss',
@@ -194,7 +195,7 @@ describe('@hypha/serving-cache', () => {
       instructions: 'stable system',
       input: [{ role: 'user', content: 'hello' }],
       temperature: 0,
-      metadata: { provider: 'mock', sessionId: 'session_shape' },
+      metadata: { provider: 'mock', userId: 'user_shape', sessionId: 'session_shape' },
     };
     const first = await provider.generate(baseRequest);
     const second = await provider.generate({
@@ -257,6 +258,7 @@ describe('@hypha/serving-cache', () => {
       stepId: 'step_1',
       modelAlias: 'default-fast',
       input: 'hello',
+      metadata: { userId: 'user_1' },
     };
 
     await provider.generate(request);
@@ -296,16 +298,16 @@ describe('@hypha/serving-cache', () => {
     expect(events).toMatchObject([{ type: 'llm.cache.bypass', reason: 'streaming' }]);
   });
 
-  it('bypasses streaming-marked generate requests even if cacheStreaming is enabled', async () => {
+  it('always bypasses streaming-marked generate requests', async () => {
     const inner = new CountingProvider();
     const provider = new CachedLLMProvider(
       inner,
       new ServingCacheManager({
         store: new MemoryCacheStore(),
-        policy: { enabled: true, mode: 'readwrite', cacheStreaming: true },
+        policy: { enabled: true, mode: 'readwrite' },
       }),
       {
-        policy: { enabled: true, mode: 'readwrite', cacheStreaming: true },
+        policy: { enabled: true, mode: 'readwrite' },
       }
     );
     const request: ModelRequest = {
@@ -338,5 +340,174 @@ describe('@hypha/serving-cache', () => {
 
     expect(entry?.value).toEqual({ content: 'ok' });
     expect(entry?.metadata).toMatchObject({ provider: 'mock', model: 'default-fast' });
+  });
+
+  it('does not cache an unscoped request under the default user boundary', async () => {
+    const inner = new CountingProvider();
+    const store = new MemoryCacheStore();
+    const provider = new CachedLLMProvider(
+      inner,
+      new ServingCacheManager({ store, policy: { enabled: true, mode: 'readwrite' } })
+    );
+    const request: ModelRequest = {
+      runId: 'run_unscoped',
+      stepId: 'step_1',
+      modelAlias: 'default-fast',
+      input: 'private prompt',
+    };
+
+    await provider.generate(request);
+    await provider.generate(request);
+
+    expect(inner.calls).toBe(2);
+    expect(await store.stats()).toMatchObject({ entries: 0 });
+  });
+
+  it('keeps cache and trace failures off the primary model path in bypass mode', async () => {
+    const inner = new CountingProvider();
+    const provider = new CachedLLMProvider(
+      inner,
+      new ServingCacheManager({
+        store: {
+          async get() {
+            throw new Error('cache unavailable');
+          },
+          async set() {
+            throw new Error('cache unavailable');
+          },
+          async delete() {
+            throw new Error('cache unavailable');
+          },
+        },
+        policy: { enabled: true, mode: 'readwrite', failureMode: 'bypass' },
+      }),
+      {
+        trace: () => {
+          throw new Error('trace unavailable');
+        },
+      }
+    );
+
+    const response = await provider.generate({
+      runId: 'run_failure',
+      stepId: 'step_1',
+      modelAlias: 'default-fast',
+      input: 'hello',
+      metadata: { userId: 'user_1' },
+    });
+
+    expect(response.content).toBe('content 1');
+    expect(inner.calls).toBe(1);
+  });
+
+  it('coalesces concurrent misses and never persists raw provider payloads', async () => {
+    const inner = new CountingProvider();
+    const originalGenerate = inner.generate.bind(inner);
+    inner.generate = async (request) => {
+      await Promise.resolve();
+      const response = await originalGenerate(request);
+      return { ...response, raw: { secret: 'provider-internal' }, metadata: { debug: true } };
+    };
+    const store = new MemoryCacheStore();
+    const manager = new ServingCacheManager({
+      store,
+      policy: { enabled: true, mode: 'readwrite', singleflight: true },
+    });
+    const provider = new CachedLLMProvider(inner, manager);
+    const request: ModelRequest = {
+      runId: 'run_singleflight',
+      stepId: 'step_1',
+      modelAlias: 'default-fast',
+      input: 'hello',
+      metadata: { userId: 'user_1' },
+    };
+
+    const [first, second] = await Promise.all([
+      provider.generate(request),
+      provider.generate({ ...request, stepId: 'step_2' }),
+    ]);
+
+    expect(inner.calls).toBe(1);
+    expect(first.content).toBe(second.content);
+    expect(second.raw).toBeUndefined();
+    const key = manager.keyFor({
+      provider: 'counting',
+      model: 'default-fast',
+      messages: ['hello'],
+      cacheScope: { userId: 'user_1' },
+      params: {},
+    });
+    expect((await store.get(key))?.value).not.toMatchObject({ raw: expect.anything() });
+  });
+
+  it('bounds the in-memory store and reports evictions', async () => {
+    const store = new MemoryCacheStore({ maxEntries: 2 });
+    for (const key of ['one', 'two', 'three']) {
+      await store.set(key, { key, value: key, createdAt: 1 });
+    }
+
+    expect(await store.get('one')).toBeNull();
+    expect(await store.stats()).toMatchObject({ entries: 2, evictions: 1 });
+  });
+
+  it('rejects malformed contracts and oversized total entries before persistence', async () => {
+    expect(() => validateCachedModelResponseProjection({ schemaVersion: '1.0' })).toThrow();
+    expect(() => validateCacheEntry({ key: 'missing-value', createdAt: 1 })).toThrow();
+    const store = new MemoryCacheStore();
+    const manager = new ServingCacheManager({
+      store,
+      policy: { enabled: true, mode: 'write', maxEntryBytes: 120 },
+    });
+
+    await expect(
+      manager.set(
+        'large',
+        { content: 'small' },
+        {
+          provider: 'mock',
+          model: 'model',
+          cacheType: 'exact',
+          tags: ['x'.repeat(200)],
+        }
+      )
+    ).rejects.toThrow(/maximum/);
+    expect(await store.get('large')).toBeNull();
+  });
+
+  it('round-trips and clears versioned entries through a Redis-compatible store', async () => {
+    const values = new Map<string, string>();
+    const client: RedisCacheClient = {
+      async get(key) {
+        return values.get(key) ?? null;
+      },
+      async set(key, value) {
+        values.set(key, value);
+        return 'OK';
+      },
+      async del(...keys) {
+        let deleted = 0;
+        for (const key of keys) deleted += Number(values.delete(key));
+        return deleted;
+      },
+      async scan() {
+        return ['0', [...values.keys()]];
+      },
+      async ping() {
+        return 'PONG';
+      },
+    };
+    const store = new RedisCacheStore({ client, prefix: 'test:' });
+    await store.set('key', {
+      schemaVersion: '1.0',
+      keyVersion: '1',
+      key: 'key',
+      value: { content: 'ok' },
+      createdAt: Date.now(),
+    });
+
+    expect((await store.get<{ content: string }>('key'))?.value.content).toBe('ok');
+    expect(await store.health()).toMatchObject({ status: 'healthy' });
+    await store.clear();
+    expect(values.size).toBe(0);
   });
 });

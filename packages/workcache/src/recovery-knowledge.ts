@@ -10,11 +10,15 @@ import type { CacheBlock, RecoveryKnowledgeBlockValue, WorkCacheStore } from './
 export interface WorkCacheRecoveryKnowledgeOptions {
   ttlMs?: number;
   now?: () => number;
+  failureMode?: 'bypass' | 'strict';
+  maxEntries?: number;
 }
 
 export class WorkCacheRecoveryKnowledgeStore implements RecoveryKnowledgePort {
   private readonly ttlMs: number;
   private readonly now: () => number;
+  private readonly failureMode: 'bypass' | 'strict';
+  private readonly maxEntries: number;
 
   constructor(
     private readonly store: WorkCacheStore,
@@ -22,9 +26,20 @@ export class WorkCacheRecoveryKnowledgeStore implements RecoveryKnowledgePort {
   ) {
     this.ttlMs = Math.max(1, options.ttlMs ?? 6 * 60 * 60_000);
     this.now = options.now ?? Date.now;
+    this.failureMode = options.failureMode ?? 'bypass';
+    this.maxEntries = Math.max(1, options.maxEntries ?? 1000);
   }
 
   async get(key: RecoveryKnowledgeKey): Promise<RecoveryKnowledge | null> {
+    try {
+      return await this.getInternal(key);
+    } catch (error) {
+      if (this.failureMode === 'strict') throw error;
+      return null;
+    }
+  }
+
+  private async getInternal(key: RecoveryKnowledgeKey): Promise<RecoveryKnowledge | null> {
     const block = await this.store.getByCacheKey<RecoveryKnowledgeBlockValue>(
       'RecoveryTree',
       recoveryKnowledgeCacheKey(key)
@@ -47,21 +62,30 @@ export class WorkCacheRecoveryKnowledgeStore implements RecoveryKnowledgePort {
   }
 
   async put(knowledge: RecoveryKnowledge): Promise<void> {
-    await this.removeStaleRevisions(knowledge.key);
-    await this.store.set(this.blockFromKnowledge(knowledge));
+    try {
+      await this.removeStaleRevisions(knowledge.key);
+      await this.store.set(this.blockFromKnowledge(knowledge));
+      await this.prune();
+    } catch (error) {
+      if (this.failureMode === 'strict') throw error;
+    }
   }
 
   async invalidate(key: RecoveryKnowledgeKey, _reason: string): Promise<void> {
-    const blocks = await this.store.list<RecoveryKnowledgeBlockValue>('RecoveryTree');
-    await Promise.all(
-      blocks
-        .filter(
-          (block) =>
-            block.value.key.fingerprint === key.fingerprint &&
-            block.value.key.participantId === key.participantId
-        )
-        .map((block) => this.store.delete(block.id))
-    );
+    try {
+      const blocks = await this.store.list<RecoveryKnowledgeBlockValue>('RecoveryTree');
+      await Promise.all(
+        blocks
+          .filter(
+            (block) =>
+              block.value.key.fingerprint === key.fingerprint &&
+              block.value.key.participantId === key.participantId
+          )
+          .map((block) => this.store.delete(block.id))
+      );
+    } catch (error) {
+      if (this.failureMode === 'strict') throw error;
+    }
   }
 
   private async removeStaleRevisions(key: RecoveryKnowledgeKey): Promise<void> {
@@ -76,6 +100,14 @@ export class WorkCacheRecoveryKnowledgeStore implements RecoveryKnowledgePort {
         )
         .map((block) => this.store.delete(block.id))
     );
+  }
+
+  private async prune(): Promise<void> {
+    const blocks = await this.store.list<RecoveryKnowledgeBlockValue>('RecoveryTree');
+    const excess = blocks
+      .sort((left, right) => left.updatedAt - right.updatedAt)
+      .slice(0, Math.max(0, blocks.length - this.maxEntries));
+    await Promise.all(excess.map((block) => this.store.delete(block.id)));
   }
 
   private blockFromKnowledge(

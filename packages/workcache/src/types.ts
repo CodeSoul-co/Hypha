@@ -20,7 +20,20 @@ export type CacheTreeType =
   | 'RecoveryTree'
   | 'PromptPrefixTree';
 
-export type WorkCacheStoreKind = 'off' | 'memory' | 'sqlite';
+export type WorkCacheStoreKind = 'off' | 'memory' | 'sqlite' | 'redis';
+
+export type WorkCacheFailureMode = 'bypass' | 'strict';
+
+export type WorkCacheScopeRequirement = 'none' | 'user' | 'session';
+
+export interface WorkCacheScope {
+  tenantId?: string;
+  userId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  agentId?: string;
+  domainPackId?: string;
+}
 
 export type WorkCacheUnknownEventPolicy = 'ignore' | 'reject';
 
@@ -136,6 +149,7 @@ export interface WorkGraph {
   graphId: string;
   runId: string;
   sessionId?: string;
+  scope?: WorkCacheScope;
   nodes: Map<string, WorkGraphNode>;
   edges: Map<string, WorkGraphEdge>;
   activeNodeIds: string[];
@@ -181,6 +195,8 @@ export interface CacheBlockUtility {
 }
 
 export interface CacheBlock<T = unknown> {
+  schemaVersion?: '1.0';
+  keyVersion?: '1';
   id: string;
   treeType: CacheTreeType;
   nodeType: WorkNodeType;
@@ -191,6 +207,8 @@ export interface CacheBlock<T = unknown> {
   expiresAt?: number;
   sourceEventId: string;
   sourceEventType: FrameworkEventType;
+  scope?: WorkCacheScope;
+  sizeBytes?: number;
   provenance?: Record<string, unknown>;
   validity: CacheBlockValidity;
   utility: CacheBlockUtility;
@@ -222,6 +240,14 @@ export interface WorkCacheStore {
     utility: Partial<CacheBlockUtility>,
     timestamp: number
   ): Promise<void>;
+  health?(): Promise<WorkCacheStoreHealth>;
+  close?(): Promise<void>;
+}
+
+export interface WorkCacheStoreHealth {
+  status: 'healthy' | 'degraded' | 'unavailable';
+  checkedAt: string;
+  details?: Record<string, unknown>;
 }
 
 export interface WorkCacheTreePolicy {
@@ -233,6 +259,10 @@ export interface WorkCacheTreePolicy {
 export interface WorkCachePolicy {
   enabled: boolean;
   store: WorkCacheStoreKind;
+  failureMode: WorkCacheFailureMode;
+  scopeRequirement: WorkCacheScopeRequirement;
+  operationTimeoutMs: number;
+  maxBlockBytes: number;
   promptBudgetTokens: number;
   unknownEventPolicy: WorkCacheUnknownEventPolicy;
   allowExtensionEvents: boolean;
@@ -244,6 +274,7 @@ export interface WorkCacheManagerOptions {
   policy?: PartialWorkCachePolicy;
   registry?: RuntimeTypeRegistryLike;
   workGraph?: WorkGraphIndexLike;
+  invalidationBus?: WorkCacheInvalidationBus;
   hotIndex?: boolean;
   now?: () => number;
 }
@@ -264,18 +295,55 @@ export interface RuntimeTypeRegistryLike {
 
 export interface WorkGraphIndexLike {
   ingest(event: NormalizedWorkEvent, blocks: CacheBlock[]): WorkGraphUpdate;
-  getGraph(runId: string): WorkGraph | null;
+  getGraph(runId: string, scope?: WorkCacheScope): WorkGraph | null;
   listDemandSignals(runId?: string): DemandSignal[];
 }
 
 export interface WorkCacheLookupQuery {
   treeType: CacheTreeType;
   cacheKey: string;
+  scope?: WorkCacheScope;
 }
 
 export type WorkCacheLookupResult<T = unknown> =
   | { hit: true; block: CacheBlock<T>; ageMs: number }
-  | { hit: false; reason: 'not_found' | 'expired' | 'invalid' | 'disabled' };
+  | {
+      hit: false;
+      reason:
+        | 'not_found'
+        | 'expired'
+        | 'invalid'
+        | 'unproven'
+        | 'scope_missing'
+        | 'scope_mismatch'
+        | 'store_unavailable'
+        | 'disabled';
+    };
+
+export interface WorkCacheInvalidationQuery {
+  treeType?: CacheTreeType;
+  cacheKey?: string;
+  sourceEventId?: string;
+  tag?: string;
+  dependencyKey?: string;
+  scope?: WorkCacheScope;
+}
+
+export interface WorkCacheInvalidationMessage {
+  schemaVersion: '1.0';
+  originId: string;
+  blockIds: string[];
+  reason: string;
+  timestamp: string;
+}
+
+export interface WorkCacheInvalidationBus {
+  publish(message: WorkCacheInvalidationMessage): Promise<void>;
+  subscribe(
+    handler: (message: WorkCacheInvalidationMessage) => Promise<void> | void
+  ): Promise<() => Promise<void> | void> | (() => Promise<void> | void);
+  close?(): Promise<void>;
+}
 
 export interface PromptPrefixMaterialization {
   prefix: string;

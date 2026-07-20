@@ -417,7 +417,10 @@ Core exports:
 | `WorkCachePolicy`                 | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
 | `WorkCacheRecoveryKnowledgeStore` | Revision-safe `RecoveryKnowledgePort` backed by `RecoveryTree` blocks.                          |
 | `MemoryWorkCacheStore`            | In-memory store.                                                                                |
-| `SQLiteWorkCacheStore`            | Persistent store backed by `workcache_blocks`.                                                  |
+| `SQLiteWorkCacheStore`            | Bounded persistent store backed by `workcache_blocks`.                                          |
+| `RedisWorkCacheStore`             | Shared, TTL-aware store with atomic latest-key maintenance.                                     |
+| `TimeoutWorkCacheStore`           | Bounds provider-neutral store calls.                                                            |
+| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                     |
 
 Default source event alignment:
 
@@ -432,9 +435,10 @@ Default source event alignment:
 | `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `RecoveryTree`     |
 | `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
-Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
+Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite|redis`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
-per-tree TTL fields under `workCache.trees` in `config.yaml`.
+per-tree TTL fields under `workCache.trees` in `config.yaml`. The default
+scope requirement is `user`; `unknown` validity is a miss, not a reusable hit.
 
 `PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
 prompt block. A block value contains `id`, `type`, `hash`, `content`,

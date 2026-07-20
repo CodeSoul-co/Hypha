@@ -86,6 +86,7 @@ describe('@hypha/workcache recovery knowledge', () => {
         id: 'recovery-attempt-2',
         type: 'recovery.attempt.completed',
         runId: 'run_recovery_cache',
+        userId: 'owner',
         timestamp: '2026-07-16T00:00:00.000Z',
         payload: { knowledge: eventKnowledge },
       })
@@ -97,5 +98,30 @@ describe('@hypha/workcache recovery knowledge', () => {
     expect(blocks.map((block) => block.value.key.participantId)).toEqual(
       expect.arrayContaining(['memory-primary', 'execution-primary'])
     );
+  });
+
+  it('keeps optional recovery hints fail-open when the cache store is unavailable', async () => {
+    const store = {
+      async get() {
+        throw new Error('offline');
+      },
+      async getByCacheKey() {
+        throw new Error('offline');
+      },
+      async set() {
+        throw new Error('offline');
+      },
+      async delete() {
+        throw new Error('offline');
+      },
+      async list() {
+        throw new Error('offline');
+      },
+    };
+    const hints = new WorkCacheRecoveryKnowledgeStore(store, { failureMode: 'bypass' });
+
+    await expect(hints.get(knowledge().key)).resolves.toBeNull();
+    await expect(hints.put(knowledge())).resolves.toBeUndefined();
+    await expect(hints.invalidate(knowledge().key, 'test')).resolves.toBeUndefined();
   });
 });

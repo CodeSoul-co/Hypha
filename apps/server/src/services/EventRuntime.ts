@@ -103,12 +103,16 @@ import {
 import {
   MemoryWorkCacheStore,
   NoopWorkCacheStore,
+  RedisWorkCacheInvalidationBus,
+  RedisWorkCacheStore,
   SQLiteWorkCacheStore,
   ThinkingCache,
   ThinkingCachedReasoningProvider,
   WorkCachedInferenceProvider,
   WorkCacheManager,
   type WorkCacheAuditEvent,
+  type RedisWorkCacheClient,
+  type RedisWorkCachePubSubClient,
   type WorkCacheStore,
 } from '@hypha/workcache';
 import { inferenceConfig, storageConfig, workCacheConfig } from '../config';
@@ -117,6 +121,7 @@ import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
+import { createCacheRedisClient } from './cacheRedis';
 
 interface RuntimeRunContext {
   runId: string;
@@ -2547,9 +2552,17 @@ class EventRuntimeService {
 
   private async recordWorkCacheEvents(sourceEvent: FrameworkEvent): Promise<void> {
     if (sourceEvent.type.startsWith('workcache.')) return;
-    const derivedEvents = await this.workCache.ingest(sourceEvent);
-    for (const event of derivedEvents) {
-      await this.appendWorkCacheEvent(event);
+    try {
+      const derivedEvents = await this.workCache.ingest(sourceEvent);
+      for (const event of derivedEvents) {
+        await this.appendWorkCacheEvent(event);
+      }
+    } catch (error) {
+      logger.warn('WorkCache derivation failed without masking the source event', {
+        sourceEventId: sourceEvent.id,
+        sourceEventType: sourceEvent.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -2588,8 +2601,22 @@ class EventRuntimeService {
   private createWorkCacheAwareTraceRecorder(): TraceRecorder {
     return {
       record: async (event) => {
-        await this.events.record(event);
-        await this.recordWorkCacheEvents(event);
+        const context = this.runs.get(event.runId);
+        const scopedEvent: FrameworkEvent = context
+          ? {
+              ...event,
+              userId: event.userId ?? context.userId,
+              sessionId: event.sessionId ?? context.sessionId,
+              metadata: {
+                ...event.metadata,
+                userId: event.userId ?? context.userId,
+                clientSessionId: context.clientSessionId,
+                domainPackId: context.domainPackId,
+              },
+            }
+          : event;
+        await this.events.record(scopedEvent);
+        await this.recordWorkCacheEvents(scopedEvent);
       },
     };
   }
@@ -2762,10 +2789,23 @@ const sharedSQLiteWorkCacheStores = new Map<string, SQLiteWorkCacheStore>();
 function createWorkCacheManager(): WorkCacheManager {
   const config = workCacheConfig();
   return new WorkCacheManager({
-    store: createWorkCacheStore(config.store, config.sqlite.path),
+    store: createWorkCacheStore(config),
+    invalidationBus:
+      config.store === 'redis'
+        ? new RedisWorkCacheInvalidationBus({
+            publisher: createCacheRedisClient() as unknown as RedisWorkCachePubSubClient,
+            subscriber: createCacheRedisClient() as unknown as RedisWorkCachePubSubClient,
+            channel: config.redis.invalidationChannel,
+            closeClients: true,
+          })
+        : undefined,
     policy: {
       enabled: config.enabled,
       store: config.store,
+      failureMode: config.failureMode,
+      scopeRequirement: config.scopeRequirement,
+      operationTimeoutMs: config.operationTimeoutMs,
+      maxBlockBytes: config.maxBlockBytes,
       promptBudgetTokens: config.promptBudgetTokens,
       unknownEventPolicy: config.unknownEventPolicy,
       allowExtensionEvents: config.allowExtensionEvents,
@@ -2774,22 +2814,26 @@ function createWorkCacheManager(): WorkCacheManager {
   });
 }
 
-function createWorkCacheStore(
-  store: ReturnType<typeof workCacheConfig>['store'],
-  sqlitePath: string
-): WorkCacheStore {
-  switch (store) {
+function createWorkCacheStore(config: ReturnType<typeof workCacheConfig>): WorkCacheStore {
+  switch (config.store) {
     case 'memory':
-      sharedMemoryWorkCacheStore = sharedMemoryWorkCacheStore ?? new MemoryWorkCacheStore();
+      sharedMemoryWorkCacheStore =
+        sharedMemoryWorkCacheStore ?? new MemoryWorkCacheStore(config.memory);
       return sharedMemoryWorkCacheStore;
     case 'sqlite': {
-      const filename = resolveRuntimePath(sqlitePath);
+      const filename = resolveRuntimePath(config.sqlite.path);
       const existing = sharedSQLiteWorkCacheStores.get(filename);
       if (existing) return existing;
       const next = new SQLiteWorkCacheStore({ filename });
       sharedSQLiteWorkCacheStores.set(filename, next);
       return next;
     }
+    case 'redis':
+      return new RedisWorkCacheStore({
+        client: createCacheRedisClient() as unknown as RedisWorkCacheClient,
+        prefix: config.redis.prefix,
+        closeClient: true,
+      });
     case 'off':
     default:
       return new NoopWorkCacheStore();
