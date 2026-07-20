@@ -16,6 +16,7 @@ import {
   createClassicMCPMockGateway,
   governedMCPIntegrationDefinition,
   governedMCPIntegrationJsonSchemas,
+  mcpCapabilityRecordExample,
   mcpCapabilityRecordDefinition,
   mcpConnectionRecordDefinition,
   mcpIntegrationSpecDefinition,
@@ -30,6 +31,39 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('bounds the MCP schema cache with least-recently-used eviction', () => {
+    const schemaCache = new MCPSchemaCache({
+      maxEntries: 2,
+      now: () => '2026-07-21T00:00:00.000Z',
+    });
+    for (let index = 0; index < 3; index += 1) {
+      schemaCache.set({
+        ...mcpCapabilityRecordExample,
+        id: `record-${index}`,
+        remoteName: `capability-${index}`,
+        capabilityHash: `sha256:capability-${index}`,
+      });
+    }
+
+    expect(schemaCache.size()).toBe(2);
+    expect(
+      schemaCache.get({
+        serverId: mcpCapabilityRecordExample.serverId,
+        capabilityId: 'capability-0',
+        capabilityHash: 'sha256:capability-0',
+        protocolVersion: mcpCapabilityRecordExample.protocolVersion,
+      })
+    ).toBeNull();
+    expect(
+      schemaCache.get({
+        serverId: mcpCapabilityRecordExample.serverId,
+        capabilityId: 'capability-2',
+        capabilityHash: 'sha256:capability-2',
+        protocolVersion: mcpCapabilityRecordExample.protocolVersion,
+      })
+    ).not.toBeNull();
+  });
+
   it('filters and normalizes MCP capabilities before tool use', async () => {
     const gateway = new MockMCPGateway([
       {

@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'crypto';
+import type {
+  ExecutionCacheRecord,
+  ExecutionCacheStore,
+  ExecutionFingerprintHasher,
+} from '../../contracts/execution-cache';
 import {
   assessExecutionCacheReuse,
   canonicalizeExecutionFingerprintInput,
+  ExecutionResultCache,
   executionCacheEntryProjectionExample,
   executionCacheJsonSchemas,
   executionCacheValidityInputExample,
   executionCommandFingerprintInputExample,
   executionEnvironmentFingerprintExample,
   validateExecutionCacheEntryProjection,
+  validateExecutionCacheRecord,
   validateExecutionCacheValidityInput,
   validateExecutionCommandFingerprintInput,
   validateExecutionEnvironmentFingerprint,
@@ -40,6 +48,8 @@ describe('Execution Cache boundary contracts', () => {
         'ExecutionCacheArtifactReference',
         'ExecutionCacheResultMetadata',
         'ExecutionCacheEntryProjection',
+        'ExecutionCacheScope',
+        'ExecutionCacheRecord',
       ])
     );
     expect(executionCacheJsonSchemas.ExecutionCacheEntryProjection.required).toContain('validity');
@@ -113,6 +123,24 @@ describe('Execution Cache boundary contracts', () => {
     ).toThrow(/duplicate/u);
   });
 
+  it('measures serialized records instead of trusting declared size metadata', () => {
+    expect(() =>
+      validateExecutionCacheRecord(
+        {
+          schemaVersion: '1.0',
+          keyVersion: '1',
+          key: 'execution-cache:v1:sha256:example',
+          scope: { userId: 'owner', workspaceId: 'workspace_01' },
+          projection: executionCacheEntryProjectionExample,
+          createdAt: 1,
+          expiresAt: 2,
+          sizeBytes: 1,
+        },
+        100
+      )
+    ).toThrow(/limit is 100 bytes/u);
+  });
+
   it('canonicalizes key order while preserving argument identity through its hash', () => {
     const reversed = {
       idempotencyKey: executionCommandFingerprintInputExample.idempotencyKey,
@@ -145,6 +173,12 @@ describe('Execution Cache boundary contracts', () => {
     ).toEqual({ reusable: false, reason: 'environment_fingerprint_unavailable' });
     expect(
       assessExecutionCacheReuse({
+        sideEffectLevel: 'write',
+        environmentFingerprintStatus: 'resolved',
+      })
+    ).toEqual({ reusable: false, reason: 'workspace_write' });
+    expect(
+      assessExecutionCacheReuse({
         sideEffectLevel: 'external_effect',
         environmentFingerprintStatus: 'resolved',
       })
@@ -156,4 +190,148 @@ describe('Execution Cache boundary contracts', () => {
       })
     ).toEqual({ reusable: false, reason: 'irreversible_side_effect' });
   });
+
+  it('stores and reuses only matching scoped, read-only projections', async () => {
+    const store = new TestExecutionCacheStore();
+    const cache = new ExecutionResultCache({ store, hasher, now: () => 1000 });
+    const input = cacheInput();
+    const projection = await projectionFor(input.command, input.validity);
+
+    await expect(cache.write({ ...input, projection })).resolves.toBe(true);
+    await expect(cache.lookup(input)).resolves.toMatchObject({
+      hit: true,
+      projection: { resultMetadata: { status: 'completed' } },
+    });
+    await expect(
+      cache.lookup({ ...input, scope: { userId: 'other', workspaceId: 'workspace_01' } })
+    ).resolves.toMatchObject({ hit: false, reason: 'not_found' });
+  });
+
+  it('never caches Workspace writes or non-completed command results', async () => {
+    const cache = new ExecutionResultCache({
+      store: new TestExecutionCacheStore(),
+      hasher,
+    });
+    const input = cacheInput();
+    const projection = await projectionFor(input.command, input.validity);
+
+    await expect(cache.write({ ...input, sideEffectLevel: 'write', projection })).resolves.toBe(
+      false
+    );
+    await expect(
+      cache.write({
+        ...input,
+        projection: {
+          ...projection,
+          resultMetadata: { ...projection.resultMetadata, status: 'failed' },
+        },
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('fails closed on Artifact references unless their integrity can be verified', async () => {
+    const store = new TestExecutionCacheStore();
+    const input = cacheInput();
+    const projection = await projectionFor(input.command, input.validity, [
+      { artifactRef: 'artifact:stdout', contentHash: 'sha256:stdout' },
+    ]);
+    const writer = new ExecutionResultCache({
+      store,
+      hasher,
+      artifactVerifier: { verify: async () => true },
+    });
+    expect(await writer.write({ ...input, projection })).toBe(true);
+
+    const unverified = new ExecutionResultCache({ store, hasher });
+    await expect(unverified.lookup(input)).resolves.toMatchObject({
+      hit: false,
+      reason: 'artifact_verification_unavailable',
+    });
+    const rejected = new ExecutionResultCache({
+      store,
+      hasher,
+      artifactVerifier: { verify: async () => false },
+    });
+    await expect(rejected.lookup(input)).resolves.toMatchObject({
+      hit: false,
+      reason: 'artifact_verification_failed',
+    });
+    expect(store.records.size).toBe(0);
+  });
+
+  it('bounds Store waits and preserves strict-mode diagnostics', async () => {
+    const hangingStore: ExecutionCacheStore = {
+      get: async () => new Promise<ExecutionCacheRecord | null>(() => undefined),
+      set: async () => new Promise<void>(() => undefined),
+      delete: async () => undefined,
+    };
+    const bypass = new ExecutionResultCache({
+      store: hangingStore,
+      hasher,
+      operationTimeoutMs: 5,
+    });
+    await expect(bypass.lookup(cacheInput())).resolves.toMatchObject({
+      hit: false,
+      reason: 'store_unavailable',
+    });
+
+    const strict = new ExecutionResultCache({
+      store: hangingStore,
+      hasher,
+      operationTimeoutMs: 5,
+      failureMode: 'strict',
+    });
+    await expect(strict.lookup(cacheInput())).rejects.toThrow(/exceeded 5ms/u);
+  });
 });
+
+const hasher: ExecutionFingerprintHasher = {
+  algorithm: 'sha256',
+  async hashUtf8(value) {
+    return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+  },
+};
+
+function cacheInput() {
+  return {
+    scope: { userId: 'owner', workspaceId: 'workspace_01' },
+    command: executionCommandFingerprintInputExample,
+    validity: executionCacheValidityInputExample,
+    sideEffectLevel: 'read' as const,
+    environmentFingerprintStatus: 'resolved' as const,
+  };
+}
+
+async function projectionFor(
+  command: typeof executionCommandFingerprintInputExample,
+  validity: typeof executionCacheValidityInputExample,
+  artifacts = executionCacheEntryProjectionExample.artifacts.slice(0, 0)
+) {
+  return {
+    ...executionCacheEntryProjectionExample,
+    commandHash: await hasher.hashUtf8(canonicalizeExecutionFingerprintInput(command)),
+    validityHash: await hasher.hashUtf8(canonicalizeExecutionFingerprintInput(validity)),
+    validity,
+    artifacts,
+    resultMetadata: {
+      ...executionCacheEntryProjectionExample.resultMetadata,
+      status: 'completed' as const,
+    },
+  };
+}
+
+class TestExecutionCacheStore implements ExecutionCacheStore {
+  readonly records = new Map<string, ExecutionCacheRecord>();
+
+  async get(key: string): Promise<ExecutionCacheRecord | null> {
+    return this.records.get(key) ?? null;
+  }
+
+  async set(key: string, record: ExecutionCacheRecord): Promise<void> {
+    this.records.set(key, record);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.records.delete(key);
+  }
+}
