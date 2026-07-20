@@ -40,6 +40,7 @@ export const memorySearchCacheRecordSchema = z
     keyVersion: z.literal('1'),
     key: nonEmptyString,
     scopeHash: nonEmptyString,
+    scopeRevision: nonEmptyString,
     requestHash: nonEmptyString,
     profileRevision: nonEmptyString,
     providerRevision: nonEmptyString,
@@ -72,6 +73,7 @@ export const memorySearchCacheRecordSchema = z
 export type MemorySearchCacheRecord = z.infer<typeof memorySearchCacheRecordSchema>;
 
 export interface MemorySearchCacheStore {
+  getScopeRevision(scopeHash: string): Promise<string>;
   get(key: string): Promise<MemorySearchCacheRecord | null>;
   set(key: string, record: MemorySearchCacheRecord): Promise<void>;
   delete(key: string): Promise<void>;
@@ -101,6 +103,7 @@ export interface MemorySearchCacheEvent {
     | 'revision_changed'
     | 'access_stats_requested'
     | 'profile_revision_missing'
+    | 'invalidation_pending'
     | 'entry_oversized'
     | 'store_unavailable';
   ageMs?: number;
@@ -115,6 +118,7 @@ export interface CachedMemoryManagementProviderOptions {
   ttlMs?: number;
   maxEntryBytes?: number;
   singleflight?: boolean;
+  maxScopeRevisionRetries?: number;
   now?: () => number;
   trace?: (event: MemorySearchCacheEvent) => Promise<void> | void;
 }
@@ -134,8 +138,10 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
   private readonly ttlMs: number;
   private readonly maxEntryBytes: number;
   private readonly singleflight: boolean;
+  private readonly maxScopeRevisionRetries: number;
   private readonly now: () => number;
   private readonly inFlight = new Map<string, Promise<ManagedMemorySearchResult[]>>();
+  private readonly pendingInvalidationScopes = new Set<string>();
 
   constructor(private readonly options: CachedMemoryManagementProviderOptions) {
     this.provider = options.provider;
@@ -149,6 +155,10 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
     this.ttlMs = positiveInteger(options.ttlMs ?? 60_000, 'ttlMs');
     this.maxEntryBytes = positiveInteger(options.maxEntryBytes ?? 2 * 1024 * 1024, 'maxEntryBytes');
     this.singleflight = options.singleflight ?? true;
+    this.maxScopeRevisionRetries = nonNegativeInteger(
+      options.maxScopeRevisionRetries ?? 1,
+      'maxScopeRevisionRetries'
+    );
     this.now = options.now ?? Date.now;
     this.id = `memory-search-cached:${this.provider.id}`;
   }
@@ -166,6 +176,25 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
   async search(rawRequest: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]> {
     const request = validateManagedMemorySearchRequest(rawRequest);
     const scopeHash = hashMemoryScope(request.scope);
+    if (this.pendingInvalidationScopes.has(scopeHash)) {
+      try {
+        await this.cacheOperation('invalidateScope', this.cache.invalidateScope(scopeHash));
+        this.pendingInvalidationScopes.delete(scopeHash);
+        await this.emit({
+          type: 'memory.cache.invalidate',
+          providerId: this.provider.id,
+          scopeHash,
+        });
+      } catch {
+        await this.emit({
+          type: 'memory.cache.bypass',
+          providerId: this.provider.id,
+          scopeHash,
+          reason: 'invalidation_pending',
+        });
+        return this.provider.search(request);
+      }
+    }
     if (request.updateAccessStats !== false) {
       await this.emit({
         type: 'memory.cache.bypass',
@@ -185,15 +214,21 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
       });
       return this.provider.search(request);
     }
-    const identity = searchIdentity(request, this.providerRevision, profileRevision);
-    await this.emit({
-      type: 'memory.cache.lookup',
-      providerId: this.provider.id,
-      scopeHash,
-      key: identity.key,
-    });
+    let scopeRevision: string;
+    let identity: ReturnType<typeof searchIdentity>;
     try {
-      const cached = await this.lookupCached(identity, scopeHash, profileRevision);
+      scopeRevision = await this.cacheOperation(
+        'getScopeRevision',
+        this.cache.getScopeRevision(scopeHash)
+      );
+      identity = searchIdentity(request, this.providerRevision, profileRevision, scopeRevision);
+      await this.emit({
+        type: 'memory.cache.lookup',
+        providerId: this.provider.id,
+        scopeHash,
+        key: identity.key,
+      });
+      const cached = await this.lookupCached(identity, scopeHash, scopeRevision, profileRevision);
       if (cached) return cached;
     } catch (error) {
       if (this.failureMode === 'strict') throw error;
@@ -201,12 +236,11 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
         type: 'memory.cache.bypass',
         providerId: this.provider.id,
         scopeHash,
-        key: identity.key,
         reason: 'store_unavailable',
       });
       return this.provider.search(request);
     }
-    return this.computeAndCache(request, identity, scopeHash, profileRevision);
+    return this.computeAndCache(request, identity, scopeHash, scopeRevision, profileRevision, 0);
   }
 
   get(request: MemoryGetRequest) {
@@ -254,6 +288,7 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
   private async lookupCached(
     identity: ReturnType<typeof searchIdentity>,
     scopeHash: string,
+    scopeRevision: string,
     profileRevision: string
   ): Promise<ManagedMemorySearchResult[] | null> {
     const rawRecord = await this.cacheOperation('get', this.cache.get(identity.key));
@@ -277,6 +312,15 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
     if (record.scopeHash !== scopeHash) {
       await this.safeDelete(identity.key);
       await this.emitMiss(scopeHash, identity.key, 'scope_mismatch');
+      return null;
+    }
+    if (
+      record.scopeRevision !== scopeRevision ||
+      (await this.cacheOperation('getScopeRevision', this.cache.getScopeRevision(scopeHash))) !==
+        scopeRevision
+    ) {
+      await this.safeDelete(identity.key);
+      await this.emitMiss(scopeHash, identity.key, 'revision_changed');
       return null;
     }
     if (
@@ -306,7 +350,9 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
     request: ManagedMemorySearchRequest,
     identity: ReturnType<typeof searchIdentity>,
     scopeHash: string,
-    profileRevision: string
+    scopeRevision: string,
+    profileRevision: string,
+    scopeRevisionRetry: number
   ): Promise<ManagedMemorySearchResult[]> {
     const pending = this.singleflight ? this.inFlight.get(identity.key) : undefined;
     if (pending) return clone(await pending);
@@ -321,12 +367,44 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
           'Memory provider returned a search record outside the requested user boundary.'
         );
       }
+      let currentScopeRevision: string;
+      try {
+        currentScopeRevision = await this.cacheOperation(
+          'getScopeRevision',
+          this.cache.getScopeRevision(scopeHash)
+        );
+      } catch (error) {
+        if (this.failureMode === 'strict') throw error;
+        await this.emit({
+          type: 'memory.cache.bypass',
+          providerId: this.provider.id,
+          scopeHash,
+          key: identity.key,
+          reason: 'store_unavailable',
+        });
+        return results;
+      }
+      if (currentScopeRevision !== scopeRevision) {
+        await this.emitMiss(scopeHash, identity.key, 'revision_changed');
+        if (scopeRevisionRetry < this.maxScopeRevisionRetries) {
+          return this.computeAndCache(
+            request,
+            searchIdentity(request, this.providerRevision, profileRevision, currentScopeRevision),
+            scopeHash,
+            currentScopeRevision,
+            profileRevision,
+            scopeRevisionRetry + 1
+          );
+        }
+        return results;
+      }
       const createdAt = this.now();
       const record: MemorySearchCacheRecord = {
         schemaVersion: '1.0',
         keyVersion: '1',
         key: identity.key,
         scopeHash,
+        scopeRevision,
         requestHash: identity.requestHash,
         profileRevision,
         providerRevision: this.providerRevision,
@@ -383,6 +461,7 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
         scopeHash,
       });
     } catch (error) {
+      this.pendingInvalidationScopes.add(scopeHash);
       await this.emit({
         type: 'memory.cache.bypass',
         providerId: this.provider.id,
@@ -435,6 +514,7 @@ export interface InMemoryMemorySearchCacheOptions {
 export class InMemoryMemorySearchCacheStore implements MemorySearchCacheStore {
   private readonly records = new Map<string, MemorySearchCacheRecord>();
   private readonly scopeKeys = new Map<string, Set<string>>();
+  private readonly scopeRevisions = new Map<string, number>();
   private readonly maxEntries: number;
   private readonly maxBytes: number;
   private sizeBytes = 0;
@@ -443,6 +523,10 @@ export class InMemoryMemorySearchCacheStore implements MemorySearchCacheStore {
   constructor(options: InMemoryMemorySearchCacheOptions = {}) {
     this.maxEntries = positiveInteger(options.maxEntries ?? 1000, 'maxEntries');
     this.maxBytes = positiveInteger(options.maxBytes ?? 64 * 1024 * 1024, 'maxBytes');
+  }
+
+  async getScopeRevision(scopeHash: string): Promise<string> {
+    return String(this.scopeRevisions.get(scopeHash) ?? 0);
   }
 
   async get(key: string): Promise<MemorySearchCacheRecord | null> {
@@ -457,6 +541,9 @@ export class InMemoryMemorySearchCacheStore implements MemorySearchCacheStore {
     const record = validateMemorySearchCacheRecord(rawRecord);
     if (record.key !== key) {
       throw new Error('Memory Search Cache store key does not match record.key.');
+    }
+    if (record.scopeRevision !== (await this.getScopeRevision(record.scopeHash))) {
+      throw new Error('Memory Search Cache scope revision changed before the write completed.');
     }
     await this.delete(key);
     this.records.set(key, clone(record));
@@ -478,12 +565,16 @@ export class InMemoryMemorySearchCacheStore implements MemorySearchCacheStore {
   }
 
   async invalidateScope(scopeHash: string): Promise<number> {
+    this.scopeRevisions.set(scopeHash, (this.scopeRevisions.get(scopeHash) ?? 0) + 1);
     const keys = [...(this.scopeKeys.get(scopeHash) ?? [])];
     for (const key of keys) await this.delete(key);
     return keys.length;
   }
 
   async clear(): Promise<void> {
+    for (const scopeHash of this.scopeRevisions.keys()) {
+      this.scopeRevisions.set(scopeHash, (this.scopeRevisions.get(scopeHash) ?? 0) + 1);
+    }
     this.records.clear();
     this.scopeKeys.clear();
     this.sizeBytes = 0;
@@ -503,18 +594,140 @@ export class InMemoryMemorySearchCacheStore implements MemorySearchCacheStore {
   }
 }
 
+export interface RedisLikeMemorySearchCacheClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, mode: 'PX', durationMilliseconds: number): Promise<unknown>;
+  del(...keys: string[]): Promise<number>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  srem(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
+  incr(key: string): Promise<number>;
+  pexpire(key: string, durationMilliseconds: number): Promise<number>;
+}
+
+export interface RedisMemorySearchCacheOptions {
+  client: RedisLikeMemorySearchCacheClient;
+  namespace?: string;
+  maxEntryBytes?: number;
+  now?: () => number;
+}
+
+/** Shared Store for local, self-hosted, or managed Redis-compatible deployments. */
+export class RedisMemorySearchCacheStore implements MemorySearchCacheStore {
+  private readonly namespace: string;
+  private readonly maxEntryBytes: number;
+  private readonly now: () => number;
+
+  constructor(private readonly options: RedisMemorySearchCacheOptions) {
+    this.namespace = (options.namespace ?? 'hypha:memory-search-cache:v1').replace(/:+$/, '');
+    this.maxEntryBytes = positiveInteger(options.maxEntryBytes ?? 2 * 1024 * 1024, 'maxEntryBytes');
+    this.now = options.now ?? Date.now;
+  }
+
+  async getScopeRevision(scopeHash: string): Promise<string> {
+    return (await this.options.client.get(this.scopeRevisionKey(scopeHash))) ?? '0';
+  }
+
+  async get(key: string): Promise<MemorySearchCacheRecord | null> {
+    const physicalKey = this.recordKey(key);
+    const raw = await this.options.client.get(physicalKey);
+    if (raw === null) return null;
+    try {
+      if (Buffer.byteLength(raw, 'utf8') > this.maxEntryBytes) {
+        throw new Error('Memory Search Cache entry exceeds its configured read limit.');
+      }
+      const record = validateMemorySearchCacheRecord(JSON.parse(raw), this.maxEntryBytes);
+      if (record.key !== key) {
+        throw new Error('Memory Search Cache physical and logical keys do not match.');
+      }
+      return record;
+    } catch {
+      await this.options.client.del(physicalKey).catch(() => 0);
+      return null;
+    }
+  }
+
+  async set(key: string, input: MemorySearchCacheRecord): Promise<void> {
+    const record = validateMemorySearchCacheRecord(input, this.maxEntryBytes);
+    if (record.key !== key) {
+      throw new Error('Memory Search Cache store key does not match record.key.');
+    }
+    if (record.scopeRevision !== (await this.getScopeRevision(record.scopeHash))) {
+      throw new Error('Memory Search Cache scope revision changed before the write completed.');
+    }
+    const ttlMs = record.expiresAt - this.now();
+    if (ttlMs <= 0) {
+      await this.delete(key);
+      return;
+    }
+    const physicalKey = this.recordKey(key);
+    const scopeIndexKey = this.scopeIndexKey(record.scopeHash);
+    await this.options.client.set(physicalKey, JSON.stringify(record), 'PX', ttlMs);
+    await this.options.client.sadd(scopeIndexKey, key);
+    await this.options.client.pexpire(scopeIndexKey, ttlMs);
+  }
+
+  async delete(key: string): Promise<void> {
+    const record = await this.get(key);
+    await this.options.client.del(this.recordKey(key));
+    if (record) await this.options.client.srem(this.scopeIndexKey(record.scopeHash), key);
+  }
+
+  async invalidateScope(scopeHash: string): Promise<number> {
+    await this.options.client.incr(this.scopeRevisionKey(scopeHash));
+    const scopeIndexKey = this.scopeIndexKey(scopeHash);
+    const keys = await this.options.client.smembers(scopeIndexKey);
+    if (keys.length > 0) {
+      await this.options.client.del(...keys.map((key) => this.recordKey(key)));
+    }
+    await this.options.client.del(scopeIndexKey);
+    return keys.length;
+  }
+
+  private recordKey(key: string): string {
+    return `${this.namespace}:record:${key}`;
+  }
+
+  private scopeIndexKey(scopeHash: string): string {
+    return `${this.namespace}:scope:${scopeHash}:keys`;
+  }
+
+  private scopeRevisionKey(scopeHash: string): string {
+    return `${this.namespace}:scope:${scopeHash}:revision`;
+  }
+}
+
 export function validateManagedMemorySearchResults(input: unknown): ManagedMemorySearchResult[] {
   return z.array(managedMemorySearchResultSchema).parse(input) as ManagedMemorySearchResult[];
 }
 
-export function validateMemorySearchCacheRecord(input: unknown): MemorySearchCacheRecord {
-  return memorySearchCacheRecordSchema.parse(input);
+export function validateMemorySearchCacheRecord(
+  input: unknown,
+  maxEntryBytes = 2 * 1024 * 1024
+): MemorySearchCacheRecord {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(input);
+  } catch (error) {
+    throw new Error(
+      `Memory Search Cache entry is not JSON-safe: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!serialized) throw new Error('Memory Search Cache entry is empty.');
+  const actualBytes = Buffer.byteLength(serialized, 'utf8');
+  if (actualBytes > positiveInteger(maxEntryBytes, 'maxEntryBytes')) {
+    throw new Error(
+      `Memory Search Cache entry is ${actualBytes} bytes; limit is ${maxEntryBytes} bytes.`
+    );
+  }
+  return memorySearchCacheRecordSchema.parse(JSON.parse(serialized));
 }
 
 function searchIdentity(
   request: ManagedMemorySearchRequest,
   providerRevision: string,
-  profileRevision: string
+  profileRevision: string,
+  scopeRevision: string
 ): { key: string; requestHash: string } {
   const requestHash = sha256({
     principal: {
@@ -547,6 +760,7 @@ function searchIdentity(
     rerank: request.rerank,
     pagination: request.pagination,
     providerRevision,
+    scopeRevision,
   });
   return { key: `memory-search-cache:v1:${requestHash}`, requestHash };
 }
@@ -569,6 +783,13 @@ function requiredString(value: string, field: string): string {
 function positiveInteger(value: number, field: string): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new TypeError(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: number, field: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new TypeError(`${field} must be a non-negative integer.`);
   }
   return value;
 }
