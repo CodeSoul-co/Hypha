@@ -55,6 +55,7 @@ export * from './redis-execution-cache-store';
 export * from './docker-cli-transport';
 export * from './docker-engine-client';
 export * from './docker-workspace-mount';
+export * from './docker-execution-policy';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
