@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ArtifactPutRequest } from '@hypha/core';
 import { readArtifactStream } from './artifact-content-io';
 import { S3ExecutionArtifactStore } from './s3-execution-artifact-store';
+import { AwsSdkS3ArtifactStoreTransport } from './s3-artifact-store-transport';
 import type {
   S3ArtifactObjectState,
   S3ArtifactReadResult,
@@ -158,6 +159,23 @@ describe('S3ExecutionArtifactStore', () => {
         details: { operation: 'put', providerCode: 'AccessDenied' },
       },
     });
+
+    transport.nextError = providerError('ServiceUnavailable', 503);
+    await expect(
+      store.put(request('objects/retryable.bin', Uint8Array.from([1])))
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_STORE_UNAVAILABLE',
+        retryable: true,
+        details: { operation: 'put', providerCode: 'ServiceUnavailable', status: 503 },
+      },
+    });
+  });
+
+  it('rejects invalid retry configuration before constructing an SDK client', () => {
+    expect(() => new AwsSdkS3ArtifactStoreTransport({ maxAttempts: 0 })).toThrow(
+      /maxAttempts/u
+    );
   });
 
   it('reports only configured capabilities and checks bucket health', async () => {
