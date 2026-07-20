@@ -21,6 +21,7 @@ import type {
   InferenceBackendRequest,
   InferenceProvider,
   KvCacheProvider,
+  PrefixSegmentationResult,
   PrefixCacheProvider,
 } from './types';
 
@@ -346,6 +347,68 @@ describe('@hypha/inference', () => {
       now: () => new Date('2026-07-02T00:00:01.000Z'),
     });
     await expect(expiredManager.getKv(kv)).resolves.toBeNull();
+  });
+
+  it('bounds in-memory prefix and KV providers with LRU eviction', async () => {
+    const prefixCache = new InMemoryPrefixCacheProvider({
+      maxEntries: 2,
+      maxEntryBytes: 64,
+      maxTotalBytes: 64,
+    });
+    const manager = new InferenceCacheManager({
+      prefixCache,
+      kvCache: new InMemoryKvCacheProvider(),
+    });
+    const first = await manager.putPrefix({ id: 'first', version: '1', content: 'first' });
+    const second = await manager.putPrefix({ id: 'second', version: '1', content: 'second' });
+    await expect(manager.getPrefix(first)).resolves.toBe('first');
+    const third = await manager.putPrefix({ id: 'third', version: '1', content: 'third' });
+    await expect(manager.getPrefix(second)).resolves.toBeNull();
+    await expect(manager.getPrefix(first)).resolves.toBe('first');
+    await expect(manager.getPrefix(third)).resolves.toBe('third');
+    expect(prefixCache.stats()).toEqual({ entries: 2, totalBytes: 10 });
+    await expect(
+      manager.putPrefix({ id: 'oversized', version: '1', content: 'x'.repeat(65) })
+    ).rejects.toMatchObject({ code: 'INFERENCE_CACHE_CAPACITY_EXCEEDED' });
+
+    const kvCache = new InMemoryKvCacheProvider({ maxEntries: 2 });
+    const refs = [0, 1, 2].map((index) => ({
+      id: `kv-${index}`,
+      provider: 'fixture',
+      modelAlias: 'default',
+      scope: 'run' as const,
+    }));
+    await kvCache.put(refs[0], { value: 0 });
+    await kvCache.put(refs[1], { value: 1 });
+    await expect(kvCache.get(refs[0])).resolves.toEqual({ value: 0 });
+    await kvCache.put(refs[2], { value: 2 });
+    expect(kvCache.size()).toBe(2);
+    await expect(kvCache.get(refs[1])).resolves.toBeNull();
+  });
+
+  it('separates identical inference cache references by user scope', async () => {
+    const prefixCache = new InMemoryPrefixCacheProvider();
+    const prefixBase = { id: 'shared', version: '1', contentHash: 'a'.repeat(64) };
+    const prefixA = { ...prefixBase, cacheScope: { userId: 'user-a' } };
+    const prefixB = { ...prefixBase, cacheScope: { userId: 'user-b' } };
+    await prefixCache.put(prefixA, 'content-a');
+    await prefixCache.put(prefixB, 'content-b');
+    await expect(prefixCache.get(prefixA)).resolves.toBe('content-a');
+    await expect(prefixCache.get(prefixB)).resolves.toBe('content-b');
+
+    const kvCache = new InMemoryKvCacheProvider();
+    const kvBase = {
+      id: 'shared',
+      provider: 'fixture',
+      modelAlias: 'default',
+      scope: 'session' as const,
+    };
+    const kvA = { ...kvBase, cacheScope: { userId: 'user-a' } };
+    const kvB = { ...kvBase, cacheScope: { userId: 'user-b' } };
+    await kvCache.put(kvA, { owner: 'a' });
+    await kvCache.put(kvB, { owner: 'b' });
+    await expect(kvCache.get(kvA)).resolves.toEqual({ owner: 'a' });
+    await expect(kvCache.get(kvB)).resolves.toEqual({ owner: 'b' });
   });
 
   it('enforces KV cache expiry on inference manager reads', async () => {
@@ -714,6 +777,7 @@ describe('@hypha/inference', () => {
       agentId: 'agent_plasmod',
       modelAlias: 'default-chat',
       backendId: 'sglang',
+      cacheScope: { userId: 'user-plasmod' },
       segmentation: segmented,
     });
     const second = await hotLayer.prepare({
@@ -723,6 +787,7 @@ describe('@hypha/inference', () => {
       agentId: 'agent_plasmod',
       modelAlias: 'default-chat',
       backendId: 'sglang',
+      cacheScope: { userId: 'user-plasmod' },
       segmentation: segmented,
     });
 
@@ -749,6 +814,97 @@ describe('@hypha/inference', () => {
 
     await hotLayer.invalidateSegment(ref.id, 'test');
     expect(hotLayer.getCacheMetadata(ref.id)).toBeNull();
+  });
+
+  it('keeps Plasmod reuse inside the hard user scope even when cross-session reuse is enabled', async () => {
+    const compiled = await new DefaultPromptCompiler().compile({
+      runId: 'run_scope_a1',
+      stepId: 'step_scope',
+      sessionId: 'session_a1',
+      agentId: 'agent_scope',
+      modelAlias: 'default-chat',
+      instructions: 'Stable scoped prefix.',
+      input: 'Dynamic input.',
+    });
+    const segmented = await new DefaultPrefixSegmenter().segment(compiled);
+    const hotLayer = new InMemoryPlasmodHotLayer();
+    const prepare = (userId: string, sessionId: string, runId: string) =>
+      hotLayer.prepare({
+        runId,
+        stepId: 'step_scope',
+        sessionId,
+        agentId: 'agent_scope',
+        modelAlias: 'default-chat',
+        backendId: 'sglang',
+        cacheScope: { userId },
+        segmentation: segmented,
+        reusePolicy: { allowCrossSession: true, allowCrossAgent: true },
+      });
+
+    const userAFirst = await prepare('user-a', 'session-a1', 'run-a1');
+    const userB = await prepare('user-b', 'session-b1', 'run-b1');
+    const userASecond = await prepare('user-a', 'session-a2', 'run-a2');
+
+    expect(userAFirst.reusedSegmentIds).toHaveLength(0);
+    expect(userB.reusedSegmentIds).toHaveLength(0);
+    expect(userB.prefixRefs[0]?.id).not.toBe(userAFirst.prefixRefs[0]?.id);
+    expect(userASecond.reusedSegmentIds).toEqual([userAFirst.prefixRefs[0]?.id]);
+  });
+
+  it('bounds Plasmod segments, states, aliases, reuse keys, and dependency fan-out', async () => {
+    const hotLayer = new InMemoryPlasmodHotLayer({
+      maxSegments: 1,
+      maxSessionStates: 1,
+      maxAliases: 1,
+      maxReuseKeys: 1,
+      maxDependenciesPerSegment: 1,
+    });
+    const segmentation = (
+      id: string,
+      contentHash: string,
+      dependencies: string[] = []
+    ): PrefixSegmentationResult => ({
+      compiled: { id: `compiled-${id}`, messages: [], text: id },
+      segments: [
+        {
+          id,
+          kind: 'system',
+          scope: 'agent',
+          content: id,
+          contentHash,
+          tokenCount: 4,
+          cacheable: true,
+          dependencies,
+        },
+      ],
+      stablePrefix: id,
+      dynamicPrompt: '',
+    });
+    const prepare = (id: string, hash: string, dependencies: string[] = []) =>
+      hotLayer.prepare({
+        runId: `run-${id}`,
+        stepId: 'step-bounded',
+        sessionId: `session-${id}`,
+        agentId: 'agent-bounded',
+        modelAlias: 'default-chat',
+        backendId: 'sglang',
+        cacheScope: { userId: 'user-bounded' },
+        segmentation: segmentation(id, hash, dependencies),
+      });
+
+    const first = await prepare('first', 'a'.repeat(64));
+    const second = await prepare('second', 'b'.repeat(64));
+    expect(second.invalidatedSegmentIds).toContain(first.prefixRefs[0]?.id);
+    expect(hotLayer.snapshot()).toMatchObject({
+      prefixRegistrySize: 1,
+      cacheMetadataSize: 1,
+      sessionStateSize: 1,
+      segmentAliasSize: 1,
+      reuseKeySize: 1,
+    });
+    const skipped = await prepare('fan-out', 'c'.repeat(64), ['dep-1', 'dep-2']);
+    expect(skipped.prefixRefs).toHaveLength(0);
+    expect(hotLayer.snapshot().invalidationGraphSize).toBeLessThanOrEqual(1);
   });
 
   it('registers all inference backends and defaults to SGLang', () => {
