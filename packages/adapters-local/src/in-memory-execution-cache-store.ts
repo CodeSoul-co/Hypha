@@ -9,6 +9,7 @@ import {
 export interface InMemoryExecutionCacheStoreOptions {
   maxEntries?: number;
   maxBytes?: number;
+  maxEntryBytes?: number;
 }
 
 export interface InMemoryExecutionCacheStoreStats {
@@ -30,12 +31,14 @@ export class InMemoryExecutionCacheStore implements ExecutionCacheStore {
   private readonly records = new Map<string, ExecutionCacheRecord>();
   private readonly maxEntries: number;
   private readonly maxBytes: number;
+  private readonly maxEntryBytes: number;
   private sizeBytes = 0;
   private evictions = 0;
 
   constructor(options: InMemoryExecutionCacheStoreOptions = {}) {
     this.maxEntries = positiveInteger(options.maxEntries ?? 1000, 'maxEntries');
     this.maxBytes = positiveInteger(options.maxBytes ?? 64 * 1024 * 1024, 'maxBytes');
+    this.maxEntryBytes = positiveInteger(options.maxEntryBytes ?? 1024 * 1024, 'maxEntryBytes');
   }
 
   async get(key: string): Promise<ExecutionCacheRecord | null> {
@@ -47,7 +50,7 @@ export class InMemoryExecutionCacheStore implements ExecutionCacheStore {
   }
 
   async set(key: string, rawRecord: ExecutionCacheRecord): Promise<void> {
-    const record = validateExecutionCacheRecord(rawRecord);
+    const record = validateExecutionCacheRecord(rawRecord, this.maxEntryBytes);
     if (record.key !== key) {
       throw new Error('Execution Cache store key does not match ExecutionCacheRecord.key.');
     }
@@ -87,7 +90,7 @@ export class InMemoryExecutionCacheStore implements ExecutionCacheStore {
 }
 
 function recordSize(record: ExecutionCacheRecord): number {
-  return record.sizeBytes ?? Buffer.byteLength(JSON.stringify(record), 'utf8');
+  return Buffer.byteLength(JSON.stringify(record), 'utf8');
 }
 
 function positiveInteger(value: number, field: string): number {

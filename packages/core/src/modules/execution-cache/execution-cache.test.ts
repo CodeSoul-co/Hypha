@@ -15,6 +15,7 @@ import {
   executionCommandFingerprintInputExample,
   executionEnvironmentFingerprintExample,
   validateExecutionCacheEntryProjection,
+  validateExecutionCacheRecord,
   validateExecutionCacheValidityInput,
   validateExecutionCommandFingerprintInput,
   validateExecutionEnvironmentFingerprint,
@@ -120,6 +121,24 @@ describe('Execution Cache boundary contracts', () => {
         ],
       })
     ).toThrow(/duplicate/u);
+  });
+
+  it('measures serialized records instead of trusting declared size metadata', () => {
+    expect(() =>
+      validateExecutionCacheRecord(
+        {
+          schemaVersion: '1.0',
+          keyVersion: '1',
+          key: 'execution-cache:v1:sha256:example',
+          scope: { userId: 'owner', workspaceId: 'workspace_01' },
+          projection: executionCacheEntryProjectionExample,
+          createdAt: 1,
+          expiresAt: 2,
+          sizeBytes: 1,
+        },
+        100
+      )
+    ).toThrow(/limit is 100 bytes/u);
   });
 
   it('canonicalizes key order while preserving argument identity through its hash', () => {
