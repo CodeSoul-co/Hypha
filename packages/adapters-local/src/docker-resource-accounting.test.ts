@@ -58,5 +58,7 @@ function command(): DockerCliResult {
     startedAt: '2026-07-18T00:00:00.000Z',
     completedAt: '2026-07-18T00:00:01.000Z',
     latencyMs: 1_000,
+    terminationMechanism: 'posix_process_group',
+    processTreeTerminationVerified: false,
   };
 }
