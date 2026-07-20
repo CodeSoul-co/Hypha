@@ -46,7 +46,9 @@ envelope, payload, and matching Workspace identity before the event can be recor
 Sandbox and command states have explicit transition tables. Providers return normalized records and
 results rather than SDK objects. Command results bind execution and sandbox identity, distinguish
 terminal states, require normalized error evidence for unsuccessful terminals, and use artifact
-references when bounded inline output is truncated.
+references when bounded inline output is truncated. Bounded inline stdout and stderr carry SHA-256
+content hashes; a truncated inline value is only a summary and must reference the preserved full
+output Artifact.
 
 `SandboxProviderCapabilities` and capability negotiation keep environment requirements separate
 from a concrete provider. Runtime code can reject an incompatible provider before any side effect.
