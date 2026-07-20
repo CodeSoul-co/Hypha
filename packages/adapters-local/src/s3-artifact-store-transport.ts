@@ -172,9 +172,7 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
     }
   }
 
-  async get(
-    input: Parameters<S3ArtifactStoreTransport['get']>[0]
-  ): Promise<S3ArtifactReadResult> {
+  async get(input: Parameters<S3ArtifactStoreTransport['get']>[0]): Promise<S3ArtifactReadResult> {
     const result = await this.client.send(
       new GetObjectCommand({
         Bucket: input.bucket,
@@ -297,16 +295,18 @@ export class AwsSdkS3ArtifactStoreTransport implements S3ArtifactStoreTransport 
 function isAsyncByteStream(value: unknown): value is AsyncIterable<Uint8Array> {
   return Boolean(
     value &&
-      typeof value === 'object' &&
-      Symbol.asyncIterator in value &&
-      typeof (value as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] === 'function'
+    typeof value === 'object' &&
+    Symbol.asyncIterator in value &&
+    typeof (value as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] === 'function'
   );
 }
 
 function isNotFound(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const value = error as { name?: string; $metadata?: { httpStatusCode?: number } };
-  return value.$metadata?.httpStatusCode === 404 || ['NotFound', 'NoSuchKey'].includes(value.name ?? '');
+  return (
+    value.$metadata?.httpStatusCode === 404 || ['NotFound', 'NoSuchKey'].includes(value.name ?? '')
+  );
 }
 
 function encodeS3CopyKey(key: string): string {
