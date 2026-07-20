@@ -52,6 +52,7 @@ export * from './local-process-result';
 export * from './local-process-execution-provider';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
+export * from './docker-cli-transport';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
