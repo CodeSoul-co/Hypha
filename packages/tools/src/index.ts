@@ -279,6 +279,8 @@ export interface ToolReceiptReconciler {
 }
 
 export interface ToolResultCacheEntry {
+  schemaVersion: '1.0';
+  keyVersion: '1';
   validity: ToolCacheValidityRecord;
   result: ToolCachedResultProjection;
   createdAt: string;
@@ -296,6 +298,179 @@ export interface ToolResultCache {
   set(entry: ToolResultCacheEntry): Promise<void>;
   delete?(key: string): Promise<void>;
 }
+
+export interface ToolResultCacheArtifactVerifier {
+  verify(request: {
+    toolId: string;
+    artifactRefs: readonly string[];
+    tenantId?: string;
+    userId?: string;
+    workspaceId?: string;
+  }): Promise<boolean>;
+}
+
+export const toolCacheValidityRecordSchema = z
+  .object({
+    toolId: z.string().min(1).max(512),
+    toolRevision: z.string().min(1).max(512),
+    inputHash: z.string().min(1).max(512),
+    scopeHash: z.string().min(1).max(512),
+    policyRevision: z.string().min(1).max(512),
+    contractSnapshotHash: z.string().min(1).max(512).optional(),
+    capabilityHash: z.string().min(1).max(512).optional(),
+    externalStateVersion: z.string().min(1).max(512).optional(),
+    key: z.string().min(1).max(512),
+    validUntil: z.string().datetime().optional(),
+  })
+  .strict() satisfies ZodType<ToolCacheValidityRecord>;
+
+const toolResultContentSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string().max(1024 * 1024) }).strict(),
+  z
+    .object({
+      type: z.literal('json'),
+      value: z.custom<unknown>((value) => value !== undefined, 'JSON content value is required.'),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('image'),
+      artifactRef: z.string().min(1).max(4096).optional(),
+      url: z.string().min(1).max(16_384).optional(),
+      mimeType: z.string().min(1).max(512).optional(),
+      alt: z.string().max(4096).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('resource'),
+      uri: z.string().min(1).max(16_384),
+      mimeType: z.string().min(1).max(512).optional(),
+      title: z.string().max(4096).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('artifact'),
+      artifactRef: z.string().min(1).max(4096),
+      title: z.string().max(4096).optional(),
+      mimeType: z.string().min(1).max(512).optional(),
+    })
+    .strict(),
+]) as unknown as ZodType<ToolResultContent>;
+
+export const toolResultCacheEntrySchema = z
+  .object({
+    schemaVersion: z.literal('1.0'),
+    keyVersion: z.literal('1'),
+    validity: toolCacheValidityRecordSchema,
+    result: z
+      .object({
+        output: z.unknown().optional(),
+        content: z.array(toolResultContentSchema).max(1_000).optional(),
+        artifactRefs: z.array(z.string().min(1).max(4096)).max(1_000).optional(),
+      })
+      .strict(),
+    createdAt: z.string().datetime(),
+  })
+  .strict() satisfies ZodType<ToolResultCacheEntry>;
+
+export const toolResultCacheEntryJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['schemaVersion', 'keyVersion', 'validity', 'result', 'createdAt'],
+  properties: {
+    schemaVersion: { const: '1.0' },
+    keyVersion: { const: '1' },
+    validity: {
+      type: 'object',
+      required: ['toolId', 'toolRevision', 'inputHash', 'scopeHash', 'policyRevision', 'key'],
+      properties: {
+        toolId: { type: 'string', maxLength: 512 },
+        toolRevision: { type: 'string', maxLength: 512 },
+        inputHash: { type: 'string', maxLength: 512 },
+        scopeHash: { type: 'string', maxLength: 512 },
+        policyRevision: { type: 'string', maxLength: 512 },
+        contractSnapshotHash: { type: 'string', maxLength: 512 },
+        capabilityHash: { type: 'string', maxLength: 512 },
+        externalStateVersion: { type: 'string', maxLength: 512 },
+        key: { type: 'string', maxLength: 512 },
+        validUntil: { type: 'string', format: 'date-time' },
+      },
+      additionalProperties: false,
+    },
+    result: {
+      type: 'object',
+      properties: {
+        output: {},
+        content: {
+          type: 'array',
+          maxItems: 1000,
+          items: {
+            oneOf: [
+              {
+                type: 'object',
+                required: ['type', 'text'],
+                properties: {
+                  type: { const: 'text' },
+                  text: { type: 'string', maxLength: 1048576 },
+                },
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                required: ['type', 'value'],
+                properties: { type: { const: 'json' }, value: {} },
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                required: ['type'],
+                properties: {
+                  type: { const: 'image' },
+                  artifactRef: { type: 'string', maxLength: 4096 },
+                  url: { type: 'string', maxLength: 16384 },
+                  mimeType: { type: 'string', maxLength: 512 },
+                  alt: { type: 'string', maxLength: 4096 },
+                },
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                required: ['type', 'uri'],
+                properties: {
+                  type: { const: 'resource' },
+                  uri: { type: 'string', maxLength: 16384 },
+                  mimeType: { type: 'string', maxLength: 512 },
+                  title: { type: 'string', maxLength: 4096 },
+                },
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                required: ['type', 'artifactRef'],
+                properties: {
+                  type: { const: 'artifact' },
+                  artifactRef: { type: 'string', maxLength: 4096 },
+                  title: { type: 'string', maxLength: 4096 },
+                  mimeType: { type: 'string', maxLength: 512 },
+                },
+                additionalProperties: false,
+              },
+            ],
+          },
+        },
+        artifactRefs: {
+          type: 'array',
+          maxItems: 1000,
+          items: { type: 'string', maxLength: 4096 },
+        },
+      },
+      additionalProperties: false,
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+  additionalProperties: false,
+};
 
 export interface InMemoryToolResultCacheOptions {
   maxEntries?: number;
@@ -318,11 +493,106 @@ export class ToolResultCacheOperationTimeoutError extends Error {
   readonly code = 'TOOL_RESULT_CACHE_TIMEOUT';
 
   constructor(
-    readonly operation: 'get' | 'set' | 'delete',
+    readonly operation: 'get' | 'set' | 'delete' | 'verify',
     readonly timeoutMs: number
   ) {
     super(`Tool result cache ${operation} timed out after ${timeoutMs}ms.`);
     this.name = 'ToolResultCacheOperationTimeoutError';
+  }
+}
+
+export class ToolResultCacheValidationError extends Error {
+  readonly code = 'TOOL_RESULT_CACHE_CORRUPT';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolResultCacheValidationError';
+  }
+}
+
+export interface RedisLikeToolResultCacheClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, mode?: 'PX', durationMilliseconds?: number): Promise<unknown>;
+  del(...keys: string[]): Promise<number>;
+}
+
+export interface RedisToolResultCacheOptions {
+  client: RedisLikeToolResultCacheClient;
+  namespace?: string;
+  maxEntryBytes?: number;
+  defaultTtlMs?: number;
+  now?: () => string;
+}
+
+/** Shared Redis-compatible Store for local, self-hosted, and managed Redis deployments. */
+export class RedisToolResultCache implements ToolResultCache {
+  private readonly namespace: string;
+  private readonly maxEntryBytes: number;
+  private readonly defaultTtlMs: number;
+  private readonly now: () => string;
+
+  constructor(private readonly options: RedisToolResultCacheOptions) {
+    this.namespace = (options.namespace ?? 'hypha:tool-result-cache:v1').replace(/:+$/, '');
+    this.maxEntryBytes = Math.max(1, options.maxEntryBytes ?? 1024 * 1024);
+    this.defaultTtlMs = Math.max(1, options.defaultTtlMs ?? 24 * 60 * 60 * 1000);
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  async get(key: string): Promise<ToolResultCacheEntry | null> {
+    const physicalKey = this.physicalKey(key);
+    const raw = await this.options.client.get(physicalKey);
+    if (raw === null) return null;
+    try {
+      if (Buffer.byteLength(raw, 'utf8') > this.maxEntryBytes) {
+        throw new ToolResultCacheValidationError('Tool result cache entry exceeds its read limit.');
+      }
+      const entry = validateToolResultCacheEntry(JSON.parse(raw), this.maxEntryBytes);
+      if (entry.validity.key !== key) {
+        throw new ToolResultCacheValidationError(
+          'Tool result cache physical key does not match the logical validity key.'
+        );
+      }
+      return entry;
+    } catch {
+      await this.options.client.del(physicalKey).catch(() => 0);
+      return null;
+    }
+  }
+
+  async set(entry: ToolResultCacheEntry): Promise<void> {
+    const validated = validateToolResultCacheEntry(entry, this.maxEntryBytes);
+    const serialized = JSON.stringify(validated);
+    const validUntil = validated.validity.validUntil
+      ? Date.parse(validated.validity.validUntil)
+      : undefined;
+    if (validUntil !== undefined) {
+      const ttlMs = validUntil - Date.parse(this.now());
+      if (ttlMs <= 0) {
+        await this.delete(validated.validity.key);
+        return;
+      }
+      await this.options.client.set(
+        this.physicalKey(validated.validity.key),
+        serialized,
+        'PX',
+        ttlMs
+      );
+      return;
+    }
+    await this.options.client.set(
+      this.physicalKey(validated.validity.key),
+      serialized,
+      'PX',
+      this.defaultTtlMs
+    );
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.options.client.del(this.physicalKey(key));
+  }
+
+  private physicalKey(key: string): string {
+    return `${this.namespace}:${key}`;
   }
 }
 
@@ -354,20 +624,29 @@ export class InMemoryToolResultCache implements ToolResultCache {
   async get(key: string): Promise<ToolResultCacheEntry | null> {
     const entry = this.entries.get(key);
     if (!entry) return null;
+    let validated: ToolResultCacheEntry;
+    try {
+      validated = validateToolResultCacheEntry(entry, this.maxEntryBytes);
+      if (validated.validity.key !== key) throw new ToolResultCacheValidationError('Key mismatch.');
+    } catch {
+      this.entries.delete(key);
+      return null;
+    }
     this.entries.delete(key);
-    this.entries.set(key, entry);
-    return cloneToolCacheValue(entry);
+    this.entries.set(key, validated);
+    return cloneToolCacheValue(validated);
   }
 
   async set(entry: ToolResultCacheEntry): Promise<void> {
-    const serialized = JSON.stringify(entry);
+    const validated = validateToolResultCacheEntry(entry, this.maxEntryBytes);
+    const serialized = JSON.stringify(validated);
     const actualBytes = Buffer.byteLength(serialized, 'utf8');
     if (actualBytes > this.maxEntryBytes) {
       throw new ToolResultCacheEntryTooLargeError(actualBytes, this.maxEntryBytes);
     }
-    const copy = cloneToolCacheValue(entry);
-    this.entries.delete(entry.validity.key);
-    this.entries.set(entry.validity.key, copy);
+    const copy = cloneToolCacheValue(validated);
+    this.entries.delete(validated.validity.key);
+    this.entries.set(validated.validity.key, copy);
     while (this.entries.size > this.maxEntries) {
       const oldestKey = this.entries.keys().next().value as string | undefined;
       if (!oldestKey) break;
@@ -1100,6 +1379,8 @@ export class GovernedToolRunner implements ToolRunner {
   private readonly resultCache?: ToolResultCache;
   private readonly resultCacheFailureMode: 'bypass' | 'strict';
   private readonly resultCacheTimeoutMs: number;
+  private readonly resultCacheMaxEntryBytes: number;
+  private readonly resultCacheArtifactVerifier?: ToolResultCacheArtifactVerifier;
   private readonly observationPort?: ToolObservationPort;
   private readonly telemetry?: TelemetryRecorder;
   private readonly inFlight = new Map<string, Promise<ToolCallResult>>();
@@ -1124,6 +1405,8 @@ export class GovernedToolRunner implements ToolRunner {
       resultCache?: ToolResultCache;
       resultCacheFailureMode?: 'bypass' | 'strict';
       resultCacheTimeoutMs?: number;
+      resultCacheMaxEntryBytes?: number;
+      resultCacheArtifactVerifier?: ToolResultCacheArtifactVerifier;
       observationPort?: ToolObservationPort;
       telemetry?: TelemetryRecorder;
       now?: () => string;
@@ -1139,6 +1422,8 @@ export class GovernedToolRunner implements ToolRunner {
     this.resultCache = options.resultCache;
     this.resultCacheFailureMode = options.resultCacheFailureMode ?? 'bypass';
     this.resultCacheTimeoutMs = Math.max(1, options.resultCacheTimeoutMs ?? 250);
+    this.resultCacheMaxEntryBytes = Math.max(1, options.resultCacheMaxEntryBytes ?? 1024 * 1024);
+    this.resultCacheArtifactVerifier = options.resultCacheArtifactVerifier;
     this.observationPort = options.observationPort;
     this.telemetry = options.telemetry;
     this.now = options.now ?? (() => new Date().toISOString());
@@ -2043,7 +2328,7 @@ export class GovernedToolRunner implements ToolRunner {
     }
 
     const cacheOperation = async <T>(
-      operation: 'get' | 'set' | 'delete',
+      operation: 'get' | 'set' | 'delete' | 'verify',
       task: () => Promise<T>,
       fallback: T,
       cacheKey?: string
@@ -2065,15 +2350,24 @@ export class GovernedToolRunner implements ToolRunner {
 
     let cacheValidity: ToolCacheValidityRecord | undefined;
     const cachePolicy = spec.cache;
+    const externalStateVersion =
+      typeof request.context.metadata?.externalStateVersion === 'string' &&
+      request.context.metadata.externalStateVersion.length > 0
+        ? request.context.metadata.externalStateVersion
+        : undefined;
+    const hasSensitiveOutput = Boolean(spec.output?.sensitivePaths?.length);
     const cacheAllowed = Boolean(
       this.resultCache &&
       cachePolicy &&
-      cachePolicy.mode !== 'disabled' &&
+      cachePolicy.mode === 'result' &&
       (spec.sideEffectLevel === 'none' || spec.sideEffectLevel === 'read') &&
+      (spec.sideEffectLevel !== 'read' || externalStateVersion) &&
+      !hasSensitiveOutput &&
       (!cachePolicy.allowForSideEffectLevels ||
         cachePolicy.allowForSideEffectLevels.includes(spec.sideEffectLevel))
     );
     if (cacheAllowed && cachePolicy) {
+      const resultCache = this.resultCache!;
       const snapshot = request.context.contractSnapshotRef
         ? await this.snapshotStore?.get(request.context.contractSnapshotRef)
         : null;
@@ -2085,10 +2379,7 @@ export class GovernedToolRunner implements ToolRunner {
         policyRevision: resolvePolicyRevision(decision, request),
         contractSnapshotHash: snapshot?.snapshotHash,
         capabilityHash: spec.sourceRef?.capabilityHash,
-        externalStateVersion:
-          typeof request.context.metadata?.externalStateVersion === 'string'
-            ? request.context.metadata.externalStateVersion
-            : undefined,
+        externalStateVersion,
       };
       const key = createToolCacheValidityKey(validityInput);
       cacheValidity = {
@@ -2099,12 +2390,76 @@ export class GovernedToolRunner implements ToolRunner {
           : undefined,
       };
       await record('tool.cache.lookup', 'cache-lookup', { ...basePayload, cacheKey: key });
-      const cached = await cacheOperation('get', () => this.resultCache!.get(key), null, key);
-      if (
-        cached &&
-        (!cached.validity.validUntil ||
-          Date.parse(cached.validity.validUntil) > Date.parse(this.now()))
-      ) {
+      const cachedValue = await cacheOperation('get', () => resultCache.get(key), null, key);
+      let cached: ToolResultCacheEntry | null = null;
+      if (cachedValue) {
+        try {
+          const validated = validateToolResultCacheEntry(
+            cachedValue,
+            this.resultCacheMaxEntryBytes
+          );
+          if (
+            !isToolResultCacheEntryUsable(
+              validated,
+              cacheValidity,
+              cachePolicy.ttlSeconds,
+              this.now()
+            )
+          ) {
+            throw new ToolResultCacheValidationError(
+              'Tool result cache validity does not match the current invocation.'
+            );
+          }
+          cached = validated;
+        } catch (error) {
+          await record('tool.cache.bypass', 'cache-entry-rejected', {
+            ...basePayload,
+            reason: 'cache_entry_corrupt_or_mismatched',
+            cacheKey: key,
+            code: toolCacheErrorCode(error),
+          });
+          if (resultCache.delete) {
+            await cacheOperation('delete', () => resultCache.delete!(key), undefined, key);
+          }
+        }
+      }
+      const cachedArtifactRefs = cached ? collectToolCacheArtifactRefs(cached.result) : [];
+      if (cached && cachedArtifactRefs.length > 0) {
+        if (!this.resultCacheArtifactVerifier) {
+          await record('tool.cache.bypass', 'cache-artifact-verifier-unavailable', {
+            ...basePayload,
+            reason: 'artifact_verification_unavailable',
+            cacheKey: key,
+          });
+          cached = null;
+        } else {
+          const verified = await cacheOperation(
+            'verify',
+            () =>
+              this.resultCacheArtifactVerifier!.verify({
+                toolId: spec.id,
+                artifactRefs: cachedArtifactRefs,
+                tenantId: request.context.tenantId ?? request.context.principal?.tenantId,
+                userId: request.context.userId ?? request.context.principal?.userId,
+                workspaceId: request.context.workspaceId ?? request.context.principal?.workspaceId,
+              }),
+            false,
+            key
+          );
+          if (!verified) {
+            await record('tool.cache.bypass', 'cache-artifact-verification-failed', {
+              ...basePayload,
+              reason: 'artifact_verification_failed',
+              cacheKey: key,
+            });
+            if (resultCache.delete) {
+              await cacheOperation('delete', () => resultCache.delete!(key), undefined, key);
+            }
+            cached = null;
+          }
+        }
+      }
+      if (cached) {
         await record('tool.cache.hit', 'cache-hit', { ...basePayload, cacheKey: key });
         await record('tool.call.completed', 'completed:cache-hit', {
           ...basePayload,
@@ -2120,14 +2475,20 @@ export class GovernedToolRunner implements ToolRunner {
           durationMs: Date.now() - startedAt,
         };
       }
-      if (cached && this.resultCache!.delete) {
-        await cacheOperation('delete', () => this.resultCache!.delete!(key), undefined, key);
-      }
       await record('tool.cache.miss', 'cache-miss', { ...basePayload, cacheKey: key });
-    } else if (cachePolicy?.mode !== 'disabled') {
+    } else if (cachePolicy && cachePolicy.mode !== 'disabled') {
+      const bypassReason = !this.resultCache
+        ? 'cache_port_unavailable'
+        : cachePolicy.mode !== 'result'
+          ? 'cache_mode_not_supported'
+          : hasSensitiveOutput
+            ? 'sensitive_output_not_cacheable'
+            : spec.sideEffectLevel === 'read' && !externalStateVersion
+              ? 'external_state_version_required'
+              : 'side_effect_not_cacheable';
       await record('tool.cache.bypass', 'cache-bypass', {
         ...basePayload,
-        reason: this.resultCache ? 'side_effect_not_cacheable' : 'cache_port_unavailable',
+        reason: bypassReason,
       });
     }
 
@@ -2405,10 +2766,21 @@ export class GovernedToolRunner implements ToolRunner {
           durationMs,
         };
         if (cacheValidity && this.resultCache) {
+          const resultArtifactRefs = collectToolCacheArtifactRefs(result);
+          if (resultArtifactRefs.length > 0 && !this.resultCacheArtifactVerifier) {
+            await record('tool.cache.bypass', 'cache-write-artifact-verifier-unavailable', {
+              ...basePayload,
+              reason: 'artifact_verification_unavailable',
+              cacheKey: cacheValidity.key,
+            });
+            return result;
+          }
           const wrote = await cacheOperation(
             'set',
             async () => {
               await this.resultCache!.set({
+                schemaVersion: '1.0',
+                keyVersion: '1',
                 validity: cacheValidity,
                 result: projectToolResultForCache(result),
                 createdAt: this.now(),
@@ -3544,12 +3916,93 @@ function projectToolResultForCache(result: ToolCallResult): ToolCachedResultProj
   });
 }
 
+export function validateToolResultCacheEntry(
+  value: unknown,
+  maxEntryBytes = 1024 * 1024
+): ToolResultCacheEntry {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch (error) {
+    throw new ToolResultCacheValidationError(
+      `Tool result cache entry is not JSON-safe: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!serialized) {
+    throw new ToolResultCacheValidationError('Tool result cache entry is empty.');
+  }
+  const actualBytes = Buffer.byteLength(serialized, 'utf8');
+  if (actualBytes > Math.max(1, maxEntryBytes)) {
+    throw new ToolResultCacheEntryTooLargeError(actualBytes, Math.max(1, maxEntryBytes));
+  }
+  const parsed = toolResultCacheEntrySchema.safeParse(JSON.parse(serialized));
+  if (!parsed.success) {
+    throw new ToolResultCacheValidationError(parsed.error.message);
+  }
+  const expectedKey = createToolCacheValidityKey(toolCacheValidityInput(parsed.data.validity));
+  if (parsed.data.validity.key !== expectedKey) {
+    throw new ToolResultCacheValidationError(
+      'Tool result cache validity key does not match its canonical validity input.'
+    );
+  }
+  return parsed.data;
+}
+
+function toolCacheValidityInput(validity: ToolCacheValidityRecord) {
+  return {
+    toolId: validity.toolId,
+    toolRevision: validity.toolRevision,
+    inputHash: validity.inputHash,
+    scopeHash: validity.scopeHash,
+    policyRevision: validity.policyRevision,
+    contractSnapshotHash: validity.contractSnapshotHash,
+    capabilityHash: validity.capabilityHash,
+    externalStateVersion: validity.externalStateVersion,
+  };
+}
+
+function isToolResultCacheEntryUsable(
+  entry: ToolResultCacheEntry,
+  expected: ToolCacheValidityRecord,
+  ttlSeconds: number | undefined,
+  currentTime: string
+): boolean {
+  if (!deepEqual(toolCacheValidityInput(entry.validity), toolCacheValidityInput(expected))) {
+    return false;
+  }
+  if (entry.validity.key !== expected.key) return false;
+  const createdAt = Date.parse(entry.createdAt);
+  const now = Date.parse(currentTime);
+  if (!Number.isFinite(createdAt) || !Number.isFinite(now) || createdAt > now + 60_000)
+    return false;
+  if (ttlSeconds === undefined) return entry.validity.validUntil === undefined;
+  if (!entry.validity.validUntil) return false;
+  const validUntil = Date.parse(entry.validity.validUntil);
+  return (
+    Number.isFinite(validUntil) &&
+    validUntil > now &&
+    validUntil <= createdAt + Math.max(0, ttlSeconds) * 1_000 + 1_000
+  );
+}
+
+function collectToolCacheArtifactRefs(
+  value: Pick<ToolCachedResultProjection, 'content' | 'artifactRefs'>
+): string[] {
+  const refs = new Set(value.artifactRefs ?? []);
+  for (const item of value.content ?? []) {
+    if ((item.type === 'artifact' || item.type === 'image') && item.artifactRef) {
+      refs.add(item.artifactRef);
+    }
+  }
+  return [...refs].sort();
+}
+
 function cloneToolCacheValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
 async function runToolCacheOperation<T>(
-  operation: 'get' | 'set' | 'delete',
+  operation: 'get' | 'set' | 'delete' | 'verify',
   task: () => Promise<T>,
   timeoutMs: number
 ): Promise<T> {

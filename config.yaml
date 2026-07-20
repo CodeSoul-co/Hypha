@@ -700,6 +700,16 @@ skills:
   autoLoad: true
 
 tools:
+  # Optional, non-authoritative cache for governed none/read Tool results.
+  # `redis` reuses the configured local, self-hosted, or managed Redis connection.
+  resultCache:
+    store: "${HYPHA_TOOL_RESULT_CACHE:off}"
+    failureMode: "${HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE:bypass}"
+    operationTimeoutMs: "${HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS:250}"
+    maxEntries: "${HYPHA_TOOL_RESULT_CACHE_MAX_ENTRIES:1000}"
+    maxEntryBytes: "${HYPHA_TOOL_RESULT_CACHE_MAX_ENTRY_BYTES:1048576}"
+    redisDefaultTtlMs: "${HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS:86400000}"
+    namespace: "${HYPHA_TOOL_RESULT_CACHE_NAMESPACE:tool-result-cache:v1}"
   configPath: "./configs/tools.yaml"
   filesystem:
     # Relative paths resolve from workingDirectory. Lists are comma-separated
