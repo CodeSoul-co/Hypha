@@ -411,6 +411,25 @@ describe('@hypha/inference', () => {
     await expect(kvCache.get(kvB)).resolves.toEqual({ owner: 'b' });
   });
 
+  it('time-bounds direct inference cache manager operations', async () => {
+    const pending = () => new Promise<never>(() => undefined);
+    const manager = new InferenceCacheManager({
+      prefixCache: {
+        get: pending,
+        put: pending,
+        invalidate: async () => undefined,
+      },
+      kvCache: new InMemoryKvCacheProvider(),
+      operationTimeoutMs: 5,
+    });
+    await expect(
+      manager.getPrefix({ id: 'pending', version: '1', contentHash: 'a'.repeat(64) })
+    ).rejects.toMatchObject({
+      code: 'INFERENCE_CACHE_OPERATION_TIMEOUT',
+      operation: 'prefix_read',
+    });
+  });
+
   it('enforces KV cache expiry on inference manager reads', async () => {
     const kvCache = new InMemoryKvCacheProvider();
     const kv = {
@@ -639,6 +658,55 @@ describe('@hypha/inference', () => {
     });
     expect(failures).toHaveLength(3);
     expect(failures.every((failure) => failure.module === 'cache')).toBe(true);
+  });
+
+  it('time-bounds hanging cache providers before fail-open inference continues', async () => {
+    const pending = () => new Promise<never>(() => undefined);
+    const failures: RecoveryFailure[] = [];
+    const manager = new InferenceManager({
+      prefixCache: { get: pending, put: pending, invalidate: pending },
+      kvCache: { get: pending, put: pending, invalidate: pending },
+      cacheOperationTimeoutMs: 5,
+      onRecoveryFailure: (failure) => {
+        failures.push(failure);
+      },
+    });
+    manager.register({
+      id: 'mock',
+      infer: async () => ({
+        id: 'response_timeout_bypass',
+        output: 'completed',
+        nextKvCacheValue: { handle: 'next' },
+      }),
+    });
+    const kv = { id: 'kv-timeout', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+    const startedAt = Date.now();
+    const response = await manager.infer('mock', {
+      runId: 'run_cache_timeout',
+      stepId: 'step_cache_timeout',
+      modelAlias: 'default',
+      input: 'hello',
+      cachePolicy: {
+        prefix: { id: 'prefix-timeout', version: '1', contentHash: 'hash' },
+        kvCache: kv,
+        writeKvCache: { ref: kv },
+      },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(response).toMatchObject({
+      id: 'response_timeout_bypass',
+      output: 'completed',
+      cache: {
+        bypassed: true,
+        issues: [
+          { operation: 'prefix_read', code: 'INFERENCE_CACHE_OPERATION_TIMEOUT' },
+          { operation: 'kv_read', code: 'INFERENCE_CACHE_OPERATION_TIMEOUT' },
+          { operation: 'kv_write', code: 'INFERENCE_CACHE_OPERATION_TIMEOUT' },
+        ],
+      },
+    });
+    expect(failures).toHaveLength(3);
   });
 
   it('reports provider failures without hiding the original inference error', async () => {
