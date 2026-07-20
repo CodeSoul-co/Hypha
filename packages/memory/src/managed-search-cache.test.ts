@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { managedMemoryRecordExample } from './record-contract';
+import { hashMemoryScope } from './memory-utils';
 import {
   CachedMemoryManagementProvider,
   InMemoryMemorySearchCacheStore,
+  RedisMemorySearchCacheStore,
   type MemorySearchCacheRecord,
   type MemorySearchCacheStore,
 } from './managed-search-cache';
@@ -104,6 +106,7 @@ describe('CachedMemoryManagementProvider', () => {
 
   it('time-bounds Cache Stores and preserves the Memory provider result by default', async () => {
     const hanging: MemorySearchCacheStore = {
+      getScopeRevision: async () => '0',
       get: async () => new Promise<MemorySearchCacheRecord | null>(() => undefined),
       set: async () => undefined,
       delete: async () => undefined,
@@ -130,6 +133,7 @@ describe('CachedMemoryManagementProvider', () => {
 
   it('does not retry a failed Memory provider after quarantining a corrupt cache record', async () => {
     const cache: MemorySearchCacheStore = {
+      getScopeRevision: async () => '0',
       get: async () => ({ invalid: true }) as unknown as MemorySearchCacheRecord,
       set: async () => undefined,
       delete: async () => undefined,
@@ -170,6 +174,167 @@ describe('CachedMemoryManagementProvider', () => {
 
     const record = (await store.get(writtenKeys.at(-1)!))!;
     await expect(store.set('different-key', record)).rejects.toThrow(/does not match/u);
+  });
+
+  it('uses scope revisions to fence a search that overlaps a successful mutation', async () => {
+    let resolveFirst: ((results: ManagedMemorySearchResult[]) => void) | undefined;
+    const search = vi
+      .fn<(request: ManagedMemorySearchRequest) => Promise<ManagedMemorySearchResult[]>>()
+      .mockImplementationOnce(
+        (request) =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+            void request;
+          })
+      )
+      .mockImplementation(async (request) => resultsFor(request));
+    const underlying = testProvider(search);
+    const cache = new InMemoryMemorySearchCacheStore();
+    const provider = new CachedMemoryManagementProvider({
+      provider: underlying,
+      cache,
+      providerRevision: 'provider:v1',
+      maxScopeRevisionRetries: 1,
+    });
+    const request = searchRequest('operation:overlap');
+    const pending = provider.search(request);
+    await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+
+    await provider.add({
+      operationId: 'operation:mutation',
+      principal: request.principal,
+      scope: request.scope,
+      input: 'new fact',
+      inputType: 'text',
+      memoryType: 'semantic',
+      source: { type: 'user_message' },
+      profileRef: request.profileRef,
+    });
+    resolveFirst!(resultsFor(request));
+    await expect(pending).resolves.toHaveLength(1);
+    expect(search).toHaveBeenCalledTimes(2);
+
+    await provider.search({ ...request, operationId: 'operation:after-overlap' });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(await cache.getScopeRevision(hashMemoryScope(request.scope))).not.toBe('0');
+  });
+
+  it('supports shared Redis-compatible caching with scoped generation invalidation', async () => {
+    const strings = new Map<string, string>();
+    const sets = new Map<string, Set<string>>();
+    const client = {
+      async get(key: string) {
+        return strings.get(key) ?? null;
+      },
+      async set(key: string, value: string) {
+        strings.set(key, value);
+        return 'OK';
+      },
+      async del(...keys: string[]) {
+        let deleted = 0;
+        for (const key of keys) {
+          deleted += strings.delete(key) ? 1 : 0;
+          deleted += sets.delete(key) ? 1 : 0;
+        }
+        return deleted;
+      },
+      async sadd(key: string, ...members: string[]) {
+        const values = sets.get(key) ?? new Set<string>();
+        const before = values.size;
+        members.forEach((member) => values.add(member));
+        sets.set(key, values);
+        return values.size - before;
+      },
+      async srem(key: string, ...members: string[]) {
+        const values = sets.get(key);
+        if (!values) return 0;
+        let deleted = 0;
+        members.forEach((member) => {
+          deleted += values.delete(member) ? 1 : 0;
+        });
+        return deleted;
+      },
+      async smembers(key: string) {
+        return [...(sets.get(key) ?? [])];
+      },
+      async incr(key: string) {
+        const next = Number(strings.get(key) ?? '0') + 1;
+        strings.set(key, String(next));
+        return next;
+      },
+      async pexpire() {
+        return 1;
+      },
+    };
+    const cache = new RedisMemorySearchCacheStore({
+      client,
+      namespace: 'test:memory-cache',
+    });
+    const search = vi.fn(async (request: ManagedMemorySearchRequest) => resultsFor(request));
+    const underlying = testProvider(search);
+    const provider = new CachedMemoryManagementProvider({
+      provider: underlying,
+      cache,
+      providerRevision: 'provider:v1',
+    });
+    const request = searchRequest('operation:redis-one');
+
+    await provider.search(request);
+    await provider.search({ ...request, operationId: 'operation:redis-two' });
+    expect(search).toHaveBeenCalledOnce();
+    await provider.update({
+      operationId: 'operation:redis-update',
+      principal: request.principal,
+      scope: request.scope,
+      memoryId: 'memory_01',
+      patch: { summary: 'updated' },
+      reason: 'test',
+    });
+    await provider.search({ ...request, operationId: 'operation:redis-three' });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(Number(await cache.getScopeRevision(hashMemoryScope(request.scope)))).toBeGreaterThan(0);
+  });
+
+  it('quarantines a scope and retries invalidation after a mutation-side cache failure', async () => {
+    const backing = new InMemoryMemorySearchCacheStore();
+    let failInvalidation = true;
+    const cache: MemorySearchCacheStore = {
+      getScopeRevision: (scopeHash) => backing.getScopeRevision(scopeHash),
+      get: (key) => backing.get(key),
+      set: (key, record) => backing.set(key, record),
+      delete: (key) => backing.delete(key),
+      invalidateScope: (scopeHash) => {
+        if (failInvalidation) {
+          failInvalidation = false;
+          return Promise.reject(new Error('temporary invalidation failure'));
+        }
+        return backing.invalidateScope(scopeHash);
+      },
+    };
+    const search = vi.fn(async (request: ManagedMemorySearchRequest) => resultsFor(request));
+    const provider = new CachedMemoryManagementProvider({
+      provider: testProvider(search),
+      cache,
+      providerRevision: 'provider:v1',
+    });
+    const request = searchRequest('operation:pending-one');
+    await provider.search(request);
+    await expect(
+      provider.update({
+        operationId: 'operation:pending-update',
+        principal: request.principal,
+        scope: request.scope,
+        memoryId: 'memory_01',
+        patch: { summary: 'updated' },
+        reason: 'test',
+      })
+    ).resolves.toMatchObject({ status: 'committed' });
+
+    await provider.search({ ...request, operationId: 'operation:pending-two' });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(Number(await backing.getScopeRevision(hashMemoryScope(request.scope)))).toBeGreaterThan(
+      0
+    );
   });
 });
 
