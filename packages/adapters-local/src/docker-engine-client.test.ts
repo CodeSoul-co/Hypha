@@ -140,6 +140,7 @@ describe('DockerEngineCliClient', () => {
             Image: digest,
             State: {
               Running: true,
+              OOMKilled: false,
               Status: 'running',
               ExitCode: 0,
               StartedAt: '2026-07-20T00:00:00.000Z',
@@ -166,6 +167,7 @@ describe('DockerEngineCliClient', () => {
     });
     await expect(client.inspectContainer('container123')).resolves.toMatchObject({
       running: true,
+      oomKilled: false,
       imageDigest: digest,
       startedAt: '2026-07-20T00:00:00.000Z',
     });
@@ -280,13 +282,24 @@ function execInput(overrides: Partial<DockerContainerExecInput> = {}): DockerCon
 }
 
 function inspection(
-  stateOverrides: Partial<{ Running: boolean; Status: string; ExitCode: number }> = {}
+  stateOverrides: Partial<{
+    Running: boolean;
+    OOMKilled: boolean;
+    Status: string;
+    ExitCode: number;
+  }> = {}
 ): string {
   return JSON.stringify([
     {
       Id: 'container123',
       Image: digest,
-      State: { Running: true, Status: 'running', ExitCode: 0, ...stateOverrides },
+      State: {
+        Running: true,
+        OOMKilled: false,
+        Status: 'running',
+        ExitCode: 0,
+        ...stateOverrides,
+      },
     },
   ]);
 }
