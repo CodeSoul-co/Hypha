@@ -15,6 +15,7 @@ export * from './contracts/execution-governance';
 export * from './contracts/execution-output';
 export * from './contracts/execution-port';
 export * from './contracts/recovery';
+export * from './contracts/recovery-knowledge-schemas';
 export * from './contracts/workspace';
 export * from './contracts/sandbox';
 export * from './contracts/runtime';
