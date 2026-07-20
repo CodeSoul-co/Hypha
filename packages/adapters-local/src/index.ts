@@ -54,6 +54,7 @@ export * from './docker-cli-transport';
 export * from './docker-engine-client';
 export * from './docker-workspace-mount';
 export * from './docker-execution-policy';
+export * from './docker-resource-accounting';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
