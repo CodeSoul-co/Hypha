@@ -68,6 +68,8 @@ import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hyp
 import {
   GovernedToolRunner,
   hashToolContract,
+  InMemoryToolResultCache,
+  RedisToolResultCache,
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
@@ -99,7 +101,8 @@ import {
   type ServingCacheEvent,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
-import { inferenceConfig, storageConfig } from '../config';
+import { inferenceConfig, storageConfig, toolResultCacheConfig } from '../config';
+import { getRedisClient } from './database';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
@@ -527,6 +530,29 @@ class EventRuntimeService {
     const observationPort = new FileToolObservationStore(
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
+    const toolCacheConfig = toolResultCacheConfig();
+    const redis = getRedisClient();
+    const toolResultCache =
+      toolCacheConfig.store === 'memory'
+        ? new InMemoryToolResultCache({
+            maxEntries: toolCacheConfig.maxEntries,
+            maxEntryBytes: toolCacheConfig.maxEntryBytes,
+          })
+        : toolCacheConfig.store === 'redis' && redis
+          ? new RedisToolResultCache({
+              client: {
+                get: (key) => redis.get(key),
+                set: (key, value, mode, durationMilliseconds) =>
+                  mode && durationMilliseconds !== undefined
+                    ? redis.set(key, value, mode, durationMilliseconds)
+                    : redis.set(key, value),
+                del: (...keys) => redis.del(...keys),
+              },
+              namespace: toolCacheConfig.namespace,
+              maxEntryBytes: toolCacheConfig.maxEntryBytes,
+              defaultTtlMs: toolCacheConfig.redisDefaultTtlMs,
+            })
+          : undefined;
     this.toolRunner = new GovernedToolRunner(this.toolRegistry, this.events, undefined, {
       approvalStore: toolRuntimeStore,
       invocationStore: toolRuntimeStore,
@@ -534,6 +560,10 @@ class EventRuntimeService {
       snapshotStore: this.toolSnapshotStore,
       observationPort,
       telemetry: this.toolTelemetry,
+      resultCache: toolResultCache,
+      resultCacheFailureMode: toolCacheConfig.failureMode,
+      resultCacheTimeoutMs: toolCacheConfig.operationTimeoutMs,
+      resultCacheMaxEntryBytes: toolCacheConfig.maxEntryBytes,
     });
     this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({
@@ -705,6 +735,7 @@ class EventRuntimeService {
       sessionId: runContext?.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
+      cacheScope: { userId: runContext?.userId ?? 'single-user' },
       input: {
         messages: input.messages,
         options: {
@@ -1060,6 +1091,7 @@ class EventRuntimeService {
       sessionId: runContext?.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
+      cacheScope: { userId: runContext?.userId ?? 'single-user' },
       input: {
         messages: input.messages,
         options: {
@@ -1743,9 +1775,11 @@ class EventRuntimeService {
     const result = await runRecoverySupervisor({
       fsm: recoveryFsm,
       caseId: input.caseId,
+      userId: context.userId,
       participants: [input.participant],
       knowledge: this.recoveryKnowledge,
       sessionId: context.sessionId,
+      domainPackId: context.domainPackId,
       stepId: input.stepId,
       metadata: {
         userId: context.userId,
@@ -1794,12 +1828,18 @@ class EventRuntimeService {
     if (failure.module !== 'cache') return;
     const runId = stringValue(failure.metadata?.runId);
     if (!runId || !this.runs.has(runId)) return;
+    const context = this.runs.get(runId)!;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
     const knowledge: RecoveryKnowledge = {
       key: {
         fingerprint,
         participantId: 'inference-cache',
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          domainPackId: context.domainPackId,
+        },
         policyRevision: failure.evidence.policyRevision,
         specRevision: failure.evidence.specRevision,
         providerRevision: failure.evidence.providerRevision,

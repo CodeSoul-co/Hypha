@@ -71,6 +71,7 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     const result = await runRecoverySupervisor({
       fsm,
       caseId: 'case_memory_execution',
+      userId: 'user-recovery',
       trace,
       now: () => '2026-07-16T00:00:00.100Z',
       policy: { maxNoProgressCycles: 1 },
@@ -107,6 +108,7 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     });
     expect(memoryExecute).toHaveBeenCalledTimes(2);
     expect(execution).toHaveBeenCalledOnce();
+    expect(execution.mock.calls[0]?.[0].scope).toEqual({ userId: 'user-recovery' });
     expect(result.snapshot).toMatchObject({
       status: 'degraded',
       noProgressCycles: 1,
@@ -123,6 +125,9 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
       expect.arrayContaining([
         expect.objectContaining({
           knowledge: expect.objectContaining({
+            key: expect.objectContaining({
+              scope: expect.objectContaining({ userId: 'user-recovery' }),
+            }),
             strategy: 'degrade',
             outcome: 'degraded',
             validation: { status: 'verified' },
@@ -151,6 +156,7 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     const result = await runRecoverySupervisor({
       fsm,
       caseId: 'case_unknown_execution',
+      userId: 'user-recovery',
       now: () => '2026-07-16T00:00:00.100Z',
       participants: [
         {
