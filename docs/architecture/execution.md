@@ -14,6 +14,7 @@ belong in adapters and must pass through the harness governance and trace path.
 | Environment         | `ExecutionEnvironmentSpec`                                                                | Provider choice, image pinning, process policy, resources, mounts, network, security, secrets, logging, and lifecycle policy.           |
 | Sandbox             | `SandboxRecord`, lifecycle requests, `SandboxProvider`                                    | Revisioned sandbox state and the adapter boundary for create, start, execute, cancel, status, terminate, cleanup, and close.            |
 | Command             | `CommandExecutionRequest`, `CommandExecutionResult`, `CommandOutputChunk`                 | Governed command input, bounded output, terminal evidence, resource usage, cancellation, and receipts.                                  |
+| Activity boundary   | `ExecutionActivityRequest`, `ExecutionActivityResult`                                     | Fenced Runtime-to-Execution dispatch for governed Command and Workspace operations, with event and Artifact evidence.                   |
 | Persistence         | `ExecutionStore`, record, lease, fencing, idempotency, and recovery contracts             | Compare-and-set updates, exclusive workers, stale-writer rejection, and restart-safe reconciliation evidence.                           |
 | Events              | typed Sandbox, Command, and Network Authorization events                                  | Bounded lifecycle evidence without raw output, host paths, environment values, or plaintext secrets.                                    |
 | Cache boundary      | execution validity, environment fingerprint, and result projection contracts              | Deterministic reuse inputs without placing cache policy or storage inside Core.                                                         |
@@ -48,6 +49,19 @@ references when bounded inline output is truncated.
 
 `SandboxProviderCapabilities` and capability negotiation keep environment requirements separate
 from a concrete provider. Runtime code can reject an incompatible provider before any side effect.
+
+## Runtime Activity Boundary
+
+`ExecutionActivityRequest` is the provider-neutral handoff from Runtime scheduling to Execution. It
+binds the activity, operation, Run, FSM state attempt, Workspace, fencing token, optional deadline,
+and idempotency identity to one validated `CommandExecutionRequest` or Workspace operation. Boundary
+validation rejects conflicting operation, Run, Workspace, and idempotency identities before an
+adapter is called.
+
+`ExecutionActivityResult` returns a terminal activity status plus bounded Execution, Artifact,
+snapshot, Event, and normalized-error references. Event evidence is mandatory and references must
+be unique. These contracts do not schedule FSM transitions, pause or resume a Run, approve a Tool,
+or select a provider; those responsibilities remain with Runtime, Tool governance, and adapters.
 
 ## Deterministic Mock Provider
 
