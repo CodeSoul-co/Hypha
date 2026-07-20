@@ -440,6 +440,13 @@ optional `history`, capabilities, health, and close. Requests carry `operationId
 `working`, `episodic`, `semantic`, `procedural`, `preference`, `artifact`, `governance`,
 `reflection`, and `custom`.
 
+`CachedMemoryManagementProvider` optionally wraps any managed provider with a versioned,
+scope-qualified search cache. Its identity includes principal roles/permission scopes and retrieval
+semantics; `operationId` and trace metadata are excluded. It caches only searches that explicitly
+set `updateAccessStats: false`, validates returned records at runtime, bounds entry size and Store
+latency, coalesces only identical scoped reads, and invalidates the scope after every successful
+mutation. `InMemoryMemorySearchCacheStore` is the bounded local reference implementation.
+
 `ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
 and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
 hash, and timestamps. `ManagedMemoryRecordStore` uses compare-and-set revisions and scope-qualified
@@ -474,6 +481,12 @@ artifactizes large output, records observations, applies validity-aware result r
 MCP events, and supports recovery. Calls return structured results such as `completed`, `failed`,
 `denied`, `conflict`, `cancelled`, or `human_review_required`. Audit inclusion and redaction apply to
 both request and completion events.
+
+`ToolResultCache` is an optional acceleration boundary. The package exports bounded
+`InMemoryToolResultCache`, shared `RedisToolResultCache`, strict runtime/JSON schemas, and an
+Artifact verification port. Cache entries are versioned, key-bound safe projections. `read` Tools
+must provide `context.metadata.externalStateVersion`; Tools with sensitive output declarations or
+side effects bypass result reuse.
 
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
