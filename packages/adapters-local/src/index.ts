@@ -59,6 +59,7 @@ export * from './docker-execution-policy';
 export * from './docker-resource-accounting';
 export * from './docker-process-result';
 export * from './docker-sandbox-lifecycle';
+export * from './docker-execution-provider';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
