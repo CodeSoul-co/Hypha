@@ -59,6 +59,16 @@ const pathListSchema = z.preprocess(
   },
   z.array(z.string().min(1))
 );
+const nonEmptyPathListSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== 'string') return value;
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  },
+  z.array(z.string().min(1)).min(1)
+);
 const optionalBooleanishSchema = z.preprocess((value) => {
   if (typeof value === 'string' && value.trim() === '') return undefined;
   return parseBooleanish(value);
@@ -328,6 +338,8 @@ const configSchema = z.object({
     host: z.string().default('0.0.0.0'),
     port: z.coerce.number().default(3000),
     apiPrefix: z.string().default('/api/v1'),
+    corsOrigins: nonEmptyPathListSchema.default(['*']),
+    bodyLimit: z.string().min(1).default('10mb'),
   }),
   database: z
     .object({
@@ -539,8 +551,10 @@ const configSchema = z.object({
   }),
   rateLimit: z.object({
     enabled: z.boolean().default(true),
-    windowMs: z.number().default(60000),
-    max: z.number().default(100),
+    windowMs: z.coerce.number().int().positive().default(60000),
+    ingressMax: z.coerce.number().int().positive().default(1000),
+    max: z.coerce.number().int().positive().default(100),
+    highCostMax: z.coerce.number().int().positive().default(20),
   }),
 });
 
@@ -641,11 +655,41 @@ function loadConfig(): Config {
 
   const resolvedConfig = resolveEnvVariables(mergedConfig);
 
+  let config: Config;
   try {
-    return configSchema.parse(resolvedConfig);
+    config = configSchema.parse(resolvedConfig);
   } catch (error) {
     logger.error('Configuration validation failed:', error);
     throw new Error('Invalid configuration');
+  }
+
+  assertProductionConfig(config);
+  return config;
+}
+
+export function assertProductionConfig(config: Config): void {
+  if (config.app.env !== 'production') return;
+
+  const violations: string[] = [];
+  if (!config.auth.enabled) violations.push('authentication must be enabled');
+  if (
+    config.auth.jwt.secret === 'change-me-local-access-secret' ||
+    config.auth.jwt.secret.length < 32
+  ) {
+    violations.push('JWT secret must be replaced with at least 32 characters');
+  }
+  if (
+    config.auth.singleUser.password === 'hypha_owner_2026' ||
+    config.auth.singleUser.password.length < 16
+  ) {
+    violations.push('single-user owner password must be replaced with at least 16 characters');
+  }
+  if (config.app.corsOrigins.includes('*')) {
+    violations.push('CORS origins must be explicitly allowlisted');
+  }
+
+  if (violations.length > 0) {
+    throw new Error(`Unsafe production configuration: ${violations.join('; ')}`);
   }
 }
 

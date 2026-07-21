@@ -29,6 +29,8 @@ declare global {
 // JWT Authentication
 export function authMiddleware(required: boolean = true) {
   return async (req: Request, res: Response, next: NextFunction) => {
+    if (req.user || req.apiKey) return next();
+
     const authHeader = req.headers.authorization;
 
     if (!authHeader) {
@@ -86,6 +88,8 @@ export function authMiddleware(required: boolean = true) {
 
 // API Key Authentication
 export async function apiKeyMiddleware(req: Request, res: Response, next: NextFunction) {
+  if (req.apiKey) return next();
+
   const config = authConfig();
   const headerName = config.apiKey.headerName;
   const apiKey = req.headers[headerName.toLowerCase()] as string;
@@ -190,10 +194,11 @@ export function requirePermission(...permissions: string[]) {
             message: 'Insufficient permissions',
           },
         });
+        return;
       }
     }
 
-    next();
+    return next();
   };
 }
 

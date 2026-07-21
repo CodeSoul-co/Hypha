@@ -60,13 +60,9 @@ router.delete(
 router.get(
   '/runs/:runId',
   asyncHandler(async (req: Request, res: Response) => {
-    const run = await getEventRuntime().projectRun(req.params.runId);
-    if (!run) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        error: { code: 'RUN_NOT_FOUND', message: 'Run not found' },
-      });
-    }
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    const { run } = owned;
     res.json({ success: true, data: run });
   })
 );
@@ -74,7 +70,9 @@ router.get(
 router.get(
   '/runs/:runId/events',
   asyncHandler(async (req: Request, res: Response) => {
-    const events = await getEventRuntime().listEvents(req.params.runId);
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    const events = await owned.runtime.listEvents(req.params.runId);
     res.json({ success: true, data: events });
   })
 );
@@ -82,7 +80,9 @@ router.get(
 router.get(
   '/runs/:runId/replay',
   asyncHandler(async (req: Request, res: Response) => {
-    const replay = await getEventRuntime().projectReplay(req.params.runId);
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    const replay = await owned.runtime.projectReplay(req.params.runId);
     res.json({ success: true, data: replay });
   })
 );
@@ -90,7 +90,9 @@ router.get(
 router.get(
   '/runs/:runId/audit',
   asyncHandler(async (req: Request, res: Response) => {
-    const audit = await getEventRuntime().projectAudit(req.params.runId);
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    const audit = await owned.runtime.projectAudit(req.params.runId);
     res.json({ success: true, data: audit });
   })
 );
@@ -98,9 +100,33 @@ router.get(
 router.get(
   '/runs/:runId/regression',
   asyncHandler(async (req: Request, res: Response) => {
-    const regression = await getEventRuntime().projectRegression(req.params.runId);
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    const regression = await owned.runtime.projectRegression(req.params.runId);
     res.json({ success: true, data: regression });
   })
 );
+
+async function findOwnedRun(req: Request, res: Response) {
+  const userId = req.user?.userId ?? req.apiKey?.userId;
+  if (!userId) {
+    res.status(HTTP_STATUS.UNAUTHORIZED).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+    return null;
+  }
+
+  const runtime = getEventRuntime();
+  const run = await runtime.projectOwnedRun(req.params.runId, userId);
+  if (!run) {
+    res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'RUN_NOT_FOUND', message: 'Run not found' },
+    });
+    return null;
+  }
+  return { runtime, run };
+}
 
 export default router;

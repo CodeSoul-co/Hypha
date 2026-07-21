@@ -2482,6 +2482,11 @@ class EventRuntimeService {
     return this.runtime.projectRun(runId);
   }
 
+  async projectOwnedRun(runId: string, userId: string) {
+    const run = await this.runtime.projectRun(runId);
+    return run?.userId === userId ? run : null;
+  }
+
   projectReplay(runId: string) {
     return this.runtime.projectReplay(runId);
   }

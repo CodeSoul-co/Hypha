@@ -3,6 +3,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
 import { checkStorageHealth } from '../services/database';
 import { getConfig } from '../config';
+import { getHealthService } from '../services/HealthService';
 
 const router = Router();
 
@@ -25,6 +26,7 @@ router.get(
     const config = getConfig();
     const llmHealth = await llmManager.healthCheck();
     const models = await llmManager.listAllModels();
+    const readiness = await getHealthService().readiness();
 
     let providersHtml = '';
     let modelsHtml = '';
@@ -56,6 +58,7 @@ router.get(
     const messagingStoreStatus = dbHealth.redis ? 'Connected' : 'Disconnected';
     const messagingStoreClass = dbHealth.redis ? 'success' : 'warning';
 
+    const overallStatus = readiness.ready ? 'All required systems ready' : 'Service not ready';
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -123,7 +126,7 @@ router.get(
       </div>
       <div class="card">
         <div class="card-header">
-          <div class="status-dot healthy"></div>
+          <div class="status-dot ${readiness.components.defaultModel.status === 'healthy' ? 'healthy' : 'unavailable'}"></div>
           <span class="card-title">LLM Providers</span>
         </div>
         <div class="card-content">${providersHtml}</div>
@@ -149,7 +152,7 @@ router.get(
       ${modelsHtml}
     </div>
     <div class="footer">
-      <p>hypha v1.0.0 | All systems operational</p>
+      <p>hypha v1.0.0 | ${overallStatus}</p>
       <p style="margin-top:8px">Base URL: <code style="background:rgba(0,217,255,0.1);padding:4px 8px;border-radius:4px">http://localhost:3000/api/v1</code></p>
     </div>
   </div>
@@ -168,6 +171,7 @@ router.get(
     const llmManager = getLLMManager();
     const llmHealth = await llmManager.healthCheck();
     const models = await llmManager.listAllModels();
+    const readiness = await getHealthService().readiness();
 
     res.json({
       success: true,
@@ -175,6 +179,8 @@ router.get(
         service: 'hypha',
         version: '1.0.0',
         timestamp: new Date().toISOString(),
+        status: readiness.status,
+        ready: readiness.ready,
         storage: {
           document: {
             engine: 'mongodb',

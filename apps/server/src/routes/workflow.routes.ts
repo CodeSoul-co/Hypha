@@ -33,6 +33,12 @@ router.get('/executions/:executionId', asyncHandler(async (req: Request, res: Re
       error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
     });
   }
+  if (!isExecutionOwner(req, execution.context.userId)) {
+    return res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
+    });
+  }
 
   res.json({
     success: true,
@@ -58,6 +64,13 @@ router.post('/executions/:executionId/cancel', asyncHandler(async (req: Request,
   const { executionId } = req.params;
 
   const engine = getWorkflowEngine();
+  const execution = engine.getExecution(executionId);
+  if (!execution || !isExecutionOwner(req, execution.context.userId)) {
+    return res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
+    });
+  }
   await engine.cancel(executionId);
 
   res.json({
@@ -211,3 +224,7 @@ router.delete('/:name', adminOnly, asyncHandler(async (req: Request, res: Respon
 }));
 
 export default router;
+
+function isExecutionOwner(req: Request, ownerUserId: string): boolean {
+  return (req.user?.userId ?? req.apiKey?.userId) === ownerUserId;
+}

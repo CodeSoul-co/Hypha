@@ -47,6 +47,15 @@ const trackedEnv = [
   'HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS',
   'HYPHA_TOOL_RESULT_CACHE_NAMESPACE',
   'FILESYSTEM_TOOL_ROOT',
+  'NODE_ENV',
+  'JWT_SECRET',
+  'HYPHA_OWNER_PASSWORD',
+  'HYPHA_CORS_ORIGINS',
+  'HYPHA_BODY_LIMIT',
+  'HYPHA_RATE_LIMIT_WINDOW_MS',
+  'HYPHA_RATE_LIMIT_INGRESS_MAX',
+  'HYPHA_RATE_LIMIT_MAX',
+  'HYPHA_RATE_LIMIT_HIGH_COST_MAX',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -228,6 +237,43 @@ describe('configuration storage taxonomy', () => {
       workingDirectory: './legacy-workspace',
       readPaths: ['./legacy-workspace'],
       writePaths: ['./legacy-workspace'],
+    });
+  });
+
+  it('rejects insecure production authentication and open CORS defaults', () => {
+    process.env.NODE_ENV = 'production';
+
+    expect(() => reloadConfig()).toThrow(/Unsafe production configuration/);
+  });
+
+  it('accepts explicit production credentials, CORS origins, and body limits', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'production-jwt-secret-with-at-least-32-characters';
+    process.env.HYPHA_OWNER_PASSWORD = 'production-owner-password';
+    process.env.HYPHA_CORS_ORIGINS = 'https://console.example.com,https://admin.example.com';
+    process.env.HYPHA_BODY_LIMIT = '2mb';
+
+    const config = reloadConfig();
+
+    expect(config.app.corsOrigins).toEqual([
+      'https://console.example.com',
+      'https://admin.example.com',
+    ]);
+    expect(config.app.bodyLimit).toBe('2mb');
+  });
+
+  it('loads separate ingress, principal, and high-cost rate-limit budgets', () => {
+    process.env.HYPHA_RATE_LIMIT_WINDOW_MS = '30000';
+    process.env.HYPHA_RATE_LIMIT_INGRESS_MAX = '500';
+    process.env.HYPHA_RATE_LIMIT_MAX = '50';
+    process.env.HYPHA_RATE_LIMIT_HIGH_COST_MAX = '5';
+
+    expect(reloadConfig().rateLimit).toEqual({
+      enabled: true,
+      windowMs: 30000,
+      ingressMax: 500,
+      max: 50,
+      highCostMax: 5,
     });
   });
 });

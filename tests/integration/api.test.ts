@@ -46,11 +46,44 @@ afterAll(async () => {
 });
 
 describe('GET /api/v1/health', () => {
-  it('returns 200 with status=healthy', async () => {
-    const r = await request(app).get('/api/v1/health');
-    expect(r.status).toBe(200);
-    expect(r.body.success).toBe(true);
-    expect(r.body.data.status).toBe('healthy');
+  it('separates process liveness from dependency readiness', async () => {
+    const live = await request(app).get('/api/v1/live');
+    expect(live.status).toBe(200);
+    expect(live.body.data.status).toBe('alive');
+
+    const ready = await request(app).get('/api/v1/ready');
+    expect([200, 503]).toContain(ready.status);
+    expect(ready.body.data.status).toBe(ready.status === 200 ? 'ready' : 'not_ready');
+    expect(ready.body.data.ready).toBe(ready.status === 200);
+
+    const legacy = await request(app).get('/api/v1/health');
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.success).toBe(true);
+    expect(legacy.body.data.status).toBe(ready.status === 200 ? 'healthy' : 'degraded');
+  });
+});
+
+describe('runtime run ownership', () => {
+  it('hides run projections and events from a different user', async () => {
+    const created = await request(app)
+      .post('/api/v1/tools/execute')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ name: 'utility.hash', params: { operation: 'sha256_text', text: 'owner-scope' } });
+    expect(created.status).toBe(200);
+    expect(created.body.runId).toBeTruthy();
+
+    const foreignToken = generateToken({
+      id: 'foreign-runtime-reader',
+      email: 'foreign-runtime-reader@hypha.local',
+      isAdmin: false,
+    });
+    for (const suffix of ['', '/events', '/replay', '/audit', '/regression']) {
+      const response = await request(app)
+        .get(`/api/v1/runtime/runs/${created.body.runId}${suffix}`)
+        .set('Authorization', `Bearer ${foreignToken}`);
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe('RUN_NOT_FOUND');
+    }
   });
 });
 

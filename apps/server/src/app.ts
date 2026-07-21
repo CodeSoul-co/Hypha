@@ -2,7 +2,6 @@ import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import rateLimit from 'express-rate-limit';
 import http from 'http';
 
 import { getConfig } from './config';
@@ -23,14 +22,12 @@ import {
   getDevTestToken,
 } from './services/DevAuth';
 import routes from './routes';
-import {
-  errorHandler,
-  notFoundHandler,
-  requestLogger,
-  rateLimitHandler,
-} from './middleware/errorHandler';
+import { errorHandler, notFoundHandler, requestLogger } from './middleware/errorHandler';
+import { createApiRateLimiter } from './middleware/rateLimit';
+import { apiKeyMiddleware, authMiddleware } from './middleware/auth';
 import { HTTP_STATUS } from './constants';
 import { getEventRuntime } from './services/EventRuntime';
+import { getHealthService } from './services/HealthService';
 
 class Application {
   private app: Express;
@@ -43,6 +40,8 @@ class Application {
   }
 
   async initialize(): Promise<void> {
+    getHealthService().setRuntimeInitialized(false);
+
     // Setup middleware
     this.setupMiddleware();
 
@@ -69,18 +68,80 @@ class Application {
     // CORS
     this.app.use(
       cors({
-        origin: '*', // Configure for production
+        origin: this.config.app.corsOrigins.includes('*')
+          ? '*'
+          : (origin, callback) => {
+              if (!origin || this.config.app.corsOrigins.includes(origin)) {
+                callback(null, true);
+                return;
+              }
+              callback(new Error('Origin is not allowed by CORS policy'));
+            },
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+        allowedHeaders: [
+          'Content-Type',
+          'Authorization',
+          this.config.auth.apiKey.headerName,
+        ],
       })
     );
 
     // Compression
     this.app.use(compression());
 
+    const publicHealthPaths = [
+      `${this.config.app.apiPrefix}/live`,
+      `${this.config.app.apiPrefix}/ready`,
+      `${this.config.app.apiPrefix}/health`,
+    ];
+
+    // Bound unauthenticated credential verification work by network origin.
+    if (this.config.rateLimit.enabled) {
+      this.app.use(
+        createApiRateLimiter({
+          windowMs: this.config.rateLimit.windowMs,
+          max: this.config.rateLimit.ingressMax,
+          skipPaths: publicHealthPaths,
+        })
+      );
+    }
+
+    // Resolve a valid bearer principal before applying principal-scoped budgets.
+    this.app.use(apiKeyMiddleware);
+    this.app.use(authMiddleware(false));
+
+    // Protect all routes before body parsing and business handlers run.
+    if (this.config.rateLimit.enabled) {
+      this.app.use(
+        createApiRateLimiter({
+          windowMs: this.config.rateLimit.windowMs,
+          max: this.config.rateLimit.max,
+          skipPaths: publicHealthPaths,
+        })
+      );
+
+      const highCostLimiter = createApiRateLimiter({
+        windowMs: this.config.rateLimit.windowMs,
+        max: this.config.rateLimit.highCostMax,
+        skip: (req) => req.method !== 'POST',
+      });
+      this.app.use(
+        [`${this.config.app.apiPrefix}/chat`, `${this.config.app.apiPrefix}/tools/execute`],
+        highCostLimiter
+      );
+      this.app.use(
+        `${this.config.app.apiPrefix}/workflows`,
+        createApiRateLimiter({
+          windowMs: this.config.rateLimit.windowMs,
+          max: this.config.rateLimit.highCostMax,
+          skip: (req) => req.method !== 'POST' || !req.path.endsWith('/execute'),
+        })
+      );
+    }
+
     // Body parsing
-    this.app.use(express.json({ limit: '10mb' }));
-    this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+    this.app.use(express.json({ limit: this.config.app.bodyLimit }));
+    this.app.use(express.urlencoded({ extended: true, limit: this.config.app.bodyLimit }));
 
     // Request logging
     this.app.use(requestLogger);
@@ -104,19 +165,6 @@ class Application {
 
     // Global error handler
     this.app.use(errorHandler);
-
-    // Rate limiting
-    if (this.config.rateLimit.enabled) {
-      const limiter = rateLimit({
-        windowMs: this.config.rateLimit.windowMs,
-        max: this.config.rateLimit.max,
-        handler: rateLimitHandler,
-        standardHeaders: true,
-        legacyHeaders: false,
-      });
-
-      this.app.use(limiter);
-    }
   }
 
   private async initializeServices(): Promise<void> {
@@ -157,6 +205,7 @@ class Application {
     // Initialize Prompt Manager
     await initializePromptManager();
 
+    getHealthService().setRuntimeInitialized(true);
     logger.info('All services initialized');
   }
 
@@ -273,23 +322,23 @@ class Application {
       logger.error('  ❌ Messaging  │ Error:', err);
     }
 
-    // 3. Check API /health endpoint
+    // 3. Check the readiness endpoint used by traffic managers.
     try {
-      const response = await fetch(`${apiBase}/health`);
+      const response = await fetch(`${apiBase}/ready`);
       if (response.ok) {
-        checks.push({ name: 'API /health', status: 'pass', detail: '200 OK' });
-        logger.info('  ✅ API Health │ 200 OK');
+        checks.push({ name: 'API /ready', status: 'pass', detail: '200 OK' });
+        logger.info('  ✅ API Ready  │ 200 OK');
       } else {
         checks.push({
-          name: 'API /health',
+          name: 'API /ready',
           status: 'fail',
           detail: `${response.status}`,
         });
-        logger.error(`  ❌ API Health │ ${response.status}`);
+        logger.error(`  ❌ API Ready  │ ${response.status}`);
       }
     } catch (err) {
-      checks.push({ name: 'API /health', status: 'fail', detail: String(err) });
-      logger.error('  ❌ API Health │ Error:', err);
+      checks.push({ name: 'API /ready', status: 'fail', detail: String(err) });
+      logger.error('  ❌ API Ready  │ Error:', err);
     }
 
     // 4. Check LLM Providers
@@ -385,6 +434,7 @@ class Application {
 
   async stop(): Promise<void> {
     logger.info('Shutting down...');
+    getHealthService().setRuntimeInitialized(false);
 
     // Stop accepting new connections
     if (this.server) {

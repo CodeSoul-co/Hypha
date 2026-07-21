@@ -5,6 +5,8 @@ app:
   host: "${HOST:0.0.0.0}"
   port: "${PORT:3000}"
   apiPrefix: "${HYPHA_API_PREFIX:/api/v1}"
+  corsOrigins: "${HYPHA_CORS_ORIGINS:*}"
+  bodyLimit: "${HYPHA_BODY_LIMIT:10mb}"
 
 storage:
   deployment:
@@ -704,5 +706,7 @@ auth:
 
 rateLimit:
   enabled: true
-  windowMs: 60000
-  max: 100
+  windowMs: "${HYPHA_RATE_LIMIT_WINDOW_MS:60000}"
+  ingressMax: "${HYPHA_RATE_LIMIT_INGRESS_MAX:1000}"
+  max: "${HYPHA_RATE_LIMIT_MAX:100}"
+  highCostMax: "${HYPHA_RATE_LIMIT_HIGH_COST_MAX:20}"

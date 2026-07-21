@@ -13,20 +13,11 @@ import devRoutes from './dev.routes';
 import runtimeRoutes from './runtime.routes';
 import { approvalRouter, invocationRouter } from './tool-runtime.routes';
 import mcpRoutes from './mcp.routes';
+import healthRoutes from './health.routes';
 
 const router = Router();
 
-// Health check
-router.get('/health', (_req, res) => {
-  res.json({
-    success: true,
-    data: {
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-    },
-  });
-});
+router.use('/', healthRoutes);
 
 // Mount routes
 router.use('/auth', authRoutes);
