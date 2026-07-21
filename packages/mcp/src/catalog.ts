@@ -230,6 +230,50 @@ export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogSt
   }
 }
 
+export interface RedisLikeMCPStoreClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<unknown>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
+}
+
+/** Multi-worker catalog store. Redis key operations are idempotent per capability id. */
+export class RedisMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
+  private readonly namespace: string;
+
+  constructor(
+    private readonly client: RedisLikeMCPStoreClient,
+    namespace = 'hypha:mcp:catalog:v1'
+  ) {
+    this.namespace = namespace.replace(/:+$/, '');
+  }
+
+  async list(serverId?: string): Promise<MCPCapabilityRecord[]> {
+    const ids = await this.client.smembers(this.indexKey(serverId));
+    const records = await Promise.all(ids.map((id) => this.client.get(this.recordKey(id))));
+    return records
+      .filter((raw): raw is string => raw !== null)
+      .map((raw) => JSON.parse(raw) as MCPCapabilityRecord)
+      .filter((record) => !serverId || record.serverId === serverId);
+  }
+
+  async save(record: MCPCapabilityRecord): Promise<void> {
+    await this.client.set(this.recordKey(record.id), JSON.stringify(record));
+    await Promise.all([
+      this.client.sadd(this.indexKey(), record.id),
+      this.client.sadd(this.indexKey(record.serverId), record.id),
+    ]);
+  }
+
+  private indexKey(serverId?: string): string {
+    return `${this.namespace}:index:${serverId ?? 'all'}`;
+  }
+
+  private recordKey(id: string): string {
+    return `${this.namespace}:record:${id}`;
+  }
+}
+
 export interface MCPSchemaCacheEntry {
   key: string;
   serverId: string;
@@ -665,6 +709,30 @@ export class InMemoryToolContractSnapshotStore implements ToolContractSnapshotSt
 
   async save(snapshot: ToolContractSnapshot): Promise<void> {
     this.snapshots.set(snapshot.id, clone(snapshot));
+  }
+}
+
+export class RedisToolContractSnapshotStore implements ToolContractSnapshotStore {
+  private readonly namespace: string;
+
+  constructor(
+    private readonly client: Pick<RedisLikeMCPStoreClient, 'get' | 'set'>,
+    namespace = 'hypha:tool:snapshot:v1'
+  ) {
+    this.namespace = namespace.replace(/:+$/, '');
+  }
+
+  async get(snapshotId: string): Promise<ToolContractSnapshot | null> {
+    const raw = await this.client.get(this.key(snapshotId));
+    return raw === null ? null : (JSON.parse(raw) as ToolContractSnapshot);
+  }
+
+  async save(snapshot: ToolContractSnapshot): Promise<void> {
+    await this.client.set(this.key(snapshot.id), JSON.stringify(snapshot));
+  }
+
+  private key(snapshotId: string): string {
+    return `${this.namespace}:${snapshotId}`;
   }
 }
 

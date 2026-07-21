@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
+import { EnvironmentSecretResolver } from '../../services/SecretResolver';
 import { InMemoryTelemetryRecorder } from '@hypha/core';
 import { filesystemToolConfig, getConfig } from '../../config';
 import {
@@ -29,6 +30,9 @@ import {
   MCPConnectionManager,
   SDKMCPConnectionSessionFactory,
   MCPCapabilityCatalog,
+  RedisMCPCapabilityCatalogStore,
+  RedisToolContractSnapshotStore,
+  type MCPCapabilityCatalogStore,
   type MCPCapabilityRecord,
   type MCPCapabilityDescriptor,
   type MCPGateway,
@@ -38,7 +42,9 @@ import {
   MCPToolAdapter,
   type ToolAdapter,
   type ToolSpec as HyphaToolSpec,
+  type ToolContractSnapshotStore,
 } from '@hypha/tools';
+import { getRedisClient } from '../../services/database';
 
 type MCPToolResolution = {
   client: MCPClient;
@@ -308,26 +314,35 @@ class FixtureMCPClient implements MCPClient {
 export class ToolManager {
   private tools: Map<string, ToolRegistration> = new Map();
   private mcpClients: Map<string, MCPClient> = new Map();
-  private readonly mcpAuthorization = new Map<string, string>();
+  private readonly secretResolver = new EnvironmentSecretResolver();
   private readonly mcpTelemetry = new InMemoryTelemetryRecorder();
   private readonly connectionManager = new MCPConnectionManager({
     sessionFactory: new SDKMCPConnectionSessionFactory({
-      resolveAuthorizationRef: (ref) => this.mcpAuthorization.get(ref) ?? ref,
+      resolveAuthorizationRef: (ref) => this.secretResolver.resolveAuthorization(ref),
     }),
     telemetry: this.mcpTelemetry,
   });
   private readonly mcpCatalogs = new Map<string, MCPCapabilityCatalog>();
-  private readonly mcpCatalogStore = new FileMCPCapabilityCatalogStore(
+  private mcpCatalogStore: MCPCapabilityCatalogStore = new FileMCPCapabilityCatalogStore(
     process.env.HYPHA_MCP_CATALOG_STORE ??
       path.resolve(process.cwd(), 'data/runtime/mcp-capability-catalog.json')
   );
-  private readonly mcpSnapshotStore = new FileToolContractSnapshotStore(
+  private mcpSnapshotStore: ToolContractSnapshotStore = new FileToolContractSnapshotStore(
     process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ??
       path.resolve(process.cwd(), 'data/runtime/tool-contract-snapshots')
   );
 
   async initialize(): Promise<void> {
     const config = getConfig();
+
+    if (process.env.NODE_ENV === 'production') {
+      const redis = getRedisClient();
+      if (!redis) {
+        throw new Error('Production MCP governance requires the shared Redis store.');
+      }
+      this.mcpCatalogStore = new RedisMCPCapabilityCatalogStore(redis);
+      this.mcpSnapshotStore = new RedisToolContractSnapshotStore(redis);
+    }
 
     // 1. Register built-in tool implementations.
     const filesystemConfig = filesystemToolConfig();
@@ -592,7 +607,6 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
-    if (config.authToken) this.mcpAuthorization.set(`mcp-auth:${config.id}`, config.authToken);
     if (config.mode !== 'fixture') {
       this.connectionManager.register({
         id: config.id,
@@ -610,7 +624,7 @@ export class ToolManager {
             : {
                 type: 'streamable_http',
                 endpoint: config.endpoint ?? '',
-                authorizationRef: config.authToken ? `mcp-auth:${config.id}` : undefined,
+                authorizationRef: config.credentialRef,
                 sessionMode: 'protocol_default',
               },
         singleStart: true,
@@ -618,6 +632,13 @@ export class ToolManager {
         requestTimeoutMs: 30_000,
         shutdownTimeoutMs: 5_000,
         reconnectPolicy: { maxAttempts: 3, backoffMs: 250 },
+        egressPolicy:
+          config.mode === 'remote' ? { requireTls: true, denyPrivateNetworks: true } : undefined,
+        requestGuardPolicy: {
+          maxConcurrentRequests: 8,
+          rateLimit: { maxRequests: 120, windowMs: 60_000 },
+          circuitBreaker: { failureThreshold: 5, resetAfterMs: 30_000 },
+        },
       });
       const catalog = new MCPCapabilityCatalog({
         integration: {
@@ -628,7 +649,7 @@ export class ToolManager {
         gateway: this.connectionManager,
         trustPolicy: {
           defaultTrustLevel: 'restricted',
-          requireApprovalForNewCapability: false,
+          requireApprovalForNewCapability: true,
           requireApprovalForSchemaChange: true,
           allowServerDeclaredSideEffectHints: false,
           pinServerIdentity: true,
@@ -692,6 +713,67 @@ export class ToolManager {
     return records.flat();
   }
 
+  async listMCPContextCapabilities(
+    serverId: string,
+    kind: 'resource' | 'prompt'
+  ): Promise<MCPCapabilityRecord[]> {
+    const catalog = this.mcpCatalogs.get(serverId);
+    if (!catalog) throw new Error(`MCP server not found: ${serverId}`);
+    return catalog.list({
+      serverId,
+      kind,
+      states: ['stable', 'approved'],
+      loadDescriptors: true,
+    });
+  }
+
+  async readMCPResource(serverId: string, uri: string, runId: string): Promise<unknown> {
+    await this.requireApprovedMCPContextCapability(serverId, uri, 'resource');
+    return this.connectionManager.readResource({
+      serverId,
+      uri,
+      context: {
+        runId,
+        stepId: `mcp:resource:${serverId}`,
+        invocationId: `mcp-resource:${serverId}:${Date.now()}`,
+      },
+    });
+  }
+
+  async renderMCPPrompt(
+    serverId: string,
+    name: string,
+    args: Record<string, string>,
+    runId: string
+  ): Promise<unknown> {
+    await this.requireApprovedMCPContextCapability(serverId, name, 'prompt');
+    return this.connectionManager.getPrompt({
+      serverId,
+      name,
+      arguments: args,
+      context: {
+        runId,
+        stepId: `mcp:prompt:${serverId}`,
+        invocationId: `mcp-prompt:${serverId}:${Date.now()}`,
+      },
+    });
+  }
+
+  private async requireApprovedMCPContextCapability(
+    serverId: string,
+    capabilityId: string,
+    kind: 'resource' | 'prompt'
+  ): Promise<void> {
+    const catalog = this.mcpCatalogs.get(serverId);
+    if (!catalog) throw new Error(`MCP server not found: ${serverId}`);
+    const capability = await catalog.getCapability({ serverId, capabilityId, kind });
+    if (!capability || !['stable', 'approved'].includes(capability.driftState)) {
+      throw Object.assign(new Error(`MCP ${kind} is unavailable or awaiting approval.`), {
+        code: 'MCP_CAPABILITY_QUARANTINED',
+      });
+    }
+  }
+
   async listMCPDrifts(): Promise<MCPCapabilityRecord[]> {
     return (await this.listMCPCapabilities()).filter(
       (record) =>
@@ -699,6 +781,29 @@ export class ToolManager {
         record.driftState === 'quarantined' ||
         record.driftState === 'removed'
     );
+  }
+
+  async approveMCPCapability(request: {
+    serverId: string;
+    capabilityId: string;
+    capabilityHash?: string;
+    approvedBy: string;
+    restrictions?: string[];
+  }): Promise<void> {
+    const catalog = this.mcpCatalogs.get(request.serverId);
+    if (!catalog) throw new Error(`MCP server not found: ${request.serverId}`);
+    await catalog.approveRevision(request);
+  }
+
+  async quarantineMCPCapability(request: {
+    serverId: string;
+    capabilityId: string;
+    capabilityHash?: string;
+    reason: string;
+  }): Promise<void> {
+    const catalog = this.mcpCatalogs.get(request.serverId);
+    if (!catalog) throw new Error(`MCP server not found: ${request.serverId}`);
+    await catalog.quarantine(request);
   }
 
   hasMCPServer(serverId: string): boolean {

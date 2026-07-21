@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
 import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@hypha/core';
-import { GovernedToolRunner, ToolRegistry } from '@hypha/tools';
+import { GovernedToolRunner, ToolRegistry, toolContractSnapshotExample } from '@hypha/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -22,6 +22,8 @@ import {
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
   normalizeMCPToolSpec,
+  RedisMCPCapabilityCatalogStore,
+  RedisToolContractSnapshotStore,
   registerMCPGatewayTools,
   validateMCPIntegrationSpec,
   type MCPConnectionSession,
@@ -31,6 +33,41 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('persists catalog records and contract snapshots in a shared Redis-compatible store', async () => {
+    const strings = new Map<string, string>();
+    const sets = new Map<string, Set<string>>();
+    const redis = {
+      async get(key: string) {
+        return strings.get(key) ?? null;
+      },
+      async set(key: string, value: string) {
+        strings.set(key, value);
+        return 'OK';
+      },
+      async sadd(key: string, ...members: string[]) {
+        const values = sets.get(key) ?? new Set<string>();
+        const size = values.size;
+        members.forEach((member) => values.add(member));
+        sets.set(key, values);
+        return values.size - size;
+      },
+      async smembers(key: string) {
+        return Array.from(sets.get(key) ?? []);
+      },
+    };
+    const catalog = new RedisMCPCapabilityCatalogStore(redis, 'test:catalog');
+    await catalog.save(mcpCapabilityRecordExample);
+    await expect(catalog.list(mcpCapabilityRecordExample.serverId)).resolves.toEqual([
+      mcpCapabilityRecordExample,
+    ]);
+
+    const snapshots = new RedisToolContractSnapshotStore(redis, 'test:snapshots');
+    await snapshots.save(toolContractSnapshotExample);
+    await expect(snapshots.get(toolContractSnapshotExample.id)).resolves.toEqual(
+      toolContractSnapshotExample
+    );
+  });
+
   it('bounds the MCP schema cache with least-recently-used eviction', () => {
     const schemaCache = new MCPSchemaCache({
       maxEntries: 2,
@@ -1022,5 +1059,60 @@ describe('@hypha/mcp normalization', () => {
       ])
     );
     expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(5);
+  });
+
+  it('enforces per-server bulkhead, rate limit, and circuit breaker policies', async () => {
+    let release: (() => void) | undefined;
+    let shouldFail = false;
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return { serverCapabilities: { tools: {} } };
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            if (shouldFail) throw new Error('provider failed');
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return { ok: true };
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({ sessionFactory: factory });
+    manager.register({
+      id: 'guarded',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      requestGuardPolicy: {
+        maxConcurrentRequests: 1,
+        rateLimit: { maxRequests: 2, windowMs: 60_000 },
+        circuitBreaker: { failureThreshold: 1, resetAfterMs: 60_000 },
+      },
+    });
+    const request = (invocationId: string) =>
+      manager.call({
+        serverId: 'guarded',
+        capabilityId: 'echo',
+        input: {},
+        context: { runId: 'run-guard', stepId: 'call', invocationId },
+      });
+
+    const first = request('first');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(request('bulkhead')).rejects.toMatchObject({ code: 'MCP_BULKHEAD_REJECTED' });
+    release?.();
+    await expect(first).resolves.toEqual({ ok: true });
+
+    shouldFail = true;
+    await expect(request('failure')).rejects.toMatchObject({ code: 'MCP_CONNECTION_FAILED' });
+    await expect(request('circuit')).rejects.toMatchObject({ code: 'MCP_CIRCUIT_OPEN' });
+    await manager.closeAll();
   });
 });

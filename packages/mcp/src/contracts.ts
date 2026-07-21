@@ -55,6 +55,16 @@ export interface MCPServerProfile {
     preferLatest?: boolean;
     rejectUnknown?: boolean;
   };
+  egressPolicy?: {
+    allowedHosts?: string[];
+    denyPrivateNetworks?: boolean;
+    requireTls?: boolean;
+  };
+  requestGuardPolicy?: {
+    maxConcurrentRequests?: number;
+    rateLimit?: { maxRequests: number; windowMs: number };
+    circuitBreaker?: { failureThreshold: number; resetAfterMs: number };
+  };
   metadata?: Record<string, unknown>;
 }
 
@@ -141,6 +151,10 @@ export interface NormalizedMCPError {
     | 'MCP_CAPABILITY_DRIFT'
     | 'MCP_SCHEMA_INVALID'
     | 'MCP_AUTH_FAILED'
+    | 'MCP_BULKHEAD_REJECTED'
+    | 'MCP_RATE_LIMITED'
+    | 'MCP_CIRCUIT_OPEN'
+    | 'MCP_EGRESS_DENIED'
     | 'MCP_REMOTE_ERROR'
     | 'MCP_TRANSPORT_CLOSED'
     | 'MCP_INTERNAL_ERROR';
@@ -165,6 +179,10 @@ export const normalizedMCPErrorSchema = z.object({
     'MCP_CAPABILITY_DRIFT',
     'MCP_SCHEMA_INVALID',
     'MCP_AUTH_FAILED',
+    'MCP_BULKHEAD_REJECTED',
+    'MCP_RATE_LIMITED',
+    'MCP_CIRCUIT_OPEN',
+    'MCP_EGRESS_DENIED',
     'MCP_REMOTE_ERROR',
     'MCP_TRANSPORT_CLOSED',
     'MCP_INTERNAL_ERROR',
@@ -228,6 +246,30 @@ export const mcpServerProfileSchema = z.object({
       allowedVersions: z.array(z.string()).optional(),
       preferLatest: z.boolean().optional(),
       rejectUnknown: z.boolean().optional(),
+    })
+    .optional(),
+  egressPolicy: z
+    .object({
+      allowedHosts: z.array(z.string().min(1)).optional(),
+      denyPrivateNetworks: z.boolean().optional(),
+      requireTls: z.boolean().optional(),
+    })
+    .optional(),
+  requestGuardPolicy: z
+    .object({
+      maxConcurrentRequests: z.number().int().positive().optional(),
+      rateLimit: z
+        .object({
+          maxRequests: z.number().int().positive(),
+          windowMs: z.number().int().positive(),
+        })
+        .optional(),
+      circuitBreaker: z
+        .object({
+          failureThreshold: z.number().int().positive(),
+          resetAfterMs: z.number().int().positive(),
+        })
+        .optional(),
     })
     .optional(),
   metadata: z.record(z.unknown()).optional(),

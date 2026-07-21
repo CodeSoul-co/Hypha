@@ -1,0 +1,37 @@
+# Declarative examples only. Credentials are opaque refs and are resolved at invocation time.
+profiles:
+  local:
+    - id: local.text-normalize
+      kind: local_function
+      toolSpecRef:
+        id: common.text.normalize
+        version: 1.0.0
+      requiredCapabilities: [execute, health]
+
+    - id: local.command
+      kind: execution
+      toolSpecRef:
+        id: common.command.execute
+        version: 1.0.0
+      requiredCapabilities: [execute, cancel, health]
+      config:
+        executionPortRef: execution.default
+
+  cloud:
+    - id: cloud.search
+      kind: http
+      toolSpecRef:
+        id: common.search.query
+        version: 1.0.0
+      endpoint: https://tools.example.com/v1/search
+      credentialRef: env:HYPHA_SEARCH_TOKEN
+      requiredCapabilities: [execute, cancel, health]
+
+    - id: cloud.mcp
+      kind: mcp_streamable_http
+      toolSpecRef:
+        id: mcp.remote.tool
+        version: 1.0.0
+      endpoint: https://mcp.example.com/mcp
+      credentialRef: env:HYPHA_MCP_TOKEN
+      requiredCapabilities: [execute, cancel, health]
