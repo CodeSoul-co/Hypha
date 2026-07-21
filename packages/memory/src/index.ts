@@ -877,6 +877,7 @@ export * from './structured-extraction-state-store';
 export * from './working-store';
 export * from './structured-lifecycle-task-store';
 export * from './external-adapters';
+export * from './external-provider-acceptance';
 export * from './external-memory-identity';
 export * from './structured-external-mapping-store';
 export * from './mem0-rest-client';
