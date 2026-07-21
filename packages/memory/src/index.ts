@@ -880,6 +880,7 @@ export * from './external-adapters';
 export * from './external-memory-identity';
 export * from './structured-external-mapping-store';
 export * from './mem0-rest-client';
+export * from './mem0-platform-client';
 export * from './memory-events';
 export * from './context-contracts';
 export * from './context-schema';
