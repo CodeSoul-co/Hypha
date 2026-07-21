@@ -1,4 +1,6 @@
 import { createHash } from 'crypto';
+import Ajv from 'ajv';
+import type { JsonSchema } from '@hypha/core';
 import type { ToolSpec } from './index';
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
@@ -19,7 +21,8 @@ export type JsonUtilityInput =
   | { operation: 'parse'; text: string }
   | { operation: 'stringify'; value: unknown; pretty?: boolean }
   | { operation: 'get'; value: unknown; pointer: string }
-  | { operation: 'keys'; value: unknown };
+  | { operation: 'keys'; value: unknown }
+  | { operation: 'validate'; value: unknown; schema: JsonSchema };
 
 export interface TextUtilityInput {
   operation:
@@ -28,8 +31,12 @@ export interface TextUtilityInput {
     | 'literal_find'
     | 'literal_replace'
     | 'slice'
-    | 'normalize_whitespace';
-  text: string;
+    | 'normalize_whitespace'
+    | 'split'
+    | 'join';
+  text?: string;
+  parts?: string[];
+  separator?: string;
   start?: number;
   end?: number;
   query?: string;
@@ -42,6 +49,11 @@ export interface TextUtilityInput {
 export type HashUtilityInput =
   | { operation: 'sha256_text'; text: string }
   | { operation: 'sha256_json'; value: unknown };
+
+export type TimeUtilityInput =
+  | { operation: 'now' }
+  | { operation: 'parse'; value: string }
+  | { operation: 'format'; value: string | number; timeZone?: string; locale?: string };
 
 const commonGovernance = {
   sideEffectLevel: 'none' as const,
@@ -61,11 +73,12 @@ export const jsonUtilityToolSpec: ToolSpec = {
     required: ['operation'],
     additionalProperties: false,
     properties: {
-      operation: { enum: ['parse', 'stringify', 'get', 'keys'] },
+      operation: { enum: ['parse', 'stringify', 'get', 'keys', 'validate'] },
       text: { type: 'string', maxLength: COMMON_TOOL_LIMITS.maxTextCharacters },
       value: {},
       pointer: { type: 'string', maxLength: 8_192 },
       pretty: { type: 'boolean' },
+      schema: { type: 'object' },
     },
   },
   outputSchema: { type: 'object' },
@@ -92,6 +105,8 @@ export const textUtilityToolSpec: ToolSpec = {
           'literal_replace',
           'slice',
           'normalize_whitespace',
+          'split',
+          'join',
         ],
       },
       text: { type: 'string', maxLength: COMMON_TOOL_LIMITS.maxTextCharacters },
@@ -102,6 +117,12 @@ export const textUtilityToolSpec: ToolSpec = {
       caseSensitive: { type: 'boolean' },
       maxResults: { type: 'integer', minimum: 1, maximum: COMMON_TOOL_LIMITS.maxMatches },
       mode: { enum: ['spaces', 'lines'] },
+      parts: {
+        type: 'array',
+        items: { type: 'string', maxLength: COMMON_TOOL_LIMITS.maxTextCharacters },
+        maxItems: COMMON_TOOL_LIMITS.maxMatches,
+      },
+      separator: { type: 'string', maxLength: COMMON_TOOL_LIMITS.maxQueryCharacters },
     },
   },
   outputSchema: { type: 'object' },
@@ -139,10 +160,33 @@ export const hashUtilityToolSpec: ToolSpec = {
   ...commonGovernance,
 };
 
+export const timeUtilityToolSpec: ToolSpec = {
+  id: 'utility.time',
+  version: '1.0.0',
+  name: 'utility.time',
+  description:
+    'Read, parse, and format time with explicit timezone output suitable for event replay.',
+  inputSchema: {
+    type: 'object',
+    required: ['operation'],
+    additionalProperties: false,
+    properties: {
+      operation: { enum: ['now', 'parse', 'format'] },
+      value: { oneOf: [{ type: 'string', maxLength: 128 }, { type: 'number' }] },
+      timeZone: { type: 'string', maxLength: 128 },
+      locale: { type: 'string', maxLength: 64 },
+    },
+  },
+  outputSchema: { type: 'object' },
+  permissionScope: ['utility.time'],
+  ...commonGovernance,
+};
+
 export const commonUtilityToolSpecs = [
   jsonUtilityToolSpec,
   textUtilityToolSpec,
   hashUtilityToolSpec,
+  timeUtilityToolSpec,
 ] as const;
 
 export function executeJsonUtility(input: JsonUtilityInput): Record<string, unknown> {
@@ -176,23 +220,41 @@ export function executeJsonUtility(input: JsonUtilityInput): Record<string, unkn
       const keys = Object.keys(value).sort();
       return { keys, count: keys.length };
     }
+    case 'validate': {
+      const value = sanitizeJsonValue(input.value);
+      const schema = sanitizeJsonValue(input.schema) as JsonSchema;
+      try {
+        const validate = new Ajv({ strict: false, allErrors: true }).compile(schema);
+        const valid = validate(value);
+        return {
+          valid,
+          errors: (validate.errors ?? []).slice(0, 100).map((error) => ({
+            instancePath: error.instancePath,
+            keyword: error.keyword,
+            message: error.message,
+          })),
+        };
+      } catch (error) {
+        throw utilityError('UTILITY_JSON_SCHEMA_INVALID', errorMessage(error));
+      }
+    }
     default:
       throw utilityError('UTILITY_JSON_OPERATION_INVALID', 'Unsupported JSON utility operation.');
   }
 }
 
 export function executeTextUtility(input: TextUtilityInput): Record<string, unknown> {
-  assertText(input.text, 'text');
+  const sourceText = input.operation === 'join' ? undefined : requiredText(input.text, 'text');
   switch (input.operation) {
     case 'length':
       return {
-        codeUnits: input.text.length,
-        codePoints: Array.from(input.text).length,
-        utf8Bytes: Buffer.byteLength(input.text, 'utf8'),
-        lines: input.text.length === 0 ? 0 : input.text.split(/\r\n|\r|\n/).length,
+        codeUnits: sourceText!.length,
+        codePoints: Array.from(sourceText!).length,
+        utf8Bytes: Buffer.byteLength(sourceText!, 'utf8'),
+        lines: sourceText!.length === 0 ? 0 : sourceText!.split(/\r\n|\r|\n/).length,
       };
     case 'line_select': {
-      const lines = input.text.split(/\r\n|\r|\n/);
+      const lines = sourceText!.split(/\r\n|\r|\n/);
       const start = boundedIndex(input.start ?? 0, lines.length, 'start');
       const end = boundedIndex(input.end ?? lines.length, lines.length, 'end');
       if (end < start) throw utilityError('UTILITY_TEXT_RANGE_INVALID', 'end must be >= start.');
@@ -207,7 +269,7 @@ export function executeTextUtility(input: TextUtilityInput): Record<string, unkn
         input.caseSensitive === false ? 'gi' : 'g'
       );
       const indexes: number[] = [];
-      for (const match of input.text.matchAll(expression)) {
+      for (const match of sourceText!.matchAll(expression)) {
         indexes.push(match.index);
         if (indexes.length > maxResults) break;
       }
@@ -226,7 +288,7 @@ export function executeTextUtility(input: TextUtilityInput): Record<string, unkn
       );
       let replacements = 0;
       let truncated = false;
-      const text = input.text.replace(expression, (matched) => {
+      const replaced = sourceText!.replace(expression, (matched) => {
         if (replacements >= maxResults) {
           truncated = true;
           return matched;
@@ -234,11 +296,11 @@ export function executeTextUtility(input: TextUtilityInput): Record<string, unkn
         replacements += 1;
         return replacement;
       });
-      assertText(text, 'output');
-      return { text, replacements, truncated };
+      assertText(replaced, 'output');
+      return { text: replaced, replacements, truncated };
     }
     case 'slice': {
-      const codePoints = Array.from(input.text);
+      const codePoints = Array.from(sourceText!);
       const start = boundedIndex(input.start ?? 0, codePoints.length, 'start');
       const end = boundedIndex(input.end ?? codePoints.length, codePoints.length, 'end');
       if (end < start) throw utilityError('UTILITY_TEXT_RANGE_INVALID', 'end must be >= start.');
@@ -246,16 +308,38 @@ export function executeTextUtility(input: TextUtilityInput): Record<string, unkn
     }
     case 'normalize_whitespace': {
       const mode = input.mode ?? 'spaces';
-      const text =
+      const normalized =
         mode === 'spaces'
-          ? input.text.replace(/[\t ]+/g, ' ').trim()
-          : input.text
+          ? sourceText!.replace(/[\t ]+/g, ' ').trim()
+          : sourceText!
               .split(/\r\n|\r|\n/)
               .map((line) => line.replace(/[\t ]+$/g, ''))
               .join('\n')
               .replace(/\n{3,}/g, '\n\n')
               .trim();
-      return { text, mode };
+      return { text: normalized, mode };
+    }
+    case 'split': {
+      const separator = requiredText(input.separator, 'separator');
+      if (!separator)
+        throw utilityError('UTILITY_TEXT_SEPARATOR_REQUIRED', 'separator must not be empty.');
+      const allParts = sourceText!.split(separator);
+      const parts = allParts.slice(0, COMMON_TOOL_LIMITS.maxMatches);
+      return {
+        parts,
+        count: parts.length,
+        truncated: allParts.length > parts.length,
+      };
+    }
+    case 'join': {
+      const parts = input.parts ?? [];
+      if (parts.length > COMMON_TOOL_LIMITS.maxMatches) {
+        throw utilityError('UTILITY_TEXT_RESULT_LIMIT_INVALID', 'parts exceeds the item limit.');
+      }
+      parts.forEach((part) => assertText(part, 'part'));
+      const joined = parts.join(input.separator ?? '');
+      assertText(joined, 'output');
+      return { text: joined, count: parts.length };
     }
     default:
       throw utilityError('UTILITY_TEXT_OPERATION_INVALID', 'Unsupported text utility operation.');
@@ -279,6 +363,35 @@ export function executeHashUtility(input: HashUtilityInput): Record<string, unkn
     digest: createHash('sha256').update(material, 'utf8').digest('hex'),
     inputBytes: Buffer.byteLength(material, 'utf8'),
   };
+}
+
+export function executeTimeUtility(
+  input: TimeUtilityInput,
+  now: () => Date = () => new Date()
+): Record<string, unknown> {
+  if (input.operation === 'now') {
+    const value = now();
+    return { iso: value.toISOString(), epochMs: value.getTime(), replaySource: 'recorded-output' };
+  }
+  const date = new Date(input.value);
+  if (!Number.isFinite(date.getTime())) {
+    throw utilityError('UTILITY_TIME_INVALID', 'Time value is invalid.');
+  }
+  if (input.operation === 'parse') return { iso: date.toISOString(), epochMs: date.getTime() };
+  try {
+    return {
+      iso: date.toISOString(),
+      epochMs: date.getTime(),
+      formatted: new Intl.DateTimeFormat(input.locale ?? 'en-US', {
+        timeZone: input.timeZone ?? 'UTC',
+        dateStyle: 'full',
+        timeStyle: 'long',
+      }).format(date),
+      timeZone: input.timeZone ?? 'UTC',
+    };
+  } catch (error) {
+    throw utilityError('UTILITY_TIME_FORMAT_INVALID', errorMessage(error));
+  }
 }
 
 export function sanitizeJsonValue(value: unknown): JsonValue {
@@ -395,6 +508,14 @@ function assertText(value: string, field: string): void {
       `${field} exceeds ${COMMON_TOOL_LIMITS.maxTextCharacters} characters.`
     );
   }
+}
+
+function requiredText(value: string | undefined, field: string): string {
+  if (typeof value !== 'string') {
+    throw utilityError('UTILITY_TEXT_REQUIRED', `${field} must be a string.`);
+  }
+  assertText(value, field);
+  return value;
 }
 
 function requiredQuery(query: string | undefined): string {
