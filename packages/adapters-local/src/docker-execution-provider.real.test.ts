@@ -6,7 +6,7 @@ import type {
   ExecutionEnvironmentSpec,
   SandboxCreateRequest,
 } from '@hypha/core';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { DockerCliTransport } from './docker-cli-transport';
 import { DockerEngineCliClient } from './docker-engine-client';
 import { DockerExecutionProvider } from './docker-execution-provider';
@@ -24,6 +24,11 @@ const principal = {
   permissionScopes: ['execution.run'],
 };
 const temporaryWorkspaces: string[] = [];
+const activeProviders: DockerExecutionProvider[] = [];
+
+afterEach(async () => {
+  await Promise.all(activeProviders.splice(0).map((provider) => provider.close()));
+});
 
 afterAll(async () => {
   await Promise.all(
@@ -35,7 +40,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
   it('attests hardened container configuration, non-root identity, and immutable image evidence', async () => {
     const workspace = await temporaryWorkspace('security');
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({ workspaceRoot: workspace, engine });
+    const provider = trackedProvider({ workspaceRoot: workspace, engine });
     await expect(provider.health()).resolves.toMatchObject({
       status: 'healthy',
       details: { processTreeKillScope: 'container' },
@@ -97,7 +102,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
   it('creates, starts, mounts, executes, accounts, stops, and removes a real container', async () => {
     const workspace = await temporaryWorkspace('success');
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({ workspaceRoot: workspace, engine });
+    const provider = trackedProvider({ workspaceRoot: workspace, engine });
     const ready = await createReady(provider, 'success', ['cp']);
     const result = await provider.execute(
       command(ready.id, 'success', 'cp', ['/etc/hostname', '/workspace/result.txt'], {
@@ -124,7 +129,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('kills and removes the real container after timeout', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('timeout'),
       engine,
     });
@@ -157,9 +162,30 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
     await provider.close();
   }, 60_000);
 
+  it('kills and removes the real container after idle timeout', async () => {
+    const engine = realEngine();
+    const provider = trackedProvider({
+      workspaceRoot: await temporaryWorkspace('idle-timeout'),
+      engine,
+    });
+    const ready = await createReady(provider, 'idle-timeout', ['sleep']);
+    const result = await provider.execute(
+      command(ready.id, 'idle-timeout', 'sleep', ['30'], {
+        timeoutMs: 5_000,
+        idleTimeoutMs: 250,
+      })
+    );
+    expect(result).toMatchObject({
+      status: 'timed_out',
+      error: { code: 'EXECUTION_IDLE_TIMEOUT' },
+      metadata: { processTreeTerminationVerified: true },
+    });
+    await cleanup(provider, engine, ready.id, ready.providerSandboxRef!, 'idle-timeout');
+  }, 60_000);
+
   it('propagates real cancellation and rejects secret/path requests before Docker exec', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('cancel'),
       engine,
     });
@@ -172,6 +198,10 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
     await expect(
       provider.execute(command(ready.id, 'path-denied', 'sleep', ['1'], { cwd: '../outside' }))
     ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_PATH_ESCAPE' } });
+    await expect(provider.status({ sandboxId: ready.id, principal })).resolves.toMatchObject({
+      status: 'ready',
+      activeExecutionIds: [],
+    });
 
     const execution = provider.execute(command(ready.id, 'cancel', 'sleep', ['30']));
     await waitForStatus(provider, ready.id, 'busy');
@@ -198,7 +228,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('enforces CPU, memory, and process limits through the container cgroup', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('cgroup'),
       engine,
     });
@@ -226,7 +256,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('denies direct-IP network access in the real container', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('network'),
       engine,
     });
@@ -248,7 +278,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('normalizes real Docker memory-limit enforcement as OOM killed', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('oom'),
       engine,
     });
@@ -272,7 +302,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('keeps protected container paths read-only and does not expose the Docker socket', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('filesystem'),
       engine,
     });
@@ -294,7 +324,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('observes CPU quota throttling under sustained real container load', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('cpu'),
       engine,
     });
@@ -331,7 +361,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('enforces the real PID limit and removes the forked process tree', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('pids'),
       engine,
     });
@@ -357,7 +387,7 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
   it('terminates a busy real Sandbox and removes its descendant process tree', async () => {
     const engine = realEngine();
-    const provider = new DockerExecutionProvider({
+    const provider = trackedProvider({
       workspaceRoot: await temporaryWorkspace('terminate'),
       engine,
     });
@@ -396,6 +426,14 @@ describe.skipIf(!runRealDocker)('DockerExecutionProvider real daemon', () => {
 
 function realEngine(): DockerEngineCliClient {
   return new DockerEngineCliClient(new DockerCliTransport({ dockerPath }));
+}
+
+function trackedProvider(
+  options: ConstructorParameters<typeof DockerExecutionProvider>[0]
+): DockerExecutionProvider {
+  const provider = new DockerExecutionProvider(options);
+  activeProviders.push(provider);
+  return provider;
 }
 
 async function inspectRawContainer(containerId: string): Promise<Record<string, unknown>> {
