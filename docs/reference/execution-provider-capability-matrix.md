@@ -28,7 +28,7 @@ incompatible.
 | ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `mock`           | No external process, filesystem, or network side effect                                                     | Deterministic result and lifecycle for tests                                                                                          | Contracts and test doubles; never a security sandbox                                                                       |
 | `local_process`  | No process or network isolation may be assumed; managed-root checks provide only filesystem confinement     | Cancellation and process-tree kill require a platform process group or Job Object before those capabilities may be reported           | `LocalWorkspaceRuntime` provides bounded file execution but does not implement `SandboxProvider`                           |
-| `docker`         | Process, filesystem, namespace, resource, mount, security, network, and image-digest controls are mandatory | Stop, forced kill, receipt capture, and container cleanup are idempotent and reconciled                                               | Environment validation and capability requirements; no concrete Docker adapter                                             |
+| `docker`         | Process, filesystem, namespace, resource, mount, security, network, and image-digest controls are mandatory | Stop, forced kill, receipt capture, and container cleanup are idempotent and reconciled                                               | `DockerExecutionProvider` and `DockerExecutionProviderFactory` in `@hypha/adapters-local`                                  |
 | `remote_sandbox` | Provider contract attests enforceable process, filesystem, network, resource, and tenant isolation          | Create, execute, output stream, Artifact transfer, cancel, terminate, cleanup, health, and remote receipt reconciliation are required | `RemoteSandboxProvider` defines the provider-neutral port and requires `remoteExecution: true`; no concrete remote adapter |
 | `custom`         | No capability is inferred from the provider name                                                            | Every claimed capability requires adapter contract tests and runtime health evidence                                                  | Provider-neutral extension port                                                                                            |
 
@@ -47,6 +47,32 @@ incompatible.
 
 Capability negotiation is fail-closed. A local adapter reports `false` for a guarantee it cannot
 enforce; configuration, documentation, or best-effort cleanup is not sufficient evidence.
+
+## Docker Adapter
+
+The local Docker adapter uses an argument-only Docker CLI transport and verifies the immutable image
+digest before container creation. It runs containers as a configured non-root user with a read-only
+root filesystem, dropped capabilities, `no-new-privileges`, governed Workspace mounts, and explicit
+CPU, memory, and PID limits. Disabled network policy maps to Docker's `none` network. Timeout,
+idle-timeout, cancellation, termination, provider close, and cleanup stop and remove the container
+execution scope.
+
+The adapter reports `diskLimits`, `snapshots`, and `remoteExecution` as `false`; callers requesting
+those guarantees must select another provider. A healthy Docker daemon alone is not acceptance
+evidence.
+
+Real-provider acceptance is opt-in for ordinary package tests and mandatory for a Docker release
+claim. The acceptance environment must set `HYPHA_REAL_DOCKER=1` and may set
+`HYPHA_REAL_DOCKER_PATH`, `HYPHA_REAL_DOCKER_IMAGE`, and `HYPHA_REAL_DOCKER_DIGEST`. Run:
+
+```bash
+npx vitest run packages/adapters-local/src/docker-execution-provider.real.test.ts
+```
+
+The release result must execute every case with zero skipped tests. The suite verifies daemon health,
+non-root and immutable-image evidence, mount and path confinement, secret and network denial, CPU,
+memory and PID enforcement, timeout and idle-timeout, cancellation, process-tree termination, and
+container cleanup.
 
 ## Evidence Required for Capability Claims
 
