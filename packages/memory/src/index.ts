@@ -882,6 +882,7 @@ export * from './structured-external-mapping-store';
 export * from './mem0-rest-client';
 export * from './mem0-platform-client';
 export * from './memorybank-local-client';
+export * from './memorybank-managed-client';
 export * from './memory-events';
 export * from './context-contracts';
 export * from './context-schema';
