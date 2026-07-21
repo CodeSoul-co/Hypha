@@ -54,6 +54,8 @@ export * from './local-process-execution-provider';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
 export * from './runtime-event-store';
+export * from './runtime-checkpoint-store';
+export * from './projection-store';
 export * from './sqlite-driver';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
