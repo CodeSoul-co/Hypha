@@ -1,7 +1,7 @@
 schemaVersion: '1.0'
 profiles:
   native-lite:
-    status: validated
+    status: framework-validated
     management:
       id: memory.provider.native-lite
       version: '1.0.0'
@@ -16,11 +16,14 @@ profiles:
         delete: true
         history: true
     stores:
+      working: working.in-memory.bounded
       structured: storage.sqlite.structured
       vector: vector.local.in-memory
-      persistence: ephemeral
+      artifact: artifact.local.filesystem
+      persistence: local-durable
+      coordination: single-process
   native-default:
-    status: validated
+    status: framework-validated
     management:
       id: memory.provider.native-default
       version: '1.0.0'
@@ -35,9 +38,12 @@ profiles:
         delete: true
         history: true
     stores:
-      structured: storage.sqlite.structured
+      working: redis.working
+      structured: mongo.memory.structured
       vector: vector.local.in-memory
+      artifact: artifact.local.filesystem
       persistence: durable
+      coordination: distributed
       outbox: enabled
   mem0-oss:
     status: validated-contract

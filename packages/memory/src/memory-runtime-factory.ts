@@ -285,11 +285,22 @@ function findInlineSecret(
 ): Array<string | number> | undefined {
   if (!value || typeof value !== 'object') return undefined;
   for (const [key, nested] of Object.entries(value)) {
-    if (/(?:password|secret|token|api[_-]?key|credential)/i.test(key)) return [...path, key];
+    if (/(?:password|secret|token|api[_-]?key|credential)/i.test(key)) {
+      if (!isCredentialReference(key, nested)) return [...path, key];
+      continue;
+    }
     const found = findInlineSecret(nested, [...path, key]);
     if (found) return found;
   }
   return undefined;
+}
+
+function isCredentialReference(key: string, value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  if (/Env$/i.test(key)) return /^[A-Z][A-Z0-9_]*$/.test(value);
+  if (/Ref$/i.test(key))
+    return /^(?:secret|env|vault|credential)[.:/][A-Za-z0-9._:/-]+$/.test(value);
+  return false;
 }
 
 function isProviderInstallation(
