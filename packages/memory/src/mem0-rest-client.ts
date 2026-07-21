@@ -83,6 +83,8 @@ export class Mem0OssClient implements ExternalMemoryClient {
   private readonly providerId: string;
   private readonly now: () => Date;
   private readonly mappingStore: ExternalMemoryMappingStore;
+  private readonly inFlight = new Set<AbortController>();
+  private closed = false;
 
   constructor(private readonly options: Mem0OssClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
@@ -211,10 +213,13 @@ export class Mem0OssClient implements ExternalMemoryClient {
     });
     await this.rememberMappings(records);
     const filtered = records.filter((record) => matchesFilter(record, request.filter));
-    const limit = request.pagination?.limit ?? filtered.length;
+    const offset = decodeOffsetCursor(request.pagination?.cursor);
+    const limit = request.pagination?.limit ?? Math.max(0, filtered.length - offset);
+    const end = offset + limit;
     return {
-      records: filtered.slice(0, limit),
-      hasMore: filtered.length > limit,
+      records: filtered.slice(offset, end),
+      nextCursor: end < filtered.length ? encodeOffsetCursor(end) : undefined,
+      hasMore: end < filtered.length,
     };
   }
 
@@ -362,50 +367,69 @@ export class Mem0OssClient implements ExternalMemoryClient {
     }
   }
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    this.closed = true;
+    for (const controller of this.inFlight) controller.abort(new Error('Mem0 client closed.'));
+    this.inFlight.clear();
+  }
 
   private async request(
     path: string,
     options: { method?: string; body?: Record<string, unknown>; signal?: AbortSignal } = {}
   ): Promise<unknown> {
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (options.body) headers['Content-Type'] = 'application/json';
-    if (this.options.apiKey && this.options.authMode !== 'none') {
-      if (this.options.authMode === 'bearer') {
-        headers.Authorization = 'Bearer ' + this.options.apiKey;
-      } else {
-        headers['X-API-Key'] = this.options.apiKey;
-      }
+    if (this.closed) {
+      throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Mem0 client is closed.');
     }
-    const response = await this.fetcher(this.baseUrl + path, {
-      method: options.method ?? 'GET',
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: options.signal,
-    });
-    if (!response.ok) {
-      const body = await safeResponseText(response);
-      const code =
-        response.status === 401 || response.status === 403
-          ? 'MEMORY_PERMISSION_DENIED'
-          : response.status === 404
-            ? 'MEMORY_NOT_FOUND'
-            : 'MEMORY_PROVIDER_UNAVAILABLE';
-      throw memoryError(
-        code,
-        'Mem0 HTTP ' + response.status + ': ' + (body || response.statusText),
-        response.status === 429 || response.status >= 500,
-        { status: response.status }
-      );
-    }
-    if (response.status === 204) return {};
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    this.inFlight.add(controller);
     try {
-      return await response.json();
-    } catch {
-      return {};
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (options.body) headers['Content-Type'] = 'application/json';
+      if (this.options.apiKey && this.options.authMode !== 'none') {
+        if (this.options.authMode === 'bearer')
+          headers.Authorization = 'Bearer ' + this.options.apiKey;
+        else headers['X-API-Key'] = this.options.apiKey;
+      }
+      const response = await this.fetcher(this.baseUrl + path, {
+        method: options.method ?? 'GET',
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const body = await safeResponseText(response);
+        const code =
+          response.status === 400
+            ? 'MEMORY_INVALID_INPUT'
+            : response.status === 401 || response.status === 403
+              ? 'MEMORY_PERMISSION_DENIED'
+              : response.status === 404
+                ? 'MEMORY_NOT_FOUND'
+                : response.status === 409
+                  ? 'MEMORY_REVISION_CONFLICT'
+                  : 'MEMORY_PROVIDER_UNAVAILABLE';
+        throw memoryError(
+          code,
+          'Mem0 HTTP ' + response.status + ': ' + (body || response.statusText),
+          response.status === 429 || response.status >= 500,
+          { status: response.status }
+        );
+      }
+      if (response.status === 204) return {};
+      try {
+        return await response.json();
+      } catch {
+        throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Mem0 returned invalid JSON.', false, {
+          schemaDrift: true,
+        });
+      }
+    } finally {
+      options.signal?.removeEventListener('abort', onAbort);
+      this.inFlight.delete(controller);
     }
   }
-
   private async rememberMappings(records: ManagedMemoryRecord[]): Promise<void> {
     for (const record of records) {
       const externalId = record.metadata?.providerExternalId;
@@ -519,6 +543,7 @@ function toMem0Scope(scope: ManagedMemoryScope): Record<string, string> {
     [
       ['user_id', scope.userId],
       ['agent_id', scope.agentId],
+      ['app_id', scope.workspaceId],
       ['run_id', scope.runId],
     ].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   );
@@ -546,6 +571,15 @@ function extractItems(body: unknown): Array<Record<string, unknown>> {
     if (Array.isArray(object[key])) return (object[key] as unknown[]).map(asObject);
   }
   return Object.keys(object).length > 0 ? [object] : [];
+}
+
+function encodeOffsetCursor(offset: number): string {
+  return 'offset:' + offset;
+}
+
+function decodeOffsetCursor(cursor?: string): number {
+  const match = cursor ? /^offset:(\d+)$/.exec(cursor) : null;
+  return match ? Number(match[1]) : 0;
 }
 
 function asObject(value: unknown): Record<string, unknown> {

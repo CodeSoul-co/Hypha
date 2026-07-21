@@ -183,6 +183,70 @@ describe('Mem0 REST client', () => {
       })
     ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_UNAVAILABLE', retryable: true });
   });
+  it('provides stable cursor pagination and rejects invalid JSON', async () => {
+    const metadata = { _hypha_scope_hash: hashMemoryScope(scope) };
+    const paging = new Mem0OssClient({
+      baseUrl: 'http://mem0.local',
+      fetch: async () =>
+        jsonResponse([
+          { id: '1', memory: 'one', metadata },
+          { id: '2', memory: 'two', metadata },
+          { id: '3', memory: 'three', metadata },
+        ]),
+    });
+    const first = await paging.list({
+      operationId: 'list-1',
+      principal,
+      scope,
+      pagination: { limit: 2 },
+    });
+    expect(first).toMatchObject({ hasMore: true, nextCursor: 'offset:2' });
+    const second = await paging.list({
+      operationId: 'list-2',
+      principal,
+      scope,
+      pagination: { limit: 2, cursor: first.nextCursor },
+    });
+    expect(second.records.map((record) => record.canonicalText)).toEqual(['three']);
+
+    const invalid = new Mem0OssClient({
+      baseUrl: 'http://mem0.local',
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => {
+          throw new SyntaxError('bad json');
+        },
+        text: async () => 'not-json',
+      }),
+    });
+    await expect(invalid.list({ operationId: 'bad-json', principal, scope })).rejects.toMatchObject(
+      { code: 'MEMORY_PROVIDER_UNAVAILABLE', details: { schemaDrift: true } }
+    );
+  });
+
+  it('cancels in-flight requests when closed', async () => {
+    let aborted = false;
+    const client = new Mem0OssClient({
+      baseUrl: 'http://mem0.local',
+      fetch: async (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              reject(init.signal?.reason);
+            },
+            { once: true }
+          );
+        }),
+    });
+    const pending = client.list({ operationId: 'close', principal, scope });
+    await client.close();
+    await expect(pending).rejects.toBeTruthy();
+    expect(aborted).toBe(true);
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Mem0HttpResponse {
