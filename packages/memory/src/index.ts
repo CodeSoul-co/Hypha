@@ -36,6 +36,9 @@ import type {
 
 export * from './recovery';
 
+/**
+ * @deprecated Use ManagedMemoryScope for new integrations.
+ */
 export interface MemoryScope {
   workspaceId?: string;
   sessionId?: string;
@@ -51,6 +54,9 @@ export type MemoryType =
   | 'artifact'
   | 'governance';
 
+/**
+ * @deprecated Use ManagedMemoryRecord for new integrations.
+ */
 export interface MemoryRecord<TValue = unknown> {
   id: string;
   type: MemoryType;
@@ -213,6 +219,9 @@ export interface MemoryAuditReport {
   missingProvenance: string[];
 }
 
+/**
+ * @deprecated Use MemoryManagementProvider behind GovernedMemoryManager.
+ */
 export interface MemoryProvider {
   read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
   search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
@@ -252,6 +261,10 @@ export interface MemoryManagerRecoveryOptions {
   onFailure?: (failure: RecoveryFailure) => void | Promise<void>;
 }
 
+/**
+ * @deprecated Use GovernedMemoryManager for managed operations. This class remains for legacy
+ * MemoryProvider compatibility during the documented migration window.
+ */
 export class MemoryManager {
   private sequence = 0;
 
@@ -842,6 +855,9 @@ export * from './operation-contract';
 export * from './lifecycle-contracts';
 export * from './lifecycle-schema';
 export * from './governed-memory-manager';
+export * from './memory-application-service';
+export * from './memory-runtime-factory';
+export * from './memory-server-migration-contract';
 export * from './provider-reconciliation';
 export * from './memory-utils';
 export * from './managed-store';
