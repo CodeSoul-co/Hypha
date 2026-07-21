@@ -59,11 +59,7 @@ export class VersionValidContextCache {
       return null;
     }
     const expected = createContextCacheValidityHash(current);
-    if (
-      record.validityHash !== expected ||
-      !sameSnapshot(record.snapshot, current) ||
-      (record.envelope.contextHash !== record.key && key === record.envelope.contextHash)
-    ) {
+    if (record.validityHash !== expected || !sameSnapshot(record.snapshot, current)) {
       await this.options.store.delete(key);
       return null;
     }
