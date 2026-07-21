@@ -39,6 +39,10 @@ truth during recovery.
 Local and self-hosted deployments can use `StructuredMemoryPersistenceUnitOfWork` over a
 transactional `StructuredStoreProvider`. `InMemoryMemoryPersistenceUnitOfWork` is deterministic and
 atomic for tests but declares `durable: false`.
+`StructuredMemoryExtractionStateStore` persists extraction jobs, batches, and compare-and-set
+cursors. `StructuredMemoryLifecycleTaskStore` persists leased lifecycle and provider reconciliation
+tasks so expired work can be reclaimed after a process restart. The in-memory state and task stores
+remain test fixtures rather than production recovery stores.
 
 ## Retrieval and Context Safety
 
@@ -95,14 +99,24 @@ and physical/logical key rules.
 
 ```ts
 import {
-  MemoryManager,
+  DefaultMemoryActivityPort,
+  GovernedMemoryManager,
   NativeMemoryManagementProvider,
   memoryProfileSpecExample,
+  registerMemoryManagementProviderHandlers,
 } from '@hypha/memory';
 
-const memory = new MemoryManager(
-  new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample })
-);
+const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+const activities = new DefaultMemoryActivityPort({ policy, events, harness });
+registerMemoryManagementProviderHandlers(activities, provider);
+const memory = new GovernedMemoryManager({
+  activities,
+  profileRef: memoryProfileSpecExample,
+  eventContext: (request) => ({
+    runId: request.scope.runId ?? request.operationId,
+    workspaceId: request.scope.workspaceId,
+  }),
+});
 
 await memory.add({
   operationId: 'memory:add:preference',
@@ -121,6 +135,8 @@ await memory.add({
 });
 ```
 
-Production assembly must supply the policy, trace, persistence, provider health, and external
-receipt hooks required by the selected profile. Direct provider or store writes bypassing those
-boundaries are not framework-compliant.
+`GovernedMemoryManager` is the canonical managed API. Production assembly must supply policy,
+harness, event, persistence, provider health, and external receipt hooks required by the selected
+profile. The legacy `MemoryManager` remains only as a compatibility surface while consumers migrate.
+Direct provider or store writes bypassing those boundaries are not framework-compliant. See the
+[Managed Memory migration guide](../guides/memory-managed-migration.md).
