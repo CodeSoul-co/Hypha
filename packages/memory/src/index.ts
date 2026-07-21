@@ -35,6 +35,7 @@ import type {
 } from './operations';
 
 export * from './recovery';
+export * from './bounded-recovery';
 
 /**
  * @deprecated Use ManagedMemoryScope for new integrations.
