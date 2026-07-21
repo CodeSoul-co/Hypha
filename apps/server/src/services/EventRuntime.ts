@@ -12,6 +12,7 @@ import {
   InMemoryEventSchemaRegistry,
   InMemoryTelemetryRecorder,
   FrameworkError,
+  registerRuntimeOrchestrationEventSchemas,
   recoveryFailureFingerprint,
   stableRecoveryHash,
   type FrameworkEvent,
@@ -600,9 +601,10 @@ class EventRuntimeService {
         process.env.HYPHA_CANONICAL_RUNTIME_DB ??
         `${legacyEventDbPath}.canonical.sqlite`;
       const schemaRegistry = options.schemaRegistry ?? new InMemoryEventSchemaRegistry();
-      this.canonicalLifecycle = new RuntimeBackboneLifecycle(() =>
-        createRuntimeBackbone({ filename, schemaRegistry })
-      );
+      this.canonicalLifecycle = new RuntimeBackboneLifecycle(async () => {
+        await registerRuntimeOrchestrationEventSchemas(schemaRegistry);
+        return createRuntimeBackbone({ filename, schemaRegistry });
+      });
     }
     return this.canonicalLifecycle.initialize();
   }
