@@ -865,6 +865,7 @@ export * from './mongo-structured-store';
 export * from './structured-idempotency-store';
 export * from './memory-server-migration-contract';
 export * from './provider-reconciliation';
+export * from './provider-operational-health';
 export * from './memory-utils';
 export * from './managed-store';
 export * from './structured-managed-store';
