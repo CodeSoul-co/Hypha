@@ -391,6 +391,65 @@ describe('@hypha/harness contracts', () => {
     });
   });
 
+  it('persists canonical Run identity and caller recovery metadata on run.created', async () => {
+    const runtime = new EventFirstRuntime();
+    await runtime.createRun({
+      id: 'run_canonical',
+      sessionId: 'session_canonical',
+      userId: 'owner',
+      metadata: { runtimeRunContext: { snapshot: 'persisted' } },
+    });
+
+    await expect(runtime.listEvents('run_canonical')).resolves.toEqual([
+      expect.objectContaining({
+        type: 'run.created',
+        payload: expect.objectContaining({ id: 'run_canonical', runId: 'run_canonical' }),
+        metadata: {
+          runtimeRunContext: { snapshot: 'persisted' },
+          userId: 'owner',
+        },
+      }),
+    ]);
+  });
+
+  it('emits lifecycle payloads that satisfy canonical orchestration schemas', async () => {
+    const runtime = new EventFirstRuntime();
+    const runs = new RunManager({ runtime });
+    const run = await runs.createRun({
+      id: 'run_lifecycle_schema',
+      sessionId: 'session_lifecycle_schema',
+      userId: 'owner',
+    });
+    const context = {
+      runId: run.id,
+      sessionId: run.sessionId,
+      userId: run.userId,
+    };
+
+    await runs.startRun(run);
+    await runs.waitForHumanReview(context);
+    await runs.completeRun(context, 'ok');
+    await runs.failRun(context, 'failed');
+    await runs.cancelRun(context, 'cancelled');
+
+    const events = await runs.listEvents(run.id);
+    expect(events.find((event) => event.type === 'run.started')?.payload).toMatchObject({
+      runId: run.id,
+    });
+    expect(events.find((event) => event.type === 'run.waiting_human')?.payload).toMatchObject({
+      waitId: `human-review:${run.id}`,
+    });
+    expect(events.find((event) => event.type === 'run.completed')?.payload).toMatchObject({
+      terminalState: 'Completed',
+    });
+    expect(events.find((event) => event.type === 'run.failed')?.payload).toMatchObject({
+      terminalState: 'Failed',
+    });
+    expect(events.find((event) => event.type === 'run.cancelled')?.payload).toMatchObject({
+      terminalState: 'Cancelled',
+    });
+  });
+
   it('runs the minimal ReAct + FSM runtime closure with trace events for each state', async () => {
     const inference: InferenceProvider = {
       id: 'mock-inference',

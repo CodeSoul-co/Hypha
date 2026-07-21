@@ -10,10 +10,9 @@ import {
   ProjectionEngine,
   RuntimeRunControlService,
   RuntimeCancellationService,
-  hashCanonicalJson,
+  registerRuntimeOrchestrationEventSchemas,
   type EventCreateInput,
   type FrameworkEventType,
-  type JsonSchema,
   type RuntimeOrchestrationProjection,
   type RuntimeScope,
 } from '@hypha/core';
@@ -54,34 +53,6 @@ const process: FSMProcessSpec = {
   terminalStates: ['Completed', 'Failed'],
 };
 
-const driverEventTypes: FrameworkEventType[] = [
-  'run.created',
-  'run.started',
-  'run.resume.requested',
-  'run.resumed',
-  'run.cancel.requested',
-  'run.cancelling',
-  'run.waiting_human',
-  'run.waiting_signal',
-  'run.waiting_timer',
-  'run.paused',
-  'run.completed',
-  'run.failed',
-  'run.cancelled',
-  'runtime.wait.created',
-  'runtime.wait.resolved',
-  'runtime.signal.received',
-  'runtime.timer.created',
-  'runtime.timer.fired',
-  'runtime.cancellation.propagated',
-  'runtime.cancellation.failed',
-  'fsm.state.entered',
-  'fsm.state.exited',
-  'fsm.transition.accepted',
-];
-
-const payloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
-
 async function fixture(
   executeState: (
     input: BoundedStateExecutorInput
@@ -92,14 +63,7 @@ async function fixture(
   const now = () => new Date(Date.UTC(2026, 6, 18, 5, 0, 0, milliseconds++)).toISOString();
   const nextId = (namespace: string) => `${namespace}.${++idSequence}`;
   const schemas = new InMemoryEventSchemaRegistry();
-  for (const eventType of driverEventTypes) {
-    await schemas.register({
-      eventType,
-      version: '1.0.0',
-      schema: payloadSchema,
-      schemaHash: hashCanonicalJson(payloadSchema),
-    });
-  }
+  await registerRuntimeOrchestrationEventSchemas(schemas);
   const eventStore = new InMemoryDurableEventStore({ schemaRegistry: schemas, now });
   const events = new DurableEventRuntime({ store: eventStore, now });
   const projectionStore = new InMemoryProjectionStore<RuntimeOrchestrationProjection>();
@@ -201,7 +165,7 @@ function seedEvent(id: string, type: FrameworkEventType, timestamp: string): Eve
     sessionId: scope.sessionId,
     runId: scope.runId,
     timestamp,
-    payload: {},
+    payload: type === 'run.created' ? { runId: scope.runId } : {},
   };
 }
 

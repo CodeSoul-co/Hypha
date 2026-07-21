@@ -9,18 +9,28 @@ import {
 } from '@hypha/adapters-local';
 import {
   createFrameworkEvent,
+  InMemoryEventSchemaRegistry,
   InMemoryTelemetryRecorder,
   FrameworkError,
+  registerRuntimeOrchestrationEventSchemas,
   recoveryFailureFingerprint,
   stableRecoveryHash,
   type FrameworkEvent,
   type FrameworkEventType,
+  type EventStore,
+  type EventSchemaRegistry,
+  type TraceRecorder,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
   type SpecRef,
 } from '@hypha/core';
-import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
+import {
+  DurableEventStoreBridge,
+  EventFirstRuntime,
+  runRecoverySupervisor,
+  type RecoveryParticipant,
+} from '@hypha/harness';
 import {
   compileWorkflowToFSM,
   validateDomainPackSpec,
@@ -108,16 +118,14 @@ import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
-
-interface RuntimeRunContext {
-  runId: string;
-  userId: string;
-  sessionId: string;
-  clientSessionId: string;
-  domainPackId: string;
-  fsm: FSMProcessSpec;
-  snapshot: FSMSnapshot;
-}
+import { createRuntimeBackbone, type RuntimeBackbone } from '../runtime/RuntimeBackbone';
+import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
+import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
+import {
+  projectRuntimeRunContexts,
+  runtimeRunContextMetadata,
+  type RuntimeRunContext,
+} from '../runtime/RuntimeRunContextProjection';
 
 export class HumanReviewRequiredError extends Error {
   readonly code = 'HUMAN_REVIEW_REQUIRED';
@@ -508,7 +516,8 @@ function legacyToolToModelTool(
 }
 
 class EventRuntimeService {
-  private readonly events: SQLiteEventStore;
+  private readonly legacyEvents: SQLiteEventStore;
+  private readonly events: EventStore & TraceRecorder;
   private readonly runtime: EventFirstRuntime;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
@@ -522,15 +531,21 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private canonicalLifecycle?: RuntimeBackboneLifecycle;
+  private canonicalEvents?: DurableEventStoreBridge;
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
     const eventDbPath =
       process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
-    this.events = new SQLiteEventStore({
+    this.legacyEvents = new SQLiteEventStore({
       filename: eventDbPath,
       mode: sqliteStorage.sqliteMode,
+    });
+    this.events = new OrchestrationEventStore({
+      legacy: this.legacyEvents,
+      canonical: () => this.canonicalEventStore(),
     });
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
@@ -599,6 +614,61 @@ class EventRuntimeService {
     });
   }
 
+  async initializeCanonicalRuntime(
+    options: { filename?: string; schemaRegistry?: EventSchemaRegistry } = {}
+  ): Promise<RuntimeBackbone> {
+    if (!this.canonicalLifecycle) {
+      const sqliteStorage = storageConfig().relational.sqlite;
+      const legacyEventDbPath =
+        process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
+      const filename =
+        options.filename ??
+        process.env.HYPHA_CANONICAL_RUNTIME_DB ??
+        `${legacyEventDbPath}.canonical.sqlite`;
+      const schemaRegistry = options.schemaRegistry ?? new InMemoryEventSchemaRegistry();
+      this.canonicalLifecycle = new RuntimeBackboneLifecycle(async () => {
+        await registerRuntimeOrchestrationEventSchemas(schemaRegistry);
+        return createRuntimeBackbone({ filename, schemaRegistry });
+      });
+    }
+    return this.canonicalLifecycle.initialize();
+  }
+
+  canonicalRuntime(): RuntimeBackbone {
+    if (!this.canonicalLifecycle) {
+      throw new Error('Canonical Runtime backbone is not initialized');
+    }
+    return this.canonicalLifecycle.get();
+  }
+
+  async restoreRunContexts(): Promise<number> {
+    const contexts = projectRuntimeRunContexts(await this.canonicalEventStore().list());
+    this.runs.clear();
+    for (const context of contexts) {
+      this.runs.set(context.runId, context);
+      this.knownSessions.add(context.sessionId);
+    }
+    return contexts.length;
+  }
+
+  isCanonicalRuntimeInitialized(): boolean {
+    return this.canonicalLifecycle?.isInitialized() ?? false;
+  }
+
+  async close(): Promise<void> {
+    await this.canonicalLifecycle?.close();
+    this.canonicalEvents = undefined;
+  }
+
+  private canonicalEventStore(): DurableEventStoreBridge {
+    if (!this.canonicalEvents) {
+      this.canonicalEvents = new DurableEventStoreBridge({
+        events: this.canonicalRuntime().events,
+      });
+    }
+    return this.canonicalEvents;
+  }
+
   listReasoningStrategies(): ReasoningStrategyDescriptor[] {
     return this.reasoning.registry.list();
   }
@@ -630,6 +700,7 @@ class EventRuntimeService {
   }
 
   async startRun(input: StartRunInput): Promise<EventRunHandle> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
@@ -642,6 +713,15 @@ class EventRuntimeService {
       version: fsm.version,
     };
     const snapshot = createInitialSnapshot(fsm, runId, timestamp);
+    const context: RuntimeRunContext = {
+      runId,
+      userId: input.userId,
+      sessionId: runtimeSessionId,
+      clientSessionId: input.sessionId,
+      domainPackId: domainPack.id,
+      fsm,
+      snapshot,
+    };
 
     await this.runtime.createRun({
       id: runId,
@@ -651,21 +731,21 @@ class EventRuntimeService {
       workflowRef,
       agentRef: input.agentId ? { id: input.agentId } : undefined,
       input: input.input,
+      metadata: {
+        ...input.metadata,
+        ...runtimeRunContextMetadata(context),
+      },
       timestamp,
     });
-    this.runs.set(runId, {
+    this.runs.set(runId, context);
+    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
+    await this.append(
       runId,
-      userId: input.userId,
-      sessionId: runtimeSessionId,
-      clientSessionId: input.sessionId,
-      domainPackId: domainPack.id,
-      fsm,
-      snapshot,
-    });
-    await this.append(runId, 'run.started', { input: input.input }, timestamp);
-    await this.append(runId, 'fsm.state.entered', { stateId: snapshot.currentState }, timestamp, {
-      fsmState: snapshot.currentState,
-    });
+      'fsm.state.entered',
+      { stateId: snapshot.currentState, snapshot },
+      timestamp,
+      { fsmState: snapshot.currentState }
+    );
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
@@ -696,10 +776,14 @@ class EventRuntimeService {
       await this.append(runId, 'fsm.state.exited', { stateId: from }, undefined, {
         fsmState: from,
       });
-      await this.append(runId, 'fsm.transition.accepted', { from, to, ...payload }, undefined, {
-        fsmState: to,
-      });
-      await this.append(runId, 'fsm.state.entered', { stateId: to }, undefined, {
+      await this.append(
+        runId,
+        'fsm.transition.accepted',
+        { from, to, ...payload, snapshot: next },
+        undefined,
+        { fsmState: to }
+      );
+      await this.append(runId, 'fsm.state.entered', { stateId: to, snapshot: next }, undefined, {
         fsmState: to,
       });
       context.snapshot = next;
@@ -1937,8 +2021,6 @@ class EventRuntimeService {
       input.runId,
       {
         onTransition: async (transition) => {
-          context.snapshot = transition.snapshot;
-          this.runs.set(input.runId, context);
           await this.append(
             input.runId,
             'fsm.state.exited',
@@ -1954,21 +2036,29 @@ class EventRuntimeService {
               to: transition.to,
               phase: 'recovery',
               ...transition.metadata,
+              snapshot: transition.snapshot,
             },
             transition.acceptedAt,
             { stepId: input.stepId, fsmState: transition.to }
           );
+          context.snapshot = transition.snapshot;
+          this.runs.set(input.runId, context);
         },
         onStateEntered: async (entered) => {
-          context.snapshot = entered.snapshot;
-          this.runs.set(input.runId, context);
           await this.append(
             input.runId,
             'fsm.state.entered',
-            { stateId: entered.stateId, fromState: entered.fromState, phase: 'recovery' },
+            {
+              stateId: entered.stateId,
+              fromState: entered.fromState,
+              phase: 'recovery',
+              snapshot: entered.snapshot,
+            },
             entered.enteredAt,
             { stepId: input.stepId, fsmState: entered.stateId }
           );
+          context.snapshot = entered.snapshot;
+          this.runs.set(input.runId, context);
         },
       },
       context.snapshot
@@ -2101,7 +2191,10 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferCompletedState(context.fsm), { reason: 'completed' });
     }
-    await this.append(runId, 'run.completed', { output });
+    await this.append(runId, 'run.completed', {
+      terminalState: context.snapshot.currentState,
+      output,
+    });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
@@ -2110,11 +2203,17 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferFailedState(context.fsm), { reason: message });
     }
-    await this.append(runId, 'run.failed', { error: message });
+    await this.append(runId, 'run.failed', {
+      terminalState: context.snapshot.currentState,
+      error: message,
+    });
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    await this.append(runId, 'run.waiting_human', payload);
+    await this.append(runId, 'run.waiting_human', {
+      ...payload,
+      waitId: stringValue(payload.waitId) ?? `human-review:${runId}`,
+    });
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {

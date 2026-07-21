@@ -84,6 +84,7 @@ export interface CreateRunInput {
   workflowRef?: SpecRef;
   agentRef?: SpecRef;
   input?: unknown;
+  metadata?: Record<string, unknown>;
   timestamp?: string;
 }
 
@@ -229,13 +230,13 @@ export class EventFirstRuntime {
       id: input.id,
       sessionId: input.sessionId,
       userId: input.userId,
-      domainPackRef: input.domainPackRef,
-      workflowRef: input.workflowRef,
-      agentRef: input.agentRef,
+      ...(input.domainPackRef === undefined ? {} : { domainPackRef: input.domainPackRef }),
+      ...(input.workflowRef === undefined ? {} : { workflowRef: input.workflowRef }),
+      ...(input.agentRef === undefined ? {} : { agentRef: input.agentRef }),
       status: 'queued',
       createdAt: timestamp,
       updatedAt: timestamp,
-      input: input.input,
+      ...(input.input === undefined ? {} : { input: input.input }),
     };
     await this.events.append(
       createFrameworkEvent({
@@ -244,8 +245,8 @@ export class EventFirstRuntime {
         runId: input.id,
         sessionId: input.sessionId,
         timestamp,
-        payload: run,
-        metadata: { userId: input.userId },
+        payload: { ...run, runId: input.id },
+        metadata: { ...input.metadata, userId: input.userId },
       })
     );
     return run;
@@ -571,7 +572,7 @@ export class RunManager {
       userId: context.userId,
       agentId: context.agentId,
       timestamp,
-      payload: { output },
+      payload: { terminalState: 'Completed', output },
     });
   }
 
@@ -589,7 +590,10 @@ export class RunManager {
       userId: context.userId,
       agentId: context.agentId,
       timestamp,
-      payload,
+      payload: {
+        ...payload,
+        waitId: nonEmptyString(payload.waitId) ?? `human-review:${context.runId}`,
+      },
     });
   }
 
@@ -674,7 +678,7 @@ export class RunManager {
       userId: context.userId,
       agentId: context.agentId,
       timestamp,
-      payload: { reason },
+      payload: { terminalState: 'Cancelled', reason },
     });
   }
 
@@ -691,7 +695,10 @@ export class RunManager {
       userId: context.userId,
       agentId: context.agentId,
       timestamp,
-      payload: { error: error instanceof Error ? error.message : String(error) },
+      payload: {
+        terminalState: 'Failed',
+        error: error instanceof Error ? error.message : String(error),
+      },
     });
   }
 
@@ -1127,4 +1134,8 @@ function statusFromRunEvent(type: FrameworkEvent['type']): RuntimeRun['status'] 
   if (type === 'run.failed') return 'failed';
   if (type === 'run.cancelled') return 'cancelled';
   return 'completed';
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
