@@ -12,6 +12,7 @@ import {
   InMemoryEventSchemaRegistry,
   InMemoryTelemetryRecorder,
   FrameworkError,
+  RuntimeCancellationService,
   registerRuntimeOrchestrationEventSchemas,
   recoveryFailureFingerprint,
   stableRecoveryHash,
@@ -23,6 +24,7 @@ import {
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type RuntimeCancelResult,
   type SpecRef,
 } from '@hypha/core';
 import {
@@ -127,6 +129,11 @@ import {
   runtimeRunContextMetadata,
   type RuntimeRunContext,
 } from '../runtime/RuntimeRunContextProjection';
+import {
+  projectWorkflowExecution,
+  workflowExecutionIdFromEvent,
+  type WorkflowExecutionProjection,
+} from '../runtime/WorkflowExecutionProjection';
 
 export class HumanReviewRequiredError extends Error {
   readonly code = 'HUMAN_REVIEW_REQUIRED';
@@ -533,6 +540,7 @@ class EventRuntimeService {
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
   private canonicalLifecycle?: RuntimeBackboneLifecycle;
   private canonicalEvents?: DurableEventStoreBridge;
+  private cancellationService?: RuntimeCancellationService;
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor() {
@@ -656,6 +664,7 @@ class EventRuntimeService {
   async close(): Promise<void> {
     await this.canonicalLifecycle?.close();
     this.canonicalEvents = undefined;
+    this.cancellationService = undefined;
   }
 
   private canonicalEventStore(): DurableEventStoreBridge {
@@ -2162,6 +2171,78 @@ class EventRuntimeService {
     });
   }
 
+  async projectWorkflowExecution(executionId: string): Promise<WorkflowExecutionProjection | null> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const directEvents = await this.events.list({ runId: executionId });
+    const direct = projectWorkflowExecution(directEvents, executionId);
+    if (direct) return direct;
+
+    const lookupTypes: FrameworkEventType[] = [
+      'workflow.stage.started',
+      'workflow.stage.completed',
+      'workflow.stage.failed',
+      'run.completed',
+    ];
+    const lookupEvents = (
+      await Promise.all(lookupTypes.map((type) => this.events.list({ type })))
+    ).flat();
+    const matched = lookupEvents.find(
+      (event) => workflowExecutionIdFromEvent(event) === executionId
+    );
+    if (!matched) return null;
+    return projectWorkflowExecution(await this.events.list({ runId: matched.runId }), executionId);
+  }
+
+  async projectOwnedWorkflowExecution(
+    executionId: string,
+    userId: string
+  ): Promise<WorkflowExecutionProjection | null> {
+    const execution = await this.projectWorkflowExecution(executionId);
+    return execution?.userId === userId ? execution : null;
+  }
+
+  async cancelOwnedWorkflowExecution(input: {
+    executionId: string;
+    userId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  }): Promise<RuntimeCancelResult | null> {
+    const execution = await this.projectOwnedWorkflowExecution(input.executionId, input.userId);
+    if (!execution) return null;
+    const context = await this.requireRun(execution.runId);
+    const commandId = input.idempotencyKey ?? `workflow-cancel:${execution.runId}`;
+    const priorRequest = (await this.events.list({ runId: execution.runId })).find(
+      (event) =>
+        event.type === 'run.cancel.requested' &&
+        stringValue(asRecord(event.payload)?.commandId) === commandId
+    );
+    const requestedAt =
+      stringValue(asRecord(priorRequest?.payload)?.requestedAt) ?? new Date().toISOString();
+    return this.runtimeCancellationService().cancel({
+      commandId,
+      scope: {
+        userId: input.userId,
+        sessionId: context.sessionId,
+        runId: execution.runId,
+      },
+      principal: {
+        principalId: input.userId,
+        type: 'user',
+        userId: input.userId,
+        permissionScopes: ['runtime.run.cancel'],
+      },
+      ownerId: 'server.workflow-cancellation',
+      leaseTtlMs: 30_000,
+      reason: input.reason?.trim() || 'Workflow execution cancelled by owner.',
+      policy: {
+        propagation: 'all_descendants',
+        cancelRunningActivities: true,
+      },
+      requestedAt,
+      idempotencyKey: input.idempotencyKey ?? commandId,
+    });
+  }
+
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
     await this.append(runId, 'run.waiting_human', {
       ...payload,
@@ -2213,7 +2294,7 @@ class EventRuntimeService {
   }): Promise<WorkflowExecution> {
     const workflow = input.workflow;
     const execution: WorkflowExecution = {
-      id: generateId(),
+      id: input.runId,
       workflowName: workflow.name,
       workflowVersion: workflow.version,
       status: 'running',
@@ -2230,6 +2311,11 @@ class EventRuntimeService {
         currentStageId && currentStageId !== 'end' && execution.status === 'running';
         transitions += 1
       ) {
+        if (await this.isRunCancelled(input.runId)) {
+          execution.status = 'cancelled';
+          execution.completedAt = now();
+          return execution;
+        }
         if (transitions > workflow.stages.length) {
           throw new Error(`Workflow exceeded declared stage count: ${workflow.name}`);
         }
@@ -2325,6 +2411,11 @@ class EventRuntimeService {
         }
       }
 
+      if (await this.isRunCancelled(input.runId)) {
+        execution.status = 'cancelled';
+        execution.completedAt = now();
+        return execution;
+      }
       execution.status = 'completed';
       execution.completedAt = now();
       await this.completeRun(input.runId, { executionId: execution.id, status: execution.status });
@@ -2814,6 +2905,45 @@ class EventRuntimeService {
       throw new Error(`Runtime run not found: ${runId}`);
     }
     return context;
+  }
+
+  private async isRunCancelled(runId: string): Promise<boolean> {
+    return (await this.runtime.projectRun(runId))?.status === 'cancelled';
+  }
+
+  private runtimeCancellationService(): RuntimeCancellationService {
+    if (this.cancellationService) return this.cancellationService;
+    const runtime = this.canonicalRuntime();
+    this.cancellationService = new RuntimeCancellationService({
+      events: runtime.events,
+      projections: runtime.projections,
+      projectionStore: runtime.projectionStore,
+      runLeases: runtime.runLeases,
+      activities: {
+        cancel: async (request) => {
+          const invocation = await this.toolRunner.getInvocation(request.activityId);
+          if (!invocation) {
+            return { targetType: 'activity', targetId: request.activityId, status: 'not_found' };
+          }
+          const result = await this.toolRunner.cancelInvocation(request.activityId, request.reason);
+          return {
+            targetType: 'activity',
+            targetId: request.activityId,
+            status: result.status === 'cancelled' ? 'cancelled' : 'already_terminal',
+          };
+        },
+      },
+      children: {
+        listChildren: async () => [],
+        cancel: async (request) => ({
+          targetType: 'child_run',
+          targetId: request.childRunId,
+          status: 'not_found',
+        }),
+      },
+      nextId: (namespace) => `${namespace}:${generateId()}`,
+    });
+    return this.cancellationService;
   }
 
   private runtimeSessionId(userId: string, clientSessionId: string): string {

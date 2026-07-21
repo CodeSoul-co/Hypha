@@ -23,17 +23,11 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 // Get execution status
 router.get('/executions/:executionId', asyncHandler(async (req: Request, res: Response) => {
   const { executionId } = req.params;
-
-  const engine = getWorkflowEngine();
-  const execution = engine.getExecution(executionId);
-
+  const userId = authenticatedUserId(req);
+  const execution = userId
+    ? await getEventRuntime().projectOwnedWorkflowExecution(executionId, userId)
+    : null;
   if (!execution) {
-    return res.status(HTTP_STATUS.NOT_FOUND).json({
-      success: false,
-      error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
-    });
-  }
-  if (!isExecutionOwner(req, execution.context.userId)) {
     return res.status(HTTP_STATUS.NOT_FOUND).json({
       success: false,
       error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
@@ -43,7 +37,8 @@ router.get('/executions/:executionId', asyncHandler(async (req: Request, res: Re
   res.json({
     success: true,
     data: {
-      executionId: execution.id,
+      runId: execution.runId,
+      executionId: execution.executionId,
       status: execution.status,
       workflowName: execution.workflowName,
       workflowVersion: execution.workflowVersion,
@@ -62,20 +57,26 @@ router.get('/executions/:executionId', asyncHandler(async (req: Request, res: Re
 // Cancel execution
 router.post('/executions/:executionId/cancel', asyncHandler(async (req: Request, res: Response) => {
   const { executionId } = req.params;
-
-  const engine = getWorkflowEngine();
-  const execution = engine.getExecution(executionId);
-  if (!execution || !isExecutionOwner(req, execution.context.userId)) {
+  const userId = authenticatedUserId(req);
+  const cancellation = userId
+    ? await getEventRuntime().cancelOwnedWorkflowExecution({
+        executionId,
+        userId,
+        reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
+        idempotencyKey: req.get('Idempotency-Key') || undefined,
+      })
+    : null;
+  if (!cancellation) {
     return res.status(HTTP_STATUS.NOT_FOUND).json({
       success: false,
       error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
     });
   }
-  await engine.cancel(executionId);
 
   res.json({
     success: true,
     message: 'Execution cancelled',
+    data: cancellation,
   });
 }));
 
@@ -225,6 +226,6 @@ router.delete('/:name', adminOnly, asyncHandler(async (req: Request, res: Respon
 
 export default router;
 
-function isExecutionOwner(req: Request, ownerUserId: string): boolean {
-  return (req.user?.userId ?? req.apiKey?.userId) === ownerUserId;
+function authenticatedUserId(req: Request): string | undefined {
+  return req.user?.userId ?? req.apiKey?.userId;
 }

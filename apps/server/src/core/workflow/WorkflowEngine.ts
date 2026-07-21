@@ -10,11 +10,9 @@ import {
 import { normalizeWorkflowExecutionContext } from './context';
 import { getEventRuntime } from '../../services/EventRuntime';
 import { logger } from '../../utils/logger';
-import { now } from '../../utils/helpers';
 
 export class WorkflowEngine implements IWorkflowEngine {
   private workflows: Map<string, WorkflowDefinition> = new Map();
-  private executions: Map<string, WorkflowExecution> = new Map();
   private workflowDir: string;
   private autoReload: boolean;
   private reloadInterval: NodeJS.Timeout | null = null;
@@ -45,15 +43,6 @@ export class WorkflowEngine implements IWorkflowEngine {
       this.reloadInterval = null;
     }
 
-    // Cancel all running executions
-    for (const [id, execution] of this.executions) {
-      if (execution.status === 'running') {
-        execution.status = 'cancelled';
-        execution.completedAt = now();
-      }
-    }
-
-    this.executions.clear();
     this.workflows.clear();
     logger.info('WorkflowEngine destroyed');
   }
@@ -123,22 +112,7 @@ export class WorkflowEngine implements IWorkflowEngine {
       workflow,
       context: normalizedContext,
     });
-    this.executions.set(execution.id, execution);
-
     return execution;
-  }
-
-  async cancel(executionId: string): Promise<void> {
-    const execution = this.executions.get(executionId);
-    if (execution && execution.status === 'running') {
-      execution.status = 'cancelled';
-      execution.completedAt = now();
-      logger.info(`Workflow cancelled: ${executionId}`);
-    }
-  }
-
-  getExecution(executionId: string): WorkflowExecution | null {
-    return this.executions.get(executionId) || null;
   }
 
   private async loadWorkflowsFromDir(isReload = false): Promise<void> {

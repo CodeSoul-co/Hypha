@@ -139,6 +139,53 @@ describe('WorkflowEngine conditional execution', () => {
       )
     ).toHaveLength(1);
   });
+
+  it('projects and cancels Workflow executions from durable Run events', async () => {
+    const workflow: WorkflowDefinition = {
+      name: 'durable-workflow-execution',
+      version: '1.0.0',
+      stages: [{ id: 'prepare', type: 'preprocessor', next: 'end' }],
+    };
+    const runtime = getEventRuntime();
+    const runtimeSpec = runtime.createRuntimeSpecFromWorkflow(workflow);
+    const run = await runtime.startRun({
+      userId: baseContext.userId,
+      sessionId: baseContext.sessionId,
+      workflowRef: { id: workflow.name, version: workflow.version },
+      domainPack: runtimeSpec.domainPack,
+      fsm: runtimeSpec.fsm,
+      input: baseContext,
+      metadata: { surface: 'workflow-engine.execute' },
+    });
+
+    await expect(
+      runtime.projectOwnedWorkflowExecution(run.runId, baseContext.userId)
+    ).resolves.toMatchObject({
+      runId: run.runId,
+      executionId: run.runId,
+      status: 'running',
+    });
+    await expect(
+      runtime.cancelOwnedWorkflowExecution({
+        executionId: run.runId,
+        userId: baseContext.userId,
+        idempotencyKey: `cancel:${run.runId}`,
+      })
+    ).resolves.toMatchObject({
+      disposition: 'applied',
+      projection: { runStatus: 'cancelled' },
+    });
+    await expect(
+      runtime.cancelOwnedWorkflowExecution({
+        executionId: run.runId,
+        userId: baseContext.userId,
+        idempotencyKey: `cancel:${run.runId}`,
+      })
+    ).resolves.toMatchObject({ disposition: 'reused' });
+    await expect(
+      runtime.projectOwnedWorkflowExecution(run.runId, baseContext.userId)
+    ).resolves.toMatchObject({ status: 'cancelled' });
+  });
 });
 
 describe('workflow context normalization', () => {

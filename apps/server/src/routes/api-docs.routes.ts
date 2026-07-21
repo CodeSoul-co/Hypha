@@ -639,9 +639,10 @@ const workflowEndpoints = [
     response: `{
   "success": true,
   "data": {
-    "executionId": "exec_xxx",
+    "runId": "run_xxx",
+    "executionId": "run_xxx",
     "status": "completed",
-    "result": { ... }
+    "stageResults": [{ "stageId": "prepare", "success": true }]
   }
 }`,
   },
@@ -653,10 +654,11 @@ const workflowEndpoints = [
     response: `{
   "success": true,
   "data": {
-    "executionId": "exec_xxx",
+    "runId": "run_xxx",
+    "executionId": "run_xxx",
     "status": "completed",
-    "steps": [{ "name", "status", "result", "duration" }],
-    "totalDuration": 5000
+    "currentStage": "finish",
+    "stageResults": [{ "stageId": "prepare", "success": true, "duration": 120 }]
   }
 }`,
   },
@@ -667,7 +669,11 @@ const workflowEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "message": "Execution cancelled"
+  "message": "Execution cancelled",
+  "data": {
+    "disposition": "applied",
+    "projection": { "runStatus": "cancelled" }
+  }
 }`,
   },
   {
