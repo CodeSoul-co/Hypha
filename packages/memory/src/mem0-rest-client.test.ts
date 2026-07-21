@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  InMemoryExternalMemoryMappingStore,
   Mem0RestClient,
+  createExternalMemoryId,
   hashMemoryScope,
   memoryProfileSpecExample,
   type Mem0HttpFetch,
@@ -74,6 +76,14 @@ describe('Mem0 REST client', () => {
           ],
         });
       }
+      if (url.endsWith('/memories/mem0%3A1')) {
+        return jsonResponse({
+          id: 'mem0:1',
+          memory: 'User prefers blue.',
+          metadata: storedMetadata,
+          created_at: '2026-07-17T00:00:00.000Z',
+        });
+      }
       if (url.endsWith('/health')) return jsonResponse({ status: 'ok' });
       return jsonResponse({ message: 'not found' }, 404);
     };
@@ -86,8 +96,10 @@ describe('Mem0 REST client', () => {
     });
 
     const write = await client.add(addRequest('operation:mem0:add'));
-    expect(write).toMatchObject({ status: 'committed', records: [{ id: 'mem0:1' }] });
+    const memoryId = createExternalMemoryId('memory.provider.mem0.rest', 'mem0:1');
+    expect(write).toMatchObject({ status: 'committed', records: [{ id: memoryId }] });
     expect(storedMetadata._hypha_scope_hash).toBe(hashMemoryScope(scope));
+    expect(storedMetadata._hypha_scope).toEqual(scope);
     expect(requests[0]?.headers['X-API-Key']).toBe('test-api-key');
 
     const results = await client.search({
@@ -98,14 +110,33 @@ describe('Mem0 REST client', () => {
       query: 'blue',
       topK: 5,
     });
-    expect(results.map((result) => result.record.id)).toEqual(['mem0:1']);
+    expect(results.map((result) => result.record.id)).toEqual([memoryId]);
+    await expect(
+      client.get({
+        operationId: 'operation:mem0:get',
+        principal,
+        scope,
+        memoryId,
+      })
+    ).resolves.toMatchObject({ id: memoryId });
+    expect(requests.some((request) => request.url.endsWith('/memories/mem0%3A1'))).toBe(true);
     await expect(client.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
   it('normalizes authorization and transient provider failures without leaking credentials', async () => {
+    const memoryId = createExternalMemoryId('memory.provider.mem0.rest', 'mem0:1');
+    const forbiddenMappings = new InMemoryExternalMemoryMappingStore();
+    await forbiddenMappings.set({
+      memoryId,
+      providerId: 'memory.provider.mem0.rest',
+      externalId: 'mem0:1',
+      lastSyncedAt: '2026-07-17T00:00:00.000Z',
+      syncState: 'synced',
+    });
     const forbidden = new Mem0RestClient({
       baseUrl: 'http://mem0.local',
       apiKey: 'do-not-leak',
+      mappingStore: forbiddenMappings,
       fetch: async () => jsonResponse({ message: 'forbidden' }, 403),
     });
     await expect(
@@ -113,12 +144,21 @@ describe('Mem0 REST client', () => {
         operationId: 'operation:mem0:forbidden',
         principal,
         scope,
-        memoryId: 'mem0:1',
+        memoryId,
       })
     ).rejects.toMatchObject({ code: 'MEMORY_PERMISSION_DENIED', retryable: false });
 
+    const unavailableMappings = new InMemoryExternalMemoryMappingStore();
+    await unavailableMappings.set({
+      memoryId,
+      providerId: 'memory.provider.mem0.rest',
+      externalId: 'mem0:1',
+      lastSyncedAt: '2026-07-17T00:00:00.000Z',
+      syncState: 'synced',
+    });
     const unavailable = new Mem0RestClient({
       baseUrl: 'http://mem0.local',
+      mappingStore: unavailableMappings,
       fetch: async () => jsonResponse({ message: 'unavailable' }, 503),
     });
     await expect(
@@ -126,7 +166,7 @@ describe('Mem0 REST client', () => {
         operationId: 'operation:mem0:unavailable',
         principal,
         scope,
-        memoryId: 'mem0:1',
+        memoryId,
       })
     ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_UNAVAILABLE', retryable: true });
   });

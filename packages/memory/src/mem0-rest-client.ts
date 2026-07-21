@@ -20,7 +20,12 @@ import type {
   MemoryVersion,
   ProviderHealth,
 } from './operations';
-import type { ExternalMemoryClient } from './external-adapters';
+import {
+  InMemoryExternalMemoryMappingStore,
+  type ExternalMemoryClient,
+  type ExternalMemoryMappingStore,
+} from './external-adapters';
+import { createExternalMemoryId } from './external-memory-identity';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
 
 export interface Mem0HttpResponse {
@@ -37,6 +42,7 @@ export type Mem0HttpFetch = (
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    signal?: AbortSignal;
   }
 ) => Promise<Mem0HttpResponse>;
 
@@ -48,6 +54,8 @@ export interface Mem0RestClientOptions {
   providerId?: string;
   healthPath?: string;
   now?: () => Date;
+  deployment?: 'managed' | 'self_hosted';
+  mappingStore?: ExternalMemoryMappingStore;
 }
 
 const mem0RestCapabilities: MemoryManagementCapabilities = {
@@ -75,6 +83,8 @@ export class Mem0RestClient implements ExternalMemoryClient {
   private readonly fetcher: Mem0HttpFetch;
   private readonly providerId: string;
   private readonly now: () => Date;
+  private readonly deployment: 'managed' | 'self_hosted';
+  private readonly mappingStore: ExternalMemoryMappingStore;
 
   constructor(private readonly options: Mem0RestClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
@@ -89,17 +99,20 @@ export class Mem0RestClient implements ExternalMemoryClient {
     this.fetcher = fetcher;
     this.providerId = options.providerId ?? 'memory.provider.mem0.rest';
     this.now = options.now ?? (() => new Date());
+    this.deployment = options.deployment ?? 'self_hosted';
+    this.mappingStore = options.mappingStore ?? new InMemoryExternalMemoryMappingStore();
   }
 
   async capabilities(): Promise<Partial<MemoryManagementCapabilities>> {
     return { ...mem0RestCapabilities };
   }
 
-  async add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult> {
+  async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
     const scopeHash = hashMemoryScope(request.scope);
     const metadata = {
       ...request.metadata,
       _hypha_scope_hash: scopeHash,
+      _hypha_scope: request.scope,
       _hypha_operation_id: request.operationId,
       _hypha_memory_type: request.memoryType ?? 'semantic',
       _hypha_source: request.source,
@@ -112,6 +125,7 @@ export class Mem0RestClient implements ExternalMemoryClient {
         metadata,
         infer: request.extractionMode !== 'none',
       },
+      signal,
     });
     const records = this.toRecords(body, request.scope, {
       source: request.source,
@@ -119,6 +133,7 @@ export class Mem0RestClient implements ExternalMemoryClient {
       metadata,
       requireScopeMetadata: false,
     });
+    await this.rememberMappings(records);
     const eventId = readString(asObject(body), 'event_id');
     return {
       operationId: request.operationId,
@@ -132,7 +147,10 @@ export class Mem0RestClient implements ExternalMemoryClient {
     };
   }
 
-  async search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]> {
+  async search(
+    request: ManagedMemorySearchRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemorySearchResult[]> {
     const body = await this.request('/search', {
       method: 'POST',
       body: {
@@ -140,8 +158,9 @@ export class Mem0RestClient implements ExternalMemoryClient {
         ...toMem0Scope(request.scope),
         limit: request.topK,
       },
+      signal,
     });
-    return extractItems(body)
+    const results = extractItems(body)
       .map((item) => {
         const record = this.toRecord(item, request.scope, {
           source: { type: 'derived', sourceId: 'mem0:search' },
@@ -162,28 +181,38 @@ export class Mem0RestClient implements ExternalMemoryClient {
       })
       .filter((result): result is ManagedMemorySearchResult => result !== null)
       .slice(0, request.topK ?? Number.POSITIVE_INFINITY);
+    await this.rememberMappings(results.map((result) => result.record));
+    return results;
   }
 
-  async get(request: MemoryGetRequest): Promise<ManagedMemoryRecord | null> {
-    const body = await this.request('/memories/' + encodeURIComponent(request.memoryId));
-    return this.toRecord(asObject(body), request.scope, {
+  async get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null> {
+    const externalId = await this.resolveExternalId(request.memoryId);
+    const body = await this.request('/memories/' + encodeURIComponent(externalId), {
+      signal,
+    });
+    const record = this.toRecord(asObject(body), request.scope, {
       source: { type: 'derived', sourceId: 'mem0:get' },
       type: 'semantic',
       requireScopeMetadata: true,
     });
+    await this.rememberMappings(record ? [record] : []);
+    return record;
   }
 
-  async list(request: MemoryListRequest): Promise<MemoryListResult> {
+  async list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(toMem0Scope(request.scope))) {
       if (value) query.set(key, value);
     }
-    const body = await this.request('/memories' + (query.size > 0 ? '?' + query.toString() : ''));
+    const body = await this.request('/memories' + (query.size > 0 ? '?' + query.toString() : ''), {
+      signal,
+    });
     const records = this.toRecords(body, request.scope, {
       source: { type: 'derived', sourceId: 'mem0:list' },
       type: 'semantic',
       requireScopeMetadata: true,
     });
+    await this.rememberMappings(records);
     const filtered = records.filter((record) => matchesFilter(record, request.filter));
     const limit = request.pagination?.limit ?? filtered.length;
     return {
@@ -192,20 +221,26 @@ export class Mem0RestClient implements ExternalMemoryClient {
     };
   }
 
-  async update(request: ManagedMemoryUpdateRequest): Promise<ManagedMemoryWriteResult> {
+  async update(
+    request: ManagedMemoryUpdateRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult> {
     const revision = (request.expectedRevision ?? 0) + 1;
     const metadata = {
       ...request.patch.metadata,
       _hypha_scope_hash: hashMemoryScope(request.scope),
+      _hypha_scope: request.scope,
       _hypha_operation_id: request.operationId,
       _hypha_revision: revision,
     };
-    const body = await this.request('/memories/' + encodeURIComponent(request.memoryId), {
+    const externalId = await this.resolveExternalId(request.memoryId);
+    const body = await this.request('/memories/' + encodeURIComponent(externalId), {
       method: 'PUT',
       body: {
         text: request.patch.canonicalText ?? toText(request.patch.content),
         metadata,
       },
+      signal,
     });
     const records = this.toRecords(body, request.scope, {
       source: { type: 'human_review', sourceId: request.operationId },
@@ -214,6 +249,7 @@ export class Mem0RestClient implements ExternalMemoryClient {
       revision,
       requireScopeMetadata: false,
     });
+    await this.rememberMappings(records);
     return {
       operationId: request.operationId,
       status: records.length > 0 ? 'committed' : 'partial',
@@ -222,24 +258,53 @@ export class Mem0RestClient implements ExternalMemoryClient {
     };
   }
 
-  async delete(request: ManagedMemoryDeleteRequest): Promise<ManagedMemoryDeleteResult> {
+  async delete(
+    request: ManagedMemoryDeleteRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult> {
     const memoryIds =
       request.memoryIds ??
       (
-        await this.list({
-          operationId: request.operationId + ':resolve',
-          principal: request.principal,
-          scope: request.scope,
-          filter: request.filter,
-        })
+        await this.list(
+          {
+            operationId: request.operationId + ':resolve',
+            principal: request.principal,
+            scope: request.scope,
+            filter: request.filter,
+          },
+          signal
+        )
       ).records.map((record) => record.id);
     const deleted: string[] = [];
     const warnings: string[] = [];
     for (const memoryId of memoryIds) {
+      const mapping = await this.mappingStore.get(this.providerId, memoryId);
+      if (!mapping || mapping.syncState === 'deleted') {
+        warnings.push(`No active Mem0 mapping exists for Hypha memory ${memoryId}.`);
+        continue;
+      }
+      await this.mappingStore.set({
+        ...mapping,
+        syncState: 'pending',
+        lastSyncedAt: this.now().toISOString(),
+      });
       try {
-        await this.request('/memories/' + encodeURIComponent(memoryId), { method: 'DELETE' });
+        await this.request('/memories/' + encodeURIComponent(mapping.externalId), {
+          method: 'DELETE',
+          signal,
+        });
+        await this.mappingStore.set({
+          ...mapping,
+          syncState: 'deleted',
+          lastSyncedAt: this.now().toISOString(),
+        });
         deleted.push(memoryId);
       } catch (error) {
+        await this.mappingStore.set({
+          ...mapping,
+          syncState: 'failed',
+          lastSyncedAt: this.now().toISOString(),
+        });
         warnings.push(error instanceof Error ? error.message : String(error));
       }
     }
@@ -252,15 +317,18 @@ export class Mem0RestClient implements ExternalMemoryClient {
     };
   }
 
-  async history(request: MemoryHistoryRequest): Promise<MemoryVersion[]> {
-    const body = await this.request(
-      '/memories/' + encodeURIComponent(request.memoryId) + '/history'
-    );
-    return this.toRecords(body, request.scope, {
+  async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
+    const externalId = await this.resolveExternalId(request.memoryId);
+    const body = await this.request('/memories/' + encodeURIComponent(externalId) + '/history', {
+      signal,
+    });
+    const records = this.toRecords(body, request.scope, {
       source: { type: 'derived', sourceId: 'mem0:history' },
       type: 'semantic',
       requireScopeMetadata: true,
-    })
+    });
+    await this.rememberMappings(records);
+    return records
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((record, index) => {
         const revision = readRevision(record, index + 1);
@@ -278,15 +346,15 @@ export class Mem0RestClient implements ExternalMemoryClient {
       });
   }
 
-  async health(): Promise<ProviderHealth> {
+  async health(signal?: AbortSignal): Promise<ProviderHealth> {
     const startedAt = this.now().getTime();
     try {
-      await this.request(this.options.healthPath ?? '/');
+      await this.request(this.options.healthPath ?? '/', { signal });
       return {
         status: 'healthy',
         checkedAt: this.now().toISOString(),
         latencyMs: Math.max(0, this.now().getTime() - startedAt),
-        details: { transport: 'rest', deployment: 'self_hosted' },
+        details: { transport: 'rest', deployment: this.deployment },
       };
     } catch (error) {
       return {
@@ -301,7 +369,7 @@ export class Mem0RestClient implements ExternalMemoryClient {
 
   private async request(
     path: string,
-    options: { method?: string; body?: Record<string, unknown> } = {}
+    options: { method?: string; body?: Record<string, unknown>; signal?: AbortSignal } = {}
   ): Promise<unknown> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (options.body) headers['Content-Type'] = 'application/json';
@@ -316,6 +384,7 @@ export class Mem0RestClient implements ExternalMemoryClient {
       method: options.method ?? 'GET',
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
     });
     if (!response.ok) {
       const body = await safeResponseText(response);
@@ -338,6 +407,35 @@ export class Mem0RestClient implements ExternalMemoryClient {
     } catch {
       return {};
     }
+  }
+
+  private async rememberMappings(records: ManagedMemoryRecord[]): Promise<void> {
+    for (const record of records) {
+      const externalId = record.metadata?.providerExternalId;
+      if (typeof externalId !== 'string') continue;
+      await this.mappingStore.set({
+        memoryId: record.id,
+        providerId: this.providerId,
+        externalId,
+        externalVersion:
+          typeof record.metadata?.providerExternalVersion === 'string'
+            ? record.metadata.providerExternalVersion
+            : undefined,
+        lastSyncedAt: this.now().toISOString(),
+        syncState: 'synced',
+      });
+    }
+  }
+
+  private async resolveExternalId(memoryId: string): Promise<string> {
+    const mapping = await this.mappingStore.get(this.providerId, memoryId);
+    if (!mapping || mapping.syncState === 'deleted') {
+      throw memoryError(
+        'MEMORY_NOT_FOUND',
+        `No active Mem0 mapping exists for Hypha memory ${memoryId}.`
+      );
+    }
+    return mapping.externalId;
   }
 
   private toRecords(
@@ -366,9 +464,10 @@ export class Mem0RestClient implements ExternalMemoryClient {
     const createdAt =
       readString(item, 'created_at') ?? readString(item, 'createdAt') ?? this.now().toISOString();
     const updatedAt = readString(item, 'updated_at') ?? readString(item, 'updatedAt') ?? createdAt;
+    const memoryId = createExternalMemoryId(this.providerId, externalId);
     return {
-      id: externalId,
-      versionId: externalId + ':v' + revision,
+      id: memoryId,
+      versionId: memoryId + ':v' + revision,
       revision,
       type: defaults.type,
       content,

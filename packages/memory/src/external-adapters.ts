@@ -34,6 +34,7 @@ export interface ExternalMemoryMapping {
 
 export interface ExternalMemoryMappingStore {
   get(providerId: string, memoryId: string): Promise<ExternalMemoryMapping | null>;
+  getByExternalId(providerId: string, externalId: string): Promise<ExternalMemoryMapping | null>;
   set(mapping: ExternalMemoryMapping): Promise<void>;
   list(providerId: string): Promise<ExternalMemoryMapping[]>;
 }
@@ -43,6 +44,16 @@ export class InMemoryExternalMemoryMappingStore implements ExternalMemoryMapping
 
   async get(providerId: string, memoryId: string): Promise<ExternalMemoryMapping | null> {
     const mapping = this.values.get(`${providerId}:${memoryId}`);
+    return mapping ? structuredClone(mapping) : null;
+  }
+
+  async getByExternalId(
+    providerId: string,
+    externalId: string
+  ): Promise<ExternalMemoryMapping | null> {
+    const mapping = Array.from(this.values.values()).find(
+      (value) => value.providerId === providerId && value.externalId === externalId
+    );
     return mapping ? structuredClone(mapping) : null;
   }
 
@@ -58,15 +69,24 @@ export class InMemoryExternalMemoryMappingStore implements ExternalMemoryMapping
 }
 
 export interface ExternalMemoryClient {
-  capabilities(): Promise<Partial<MemoryManagementCapabilities>>;
-  add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult>;
-  search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]>;
-  get(request: MemoryGetRequest): Promise<ManagedMemoryRecord | null>;
-  list(request: MemoryListRequest): Promise<MemoryListResult>;
-  update?(request: ManagedMemoryUpdateRequest): Promise<ManagedMemoryWriteResult>;
-  delete(request: ManagedMemoryDeleteRequest): Promise<ManagedMemoryDeleteResult>;
-  history?(request: MemoryHistoryRequest): Promise<MemoryVersion[]>;
-  health(): Promise<ProviderHealth>;
+  capabilities(signal?: AbortSignal): Promise<Partial<MemoryManagementCapabilities>>;
+  add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult>;
+  search(
+    request: ManagedMemorySearchRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemorySearchResult[]>;
+  get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null>;
+  list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult>;
+  update?(
+    request: ManagedMemoryUpdateRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult>;
+  delete(
+    request: ManagedMemoryDeleteRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult>;
+  history?(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]>;
+  health(signal?: AbortSignal): Promise<ProviderHealth>;
   close?(): Promise<void>;
 }
 
@@ -137,45 +157,52 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     return { ...this.negotiated };
   }
 
-  async add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult> {
+  async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
     const result = await this.execute(
       'add',
-      () => this.options.client.add(request),
-      () => this.options.fallback?.add(request),
-      'write'
+      (operationSignal) => this.options.client.add(request, operationSignal),
+      (operationSignal) => this.options.fallback?.add(request, operationSignal),
+      'write',
+      signal
     );
     await Promise.all(result.records.map((record) => this.captureMapping(record)));
     return result;
   }
 
-  async search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]> {
+  async search(
+    request: ManagedMemorySearchRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemorySearchResult[]> {
     const results = await this.execute(
       'search',
-      () => this.options.client.search(request),
-      () => this.options.fallback?.search(request),
-      'read'
+      (operationSignal) => this.options.client.search(request, operationSignal),
+      (operationSignal) => this.options.fallback?.search(request, operationSignal),
+      'read',
+      signal
     );
     return results.filter(
       (result) => !this.tombstones.has(tombstoneKey(request, result.record.id))
     );
   }
 
-  async get(request: MemoryGetRequest): Promise<ManagedMemoryRecord | null> {
+  async get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null> {
     if (this.tombstones.has(tombstoneKey(request, request.memoryId))) return null;
     return this.execute(
       'get',
-      () => this.options.client.get(request),
-      () => this.options.fallback?.get(request),
-      'read'
+      (operationSignal) => this.options.client.get(request, operationSignal),
+      (operationSignal) => this.options.fallback?.get(request, operationSignal),
+      'read',
+      signal
     );
   }
 
-  async list(request: MemoryListRequest): Promise<MemoryListResult> {
+  async list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult> {
     const result = await this.execute(
       'list',
-      () => this.options.client.list(request),
-      () => this.options.fallback?.list(request),
-      'read'
+      (operationSignal) => this.options.client.list(request, operationSignal),
+      (operationSignal) => this.options.fallback?.list(request, operationSignal),
+      'read',
+      signal
     );
     return {
       ...result,
@@ -185,21 +212,28 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     };
   }
 
-  async update(request: ManagedMemoryUpdateRequest): Promise<ManagedMemoryWriteResult> {
+  async update(
+    request: ManagedMemoryUpdateRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult> {
     const result = await this.execute(
       'update',
-      () => {
+      (operationSignal) => {
         if (!this.options.client.update) throw unsupportedError(this.id, 'update');
-        return this.options.client.update(request);
+        return this.options.client.update(request, operationSignal);
       },
-      () => this.options.fallback?.update(request),
-      'write'
+      (operationSignal) => this.options.fallback?.update(request, operationSignal),
+      'write',
+      signal
     );
     await Promise.all(result.records.map((record) => this.captureMapping(record)));
     return result;
   }
 
-  async delete(request: ManagedMemoryDeleteRequest): Promise<ManagedMemoryDeleteResult> {
+  async delete(
+    request: ManagedMemoryDeleteRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult> {
     for (const memoryId of request.memoryIds ?? []) {
       this.tombstones.add(tombstoneKey(request, memoryId));
       const mapping = await this.mappingStore.get(this.id, memoryId);
@@ -214,9 +248,10 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     try {
       const result = await this.execute(
         'delete',
-        () => this.options.client.delete(request),
-        () => this.options.fallback?.delete(request),
-        'write'
+        (operationSignal) => this.options.client.delete(request, operationSignal),
+        (operationSignal) => this.options.fallback?.delete(request, operationSignal),
+        'write',
+        signal
       );
       await Promise.all(
         result.deletedMemoryIds.map(async (memoryId) => {
@@ -243,15 +278,16 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     }
   }
 
-  async history(request: MemoryHistoryRequest): Promise<MemoryVersion[]> {
+  async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
     return this.execute(
       'history',
-      () => {
+      (operationSignal) => {
         if (!this.options.client.history) throw unsupportedError(this.id, 'history');
-        return this.options.client.history(request);
+        return this.options.client.history(request, operationSignal);
       },
-      () => this.options.fallback?.history?.(request),
-      'read'
+      (operationSignal) => this.options.fallback?.history?.(request, operationSignal),
+      'read',
+      signal
     );
   }
 
@@ -265,7 +301,7 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
       };
     }
     try {
-      return await this.withTimeout(this.options.client.health());
+      return await this.withTimeout((signal) => this.options.client.health(signal));
     } catch (error) {
       return {
         status: 'unhealthy',
@@ -282,26 +318,31 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
 
   protected async execute<T>(
     capability: CapabilityName,
-    primary: () => Promise<T>,
-    fallback: () => Promise<T> | undefined,
-    mode: 'read' | 'write'
+    primary: (signal?: AbortSignal) => Promise<T>,
+    fallback: (signal?: AbortSignal) => Promise<T> | undefined,
+    mode: 'read' | 'write',
+    signal?: AbortSignal
   ): Promise<T> {
     let primaryStarted = false;
     try {
       const capabilities = await this.capabilities();
       if (!capabilities[capability]) throw unsupportedError(this.id, capability);
       primaryStarted = true;
-      return await this.callWithResilience(primary, mode === 'read');
+      return await this.callWithResilience(primary, mode === 'read', signal);
     } catch (error) {
       if (this.shouldFallback() && (mode === 'read' || !primaryStarted)) {
-        const alternative = fallback();
+        const alternative = fallback(signal);
         if (alternative) return alternative;
       }
       throw normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
     }
   }
 
-  private async callWithResilience<T>(call: () => Promise<T>, retryAllowed = true): Promise<T> {
+  private async callWithResilience<T>(
+    call: (signal?: AbortSignal) => Promise<T>,
+    retryAllowed = true,
+    signal?: AbortSignal
+  ): Promise<T> {
     if (this.circuitOpenUntil > this.now().getTime()) {
       throw memoryError(
         'MEMORY_PROVIDER_UNAVAILABLE',
@@ -313,7 +354,7 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        const value = await this.withTimeout(call());
+        const value = await this.withTimeout(call, signal);
         const recovered = this.consecutiveFailures > 0;
         this.consecutiveFailures = 0;
         this.circuitOpenUntil = 0;
@@ -354,28 +395,43 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     throw normalizeMemoryError(lastError, 'MEMORY_PROVIDER_UNAVAILABLE');
   }
 
-  private async withTimeout<T>(promise: Promise<T>): Promise<T> {
+  private async withTimeout<T>(
+    call: (signal: AbortSignal) => Promise<T>,
+    parentSignal?: AbortSignal
+  ): Promise<T> {
+    if (parentSignal?.aborted) {
+      throw (
+        parentSignal.reason ??
+        memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Memory provider request was cancelled.')
+      );
+    }
     const timeoutMs = this.options.timeoutMs ?? 5_000;
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = (): void => controller.abort(parentSignal?.reason);
     try {
+      if (parentSignal?.aborted) controller.abort(parentSignal.reason);
+      else parentSignal?.addEventListener('abort', onAbort, { once: true });
       return await Promise.race([
-        promise,
+        call(controller.signal),
         new Promise<T>((_resolve, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                memoryError(
-                  'MEMORY_PROVIDER_TIMEOUT',
-                  `Memory provider timed out after ${timeoutMs}ms: ${this.id}`,
-                  true
-                )
-              ),
-            timeoutMs
-          );
+          controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
+            once: true,
+          });
+          timer = setTimeout(() => {
+            controller.abort(
+              memoryError(
+                'MEMORY_PROVIDER_TIMEOUT',
+                `Memory provider timed out after ${timeoutMs}ms: ${this.id}`,
+                true
+              )
+            );
+          }, timeoutMs);
         }),
       ]);
     } finally {
       if (timer) clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', onAbort);
     }
   }
 
