@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'crypto';
 import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import type {
@@ -59,6 +60,8 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   allowedSkills?: SkillRef[];
   defaultSkills?: SkillRef[];
   skillPolicies?: SkillPolicyBinding[];
+  allowedPromptRefs?: DomainPromptRef[];
+  defaultPromptRefs?: DomainPromptRef[];
   tools?: ToolSpec[];
   toolProfiles?: ToolProfileSpec[];
   mcpProfiles?: MCPIntegrationSpec[];
@@ -72,6 +75,11 @@ export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   regressionCases?: RegressionSpec[];
   deploymentProfile?: DeploymentSpec;
   metadata?: Record<string, unknown>;
+}
+
+export interface DomainPromptRef extends SpecRef {
+  required?: boolean;
+  priority?: number;
 }
 
 export interface SkillPolicyBinding extends VersionedSpec, SpecMetadata {
@@ -118,6 +126,7 @@ export interface DomainCompileOptions {
 }
 
 export interface DomainAgentPatch {
+  promptRefs: DomainPromptRef[];
   skillRefs: SkillRef[];
   toolRefs: string[];
   memoryProfileRef?: string;
@@ -135,6 +144,7 @@ export interface DomainAgentPatchTarget {
   name?: string;
   modelAlias?: string;
   systemInstructions?: string;
+  promptRefs?: DomainPromptRef[];
   skillRefs?: SkillRef[];
   toolRefs?: string[];
   memoryProfileRef?: string;
@@ -148,6 +158,8 @@ export interface WorkflowStateBinding {
   allowedTools: string[];
   allowedSkills: string[];
   requiredSkills: string[];
+  allowedPromptRefs: DomainPromptRef[];
+  requiredPromptRefs: DomainPromptRef[];
   allowedMCPProfiles: string[];
   memoryPolicyRef?: string;
   reasoningProfileRef?: string;
@@ -183,7 +195,21 @@ export interface DomainBindingResolution {
   allowedSkills: SkillRef[];
   defaultSkills: SkillRef[];
   skillPolicies: SkillPolicyBinding[];
+  allowedPromptRefs: DomainPromptRef[];
+  defaultPromptRefs: DomainPromptRef[];
   workflowStates: WorkflowStateBinding[];
+}
+
+export interface DomainCompilationAudit {
+  compilationHash: string;
+  domainPackRef: SpecRef;
+  workflowRef: SpecRef;
+  agentRef: SpecRef;
+  promptRefs: DomainPromptRef[];
+  skillRefs: SkillRef[];
+  toolRefs: SpecRef[];
+  mcpRefs: SpecRef[];
+  workflowStateBindingsHash: string;
 }
 
 export interface DomainCompilationResult {
@@ -193,6 +219,7 @@ export interface DomainCompilationResult {
   harnessedSystem: HarnessedAgentSystemSpec;
   agentPatch: DomainAgentPatch;
   sessionInitialization: DomainSessionInitialization;
+  audit: DomainCompilationAudit;
 }
 
 export type DomainPackOverlayCollection =
@@ -203,6 +230,8 @@ export type DomainPackOverlayCollection =
   | 'allowedSkills'
   | 'defaultSkills'
   | 'skillPolicies'
+  | 'allowedPromptRefs'
+  | 'defaultPromptRefs'
   | 'tools'
   | 'toolProfiles'
   | 'mcpProfiles'
@@ -331,6 +360,8 @@ export interface WorkflowStateSpec extends SpecMetadata {
   allowedTools?: string[];
   allowedSkills?: string[];
   requiredSkills?: string[];
+  allowedPromptRefs?: DomainPromptRef[];
+  requiredPromptRefs?: DomainPromptRef[];
   allowedMCPProfiles?: string[];
   toolProfileRefs?: SpecRef[];
   allowedToolRefs?: SpecRef[];
@@ -582,6 +613,16 @@ export function extendDomainPack(base: DomainPackSpec, overlay: DomainPackOverla
     allowedSkills: upsertById(base.allowedSkills, patch.allowedSkills, remove?.allowedSkills),
     defaultSkills: upsertById(base.defaultSkills, patch.defaultSkills, remove?.defaultSkills),
     skillPolicies: upsertById(base.skillPolicies, patch.skillPolicies, remove?.skillPolicies),
+    allowedPromptRefs: upsertById(
+      base.allowedPromptRefs,
+      patch.allowedPromptRefs,
+      remove?.allowedPromptRefs
+    ),
+    defaultPromptRefs: upsertById(
+      base.defaultPromptRefs,
+      patch.defaultPromptRefs,
+      remove?.defaultPromptRefs
+    ),
     tools: upsertById(base.tools, patch.tools, remove?.tools),
     toolProfiles: upsertById(base.toolProfiles, patch.toolProfiles, remove?.toolProfiles),
     mcpProfiles: upsertById(base.mcpProfiles, patch.mcpProfiles, remove?.mcpProfiles),
@@ -682,6 +723,7 @@ export function compileDomainPackToHarnessedSystem(
     taskSchema?.defaultSkillRefs,
     requiredSkillRefs
   );
+  const selectedPromptRefs = mergePromptRefs(domainPack.defaultPromptRefs);
   assertSkillsAllowed(selectedSkillRefs, domainPack.allowedSkills, 'Agent skill');
   const selectedToolIds = mergeStrings(
     options.agentToolRefs,
@@ -749,6 +791,7 @@ export function compileDomainPackToHarnessedSystem(
     tags: mergeStrings(domainPack.tags, ['compiled-from-domain-pack', domainPack.id]),
   };
   const agentPatch: DomainAgentPatch = {
+    promptRefs: selectedPromptRefs,
     skillRefs: selectedSkillRefs,
     toolRefs: selectedToolIds,
     memoryProfileRef: memoryProfile?.id,
@@ -765,7 +808,23 @@ export function compileDomainPackToHarnessedSystem(
       mcpProfileSpecRef: toOptionalSpecRef(mcpProfile),
       reasoningProfileSpecRef: toOptionalSpecRef(reasoningProfile),
       workflowStateBindings,
+      promptRefs: selectedPromptRefs,
     },
+  };
+
+  const auditInput = {
+    domainPackRef: toSpecRef(domainPack),
+    workflowRef: toSpecRef(workflow),
+    agentRef: options.agentRef,
+    promptRefs: selectedPromptRefs,
+    skillRefs: selectedSkillRefs,
+    toolRefs: harnessedSystem.toolRefs ?? [],
+    mcpRefs: harnessedSystem.mcpRefs ?? [],
+    workflowStateBindingsHash: stableHash(workflowStateBindings),
+  };
+  const audit: DomainCompilationAudit = {
+    ...auditInput,
+    compilationHash: stableHash(auditInput),
   };
 
   return {
@@ -791,12 +850,15 @@ export function compileDomainPackToHarnessedSystem(
       allowedSkills: domainPack.allowedSkills ?? selectedSkillRefs,
       defaultSkills: selectedSkillRefs,
       skillPolicies: domainPack.skillPolicies ?? [],
+      allowedPromptRefs: domainPack.allowedPromptRefs ?? selectedPromptRefs,
+      defaultPromptRefs: selectedPromptRefs,
       workflowStates: workflowStateBindings,
     },
     fsmProcess,
     harnessedSystem,
     agentPatch,
     sessionInitialization,
+    audit,
   };
 }
 
@@ -811,6 +873,7 @@ export function applyDomainAgentPatch<TAgent extends DomainAgentPatchTarget>(
   });
   return {
     ...agent,
+    promptRefs: mergePromptRefs(agent.promptRefs, patch.promptRefs),
     skillRefs: mergeSkillRefs(agent.skillRefs, patch.skillRefs),
     toolRefs: mergeStrings(agent.toolRefs, patch.toolRefs),
     memoryProfileRef: patch.memoryProfileRef ?? agent.memoryProfileRef,
@@ -919,6 +982,8 @@ function resolveWorkflowStateBinding(
     allowedTools: allowedToolIds,
     allowedSkills: state.allowedSkills ?? [],
     requiredSkills: state.requiredSkills ?? [],
+    allowedPromptRefs: mergePromptRefs(state.allowedPromptRefs),
+    requiredPromptRefs: mergePromptRefs(state.requiredPromptRefs),
     allowedMCPProfiles: allowedMCPProfileIds,
     memoryPolicyRef: state.memoryPolicyRef,
     reasoningProfileRef: state.reasoningProfileRef,
@@ -974,6 +1039,18 @@ function mergeSkillRefs(...groups: Array<SkillRef[] | undefined>): SkillRef[] {
     }
   }
   return Array.from(merged.values());
+}
+
+function mergePromptRefs(...groups: Array<DomainPromptRef[] | undefined>): DomainPromptRef[] {
+  const merged = new Map<string, DomainPromptRef>();
+  for (const group of groups) {
+    for (const ref of group ?? []) {
+      merged.set(ref.id, ref);
+    }
+  }
+  return Array.from(merged.values()).sort(
+    (left, right) => (left.priority ?? 0) - (right.priority ?? 0) || left.id.localeCompare(right.id)
+  );
 }
 
 function mergeSpecRefs(...groups: Array<SpecRef[] | undefined>): SpecRef[] {
@@ -1044,6 +1121,22 @@ function compactRecord(input: Record<string, unknown>): Record<string, unknown> 
   ) as Record<string, unknown>;
 }
 
+function stableHash(value: unknown): string {
+  return `sha256:${createHash('sha256').update(stableStringify(value)).digest('hex')}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function selectWorkflow(domainPack: DomainPackSpec, workflowId?: string): WorkflowSpec {
   const selectedId = workflowId ?? domainPack.defaultWorkflow;
   const workflow = selectedId
@@ -1078,6 +1171,11 @@ export const riskProfileSpecSchema = z.object({
   defaultRiskLevel: riskLevelSchema,
   escalationPolicyRef: z.string().optional(),
 });
+
+export const domainPromptRefSchema = specRefSchema.extend({
+  required: z.boolean().optional(),
+  priority: z.number().int().optional(),
+}) satisfies ZodType<DomainPromptRef>;
 
 export const domainThinkingModeSchema = z.enum(['none', 'summary', 'structured']);
 export const domainAgenticReasoningModeSchema = z.enum(['react', 'fsm_react', 'tot', 'critique']);
@@ -1160,6 +1258,8 @@ export const workflowStateSpecSchema = specMetadataSchema.extend({
   allowedTools: z.array(z.string()).optional(),
   allowedSkills: z.array(z.string()).optional(),
   requiredSkills: z.array(z.string()).optional(),
+  allowedPromptRefs: z.array(domainPromptRefSchema).optional(),
+  requiredPromptRefs: z.array(domainPromptRefSchema).optional(),
   allowedMCPProfiles: z.array(z.string()).optional(),
   toolProfileRefs: z.array(specRefSchema).optional(),
   allowedToolRefs: z.array(specRefSchema).optional(),
@@ -1204,6 +1304,8 @@ export const domainPackSpecSchema = versionedSpecSchema.merge(specMetadataSchema
   allowedSkills: z.array(specRefSchema).optional(),
   defaultSkills: z.array(specRefSchema).optional(),
   skillPolicies: z.array(skillPolicyBindingSchema).optional(),
+  allowedPromptRefs: z.array(domainPromptRefSchema).optional(),
+  defaultPromptRefs: z.array(domainPromptRefSchema).optional(),
   tools: z.array(toolSpecSchema).optional(),
   toolProfiles: z.array(toolProfileSpecSchema).optional(),
   mcpProfiles: z.array(mcpIntegrationSpecSchema).optional(),
@@ -1240,6 +1342,8 @@ export const workflowSpecJsonSchema: JsonSchema = {
           allowedTools: { type: 'array', items: { type: 'string' } },
           allowedSkills: { type: 'array', items: { type: 'string' } },
           requiredSkills: { type: 'array', items: { type: 'string' } },
+          allowedPromptRefs: { type: 'array', items: { type: 'object' } },
+          requiredPromptRefs: { type: 'array', items: { type: 'object' } },
           reasoningProfileRef: { type: 'string' },
           policyRefs: { type: 'array', items: { type: 'string' } },
           humanReviewPolicy: { type: 'object' },
@@ -1321,6 +1425,8 @@ export const domainPackSpecJsonSchema: JsonSchema = {
     allowedSkills: { type: 'array', items: { type: 'object' } },
     defaultSkills: { type: 'array', items: { type: 'object' } },
     skillPolicies: { type: 'array', items: { type: 'object' } },
+    allowedPromptRefs: { type: 'array', items: { type: 'object' } },
+    defaultPromptRefs: { type: 'array', items: { type: 'object' } },
     tools: { type: 'array', items: { type: 'object' } },
     toolProfiles: { type: 'array', items: { type: 'object' } },
     mcpProfiles: { type: 'array', items: { type: 'object' } },
@@ -1352,6 +1458,10 @@ export const workflowSpecExample: WorkflowSpec = {
       allowedTools: ['tool.search'],
       allowedSkills: ['skill.context-enrichment'],
       requiredSkills: ['skill.context-enrichment'],
+      allowedPromptRefs: [{ id: 'prompt.agent.default', version: '1.0.0' }],
+      requiredPromptRefs: [
+        { id: 'prompt.agent.default', version: '1.0.0', required: true, priority: 0 },
+      ],
       allowedMCPProfiles: ['mcp.default'],
       reasoningProfileRef: 'reasoning.default',
       policyRefs: ['policy.default'],
@@ -1438,6 +1548,10 @@ export const domainPackSpecExample: DomainPackSpec = {
       allowedTools: ['tool.search'],
       trustLevel: 'reviewed',
     },
+  ],
+  allowedPromptRefs: [{ id: 'prompt.agent.default', version: '1.0.0' }],
+  defaultPromptRefs: [
+    { id: 'prompt.agent.default', version: '1.0.0', required: true, priority: 0 },
   ],
   tools: [
     {
@@ -1610,6 +1724,7 @@ export function validateDomainPackSpec(input: unknown): DomainPackSpec {
   const domainPack = domainPackSpecDefinition.parse(input);
   validateDomainReferences(domainPack);
   validateDomainSkillBindings(domainPack);
+  validateDomainPromptBindings(domainPack);
   return domainPack;
 }
 
@@ -1849,6 +1964,8 @@ function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
   assertUniqueIds(domainPack.allowedSkills, 'DomainPack allowedSkills');
   assertUniqueIds(domainPack.defaultSkills, 'DomainPack defaultSkills');
   assertUniqueIds(domainPack.skillPolicies, 'DomainPack skillPolicies');
+  assertUniqueIds(domainPack.allowedPromptRefs, 'DomainPack allowedPromptRefs');
+  assertUniqueIds(domainPack.defaultPromptRefs, 'DomainPack defaultPromptRefs');
   assertUniqueIds(domainPack.tools, 'DomainPack tools');
   assertUniqueIds(domainPack.toolProfiles, 'DomainPack toolProfiles');
   assertUniqueIds(domainPack.mcpProfiles, 'DomainPack mcpProfiles');
@@ -1861,6 +1978,52 @@ function validateUniqueDomainIds(domainPack: DomainPackSpec): void {
   assertUniqueIds(domainPack.regressionCases, 'DomainPack regressionCases');
   for (const workflow of domainPack.workflows) {
     assertUniqueIds(workflow.states, `Workflow ${workflow.id} states`);
+    for (const state of workflow.states) {
+      assertUniqueIds(state.allowedPromptRefs, `Workflow state ${state.id} allowedPromptRefs`);
+      assertUniqueIds(state.requiredPromptRefs, `Workflow state ${state.id} requiredPromptRefs`);
+    }
+  }
+}
+
+function validateDomainPromptBindings(domainPack: DomainPackSpec): void {
+  const allowed = new Map((domainPack.allowedPromptRefs ?? []).map((ref) => [ref.id, ref]));
+  const assertAllowed = (ref: DomainPromptRef, owner: string): void => {
+    if (!allowed.size) return;
+    const declared = allowed.get(ref.id);
+    if (!declared)
+      throw new Error(`${owner} references prompt outside allowedPromptRefs: ${ref.id}`);
+    if (ref.version && declared.version && ref.version !== declared.version) {
+      throw new Error(
+        `${owner} prompt version mismatch: ${ref.id} requested ${ref.version}, allowed ${declared.version}`
+      );
+    }
+    if (ref.revision && declared.revision && ref.revision !== declared.revision) {
+      throw new Error(`${owner} prompt revision mismatch: ${ref.id}`);
+    }
+  };
+
+  for (const ref of domainPack.defaultPromptRefs ?? []) {
+    assertAllowed(ref, 'Domain defaultPromptRefs');
+  }
+  for (const workflow of domainPack.workflows) {
+    for (const state of workflow.states) {
+      const stateAllowed = new Set((state.allowedPromptRefs ?? []).map((ref) => ref.id));
+      for (const ref of state.allowedPromptRefs ?? [])
+        assertAllowed(ref, `Workflow state ${state.id}`);
+      for (const ref of state.requiredPromptRefs ?? []) {
+        assertAllowed(ref, `Workflow state ${state.id}`);
+        if (state.allowedPromptRefs && !stateAllowed.has(ref.id)) {
+          throw new Error(
+            `Workflow state ${state.id} requires prompt outside state allowedPromptRefs: ${ref.id}`
+          );
+        }
+        if (ref.required === false) {
+          throw new Error(
+            `Workflow state ${state.id} required prompt cannot set required=false: ${ref.id}`
+          );
+        }
+      }
+    }
   }
 }
 

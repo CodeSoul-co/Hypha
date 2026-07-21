@@ -56,6 +56,14 @@ workflows:
           - skill.context-enrichment
         requiredSkills:
           - skill.context-enrichment
+        allowedPromptRefs:
+          - id: prompt.agent.default
+            version: 1.0.0
+        requiredPromptRefs:
+          - id: prompt.agent.default
+            version: 1.0.0
+            required: true
+            priority: 0
         allowedMCPProfiles:
           - mcp.local
         reasoningProfileRef: reasoning.local
@@ -98,6 +106,14 @@ skillPolicies:
     allowedTools:
       - tool.search
     trustLevel: reviewed
+allowedPromptRefs:
+  - id: prompt.agent.default
+    version: 1.0.0
+defaultPromptRefs:
+  - id: prompt.agent.default
+    version: 1.0.0
+    required: true
+    priority: 0
 tools:
   - id: tool.search
     version: 0.0.0

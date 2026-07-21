@@ -809,4 +809,64 @@ defaultWorkflow: workflow.file
       })
     ).toThrow(/Workflow state memory policy not found/);
   });
+
+  it('compiles prompt refs as state-scoped bindings and emits a deterministic audit hash', () => {
+    const first = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '1.0.0' },
+    });
+    const second = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '1.0.0' },
+    });
+
+    expect(first.agentPatch.promptRefs).toEqual([
+      { id: 'prompt.agent.default', version: '1.0.0', required: true, priority: 0 },
+    ]);
+    expect(
+      first.bindings.workflowStates.find((state) => state.stateId === 'Reasoning')
+    ).toMatchObject({
+      allowedPromptRefs: [{ id: 'prompt.agent.default', version: '1.0.0' }],
+      requiredPromptRefs: [
+        { id: 'prompt.agent.default', version: '1.0.0', required: true, priority: 0 },
+      ],
+    });
+    expect(first.audit.compilationHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(first.audit).toEqual(second.audit);
+
+    const changed = compileDomainPackToHarnessedSystem(
+      { ...domainPackSpecDefinition.example, version: '0.0.1' },
+      { agentRef: { id: 'agent.default', version: '1.0.0' } }
+    );
+    expect(changed.audit.compilationHash).not.toBe(first.audit.compilationHash);
+  });
+
+  it('rejects prompt bindings outside the domain and workflow allowlists', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        defaultPromptRefs: [{ id: 'prompt.unknown', version: '1.0.0', required: true }],
+      })
+    ).toThrow(/outside allowedPromptRefs/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state) =>
+              state.id === 'Reasoning'
+                ? {
+                    ...state,
+                    allowedPromptRefs: [],
+                    requiredPromptRefs: [
+                      { id: 'prompt.agent.default', version: '1.0.0', required: true },
+                    ],
+                  }
+                : state
+            ),
+          },
+        ],
+      })
+    ).toThrow(/requires prompt outside state allowedPromptRefs/);
+  });
 });
