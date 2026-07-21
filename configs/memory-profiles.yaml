@@ -1,0 +1,91 @@
+schemaVersion: '1.0'
+profiles:
+  native-lite:
+    status: validated
+    management:
+      id: memory.provider.native-lite
+      version: '1.0.0'
+      type: native
+      deployment: embedded
+      capabilities:
+        add: true
+        search: true
+        get: true
+        list: true
+        update: true
+        delete: true
+        history: true
+    stores:
+      structured: storage.sqlite.structured
+      vector: vector.local.in-memory
+      persistence: ephemeral
+  native-default:
+    status: validated
+    management:
+      id: memory.provider.native-default
+      version: '1.0.0'
+      type: native
+      deployment: local
+      capabilities:
+        add: true
+        search: true
+        get: true
+        list: true
+        update: true
+        delete: true
+        history: true
+    stores:
+      structured: storage.sqlite.structured
+      vector: vector.local.in-memory
+      persistence: durable
+      outbox: enabled
+  mem0-oss:
+    status: validated-contract
+    management:
+      id: memory.provider.mem0.oss
+      version: '1.0.0'
+      type: mem0
+      deployment: self_hosted
+      connectionRef: memory.connection.mem0-oss
+      config:
+        baseUrlEnv: HYPHA_MEM0_OSS_URL
+        apiKeyEnv: HYPHA_MEM0_OSS_API_KEY
+        protocol: mem0-oss-rest
+  mem0-platform:
+    status: controlled-test
+    management:
+      id: memory.provider.mem0.platform-v3
+      version: '1.0.0'
+      type: mem0
+      deployment: managed
+      connectionRef: memory.connection.mem0-platform
+      config:
+        baseUrl: https://api.mem0.ai
+        apiTokenEnv: HYPHA_MEM0_PLATFORM_TOKEN
+        protocol: mem0-platform-v3
+  memorybank-local:
+    status: validated-contract
+    management:
+      id: memory.provider.memorybank.local
+      version: '1.0.0'
+      type: memorybank
+      deployment: local
+      connectionRef: memory.connection.memorybank-local
+      config:
+        baseUrlEnv: HYPHA_MEMORYBANK_LOCAL_URL
+        apiKeyEnv: HYPHA_MEMORYBANK_LOCAL_API_KEY
+        protocol: hypha.memorybank.v1
+  memorybank-managed:
+    status: controlled-test
+    management:
+      id: memory.provider.memorybank.vertex-ai
+      version: '1.0.0'
+      type: memorybank
+      deployment: managed
+      connectionRef: memory.connection.memorybank-managed
+      config:
+        projectIdEnv: HYPHA_MEMORYBANK_PROJECT
+        locationEnv: HYPHA_MEMORYBANK_LOCATION
+        reasoningEngineIdEnv: HYPHA_MEMORYBANK_ENGINE
+        accessTokenEnv: HYPHA_MEMORYBANK_MANAGED_TOKEN
+        tlsRequired: true
