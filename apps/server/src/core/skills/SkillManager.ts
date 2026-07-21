@@ -1,101 +1,87 @@
-import fs from 'fs/promises';
 import path from 'path';
-import { ISkill, SkillConfig, SkillContext, SkillResult, SkillTrigger } from './types';
-import { loadAllSkillsFromDir, type ParsedSkillFile } from './parser';
+import os from 'os';
+import {
+  DefaultSkillPolicy,
+  SkillContextLoader,
+  SkillRegistry,
+  SkillSelector,
+  loadSkillMarkdownFile,
+  type LoadedSkillContext,
+  type SkillRef,
+  type SkillResolutionContext,
+  type SkillSpec,
+} from '@hypha/skills';
+import type { SkillConfig, SkillContext, SkillResult, SkillTrigger } from './types';
+import { listSkillFiles, type ParsedSkillFile } from './parser';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 
-/**
- * Default skill directories — relative to the project root unless the env
- * HYPHA_SKILLS_DIR adds extras. Override via the `skills.dirs` list in
- * config.yaml (or per-env) to control which paths are scanned at boot.
- */
 const DEFAULT_BUILTIN_DIR = path.resolve(process.cwd(), 'apps/server/src/core/skills/builtins');
 
-/**
- * Built-in runtime handlers keyed by skill id. .md files provide the
- * description / frontmatter; the behaviour for each builtin id is
- * implemented in TypeScript here so it can use the same SkillContext /
- * SkillResult contract as before.
- *
- * User-installed skills (under ~/.hypha/skills/) are registered as
- * no-op skills whose `body` is exposed to the chat handler as a system
- * message — i.e. they are documentation/prompt skills, not executable
- * ones. Adding a new executable user-skill requires writing a `.skill.ts`
- * file in the user dir; the parser ignores anything that isn't `.md`.
- */
-const BUILTIN_HANDLERS: Record<string, (context: SkillContext) => Promise<SkillResult>> = {
-  'context-enrichment': async (ctx) => {
-    const msg = ctx.currentMessage.content || '';
-    const language = /[一-鿿]/.test(msg) ? 'zh' : 'en';
-    return {
-      success: true,
-      shouldContinue: true,
-      variables: {
-        messageLength: msg.length,
-        historyTurns: ctx.messages.length,
-        language,
-      },
-    };
-  },
-  'intent-classification': async (ctx) => {
-    const msg = ctx.currentMessage.content || '';
-    const intents: Array<[string, RegExp]> = [
-      ['help',     /\b(help|usage|how to|怎么|如何|帮助)\b/i],
-      ['question', /\?|？|why|what|when|where|who|how/i],
-      ['command',  /^\s*[/!](\w+)/],
-    ];
-    let intent = 'chat';
-    for (const [name, re] of intents) {
-      if (re.test(msg)) { intent = name; break; }
-    }
-    return { success: true, shouldContinue: true, variables: { intent } };
-  },
-};
-
 export interface RegisteredSkill {
-  /** Parsed config from the .md frontmatter. */
   config: SkillConfig;
-  /** Absolute path of the source .md file. */
   filePath: string;
-  /** Markdown body — appended to the system prompt by the chat handler. */
   body: string;
-  /** The runtime function. Falls back to a no-op for skills without a handler. */
+  spec: SkillSpec;
+  /** Legacy workflow bridge. Prompt-only Skills are never executed as hidden handlers. */
   run: (context: SkillContext) => Promise<SkillResult>;
 }
 
+export interface ResolveServerSkillsInput {
+  agentSkillRefs: SkillRef[];
+  inputText?: string;
+  intent?: string;
+  allowedSkills?: string[];
+  requiredSkills?: string[];
+  manualSkillIds?: string[];
+  availableToolRefs?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Server composition adapter for the package-level Skill pipeline.
+ * It owns no second selector or execution loop.
+ */
 export class SkillManager {
-  private skills: Map<string, RegisteredSkill> = new Map();
-  private dirs: string[];
+  private skills = new Map<string, RegisteredSkill>();
+  private registry = new SkillRegistry();
+  private readonly dirs: string[];
 
   constructor(opts?: { dirs?: string[] }) {
-    // Precedence: explicit arg > env HYPHA_SKILLS_DIR (colon-separated) > config > builtins.
-    const configDirs = (getConfig().skills as any).dirs as string[] | undefined;
+    const configDirs = getConfig().skills.dirs;
+    const separator = process.platform === 'win32' ? ';' : ':';
     const envDirs = (process.env.HYPHA_SKILLS_DIR || '')
-      .split(':').map((s) => s.trim()).filter(Boolean);
-    const raw = [
-      ...(opts?.dirs || []),
-      ...envDirs,
-      ...(configDirs || []),
-      DEFAULT_BUILTIN_DIR,
-    ];
-    // Expand leading "~" to $HOME so the boot-time scan and the install
-    // service agree on the install target.
-    const home = require('os').homedir();
-    this.dirs = raw.map((d) => d.startsWith('~/') ? home + d.slice(1) : d);
+      .split(separator)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const home = os.homedir();
+    this.dirs = [...(opts?.dirs ?? []), ...envDirs, ...(configDirs ?? []), DEFAULT_BUILTIN_DIR].map(
+      (directory) => path.resolve(directory.replace(/^~/, home))
+    );
   }
 
-  /** Where the manager scans for .md skill files. */
-  getDirs(): string[] { return [...this.dirs]; }
+  getDirs(): string[] {
+    return [...this.dirs];
+  }
+
+  getRegistry(): SkillRegistry {
+    return this.registry;
+  }
 
   async initialize(): Promise<void> {
-    for (const dir of this.dirs) {
-      const parsed = await loadAllSkillsFromDir(dir);
-      for (const skill of parsed) {
-        this.register(skill);
+    this.skills.clear();
+    this.registry = new SkillRegistry();
+    for (const directory of this.dirs) {
+      for (const filePath of await listSkillFiles(directory)) {
+        try {
+          const parsed = await loadSkillMarkdownFile(filePath);
+          this.registerPackageSkill(parsed.spec, filePath);
+        } catch (error) {
+          logger.error(`Failed to load governed Skill from ${filePath}:`, error);
+        }
       }
     }
-    logger.info('SkillManager initialized', {
+    logger.info('SkillManager initialized with package Skill registry', {
       skillCount: this.skills.size,
       dirs: this.dirs,
     });
@@ -103,108 +89,168 @@ export class SkillManager {
 
   async destroy(): Promise<void> {
     this.skills.clear();
+    this.registry = new SkillRegistry();
     logger.info('SkillManager destroyed');
   }
 
-  /**
-   * Register a parsed .md skill. If a skill with the same id is already
-   * registered we honour precedence: explicit `.register(skill)` after
-   * initialize() wins, and on the first `register()` from .md a warning
-   * is logged for duplicate ids across the scanned directories.
-   */
-  register(skill: ParsedSkillFile | { filePath: string; config: SkillConfig; body: string }): void {
-    const handler = BUILTIN_HANDLERS[skill.config.id];
-    const run: RegisteredSkill['run'] = handler
-      ? (ctx) => handler(ctx)
-      : async () => ({ success: true, shouldContinue: true });
-    if (this.skills.has(skill.config.id)) {
-      logger.warn(`Duplicate skill id "${skill.config.id}" — overwriting with ${skill.filePath}`);
-    }
-    this.skills.set(skill.config.id, {
-      config: skill.config,
-      filePath: skill.filePath,
-      body: skill.body,
-      run,
+  register(skill: ParsedSkillFile): void {
+    this.registerPackageSkill(legacyParsedSkillToSpec(skill), skill.filePath);
+  }
+
+  private registerPackageSkill(spec: SkillSpec, filePath: string): void {
+    const previous = this.skills.get(spec.id);
+    if (previous) logger.warn(`Duplicate Skill id "${spec.id}"; replacing ${previous.filePath}`);
+    this.registry.register(spec);
+    this.skills.set(spec.id, {
+      config: packageSpecToLegacyConfig(spec),
+      filePath,
+      body: spec.instructions ?? '',
+      spec,
+      run: async () => ({
+        success: false,
+        shouldContinue: false,
+        error: `Skill ${spec.id} is procedural context and cannot execute as a hidden workflow handler.`,
+      }),
     });
-    logger.info(`Skill loaded: ${skill.config.id} (${skill.config.name}) from ${path.basename(skill.filePath)}`);
   }
 
   async unregister(skillId: string): Promise<boolean> {
-    return this.skills.delete(skillId);
+    const removed = this.skills.delete(skillId);
+    if (removed) await this.rebuildRegistry();
+    return removed;
   }
 
-  getSkill(skillId: string): RegisteredSkill | null { return this.skills.get(skillId) || null; }
-  getSkillConfig(skillId: string): SkillConfig | null { return this.skills.get(skillId)?.config || null; }
-  getSkillBody(skillId: string): string | null { return this.skills.get(skillId)?.body || null; }
-
-  listSkills(enabledOnly: boolean = false): SkillConfig[] {
-    const list: SkillConfig[] = [];
-    for (const s of this.skills.values()) {
-      if (!enabledOnly || s.config.enabled) list.push(s.config);
-    }
-    return list.sort((a, b) => b.priority - a.priority);
+  async update(
+    skillId: string,
+    patch: { enabled?: boolean; priority?: number }
+  ): Promise<RegisteredSkill | null> {
+    const current = this.skills.get(skillId);
+    if (!current) return null;
+    const spec: SkillSpec = {
+      ...current.spec,
+      enabled: patch.enabled ?? current.spec.enabled,
+      priority: patch.priority ?? current.spec.priority,
+    };
+    const updated: RegisteredSkill = {
+      ...current,
+      spec,
+      config: packageSpecToLegacyConfig(spec),
+    };
+    this.skills.set(skillId, updated);
+    await this.rebuildRegistry();
+    return updated;
   }
 
-  /**
-   * Run all enabled skills whose trigger matches, in priority order.
-   * Each skill's return value is folded into the shared context:
-   *   - `variables` → merged into context.variables
-   *   - `modifiedContent` → replaces the user message
-   *   - `shouldContinue: false` → halts the pipeline
-   */
-  async executeSkills(context: SkillContext): Promise<SkillContext> {
-    const sorted = Array.from(this.skills.values())
-      .filter((s) => s.config.enabled)
-      .sort((a, b) => b.config.priority - a.config.priority);
+  getSkill(skillId: string): RegisteredSkill | null {
+    return this.skills.get(skillId) ?? null;
+  }
 
-    const current = context;
-    for (const skill of sorted) {
-      if (!this.shouldTrigger(skill.config.triggers, current)) continue;
-      try {
-        logger.debug(`Executing skill: ${skill.config.id}`);
-        const result = await skill.run(current);
-        if (result.success) {
-          if (result.variables) {
-            current.variables = { ...current.variables, ...result.variables };
-          }
-          if (result.modifiedContent && current.currentMessage) {
-            current.currentMessage.content = result.modifiedContent;
-          }
+  getSkillConfig(skillId: string): SkillConfig | null {
+    return this.skills.get(skillId)?.config ?? null;
+  }
+
+  getSkillBody(skillId: string): string | null {
+    return this.skills.get(skillId)?.body ?? null;
+  }
+
+  listSkills(enabledOnly = false): SkillConfig[] {
+    return Array.from(this.skills.values())
+      .filter((skill) => !enabledOnly || skill.config.enabled)
+      .map((skill) => skill.config)
+      .sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id));
+  }
+
+  async resolveSkills(input: ResolveServerSkillsInput): Promise<LoadedSkillContext[]> {
+    const context: SkillResolutionContext = { ...input };
+    const selection = new SkillSelector(this.registry).select(context);
+    const loaded: LoadedSkillContext[] = [];
+    for (const selected of selection.selected) {
+      const decision = await new DefaultSkillPolicy({ requireRegisteredTools: true }).evaluate({
+        selection: selected,
+        context,
+      });
+      if (!decision.allowed) {
+        if (input.requiredSkills?.includes(selected.spec.id)) {
+          throw new Error(decision.reason ?? `Required Skill ${selected.spec.id} was denied.`);
         }
-        if (!result.shouldContinue) {
-          logger.debug(`Skill ${skill.config.id} stopped further processing`);
-          break;
-        }
-      } catch (error) {
-        logger.error(`Error executing skill ${skill.config.id}:`, error);
+        continue;
       }
+      loaded.push(
+        await new SkillContextLoader().load({ selection: selected, policyDecision: decision })
+      );
     }
-    return current;
+    assertRequiredSkills(input.requiredSkills ?? [], loaded, selection.rejected);
+    return loaded;
   }
 
-  private shouldTrigger(triggers: SkillTrigger[], context: SkillContext): boolean {
-    for (const t of triggers) {
-      switch (t.type) {
-        case 'always':
-          return true;
-        case 'keyword':
-          if (context.currentMessage.content.toLowerCase().includes(t.pattern.toLowerCase())) return true;
-          break;
-        case 'regex':
-          try {
-            if (new RegExp(t.pattern, 'i').test(context.currentMessage.content)) return true;
-          } catch { logger.warn(`Invalid regex trigger: ${t.pattern}`); }
-          break;
-        case 'intent':
-          if (context.variables?.intent === t.pattern) return true;
-          break;
-      }
-    }
-    return false;
+  private async rebuildRegistry(): Promise<void> {
+    const registry = new SkillRegistry();
+    for (const skill of this.skills.values()) registry.register(skill.spec);
+    this.registry = registry;
   }
 }
 
-// Singleton instance
+function legacyParsedSkillToSpec(skill: ParsedSkillFile): SkillSpec {
+  return {
+    id: skill.config.id,
+    version: skill.config.version,
+    name: skill.config.name,
+    description: skill.config.description,
+    enabled: skill.config.enabled,
+    priority: skill.config.priority,
+    activationPolicy: activationFromLegacyTriggers(skill.config.triggers),
+    instructions: skill.body,
+    provenance: { source: 'legacy-local-skill', filePath: skill.filePath },
+    trustLevel: 'reviewed',
+  };
+}
+
+function activationFromLegacyTriggers(triggers: SkillTrigger[]): SkillSpec['activationPolicy'] {
+  if (triggers.some((trigger) => trigger.type === 'always')) return { mode: 'always' };
+  const first = triggers[0];
+  if (!first) return { mode: 'manual' };
+  return {
+    mode: first.type,
+    patterns: triggers
+      .filter((trigger) => trigger.type === first.type)
+      .map((trigger) => trigger.pattern),
+  };
+}
+
+function packageSpecToLegacyConfig(spec: SkillSpec): SkillConfig {
+  const activation = spec.activationPolicy ?? { mode: 'manual' as const };
+  let triggers: SkillTrigger[];
+  if (activation.mode === 'always') triggers = [{ type: 'always', pattern: '' }];
+  else if (activation.mode === 'manual') triggers = [];
+  else {
+    const type: SkillTrigger['type'] = activation.mode;
+    triggers = (activation.patterns ?? []).map((pattern) => ({ type, pattern }));
+  }
+  return {
+    id: spec.id,
+    name: spec.name ?? spec.id,
+    description: spec.description,
+    version: spec.version,
+    enabled: spec.enabled !== false,
+    triggers,
+    priority: spec.priority ?? 0,
+  };
+}
+
+function assertRequiredSkills(
+  required: string[],
+  loaded: LoadedSkillContext[],
+  rejected: Array<{ skillId: string; reason: string }>
+): void {
+  const active = new Set(loaded.map((skill) => skill.id));
+  const missing = required.filter((skillId) => !active.has(skillId));
+  if (!missing.length) return;
+  const reasons = rejected
+    .filter((entry) => missing.includes(entry.skillId))
+    .map((entry) => `${entry.skillId}: ${entry.reason}`);
+  throw new Error(`Required Skills failed closed: ${reasons.join('; ') || missing.join(', ')}`);
+}
+
 let skillManagerInstance: SkillManager | null = null;
 
 export function getSkillManager(): SkillManager {
@@ -225,7 +271,5 @@ export async function destroySkillManager(): Promise<void> {
   }
 }
 
-/** Re-exported for tests. */
 export type { ParsedSkillFile } from './parser';
-
 export default SkillManager;

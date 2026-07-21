@@ -214,6 +214,30 @@ describe('@hypha/inference', () => {
       registry.resolve([{ id: 'agent.invalid', required: true }], { known: 'value' })
     ).toThrow('Undeclared agent prompt variables: agent.invalid.unknown');
   });
+
+  it('enforces compare-and-swap revisions for agent prompt updates', () => {
+    const registry = new AgentPromptRegistry();
+    const created = registry.register({
+      id: 'agent.cas',
+      version: '1.0.0',
+      name: 'CAS prompt',
+      role: 'system',
+      template: 'First.',
+    });
+    expect(created.revision).toBe(1);
+    expect(() =>
+      registry.register(
+        { ...created, template: 'Conflict.' },
+        { replace: true, expectedRevision: 2 }
+      )
+    ).toThrow(/revision conflict/);
+    const updated = registry.register(
+      { ...created, template: 'Second.' },
+      { replace: true, expectedRevision: 1 }
+    );
+    expect(updated).toMatchObject({ revision: 2, template: 'Second.' });
+    expect(updated.contentHash).not.toBe(created.contentHash);
+  });
   it('routes inference requests through registered providers', async () => {
     const manager = new InferenceManager();
     const provider: InferenceProvider = {

@@ -133,4 +133,34 @@ describe('PromptManager', () => {
       cacheable: true,
     });
   });
+
+  it('persists governed agent prompts with revision and content hash across restart', async () => {
+    const registryPath = path.join(tmp, 'data', 'prompts', 'registry.json');
+    const first = new PromptManager(undefined, false, registryPath);
+    await first.initialize();
+    const stored = await first.registerAgentPrompt({
+      id: 'dynamic-agent',
+      version: '1.0.0',
+      name: 'Dynamic Agent',
+      role: 'system',
+      template: 'Act as {{role}}.',
+      variables: [{ name: 'role', type: 'string', required: true }],
+      ownerId: 'admin-1',
+      tenantId: 'tenant-1',
+      scope: 'tenant',
+      trustLevel: 'reviewed',
+      provenance: { source: 'admin-api' },
+    });
+    expect(stored).toMatchObject({
+      revision: 1,
+      contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    await first.destroy();
+
+    const second = new PromptManager(undefined, false, registryPath);
+    await second.initialize();
+    expect(second.listAgentPrompts()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'dynamic-agent', revision: 1 })])
+    );
+  });
 });

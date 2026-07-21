@@ -22,6 +22,13 @@ export interface AgentPromptSpec {
   variables?: AgentPromptVariableSpec[];
   stable?: boolean;
   cacheable?: boolean;
+  ownerId?: string;
+  tenantId?: string;
+  scope?: 'global' | 'tenant' | 'owner';
+  trustLevel?: 'trusted' | 'reviewed' | 'untrusted';
+  provenance?: Record<string, unknown>;
+  revision?: number;
+  contentHash?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -70,6 +77,16 @@ export const agentPromptSpecSchema = z.object({
   variables: z.array(agentPromptVariableSpecSchema).optional(),
   stable: z.boolean().optional(),
   cacheable: z.boolean().optional(),
+  ownerId: z.string().min(1).optional(),
+  tenantId: z.string().min(1).optional(),
+  scope: z.enum(['global', 'tenant', 'owner']).optional(),
+  trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
+  provenance: z.record(z.unknown()).optional(),
+  revision: z.number().int().positive().optional(),
+  contentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   metadata: z.record(z.unknown()).optional(),
 }) satisfies ZodType<AgentPromptSpec>;
 
@@ -84,16 +101,32 @@ export class AgentPromptRegistry {
   private readonly specs = new Map<string, AgentPromptSpec>();
   private readonly versions = new Map<string, string[]>();
 
-  register(input: AgentPromptSpec, options: { replace?: boolean } = {}): void {
+  register(
+    input: AgentPromptSpec,
+    options: { replace?: boolean; expectedRevision?: number } = {}
+  ): AgentPromptSpec {
     const spec = agentPromptSpecSchema.parse(input);
     const key = promptKey(spec.id, spec.version);
-    if (this.specs.has(key) && !options.replace) {
+    const current = this.specs.get(key);
+    if (current && !options.replace) {
       throw new Error(`Agent prompt already registered: ${key}`);
     }
-    this.specs.set(key, spec);
+    if (
+      options.expectedRevision !== undefined &&
+      (current?.revision ?? 0) !== options.expectedRevision
+    ) {
+      throw new Error(`Agent prompt revision conflict: ${key}`);
+    }
+    const stored: AgentPromptSpec = {
+      ...spec,
+      revision: current ? (current.revision ?? 1) + 1 : (spec.revision ?? 1),
+      contentHash: promptContentHash(spec),
+    };
+    this.specs.set(key, stored);
     const versions = new Set(this.versions.get(spec.id) ?? []);
     versions.add(spec.version);
     this.versions.set(spec.id, Array.from(versions).sort(compareVersions).reverse());
+    return stored;
   }
 
   unregister(id: string, version?: string): boolean {
@@ -167,6 +200,25 @@ export class AgentPromptRegistry {
     if (versions.length) this.versions.set(id, versions);
     else this.versions.delete(id);
   }
+}
+
+function promptContentHash(spec: AgentPromptSpec): string {
+  return hashContent(
+    JSON.stringify({
+      id: spec.id,
+      version: spec.version,
+      role: spec.role,
+      template: spec.template,
+      variables: spec.variables ?? [],
+      stable: spec.stable ?? true,
+      cacheable: spec.cacheable ?? true,
+      ownerId: spec.ownerId,
+      tenantId: spec.tenantId,
+      scope: spec.scope ?? 'global',
+      trustLevel: spec.trustLevel ?? 'reviewed',
+      provenance: spec.provenance,
+    })
+  );
 }
 
 export function renderAgentPrompt(

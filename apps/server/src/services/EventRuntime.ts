@@ -64,6 +64,7 @@ import {
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
+import type { LoadedSkillContext } from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -131,6 +132,7 @@ type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
 
 type ResolvedRuntimeAgentSpec = ReActAgentSpec & {
   promptResolution?: AgentPromptResolution;
+  activeSkills?: LoadedSkillContext[];
 };
 
 export interface StartRunInput {
@@ -601,10 +603,13 @@ class EventRuntimeService {
     return manager.listAgentPrompts();
   }
 
-  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+  async registerAgentPrompt(
+    spec: AgentPromptSpec,
+    options: { expectedRevision?: number } = {}
+  ): Promise<AgentPromptSpec> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
-    manager.registerAgentPrompt(spec);
+    return manager.registerAgentPrompt(spec, options);
   }
 
   async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
@@ -859,10 +864,30 @@ class EventRuntimeService {
           sessionId,
           promptRefs,
         });
-    const systemInstructions =
+    const baseSystemInstructions =
       explicitInstructions ??
       promptResolution?.instructions ??
       `You are ${name}. Be helpful, harmless, and honest.`;
+    const workflowState = asRecord(asRecord(spec.metadata)?.workflowState);
+    const activeSkills = spec.skillRefs?.length
+      ? await getSkillManager().resolveSkills({
+          agentSkillRefs: spec.skillRefs,
+          inputText: [...input.messages].reverse().find((message) => message.role === 'user')
+            ?.content,
+          allowedSkills: stringList(workflowState?.allowedSkills),
+          requiredSkills: stringList(workflowState?.requiredSkills),
+          availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+          metadata: spec.metadata,
+        })
+      : [];
+    const skillInstructions = activeSkills.map(
+      (skill) =>
+        `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
+          .map((reference) => reference.content)
+          .filter(Boolean)
+          .join('\n')}\n</skill>`
+    );
+    const systemInstructions = mergeSystemPrompts(baseSystemInstructions, ...skillInstructions);
 
     return {
       ...spec,
@@ -877,6 +902,7 @@ class EventRuntimeService {
         this.resolveChatModel().model,
       systemInstructions,
       promptResolution,
+      activeSkills,
       toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
     };
   }
@@ -903,17 +929,9 @@ class EventRuntimeService {
       current_date: new Date().toISOString(),
     };
 
-    try {
-      const promptManager = getPromptManager();
-      await promptManager.ensureInitialized();
-      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
-    } catch (error) {
-      logger.warn('Agent prompt template resolution failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return undefined;
+    const promptManager = getPromptManager();
+    await promptManager.ensureInitialized();
+    return promptManager.resolveAgentPrompts(input.promptRefs, variables);
   }
 
   async runReActChat(
@@ -1034,6 +1052,12 @@ class EventRuntimeService {
       messages: input.messages,
       memoryScope: { userId, sessionId },
       metadata: {
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1101,6 +1125,12 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -2930,6 +2960,11 @@ function asRecord(input: unknown): Record<string, unknown> | undefined {
   return input && typeof input === 'object' && !Array.isArray(input)
     ? (input as Record<string, unknown>)
     : undefined;
+}
+
+function stringList(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter((value): value is string => typeof value === 'string');
 }
 
 function inferToolSideEffect(

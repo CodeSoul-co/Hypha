@@ -343,7 +343,14 @@ export class DefaultSkillPolicy implements SkillPolicy {
 }
 
 export class SkillContextLoader {
-  constructor(private readonly options: { defaultMaxChars?: number } = {}) {}
+  constructor(
+    private readonly options: {
+      defaultMaxChars?: number;
+      maxReferences?: number;
+      maxFileBytes?: number;
+      readTimeoutMs?: number;
+    } = {}
+  ) {}
 
   async load(input: SkillContextLoadInput): Promise<LoadedSkillContext> {
     const maxChars = Math.max(
@@ -387,30 +394,93 @@ export class SkillContextLoader {
       ...(skill.scripts ?? []),
       ...(skill.assets ?? []),
     ].filter((asset) => asset.loadPolicy === 'on_activation');
+    const maxReferences = this.options.maxReferences ?? 32;
+    if (refs.length > maxReferences) {
+      throw new Error(`Skill ${skill.id} exceeds the ${maxReferences} activation asset limit.`);
+    }
     const filePath =
       typeof skill.provenance?.filePath === 'string' ? skill.provenance.filePath : undefined;
-    const baseDir = filePath ? path.dirname(filePath) : undefined;
+    const baseDir = filePath ? await fs.realpath(path.dirname(filePath)) : undefined;
     const loaded: LoadedSkillAsset[] = [];
     let remaining = remainingChars;
 
     for (const ref of refs) {
       const asset: LoadedSkillAsset = { ...ref };
       if (remaining > 0 && ref.type === 'reference' && baseDir) {
-        const absolutePath = path.resolve(baseDir, ref.path);
-        asset.absolutePath = absolutePath;
-        try {
-          const content = await fs.readFile(absolutePath, 'utf-8');
-          const truncated = truncateToBudget(content, remaining) ?? '';
-          asset.content = truncated;
-          asset.truncated = truncated.length < content.length;
-          remaining -= truncated.length;
-        } catch {
-          asset.truncated = true;
+        if (!isSafeRelativeSkillPath(ref.path)) {
+          throw new Error(`Skill ${skill.id} contains an invalid reference path.`);
         }
+        const requestedPath = path.resolve(baseDir, ref.path);
+        const absolutePath = await fs.realpath(requestedPath);
+        if (
+          !isPathInside(baseDir, absolutePath) ||
+          normalizeFilesystemPath(requestedPath) !== normalizeFilesystemPath(absolutePath)
+        ) {
+          throw new Error(`Skill ${skill.id} reference escapes its root or traverses a symlink.`);
+        }
+        const stat = await fs.stat(absolutePath);
+        const maxFileBytes = this.options.maxFileBytes ?? 256 * 1024;
+        if (!stat.isFile() || stat.size > maxFileBytes) {
+          throw new Error(
+            `Skill ${skill.id} reference is not a regular file within the size budget.`
+          );
+        }
+        const content = await readTextWithTimeout(
+          absolutePath,
+          this.options.readTimeoutMs ?? 2_000
+        );
+        const truncated = truncateToBudget(content, remaining) ?? '';
+        asset.content = truncated;
+        asset.truncated = truncated.length < content.length;
+        remaining -= truncated.length;
       }
       loaded.push(asset);
     }
     return loaded;
+  }
+}
+
+function isSafeRelativeSkillPath(value: string): boolean {
+  if (
+    !value ||
+    value.includes('\0') ||
+    path.isAbsolute(value) ||
+    /^[a-zA-Z]:/.test(value) ||
+    value.startsWith('\\\\')
+  ) {
+    return false;
+  }
+  const normalized = value.replace(/\\/g, '/');
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(normalized);
+  } catch {
+    return false;
+  }
+  return !decoded.split('/').some((segment) => segment === '..' || segment === '');
+}
+
+function normalizeFilesystemPath(value: string): string {
+  const normalized = path.normalize(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function readTextWithTimeout(filePath: string, timeoutMs: number): Promise<string> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      fs.readFile(filePath, 'utf8'),
+      new Promise<string>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Skill reference read timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

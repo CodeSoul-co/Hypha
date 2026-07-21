@@ -492,6 +492,7 @@ const configSchema = z.object({
   prompts: z.object({
     templatesPath: z.string().default('./apps/server/src/prompts'),
     cacheEnabled: z.boolean().default(true),
+    registryPath: z.string().default('./data/prompts/registry.json'),
   }),
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
