@@ -104,7 +104,7 @@ function normalizeEvent(event: FrameworkEvent): EventCreateInput {
     });
   }
   const idempotencyKey = event.idempotencyKey ?? `legacy-event:${event.id}`;
-  return structuredClone({
+  return {
     id: event.id,
     type: event.type,
     version: event.version ?? '1.0.0',
@@ -123,9 +123,37 @@ function normalizeEvent(event: FrameworkEvent): EventCreateInput {
     idempotencyKey,
     ...(event.operationId === undefined ? {} : { operationId: event.operationId }),
     timestamp: event.timestamp,
-    payload: event.payload,
-    ...(event.metadata === undefined ? {} : { metadata: event.metadata }),
-  });
+    payload: normalizeLegacyJson(event.payload),
+    ...(event.metadata === undefined
+      ? {}
+      : { metadata: normalizeLegacyJson(event.metadata) as Record<string, unknown> }),
+  };
+}
+
+function normalizeLegacyJson(value: unknown, ancestors = new Set<object>()): unknown {
+  if (value === undefined) return null;
+  if (value === null || typeof value !== 'object') return value;
+  if (ancestors.has(value)) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: 'Legacy Event payload or metadata contains a circular reference',
+    });
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry) => normalizeLegacyJson(entry, ancestors));
+    }
+    if (Object.prototype.toString.call(value) !== '[object Object]') return value;
+
+    const normalized: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (entry !== undefined) normalized[key] = normalizeLegacyJson(entry, ancestors);
+    }
+    return normalized;
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function scopeFor(event: EventCreateInput): EventStreamScope {

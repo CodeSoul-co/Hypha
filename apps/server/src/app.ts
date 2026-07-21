@@ -196,6 +196,8 @@ class Application {
     // Open and health-check the canonical durable Runtime before recovery or readiness.
     this.eventRuntime = getEventRuntime();
     await this.eventRuntime.initializeCanonicalRuntime();
+    const restoredRuns = await this.eventRuntime.restoreRunContexts();
+    logger.info('Restored Runtime Run/FSM contexts from durable Events', { restoredRuns });
 
     // Recover persisted Tool invocations after their adapters are available.
     await this.eventRuntime.recoverToolInvocations();

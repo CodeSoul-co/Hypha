@@ -36,6 +36,22 @@ describe('DurableEventStoreBridge', () => {
     ]);
   });
 
+  it('normalizes optional undefined fields with standard JSON semantics', async () => {
+    const target = await fixture();
+    const event = frameworkEvent('event.optional', 'run.optional', 'user.optional');
+    event.payload = { runId: 'run.optional', value: undefined };
+    event.metadata = { userId: 'user.optional', optional: undefined };
+
+    await target.bridge.append(event);
+
+    await expect(target.bridge.list({ runId: 'run.optional' })).resolves.toMatchObject([
+      {
+        payload: { runId: 'run.optional' },
+        metadata: { userId: 'user.optional' },
+      },
+    ]);
+  });
+
   it('coalesces duplicate appends and rejects conflicting Event reuse', async () => {
     const target = await fixture();
     const event = frameworkEvent('event.same', 'run.same', 'user.same');
