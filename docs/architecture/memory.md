@@ -60,8 +60,9 @@ as executable policy.
 ## External Providers
 
 `ExternalMemoryManagementAdapter` keeps provider-specific transport and payloads behind the common
-management contract. `Mem0RestClient` maps Hypha scope dimensions to Mem0 metadata and discards
-responses whose returned scope hash does not match the request. External mutations are not retried
+management contract. `Mem0OssClient` and `Mem0PlatformClient` encode separate deployment protocols. MemoryBank
+Local and Managed likewise use independent concrete clients. Every client maps Hypha scope dimensions
+to provider metadata and discards responses whose returned scope hash does not match the request. External mutations are not retried
 after a write may have started unless reconciliation proves that replay is safe. MemoryBank-specific
 policy remains adapter configuration rather than a Core or Domain abstraction.
 
@@ -140,3 +141,12 @@ harness, event, persistence, provider health, and external receipt hooks require
 profile. The legacy `MemoryManager` remains only as a compatibility surface while consumers migrate.
 Direct provider or store writes bypassing those boundaries are not framework-compliant. See the
 [Managed Memory migration guide](../guides/memory-managed-migration.md).
+
+## Operational contracts
+
+`DefaultMemoryContextGateway` is the shared Chat, Workflow, and Harness context entry point.
+`VersionValidContextCache` accepts only exact version-valid envelopes. Provider readiness/liveness,
+dead-letter disposition, quota, deletion evidence, failure fingerprints, and backup/restore
+capabilities are Framework contracts; Server endpoints, metrics exporters, secret resolution, and
+deployment jobs remain in runtime assembly. See the
+[provider adapter and operations guide](../guides/memory-provider-adapter-and-operations.md).
