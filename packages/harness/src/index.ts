@@ -15,6 +15,7 @@ export * from './recovery-loop';
 export * from './recovery-supervisor';
 export * from './execution-context';
 export * from './bounded-fsm-driver';
+export * from './durable-event-store-bridge';
 
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;
