@@ -841,6 +841,8 @@ export * from './operations';
 export * from './operation-contract';
 export * from './lifecycle-contracts';
 export * from './lifecycle-schema';
+export * from './governed-memory-manager';
+export * from './provider-reconciliation';
 export * from './memory-utils';
 export * from './managed-store';
 export * from './structured-managed-store';

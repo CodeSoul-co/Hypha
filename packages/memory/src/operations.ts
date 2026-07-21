@@ -198,13 +198,22 @@ export interface ProviderHealth {
 export interface MemoryManagementProvider {
   readonly id: string;
   capabilities(): Promise<import('./contracts').MemoryManagementCapabilities>;
-  add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult>;
-  search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]>;
-  get(request: MemoryGetRequest): Promise<ManagedMemoryRecord | null>;
-  list(request: MemoryListRequest): Promise<MemoryListResult>;
-  update(request: ManagedMemoryUpdateRequest): Promise<ManagedMemoryWriteResult>;
-  delete(request: ManagedMemoryDeleteRequest): Promise<ManagedMemoryDeleteResult>;
-  history?(request: MemoryHistoryRequest): Promise<MemoryVersion[]>;
+  add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult>;
+  search(
+    request: ManagedMemorySearchRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemorySearchResult[]>;
+  get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null>;
+  list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult>;
+  update(
+    request: ManagedMemoryUpdateRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult>;
+  delete(
+    request: ManagedMemoryDeleteRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult>;
+  history?(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]>;
   health(): Promise<ProviderHealth>;
   close?(): Promise<void>;
 }

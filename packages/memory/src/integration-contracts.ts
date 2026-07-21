@@ -18,11 +18,16 @@ import { hashMemoryScope, normalizeMemoryError, sha256 } from './memory-utils';
 import type { MemoryEventContext, MemoryEventPublisher } from './memory-events';
 
 export type MemoryActivityOperation =
+  | 'add'
   | 'extract'
   | 'search'
+  | 'get'
+  | 'list'
+  | 'update'
   | 'write'
   | 'maintain'
   | 'delete'
+  | 'history'
   | 'build_context';
 
 export interface MemoryActivityRequest {
@@ -202,7 +207,7 @@ export class DefaultMemoryActivityPort implements MemoryActivityPort {
 
     try {
       const type =
-        result.status === 'completed'
+        result.status === 'completed' || result.status === 'partial'
           ? 'memory.activity.completed'
           : result.status === 'cancelled'
             ? 'memory.activity.cancelled'
@@ -217,7 +222,11 @@ export class DefaultMemoryActivityPort implements MemoryActivityPort {
       };
     }
 
-    await this.notify(result.status === 'completed' ? 'onCompleted' : 'onFailed', request, result);
+    await this.notify(
+      result.status === 'completed' || result.status === 'partial' ? 'onCompleted' : 'onFailed',
+      request,
+      result
+    );
     return result;
   }
 
