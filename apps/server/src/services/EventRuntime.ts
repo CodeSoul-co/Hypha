@@ -9,12 +9,14 @@ import {
 } from '@hypha/adapters-local';
 import {
   createFrameworkEvent,
+  InMemoryEventSchemaRegistry,
   InMemoryTelemetryRecorder,
   FrameworkError,
   recoveryFailureFingerprint,
   stableRecoveryHash,
   type FrameworkEvent,
   type FrameworkEventType,
+  type EventSchemaRegistry,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
@@ -108,6 +110,8 @@ import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
+import { createRuntimeBackbone, type RuntimeBackbone } from '../runtime/RuntimeBackbone';
+import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
 
 interface RuntimeRunContext {
   runId: string;
@@ -506,6 +510,7 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private canonicalLifecycle?: RuntimeBackboneLifecycle;
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor() {
@@ -581,6 +586,40 @@ class EventRuntimeService {
       infer: (request) => this.inference.infer(this.inferenceProviderId, request),
       stream: (request) => this.inference.stream(this.inferenceProviderId, request),
     });
+  }
+
+  async initializeCanonicalRuntime(
+    options: { filename?: string; schemaRegistry?: EventSchemaRegistry } = {}
+  ): Promise<RuntimeBackbone> {
+    if (!this.canonicalLifecycle) {
+      const sqliteStorage = storageConfig().relational.sqlite;
+      const legacyEventDbPath =
+        process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
+      const filename =
+        options.filename ??
+        process.env.HYPHA_CANONICAL_RUNTIME_DB ??
+        `${legacyEventDbPath}.canonical.sqlite`;
+      const schemaRegistry = options.schemaRegistry ?? new InMemoryEventSchemaRegistry();
+      this.canonicalLifecycle = new RuntimeBackboneLifecycle(() =>
+        createRuntimeBackbone({ filename, schemaRegistry })
+      );
+    }
+    return this.canonicalLifecycle.initialize();
+  }
+
+  canonicalRuntime(): RuntimeBackbone {
+    if (!this.canonicalLifecycle) {
+      throw new Error('Canonical Runtime backbone is not initialized');
+    }
+    return this.canonicalLifecycle.get();
+  }
+
+  isCanonicalRuntimeInitialized(): boolean {
+    return this.canonicalLifecycle?.isInitialized() ?? false;
+  }
+
+  async close(): Promise<void> {
+    await this.canonicalLifecycle?.close();
   }
 
   listReasoningStrategies(): ReasoningStrategyDescriptor[] {

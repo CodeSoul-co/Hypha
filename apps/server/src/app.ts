@@ -33,6 +33,7 @@ class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
   private server: any = null;
+  private eventRuntime: ReturnType<typeof getEventRuntime> | null = null;
 
   constructor() {
     this.app = express();
@@ -78,11 +79,7 @@ class Application {
               callback(new Error('Origin is not allowed by CORS policy'));
             },
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: [
-          'Content-Type',
-          'Authorization',
-          this.config.auth.apiKey.headerName,
-        ],
+        allowedHeaders: ['Content-Type', 'Authorization', this.config.auth.apiKey.headerName],
       })
     );
 
@@ -196,8 +193,12 @@ class Application {
     // Initialize Tool Manager
     await initializeToolManager();
 
+    // Open and health-check the canonical durable Runtime before recovery or readiness.
+    this.eventRuntime = getEventRuntime();
+    await this.eventRuntime.initializeCanonicalRuntime();
+
     // Recover persisted Tool invocations after their adapters are available.
-    await getEventRuntime().recoverToolInvocations();
+    await this.eventRuntime.recoverToolInvocations();
 
     // Initialize Workflow Engine
     await initializeWorkflowEngine();
@@ -450,6 +451,10 @@ class Application {
     await destroyToolManager();
     await destroyWorkflowEngine();
     await destroyPromptManager();
+
+    // Runtime owns SQLite handles that must close before shared database shutdown.
+    await this.eventRuntime?.close();
+    this.eventRuntime = null;
 
     // Close databases
     await closeDatabases();

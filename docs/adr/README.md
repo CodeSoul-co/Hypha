@@ -18,3 +18,4 @@ ADRs record accepted architecture decisions for hypha. They should explain the d
 - [ADR 0012: SQLite Fenced Run Lease Store](0012-sqlite-fenced-run-lease-store.md)
 - [ADR 0013: SQLite State Execution Claim Store](0013-sqlite-state-execution-claim-store.md)
 - [ADR 0014: Server Durable Runtime Backbone](0014-server-durable-runtime-backbone.md)
+- [ADR 0015: Canonical Runtime Compatibility Facade](0015-canonical-runtime-compatibility-facade.md)
