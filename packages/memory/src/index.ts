@@ -897,5 +897,6 @@ export * from './integration-contracts';
 export * from './integration-schema';
 export * from './integration-json-schema';
 export * from './managed-search-cache';
+export * from './context-cache-validity';
 
 export * from './hybrid';
