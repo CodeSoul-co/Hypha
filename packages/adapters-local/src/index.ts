@@ -55,6 +55,7 @@ export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
 export * from './runtime-event-store';
 export * from './runtime-checkpoint-store';
+export * from './run-lease-store';
 export * from './projection-store';
 export * from './sqlite-driver';
 export * from './artifact-content-io';

@@ -15,3 +15,4 @@ ADRs record accepted architecture decisions for hypha. They should explain the d
 - [ADR 0009: Canonical Runtime Composition Root](0009-canonical-runtime-composition-root.md)
 - [ADR 0010: SQLite Durable Runtime Event Store](0010-sqlite-durable-runtime-event-store.md)
 - [ADR 0011: SQLite Runtime Projection and Checkpoint Stores](0011-sqlite-runtime-projection-checkpoint-stores.md)
+- [ADR 0012: SQLite Fenced Run Lease Store](0012-sqlite-fenced-run-lease-store.md)
