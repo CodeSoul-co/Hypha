@@ -1532,7 +1532,7 @@ class EventRuntimeService {
       await this.completeApprovedToolRun(invocation, result);
       return;
     }
-    const run = this.requireRun(runId);
+    const run = await this.requireRun(runId);
     if (run.snapshot.currentState === 'HumanReview') {
       await this.transition(runId, 'ObservationRecorded', {
         tool: invocation.toolId,
@@ -1581,7 +1581,7 @@ class EventRuntimeService {
         userId: stringValue(checkpoint.userId) ?? run.userId,
         sessionId: stringValue(checkpoint.sessionId) ?? run.clientSessionId,
       });
-      if (this.requireRun(runId).snapshot.currentState === 'ObservationRecorded') {
+      if ((await this.requireRun(runId)).snapshot.currentState === 'ObservationRecorded') {
         await this.transition(runId, 'Verifying', { invocationId: invocation.id });
         await this.transition(runId, 'MemorySync', { invocationId: invocation.id });
       }
@@ -1609,56 +1609,19 @@ class EventRuntimeService {
   }
 
   private async advanceToHumanReview(runId: string): Promise<void> {
-    const run = this.requireRun(runId);
+    const run = await this.requireRun(runId);
     const ordered = ['Reasoning', 'ActionSelected', 'PolicyChecked', 'Acting'];
     const index = ordered.indexOf(run.snapshot.currentState);
     if (index >= 0) {
       for (const state of ordered.slice(index + 1)) await this.transition(runId, state);
     }
-    if (this.requireRun(runId).snapshot.currentState !== 'HumanReview') {
+    if ((await this.requireRun(runId)).snapshot.currentState !== 'HumanReview') {
       await this.transition(runId, 'HumanReview', { reason: 'tool-human-review' });
     }
   }
 
   private async restoreRunContext(runId: string): Promise<void> {
-    if (this.runs.has(runId)) return;
-    const events = await this.runtime.listEvents(runId);
-    if (!events.length) throw new Error(`Runtime run not found: ${runId}`);
-    const first = events[0];
-    const projection = await this.runtime.projectRun(runId);
-    const enteredStates = events
-      .filter((event) => event.type === 'fsm.state.entered')
-      .map((event) => stringValue(asRecord(event.payload)?.stateId))
-      .filter((state): state is string => Boolean(state));
-    const currentState = enteredStates.at(-1) ?? this.defaultFsm.initialState;
-    const runtimeSessionId = first.sessionId ?? projection?.sessionId;
-    const userId = first.userId ?? projection?.userId;
-    if (!runtimeSessionId || !userId)
-      throw new Error(`Runtime run ${runId} has incomplete identity evidence.`);
-    const clientSessionId =
-      stringValue(first.metadata?.clientSessionId) ??
-      runtimeSessionId.replace(/^user:[^:]+:session:/, '');
-    this.runs.set(runId, {
-      runId,
-      userId,
-      sessionId: runtimeSessionId,
-      clientSessionId,
-      domainPackId: stringValue(first.metadata?.domainPackId) ?? this.defaultDomainPack.id,
-      fsm: this.defaultFsm,
-      snapshot: {
-        processId: this.defaultFsm.id,
-        runId,
-        currentState,
-        statePath: enteredStates.length ? enteredStates : [currentState],
-        status:
-          currentState === 'Completed'
-            ? 'completed'
-            : currentState === 'Failed'
-              ? 'failed'
-              : 'running',
-        updatedAt: events.at(-1)?.timestamp ?? new Date().toISOString(),
-      },
-    });
+    await this.requireRun(runId);
   }
 
   async runGovernedTool<TOutput>(input: {
