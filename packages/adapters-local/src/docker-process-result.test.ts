@@ -19,6 +19,8 @@ describe('buildDockerProcessResult', () => {
       exitCode: 0,
       stdout: 'hello',
       stderr: 'err',
+      stdoutContentHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      stderrContentHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       changedFiles: [
         { path: 'result.txt', operation: 'created', detectedAt: '2026-07-18T00:00:01.000Z' },
       ],

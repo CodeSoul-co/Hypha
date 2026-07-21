@@ -7,7 +7,11 @@ import type {
 import type { DockerCliResult } from './docker-cli-transport';
 import type { DockerContainerInspection, DockerResourceSnapshot } from './docker-engine-client';
 import { DockerResourceAccountant } from './docker-resource-accounting';
-import { hashExecutionValue, shortExecutionHash } from './execution-provider-values';
+import {
+  hashExecutionText,
+  hashExecutionValue,
+  shortExecutionHash,
+} from './execution-provider-values';
 
 export interface BuildDockerProcessResultInput {
   providerId: string;
@@ -38,6 +42,8 @@ export function buildDockerProcessResult(
     exitCode: terminal.exitCode,
     stdout: input.command.stdout,
     stderr: input.command.stderr,
+    stdoutContentHash: hashExecutionText(input.command.stdout),
+    stderrContentHash: hashExecutionText(input.command.stderr),
     changedFiles: input.changedFiles,
     generatedArtifactRefs: [],
     resourceUsage: resource.usage,
