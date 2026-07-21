@@ -5,8 +5,10 @@ import {
   CreateBucketCommand,
   DeleteBucketCommand,
   DeleteObjectsCommand,
+  HeadBucketCommand,
   ListMultipartUploadsCommand,
-  ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  PutBucketVersioningCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -34,10 +36,17 @@ describe.skipIf(!runRealMinio)('S3ExecutionArtifactStore real MinIO', () => {
       credentials: { accessKeyId, secretAccessKey },
     });
     await client.send(new CreateBucketCommand({ Bucket: bucket }));
+    await client.send(
+      new PutBucketVersioningCommand({
+        Bucket: bucket,
+        VersioningConfiguration: { Status: 'Enabled' },
+      })
+    );
     store = new S3ExecutionArtifactStore({
       id: 'artifact-store.s3.minio.real',
       bucket,
       region,
+      versioning: true,
       client,
       forcePathStyle: true,
       multipartPartSizeBytes: 5 * 1024 * 1024,
@@ -51,6 +60,7 @@ describe.skipIf(!runRealMinio)('S3ExecutionArtifactStore real MinIO', () => {
       await abortMultipartUploads(client, bucket);
       await emptyBucket(client, bucket);
       await client.send(new DeleteBucketCommand({ Bucket: bucket }));
+      await expect(client.send(new HeadBucketCommand({ Bucket: bucket }))).rejects.toBeDefined();
       client.destroy();
     }
   }, 60_000);
@@ -101,14 +111,65 @@ describe.skipIf(!runRealMinio)('S3ExecutionArtifactStore real MinIO', () => {
       responseMimeType: 'text/plain',
       responseFilename: 'report copy.txt',
     });
+    expect(access.headers).toEqual({ 'If-Match': expect.stringMatching(/^".+"$/) });
     const response = await fetch(access.url, { headers: access.headers });
     expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/plain');
+    expect(response.headers.get('content-disposition')).toContain('report copy.txt');
     await expect(response.text()).resolves.toBe('real-minio-artifact');
 
     await store.delete(ref);
     await store.delete(copy);
+    await expect(store.delete(copy)).resolves.toBeUndefined();
     await expect(store.exists(ref)).resolves.toBe(false);
     await expect(store.exists(copy)).resolves.toBe(false);
+  }, 60_000);
+
+  it('rejects a checksum mismatch without publishing an object', async () => {
+    const objectKey = 'objects/checksum-mismatch.txt';
+    await expect(
+      store.put({
+        operationId: 'operation.minio.real.checksum-mismatch',
+        objectKey,
+        content: new TextEncoder().encode('actual-content'),
+        expectedContentHash: hash(new TextEncoder().encode('different-content')),
+        ifAbsent: true,
+      })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_HASH_MISMATCH' } });
+    await expect(store.exists({ storeId: store.id, objectKey })).resolves.toBe(false);
+  }, 60_000);
+
+  it('preserves and independently addresses real S3 object versions', async () => {
+    const objectKey = 'objects/versioned.txt';
+    const firstBytes = new TextEncoder().encode('version-one');
+    const secondBytes = new TextEncoder().encode('version-two');
+    const first = await store.put({
+      operationId: 'operation.minio.real.version.one',
+      objectKey,
+      content: firstBytes,
+      expectedContentHash: hash(firstBytes),
+    });
+    const second = await store.put({
+      operationId: 'operation.minio.real.version.two',
+      objectKey,
+      content: secondBytes,
+      expectedContentHash: hash(secondBytes),
+    });
+
+    expect(first.versionId).toEqual(expect.any(String));
+    expect(second.versionId).toEqual(expect.any(String));
+    expect(second.versionId).not.toBe(first.versionId);
+    await expect(readArtifactStream((await store.get({ ref: first })).stream)).resolves.toEqual(
+      firstBytes
+    );
+    await expect(readArtifactStream((await store.get({ ref: second })).stream)).resolves.toEqual(
+      secondBytes
+    );
+
+    await store.delete(first);
+    await store.delete(second);
+    await expect(store.exists(first)).resolves.toBe(false);
+    await expect(store.exists(second)).resolves.toBe(false);
   }, 60_000);
 
   it('uses real conditional requests and multipart upload without leaving partial state', async () => {
@@ -283,19 +344,26 @@ async function abortMultipartUploads(s3: S3Client, bucketName: string): Promise<
 }
 
 async function emptyBucket(s3: S3Client, bucketName: string): Promise<void> {
-  let continuationToken: string | undefined;
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
   do {
     const listed = await s3.send(
-      new ListObjectsV2Command({ Bucket: bucketName, ContinuationToken: continuationToken })
+      new ListObjectVersionsCommand({
+        Bucket: bucketName,
+        KeyMarker: keyMarker,
+        VersionIdMarker: versionIdMarker,
+      })
     );
-    const objects = (listed.Contents ?? []).flatMap((entry) =>
-      entry.Key ? [{ Key: entry.Key }] : []
+    const objects = [...(listed.Versions ?? []), ...(listed.DeleteMarkers ?? [])].flatMap(
+      (entry) =>
+        entry.Key && entry.VersionId ? [{ Key: entry.Key, VersionId: entry.VersionId }] : []
     );
     if (objects.length > 0) {
       await s3.send(new DeleteObjectsCommand({ Bucket: bucketName, Delete: { Objects: objects } }));
     }
-    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
-  } while (continuationToken);
+    keyMarker = listed.IsTruncated ? listed.NextKeyMarker : undefined;
+    versionIdMarker = listed.IsTruncated ? listed.NextVersionIdMarker : undefined;
+  } while (keyMarker);
 }
 
 function requiredEnvironment(name: string): string {
