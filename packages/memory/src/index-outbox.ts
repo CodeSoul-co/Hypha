@@ -125,6 +125,7 @@ export interface IndexOutboxWorkerOptions {
   pollIntervalMs?: number;
   now?: () => Date;
   onEvent?: (event: IndexOutboxWorkerEvent) => void | Promise<void>;
+  onError?: (error: NormalizedMemoryError) => void | Promise<void>;
 }
 
 export interface IndexOutboxWorkerRunResult {
@@ -137,6 +138,7 @@ export interface IndexOutboxWorkerRunResult {
 export class IndexOutboxWorker {
   private running = false;
   private timer?: ReturnType<typeof setTimeout>;
+  private activeRun?: Promise<IndexOutboxWorkerRunResult>;
   private readonly stores: Map<string, ManagedVectorStoreAdapter>;
   private readonly now: () => Date;
 
@@ -193,8 +195,12 @@ export class IndexOutboxWorker {
     const poll = async (): Promise<void> => {
       if (!this.running) return;
       try {
-        await this.runOnce();
+        this.activeRun = this.runOnce();
+        await this.activeRun;
+      } catch (error) {
+        await this.options.onError?.(normalizeMemoryError(error));
       } finally {
+        this.activeRun = undefined;
         if (this.running) {
           this.timer = setTimeout(poll, this.options.pollIntervalMs ?? 1_000);
         }
@@ -207,6 +213,15 @@ export class IndexOutboxWorker {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+  }
+
+  async drain(): Promise<void> {
+    await this.activeRun;
+  }
+
+  async stopAndDrain(): Promise<void> {
+    this.stop();
+    await this.drain();
   }
 
   private async process(record: MemoryIndexOutboxRecord): Promise<void> {

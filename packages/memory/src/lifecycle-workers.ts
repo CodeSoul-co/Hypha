@@ -156,6 +156,7 @@ export class LeasedMemoryLifecycleWorker {
   private running = false;
   private timer?: ReturnType<typeof setTimeout>;
   private controller?: AbortController;
+  private activeRun?: Promise<MemoryLifecycleWorkerRunResult>;
   private readonly now: () => Date;
 
   constructor(protected readonly options: MemoryLifecycleWorkerOptions) {
@@ -218,8 +219,16 @@ export class LeasedMemoryLifecycleWorker {
     const poll = async (): Promise<void> => {
       if (!this.running) return;
       try {
-        await this.runOnce();
+        this.activeRun = this.runOnce();
+        await this.activeRun;
+      } catch (error) {
+        await this.options.onEvent?.({
+          type: 'memory.worker.failed',
+          workerType: this.options.type,
+          error: normalizeMemoryError(error),
+        });
       } finally {
+        this.activeRun = undefined;
         if (this.running) {
           this.timer = setTimeout(poll, this.options.pollIntervalMs ?? 1_000);
         }
@@ -237,6 +246,15 @@ export class LeasedMemoryLifecycleWorker {
       type: 'memory.worker.stopped',
       workerType: this.options.type,
     });
+  }
+
+  async drain(): Promise<void> {
+    await this.activeRun;
+  }
+
+  async stopAndDrain(): Promise<void> {
+    this.stop();
+    await this.drain();
   }
 }
 
