@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   InMemoryExternalMemoryMappingStore,
+  Mem0OssClient,
   Mem0RestClient,
   createExternalMemoryId,
   hashMemoryScope,
@@ -44,6 +45,18 @@ function addRequest(operationId: string): MemoryAddRequest {
 }
 
 describe('Mem0 REST client', () => {
+  it('exposes a dedicated OSS client while retaining the transitional alias', async () => {
+    const fetcher: Mem0HttpFetch = async () => jsonResponse({ status: 'ok' });
+    const oss = new Mem0OssClient({ baseUrl: 'http://mem0.local', fetch: fetcher });
+    const legacy = new Mem0RestClient({ baseUrl: 'http://mem0.local', fetch: fetcher });
+
+    await expect(oss.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { deployment: 'self_hosted', protocol: 'mem0-oss-rest' },
+    });
+    await expect(legacy.health()).resolves.toMatchObject({ status: 'healthy' });
+  });
+
   it('preserves Hypha scope metadata and rejects foreign search results', async () => {
     const requests: Array<{ url: string; headers: Record<string, string>; body?: unknown }> = [];
     let storedMetadata: Record<string, unknown> = {};

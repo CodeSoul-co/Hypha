@@ -46,7 +46,7 @@ export type Mem0HttpFetch = (
   }
 ) => Promise<Mem0HttpResponse>;
 
-export interface Mem0RestClientOptions {
+export interface Mem0OssClientOptions {
   baseUrl: string;
   apiKey?: string;
   authMode?: 'x-api-key' | 'bearer' | 'none';
@@ -54,7 +54,6 @@ export interface Mem0RestClientOptions {
   providerId?: string;
   healthPath?: string;
   now?: () => Date;
-  deployment?: 'managed' | 'self_hosted';
   mappingStore?: ExternalMemoryMappingStore;
 }
 
@@ -78,15 +77,14 @@ const mem0RestCapabilities: MemoryManagementCapabilities = {
   batchOperations: false,
 };
 
-export class Mem0RestClient implements ExternalMemoryClient {
+export class Mem0OssClient implements ExternalMemoryClient {
   private readonly baseUrl: string;
   private readonly fetcher: Mem0HttpFetch;
   private readonly providerId: string;
   private readonly now: () => Date;
-  private readonly deployment: 'managed' | 'self_hosted';
   private readonly mappingStore: ExternalMemoryMappingStore;
 
-  constructor(private readonly options: Mem0RestClientOptions) {
+  constructor(private readonly options: Mem0OssClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     const runtimeFetch = (globalThis as unknown as { fetch?: Mem0HttpFetch }).fetch;
     const fetcher = options.fetch ?? runtimeFetch;
@@ -99,7 +97,6 @@ export class Mem0RestClient implements ExternalMemoryClient {
     this.fetcher = fetcher;
     this.providerId = options.providerId ?? 'memory.provider.mem0.rest';
     this.now = options.now ?? (() => new Date());
-    this.deployment = options.deployment ?? 'self_hosted';
     this.mappingStore = options.mappingStore ?? new InMemoryExternalMemoryMappingStore();
   }
 
@@ -354,7 +351,7 @@ export class Mem0RestClient implements ExternalMemoryClient {
         status: 'healthy',
         checkedAt: this.now().toISOString(),
         latencyMs: Math.max(0, this.now().getTime() - startedAt),
-        details: { transport: 'rest', deployment: this.deployment },
+        details: { transport: 'rest', deployment: 'self_hosted', protocol: 'mem0-oss-rest' },
       };
     } catch (error) {
       return {
@@ -494,6 +491,18 @@ export class Mem0RestClient implements ExternalMemoryClient {
         providerExternalId: externalId,
       },
     };
+  }
+}
+
+/** @deprecated Use Mem0OssClient. Platform v3 is represented by Mem0PlatformClient. */
+export type Mem0RestClientOptions = Mem0OssClientOptions & {
+  deployment?: 'self_hosted';
+};
+
+/** @deprecated Transitional OSS-only alias. It never represents Mem0 Platform. */
+export class Mem0RestClient extends Mem0OssClient {
+  constructor(options: Mem0RestClientOptions) {
+    super(options);
   }
 }
 
