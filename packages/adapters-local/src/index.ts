@@ -38,6 +38,7 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
+import { loadSqlite, type SqliteDatabaseSync, type SqliteModule } from './sqlite-driver';
 
 export * from './workspace-runtime';
 export * from './local-process-output-collector';
@@ -52,6 +53,8 @@ export * from './local-process-result';
 export * from './local-process-execution-provider';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
+export * from './runtime-event-store';
+export * from './sqlite-driver';
 export * from './artifact-content-io';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
@@ -65,19 +68,6 @@ export {
   type InMemoryExecutionArtifactStoreOptions,
   type InMemoryExecutionArtifactStoreStats,
 } from './in-memory-execution-artifact-store';
-
-interface SqliteDatabaseSync {
-  exec(sql: string): void;
-  prepare(sql: string): {
-    get(...params: unknown[]): Record<string, unknown> | undefined;
-    all(...params: unknown[]): Array<Record<string, unknown>>;
-    run(...params: unknown[]): unknown;
-  };
-}
-
-interface SqliteModule {
-  DatabaseSync: new (filename: string) => SqliteDatabaseSync;
-}
 
 export interface LocalAdapterProfile {
   id: string;
@@ -985,25 +975,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
   }
   if (aNorm === 0 || bNorm === 0) return 0;
   return dot / Math.sqrt(aNorm * bNorm);
-}
-
-function loadSqlite(required = false): SqliteModule | null {
-  try {
-    return require('node:sqlite') as SqliteModule;
-  } catch (nodeSqliteError) {
-    try {
-      const BetterSqliteDatabase = require('better-sqlite3') as new (
-        filename: string
-      ) => SqliteDatabaseSync;
-      return { DatabaseSync: BetterSqliteDatabase };
-    } catch (betterSqliteError) {
-      if (!required) return null;
-      throw new Error(
-        'SQLite local adapters require node:sqlite or better-sqlite3 when mode is sqlite.',
-        { cause: { nodeSqliteError, betterSqliteError } }
-      );
-    }
-  }
 }
 
 function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): FrameworkEvent[] {

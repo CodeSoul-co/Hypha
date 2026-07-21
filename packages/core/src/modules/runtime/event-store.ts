@@ -207,9 +207,8 @@ export class InMemoryDurableEventStore implements DurableEventStore {
         });
       }
       batchIds.add(event.id);
-      const validation = await this.schemaRegistry.validate(event);
-      if (!validation.valid) schemaInvalid(event, validation.issues);
     }
+    await validateEventAppendSchemas(this.schemaRegistry, request);
 
     const recordedAt = this.now();
     if (Number.isNaN(Date.parse(recordedAt))) {
@@ -299,6 +298,17 @@ export function hashEventAppendRequest(request: EventAppendRequest): string {
       ? {}
       : { transactionGroupId: request.transactionGroupId }),
   });
+}
+
+export async function validateEventAppendSchemas(
+  registry: EventSchemaRegistry,
+  request: EventAppendRequest
+): Promise<void> {
+  validateEventAppendRequest(request);
+  for (const event of request.events) {
+    const validation = await registry.validate(event);
+    if (!validation.valid) schemaInvalid(event, validation.issues);
+  }
 }
 
 export function createPersistedEventBatch(
