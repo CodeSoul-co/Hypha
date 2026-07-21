@@ -1,7 +1,17 @@
 import { IMessage } from '../../types';
 
 // LLM Provider types
-export type LLMProvider = 'anthropic' | 'openai' | 'google' | 'ollama' | 'deepseek' | 'kimi' | 'siliconflow' | 'groq' | 'together' | 'perplexity';
+export type LLMProvider =
+  | 'anthropic'
+  | 'openai'
+  | 'google'
+  | 'ollama'
+  | 'deepseek'
+  | 'kimi'
+  | 'siliconflow'
+  | 'groq'
+  | 'together'
+  | 'perplexity';
 
 // Message format
 export interface LLMMessage {
@@ -93,10 +103,12 @@ export interface ToolCall {
 
 // Stream chunk
 export interface StreamChunk {
-  type: 'content' | 'tool_call' | 'tool_result' | 'error' | 'done';
+  type: 'content' | 'tool_call' | 'tool_result' | 'waiting_human' | 'error' | 'done';
   content?: string;
   toolCall?: ToolCall;
   error?: string;
+  runId?: string;
+  approval?: Record<string, unknown>;
   finishReason?: string;
   usage?: {
     inputTokens: number;
@@ -137,7 +149,11 @@ export interface ILLMAdapter {
   streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk>;
 
   // Tool calling
-  createToolCall(messages: LLMMessage[], tools: ToolDefinition[], options?: ChatOptions): Promise<ChatResponse>;
+  createToolCall(
+    messages: LLMMessage[],
+    tools: ToolDefinition[],
+    options?: ChatOptions
+  ): Promise<ChatResponse>;
 
   // Model management
   listModels(): Promise<ModelInfo[]>;

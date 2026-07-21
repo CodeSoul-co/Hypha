@@ -119,6 +119,22 @@ interface RuntimeRunContext {
   snapshot: FSMSnapshot;
 }
 
+export class HumanReviewRequiredError extends Error {
+  readonly code = 'HUMAN_REVIEW_REQUIRED';
+
+  constructor(
+    readonly runId: string,
+    readonly approval: Record<string, unknown>
+  ) {
+    super(`Run ${runId} is waiting for human review.`);
+    this.name = 'HumanReviewRequiredError';
+  }
+}
+
+export function isHumanReviewRequiredError(error: unknown): error is HumanReviewRequiredError {
+  return error instanceof HumanReviewRequiredError;
+}
+
 export interface EventRunHandle {
   runId: string;
   sessionId: string;
@@ -1043,6 +1059,27 @@ class EventRuntimeService {
           : asRecord(input.agentSpec?.metadata)?.prompt,
       },
     });
+    if (result.status === 'human_review_required') {
+      const approval = {
+        finalAction: safeSerialize(result.finalAction),
+        stepId: input.stepId,
+        agentId: agent.id,
+        chatCheckpoint: safeSerialize({
+          stepId: input.stepId,
+          modelAlias: input.modelAlias,
+          messages: input.messages,
+          options: input.options,
+          reasoning: input.reasoning,
+          cachePolicy: input.cachePolicy,
+          agentSpec: input.agentSpec,
+          userId,
+          sessionId,
+        }),
+      };
+      await this.advanceToHumanReview(input.runId);
+      await this.waitForHumanReview(input.runId, approval);
+      throw new HumanReviewRequiredError(input.runId, approval);
+    }
     if (result.status !== 'completed') {
       throw new Error(
         result.error instanceof Error ? result.error.message : `ReAct chat failed: ${result.status}`
@@ -1055,6 +1092,28 @@ class EventRuntimeService {
   }
 
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
+    try {
+      const response = await this.runReActChat(input);
+      if (response.content) yield { type: 'content', content: response.content };
+      yield {
+        type: 'done',
+        finishReason: response.finishReason,
+        usage: response.usage,
+      };
+    } catch (error) {
+      if (isHumanReviewRequiredError(error)) {
+        yield {
+          type: 'waiting_human',
+          runId: error.runId,
+          approval: error.approval,
+        };
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async *legacyStreamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
     const runContext = this.runs.get(input.runId);
     const agent = await this.resolveChatAgent(
@@ -1287,8 +1346,9 @@ class EventRuntimeService {
     toolId: string;
     toolSpec?: Partial<ToolSpec>;
     params: unknown;
+    invocationId?: string;
   }): Promise<ToolCallResult<TOutput>> {
-    const invocationId = `tool-invocation:${generateId()}`;
+    const invocationId = input.invocationId ?? `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
     const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
     const result = await this.toolRunner.run({
@@ -1347,7 +1407,7 @@ class EventRuntimeService {
     if (invocation) this.registerManagedTool(invocation.toolId);
     const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
     if (invocation && result.status === 'completed') {
-      await this.completeApprovedToolRun(invocation, result);
+      await this.resumeApprovedRun(invocation, result);
     }
     return result;
   }
@@ -1383,6 +1443,146 @@ class EventRuntimeService {
       tool: invocation.toolId,
       invocationId: invocation.id,
       output: result.output,
+    });
+  }
+
+  private async resumeApprovedRun(
+    invocation: ToolInvocationRecord,
+    result: ToolCallResult
+  ): Promise<void> {
+    const runId = invocation.scope?.runId ?? invocation.request.context.runId;
+    await this.restoreRunContext(runId);
+    const checkpoint = await this.latestChatCheckpoint(runId);
+    if (!checkpoint) {
+      await this.completeApprovedToolRun(invocation, result);
+      return;
+    }
+    const run = this.requireRun(runId);
+    if (run.snapshot.currentState === 'HumanReview') {
+      await this.transition(runId, 'ObservationRecorded', {
+        tool: invocation.toolId,
+        invocationId: invocation.id,
+      });
+    }
+    const messages = Array.isArray(checkpoint.messages)
+      ? (checkpoint.messages as LLMMessage[])
+      : [];
+    const toolCallId = invocation.request.context.invocationId;
+    const resumedMessages: LLMMessage[] = [
+      ...messages,
+      {
+        role: 'assistant',
+        content: JSON.stringify({
+          type: 'tool_call',
+          id: toolCallId,
+          tool: invocation.toolId,
+          input: invocation.request.input,
+        }),
+      },
+      {
+        role: 'assistant',
+        content: JSON.stringify({
+          type: 'tool_result',
+          toolCallId,
+          tool: invocation.toolId,
+          invocationId: invocation.id,
+          status: result.status,
+          output: result.output,
+          artifactRefs: result.artifactRefs,
+          observationRefs: result.observationRefs,
+        }),
+      },
+    ];
+    try {
+      const response = await this.runReActChat({
+        runId,
+        stepId: `${stringValue(checkpoint.stepId) ?? 'reason'}:resume:${invocation.id}`,
+        modelAlias: stringValue(checkpoint.modelAlias) ?? this.resolveChatModel().model,
+        messages: resumedMessages,
+        options: asRecord(checkpoint.options) as ChatOptions | undefined,
+        reasoning: asRecord(checkpoint.reasoning) as ReasoningOptions | undefined,
+        cachePolicy: asRecord(checkpoint.cachePolicy) as InferenceCachePolicy | undefined,
+        agentSpec: asRecord(checkpoint.agentSpec) as RuntimeAgentSpecInput | undefined,
+        userId: stringValue(checkpoint.userId) ?? run.userId,
+        sessionId: stringValue(checkpoint.sessionId) ?? run.clientSessionId,
+      });
+      if (this.requireRun(runId).snapshot.currentState === 'ObservationRecorded') {
+        await this.transition(runId, 'Verifying', { invocationId: invocation.id });
+        await this.transition(runId, 'MemorySync', { invocationId: invocation.id });
+      }
+      await this.completeRun(runId, {
+        messageId: response.id,
+        content: response.content,
+        usage: response.usage,
+        resumedFromInvocationId: invocation.id,
+      });
+    } catch (error) {
+      if (isHumanReviewRequiredError(error)) return;
+      await this.failRun(runId, error);
+      throw error;
+    }
+  }
+
+  private async latestChatCheckpoint(runId: string): Promise<Record<string, unknown> | undefined> {
+    const events = await this.runtime.listEvents(runId);
+    for (const event of [...events].reverse()) {
+      if (event.type !== 'run.waiting_human') continue;
+      const checkpoint = asRecord(asRecord(event.payload)?.chatCheckpoint);
+      if (checkpoint) return checkpoint;
+    }
+    return undefined;
+  }
+
+  private async advanceToHumanReview(runId: string): Promise<void> {
+    const run = this.requireRun(runId);
+    const ordered = ['Reasoning', 'ActionSelected', 'PolicyChecked', 'Acting'];
+    const index = ordered.indexOf(run.snapshot.currentState);
+    if (index >= 0) {
+      for (const state of ordered.slice(index + 1)) await this.transition(runId, state);
+    }
+    if (this.requireRun(runId).snapshot.currentState !== 'HumanReview') {
+      await this.transition(runId, 'HumanReview', { reason: 'tool-human-review' });
+    }
+  }
+
+  private async restoreRunContext(runId: string): Promise<void> {
+    if (this.runs.has(runId)) return;
+    const events = await this.runtime.listEvents(runId);
+    if (!events.length) throw new Error(`Runtime run not found: ${runId}`);
+    const first = events[0];
+    const projection = await this.runtime.projectRun(runId);
+    const enteredStates = events
+      .filter((event) => event.type === 'fsm.state.entered')
+      .map((event) => stringValue(asRecord(event.payload)?.stateId))
+      .filter((state): state is string => Boolean(state));
+    const currentState = enteredStates.at(-1) ?? this.defaultFsm.initialState;
+    const runtimeSessionId = first.sessionId ?? projection?.sessionId;
+    const userId = first.userId ?? projection?.userId;
+    if (!runtimeSessionId || !userId)
+      throw new Error(`Runtime run ${runId} has incomplete identity evidence.`);
+    const clientSessionId =
+      stringValue(first.metadata?.clientSessionId) ??
+      runtimeSessionId.replace(/^user:[^:]+:session:/, '');
+    this.runs.set(runId, {
+      runId,
+      userId,
+      sessionId: runtimeSessionId,
+      clientSessionId,
+      domainPackId: stringValue(first.metadata?.domainPackId) ?? this.defaultDomainPack.id,
+      fsm: this.defaultFsm,
+      snapshot: {
+        processId: this.defaultFsm.id,
+        runId,
+        currentState,
+        statePath: enteredStates.length ? enteredStates : [currentState],
+        status:
+          currentState === 'Completed'
+            ? 'completed'
+            : currentState === 'Failed'
+              ? 'failed'
+              : 'running',
+        updatedAt: events.at(-1)?.timestamp ?? new Date().toISOString(),
+      },
     });
   }
 
@@ -1507,6 +1707,7 @@ class EventRuntimeService {
             sessionId,
             toolId: descriptor?.id ?? request.toolId,
             params,
+            invocationId: request.context.invocationId,
             toolSpec: {
               name: descriptor?.name ?? request.toolId,
               description: descriptor?.description ?? `ReAct tool ${request.toolId}`,

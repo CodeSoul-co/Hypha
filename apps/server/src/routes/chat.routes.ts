@@ -6,7 +6,7 @@ import { getPermanentMemory } from '../core/memory/PermanentMemory';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
-import { getEventRuntime } from '../services/EventRuntime';
+import { getEventRuntime, isHumanReviewRequiredError } from '../services/EventRuntime';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
@@ -426,6 +426,18 @@ router.post(
         },
       });
     } catch (error) {
+      if (runId && isHumanReviewRequiredError(error)) {
+        res.status(202).json({
+          success: true,
+          data: {
+            sessionId: session,
+            runId,
+            status: 'waiting_human',
+            approval: error.approval,
+          },
+        });
+        return;
+      }
       if (runId) {
         await runtime
           .failRun(runId, error)
@@ -691,6 +703,16 @@ router.post('/stream', async (req: Request, res: Response) => {
           contentLength: fullContent.length,
           tokens: chunk.usage?.totalTokens || 0,
         });
+      } else if (chunk.type === 'waiting_human') {
+        completed = true;
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'waiting_human',
+            sessionId: session,
+            runId: chunk.runId ?? runId,
+            approval: chunk.approval,
+          })}\n\n`
+        );
       } else if (chunk.type === 'error') {
         // Bug 1 Fix: LLM error also sent as SSE
         completed = true;

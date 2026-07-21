@@ -1001,6 +1001,11 @@ function streamChunkToModelStreamEvent(chunk: StreamChunk): ModelStreamEvent {
       return { type: 'error', error: chunk.error };
     case 'tool_result':
       return { type: 'delta', content: chunk.content ?? '' };
+    case 'waiting_human':
+      return {
+        type: 'error',
+        error: `Run ${chunk.runId ?? 'unknown'} is waiting for human review.`,
+      };
   }
 }
 
