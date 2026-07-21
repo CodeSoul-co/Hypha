@@ -1,8 +1,24 @@
-import type { EventRuntime } from '@hypha/core';
+import type {
+  EventRuntime,
+  ProjectionEngine,
+  ProjectionStore,
+  RunLeaseStore,
+  RuntimeCheckpointStore,
+  RuntimeOrchestrationProjection,
+  StateExecutionClaimStore,
+} from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
 
-export interface RuntimeComposition {
+export interface RuntimeCompositionDependencies {
   events: EventRuntime;
+  projections: ProjectionEngine;
+  projectionStore: ProjectionStore<RuntimeOrchestrationProjection>;
+  checkpoints: RuntimeCheckpointStore;
+  runLeases: RunLeaseStore;
+  stateClaims: StateExecutionClaimStore;
+}
+
+export interface RuntimeComposition extends RuntimeCompositionDependencies {
   runManager: RunManager;
   fsmDriver: FencedBoundedFSMDriver;
   reactRunner: HarnessedReActFSMRunner;
@@ -10,24 +26,26 @@ export interface RuntimeComposition {
 
 export interface RuntimeCompositionFactories {
   createRunManager(input: { events: EventRuntime }): RunManager;
-  createFSMDriver(input: { events: EventRuntime; runManager: RunManager }): FencedBoundedFSMDriver;
-  createReActRunner(input: {
-    events: EventRuntime;
-    runManager: RunManager;
-    fsmDriver: FencedBoundedFSMDriver;
-  }): HarnessedReActFSMRunner;
+  createFSMDriver(
+    input: RuntimeCompositionDependencies & { runManager: RunManager }
+  ): FencedBoundedFSMDriver;
+  createReActRunner(
+    input: RuntimeCompositionDependencies & {
+      runManager: RunManager;
+      fsmDriver: FencedBoundedFSMDriver;
+    }
+  ): HarnessedReActFSMRunner;
 }
 
-export interface RuntimeCompositionRootOptions {
-  events: EventRuntime;
+export interface RuntimeCompositionRootOptions extends RuntimeCompositionDependencies {
   factories: RuntimeCompositionFactories;
 }
 
 /**
  * Owns construction of the canonical server runtime graph.
  *
- * Factories receive the same durable EventRuntime instance explicitly so a
- * component cannot silently become authoritative over a second event source.
+ * Factories receive the same durable Event, Projection, Checkpoint, Lease, and
+ * Claim dependencies so no component can silently create a second authority.
  */
 export class RuntimeCompositionRoot {
   private composition?: Readonly<RuntimeComposition>;
@@ -37,19 +55,28 @@ export class RuntimeCompositionRoot {
   compose(): Readonly<RuntimeComposition> {
     if (this.composition) return this.composition;
 
-    const { events, factories } = this.options;
+    const { events, projections, projectionStore, checkpoints, runLeases, stateClaims, factories } =
+      this.options;
+    const dependencies = {
+      events,
+      projections,
+      projectionStore,
+      checkpoints,
+      runLeases,
+      stateClaims,
+    };
     const runManager = requiredComponent('RunManager', factories.createRunManager({ events }));
     const fsmDriver = requiredComponent(
       'FencedBoundedFSMDriver',
-      factories.createFSMDriver({ events, runManager })
+      factories.createFSMDriver({ ...dependencies, runManager })
     );
     const reactRunner = requiredComponent(
       'HarnessedReActFSMRunner',
-      factories.createReActRunner({ events, runManager, fsmDriver })
+      factories.createReActRunner({ ...dependencies, runManager, fsmDriver })
     );
 
     this.composition = Object.freeze({
-      events,
+      ...dependencies,
       runManager,
       fsmDriver,
       reactRunner,

@@ -85,7 +85,7 @@ export class SQLiteRunLeaseStore implements RunLeaseStore {
         revisionHighWater: 0,
       };
       const lease = createLease(validated, slot);
-      slot.active = structuredClone(lease);
+      slot.active = lease;
       slot.fencingTokenHighWater = lease.fencingToken;
       slot.revisionHighWater = lease.revision;
       this.writeSlot(scopeKey, scope, slot);
@@ -127,7 +127,7 @@ export class SQLiteRunLeaseStore implements RunLeaseStore {
         revisionHighWater: 0,
       };
       const lease = createLease(validated, slot);
-      slot.active = structuredClone(lease);
+      slot.active = lease;
       slot.fencingTokenHighWater = lease.fencingToken;
       slot.revisionHighWater = lease.revision;
       this.writeSlot(scopeKey, scope, slot);
