@@ -48,6 +48,13 @@ export function projectRuntimeRunContexts(events: FrameworkEvent[]): RuntimeRunC
   return contexts;
 }
 
+export function projectRuntimeRunContext(
+  events: FrameworkEvent[],
+  runId: string
+): RuntimeRunContext | null {
+  return projectRuntimeRunContexts(events).find((context) => context.runId === runId) ?? null;
+}
+
 function parseContext(value: unknown, created: FrameworkEvent): RuntimeRunContext {
   const candidate = record(value);
   const fsm = candidate?.fsm as FSMProcessSpec | undefined;

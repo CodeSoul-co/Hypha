@@ -1,6 +1,7 @@
 import { createFrameworkEvent } from '@hypha/core';
 import type { FSMProcessSpec, FSMSnapshot } from '@hypha/fsm';
 import {
+  projectRuntimeRunContext,
   projectRuntimeRunContexts,
   runtimeRunContextMetadata,
   type RuntimeRunContext,
@@ -82,6 +83,22 @@ describe('projectRuntimeRunContexts', () => {
         }),
       ])
     ).toEqual([]);
+  });
+
+  it('selects one Run context without relying on process-local state', () => {
+    const created = createFrameworkEvent({
+      id: 'run-1:created',
+      type: 'run.created',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      timestamp: initial.updatedAt,
+      payload: { runId: context.runId },
+      metadata: runtimeRunContextMetadata(context),
+    });
+
+    expect(projectRuntimeRunContext([created], 'run-1')).toEqual(context);
+    expect(projectRuntimeRunContext([created], 'missing-run')).toBeNull();
   });
 
   it('fails closed when a persisted snapshot does not belong to the Run', () => {
