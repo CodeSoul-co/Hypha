@@ -888,6 +888,7 @@ export * from './memory-events';
 export * from './context-contracts';
 export * from './context-schema';
 export * from './context-builder';
+export * from './context-gateway';
 export * from './context-source-resolver';
 export * from './context-compaction';
 export * from './retrieval';
