@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
-import { authMiddleware, adminOnly } from '../middleware/auth';
+import { authenticatedToolAuthority, authMiddleware, adminOnly } from '../middleware/auth';
 import { getToolManager } from '../core/tools/ToolManager';
 import { HTTP_STATUS } from '../constants';
 import { getEventRuntime } from '../services/EventRuntime';
@@ -122,6 +122,7 @@ router.post(
 
     const toolManager = getToolManager();
     const runtime = getEventRuntime();
+    const toolAuthority = authenticatedToolAuthority(req);
     const toolParams =
       params && typeof params === 'object' ? (params as Record<string, unknown>) : {};
     const runtimeRun = await runtime.startRun({
@@ -147,6 +148,8 @@ router.post(
         sessionId: runtimeRun.sessionId,
         toolId: descriptor?.id ?? name,
         params: toolParams,
+        principal: toolAuthority.principal,
+        principalHasAllPermissions: toolAuthority.grantsAllPermissions,
         toolSpec: {
           name: descriptor?.name ?? name,
           description: descriptor?.description ?? `Server tool ${name}`,

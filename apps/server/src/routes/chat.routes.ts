@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
-import { authMiddleware, apiKeyMiddleware } from '../middleware/auth';
+import { authenticatedToolAuthority, authMiddleware, apiKeyMiddleware } from '../middleware/auth';
 import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../core/memory/PermanentMemory';
 import { getSkillManager } from '../core/skills/SkillManager';
@@ -107,6 +107,7 @@ router.post(
     }
 
     const session = sessionId || generateSessionId();
+    const toolAuthority = authenticatedToolAuthority(req);
     const lock = acquireSessionLock(session, userId);
     await lock.wait();
     const runtime = getEventRuntime();
@@ -273,6 +274,8 @@ router.post(
         sessionId: session,
         modelAlias: resolvedChatModel.model,
         messages: llmMessages,
+        toolPrincipal: toolAuthority.principal,
+        toolPrincipalHasAllPermissions: toolAuthority.grantsAllPermissions,
         options: {
           model,
           tools: tools.length > 0 ? tools : undefined,
@@ -489,6 +492,7 @@ router.post('/stream', async (req: Request, res: Response) => {
   }
 
   const session = sessionId || generateSessionId();
+  const toolAuthority = authenticatedToolAuthority(req);
 
   // Bug 2 Fix: Acquire session lock to prevent race conditions
   const lock = acquireSessionLock(session, userId);
@@ -587,6 +591,8 @@ router.post('/stream', async (req: Request, res: Response) => {
         promptRefs: parseAgentPromptRefs(promptRefs),
       },
       messages: llmMessages,
+      toolPrincipal: toolAuthority.principal,
+      toolPrincipalHasAllPermissions: toolAuthority.grantsAllPermissions,
       options: { model },
       cachePolicy,
       reasoning: parseReasoningOptions(reasoning),

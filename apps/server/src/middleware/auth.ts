@@ -5,11 +5,52 @@ import { ApiKeyModel } from '../models/ApiKey';
 import { authConfig } from '../config';
 import { logger } from '../utils/logger';
 import { HTTP_STATUS } from '../constants';
+import type { ToolPrincipal } from '@hypha/tools';
 
 export interface AuthPayload {
   userId: string;
   email: string;
   isAdmin: boolean;
+}
+
+export interface AuthenticatedToolAuthority {
+  principal: ToolPrincipal;
+  grantsAllPermissions: boolean;
+}
+
+export function authenticatedToolAuthority(req: Request): AuthenticatedToolAuthority {
+  if (req.apiKey) {
+    const permissions = normalizedPermissions(req.apiKey.permissions);
+    return {
+      principal: {
+        id: req.apiKey.keyId,
+        principalId: req.apiKey.keyId,
+        type: 'service',
+        userId: req.apiKey.userId,
+        delegatedBy: req.apiKey.userId,
+        permissionScopes: permissions.filter((permission) => permission !== '*'),
+        authenticationContext: { method: 'api_key' },
+      },
+      grantsAllPermissions: permissions.includes('*'),
+    };
+  }
+
+  if (req.user) {
+    return {
+      principal: {
+        id: req.user.userId,
+        principalId: req.user.userId,
+        type: 'user',
+        userId: req.user.userId,
+        permissionScopes: [],
+        ...(req.user.isAdmin ? { roles: ['admin'] } : {}),
+        authenticationContext: { method: 'jwt' },
+      },
+      grantsAllPermissions: req.user.isAdmin,
+    };
+  }
+
+  throw new Error('Authenticated Tool authority requires a verified principal.');
 }
 
 // Extend Express Request
@@ -185,7 +226,7 @@ export function requirePermission(...permissions: string[]) {
     }
 
     if (req.apiKey) {
-      const hasPermission = permissions.some(p => req.apiKey!.permissions.includes(p));
+      const hasPermission = permissions.some((p) => req.apiKey!.permissions.includes(p));
       if (!hasPermission) {
         res.status(HTTP_STATUS.FORBIDDEN).json({
           success: false,
@@ -203,25 +244,26 @@ export function requirePermission(...permissions: string[]) {
 }
 
 // Generate JWT token
-export function generateToken(user: { id?: string; _id?: unknown; email: string; isAdmin: boolean }): string {
+export function generateToken(user: {
+  id?: string;
+  _id?: unknown;
+  email: string;
+  isAdmin: boolean;
+}): string {
   const userId = user.id ?? String(user._id);
   const config = authConfig();
-  return jwt.sign(
-    { userId, email: user.email, isAdmin: user.isAdmin },
-    config.jwt.secret,
-    { expiresIn: config.jwt.expiry }
-  );
+  return jwt.sign({ userId, email: user.email, isAdmin: user.isAdmin }, config.jwt.secret, {
+    expiresIn: config.jwt.expiry,
+  });
 }
 
 // Generate refresh token
 export function generateRefreshToken(user: { id?: string; _id?: unknown }): string {
   const userId = user.id ?? String(user._id);
   const config = authConfig();
-  return jwt.sign(
-    { userId, type: 'refresh' },
-    config.jwt.secret,
-    { expiresIn: config.jwt.refreshExpiry }
-  );
+  return jwt.sign({ userId, type: 'refresh' }, config.jwt.secret, {
+    expiresIn: config.jwt.refreshExpiry,
+  });
 }
 
 // Verify refresh token
@@ -240,4 +282,10 @@ export function verifyRefreshToken(token: string): { userId: string } | null {
   } catch {
     return null;
   }
+}
+
+function normalizedPermissions(permissions: readonly string[]): string[] {
+  return Array.from(
+    new Set(permissions.map((permission) => permission.trim()).filter(Boolean))
+  ).sort();
 }

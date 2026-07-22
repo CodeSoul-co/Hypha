@@ -56,6 +56,7 @@ import {
 } from './contracts';
 
 export * from './contracts';
+export * from './authority';
 export * from './common-tools';
 export * from './media';
 export * from './workspace';
