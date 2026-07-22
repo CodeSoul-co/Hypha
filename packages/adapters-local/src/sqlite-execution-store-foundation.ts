@@ -5,13 +5,21 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ExecutionLeaseAcquireRequest,
   ProviderHealth,
 } from '@hypha/core';
 import {
   validateExecutionRecord,
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
+  validateExecutionLeaseAcquireRequest,
 } from '@hypha/core';
+import {
+  migrateSQLiteExecutionStore,
+  SQLITE_EXECUTION_STORE_SCHEMA_VERSION,
+  SQLiteExecutionStoreSchemaVersionError,
+  type SQLiteExecutionStoreSchemaDatabase,
+} from './sqlite-execution-store-schema';
 
 interface SQLiteRunResult {
   changes: number | bigint;
@@ -22,7 +30,7 @@ interface SQLiteStatement {
   run(...params: unknown[]): SQLiteRunResult;
 }
 
-interface SQLiteDatabase {
+interface SQLiteDatabase extends SQLiteExecutionStoreSchemaDatabase {
   exec(sql: string): void;
   prepare(sql: string): SQLiteStatement;
   close(): void;
@@ -40,6 +48,8 @@ export type SQLiteExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_NOT_FOUND'
   | 'EXECUTION_STORE_REVISION_CONFLICT'
   | 'EXECUTION_STORE_FENCING_REJECTED'
+  | 'EXECUTION_STORE_LEASE_HELD'
+  | 'EXECUTION_STORE_LEASE_ID_CONFLICT'
   | 'EXECUTION_STORE_TERMINAL'
   | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT'
   | 'EXECUTION_STORE_UNSUPPORTED_SCHEMA';
@@ -68,7 +78,7 @@ export interface SQLiteExecutionStoreFoundationOptions {
  * complete ExecutionStore contract, including CAS and leases, is implemented.
  */
 export class SQLiteExecutionStoreFoundation {
-  static readonly schemaVersion = 2;
+  static readonly schemaVersion = SQLITE_EXECUTION_STORE_SCHEMA_VERSION;
   readonly filename: string;
   private readonly database: SQLiteDatabase;
   private readonly now: () => string;
@@ -87,7 +97,7 @@ export class SQLiteExecutionStoreFoundation {
       database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
       database.exec('PRAGMA journal_mode = WAL');
       database.exec('PRAGMA foreign_keys = ON');
-      migrate(database);
+      migrateSQLiteExecutionStore(database);
       this.database = database;
       if (process.platform !== 'win32') fs.chmodSync(this.filename, 0o600);
     } catch (error) {
@@ -97,6 +107,12 @@ export class SQLiteExecutionStoreFoundation {
         // Preserve the original initialization error.
       }
       if (error instanceof SQLiteExecutionStoreFoundationError) throw error;
+      if (error instanceof SQLiteExecutionStoreSchemaVersionError) {
+        throw storeError('EXECUTION_STORE_UNSUPPORTED_SCHEMA', error.message, {
+          current: error.current,
+          supported: error.supported,
+        });
+      }
       throw storeError(
         'EXECUTION_STORE_UNAVAILABLE',
         'Unable to open the SQLite Execution store.',
@@ -262,6 +278,157 @@ export class SQLiteExecutionStoreFoundation {
     });
   }
 
+  async acquireLease(input: ExecutionLeaseAcquireRequest): Promise<ExecutionRecord> {
+    this.assertOpen();
+    const request = validateExecutionLeaseAcquireRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    return this.writeOperation(() => {
+      if (request.idempotencyKey) {
+        const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
+        if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
+      }
+
+      const row = this.selectRecord(request.executionId);
+      if (!row) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const current = parseRecordRow(row);
+      if (current.revision !== request.expectedRevision) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
+        );
+      }
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw storeError('EXECUTION_STORE_TERMINAL', 'Terminal Execution records are immutable.', {
+          executionId: request.executionId,
+          status: current.status,
+        });
+      }
+      if (Date.parse(request.acquiredAt) < Date.parse(current.updatedAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease acquisition time cannot precede the current Execution revision.',
+          {
+            executionId: request.executionId,
+            acquiredAt: request.acquiredAt,
+            updatedAt: current.updatedAt,
+          }
+        );
+      }
+      if (current.lease && Date.parse(current.lease.expiresAt) > Date.parse(request.acquiredAt)) {
+        throw storeError('EXECUTION_STORE_LEASE_HELD', 'Execution lease is still active.', {
+          executionId: request.executionId,
+          leaseId: current.lease.id,
+          expiresAt: current.lease.expiresAt,
+        });
+      }
+      if (this.findLeaseHistory(request.requestedLeaseId)) {
+        throw storeError(
+          'EXECUTION_STORE_LEASE_ID_CONFLICT',
+          'Execution lease id has already been used.',
+          { executionId: request.executionId, leaseId: request.requestedLeaseId }
+        );
+      }
+
+      const previousFencingToken = nonNegativeInteger(
+        Number(row.last_fencing_token),
+        'lastFencingToken'
+      );
+      const fencingToken = previousFencingToken + 1;
+      if (!Number.isSafeInteger(fencingToken)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Execution fencing token cannot be incremented safely.',
+          { executionId: request.executionId, previousFencingToken }
+        );
+      }
+      const next = validateExecutionRecord({
+        ...current,
+        revision: current.revision + 1,
+        status: current.status === 'queued' ? 'starting' : current.status,
+        attempt: current.status === 'queued' ? current.attempt + 1 : current.attempt,
+        lease: {
+          id: request.requestedLeaseId,
+          executionId: request.executionId,
+          ownerId: request.ownerId,
+          fencingToken,
+          acquiredAt: request.acquiredAt,
+          heartbeatAt: request.acquiredAt,
+          expiresAt: leaseExpiry(request.acquiredAt, request.ttlMs),
+        },
+        updatedAt: request.acquiredAt,
+      });
+      const nextJson = JSON.stringify(next);
+
+      this.database
+        .prepare(
+          'INSERT INTO execution_lease_history ' +
+            '(lease_id, execution_id, fencing_token, owner_id, acquired_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .run(
+          request.requestedLeaseId,
+          request.executionId,
+          fencingToken,
+          request.ownerId,
+          request.acquiredAt
+        );
+      const update = this.database
+        .prepare(
+          'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
+            'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
+            'record_json = ?, last_fencing_token = ? ' +
+            'WHERE execution_id = ? AND revision = ? AND last_fencing_token = ?'
+        )
+        .run(
+          next.revision,
+          next.status,
+          next.request.tenantId ?? null,
+          next.request.userId,
+          next.request.workspaceId,
+          next.request.runId ?? null,
+          next.providerId,
+          next.createdAt,
+          next.updatedAt,
+          nextJson,
+          fencingToken,
+          request.executionId,
+          request.expectedRevision,
+          previousFencingToken
+        );
+      if (Number(update.changes) !== 1) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record changed during lease acquisition.',
+          { executionId: request.executionId, expectedRevision: request.expectedRevision }
+        );
+      }
+      if (request.idempotencyKey) {
+        this.database
+          .prepare(
+            'INSERT INTO execution_mutation_idempotency ' +
+              '(operation_id, idempotency_key, execution_id, request_hash, result_json) ' +
+              'VALUES (?, ?, ?, ?, ?)'
+          )
+          .run(
+            request.operationId,
+            request.idempotencyKey,
+            request.executionId,
+            requestHash,
+            nextJson
+          );
+      }
+      return structuredClone(next);
+    });
+  }
+
   async health(): Promise<ProviderHealth> {
     if (this.closed) {
       return {
@@ -301,7 +468,7 @@ export class SQLiteExecutionStoreFoundation {
     return this.database
       .prepare(
         'SELECT execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, ' +
-          'provider_id, created_at, updated_at, record_json ' +
+          'provider_id, created_at, updated_at, record_json, last_fencing_token ' +
           'FROM execution_records WHERE execution_id = ?'
       )
       .get(executionId);
@@ -329,6 +496,15 @@ export class SQLiteExecutionStoreFoundation {
           'WHERE operation_id = ? AND idempotency_key = ?'
       )
       .get(operationId, idempotencyKey);
+  }
+
+  private findLeaseHistory(leaseId: string): Record<string, unknown> | undefined {
+    return this.database
+      .prepare(
+        'SELECT lease_id, execution_id, fencing_token FROM execution_lease_history ' +
+          'WHERE lease_id = ?'
+      )
+      .get(leaseId);
   }
 
   private readOperation<T>(operation: () => T): T {
@@ -375,76 +551,6 @@ export class SQLiteExecutionStoreFoundation {
     if (this.closed) {
       throw storeError('EXECUTION_STORE_CLOSED', 'SQLite Execution store is closed.');
     }
-  }
-}
-
-const SCHEMA_V1_SQL = `
-CREATE TABLE IF NOT EXISTS execution_records (
-  execution_id TEXT PRIMARY KEY,
-  revision INTEGER NOT NULL CHECK (revision >= 0),
-  status TEXT NOT NULL,
-  tenant_id TEXT,
-  user_id TEXT NOT NULL,
-  workspace_id TEXT NOT NULL,
-  run_id TEXT,
-  provider_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  record_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS execution_records_owner_status_updated
-  ON execution_records (tenant_id, user_id, workspace_id, status, updated_at, execution_id);
-CREATE INDEX IF NOT EXISTS execution_records_provider_updated
-  ON execution_records (provider_id, updated_at, execution_id);
-CREATE TABLE IF NOT EXISTS execution_create_idempotency (
-  operation_id TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  execution_id TEXT NOT NULL,
-  record_hash TEXT NOT NULL,
-  PRIMARY KEY (operation_id, idempotency_key),
-  FOREIGN KEY (execution_id) REFERENCES execution_records(execution_id)
-);
-`;
-
-const SCHEMA_V2_SQL = `
-CREATE TABLE IF NOT EXISTS execution_mutation_idempotency (
-  operation_id TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  execution_id TEXT NOT NULL,
-  request_hash TEXT NOT NULL,
-  result_json TEXT NOT NULL,
-  PRIMARY KEY (operation_id, idempotency_key),
-  FOREIGN KEY (execution_id) REFERENCES execution_records(execution_id)
-);
-`;
-
-function migrate(database: SQLiteDatabase): void {
-  const current = Number(database.prepare('PRAGMA user_version').get()?.user_version ?? 0);
-  if (current === SQLiteExecutionStoreFoundation.schemaVersion) return;
-  if (
-    !Number.isInteger(current) ||
-    current < 0 ||
-    current > SQLiteExecutionStoreFoundation.schemaVersion
-  ) {
-    throw storeError(
-      'EXECUTION_STORE_UNSUPPORTED_SCHEMA',
-      'SQLite Execution store schema version is not supported.',
-      { current, supported: SQLiteExecutionStoreFoundation.schemaVersion }
-    );
-  }
-  database.exec('BEGIN IMMEDIATE');
-  try {
-    if (current === 0) database.exec(SCHEMA_V1_SQL);
-    if (current <= 1) database.exec(SCHEMA_V2_SQL);
-    database.exec(`PRAGMA user_version = ${SQLiteExecutionStoreFoundation.schemaVersion}`);
-    database.exec('COMMIT');
-  } catch (error) {
-    try {
-      database.exec('ROLLBACK');
-    } catch {
-      // Preserve the original migration error.
-    }
-    throw error;
   }
 }
 
@@ -522,6 +628,7 @@ const TERMINAL_STATUSES = new Set<ExecutionRecord['status']>([
 function parseRecordRow(row: Record<string, unknown>): ExecutionRecord {
   try {
     const record = validateExecutionRecord(JSON.parse(String(row.record_json)));
+    const lastFencingToken = nonNegativeInteger(Number(row.last_fencing_token), 'lastFencingToken');
     if (
       record.id !== String(row.execution_id) ||
       record.revision !== Number(row.revision) ||
@@ -532,7 +639,8 @@ function parseRecordRow(row: Record<string, unknown>): ExecutionRecord {
       (record.request.runId ?? null) !== nullableText(row.run_id) ||
       record.providerId !== String(row.provider_id) ||
       record.createdAt !== String(row.created_at) ||
-      record.updatedAt !== String(row.updated_at)
+      record.updatedAt !== String(row.updated_at) ||
+      (record.lease?.fencingToken ?? 0) > lastFencingToken
     ) {
       throw new Error('indexed columns do not match record JSON');
     }
@@ -603,6 +711,22 @@ function positiveInteger(value: number, name: string): number {
     throw new TypeError(`${name} must be a positive safe integer.`);
   }
   return value;
+}
+
+function nonNegativeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative safe integer.`);
+  }
+  return value;
+}
+
+function leaseExpiry(acquiredAt: string, ttlMs: number): string {
+  const expiry = Date.parse(acquiredAt) + ttlMs;
+  const date = new Date(expiry);
+  if (!Number.isSafeInteger(expiry) || Number.isNaN(date.getTime())) {
+    throw new TypeError('Lease expiry must be a safe timestamp.');
+  }
+  return date.toISOString();
 }
 
 function storeError(

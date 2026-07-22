@@ -5,9 +5,11 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ExecutionLeaseAcquireRequest,
 } from '@hypha/core';
 import {
   commandExecutionResultExample,
+  executionLeaseAcquireRequestExample,
   executionLeaseGuardExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
@@ -44,7 +46,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
       status: 'healthy',
       checkedAt: now(),
       message: 'SQLite Execution store is available.',
-      details: { schemaVersion: 2 },
+      details: { schemaVersion: 3 },
     });
     await store.close();
     await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
@@ -189,21 +191,159 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await reopened.close();
   });
 
-  it('migrates schema version one without losing existing records', async () => {
+  it('acquires a durable lease and replays the original result after restart', async () => {
     const root = await temporaryRoot();
     const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
-    const created = await store.create(createRequest());
-    const filename = store.filename;
+    await store.create(createRequest());
+    const request = acquireLeaseRequest();
+
+    const acquired = await store.acquireLease(request);
+    expect(acquired).toMatchObject({
+      revision: 1,
+      status: 'starting',
+      attempt: 1,
+      lease: {
+        id: request.requestedLeaseId,
+        ownerId: request.ownerId,
+        fencingToken: 1,
+        acquiredAt: request.acquiredAt,
+        heartbeatAt: request.acquiredAt,
+        expiresAt: '2026-07-16T00:00:30.000Z',
+      },
+    });
     await store.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(reopened.acquireLease(request)).resolves.toEqual(acquired);
+    await expect(reopened.get(request.executionId)).resolves.toEqual(acquired);
+    await expect(
+      reopened.acquireLease({ ...request, ownerId: 'worker.reused-key' })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT' });
+    await reopened.close();
+  });
+
+  it('rejects lease timestamps older than the persisted revision', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const queued = await store.create(createRequest());
+
+    await expect(
+      store.acquireLease({
+        ...acquireLeaseRequest(),
+        acquiredAt: '2026-07-15T23:59:59.999Z',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+    await expect(store.get(queued.id)).resolves.toEqual(queued);
+    await store.close();
+  });
+
+  it('rejects concurrent claims and advances fencing monotonically after expiry', async () => {
+    const root = await temporaryRoot();
+    const firstStore = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const secondStore = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await firstStore.create(createRequest());
+    const firstRequest = acquireLeaseRequest();
+    const competingRequest = {
+      ...acquireLeaseRequest(),
+      operationId: 'operation.lease.acquire.competing',
+      requestedLeaseId: 'lease.execution.example.competing',
+      ownerId: 'worker.competing',
+      idempotencyKey: 'lease-acquire:competing',
+    };
+
+    const claims = await Promise.allSettled([
+      firstStore.acquireLease(firstRequest),
+      secondStore.acquireLease(competingRequest),
+    ]);
+    expect(claims.filter((claim) => claim.status === 'fulfilled')).toHaveLength(1);
+    expect(claims.filter((claim) => claim.status === 'rejected')).toHaveLength(1);
+    if (claims[1].status === 'rejected') {
+      expect(claims[1].reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+    }
+
+    await expect(
+      secondStore.acquireLease({
+        ...competingRequest,
+        expectedRevision: 1,
+        acquiredAt: '2026-07-16T00:00:29.999Z',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_HELD' });
+    await expect(
+      secondStore.acquireLease({
+        ...competingRequest,
+        expectedRevision: 0,
+        acquiredAt: '2026-07-16T00:00:30.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+
+    const takeover = await secondStore.acquireLease({
+      ...competingRequest,
+      expectedRevision: 1,
+      acquiredAt: '2026-07-16T00:00:30.000Z',
+    });
+    expect(takeover).toMatchObject({
+      revision: 2,
+      status: 'starting',
+      attempt: 1,
+      lease: {
+        id: competingRequest.requestedLeaseId,
+        ownerId: competingRequest.ownerId,
+        fencingToken: 2,
+        expiresAt: '2026-07-16T00:01:00.000Z',
+      },
+    });
+    await firstStore.close();
+    await secondStore.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(
+      reopened.acquireLease({
+        ...acquireLeaseRequest(),
+        operationId: 'operation.lease.acquire.reused-id',
+        expectedRevision: 2,
+        acquiredAt: '2026-07-16T00:01:00.000Z',
+        idempotencyKey: 'lease-acquire:reused-id',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_ID_CONFLICT' });
+    const third = await reopened.acquireLease({
+      ...acquireLeaseRequest(),
+      operationId: 'operation.lease.acquire.third',
+      expectedRevision: 2,
+      requestedLeaseId: 'lease.execution.example.3',
+      ownerId: 'worker.third',
+      acquiredAt: '2026-07-16T00:01:00.000Z',
+      idempotencyKey: 'lease-acquire:third',
+    });
+    expect(third.lease?.fencingToken).toBe(3);
+    await reopened.close();
+  });
+
+  it('does not acquire leases for terminal records', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(createRequest());
+    await store.compareAndSet(terminalCompareAndSetRequest());
+
+    await expect(
+      store.acquireLease({ ...acquireLeaseRequest(), expectedRevision: 1 })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_TERMINAL' });
+    await store.close();
+  });
+
+  it('migrates schema version one without losing existing records', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const created = structuredClone(executionRecordCreateRequestExample.record);
     const database = openTestDatabase(filename);
-    database.exec('DROP TABLE execution_mutation_idempotency; PRAGMA user_version = 1');
+    createVersionOneDatabase(database);
+    insertLegacyRecord(database, created);
     database.close();
 
     const migrated = new SQLiteExecutionStoreFoundation({ rootPath: root });
     await expect(migrated.get(created.id)).resolves.toEqual(created);
     await expect(migrated.health()).resolves.toMatchObject({
       status: 'healthy',
-      details: { schemaVersion: 2 },
+      details: { schemaVersion: 3 },
     });
     await expect(
       migrated.compareAndSet(compareAndSetRequest(0, 'starting', 'cas:migrated'))
@@ -222,7 +362,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
     const filename = path.join(root, 'newer.sqlite');
     const database = openTestDatabase(filename);
-    database.exec('PRAGMA user_version = 3');
+    database.exec('PRAGMA user_version = 4');
     database.close();
     expect(
       () => new SQLiteExecutionStoreFoundation({ rootPath: root, filename: 'newer.sqlite' })
@@ -237,6 +377,10 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
 function createRequest(): ExecutionRecordCreateRequest {
   return structuredClone(executionRecordCreateRequestExample);
+}
+
+function acquireLeaseRequest(): ExecutionLeaseAcquireRequest {
+  return structuredClone(executionLeaseAcquireRequestExample);
 }
 
 function compareAndSetRequest(
@@ -285,7 +429,7 @@ function replacePersistedRecord(filename: string, record: ExecutionRecord): void
     .prepare(
       'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
         'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-        'record_json = ? WHERE execution_id = ?'
+        'record_json = ?, last_fencing_token = ? WHERE execution_id = ?'
     )
     .run(
       record.revision,
@@ -298,9 +442,62 @@ function replacePersistedRecord(filename: string, record: ExecutionRecord): void
       record.createdAt,
       record.updatedAt,
       JSON.stringify(record),
+      record.lease?.fencingToken ?? 0,
       record.id
     );
   database.close();
+}
+
+function createVersionOneDatabase(database: ReturnType<typeof openTestDatabase>): void {
+  database.exec(`
+    CREATE TABLE execution_records (
+      execution_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL CHECK (revision >= 0),
+      status TEXT NOT NULL,
+      tenant_id TEXT,
+      user_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      run_id TEXT,
+      provider_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      record_json TEXT NOT NULL
+    );
+    CREATE TABLE execution_create_idempotency (
+      operation_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      execution_id TEXT NOT NULL,
+      record_hash TEXT NOT NULL,
+      PRIMARY KEY (operation_id, idempotency_key),
+      FOREIGN KEY (execution_id) REFERENCES execution_records(execution_id)
+    );
+    PRAGMA user_version = 1;
+  `);
+}
+
+function insertLegacyRecord(
+  database: ReturnType<typeof openTestDatabase>,
+  record: ExecutionRecord
+): void {
+  database
+    .prepare(
+      'INSERT INTO execution_records ' +
+        '(execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, provider_id, ' +
+        'created_at, updated_at, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    .run(
+      record.id,
+      record.revision,
+      record.status,
+      record.request.tenantId ?? null,
+      record.request.userId,
+      record.request.workspaceId,
+      record.request.runId ?? null,
+      record.providerId,
+      record.createdAt,
+      record.updatedAt,
+      JSON.stringify(record)
+    );
 }
 
 async function temporaryRoot(): Promise<string> {
