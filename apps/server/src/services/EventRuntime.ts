@@ -86,6 +86,9 @@ import {
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
   type ToolCallResult,
+  type ToolAuthorityConstraint,
+  type ToolExecutionScope,
+  type ToolPrincipal,
   type ToolRunner,
   type ToolSpec,
   type ToolInvocationRecord,
@@ -123,6 +126,7 @@ import { logger } from '../utils/logger';
 import { createRuntimeBackbone, type RuntimeBackbone } from '../runtime/RuntimeBackbone';
 import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
 import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
+import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
 import {
   projectRuntimeRunContext,
   projectRuntimeRunContexts,
@@ -185,6 +189,9 @@ export interface ChatInferenceInput {
   reasoning?: ReasoningOptions;
   cachePolicy?: InferenceCachePolicy;
   agentSpec?: RuntimeAgentSpecInput;
+  toolPrincipal?: ToolPrincipal;
+  toolPrincipalHasAllPermissions?: boolean;
+  toolAuthorityConstraints?: readonly ToolAuthorityConstraint[];
   metadata?: Record<string, unknown>;
 }
 
@@ -1031,6 +1038,22 @@ class EventRuntimeService {
     const userId = input.userId ?? runContext.userId;
     const sessionId = input.sessionId ?? runContext.clientSessionId;
     const agent = await this.resolveChatAgent(input, userId, sessionId);
+    const toolPrincipal = input.toolPrincipal ?? runtimeUserPrincipal(userId);
+    const toolAuthorityConstraints = [
+      ...(input.toolAuthorityConstraints ?? []),
+      ...(agent.toolRefs?.length
+        ? [
+            {
+              policyRef: `agent:${agent.id}@${agent.version}`,
+              allowedToolIds: agent.toolRefs,
+            },
+          ]
+        : []),
+    ];
+    const toolExecutionScope = executionScopeFromConstraints(
+      toolAuthorityConstraints,
+      runContext.snapshot.currentState
+    );
     const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     let chatResponse: ChatResponse | undefined;
     const selectToolAction = (toolCall: NonNullable<ChatResponse['toolCalls']>[number]) => ({
@@ -1110,7 +1133,14 @@ class EventRuntimeService {
     };
     const runner = new ReActRunner(reactRuntime, {
       inference: reactInference,
-      toolRunner: this.createReActToolRunner(input.runId, userId, sessionId),
+      toolRunner: this.createReActToolRunner({
+        runId: input.runId,
+        userId,
+        sessionId,
+        principal: toolPrincipal,
+        principalHasAllPermissions: input.toolPrincipalHasAllPermissions,
+        authorityConstraints: toolAuthorityConstraints,
+      }),
       maxIterations: Math.max(
         4,
         agent.reasoning?.maxSteps ?? 0,
@@ -1137,6 +1167,8 @@ class EventRuntimeService {
       agent,
       messages: input.messages,
       memoryScope: { userId, sessionId },
+      toolPrincipal,
+      toolExecutionScope,
       metadata: {
         prompt: agent.promptResolution
           ? {
@@ -1160,6 +1192,9 @@ class EventRuntimeService {
           reasoning: input.reasoning,
           cachePolicy: input.cachePolicy,
           agentSpec: input.agentSpec,
+          toolPrincipal,
+          toolPrincipalHasAllPermissions: input.toolPrincipalHasAllPermissions === true,
+          toolAuthorityConstraints,
           userId,
           sessionId,
         }),
@@ -1431,10 +1466,47 @@ class EventRuntimeService {
     toolSpec?: Partial<ToolSpec>;
     params: unknown;
     invocationId?: string;
+    principal?: ToolPrincipal;
+    principalHasAllPermissions?: boolean;
+    authorityConstraints?: readonly ToolAuthorityConstraint[];
+    executionScope?: ToolExecutionScope;
   }): Promise<ToolCallResult<TOutput>> {
     const invocationId = input.invocationId ?? `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
-    const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
+    const run = await this.requireRun(input.runId);
+    if (run.userId !== input.userId) {
+      throw new Error(`Runtime Run ${input.runId} does not belong to user ${input.userId}.`);
+    }
+    const head = await this.canonicalRuntime().events.getStreamHead({
+      userId: run.userId,
+      runId: input.runId,
+    });
+    if (!head) throw new Error(`Runtime Event stream not found: ${input.runId}`);
+    const spec = this.toolRegistry.getSpec(toolId);
+    if (!spec) throw new Error(`Registered Tool contract not found: ${toolId}`);
+    const principal = input.principal ?? runtimeUserPrincipal(input.userId);
+    const principalUserId =
+      principal.userId ?? (principal.type === 'user' ? principal.id : undefined);
+    if (principalUserId && principalUserId !== run.userId) {
+      throw new Error(`Tool principal does not belong to Runtime Run ${input.runId}.`);
+    }
+    const authority = resolveRuntimeToolAuthority({
+      runId: input.runId,
+      runRevision: head.runRevision,
+      requestedToolId: toolId,
+      principal,
+      principalHasAllPermissions: input.principalHasAllPermissions,
+      requiredPermissionScopes: spec.governance.requiredPermissionScopes,
+      constraints: [
+        ...(input.authorityConstraints ?? []),
+        ...authorityConstraintsFromExecutionScope(input.executionScope),
+      ],
+      fsmState: input.executionScope?.fsmState ?? run.snapshot.currentState,
+    });
+    const contractSnapshotRef = await this.ensureRunToolSnapshot(
+      input.runId,
+      authority.policyRevision
+    );
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1445,12 +1517,8 @@ class EventRuntimeService {
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
-        principal: {
-          id: input.userId,
-          type: 'user',
-          userId: input.userId,
-          permissionScopes: ['*'],
-        },
+        principal: authority.principal,
+        executionScope: authority.executionScope,
       },
     });
     return result as ToolCallResult<TOutput>;
@@ -1587,6 +1655,11 @@ class EventRuntimeService {
         reasoning: asRecord(checkpoint.reasoning) as ReasoningOptions | undefined,
         cachePolicy: asRecord(checkpoint.cachePolicy) as InferenceCachePolicy | undefined,
         agentSpec: asRecord(checkpoint.agentSpec) as RuntimeAgentSpecInput | undefined,
+        toolPrincipal: asRecord(checkpoint.toolPrincipal) as ToolPrincipal | undefined,
+        toolPrincipalHasAllPermissions: checkpoint.toolPrincipalHasAllPermissions === true,
+        toolAuthorityConstraints: Array.isArray(checkpoint.toolAuthorityConstraints)
+          ? (checkpoint.toolAuthorityConstraints as ToolAuthorityConstraint[])
+          : undefined,
         userId: stringValue(checkpoint.userId) ?? run.userId,
         sessionId: stringValue(checkpoint.sessionId) ?? run.clientSessionId,
       });
@@ -1641,6 +1714,10 @@ class EventRuntimeService {
     toolId: string;
     toolSpec?: Partial<ToolSpec>;
     params: unknown;
+    principal?: ToolPrincipal;
+    principalHasAllPermissions?: boolean;
+    authorityConstraints?: readonly ToolAuthorityConstraint[];
+    executionScope?: ToolExecutionScope;
   }): Promise<TOutput> {
     const result = await this.runGovernedToolResult(input);
     if (result.status !== 'completed') {
@@ -1672,19 +1749,20 @@ class EventRuntimeService {
     return spec.id;
   }
 
-  private ensureRunToolSnapshot(runId: string): Promise<string> {
-    const active = this.runToolSnapshots.get(runId);
+  private ensureRunToolSnapshot(runId: string, policyRevision: string): Promise<string> {
+    const cacheKey = `${runId}\u0000${policyRevision}`;
+    const active = this.runToolSnapshots.get(cacheKey);
     if (active) return active;
-    const snapshot = this.createRunToolSnapshot(runId).catch((error) => {
-      this.runToolSnapshots.delete(runId);
+    const snapshot = this.createRunToolSnapshot(runId, policyRevision).catch((error) => {
+      this.runToolSnapshots.delete(cacheKey);
       throw error;
     });
-    this.runToolSnapshots.set(runId, snapshot);
+    this.runToolSnapshots.set(cacheKey, snapshot);
     return snapshot;
   }
 
-  private async createRunToolSnapshot(runId: string): Promise<string> {
-    const snapshotId = `tool-snapshot:${runId}`;
+  private async createRunToolSnapshot(runId: string, policyRevision: string): Promise<string> {
+    const snapshotId = `tool-snapshot:${runId}:${policyRevision.replace(/^sha256:/, '')}`;
     const persisted = await this.toolSnapshotStore.get(snapshotId);
     if (persisted) return persisted.id;
 
@@ -1717,6 +1795,7 @@ class EventRuntimeService {
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
+      policyRevision,
     };
     const snapshot: ToolContractSnapshot = {
       id: snapshotId,
@@ -1733,6 +1812,7 @@ class EventRuntimeService {
           snapshotId,
           snapshotHash: snapshot.snapshotHash,
           catalogRevision: snapshot.catalogRevision,
+          policyRevision: snapshot.policyRevision,
           toolCount: snapshot.toolContracts.length,
         },
       })
@@ -1740,7 +1820,14 @@ class EventRuntimeService {
     return snapshot.id;
   }
 
-  private createReActToolRunner(runId: string, userId: string, sessionId: string): ToolRunner {
+  private createReActToolRunner(input: {
+    runId: string;
+    userId: string;
+    sessionId: string;
+    principal: ToolPrincipal;
+    principalHasAllPermissions?: boolean;
+    authorityConstraints: readonly ToolAuthorityConstraint[];
+  }): ToolRunner {
     return {
       run: async (request) => {
         const toolManager = getToolManager();
@@ -1748,13 +1835,17 @@ class EventRuntimeService {
         const params = normalizeToolInput(request.input);
         try {
           const result = await this.runGovernedToolResult({
-            runId,
+            runId: input.runId,
             stepId: request.context.stepId,
-            userId,
-            sessionId,
+            userId: input.userId,
+            sessionId: input.sessionId,
             toolId: descriptor?.id ?? request.toolId,
             params,
             invocationId: request.context.invocationId,
+            principal: request.context.principal ?? input.principal,
+            principalHasAllPermissions: input.principalHasAllPermissions,
+            authorityConstraints: input.authorityConstraints,
+            executionScope: request.context.executionScope,
             toolSpec: {
               name: descriptor?.name ?? request.toolId,
               description: descriptor?.description ?? `ReAct tool ${request.toolId}`,
@@ -3323,6 +3414,57 @@ function asRecord(input: unknown): Record<string, unknown> | undefined {
   return input && typeof input === 'object' && !Array.isArray(input)
     ? (input as Record<string, unknown>)
     : undefined;
+}
+
+function runtimeUserPrincipal(userId: string): ToolPrincipal {
+  return {
+    id: userId,
+    principalId: userId,
+    type: 'user',
+    userId,
+    permissionScopes: [],
+  };
+}
+
+function executionScopeFromConstraints(
+  constraints: readonly ToolAuthorityConstraint[],
+  fsmState: string
+): ToolExecutionScope {
+  const allowedSets = constraints
+    .map((constraint) => constraint.allowedToolIds)
+    .filter((toolIds): toolIds is readonly string[] => toolIds !== undefined)
+    .map((toolIds) => Array.from(new Set(toolIds)).sort());
+  const allowedToolIds = allowedSets.reduce<string[] | undefined>(
+    (intersection, toolIds) =>
+      intersection === undefined
+        ? [...toolIds]
+        : intersection.filter((toolId) => toolIds.includes(toolId)),
+    undefined
+  );
+  const policyRefs = Array.from(
+    new Set(constraints.map((constraint) => constraint.policyRef))
+  ).sort();
+  return {
+    ...(allowedToolIds === undefined ? {} : { allowedToolIds }),
+    ...(policyRefs.length === 0 ? {} : { policyRefs }),
+    fsmState,
+  };
+}
+
+function authorityConstraintsFromExecutionScope(
+  scope: ToolExecutionScope | undefined
+): ToolAuthorityConstraint[] {
+  if (!scope) return [];
+  return [
+    {
+      policyRef: `execution-scope:${hashToolContract({
+        allowedToolIds: scope.allowedToolIds,
+        policyRefs: scope.policyRefs,
+        fsmState: scope.fsmState,
+      })}`,
+      allowedToolIds: scope.allowedToolIds,
+    },
+  ];
 }
 
 function inferToolSideEffect(
