@@ -66,6 +66,7 @@ export * from './artifact-manager-tool-port';
 export * from './legacy-tool-artifact-importer';
 export * from './legacy-tool-artifact-inventory';
 export * from './legacy-tool-artifact-migration-planner';
+export * from './legacy-tool-artifact-migration-executor';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
 export * from './local-artifact-manifest';
