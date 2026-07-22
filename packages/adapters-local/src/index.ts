@@ -62,6 +62,7 @@ export * from './docker-sandbox-lifecycle';
 export * from './docker-execution-provider';
 export * from './docker-execution-provider-factory';
 export * from './artifact-content-io';
+export * from './artifact-manager-tool-port';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
 export * from './local-artifact-manifest';
