@@ -19,6 +19,30 @@ describe('Memory Server migration acceptance', () => {
     ]);
   });
 
+  it('requires explicit Permanent Memory failure propagation and recovery evidence', () => {
+    expect(memoryServerMigrationAcceptance.permanentMemory).toMatchObject({
+      emptyResultCause: 'not_found_only',
+      providerFailureResult: 'normalized_error',
+      requiredFailureDisposition: 'retry_reconcile_quarantine_or_dlq',
+      safeDiagnosticsOnly: true,
+      failureEventRequired: true,
+    });
+    expect(memoryServerMigrationAcceptance.permanentMemory.requiredFailureCases).toEqual(
+      expect.arrayContaining([
+        'network_timeout',
+        'cursor_interrupted',
+        'write_outcome_unknown',
+        'retry_exhausted',
+        'unknown_provider_error',
+      ])
+    );
+    expect(memoryServerMigrationAcceptance.permanentMemory.recoveryDispositions).toEqual([
+      'retry',
+      'reconcile',
+      'quarantine',
+      'dlq',
+    ]);
+  });
   it('provides executable Redis retention edge cases for the Server owner', () => {
     expect(verifyRedisWorkingMemoryRetention([100, 100, 100])).toEqual([]);
     expect(verifyRedisWorkingMemoryRetention([100, 101, 100])).toEqual([

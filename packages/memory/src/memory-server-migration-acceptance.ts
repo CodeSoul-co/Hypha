@@ -32,7 +32,7 @@ export interface PermanentMemoryFailureObservation {
   notFoundReturnsEmpty: boolean;
   providerFailureResult: 'normalized_error' | 'empty_result' | 'success';
   normalizedFailure?: NormalizedMemoryError;
-  failureDisposition: 'retry_reconcile_or_quarantine' | 'empty_result' | 'none';
+  failureDisposition: 'retry_reconcile_quarantine_or_dlq' | 'empty_result' | 'none';
 }
 
 export interface MemoryMigrationObservationPort<T> {

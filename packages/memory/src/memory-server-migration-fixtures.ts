@@ -99,7 +99,7 @@ export const compliantMemoryServerSkeletonPorts: MemoryServerMigrationAcceptance
         notFoundReturnsEmpty: true,
         providerFailureResult: 'normalized_error',
         normalizedFailure: fixture.failure.expectedError,
-        failureDisposition: 'retry_reconcile_or_quarantine',
+        failureDisposition: 'retry_reconcile_quarantine_or_dlq',
       };
     },
   },

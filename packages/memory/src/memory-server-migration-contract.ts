@@ -90,7 +90,33 @@ export interface MemoryServerMigrationAcceptance {
   permanentMemory: {
     emptyResultCause: 'not_found_only';
     providerFailureResult: 'normalized_error';
-    requiredFailureDisposition: 'retry_reconcile_or_quarantine';
+    requiredFailureDisposition: 'retry_reconcile_quarantine_or_dlq';
+    requiredOperations: readonly ['get', 'list', 'delete', 'write'];
+    requiredFailureCases: readonly [
+      'explicit_not_found',
+      'network_timeout',
+      'connection_unavailable',
+      'authentication',
+      'authorization',
+      'write_conflict',
+      'validation',
+      'cursor_interrupted',
+      'write_outcome_unknown',
+      'retry_exhausted',
+      'persistent_anomaly',
+      'unknown_provider_error',
+    ];
+    requiredErrorContext: readonly [
+      'operation',
+      'providerRef',
+      'profileRef',
+      'scopeHash',
+      'causeRef',
+    ];
+    recoveryDispositions: readonly ['retry', 'reconcile', 'quarantine', 'dlq'];
+    prohibitedFailureResults: readonly ['null', 'empty_array', 'false', 'zero_stats', 'success'];
+    safeDiagnosticsOnly: true;
+    failureEventRequired: true;
   };
 }
 
@@ -104,7 +130,7 @@ export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = 
   contractRef: {
     id: 'memory.server-migration-acceptance',
     version: '1.0.0',
-    revision: 'p0-2-stage-3',
+    revision: 'p0-3-stage-4',
   },
   issues: ['P0-1', 'P0-2', 'P0-3'],
   canonicalService: '@hypha/memory.MemoryApplicationService',
@@ -199,7 +225,27 @@ export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = 
   permanentMemory: {
     emptyResultCause: 'not_found_only',
     providerFailureResult: 'normalized_error',
-    requiredFailureDisposition: 'retry_reconcile_or_quarantine',
+    requiredFailureDisposition: 'retry_reconcile_quarantine_or_dlq',
+    requiredOperations: ['get', 'list', 'delete', 'write'],
+    requiredFailureCases: [
+      'explicit_not_found',
+      'network_timeout',
+      'connection_unavailable',
+      'authentication',
+      'authorization',
+      'write_conflict',
+      'validation',
+      'cursor_interrupted',
+      'write_outcome_unknown',
+      'retry_exhausted',
+      'persistent_anomaly',
+      'unknown_provider_error',
+    ],
+    requiredErrorContext: ['operation', 'providerRef', 'profileRef', 'scopeHash', 'causeRef'],
+    recoveryDispositions: ['retry', 'reconcile', 'quarantine', 'dlq'],
+    prohibitedFailureResults: ['null', 'empty_array', 'false', 'zero_stats', 'success'],
+    safeDiagnosticsOnly: true,
+    failureEventRequired: true,
   },
 };
 

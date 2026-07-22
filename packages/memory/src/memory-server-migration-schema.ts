@@ -134,7 +134,49 @@ export const memoryServerMigrationAcceptanceSchema: ZodType<MemoryServerMigratio
       .object({
         emptyResultCause: z.literal('not_found_only'),
         providerFailureResult: z.literal('normalized_error'),
-        requiredFailureDisposition: z.literal('retry_reconcile_or_quarantine'),
+        requiredFailureDisposition: z.literal('retry_reconcile_quarantine_or_dlq'),
+        requiredOperations: z.tuple([
+          z.literal('get'),
+          z.literal('list'),
+          z.literal('delete'),
+          z.literal('write'),
+        ]),
+        requiredFailureCases: z.tuple([
+          z.literal('explicit_not_found'),
+          z.literal('network_timeout'),
+          z.literal('connection_unavailable'),
+          z.literal('authentication'),
+          z.literal('authorization'),
+          z.literal('write_conflict'),
+          z.literal('validation'),
+          z.literal('cursor_interrupted'),
+          z.literal('write_outcome_unknown'),
+          z.literal('retry_exhausted'),
+          z.literal('persistent_anomaly'),
+          z.literal('unknown_provider_error'),
+        ]),
+        requiredErrorContext: z.tuple([
+          z.literal('operation'),
+          z.literal('providerRef'),
+          z.literal('profileRef'),
+          z.literal('scopeHash'),
+          z.literal('causeRef'),
+        ]),
+        recoveryDispositions: z.tuple([
+          z.literal('retry'),
+          z.literal('reconcile'),
+          z.literal('quarantine'),
+          z.literal('dlq'),
+        ]),
+        prohibitedFailureResults: z.tuple([
+          z.literal('null'),
+          z.literal('empty_array'),
+          z.literal('false'),
+          z.literal('zero_stats'),
+          z.literal('success'),
+        ]),
+        safeDiagnosticsOnly: z.literal(true),
+        failureEventRequired: z.literal(true),
       })
       .strict(),
   })
@@ -292,11 +334,37 @@ export const memoryServerMigrationAcceptanceJsonSchema: JsonSchema = strictObjec
       }
     ),
     permanentMemory: strictObject(
-      ['emptyResultCause', 'providerFailureResult', 'requiredFailureDisposition'],
+      [
+        'emptyResultCause',
+        'providerFailureResult',
+        'requiredFailureDisposition',
+        'requiredOperations',
+        'requiredFailureCases',
+        'requiredErrorContext',
+        'recoveryDispositions',
+        'prohibitedFailureResults',
+        'safeDiagnosticsOnly',
+        'failureEventRequired',
+      ],
       {
         emptyResultCause: { enum: ['not_found_only'] },
         providerFailureResult: { enum: ['normalized_error'] },
-        requiredFailureDisposition: { enum: ['retry_reconcile_or_quarantine'] },
+        requiredFailureDisposition: { enum: ['retry_reconcile_quarantine_or_dlq'] },
+        requiredOperations: {
+          type: 'array',
+          items: { enum: ['get', 'list', 'delete', 'write'] },
+          minItems: 4,
+        },
+        requiredFailureCases: { type: 'array', items: { type: 'string' }, minItems: 12 },
+        requiredErrorContext: { type: 'array', items: { type: 'string' }, minItems: 5 },
+        recoveryDispositions: {
+          type: 'array',
+          items: { enum: ['retry', 'reconcile', 'quarantine', 'dlq'] },
+          minItems: 4,
+        },
+        prohibitedFailureResults: { type: 'array', items: { type: 'string' }, minItems: 5 },
+        safeDiagnosticsOnly: { enum: [true] },
+        failureEventRequired: { enum: [true] },
       }
     ),
   }
