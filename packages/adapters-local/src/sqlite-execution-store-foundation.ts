@@ -1,12 +1,25 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ExecutionRecord, ExecutionRecordCreateRequest, ProviderHealth } from '@hypha/core';
-import { validateExecutionRecord, validateExecutionRecordCreateRequest } from '@hypha/core';
+import type {
+  ExecutionRecord,
+  ExecutionRecordCompareAndSetRequest,
+  ExecutionRecordCreateRequest,
+  ProviderHealth,
+} from '@hypha/core';
+import {
+  validateExecutionRecord,
+  validateExecutionRecordCompareAndSetRequest,
+  validateExecutionRecordCreateRequest,
+} from '@hypha/core';
+
+interface SQLiteRunResult {
+  changes: number | bigint;
+}
 
 interface SQLiteStatement {
   get(...params: unknown[]): Record<string, unknown> | undefined;
-  run(...params: unknown[]): unknown;
+  run(...params: unknown[]): SQLiteRunResult;
 }
 
 interface SQLiteDatabase {
@@ -24,6 +37,10 @@ export type SQLiteExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_CLOSED'
   | 'EXECUTION_STORE_CORRUPT'
   | 'EXECUTION_STORE_CONFLICT'
+  | 'EXECUTION_STORE_NOT_FOUND'
+  | 'EXECUTION_STORE_REVISION_CONFLICT'
+  | 'EXECUTION_STORE_FENCING_REJECTED'
+  | 'EXECUTION_STORE_TERMINAL'
   | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT'
   | 'EXECUTION_STORE_UNSUPPORTED_SCHEMA';
 
@@ -51,7 +68,7 @@ export interface SQLiteExecutionStoreFoundationOptions {
  * complete ExecutionStore contract, including CAS and leases, is implemented.
  */
 export class SQLiteExecutionStoreFoundation {
-  static readonly schemaVersion = 1;
+  static readonly schemaVersion = 2;
   readonly filename: string;
   private readonly database: SQLiteDatabase;
   private readonly now: () => string;
@@ -162,6 +179,89 @@ export class SQLiteExecutionStoreFoundation {
     });
   }
 
+  async compareAndSet(input: ExecutionRecordCompareAndSetRequest): Promise<ExecutionRecord> {
+    this.assertOpen();
+    const request = validateExecutionRecordCompareAndSetRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    return this.writeOperation(() => {
+      if (request.idempotencyKey) {
+        const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
+        if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
+      }
+
+      const row = this.selectRecord(request.executionId);
+      if (!row) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const current = parseRecordRow(row);
+      if (current.revision !== request.expectedRevision) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
+        );
+      }
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw storeError('EXECUTION_STORE_TERMINAL', 'Terminal Execution records are immutable.', {
+          executionId: request.executionId,
+          status: current.status,
+        });
+      }
+      assertLeaseContinuity(current, request);
+
+      const nextJson = JSON.stringify(request.next);
+      const update = this.database
+        .prepare(
+          'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
+            'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
+            'record_json = ? WHERE execution_id = ? AND revision = ?'
+        )
+        .run(
+          request.next.revision,
+          request.next.status,
+          request.next.request.tenantId ?? null,
+          request.next.request.userId,
+          request.next.request.workspaceId,
+          request.next.request.runId ?? null,
+          request.next.providerId,
+          request.next.createdAt,
+          request.next.updatedAt,
+          nextJson,
+          request.executionId,
+          request.expectedRevision
+        );
+      if (Number(update.changes) !== 1) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record changed during compare-and-set.',
+          { executionId: request.executionId, expectedRevision: request.expectedRevision }
+        );
+      }
+      if (request.idempotencyKey) {
+        this.database
+          .prepare(
+            'INSERT INTO execution_mutation_idempotency ' +
+              '(operation_id, idempotency_key, execution_id, request_hash, result_json) ' +
+              'VALUES (?, ?, ?, ?, ?)'
+          )
+          .run(
+            request.operationId,
+            request.idempotencyKey,
+            request.executionId,
+            requestHash,
+            nextJson
+          );
+      }
+      return structuredClone(request.next);
+    });
+  }
+
   async health(): Promise<ProviderHealth> {
     if (this.closed) {
       return {
@@ -219,6 +319,18 @@ export class SQLiteExecutionStoreFoundation {
       .get(operationId, idempotencyKey);
   }
 
+  private findMutationIdempotency(
+    operationId: string,
+    idempotencyKey: string
+  ): Record<string, unknown> | undefined {
+    return this.database
+      .prepare(
+        'SELECT execution_id, request_hash, result_json FROM execution_mutation_idempotency ' +
+          'WHERE operation_id = ? AND idempotency_key = ?'
+      )
+      .get(operationId, idempotencyKey);
+  }
+
   private readOperation<T>(operation: () => T): T {
     try {
       return operation();
@@ -266,7 +378,7 @@ export class SQLiteExecutionStoreFoundation {
   }
 }
 
-const SCHEMA_SQL = `
+const SCHEMA_V1_SQL = `
 CREATE TABLE IF NOT EXISTS execution_records (
   execution_id TEXT PRIMARY KEY,
   revision INTEGER NOT NULL CHECK (revision >= 0),
@@ -294,10 +406,26 @@ CREATE TABLE IF NOT EXISTS execution_create_idempotency (
 );
 `;
 
+const SCHEMA_V2_SQL = `
+CREATE TABLE IF NOT EXISTS execution_mutation_idempotency (
+  operation_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  PRIMARY KEY (operation_id, idempotency_key),
+  FOREIGN KEY (execution_id) REFERENCES execution_records(execution_id)
+);
+`;
+
 function migrate(database: SQLiteDatabase): void {
   const current = Number(database.prepare('PRAGMA user_version').get()?.user_version ?? 0);
   if (current === SQLiteExecutionStoreFoundation.schemaVersion) return;
-  if (current !== 0) {
+  if (
+    !Number.isInteger(current) ||
+    current < 0 ||
+    current > SQLiteExecutionStoreFoundation.schemaVersion
+  ) {
     throw storeError(
       'EXECUTION_STORE_UNSUPPORTED_SCHEMA',
       'SQLite Execution store schema version is not supported.',
@@ -306,7 +434,8 @@ function migrate(database: SQLiteDatabase): void {
   }
   database.exec('BEGIN IMMEDIATE');
   try {
-    database.exec(SCHEMA_SQL);
+    if (current === 0) database.exec(SCHEMA_V1_SQL);
+    if (current <= 1) database.exec(SCHEMA_V2_SQL);
     database.exec(`PRAGMA user_version = ${SQLiteExecutionStoreFoundation.schemaVersion}`);
     database.exec('COMMIT');
   } catch (error) {
@@ -318,6 +447,77 @@ function migrate(database: SQLiteDatabase): void {
     throw error;
   }
 }
+
+function parseMutationReplay(
+  row: Record<string, unknown>,
+  expectedHash: string,
+  executionId: string
+): ExecutionRecord {
+  if (String(row.request_hash) !== expectedHash || String(row.execution_id) !== executionId) {
+    throw storeError(
+      'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+      'Execution mutation idempotency key was reused with different input.',
+      { executionId }
+    );
+  }
+  try {
+    const result = validateExecutionRecord(JSON.parse(String(row.result_json)));
+    if (result.id !== executionId) throw new Error('result execution id does not match');
+    return result;
+  } catch (error) {
+    if (error instanceof SQLiteExecutionStoreFoundationError) throw error;
+    throw storeError(
+      'EXECUTION_STORE_CORRUPT',
+      'Execution mutation idempotency record contains an invalid result.',
+      { executionId },
+      error
+    );
+  }
+}
+
+function assertLeaseContinuity(
+  current: ExecutionRecord,
+  request: ExecutionRecordCompareAndSetRequest
+): void {
+  const currentLease = current.lease;
+  const nextLease = request.next.lease;
+  const guard = request.leaseGuard;
+  if (!currentLease) {
+    if (guard || nextLease) {
+      throw storeError(
+        'EXECUTION_STORE_FENCING_REJECTED',
+        'compareAndSet cannot create a lease; acquireLease is required.',
+        { executionId: current.id }
+      );
+    }
+    return;
+  }
+  const matchesCurrent =
+    guard?.leaseId === currentLease.id &&
+    guard.ownerId === currentLease.ownerId &&
+    guard.fencingToken === currentLease.fencingToken;
+  const preservesLease =
+    nextLease?.id === currentLease.id &&
+    nextLease.ownerId === currentLease.ownerId &&
+    nextLease.fencingToken === currentLease.fencingToken;
+  if (!matchesCurrent || !preservesLease) {
+    throw storeError(
+      'EXECUTION_STORE_FENCING_REJECTED',
+      'Execution lease or fencing token is stale.',
+      { executionId: current.id, fencingToken: currentLease.fencingToken }
+    );
+  }
+}
+
+const TERMINAL_STATUSES = new Set<ExecutionRecord['status']>([
+  'cancelled',
+  'completed',
+  'failed',
+  'timed_out',
+  'oom_killed',
+  'resource_exceeded',
+  'quarantined',
+]);
 
 function parseRecordRow(row: Record<string, unknown>): ExecutionRecord {
   try {
