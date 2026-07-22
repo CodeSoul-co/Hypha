@@ -1,5 +1,6 @@
 import type {
   EventRuntime,
+  DurableRuntimeTimerWorker,
   ProjectionEngine,
   ProjectionStore,
   RunLeaseStore,
@@ -33,11 +34,13 @@ describe('RuntimeCompositionRoot', () => {
   it('constructs every canonical component once from the same durable dependencies', () => {
     const durable = dependencies();
     const runManager = {} as RunManager;
+    const timerWorker = {} as DurableRuntimeTimerWorker;
     const fsmDriver = {} as FencedBoundedFSMDriver;
     const reactRunner = {} as HarnessedReActFSMRunner;
     const scopedReActRunners = {} as ScopedReActRunnerFactory;
     const recoveryFSMs = {} as RecoveryFSMFactory;
     const createRunManager = jest.fn(() => runManager);
+    const createTimerWorker = jest.fn(() => timerWorker);
     const createFSMDriver = jest.fn(() => fsmDriver);
     const createReActRunner = jest.fn(() => reactRunner);
     const createScopedReActRunnerFactory = jest.fn(() => scopedReActRunners);
@@ -46,6 +49,7 @@ describe('RuntimeCompositionRoot', () => {
       ...durable,
       factories: {
         createRunManager,
+        createTimerWorker,
         createFSMDriver,
         createReActRunner,
         createScopedReActRunnerFactory,
@@ -61,6 +65,7 @@ describe('RuntimeCompositionRoot', () => {
     expect(first).toEqual({
       ...durable,
       runManager,
+      timerWorker,
       fsmDriver,
       reactRunner,
       scopedReActRunners,
@@ -68,6 +73,8 @@ describe('RuntimeCompositionRoot', () => {
     });
     expect(createRunManager).toHaveBeenCalledTimes(1);
     expect(createRunManager).toHaveBeenCalledWith({ events: durable.events });
+    expect(createTimerWorker).toHaveBeenCalledTimes(1);
+    expect(createTimerWorker).toHaveBeenCalledWith(durable);
     expect(createFSMDriver).toHaveBeenCalledTimes(1);
     expect(createFSMDriver).toHaveBeenCalledWith({ ...durable, runManager });
     expect(createReActRunner).toHaveBeenCalledTimes(1);
@@ -94,6 +101,7 @@ describe('RuntimeCompositionRoot', () => {
       ...dependencies(),
       factories: {
         createRunManager: () => undefined as unknown as RunManager,
+        createTimerWorker: () => undefined as unknown as DurableRuntimeTimerWorker,
         createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
         createReActRunner: () => ({}) as HarnessedReActFSMRunner,
         createScopedReActRunnerFactory: () => undefined as unknown as ScopedReActRunnerFactory,
@@ -109,6 +117,7 @@ describe('RuntimeCompositionRoot', () => {
       ...dependencies(),
       factories: {
         createRunManager: () => ({}) as RunManager,
+        createTimerWorker: () => ({}) as DurableRuntimeTimerWorker,
         createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
         createReActRunner: () => ({}) as HarnessedReActFSMRunner,
         createScopedReActRunnerFactory: () => undefined as unknown as ScopedReActRunnerFactory,
@@ -126,6 +135,7 @@ describe('RuntimeCompositionRoot', () => {
       ...dependencies(),
       factories: {
         createRunManager: () => ({}) as RunManager,
+        createTimerWorker: () => ({}) as DurableRuntimeTimerWorker,
         createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
         createReActRunner: () => ({}) as HarnessedReActFSMRunner,
         createScopedReActRunnerFactory: () => ({}) as ScopedReActRunnerFactory,
@@ -135,6 +145,24 @@ describe('RuntimeCompositionRoot', () => {
 
     expect(() => root.compose()).toThrow(
       'Runtime composition factory did not provide RecoveryFSMFactory'
+    );
+  });
+
+  it('fails composition when the durable Timer Worker is absent', () => {
+    const root = new RuntimeCompositionRoot({
+      ...dependencies(),
+      factories: {
+        createRunManager: () => ({}) as RunManager,
+        createTimerWorker: () => undefined as unknown as DurableRuntimeTimerWorker,
+        createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
+        createReActRunner: () => ({}) as HarnessedReActFSMRunner,
+        createScopedReActRunnerFactory: () => ({}) as ScopedReActRunnerFactory,
+        createRecoveryFSMFactory: () => ({}) as RecoveryFSMFactory,
+      },
+    });
+
+    expect(() => root.compose()).toThrow(
+      'Runtime composition factory did not provide DurableRuntimeTimerWorker'
     );
   });
 });

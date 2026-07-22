@@ -82,6 +82,58 @@ describe('EventRuntime canonical transitions', () => {
     });
   }
 
+  async function seedPendingTimer(runId: string, userId: string, expiresAt: string): Promise<void> {
+    const owned = await runtime.requireOwnedRunScope(runId, userId);
+    const events = runtime.canonicalRuntime().events;
+    const scope = { userId, runId };
+    const head = await events.getStreamHead(scope);
+    if (!head) throw new Error('Expected a canonical Run Event stream');
+    const timestamp = new Date(Date.parse(expiresAt) - 60_000).toISOString();
+    const waitId = `wait:${runId}`;
+    const wait = { type: 'timer', expiresAt } as const;
+    const baseEvent = {
+      version: '1.0.0' as const,
+      userId,
+      sessionId: owned.sessionId,
+      runId,
+      fsmState: 'RunInitialized',
+      timestamp,
+      metadata: { stateAttempt: 1 },
+    };
+    await events.append({
+      scope,
+      events: [
+        {
+          ...baseEvent,
+          id: `event:${runId}:wait-created`,
+          type: 'runtime.wait.created',
+          payload: {
+            waitId,
+            stateId: 'RunInitialized',
+            stateAttempt: 1,
+            wait,
+            createdAt: timestamp,
+          },
+        },
+        {
+          ...baseEvent,
+          id: `event:${runId}:timer-created`,
+          type: 'runtime.timer.created',
+          payload: { timerId: waitId, waitId, fireAt: expiresAt },
+        },
+        {
+          ...baseEvent,
+          id: `event:${runId}:waiting`,
+          type: 'run.waiting_timer',
+          payload: { waitId, stateId: 'RunInitialized', wait },
+        },
+      ],
+      expectedLastSequence: head.lastSequence,
+      expectedRunRevision: head.runRevision,
+      idempotencyKey: `seed-timer:${runId}`,
+    });
+  }
+
   it('executes State transitions through the fenced driver and completes once', async () => {
     const run = await runtime.startRun({
       userId: 'user.transition',
@@ -288,6 +340,34 @@ describe('EventRuntime canonical transitions', () => {
     ]);
     const events = await runtime.listEvents(run.runId);
     expect(events.filter((event) => event.type === 'runtime.signal.received')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
+    await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('resumes an overdue persisted Timer Wait through the Server Timer Worker exactly once', async () => {
+    const userId = 'user.timer-worker';
+    const run = await runtime.startRun({
+      userId,
+      sessionId: 'session.timer-worker',
+      input: { task: 'wait-for-timer' },
+    });
+    await seedPendingTimer(run.runId, userId, '2026-07-22T08:00:00.000Z');
+
+    const first = await runtime.sweepRuntimeTimers('2026-07-22T08:01:00.000Z');
+    expect(first).toMatchObject({ fired: 1 });
+    expect(first.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: expect.objectContaining({ runId: run.runId }),
+          disposition: 'fired',
+        }),
+      ])
+    );
+    const second = await runtime.sweepRuntimeTimers('2026-07-22T08:02:00.000Z');
+    expect(second.fired).toBe(0);
+
+    const events = await runtime.listEvents(run.runId);
+    expect(events.filter((event) => event.type === 'runtime.timer.fired')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
   });

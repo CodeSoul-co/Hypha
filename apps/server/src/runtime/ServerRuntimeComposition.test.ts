@@ -1,4 +1,4 @@
-import { InMemoryEventStore, type EventRuntime } from '@hypha/core';
+import { DurableRuntimeTimerWorker, InMemoryEventStore, type EventRuntime } from '@hypha/core';
 import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
 import { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
 import type { InferenceProvider } from '@hypha/inference';
@@ -37,6 +37,7 @@ describe('createServerRuntimeComposition', () => {
     expect(Object.isFrozen(composition)).toBe(true);
     expect(composition.events).toBe(canonicalEvents);
     expect(composition.runManager).toBeInstanceOf(RunManager);
+    expect(composition.timerWorker).toBeInstanceOf(DurableRuntimeTimerWorker);
     expect(composition.fsmDriver).toBeInstanceOf(FencedBoundedFSMDriver);
     expect(composition.reactRunner).toBeInstanceOf(HarnessedReActFSMRunner);
     expect(

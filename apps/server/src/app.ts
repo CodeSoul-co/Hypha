@@ -204,7 +204,8 @@ class Application {
     // Recover persisted Tool invocations after their adapters are available.
     await this.eventRuntime.recoverToolInvocations();
 
-    // Start durable Session command claims only after Run contexts and side effects are restored.
+    // Resume persisted Timer Waits and Session commands only after side effects are reconciled.
+    await this.eventRuntime.startRuntimeTimerScheduler();
     await this.eventRuntime.startSessionCommandScheduler();
 
     // Initialize Workflow Engine

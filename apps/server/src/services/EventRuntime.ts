@@ -138,6 +138,10 @@ import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
 import type { RuntimeComposition } from '../runtime/RuntimeCompositionRoot';
 import { createServerRuntimeComposition } from '../runtime/ServerRuntimeComposition';
 import {
+  ServerRuntimeTimerScheduler,
+  type ServerRuntimeTimerSweepResult,
+} from '../runtime/ServerRuntimeTimerScheduler';
+import {
   ServerSessionCommandRuntime,
   type ServerSessionCommandPayloads,
 } from '../runtime/ServerSessionCommandRuntime';
@@ -651,6 +655,7 @@ class EventRuntimeService {
   private sessionCommandInitialization?: Promise<void>;
   private sessionCommandArtifacts?: LocalFilesystemExecutionArtifactStore;
   private sessionCommands?: ServerSessionCommandRuntime<RuntimeSessionCommandPayloads>;
+  private runtimeTimerScheduler?: ServerRuntimeTimerScheduler;
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -763,6 +768,27 @@ class EventRuntimeService {
     await this.initializeSessionCommands(
       this.canonicalRuntimeFilename ?? options.filename ?? 'runtime.canonical.sqlite'
     );
+    if (!this.runtimeTimerScheduler) {
+      this.runtimeTimerScheduler = new ServerRuntimeTimerScheduler({
+        worker: this.canonicalRuntimeComposition().timerWorker,
+        ownerId: `${this.runtimeWorkerId}:timers`,
+        leaseTtlMs: 30_000,
+        pageLimit: 100,
+        pollIntervalMs: 1_000,
+        errorBackoffMs: 5_000,
+        onSweep: (result) => {
+          if (result.fired > 0) {
+            logger.info('Runtime Timer Worker resumed due Runs', {
+              fired: result.fired,
+              scanned: result.scanned,
+              pages: result.pages,
+              firedAt: result.firedAt,
+            });
+          }
+        },
+        onError: (error) => logger.error('Runtime Timer Scheduler sweep failed', error),
+      });
+    }
     return backbone;
   }
 
@@ -801,6 +827,21 @@ class EventRuntimeService {
 
   isSessionCommandSchedulerRunning(): boolean {
     return this.sessionCommands?.isRunning() ?? false;
+  }
+
+  async startRuntimeTimerScheduler(): Promise<void> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const scheduler = this.requireRuntimeTimerScheduler();
+    if (!scheduler.isRunning()) scheduler.start();
+  }
+
+  isRuntimeTimerSchedulerRunning(): boolean {
+    return this.runtimeTimerScheduler?.isRunning() ?? false;
+  }
+
+  sweepRuntimeTimers(firedAt?: string): Promise<ServerRuntimeTimerSweepResult> {
+    const scheduler = this.requireRuntimeTimerScheduler();
+    return scheduler.sweepOnce(firedAt);
   }
 
   async enqueueStartRun(
@@ -921,6 +962,11 @@ class EventRuntimeService {
     await this.sessionCommandInitialization?.catch(() => undefined);
     const failures: unknown[] = [];
     try {
+      await this.runtimeTimerScheduler?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
       await this.sessionCommands?.close();
     } catch (error) {
       failures.push(error);
@@ -936,6 +982,7 @@ class EventRuntimeService {
       failures.push(error);
     }
     this.sessionCommands = undefined;
+    this.runtimeTimerScheduler = undefined;
     this.sessionCommandArtifacts = undefined;
     this.sessionCommandInitialization = undefined;
     this.canonicalComposition = undefined;
@@ -1009,6 +1056,13 @@ class EventRuntimeService {
   private requireSessionCommands(): ServerSessionCommandRuntime<RuntimeSessionCommandPayloads> {
     if (!this.sessionCommands) throw new Error('Session Command Runtime is not initialized');
     return this.sessionCommands;
+  }
+
+  private requireRuntimeTimerScheduler(): ServerRuntimeTimerScheduler {
+    if (!this.runtimeTimerScheduler) {
+      throw new Error('Runtime Timer Scheduler is not initialized');
+    }
+    return this.runtimeTimerScheduler;
   }
 
   private async handleStartRunCommand(

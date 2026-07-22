@@ -1,4 +1,4 @@
-import type { EventStore } from '@hypha/core';
+import { DurableRuntimeTimerWorker, type EventStore } from '@hypha/core';
 import { FSMRuntime, type FSMProcessSpec } from '@hypha/fsm';
 import {
   EventFirstRuntime,
@@ -42,6 +42,14 @@ export function createServerRuntimeComposition(
           runtime: new EventFirstRuntime(options.compatibilityEvents),
         });
       },
+      createTimerWorker: ({ events, projections, projectionStore, runLeases }) =>
+        new DurableRuntimeTimerWorker({
+          events,
+          projections,
+          projectionStore,
+          runLeases,
+          ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
+        }),
       createFSMDriver: ({ events, projections, projectionStore, runLeases, stateClaims }) =>
         new FencedBoundedFSMDriver({
           events,

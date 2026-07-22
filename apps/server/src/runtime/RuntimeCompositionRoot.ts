@@ -1,5 +1,6 @@
 import type {
   EventRuntime,
+  DurableRuntimeTimerWorker,
   ProjectionEngine,
   ProjectionStore,
   RunLeaseStore,
@@ -37,6 +38,7 @@ export interface RuntimeCompositionDependencies {
 
 export interface RuntimeComposition extends RuntimeCompositionDependencies {
   runManager: RunManager;
+  timerWorker: DurableRuntimeTimerWorker;
   fsmDriver: FencedBoundedFSMDriver;
   reactRunner: HarnessedReActFSMRunner;
   scopedReActRunners: ScopedReActRunnerFactory;
@@ -45,6 +47,7 @@ export interface RuntimeComposition extends RuntimeCompositionDependencies {
 
 export interface RuntimeCompositionFactories {
   createRunManager(input: { events: EventRuntime }): RunManager;
+  createTimerWorker(input: RuntimeCompositionDependencies): DurableRuntimeTimerWorker;
   createFSMDriver(
     input: RuntimeCompositionDependencies & { runManager: RunManager }
   ): FencedBoundedFSMDriver;
@@ -109,6 +112,10 @@ export class RuntimeCompositionRoot {
       sessionQueue,
     };
     const runManager = requiredComponent('RunManager', factories.createRunManager({ events }));
+    const timerWorker = requiredComponent(
+      'DurableRuntimeTimerWorker',
+      factories.createTimerWorker(dependencies)
+    );
     const fsmDriver = requiredComponent(
       'FencedBoundedFSMDriver',
       factories.createFSMDriver({ ...dependencies, runManager })
@@ -140,6 +147,7 @@ export class RuntimeCompositionRoot {
     this.composition = Object.freeze({
       ...dependencies,
       runManager,
+      timerWorker,
       fsmDriver,
       reactRunner,
       scopedReActRunners,
