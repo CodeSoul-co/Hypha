@@ -1,6 +1,8 @@
 import type { ProviderHealth } from '../../contracts/execution';
 import {
+  DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
   SESSION_COMMAND_STATUSES,
+  SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
   type ClaimSessionCommandRequest,
   type CompleteSessionCommandRequest,
@@ -121,6 +123,8 @@ export class InMemorySessionQueue implements SessionQueue {
       ...(request.targetRunId === undefined ? {} : { targetRunId: request.targetRunId }),
       enqueueSequence,
       priority: request.priority ?? 50,
+      attempts: 0,
+      maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
       ...(request.payloadRef === undefined ? {} : { payloadRef: request.payloadRef }),
       payloadHash: request.payloadHash,
       status: 'queued',
@@ -166,6 +170,7 @@ export class InMemorySessionQueue implements SessionQueue {
     if (!candidate) return null;
 
     candidate.status = 'claimed';
+    candidate.attempts += 1;
     candidate.claimedBy = request.workerId;
     candidate.leaseExpiresAt = addMilliseconds(request.now, request.leaseMs);
     validateSessionCommandRecord(candidate);
@@ -210,12 +215,17 @@ export class InMemorySessionQueue implements SessionQueue {
     timestamp(request.releasedAt, 'releasedAt');
     if (request.availableAt) timestamp(request.availableAt, 'availableAt');
     const record = this.requireOwnedClaim(request.commandId, request.workerId, request.releasedAt);
+    const exhausted = record.attempts >= record.maxAttempts;
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
-      status: 'queued',
+      status: exhausted ? 'dead_letter' : 'queued',
       availableAt: request.availableAt ?? request.releasedAt,
+      ...(exhausted
+        ? { rejectionCode: 'attempt_budget_exhausted', completedAt: request.releasedAt }
+        : {}),
     });
     this.records.set(updated.id, updated);
+    if (exhausted) this.notifyIfDrained(scopeFromCommand(updated));
   }
 
   async list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]> {
@@ -302,7 +312,13 @@ export class InMemorySessionQueue implements SessionQueue {
         record.leaseExpiresAt !== undefined &&
         isAtOrBefore(record.leaseExpiresAt, now)
       ) {
-        record.status = 'queued';
+        const exhausted = record.attempts >= record.maxAttempts;
+        record.status = exhausted ? 'dead_letter' : 'queued';
+        if (exhausted) {
+          record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
+          record.completedAt = now;
+          affected.set(sessionKey(scopeFromCommand(record)), scopeFromCommand(record));
+        }
         delete record.claimedBy;
         delete record.leaseExpiresAt;
       }
@@ -352,6 +368,17 @@ function validateEnqueueRequest(request: EnqueueSessionCommandRequest): void {
   ) {
     throw busError('RUNTIME_INVALID_INPUT', 'priority must be an integer between 0 and 100');
   }
+  if (
+    request.maxAttempts !== undefined &&
+    (!Number.isInteger(request.maxAttempts) ||
+      request.maxAttempts < 1 ||
+      request.maxAttempts > SESSION_COMMAND_MAX_ATTEMPTS_LIMIT)
+  ) {
+    throw busError(
+      'RUNTIME_INVALID_INPUT',
+      `maxAttempts must be an integer between 1 and ${SESSION_COMMAND_MAX_ATTEMPTS_LIMIT}`
+    );
+  }
   if (request.createdAt) timestamp(request.createdAt, 'createdAt');
   if (request.availableAt) timestamp(request.availableAt, 'availableAt');
   if (request.expiresAt) timestamp(request.expiresAt, 'expiresAt');
@@ -366,6 +393,7 @@ function enqueueFingerprint(request: EnqueueSessionCommandRequest): string {
     sessionId: request.sessionId,
     targetRunId: request.targetRunId ?? null,
     priority: request.priority ?? 50,
+    maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
     payloadRef: request.payloadRef ?? null,
     payloadHash: request.payloadHash,
     availableAt: request.availableAt ?? null,

@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { EnqueueSessionCommandRequest, SessionQueueScope } from '@hypha/core';
+import {
+  DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+  hashCanonicalJson,
+  type EnqueueSessionCommandRequest,
+  type SessionQueueScope,
+} from '@hypha/core';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { SQLiteSessionQueue } from './session-queue';
+import { loadSqlite } from './sqlite-driver';
 
 const initialTime = '2026-07-22T06:00:00.000Z';
 const payloadHash = 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
@@ -53,6 +59,58 @@ describe('SQLiteSessionQueue', () => {
     ]);
   });
 
+  it('reads R1b records written before attempt budgets were added', async () => {
+    const filename = temporaryDatabase();
+    const initialized = openQueue(filename);
+    initialized.close();
+    queues.splice(queues.indexOf(initialized), 1);
+
+    const legacyRecord = {
+      id: 'command.legacy',
+      commandType: 'user_input',
+      idempotencyKey: 'idempotency.command.legacy',
+      userId: scope.userId,
+      sessionId: scope.sessionId,
+      enqueueSequence: 1,
+      priority: 50,
+      payloadHash,
+      status: 'queued',
+      createdAt: initialTime,
+      availableAt: initialTime,
+    };
+    const sqlite = loadSqlite(true)!;
+    const database = new sqlite.DatabaseSync(filename);
+    database
+      .prepare(
+        'INSERT INTO runtime_session_commands ' +
+          '(id, scope_key, enqueue_sequence, priority, status, available_at, expires_at, ' +
+          'claimed_by, lease_expires_at, record_json, record_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        legacyRecord.id,
+        `\u0000${scope.userId}\u0000${scope.sessionId}`,
+        legacyRecord.enqueueSequence,
+        legacyRecord.priority,
+        legacyRecord.status,
+        legacyRecord.availableAt,
+        null,
+        null,
+        null,
+        JSON.stringify(legacyRecord),
+        hashCanonicalJson(legacyRecord)
+      );
+    database.close?.();
+
+    const reopened = openQueue(filename);
+    await expect(reopened.list({ scope })).resolves.toMatchObject([
+      {
+        id: legacyRecord.id,
+        attempts: 0,
+        maxAttempts: DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+      },
+    ]);
+  });
+
   it('serializes claims across SQLite connections so only one worker owns the head', async () => {
     const filename = temporaryDatabase();
     const first = openQueue(filename);
@@ -66,6 +124,7 @@ describe('SQLiteSessionQueue', () => {
 
     expect(claims.filter(Boolean)).toHaveLength(1);
     expect(claims.filter((claim) => claim === null)).toHaveLength(1);
+    expect(claims.find(Boolean)).toMatchObject({ attempts: 1 });
   });
 
   it('recovers an expired claim after restart and rejects the stale worker', async () => {
@@ -186,6 +245,51 @@ describe('SQLiteSessionQueue', () => {
     );
     await expect(queue.list({ scope, statuses: ['expired'] })).resolves.toMatchObject([
       { id: 'command.expiring', completedAt: now },
+    ]);
+  });
+
+  it('persists the attempt budget and dead-letters an expired final claim', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    await first.enqueue(command('command.exhausted', { maxAttempts: 1 }));
+    await first.claim({ workerId: 'worker.stale', now: initialTime, leaseMs: 1_000 });
+    first.close();
+    queues.splice(queues.indexOf(first), 1);
+
+    const reopened = openQueue(filename);
+    await expect(
+      reopened.claim({
+        workerId: 'worker.next',
+        now: '2026-07-22T06:00:02.000Z',
+        leaseMs: 1_000,
+      })
+    ).resolves.toBeNull();
+    await expect(reopened.list({ scope, statuses: ['dead_letter'] })).resolves.toMatchObject([
+      {
+        id: 'command.exhausted',
+        attempts: 1,
+        maxAttempts: 1,
+        rejectionCode: 'claim_lease_expired_after_attempt_budget',
+      },
+    ]);
+  });
+
+  it('persists a released final attempt as dead-letter work', async () => {
+    const queue = openQueue(temporaryDatabase());
+    await queue.enqueue(command('command.released-exhausted', { maxAttempts: 1 }));
+    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    await queue.release({
+      commandId: 'command.released-exhausted',
+      workerId: 'worker.1',
+      releasedAt: '2026-07-22T06:00:00.500Z',
+    });
+
+    await expect(queue.list({ scope, statuses: ['dead_letter'] })).resolves.toMatchObject([
+      {
+        id: 'command.released-exhausted',
+        attempts: 1,
+        rejectionCode: 'attempt_budget_exhausted',
+      },
     ]);
   });
 

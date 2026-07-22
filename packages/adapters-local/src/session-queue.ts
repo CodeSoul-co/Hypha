@@ -1,6 +1,8 @@
 import {
   FrameworkError,
+  DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
   SESSION_COMMAND_STATUSES,
+  SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
   hashCanonicalJson,
   validateSessionCommandRecord,
@@ -116,6 +118,8 @@ export class SQLiteSessionQueue implements SessionQueue {
         ...(request.targetRunId === undefined ? {} : { targetRunId: request.targetRunId }),
         enqueueSequence,
         priority: request.priority ?? 50,
+        attempts: 0,
+        maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
         ...(request.payloadRef === undefined ? {} : { payloadRef: request.payloadRef }),
         payloadHash: request.payloadHash,
         status: 'queued',
@@ -166,6 +170,7 @@ export class SQLiteSessionQueue implements SessionQueue {
       const claimed = validateSessionCommandRecord({
         ...candidate,
         status: 'claimed',
+        attempts: candidate.attempts + 1,
         claimedBy: request.workerId,
         leaseExpiresAt: addMilliseconds(request.now, request.leaseMs),
       });
@@ -225,11 +230,15 @@ export class SQLiteSessionQueue implements SessionQueue {
         request.workerId,
         request.releasedAt
       );
+      const exhausted = record.attempts >= record.maxAttempts;
       this.updateRecord(
         validateSessionCommandRecord({
           ...withoutClaim(record),
-          status: 'queued',
+          status: exhausted ? 'dead_letter' : 'queued',
           availableAt: request.availableAt ?? request.releasedAt,
+          ...(exhausted
+            ? { rejectionCode: 'attempt_budget_exhausted', completedAt: request.releasedAt }
+            : {}),
         })
       );
     });
@@ -336,7 +345,12 @@ export class SQLiteSessionQueue implements SessionQueue {
         record.leaseExpiresAt !== undefined &&
         Date.parse(record.leaseExpiresAt) <= Date.parse(now)
       ) {
-        record.status = 'queued';
+        const exhausted = record.attempts >= record.maxAttempts;
+        record.status = exhausted ? 'dead_letter' : 'queued';
+        if (exhausted) {
+          record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
+          record.completedAt = now;
+        }
         delete record.claimedBy;
         delete record.leaseExpiresAt;
         changed = true;
@@ -492,14 +506,31 @@ export class SQLiteSessionQueue implements SessionQueue {
 
 function parseRecord(row: Record<string, unknown>): SessionCommandRecord {
   const json = String(row.record_json);
-  const record = validateSessionCommandRecord(JSON.parse(json));
-  if (hashCanonicalJson(record) !== String(row.record_hash)) {
+  const persisted: unknown = JSON.parse(json);
+  if (hashCanonicalJson(persisted) !== String(row.record_hash)) {
     throw new FrameworkError({
       code: 'RUNTIME_EVENT_STREAM_CORRUPT',
-      message: `SQLite Session command integrity mismatch: ${record.id}`,
+      message: `SQLite Session command integrity mismatch: ${recordId(persisted)}`,
     });
   }
-  return record;
+
+  // R1b records predate durable attempt budgets. Verify their original hash before adding defaults.
+  const migrated = isRecord(persisted)
+    ? {
+        ...persisted,
+        attempts: persisted.attempts ?? (persisted.status === 'claimed' ? 1 : 0),
+        maxAttempts: persisted.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+      }
+    : persisted;
+  return validateSessionCommandRecord(migrated);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function recordId(value: unknown): string {
+  return isRecord(value) && typeof value.id === 'string' ? value.id : 'unknown';
 }
 
 function validateEnqueueRequest(request: EnqueueSessionCommandRequest): void {
@@ -514,6 +545,14 @@ function validateEnqueueRequest(request: EnqueueSessionCommandRequest): void {
   ) {
     invalid('priority must be an integer between 0 and 100');
   }
+  if (
+    request.maxAttempts !== undefined &&
+    (!Number.isInteger(request.maxAttempts) ||
+      request.maxAttempts < 1 ||
+      request.maxAttempts > SESSION_COMMAND_MAX_ATTEMPTS_LIMIT)
+  ) {
+    invalid(`maxAttempts must be an integer between 1 and ${SESSION_COMMAND_MAX_ATTEMPTS_LIMIT}`);
+  }
 }
 
 function enqueueFingerprint(request: EnqueueSessionCommandRequest): string {
@@ -525,6 +564,7 @@ function enqueueFingerprint(request: EnqueueSessionCommandRequest): string {
     sessionId: request.sessionId,
     targetRunId: request.targetRunId ?? null,
     priority: request.priority ?? 50,
+    maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
     payloadRef: request.payloadRef ?? null,
     payloadHash: request.payloadHash,
     availableAt: request.availableAt ?? null,
