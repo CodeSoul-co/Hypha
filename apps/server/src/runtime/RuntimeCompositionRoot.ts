@@ -5,6 +5,7 @@ import type {
   RunLeaseStore,
   RuntimeCheckpointStore,
   RuntimeOrchestrationProjection,
+  SessionQueue,
   StateExecutionClaimStore,
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
@@ -31,6 +32,7 @@ export interface RuntimeCompositionDependencies {
   checkpoints: RuntimeCheckpointStore;
   runLeases: RunLeaseStore;
   stateClaims: StateExecutionClaimStore;
+  sessionQueue: SessionQueue;
 }
 
 export interface RuntimeComposition extends RuntimeCompositionDependencies {
@@ -87,8 +89,16 @@ export class RuntimeCompositionRoot {
   compose(): Readonly<RuntimeComposition> {
     if (this.composition) return this.composition;
 
-    const { events, projections, projectionStore, checkpoints, runLeases, stateClaims, factories } =
-      this.options;
+    const {
+      events,
+      projections,
+      projectionStore,
+      checkpoints,
+      runLeases,
+      stateClaims,
+      sessionQueue,
+      factories,
+    } = this.options;
     const dependencies = {
       events,
       projections,
@@ -96,6 +106,7 @@ export class RuntimeCompositionRoot {
       checkpoints,
       runLeases,
       stateClaims,
+      sessionQueue,
     };
     const runManager = requiredComponent('RunManager', factories.createRunManager({ events }));
     const fsmDriver = requiredComponent(

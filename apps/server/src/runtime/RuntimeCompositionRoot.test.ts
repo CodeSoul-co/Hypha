@@ -5,6 +5,7 @@ import type {
   RunLeaseStore,
   RuntimeCheckpointStore,
   RuntimeOrchestrationProjection,
+  SessionQueue,
   StateExecutionClaimStore,
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
@@ -24,6 +25,7 @@ function dependencies(): RuntimeCompositionDependencies {
     checkpoints: {} as RuntimeCheckpointStore,
     runLeases: {} as RunLeaseStore,
     stateClaims: {} as StateExecutionClaimStore,
+    sessionQueue: {} as SessionQueue,
   };
 }
 

@@ -18,6 +18,7 @@ describe('createServerRuntimeComposition', () => {
       checkpoints: {},
       runLeases: {},
       stateClaims: {},
+      sessionQueue: {},
     } as RuntimeBackbone;
     const inference = {
       id: 'inference.test',
