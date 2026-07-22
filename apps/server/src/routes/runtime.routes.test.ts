@@ -17,6 +17,8 @@ describe('runtime run authorization', () => {
     projectReplay: jest.fn(),
     projectAudit: jest.fn(),
     projectRegression: jest.fn(),
+    listSkillHumanReviews: jest.fn(),
+    decideSkillHumanReview: jest.fn(),
   };
   const app = express();
   app.use(express.json());
@@ -32,6 +34,11 @@ describe('runtime run authorization', () => {
     email: 'runtime-foreign@hypha.local',
     isAdmin: false,
   });
+  const adminToken = generateToken({
+    id: 'runtime-admin',
+    email: 'runtime-admin@hypha.local',
+    isAdmin: true,
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -43,6 +50,11 @@ describe('runtime run authorization', () => {
     runtime.projectReplay.mockResolvedValue({ runId: run.id });
     runtime.projectAudit.mockResolvedValue({ runId: run.id });
     runtime.projectRegression.mockResolvedValue({ runId: run.id });
+    runtime.listSkillHumanReviews.mockResolvedValue([{ taskId: 'skill-review-1' }]);
+    runtime.decideSkillHumanReview.mockResolvedValue({
+      taskId: 'skill-review-1',
+      status: 'approved',
+    });
   });
 
   it('returns an owned run and its events', async () => {
@@ -70,4 +82,40 @@ describe('runtime run authorization', () => {
       expect(response.body.error.code).toBe('RUN_NOT_FOUND');
     }
   );
+
+  it('lists Skill reviews only through the owned Run boundary', async () => {
+    const response = await request(app)
+      .get(`/runtime/runs/${run.id}/human-reviews/skills`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+    expect(response.body.data).toEqual([{ taskId: 'skill-review-1' }]);
+    expect(runtime.listSkillHumanReviews).toHaveBeenCalledWith(run.id, ownerId);
+
+    await request(app)
+      .get(`/runtime/runs/${run.id}/human-reviews/skills`)
+      .set('Authorization', `Bearer ${foreignToken}`)
+      .expect(404);
+  });
+
+  it('allows only an admin reviewer to resolve a Skill task', async () => {
+    await request(app)
+      .post(`/runtime/runs/${run.id}/human-reviews/skills/skill-review-1/decision`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ decision: 'approved' })
+      .expect(403);
+
+    await request(app)
+      .post(`/runtime/runs/${run.id}/human-reviews/skills/skill-review-1/decision`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ decision: 'approved' })
+      .expect(200);
+    expect(runtime.decideSkillHumanReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.id,
+        taskId: 'skill-review-1',
+        decision: 'approved',
+        decidedBy: 'runtime-admin',
+      })
+    );
+  });
 });

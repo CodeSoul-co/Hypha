@@ -76,6 +76,7 @@ import {
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
+import type { LoadedSkillContext, SkillRef } from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -163,6 +164,43 @@ type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
 
 type ResolvedRuntimeAgentSpec = ReActAgentSpec & {
   promptResolution?: AgentPromptResolution;
+  activeSkills?: LoadedSkillContext[];
+};
+
+export interface SkillHumanReviewTask {
+  taskId: string;
+  runId: string;
+  skillId: string;
+  skillVersion: string;
+  skillRevision: string;
+  contentHash?: string;
+  userId: string;
+  agentId: string;
+  domainId: string;
+  requestedAt: string;
+  expiresAt: string;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  decidedBy?: string;
+  decidedAt?: string;
+}
+
+export interface OwnedRunScope {
+  runId: string;
+  userId: string;
+  sessionId: string;
+  clientSessionId: string;
+  domainPackId: string;
+}
+
+type SkillResolvingManager = {
+  resolveSkills?: (input: {
+    agentSkillRefs: SkillRef[];
+    inputText?: string;
+    allowedSkills?: string[];
+    requiredSkills?: string[];
+    availableToolRefs?: string[];
+    metadata?: Record<string, unknown>;
+  }) => Promise<LoadedSkillContext[]>;
 };
 
 export interface StartRunInput {
@@ -963,10 +1001,49 @@ class EventRuntimeService {
           sessionId,
           promptRefs,
         });
-    const systemInstructions =
+    const baseSystemInstructions =
       explicitInstructions ??
       promptResolution?.instructions ??
       `You are ${name}. Be helpful, harmless, and honest.`;
+    const run = await this.requireOwnedRunScope(input.runId, userId);
+    const skillManager = getSkillManager() as unknown as SkillResolvingManager;
+    const workflowState = asRecord(asRecord(spec.metadata)?.workflowState);
+    const activeSkills =
+      spec.skillRefs?.length && skillManager.resolveSkills
+        ? await skillManager.resolveSkills({
+            agentSkillRefs: spec.skillRefs,
+            inputText: [...input.messages]
+              .reverse()
+              .find((message) => message.role === 'user')?.content,
+            allowedSkills: stringArray(workflowState?.allowedSkills),
+            requiredSkills: stringArray(workflowState?.requiredSkills),
+            availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+            metadata: spec.metadata,
+          })
+        : [];
+    const reviewTasks = await this.requireSkillReviewApprovals({
+      run,
+      agentId: id,
+      skills: activeSkills,
+    });
+    if (reviewTasks.length > 0) {
+      const approval = {
+        taskKind: 'skill_activation',
+        tasks: reviewTasks,
+        stepId: input.stepId,
+        agentId: id,
+      };
+      await this.waitForHumanReview(input.runId, approval);
+      throw new HumanReviewRequiredError(input.runId, approval);
+    }
+    const skillInstructions = activeSkills.map(
+      (skill) =>
+        `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
+          .map((reference) => reference.content)
+          .filter(Boolean)
+          .join('\n')}\n</skill>`
+    );
+    const systemInstructions = mergeSystemPrompts(baseSystemInstructions, ...skillInstructions);
 
     return {
       ...spec,
@@ -981,6 +1058,7 @@ class EventRuntimeService {
         this.resolveChatModel().model,
       systemInstructions,
       promptResolution,
+      activeSkills,
       toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
     };
   }
@@ -1617,15 +1695,29 @@ class EventRuntimeService {
     return undefined;
   }
 
-  private async advanceToHumanReview(runId: string): Promise<void> {
+  private async advanceToHumanReview(
+    runId: string,
+    reason: 'tool-human-review' | 'skill-human-review' = 'tool-human-review'
+  ): Promise<void> {
     const run = await this.requireRun(runId);
+    if (reason === 'skill-human-review') {
+      try {
+        await this.transition(runId, 'HumanReview', { reason });
+      } catch (error) {
+        logger.warn('Custom FSM has no direct Skill HumanReview transition; Run wait remains durable', {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
     const ordered = ['Reasoning', 'ActionSelected', 'PolicyChecked', 'Acting'];
     const index = ordered.indexOf(run.snapshot.currentState);
     if (index >= 0) {
       for (const state of ordered.slice(index + 1)) await this.transition(runId, state);
     }
     if ((await this.requireRun(runId)).snapshot.currentState !== 'HumanReview') {
-      await this.transition(runId, 'HumanReview', { reason: 'tool-human-review' });
+      await this.transition(runId, 'HumanReview', { reason });
     }
   }
 
@@ -2241,6 +2333,184 @@ class EventRuntimeService {
       requestedAt,
       idempotencyKey: input.idempotencyKey ?? commandId,
     });
+  }
+
+  private async requireSkillReviewApprovals(input: {
+    run: OwnedRunScope;
+    agentId: string;
+    skills: LoadedSkillContext[];
+  }): Promise<SkillHumanReviewTask[]> {
+    const requiringReview = input.skills.filter(
+      (skill) => skill.policyDecision.requiresHumanReview === true
+    );
+    if (requiringReview.length === 0) return [];
+    const events = await this.runtime.listEvents(input.run.runId);
+    const existing = projectSkillHumanReviewTasks(events);
+    const pending: SkillHumanReviewTask[] = [];
+    for (const skill of requiringReview) {
+      const contentHash = skillContentHash(skill);
+      const revision = `${skill.version}:${contentHash}`;
+      const exact = existing.find(
+        (task) =>
+          task.skillId === skill.id &&
+          task.skillVersion === skill.version &&
+          task.skillRevision === revision &&
+          task.contentHash === contentHash &&
+          task.userId === input.run.userId &&
+          task.agentId === input.agentId &&
+          task.domainId === input.run.domainPackId &&
+          task.status === 'approved' &&
+          Date.parse(task.expiresAt) > Date.now()
+      );
+      if (exact) continue;
+      const priorPending = existing.find(
+        (task) =>
+          task.skillId === skill.id &&
+          task.skillRevision === revision &&
+          task.userId === input.run.userId &&
+          task.agentId === input.agentId &&
+          task.domainId === input.run.domainPackId &&
+          task.status === 'pending' &&
+          Date.parse(task.expiresAt) > Date.now()
+      );
+      if (priorPending) {
+        pending.push(priorPending);
+        continue;
+      }
+      const requestedAt = new Date().toISOString();
+      const task: SkillHumanReviewTask = {
+        taskId: `skill-review:${input.run.runId}:${skill.id}:${contentHash.slice(0, 16)}`,
+        runId: input.run.runId,
+        skillId: skill.id,
+        skillVersion: skill.version,
+        skillRevision: revision,
+        contentHash,
+        userId: input.run.userId,
+        agentId: input.agentId,
+        domainId: input.run.domainPackId,
+        requestedAt,
+        expiresAt: new Date(Date.parse(requestedAt) + 24 * 60 * 60 * 1_000).toISOString(),
+        status: 'pending',
+      };
+      await this.append(input.run.runId, 'human.review.requested', {
+        ...task,
+        taskKind: 'skill_activation',
+        policyId: skill.policyDecision.policyId,
+        reason: skill.policyDecision.reason,
+      });
+      pending.push(task);
+    }
+    if (pending.length > 0) {
+      await this.advanceToHumanReview(input.run.runId, 'skill-human-review');
+    }
+    return pending;
+  }
+
+  async listSkillHumanReviews(runId: string, userId: string): Promise<SkillHumanReviewTask[]> {
+    await this.requireOwnedRunScope(runId, userId);
+    return projectSkillHumanReviewTasks(await this.runtime.listEvents(runId));
+  }
+
+  async decideSkillHumanReview(input: {
+    runId: string;
+    taskId: string;
+    decision: 'approved' | 'rejected';
+    decidedBy: string;
+    reason?: string;
+  }): Promise<SkillHumanReviewTask> {
+    const run = await this.requireRun(input.runId);
+    const tasks = projectSkillHumanReviewTasks(await this.runtime.listEvents(input.runId));
+    const task = tasks.find((candidate) => candidate.taskId === input.taskId);
+    if (!task || task.status !== 'pending') {
+      throw new FrameworkError({
+        code: 'RUNTIME_INVALID_INPUT',
+        message: 'Skill human-review task is missing or already resolved.',
+        context: { runId: input.runId, taskId: input.taskId },
+      });
+    }
+    const decidedAt = new Date().toISOString();
+    if (Date.parse(task.expiresAt) <= Date.parse(decidedAt)) {
+      await this.append(input.runId, 'human.review.expired', {
+        ...task,
+        taskKind: 'skill_activation',
+        decidedAt,
+      });
+      await this.append(input.runId, 'human.review.resolved', {
+        taskId: task.taskId,
+        taskKind: 'skill_activation',
+        decision: 'expired',
+      });
+      return { ...task, status: 'expired', decidedAt };
+    }
+    const eventType =
+      input.decision === 'approved' ? 'human.review.approved' : 'human.review.rejected';
+    await this.append(input.runId, eventType, {
+      ...task,
+      taskKind: 'skill_activation',
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt,
+      reason: input.reason,
+    });
+    await this.append(input.runId, 'human.review.resolved', {
+      taskId: task.taskId,
+      taskKind: 'skill_activation',
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt,
+    });
+    if (input.decision === 'rejected') {
+      await this.failRun(input.runId, input.reason ?? `Skill ${task.skillId} was rejected.`);
+    } else {
+      await this.append(input.runId, 'run.resume.requested', {
+        taskId: task.taskId,
+        taskKind: 'skill_activation',
+        requestedBy: input.decidedBy,
+      });
+      if (run.snapshot.currentState === 'HumanReview') {
+        try {
+          await this.transition(input.runId, 'Reasoning', {
+            taskId: task.taskId,
+            reason: 'skill-review-approved',
+          });
+        } catch (error) {
+          logger.warn('Skill review approval could not transition the custom FSM to Reasoning', {
+            runId: input.runId,
+            taskId: task.taskId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      await this.append(input.runId, 'run.resumed', {
+        taskId: task.taskId,
+        taskKind: 'skill_activation',
+        resumedBy: input.decidedBy,
+      });
+    }
+    return {
+      ...task,
+      status: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt,
+    };
+  }
+
+  async requireOwnedRunScope(runId: string, userId: string): Promise<OwnedRunScope> {
+    const run = await this.findRun(runId);
+    if (!run || run.userId !== userId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Runtime run was not found for the authenticated principal.',
+        context: { runId },
+      });
+    }
+    return {
+      runId: run.runId,
+      userId: run.userId,
+      sessionId: run.sessionId,
+      clientSessionId: run.clientSessionId,
+      domainPackId: run.domainPackId,
+    };
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
@@ -2951,6 +3221,94 @@ class EventRuntimeService {
   }
 }
 
+function skillContentHash(skill: LoadedSkillContext): string {
+  const install = asRecord(asRecord(skill.provenance)?.install);
+  const installedHash = stringValue(install?.contentHash);
+  if (installedHash && /^[a-f0-9]{64}$/u.test(installedHash)) return installedHash;
+  return hashContent(
+    JSON.stringify({
+      id: skill.id,
+      version: skill.version,
+      instructions: skill.instructions,
+      references: skill.references.map((reference) => ({
+        path: reference.path,
+        content: reference.content,
+      })),
+      provenance: skill.provenance,
+    })
+  );
+}
+
+export function projectSkillHumanReviewTasks(events: FrameworkEvent[]): SkillHumanReviewTask[] {
+  const tasks = new Map<string, SkillHumanReviewTask>();
+  for (const event of events) {
+    const payload = asRecord(event.payload);
+    if (stringValue(payload?.taskKind) !== 'skill_activation') continue;
+    const taskId = stringValue(payload?.taskId);
+    if (!taskId) continue;
+    if (event.type === 'human.review.requested') {
+      const task = parseSkillHumanReviewTask(payload);
+      if (task) tasks.set(taskId, task);
+      continue;
+    }
+    const current = tasks.get(taskId);
+    if (!current) continue;
+    if (event.type === 'human.review.approved' || event.type === 'human.review.rejected') {
+      tasks.set(taskId, {
+        ...current,
+        status: event.type === 'human.review.approved' ? 'approved' : 'rejected',
+        decidedBy: stringValue(payload?.decidedBy),
+        decidedAt: stringValue(payload?.decidedAt) ?? event.timestamp,
+      });
+    } else if (event.type === 'human.review.expired') {
+      tasks.set(taskId, {
+        ...current,
+        status: 'expired',
+        decidedAt: stringValue(payload?.decidedAt) ?? event.timestamp,
+      });
+    }
+  }
+  return Array.from(tasks.values());
+}
+
+function parseSkillHumanReviewTask(
+  payload: Record<string, unknown> | undefined
+): SkillHumanReviewTask | null {
+  if (!payload) return null;
+  const required = {
+    taskId: stringValue(payload.taskId),
+    runId: stringValue(payload.runId),
+    skillId: stringValue(payload.skillId),
+    skillVersion: stringValue(payload.skillVersion),
+    skillRevision: stringValue(payload.skillRevision),
+    userId: stringValue(payload.userId),
+    agentId: stringValue(payload.agentId),
+    domainId: stringValue(payload.domainId),
+    requestedAt: stringValue(payload.requestedAt),
+    expiresAt: stringValue(payload.expiresAt),
+  };
+  if (Object.values(required).some((value) => !value)) return null;
+  return {
+    taskId: required.taskId!,
+    runId: required.runId!,
+    skillId: required.skillId!,
+    skillVersion: required.skillVersion!,
+    skillRevision: required.skillRevision!,
+    contentHash: stringValue(payload.contentHash),
+    userId: required.userId!,
+    agentId: required.agentId!,
+    domainId: required.domainId!,
+    requestedAt: required.requestedAt!,
+    expiresAt: required.expiresAt!,
+    status: 'pending',
+  };
+}
+
+function stringArray(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
 function createDefaultDomainPack(): DomainPackSpec {
   const happyPathStates = [
     'RunInitialized',
@@ -2970,7 +3328,15 @@ function createDefaultDomainPack(): DomainPackSpec {
     description: `${from} next`,
   }));
   transitions.push(
-    ...['ActionSelected', 'PolicyChecked', 'Acting', 'ObservationRecorded', 'Verifying'].map(
+    ...[
+      'ContextBuilt',
+      'Reasoning',
+      'ActionSelected',
+      'PolicyChecked',
+      'Acting',
+      'ObservationRecorded',
+      'Verifying',
+    ].map(
       (from) => ({ from, to: 'HumanReview', description: `${from} requires human review` })
     ),
     ...states
@@ -2980,6 +3346,11 @@ function createDefaultDomainPack(): DomainPackSpec {
       from: 'HumanReview',
       to: 'ObservationRecorded',
       description: 'Approved Tool execution produced an observation',
+    },
+    {
+      from: 'HumanReview',
+      to: 'Reasoning',
+      description: 'Approved Skill context resumes Agent reasoning',
     }
   );
   return validateDomainPackSpec({
