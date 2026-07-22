@@ -113,6 +113,106 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     });
   });
 
+  it('denies framework control-plane, credential, package, and socket paths', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-deny-'));
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    for (const protectedPath of [
+      '.env',
+      '.ssh/id_rsa',
+      '.aws/credentials',
+      '.config/gcloud/application_default_credentials.json',
+      '.hypha/skills/untrusted.md',
+      '.npmrc',
+      'data/runtime/events/runtime.sqlite',
+      'node_modules/package/index.js',
+      'var/run/docker.sock',
+    ]) {
+      await expect(
+        runtime.execute({ operation: 'write', path: protectedPath, content: 'secret' })
+      ).rejects.toThrow('protected by the control-plane policy');
+    }
+  });
+
+  it('denies configured control-plane stores even inside a broad write allow-list', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-store-'));
+    const eventStore = path.join(root, 'custom-state', 'events.sqlite');
+    setEnvironment('HYPHA_RUNTIME_EVENT_DB', eventStore);
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    await expect(
+      runtime.execute({ operation: 'write', path: eventStore, content: 'tampered' })
+    ).rejects.toThrow('protected by the control-plane policy');
+  });
+
+  it('rejects encoded, Unicode-confusable, NUL, and portable traversal variants', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-encoding-'));
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    const deniedPaths = [
+      '%2eenv',
+      '%252eenv',
+      'safe\\..\\.env',
+      '\uff0eenv',
+      `safe\u2215..\u2215.env`,
+      `safe\0file.txt`,
+      '\\\\.\\pipe\\docker_engine',
+      '\\\\server\\share\\artifact.txt',
+      'C:\\Windows\\System32\\drivers\\etc\\hosts',
+    ];
+    for (const deniedPath of deniedPaths) {
+      await expect(
+        runtime.execute({ operation: 'write', path: deniedPath, content: 'denied' })
+      ).rejects.toThrow();
+    }
+  });
+
+  it('filters protected entries while preserving ordinary Workspace access', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-list-'));
+    await fs.writeFile(path.join(root, 'result.txt'), 'hypha', 'utf8');
+    await fs.writeFile(path.join(root, '.env'), 'TOKEN=secret', 'utf8');
+    await fs.mkdir(path.join(root, '.git'));
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    await expect(runtime.execute({ operation: 'read', path: 'result.txt' })).resolves.toMatchObject(
+      {
+        content: 'hypha',
+      }
+    );
+    const result = (await runtime.execute({ operation: 'list', path: '.' })) as {
+      entries: Array<{ name: string }>;
+    };
+    expect(result.entries.map((entry) => entry.name)).toEqual(['result.txt']);
+    await expect(runtime.execute({ operation: 'read', path: '.env' })).rejects.toThrow(
+      'protected by the control-plane policy'
+    );
+  });
+
+  it('rejects writes through a directory link that escapes the write root', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-link-'));
+    const workspaceRoot = path.join(root, 'workspace');
+    const outsideRoot = path.join(root, 'outside');
+    await Promise.all([
+      fs.mkdir(workspaceRoot, { recursive: true }),
+      fs.mkdir(outsideRoot, { recursive: true }),
+    ]);
+    await fs.symlink(
+      outsideRoot,
+      path.join(workspaceRoot, 'redirect'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const runtime = createRuntime(workspaceRoot, workspaceRoot, false);
+    await runtime.initialize();
+
+    await expect(
+      runtime.execute({ operation: 'write', path: 'redirect/escaped.txt', content: 'denied' })
+    ).rejects.toThrow('outside configured write paths');
+  });
+
   function setEnvironment(name: string, value: string): void {
     previousEnvironment.set(name, process.env[name]);
     process.env[name] = value;

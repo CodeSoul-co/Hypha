@@ -8,6 +8,7 @@ import type {
   WorkspaceRuntimePort,
   WorkspaceRuntimeRequest,
 } from '@hypha/tools';
+import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 
 const executionEnvironmentAllowList = ['PATH', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL'] as const;
 const windowsIdentityEnvironmentVariables = [
@@ -25,6 +26,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   private readonly readRoots: string[];
   private readonly writeRoots: string[];
   private readonly executeRoots: string[];
+  private readonly controlPlaneGuard = new WorkspaceControlPlaneGuard();
 
   constructor(private readonly config: WorkspaceRuntimeConfig) {
     this.workingDirectory = path.resolve(config.workingDirectory);
@@ -34,6 +36,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   }
 
   async initialize(): Promise<void> {
+    this.writeRoots.forEach((root) => this.controlPlaneGuard.assertResolvedPath(root));
     await Promise.all(this.writeRoots.map((root) => fs.mkdir(root, { recursive: true })));
   }
 
@@ -49,10 +52,15 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
         const entries = await fs.readdir(absolutePath, { withFileTypes: true });
         return {
           path: request.path,
-          entries: entries.map((entry) => ({
-            name: entry.name,
-            type: entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other',
-          })),
+          entries: entries
+            .filter(
+              (entry) =>
+                !this.controlPlaneGuard.isProtectedResolvedPath(path.join(absolutePath, entry.name))
+            )
+            .map((entry) => ({
+              name: entry.name,
+              type: entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other',
+            })),
         };
       }
       case 'write':
@@ -95,6 +103,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, request.content, 'utf-8');
     if (request.executable && process.platform !== 'win32') await fs.chmod(absolutePath, 0o700);
+    await this.assertExistingPathAllowed(absolutePath, this.writeRoots, 'write');
     return {
       path: request.path,
       bytesWritten: Buffer.byteLength(request.content, 'utf-8'),
@@ -182,6 +191,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   }
 
   private resolvePath(requestedPath: string): string {
+    this.controlPlaneGuard.assertInputPath(requestedPath);
     return path.isAbsolute(requestedPath)
       ? path.resolve(requestedPath)
       : path.resolve(this.workingDirectory, requestedPath);
@@ -194,6 +204,8 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     if (!realRoots.some((root) => this.isWithin(realAncestor, root))) {
       throw new Error(`Path is outside configured write paths: ${candidate}`);
     }
+    this.controlPlaneGuard.assertResolvedPath(candidate);
+    this.controlPlaneGuard.assertResolvedPath(realAncestor);
   }
 
   private async assertCandidateWithinRoots(
@@ -217,6 +229,8 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     if (!realRoots.some((root) => this.isWithin(realCandidate, root))) {
       throw new Error(`Path is outside configured ${permission} paths: ${candidate}`);
     }
+    this.controlPlaneGuard.assertResolvedPath(candidate);
+    this.controlPlaneGuard.assertResolvedPath(realCandidate);
   }
 
   private async existingRealRoots(roots: string[]): Promise<string[]> {
