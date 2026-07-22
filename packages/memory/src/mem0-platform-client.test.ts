@@ -33,7 +33,11 @@ describe('Mem0PlatformClient', () => {
       calls.push({ url, method: init?.method, headers: init?.headers });
       return json({ status: 'PENDING', event_id: 'event-1' });
     };
-    const client = new Mem0PlatformClient({ apiToken: 'secret-ref-value', fetch: fetcher });
+    const client = new Mem0PlatformClient({
+      apiToken: 'secret-ref-value',
+      mappingProfile: 'test',
+      fetch: fetcher,
+    });
     const result = await client.add({
       operationId: 'op-1',
       principal,
@@ -59,7 +63,11 @@ describe('Mem0PlatformClient', () => {
       body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
       return json([], 429);
     };
-    const client = new Mem0PlatformClient({ apiToken: 'token', fetch: fetcher });
+    const client = new Mem0PlatformClient({
+      apiToken: 'token',
+      mappingProfile: 'test',
+      fetch: fetcher,
+    });
     await expect(
       client.search({
         operationId: 'op-search',

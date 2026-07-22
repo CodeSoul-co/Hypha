@@ -41,6 +41,7 @@ describe('MemoryBankManagedClient', () => {
       location: 'us-central1',
       reasoningEngineId: 'engine',
       accessToken: 'oauth-token',
+      mappingProfile: 'test',
       fetch: fetcher,
     });
     const result = await client.add({
@@ -67,6 +68,7 @@ describe('MemoryBankManagedClient', () => {
           location: 'l',
           reasoningEngineId: 'e',
           accessToken: 'token',
+          mappingProfile: 'test',
           baseUrl: 'http://managed.example',
         })
     ).toThrow();
@@ -87,6 +89,7 @@ describe('MemoryBankManagedClient', () => {
       location: 'us-central1',
       reasoningEngineId: 'engine',
       accessToken: 'oauth-token',
+      mappingProfile: 'test',
       fetch: async (url) => {
         requestedUrl = url;
         return json({ memories: [] });

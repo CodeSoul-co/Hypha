@@ -1,6 +1,7 @@
 import type {
   ManagedMemoryRecord,
   ManagedMemoryScope,
+  MemoryContractSpecRef,
   MemoryManagementCapabilities,
   MemorySource,
 } from './contracts';
@@ -19,8 +20,12 @@ import type {
   MemoryVersion,
   ProviderHealth,
 } from './operations';
-import type { ExternalMemoryClient, ExternalMemoryMappingStore } from './external-adapters';
-import { InMemoryExternalMemoryMappingStore } from './external-adapters';
+import {
+  resolveExternalMemoryMappingStore,
+  type ExternalMemoryClient,
+  type ExternalMemoryMappingRuntimeProfile,
+  type ExternalMemoryMappingStore,
+} from './external-adapters';
 import { createExternalMemoryId } from './external-memory-identity';
 import type { Mem0HttpFetch } from './mem0-rest-client';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
@@ -34,6 +39,8 @@ export interface MemoryBankManagedClientOptions {
   baseUrl?: string;
   providerId?: string;
   mappingStore?: ExternalMemoryMappingStore;
+  mappingProfile?: ExternalMemoryMappingRuntimeProfile;
+  profileRef?: MemoryContractSpecRef;
   now?: () => Date;
   allowInsecureForTests?: boolean;
 }
@@ -65,6 +72,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   private readonly parent: string;
   private readonly providerId: string;
   private readonly mappingStore: ExternalMemoryMappingStore;
+  private readonly profileRef: MemoryContractSpecRef;
   private readonly now: () => Date;
 
   constructor(private readonly options: MemoryBankManagedClientOptions) {
@@ -87,7 +95,15 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     this.fetcher = fetcher;
     this.parent = `projects/${options.projectId}/locations/${options.location}/reasoningEngines/${options.reasoningEngineId}`;
     this.providerId = options.providerId ?? 'memory.provider.memorybank.vertex-ai';
-    this.mappingStore = options.mappingStore ?? new InMemoryExternalMemoryMappingStore();
+    const mappingProfile = options.mappingProfile ?? 'production';
+    this.mappingStore = resolveExternalMemoryMappingStore(options.mappingStore, mappingProfile);
+    if (mappingProfile === 'production' && !options.profileRef) {
+      throw memoryError(
+        'MEMORY_INVALID_INPUT',
+        'Managed production mappings require an explicit Memory profile reference.'
+      );
+    }
+    this.profileRef = options.profileRef ?? { id: 'memory.profile.ephemeral' };
     this.now = options.now ?? (() => new Date());
   }
 
@@ -359,6 +375,12 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         memoryId: record.id,
         providerId: this.providerId,
         externalId: String(record.metadata?.providerExternalId),
+        binding: {
+          scopeHash: record.scopeHash,
+          profileRef: this.profileRef,
+          recordRevision: record.revision,
+          provenance: record.provenance,
+        },
         lastSyncedAt: this.now().toISOString(),
         syncState: 'synced',
         metadata: {
@@ -373,10 +395,21 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   private async resolveName(id: string, scope: ManagedMemoryScope): Promise<string> {
     const mapping = await this.mappingStore.get(this.providerId, id);
     if (!mapping) throw memoryError('MEMORY_NOT_FOUND', 'No managed MemoryBank mapping for ' + id);
-    if (mapping.metadata?.scopeHash !== hashMemoryScope(scope)) {
+    if (mapping.binding.scopeHash !== hashMemoryScope(scope)) {
       throw memoryError(
         'MEMORY_SCOPE_DENIED',
         'Managed MemoryBank mapping does not belong to the requested scope.',
+        false,
+        { memoryId: id }
+      );
+    }
+    if (
+      mapping.binding.profileRef &&
+      !sameProfileRef(mapping.binding.profileRef, this.profileRef)
+    ) {
+      throw memoryError(
+        'MEMORY_SCOPE_DENIED',
+        'Managed MemoryBank mapping does not belong to the requested profile.',
         false,
         { memoryId: id }
       );
@@ -385,6 +418,9 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   }
 }
 
+function sameProfileRef(left: MemoryContractSpecRef, right: MemoryContractSpecRef): boolean {
+  return left.id === right.id && left.version === right.version && left.revision === right.revision;
+}
 function toVertexScope(scope: ManagedMemoryScope): Record<string, string> {
   return Object.fromEntries(
     Object.entries({

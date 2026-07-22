@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ExternalMemoryManagementAdapter,
   StructuredExternalMemoryMappingStore,
+  hashMemoryScope,
   memoryProfileSpecExample,
   type ExternalMemoryClient,
   type ManagedMemoryScope,
@@ -74,6 +75,20 @@ describe('external provider governance and reliability', () => {
       memoryId: 'memory:external:stable',
       providerId: 'memory.provider.remote',
       externalId: 'remote:42',
+      binding: {
+        scopeHash: hashMemoryScope(scope),
+        profileRef: {
+          id: memoryProfileSpecExample.id,
+          version: memoryProfileSpecExample.version,
+          revision: memoryProfileSpecExample.revision,
+        },
+        recordRevision: 1,
+        provenance: {
+          createdBy: 'external-reliability-test',
+          providerId: 'memory.provider.remote',
+          createdAt: '2026-07-21T00:00:00.000Z',
+        },
+      },
       lastSyncedAt: '2026-07-21T00:00:00.000Z',
       syncState: 'synced' as const,
     };
@@ -118,7 +133,11 @@ describe('external provider governance and reliability', () => {
         operationId: 'operation:external:timeout',
         principal,
         scope,
-        profileRef: memoryProfileSpecExample,
+        profileRef: {
+          id: memoryProfileSpecExample.id,
+          version: memoryProfileSpecExample.version,
+          revision: memoryProfileSpecExample.revision,
+        },
         query: 'timeout',
       })
     ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_TIMEOUT' });

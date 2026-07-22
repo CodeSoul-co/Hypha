@@ -265,6 +265,7 @@ describe('concrete external provider management contract', () => {
       () =>
         new Mem0PlatformClient({
           apiToken: 'injected-test-token',
+          mappingProfile: 'test',
           fetch: createMem0DialectFetch('platform'),
         }),
     ],
@@ -284,6 +285,7 @@ describe('concrete external provider management contract', () => {
           location: 'us-central1',
           reasoningEngineId: 'engine',
           accessToken: 'injected-test-token',
+          mappingProfile: 'test',
           fetch: createManagedMemoryBankFetch(),
         }),
     ],

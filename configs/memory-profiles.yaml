@@ -69,6 +69,7 @@ profiles:
         baseUrl: https://api.mem0.ai
         apiTokenEnv: HYPHA_MEM0_PLATFORM_TOKEN
         protocol: mem0-platform-v3
+        mappingStoreRef: memory.mapping.durable
   memorybank-local:
     status: validated-contract
     management:
@@ -95,3 +96,4 @@ profiles:
         reasoningEngineIdEnv: HYPHA_MEMORYBANK_ENGINE
         accessTokenEnv: HYPHA_MEMORYBANK_MANAGED_TOKEN
         tlsRequired: true
+        mappingStoreRef: memory.mapping.durable

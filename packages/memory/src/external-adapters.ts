@@ -1,7 +1,10 @@
+import { z, type ZodType } from 'zod';
 import type {
   ManagedMemoryRecord,
+  MemoryContractSpecRef,
   MemoryFallbackPolicySpec,
   MemoryManagementCapabilities,
+  MemoryProvenance,
   NormalizedMemoryError,
 } from './contracts';
 import type {
@@ -22,17 +25,68 @@ import type {
 } from './operations';
 import { hashMemoryScope, memoryError, normalizeMemoryError } from './memory-utils';
 
+export interface ExternalMemoryMappingBinding {
+  scopeHash: string;
+  profileRef?: MemoryContractSpecRef;
+  recordRevision: number;
+  provenance: MemoryProvenance;
+}
+
 export interface ExternalMemoryMapping {
   memoryId: string;
   providerId: string;
   externalId: string;
   externalVersion?: string;
+  binding: ExternalMemoryMappingBinding;
   lastSyncedAt: string;
   syncState: 'synced' | 'pending' | 'failed' | 'deleted';
   metadata?: Record<string, unknown>;
 }
 
+export const externalMemoryMappingSchema: ZodType<ExternalMemoryMapping> = z
+  .object({
+    memoryId: z.string().min(1),
+    providerId: z.string().min(1),
+    externalId: z.string().min(1),
+    externalVersion: z.string().min(1).optional(),
+    binding: z
+      .object({
+        scopeHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        profileRef: z
+          .object({
+            id: z.string().min(1),
+            version: z.string().min(1).optional(),
+            revision: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        recordRevision: z.number().int().positive(),
+        provenance: z
+          .object({
+            createdBy: z.string().min(1),
+            providerId: z.string().min(1),
+            extractorVersion: z.string().optional(),
+            sourceEventIds: z.array(z.string()).optional(),
+            sourceMemoryIds: z.array(z.string()).optional(),
+            transformation: z.string().optional(),
+            humanDecisionId: z.string().optional(),
+            createdAt: z.string().datetime(),
+            metadata: z.record(z.unknown()).optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+    lastSyncedAt: z.string().datetime(),
+    syncState: z.enum(['synced', 'pending', 'failed', 'deleted']),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export type ExternalMemoryMappingStoreDurability = 'ephemeral' | 'durable';
+export type ExternalMemoryMappingRuntimeProfile = 'production' | 'test' | 'ephemeral';
+
 export interface ExternalMemoryMappingStore {
+  readonly durability: ExternalMemoryMappingStoreDurability;
   get(providerId: string, memoryId: string): Promise<ExternalMemoryMapping | null>;
   getByExternalId(providerId: string, externalId: string): Promise<ExternalMemoryMapping | null>;
   set(mapping: ExternalMemoryMapping): Promise<void>;
@@ -40,6 +94,7 @@ export interface ExternalMemoryMappingStore {
 }
 
 export class InMemoryExternalMemoryMappingStore implements ExternalMemoryMappingStore {
+  readonly durability = 'ephemeral' as const;
   private readonly values = new Map<string, ExternalMemoryMapping>();
 
   async get(providerId: string, memoryId: string): Promise<ExternalMemoryMapping | null> {
@@ -58,7 +113,8 @@ export class InMemoryExternalMemoryMappingStore implements ExternalMemoryMapping
   }
 
   async set(mapping: ExternalMemoryMapping): Promise<void> {
-    this.values.set(`${mapping.providerId}:${mapping.memoryId}`, structuredClone(mapping));
+    const validated = externalMemoryMappingSchema.parse(mapping);
+    this.values.set(`${mapping.providerId}:${mapping.memoryId}`, structuredClone(validated));
   }
 
   async list(providerId: string): Promise<ExternalMemoryMapping[]> {
@@ -68,6 +124,18 @@ export class InMemoryExternalMemoryMappingStore implements ExternalMemoryMapping
   }
 }
 
+export function resolveExternalMemoryMappingStore(
+  store: ExternalMemoryMappingStore | undefined,
+  profile: ExternalMemoryMappingRuntimeProfile
+): ExternalMemoryMappingStore {
+  if (profile === 'production' && store?.durability !== 'durable') {
+    throw memoryError(
+      'MEMORY_INVALID_INPUT',
+      'Production external providers require a durable external identity mapping store.'
+    );
+  }
+  return store ?? new InMemoryExternalMemoryMappingStore();
+}
 export interface ExternalMemoryClient {
   capabilities(signal?: AbortSignal): Promise<Partial<MemoryManagementCapabilities>>;
   add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult>;
@@ -96,6 +164,7 @@ export interface ExternalMemoryAdapterOptions {
   fallback?: MemoryManagementProvider;
   fallbackPolicy?: MemoryFallbackPolicySpec;
   mappingStore?: ExternalMemoryMappingStore;
+  mappingProfile?: ExternalMemoryMappingRuntimeProfile;
   timeoutMs?: number;
   retryAttempts?: number;
   circuitBreaker?: {
@@ -146,7 +215,10 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
 
   constructor(protected readonly options: ExternalMemoryAdapterOptions) {
     this.id = options.id;
-    this.mappingStore = options.mappingStore ?? new InMemoryExternalMemoryMappingStore();
+    this.mappingStore = resolveExternalMemoryMappingStore(
+      options.mappingStore,
+      options.mappingProfile ?? 'ephemeral'
+    );
     this.now = options.now ?? (() => new Date());
   }
 
@@ -165,7 +237,9 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
       'write',
       signal
     );
-    await Promise.all(result.records.map((record) => this.captureMapping(record)));
+    await Promise.all(
+      result.records.map((record) => this.captureMapping(record, request.profileRef))
+    );
     return result;
   }
 
@@ -442,13 +516,22 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     );
   }
 
-  private async captureMapping(record: ManagedMemoryRecord): Promise<void> {
+  private async captureMapping(
+    record: ManagedMemoryRecord,
+    profileRef?: MemoryContractSpecRef
+  ): Promise<void> {
     const externalId = record.metadata?.providerExternalId;
     if (typeof externalId !== 'string') return;
     await this.mappingStore.set({
       memoryId: record.id,
       providerId: this.id,
       externalId,
+      binding: {
+        scopeHash: record.scopeHash,
+        profileRef,
+        recordRevision: record.revision,
+        provenance: record.provenance,
+      },
       externalVersion:
         typeof record.metadata?.providerExternalVersion === 'string'
           ? record.metadata.providerExternalVersion

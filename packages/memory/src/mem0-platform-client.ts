@@ -14,7 +14,11 @@ import type {
   MemoryVersion,
   ProviderHealth,
 } from './operations';
-import type { ExternalMemoryClient, ExternalMemoryMappingStore } from './external-adapters';
+import type {
+  ExternalMemoryClient,
+  ExternalMemoryMappingRuntimeProfile,
+  ExternalMemoryMappingStore,
+} from './external-adapters';
 import { Mem0OssClient, type Mem0HttpFetch, type Mem0HttpResponse } from './mem0-rest-client';
 import { memoryError } from './memory-utils';
 
@@ -24,6 +28,7 @@ export interface Mem0PlatformClientOptions {
   fetch?: Mem0HttpFetch;
   providerId?: string;
   mappingStore?: ExternalMemoryMappingStore;
+  mappingProfile?: ExternalMemoryMappingRuntimeProfile;
   now?: () => Date;
 }
 
@@ -86,6 +91,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
       fetch: (url, init) => this.platformFetch(url, init),
       authMode: 'none',
       mappingStore: options.mappingStore,
+      mappingProfile: options.mappingProfile ?? 'production',
       now: options.now,
       healthPath: '/v1/events/?page=1&page_size=1',
     });

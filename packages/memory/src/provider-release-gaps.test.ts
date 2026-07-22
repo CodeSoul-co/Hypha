@@ -36,6 +36,7 @@ function managedClient(fetch: Mem0HttpFetch): MemoryBankManagedClient {
     location: 'us-central1',
     reasoningEngineId: 'engine',
     accessToken: 'injected-test-token',
+    mappingProfile: 'test',
     fetch,
   });
 }
@@ -117,10 +118,17 @@ describe('external provider release gap baseline', () => {
     ).rejects.toMatchObject({ code: 'MEMORY_SCOPE_DENIED' });
   });
 
-  it.fails('requires a durable identity mapping store for managed production clients', () => {
-    expect(() => managedClient(async () => response({ memories: [] }))).toThrow(
-      'durable external identity mapping store'
-    );
+  it('requires a durable identity mapping store for managed production clients', () => {
+    expect(
+      () =>
+        new MemoryBankManagedClient({
+          projectId: 'project',
+          location: 'us-central1',
+          reasoningEngineId: 'engine',
+          accessToken: 'injected-test-token',
+          fetch: async () => response({ memories: [] }),
+        })
+    ).toThrow('durable external identity mapping store');
   });
 
   it.fails('treats omitted local capabilities as unsupported', async () => {

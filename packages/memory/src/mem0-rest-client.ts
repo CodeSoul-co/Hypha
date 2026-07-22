@@ -21,8 +21,9 @@ import type {
   ProviderHealth,
 } from './operations';
 import {
-  InMemoryExternalMemoryMappingStore,
+  resolveExternalMemoryMappingStore,
   type ExternalMemoryClient,
+  type ExternalMemoryMappingRuntimeProfile,
   type ExternalMemoryMappingStore,
 } from './external-adapters';
 import { createExternalMemoryId } from './external-memory-identity';
@@ -55,6 +56,7 @@ export interface Mem0OssClientOptions {
   healthPath?: string;
   now?: () => Date;
   mappingStore?: ExternalMemoryMappingStore;
+  mappingProfile?: ExternalMemoryMappingRuntimeProfile;
 }
 
 const mem0RestCapabilities: MemoryManagementCapabilities = {
@@ -99,7 +101,10 @@ export class Mem0OssClient implements ExternalMemoryClient {
     this.fetcher = fetcher;
     this.providerId = options.providerId ?? 'memory.provider.mem0.rest';
     this.now = options.now ?? (() => new Date());
-    this.mappingStore = options.mappingStore ?? new InMemoryExternalMemoryMappingStore();
+    this.mappingStore = resolveExternalMemoryMappingStore(
+      options.mappingStore,
+      options.mappingProfile ?? 'ephemeral'
+    );
   }
 
   async capabilities(): Promise<Partial<MemoryManagementCapabilities>> {
@@ -438,6 +443,11 @@ export class Mem0OssClient implements ExternalMemoryClient {
         memoryId: record.id,
         providerId: this.providerId,
         externalId,
+        binding: {
+          scopeHash: record.scopeHash,
+          recordRevision: record.revision,
+          provenance: record.provenance,
+        },
         externalVersion:
           typeof record.metadata?.providerExternalVersion === 'string'
             ? record.metadata.providerExternalVersion

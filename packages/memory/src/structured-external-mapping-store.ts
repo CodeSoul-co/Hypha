@@ -1,5 +1,9 @@
 import type { StructuredStoreProvider } from './index';
-import type { ExternalMemoryMapping, ExternalMemoryMappingStore } from './external-adapters';
+import {
+  externalMemoryMappingSchema,
+  type ExternalMemoryMapping,
+  type ExternalMemoryMappingStore,
+} from './external-adapters';
 import { sha256 } from './memory-utils';
 
 interface StoredExternalMemoryMapping extends ExternalMemoryMapping {
@@ -13,6 +17,7 @@ export interface StructuredExternalMemoryMappingStoreOptions {
 
 /** Persistent, restart-safe mapping between Hypha memory IDs and provider IDs. */
 export class StructuredExternalMemoryMappingStore implements ExternalMemoryMappingStore {
+  readonly durability = 'durable' as const;
   private readonly table: string;
 
   constructor(private readonly options: StructuredExternalMemoryMappingStoreOptions) {
@@ -39,8 +44,9 @@ export class StructuredExternalMemoryMappingStore implements ExternalMemoryMappi
   }
 
   async set(mapping: ExternalMemoryMapping): Promise<void> {
+    const validated = externalMemoryMappingSchema.parse(mapping);
     const record: StoredExternalMemoryMapping = {
-      ...structuredClone(mapping),
+      ...structuredClone(validated),
       id: mappingId(mapping.providerId, mapping.memoryId),
     };
     await this.options.store.transaction(async (transaction) => {

@@ -14,7 +14,11 @@ import type {
   MemoryVersion,
   ProviderHealth,
 } from './operations';
-import type { ExternalMemoryClient, ExternalMemoryMappingStore } from './external-adapters';
+import type {
+  ExternalMemoryClient,
+  ExternalMemoryMappingRuntimeProfile,
+  ExternalMemoryMappingStore,
+} from './external-adapters';
 import { Mem0OssClient, type Mem0HttpFetch, type Mem0HttpResponse } from './mem0-rest-client';
 import { memoryError } from './memory-utils';
 
@@ -35,6 +39,7 @@ export interface MemoryBankLocalClientOptions {
   apiKey?: string;
   providerId?: string;
   mappingStore?: ExternalMemoryMappingStore;
+  mappingProfile?: ExternalMemoryMappingRuntimeProfile;
   now?: () => Date;
 }
 
@@ -85,6 +90,7 @@ export class MemoryBankLocalClient implements MemoryBankClient {
       fetch: (url, init) => this.localFetch(url, init),
       authMode: 'none',
       mappingStore: options.mappingStore,
+      mappingProfile: options.mappingProfile ?? 'ephemeral',
       now: options.now,
       healthPath: '/health',
     });

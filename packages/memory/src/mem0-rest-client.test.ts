@@ -119,7 +119,11 @@ describe('Mem0 REST client', () => {
       operationId: 'operation:mem0:search',
       principal,
       scope,
-      profileRef: memoryProfileSpecExample,
+      profileRef: {
+        id: memoryProfileSpecExample.id,
+        version: memoryProfileSpecExample.version,
+        revision: memoryProfileSpecExample.revision,
+      },
       query: 'blue',
       topK: 5,
     });
@@ -143,6 +147,20 @@ describe('Mem0 REST client', () => {
       memoryId,
       providerId: 'memory.provider.mem0.rest',
       externalId: 'mem0:1',
+      binding: {
+        scopeHash: hashMemoryScope(scope),
+        profileRef: {
+          id: memoryProfileSpecExample.id,
+          version: memoryProfileSpecExample.version,
+          revision: memoryProfileSpecExample.revision,
+        },
+        recordRevision: 1,
+        provenance: {
+          createdBy: 'mem0-test',
+          providerId: 'memory.provider.mem0.rest',
+          createdAt: '2026-07-17T00:00:00.000Z',
+        },
+      },
       lastSyncedAt: '2026-07-17T00:00:00.000Z',
       syncState: 'synced',
     });
@@ -166,6 +184,20 @@ describe('Mem0 REST client', () => {
       memoryId,
       providerId: 'memory.provider.mem0.rest',
       externalId: 'mem0:1',
+      binding: {
+        scopeHash: hashMemoryScope(scope),
+        profileRef: {
+          id: memoryProfileSpecExample.id,
+          version: memoryProfileSpecExample.version,
+          revision: memoryProfileSpecExample.revision,
+        },
+        recordRevision: 1,
+        provenance: {
+          createdBy: 'mem0-test',
+          providerId: 'memory.provider.mem0.rest',
+          createdAt: '2026-07-17T00:00:00.000Z',
+        },
+      },
       lastSyncedAt: '2026-07-17T00:00:00.000Z',
       syncState: 'synced',
     });
