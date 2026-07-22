@@ -20,6 +20,56 @@ export const memoryServerMigrationAcceptanceSchema: ZodType<MemoryServerMigratio
       z.literal('TemporaryMemory'),
       z.literal('PermanentMemory'),
     ]),
+    canonicalConsumption: z
+      .object({
+        serviceRegistration: z.literal('single'),
+        minimumProfileSwitchCases: z.literal(2),
+        compositionReceiptRequired: z.literal(true),
+        allowedLegacyAdapterResponsibilities: z.tuple([
+          z.literal('delegate'),
+          z.literal('scope_mapping'),
+          z.literal('error_mapping'),
+        ]),
+        prohibitedLegacyAdapterResponsibilities: z.tuple([
+          z.literal('business_rules'),
+          z.literal('provider_selection'),
+          z.literal('independent_persistence'),
+        ]),
+      })
+      .strict(),
+    migration: z
+      .object({
+        phases: z.tuple([
+          z.literal('planned'),
+          z.literal('shadow_read'),
+          z.literal('bounded_dual_write'),
+          z.literal('verify'),
+          z.literal('cutover'),
+          z.literal('retire'),
+          z.literal('rollback'),
+        ]),
+        dualWriteRequirements: z.tuple([
+          z.literal('deadlineAt'),
+          z.literal('revision'),
+          z.literal('idempotencyKey'),
+          z.literal('checkpointRef'),
+        ]),
+        requiredEventFields: z.tuple([
+          z.literal('migrationRevision'),
+          z.literal('activePath'),
+          z.literal('shadowResult'),
+          z.literal('reason'),
+        ]),
+        retirementConditions: z.tuple([
+          z.literal('legacyReadTraffic'),
+          z.literal('legacyWriteTraffic'),
+          z.literal('reconciliationPassed'),
+          z.literal('rollbackWindowClosed'),
+          z.literal('legacyImports'),
+          z.literal('legacyRegistrations'),
+        ]),
+      })
+      .strict(),
     sharedFixture: z
       .object({
         scope: managedMemoryScopeSchema,
@@ -88,6 +138,8 @@ export const memoryServerMigrationAcceptanceJsonSchema: JsonSchema = strictObjec
     'canonicalService',
     'requiredConsumers',
     'prohibitedRuntimeDependencies',
+    'canonicalConsumption',
+    'migration',
     'sharedFixture',
     'redisWorkingMemory',
     'permanentMemory',
@@ -106,6 +158,53 @@ export const memoryServerMigrationAcceptanceJsonSchema: JsonSchema = strictObjec
       items: { enum: ['TemporaryMemory', 'PermanentMemory'] },
       minItems: 2,
     },
+    canonicalConsumption: strictObject(
+      [
+        'serviceRegistration',
+        'minimumProfileSwitchCases',
+        'compositionReceiptRequired',
+        'allowedLegacyAdapterResponsibilities',
+        'prohibitedLegacyAdapterResponsibilities',
+      ],
+      {
+        serviceRegistration: { enum: ['single'] },
+        minimumProfileSwitchCases: { type: 'integer', minimum: 2 },
+        compositionReceiptRequired: { type: 'boolean' },
+        allowedLegacyAdapterResponsibilities: {
+          type: 'array',
+          items: { enum: ['delegate', 'scope_mapping', 'error_mapping'] },
+          minItems: 3,
+        },
+        prohibitedLegacyAdapterResponsibilities: {
+          type: 'array',
+          items: { enum: ['business_rules', 'provider_selection', 'independent_persistence'] },
+          minItems: 3,
+        },
+      }
+    ),
+    migration: strictObject(
+      ['phases', 'dualWriteRequirements', 'requiredEventFields', 'retirementConditions'],
+      {
+        phases: {
+          type: 'array',
+          items: {
+            enum: [
+              'planned',
+              'shadow_read',
+              'bounded_dual_write',
+              'verify',
+              'cutover',
+              'retire',
+              'rollback',
+            ],
+          },
+          minItems: 7,
+        },
+        dualWriteRequirements: { type: 'array', items: { type: 'string' }, minItems: 4 },
+        requiredEventFields: { type: 'array', items: { type: 'string' }, minItems: 4 },
+        retirementConditions: { type: 'array', items: { type: 'string' }, minItems: 6 },
+      }
+    ),
     sharedFixture: strictObject(
       ['scope', 'observedAt', 'canonicalServiceInstanceId', 'migration', 'failure'],
       {

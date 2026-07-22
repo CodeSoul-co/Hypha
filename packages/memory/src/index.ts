@@ -866,6 +866,7 @@ export * from './structured-idempotency-store';
 export * from './memory-server-migration-contract';
 export * from './memory-server-migration-schema';
 export * from './memory-server-migration-acceptance';
+export * from './memory-server-consumer-migration';
 export * from './memory-server-migration-fixtures';
 export * from './provider-reconciliation';
 export * from './provider-operational-health';

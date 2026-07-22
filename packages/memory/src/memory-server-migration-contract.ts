@@ -29,6 +29,38 @@ export interface MemoryServerMigrationAcceptance {
   canonicalService: '@hypha/memory.MemoryApplicationService';
   requiredConsumers: readonly ['chat', 'memory-routes', 'tool', 'workflow', 'harness'];
   prohibitedRuntimeDependencies: readonly ['TemporaryMemory', 'PermanentMemory'];
+  canonicalConsumption: {
+    serviceRegistration: 'single';
+    minimumProfileSwitchCases: 2;
+    compositionReceiptRequired: true;
+    allowedLegacyAdapterResponsibilities: readonly ['delegate', 'scope_mapping', 'error_mapping'];
+    prohibitedLegacyAdapterResponsibilities: readonly [
+      'business_rules',
+      'provider_selection',
+      'independent_persistence',
+    ];
+  };
+  migration: {
+    phases: readonly [
+      'planned',
+      'shadow_read',
+      'bounded_dual_write',
+      'verify',
+      'cutover',
+      'retire',
+      'rollback',
+    ];
+    dualWriteRequirements: readonly ['deadlineAt', 'revision', 'idempotencyKey', 'checkpointRef'];
+    requiredEventFields: readonly ['migrationRevision', 'activePath', 'shadowResult', 'reason'];
+    retirementConditions: readonly [
+      'legacyReadTraffic',
+      'legacyWriteTraffic',
+      'reconciliationPassed',
+      'rollbackWindowClosed',
+      'legacyImports',
+      'legacyRegistrations',
+    ];
+  };
   sharedFixture: MemoryServerMigrationSharedFixture;
   redisWorkingMemory: {
     trimMode: 'MAXLEN';
@@ -55,12 +87,44 @@ export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = 
   contractRef: {
     id: 'memory.server-migration-acceptance',
     version: '1.0.0',
-    revision: 'p0-123-stage-1',
+    revision: 'p0-1-stage-2',
   },
   issues: ['P0-1', 'P0-2', 'P0-3'],
   canonicalService: '@hypha/memory.MemoryApplicationService',
   requiredConsumers: ['chat', 'memory-routes', 'tool', 'workflow', 'harness'],
   prohibitedRuntimeDependencies: ['TemporaryMemory', 'PermanentMemory'],
+  canonicalConsumption: {
+    serviceRegistration: 'single',
+    minimumProfileSwitchCases: 2,
+    compositionReceiptRequired: true,
+    allowedLegacyAdapterResponsibilities: ['delegate', 'scope_mapping', 'error_mapping'],
+    prohibitedLegacyAdapterResponsibilities: [
+      'business_rules',
+      'provider_selection',
+      'independent_persistence',
+    ],
+  },
+  migration: {
+    phases: [
+      'planned',
+      'shadow_read',
+      'bounded_dual_write',
+      'verify',
+      'cutover',
+      'retire',
+      'rollback',
+    ],
+    dualWriteRequirements: ['deadlineAt', 'revision', 'idempotencyKey', 'checkpointRef'],
+    requiredEventFields: ['migrationRevision', 'activePath', 'shadowResult', 'reason'],
+    retirementConditions: [
+      'legacyReadTraffic',
+      'legacyWriteTraffic',
+      'reconciliationPassed',
+      'rollbackWindowClosed',
+      'legacyImports',
+      'legacyRegistrations',
+    ],
+  },
   sharedFixture: {
     scope: {
       tenantId: 'tenant:p0-acceptance',

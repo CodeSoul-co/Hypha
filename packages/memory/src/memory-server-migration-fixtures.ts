@@ -12,8 +12,20 @@ export const legacyMemoryServerGapPorts: MemoryServerMigrationAcceptancePorts = 
           chat: 'legacy:TemporaryMemory',
           'memory-routes': 'legacy:PermanentMemory',
         },
+        serviceRegistrationCount: 2,
         runtimeDependencies: ['TemporaryMemory', 'PermanentMemory'],
+        unresolvedDependencyRefs: ['memory.mapping.missing'],
         directStoreConsumers: ['chat', 'memory-routes'],
+        secondWritePaths: ['legacy:PermanentMemory.write'],
+        profileSwitches: [
+          {
+            profileId: 'memory.profile.native',
+            expectedProviderId: 'memory.provider.native',
+            observedReadProviderId: 'legacy:PermanentMemory',
+            observedWriteProviderId: 'legacy:PermanentMemory',
+          },
+        ],
+        legacyAdapterResponsibilities: ['provider_selection', 'business_rules'],
       };
     },
   },
@@ -49,8 +61,26 @@ export const compliantMemoryServerSkeletonPorts: MemoryServerMigrationAcceptance
           workflow: canonicalId,
           harness: canonicalId,
         },
+        serviceRegistrationCount: 1,
         runtimeDependencies: [],
+        unresolvedDependencyRefs: [],
         directStoreConsumers: [],
+        secondWritePaths: [],
+        profileSwitches: [
+          {
+            profileId: 'memory.profile.native',
+            expectedProviderId: 'memory.provider.native',
+            observedReadProviderId: 'memory.provider.native',
+            observedWriteProviderId: 'memory.provider.native',
+          },
+          {
+            profileId: 'memory.profile.mem0',
+            expectedProviderId: 'memory.provider.mem0',
+            observedReadProviderId: 'memory.provider.mem0',
+            observedWriteProviderId: 'memory.provider.mem0',
+          },
+        ],
+        legacyAdapterResponsibilities: ['delegate', 'scope_mapping', 'error_mapping'],
       };
     },
   },

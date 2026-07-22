@@ -162,6 +162,19 @@ export interface MemoryRuntimeFactoryOptions {
   now?: () => string;
 }
 
+export interface MemoryRuntimeCompositionReceipt {
+  runtimeId: string;
+  serviceInstanceId: string;
+  serviceContract: '@hypha/memory.MemoryApplicationService';
+  activeProfileId: string;
+  providerId: string;
+  providerSpecId: string;
+  configHash: string;
+  profileHash: string;
+  resolvedDependencyRefs: string[];
+  createdAt: string;
+}
+
 export interface MemoryRuntime {
   service: MemoryApplicationService;
   provider: MemoryManagementProvider;
@@ -169,13 +182,18 @@ export interface MemoryRuntime {
   providerSpec: MemoryManagementProviderSpec;
   profileHash: string;
   capabilities: MemoryManagementCapabilities;
+  compositionReceipt: MemoryRuntimeCompositionReceipt;
   resources?: unknown;
   close(): Promise<void>;
 }
 
 /** Strict composition root for all Memory consumers. */
 export class MemoryRuntimeFactory {
+  private readonly now: () => string;
+  private sequence = 0;
+
   constructor(private readonly options: MemoryRuntimeFactoryOptions) {
+    this.now = options.now ?? (() => new Date().toISOString());
     if (Boolean(options.contextBuilder) !== Boolean(options.contextGateway)) {
       throw memoryError(
         'MEMORY_INVALID_INPUT',
@@ -252,13 +270,29 @@ export class MemoryRuntimeFactory {
       eventContext: (request) => this.options.eventContext(request),
       contextTimeoutMs: selected.management.timeoutPolicy?.timeoutMs,
     });
+    const profileHash = sha256({ profile: selected.profile, management: selected.management });
+    const createdAt = this.now();
+    this.sequence += 1;
+    const compositionReceipt: MemoryRuntimeCompositionReceipt = {
+      runtimeId: `memory-runtime:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
+      serviceInstanceId: `memory-service:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
+      serviceContract: '@hypha/memory.MemoryApplicationService',
+      activeProfileId: config.activeProfile,
+      providerId: provider.id,
+      providerSpecId: selected.management.id,
+      configHash: sha256(config),
+      profileHash,
+      resolvedDependencyRefs: [...references.keys()].sort(),
+      createdAt,
+    };
     return {
       service,
       provider,
       profile: selected.profile,
       providerSpec: selected.management,
-      profileHash: sha256({ profile: selected.profile, management: selected.management }),
+      profileHash,
       capabilities,
+      compositionReceipt,
       resources: installation?.resources,
       close: async () => {
         try {

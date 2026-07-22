@@ -6,11 +6,20 @@ import type {
   MemoryServerMigrationSharedFixture,
 } from './memory-server-migration-contract';
 import { memoryServerMigrationAcceptance } from './memory-server-migration-contract';
+import {
+  allowedLegacyAdapterResponsibilities,
+  type CanonicalProfileSwitchObservation,
+} from './memory-server-consumer-migration';
 
 export interface CanonicalMemoryConsumerObservation {
   consumerServiceInstanceIds: Partial<Record<MemoryServerConsumer, string>>;
+  serviceRegistrationCount: number;
   runtimeDependencies: readonly string[];
+  unresolvedDependencyRefs: readonly string[];
   directStoreConsumers: readonly MemoryServerConsumer[];
+  secondWritePaths: readonly string[];
+  profileSwitches: readonly CanonicalProfileSwitchObservation[];
+  legacyAdapterResponsibilities: readonly string[];
 }
 
 export interface RedisWorkingMemoryObservation {
@@ -83,6 +92,55 @@ export async function runCanonicalConsumerMigrationAcceptance(
     findings.push(
       finding('P0-1', 'DIRECT_STORE_CONSUMER', `${consumer} bypasses MemoryApplicationService.`)
     );
+  }
+  if (observation.serviceRegistrationCount !== 1) {
+    findings.push(
+      finding(
+        'P0-1',
+        'NON_UNIQUE_SERVICE_REGISTRATION',
+        'Exactly one Memory service must be registered.'
+      )
+    );
+  }
+  for (const reference of observation.unresolvedDependencyRefs) {
+    findings.push(
+      finding('P0-1', 'UNRESOLVED_MEMORY_DEPENDENCY', `Dependency ${reference} is unresolved.`)
+    );
+  }
+  for (const path of observation.secondWritePaths) {
+    findings.push(
+      finding('P0-1', 'SECOND_MEMORY_WRITE_PATH', `Second write path remains: ${path}.`)
+    );
+  }
+  if (observation.profileSwitches.length < 2) {
+    findings.push(
+      finding('P0-1', 'PROFILE_SWITCH_EVIDENCE_MISSING', 'At least two profile cases are required.')
+    );
+  }
+  for (const profileSwitch of observation.profileSwitches) {
+    if (
+      profileSwitch.observedReadProviderId !== profileSwitch.expectedProviderId ||
+      profileSwitch.observedWriteProviderId !== profileSwitch.expectedProviderId
+    ) {
+      findings.push(
+        finding(
+          'P0-1',
+          'PROFILE_SWITCH_NOT_EFFECTIVE',
+          `Profile ${profileSwitch.profileId} did not route reads and writes to ${profileSwitch.expectedProviderId}.`
+        )
+      );
+    }
+  }
+  for (const responsibility of observation.legacyAdapterResponsibilities) {
+    if (!allowedLegacyAdapterResponsibilities.some((allowed) => allowed === responsibility)) {
+      findings.push(
+        finding(
+          'P0-1',
+          'LEGACY_ADAPTER_OWNS_BUSINESS_LOGIC',
+          `Legacy adapter retains ${responsibility}.`
+        )
+      );
+    }
   }
   return suite('P0-1', findings);
 }

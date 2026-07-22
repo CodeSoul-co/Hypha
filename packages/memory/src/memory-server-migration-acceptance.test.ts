@@ -23,7 +23,7 @@ describe('P0 Server migration acceptance contract', () => {
     expect(memoryServerMigrationAcceptance.contractRef).toEqual({
       id: 'memory.server-migration-acceptance',
       version: '1.0.0',
-      revision: 'p0-123-stage-1',
+      revision: 'p0-1-stage-2',
     });
     expect(memoryServerMigrationAcceptanceJsonSchema).toMatchObject({
       type: 'object',

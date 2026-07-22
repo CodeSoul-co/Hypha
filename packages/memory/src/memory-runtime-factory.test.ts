@@ -74,8 +74,92 @@ describe('MemoryRuntimeFactory', () => {
 
     await expect(runtime.service.add(request)).resolves.toMatchObject({ status: 'committed' });
     expect(runtime.profileHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(runtime.compositionReceipt).toMatchObject({
+      serviceContract: '@hypha/memory.MemoryApplicationService',
+      activeProfileId: memoryProfileSpecExample.id,
+      providerId: memoryManagementProviderSpecExample.id,
+      providerSpecId: memoryManagementProviderSpecExample.id,
+      profileHash: runtime.profileHash,
+      resolvedDependencyRefs: [],
+    });
+    expect(runtime.compositionReceipt.runtimeId).toMatch(/^memory-runtime:[a-f0-9]{32}$/);
+    expect(runtime.compositionReceipt.serviceInstanceId).toMatch(/^memory-service:[a-f0-9]{32}$/);
   });
 
+  it('changes the real service provider when the active profile changes', async () => {
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'switchable-native',
+      supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
+      create: async ({ profile }) => new NativeMemoryManagementProvider({ profile }),
+    });
+    const factory = runtimeFactory(registry);
+    const firstConfig = config();
+    const secondProfileId = 'memory.profile.switched';
+    const secondProviderId = 'memory.provider.switched';
+    const secondConfig = config();
+    const selected = secondConfig.profiles[memoryProfileSpecExample.id];
+    secondConfig.activeProfile = secondProfileId;
+    secondConfig.profiles = {
+      [secondProfileId]: {
+        profile: {
+          ...selected.profile,
+          id: secondProfileId,
+          managementProviderRef: { id: secondProviderId, version: '1.0.0' },
+        },
+        management: {
+          ...selected.management,
+          id: secondProviderId,
+          version: '1.0.0',
+        },
+      },
+    };
+
+    const first = await factory.create(firstConfig);
+    const second = await factory.create(secondConfig);
+    const principal = {
+      principalId: 'user:profile-switch',
+      type: 'user' as const,
+      userId: 'user:profile-switch',
+      permissionScopes: ['memory:read', 'memory:write'],
+    };
+    const scope = { userId: 'user:profile-switch' };
+    const write = async (
+      runtime: typeof first,
+      profile: typeof memoryProfileSpecExample,
+      input: string
+    ) =>
+      runtime.service.add({
+        operationId: `operation:${profile.id}:add`,
+        principal,
+        scope,
+        profileRef: profile,
+        input,
+        inputType: 'text',
+        memoryType: 'semantic',
+        source: { type: 'user_message', sourceId: `message:${profile.id}` },
+        extractionMode: 'none',
+        writeMode: 'sync',
+        idempotencyKey: `operation:${profile.id}:add`,
+      });
+
+    await expect(write(first, first.profile, 'first provider memory')).resolves.toMatchObject({
+      status: 'committed',
+    });
+    await expect(write(second, second.profile, 'second provider memory')).resolves.toMatchObject({
+      status: 'committed',
+    });
+    await expect(
+      first.service.list({ operationId: 'operation:first:list', principal, scope })
+    ).resolves.toMatchObject({ records: [{ content: 'first provider memory' }] });
+    await expect(
+      second.service.list({ operationId: 'operation:second:list', principal, scope })
+    ).resolves.toMatchObject({ records: [{ content: 'second provider memory' }] });
+    expect(first.compositionReceipt.providerId).toBe(memoryManagementProviderSpecExample.id);
+    expect(second.compositionReceipt.providerId).toBe(secondProviderId);
+    expect(first.compositionReceipt.serviceInstanceId).not.toBe(
+      second.compositionReceipt.serviceInstanceId
+    );
+  });
   it('fails fast when an enabled provider implementation is not installed', async () => {
     const missing = config();
     missing.profiles[memoryProfileSpecExample.id] = {

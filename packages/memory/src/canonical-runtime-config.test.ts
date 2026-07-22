@@ -71,6 +71,17 @@ describe('canonical Memory runtime configuration', () => {
       'memory.mapping.durable',
       'secret:memory/native',
     ]);
+    expect(runtime.compositionReceipt).toMatchObject({
+      activeProfileId: document.activeProfile,
+      providerId: selected.management.id,
+      resolvedDependencyRefs: [
+        'HYPHA_MEMORY_ENDPOINT',
+        'memory.connection.native',
+        'memory.mapping.durable',
+        'secret:memory/native',
+      ],
+    });
+    expect(runtime.compositionReceipt.configHash).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(resolve).toHaveBeenCalledTimes(4);
     await runtime.close();
   });
