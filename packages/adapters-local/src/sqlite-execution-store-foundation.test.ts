@@ -50,7 +50,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
       status: 'healthy',
       checkedAt: now(),
       message: 'SQLite Execution store is available.',
-      details: { schemaVersion: 4 },
+      details: { schemaVersion: 5 },
     });
     await store.close();
     await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
@@ -61,6 +61,142 @@ describe('SQLiteExecutionStoreFoundation', () => {
     const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
     await expect(reopened.get(created.id)).resolves.toEqual(created);
     await reopened.close();
+  });
+
+  it('lists only records matching owner, provider, status, and time filters', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const requests = [
+      queuedCreateRequest('execution.scope.old', {
+        tenantId: 'tenant.a',
+        userId: 'user.a',
+        workspaceId: 'workspace.a',
+        runId: 'run.a',
+        providerId: 'provider.a',
+        updatedAt: '2026-07-16T01:00:00.000+01:00',
+      }),
+      queuedCreateRequest('execution.scope.new', {
+        tenantId: 'tenant.a',
+        userId: 'user.a',
+        workspaceId: 'workspace.a',
+        runId: 'run.a',
+        providerId: 'provider.a',
+        updatedAt: '2026-07-16T00:30:00.000Z',
+      }),
+      queuedCreateRequest('execution.scope.other-user', {
+        tenantId: 'tenant.a',
+        userId: 'user.b',
+        workspaceId: 'workspace.a',
+        runId: 'run.a',
+        providerId: 'provider.a',
+        updatedAt: '2026-07-16T00:30:00.000Z',
+      }),
+      queuedCreateRequest('execution.scope.other-tenant', {
+        tenantId: 'tenant.b',
+        userId: 'user.a',
+        workspaceId: 'workspace.a',
+        runId: 'run.a',
+        providerId: 'provider.a',
+        updatedAt: '2026-07-16T00:30:00.000Z',
+      }),
+      queuedCreateRequest('execution.scope.other-workspace', {
+        tenantId: 'tenant.a',
+        userId: 'user.a',
+        workspaceId: 'workspace.b',
+        runId: 'run.b',
+        providerId: 'provider.b',
+        updatedAt: '2026-07-16T00:30:00.000Z',
+      }),
+    ];
+    for (const request of requests) await store.create(request);
+
+    const page = await store.list({
+      tenantId: 'tenant.a',
+      userId: 'user.a',
+      workspaceId: 'workspace.a',
+      runId: 'run.a',
+      providerId: 'provider.a',
+      statuses: ['queued'],
+      updatedBefore: '2026-07-16T01:00:00.000Z',
+    });
+    expect(page.records.map((record) => record.id)).toEqual([
+      requests[1]!.record.id,
+      requests[0]!.record.id,
+    ]);
+    expect(page).not.toHaveProperty('cursor');
+    await expect(store.list({ statuses: [] })).resolves.toEqual({ records: [] });
+    await store.close();
+  });
+
+  it('paginates equal timestamps without duplicates and resumes after restart', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    for (const suffix of ['a', 'b', 'c']) {
+      await store.create(
+        queuedCreateRequest(`execution.page.${suffix}`, {
+          userId: 'user.page',
+          workspaceId: 'workspace.page',
+          updatedAt: '2026-07-16T00:00:01.000Z',
+        })
+      );
+    }
+
+    const query = { userId: 'user.page', workspaceId: 'workspace.page', limit: 2 } as const;
+    const first = await store.list(query);
+    expect(first.records.map((record) => record.id)).toEqual([
+      'execution.page.c',
+      'execution.page.b',
+    ]);
+    expect(first.cursor).toEqual(expect.any(String));
+    await store.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const second = await reopened.list({ ...query, cursor: first.cursor });
+    expect(second).toEqual({ records: [expect.objectContaining({ id: 'execution.page.a' })] });
+    expect([...first.records, ...second.records].map((record) => record.id)).toEqual([
+      'execution.page.c',
+      'execution.page.b',
+      'execution.page.a',
+    ]);
+    await expect(
+      reopened.list({ ...query, userId: 'user.other', cursor: first.cursor })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_INVALID_CURSOR' });
+    await expect(reopened.list({ cursor: 'not+a+cursor' })).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_INVALID_CURSOR',
+    });
+    await reopened.close();
+  });
+
+  it('queries active leases by indexed expiry time', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const firstRequest = queuedCreateRequest('execution.lease.expiring', {
+      userId: 'user.lease',
+      workspaceId: 'workspace.lease',
+    });
+    const secondRequest = queuedCreateRequest('execution.lease.later', {
+      userId: 'user.lease',
+      workspaceId: 'workspace.lease',
+    });
+    const first = await store.create(firstRequest);
+    const second = await store.create(secondRequest);
+    await store.acquireLease(acquireLeaseRequestFor(first, '2026-07-16T00:00:00.000Z'));
+    await store.acquireLease(acquireLeaseRequestFor(second, '2026-07-16T00:01:00.000Z'));
+
+    await expect(
+      store.list({
+        userId: 'user.lease',
+        workspaceId: 'workspace.lease',
+        statuses: ['starting'],
+        leaseExpiresBefore: '2026-07-16T00:00:45.000Z',
+      })
+    ).resolves.toMatchObject({
+      records: [expect.objectContaining({ id: first.id })],
+    });
+    await expect(store.list({ leaseExpiresBefore: '2026-07-16T00:00:30.000Z' })).resolves.toEqual({
+      records: [],
+    });
+    await store.close();
   });
 
   it('replays identical creates and rejects reused or conflicting identities atomically', async () => {
@@ -589,7 +725,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await expect(migrated.get(created.id)).resolves.toEqual(created);
     await expect(migrated.health()).resolves.toMatchObject({
       status: 'healthy',
-      details: { schemaVersion: 4 },
+      details: { schemaVersion: 5 },
     });
     await expect(
       migrated.compareAndSet(compareAndSetRequest(0, 'starting', 'cas:migrated'))
@@ -608,7 +744,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
     const filename = path.join(root, 'newer.sqlite');
     const database = openTestDatabase(filename);
-    database.exec('PRAGMA user_version = 5');
+    database.exec('PRAGMA user_version = 6');
     database.close();
     expect(
       () => new SQLiteExecutionStoreFoundation({ rootPath: root, filename: 'newer.sqlite' })
@@ -623,6 +759,55 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
 function createRequest(): ExecutionRecordCreateRequest {
   return structuredClone(executionRecordCreateRequestExample);
+}
+
+interface QueuedCreateOptions {
+  tenantId?: string;
+  userId?: string;
+  workspaceId?: string;
+  runId?: string;
+  providerId?: string;
+  updatedAt?: string;
+}
+
+function queuedCreateRequest(
+  executionId: string,
+  options: QueuedCreateOptions = {}
+): ExecutionRecordCreateRequest {
+  const request = createRequest();
+  const userId = options.userId ?? request.record.request.userId;
+  request.operationId = `operation.execution.create.${executionId}`;
+  request.idempotencyKey = `execution-create:${executionId}`;
+  request.record.id = executionId;
+  request.record.providerId = options.providerId ?? request.record.providerId;
+  request.record.createdAt = options.updatedAt ?? request.record.createdAt;
+  request.record.updatedAt = request.record.createdAt;
+  request.record.request.executionId = executionId;
+  request.record.request.operationId = `operation.command.${executionId}`;
+  request.record.request.idempotencyKey = `command:${executionId}`;
+  request.record.request.userId = userId;
+  request.record.request.principal.userId = userId;
+  request.record.request.workspaceId = options.workspaceId ?? request.record.request.workspaceId;
+  if (options.tenantId === undefined) delete request.record.request.tenantId;
+  else request.record.request.tenantId = options.tenantId;
+  request.record.request.runId = options.runId ?? request.record.request.runId;
+  return request;
+}
+
+function acquireLeaseRequestFor(
+  record: ExecutionRecord,
+  acquiredAt: string
+): ExecutionLeaseAcquireRequest {
+  return {
+    ...acquireLeaseRequest(),
+    operationId: `operation.lease.acquire.${record.id}`,
+    executionId: record.id,
+    expectedRevision: record.revision,
+    requestedLeaseId: `lease.${record.id}`,
+    ownerId: `worker.${record.id}`,
+    acquiredAt,
+    idempotencyKey: `lease-acquire:${record.id}`,
+  };
 }
 
 function acquireLeaseRequest(): ExecutionLeaseAcquireRequest {
@@ -706,7 +891,7 @@ function replacePersistedRecord(filename: string, record: ExecutionRecord): void
     .prepare(
       'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
         'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-        'record_json = ?, last_fencing_token = ? WHERE execution_id = ?'
+        'lease_expires_at = ?, record_json = ?, last_fencing_token = ? WHERE execution_id = ?'
     )
     .run(
       record.revision,
@@ -718,6 +903,7 @@ function replacePersistedRecord(filename: string, record: ExecutionRecord): void
       record.providerId,
       record.createdAt,
       record.updatedAt,
+      record.lease?.expiresAt ?? null,
       JSON.stringify(record),
       record.lease?.fencingToken ?? 0,
       record.id

@@ -5,6 +5,8 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ExecutionRecordPage,
+  ExecutionRecordQuery,
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseGuard,
   ExecutionLeaseReleaseRequest,
@@ -15,10 +17,17 @@ import {
   validateExecutionRecord,
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
+  validateExecutionRecordQuery,
   validateExecutionLeaseAcquireRequest,
   validateExecutionLeaseReleaseRequest,
   validateExecutionLeaseRenewRequest,
 } from '@hypha/core';
+import {
+  nextSQLiteExecutionListCursor,
+  planSQLiteExecutionList,
+  SQLITE_EXECUTION_RECORD_COLUMNS,
+  SQLiteExecutionListCursorError,
+} from './sqlite-execution-store-query';
 import {
   migrateSQLiteExecutionStore,
   SQLITE_EXECUTION_STORE_SCHEMA_VERSION,
@@ -32,6 +41,7 @@ interface SQLiteRunResult {
 
 interface SQLiteStatement {
   get(...params: unknown[]): Record<string, unknown> | undefined;
+  all(...params: unknown[]): Record<string, unknown>[];
   run(...params: unknown[]): SQLiteRunResult;
 }
 
@@ -58,6 +68,7 @@ export type SQLiteExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_LEASE_LOST'
   | 'EXECUTION_STORE_TERMINAL'
   | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT'
+  | 'EXECUTION_STORE_INVALID_CURSOR'
   | 'EXECUTION_STORE_UNSUPPORTED_SCHEMA';
 
 export class SQLiteExecutionStoreFoundationError extends Error {
@@ -164,8 +175,8 @@ export class SQLiteExecutionStoreFoundation {
         .prepare(
           'INSERT INTO execution_records ' +
             '(execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, ' +
-            'provider_id, created_at, updated_at, record_json) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'provider_id, created_at, updated_at, lease_expires_at, record_json) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
         .run(
           request.record.id,
@@ -178,6 +189,7 @@ export class SQLiteExecutionStoreFoundation {
           request.record.providerId,
           request.record.createdAt,
           request.record.updatedAt,
+          request.record.lease?.expiresAt ?? null,
           recordJson
         );
       if (request.idempotencyKey) {
@@ -198,6 +210,32 @@ export class SQLiteExecutionStoreFoundation {
     return this.readOperation(() => {
       const row = this.selectRecord(executionId);
       return row ? parseRecordRow(row) : null;
+    });
+  }
+
+  async list(input: ExecutionRecordQuery = {}): Promise<ExecutionRecordPage> {
+    this.assertOpen();
+    const query = validateExecutionRecordQuery(input);
+    let plan;
+    try {
+      plan = planSQLiteExecutionList(query);
+    } catch (error) {
+      if (error instanceof SQLiteExecutionListCursorError) {
+        throw storeError('EXECUTION_STORE_INVALID_CURSOR', error.message);
+      }
+      throw error;
+    }
+
+    return this.readOperation(() => {
+      const rows = this.database.prepare(plan.sql).all(...plan.parameters);
+      const records = rows.slice(0, plan.limit).map(parseRecordRow);
+      if (rows.length <= plan.limit) return { records };
+      const last = records.at(-1);
+      if (!last) return { records };
+      return {
+        records,
+        cursor: nextSQLiteExecutionListCursor(last, plan.queryHash),
+      };
     });
   }
 
@@ -565,9 +603,7 @@ export class SQLiteExecutionStoreFoundation {
   private selectRecord(executionId: string): Record<string, unknown> | undefined {
     return this.database
       .prepare(
-        'SELECT execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, ' +
-          'provider_id, created_at, updated_at, record_json, last_fencing_token ' +
-          'FROM execution_records WHERE execution_id = ?'
+        `SELECT ${SQLITE_EXECUTION_RECORD_COLUMNS} FROM execution_records WHERE execution_id = ?`
       )
       .get(executionId);
   }
@@ -637,7 +673,7 @@ export class SQLiteExecutionStoreFoundation {
       .prepare(
         'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
           'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-          'record_json = ?, last_fencing_token = ? ' +
+          'lease_expires_at = ?, record_json = ?, last_fencing_token = ? ' +
           'WHERE execution_id = ? AND revision = ? AND last_fencing_token = ?'
       )
       .run(
@@ -650,6 +686,7 @@ export class SQLiteExecutionStoreFoundation {
         next.providerId,
         next.createdAt,
         next.updatedAt,
+        next.lease?.expiresAt ?? null,
         nextJson,
         nextFencingToken,
         next.id,
@@ -837,6 +874,7 @@ function parseRecordRow(row: Record<string, unknown>): ExecutionRecord {
       record.providerId !== String(row.provider_id) ||
       record.createdAt !== String(row.created_at) ||
       record.updatedAt !== String(row.updated_at) ||
+      (record.lease?.expiresAt ?? null) !== nullableText(row.lease_expires_at) ||
       (record.lease !== undefined && record.lease.fencingToken !== lastFencingToken)
     ) {
       throw new Error('indexed columns do not match record JSON');

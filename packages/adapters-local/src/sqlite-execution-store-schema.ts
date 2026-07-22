@@ -5,7 +5,7 @@ export interface SQLiteExecutionStoreSchemaDatabase {
   };
 }
 
-export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 4;
+export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 5;
 
 export class SQLiteExecutionStoreSchemaVersionError extends Error {
   constructor(
@@ -37,6 +37,7 @@ export function migrateSQLiteExecutionStore(database: SQLiteExecutionStoreSchema
     if (current <= 1) database.exec(SCHEMA_V2_SQL);
     if (current <= 2) database.exec(SCHEMA_V3_SQL);
     if (current <= 3) database.exec(SCHEMA_V4_SQL);
+    if (current <= 4) database.exec(SCHEMA_V5_SQL);
     database.exec(`PRAGMA user_version = ${SQLITE_EXECUTION_STORE_SCHEMA_VERSION}`);
     database.exec('COMMIT');
   } catch (error) {
@@ -106,4 +107,14 @@ CREATE TABLE execution_lease_history (
 const SCHEMA_V4_SQL = `
 ALTER TABLE execution_lease_history ADD COLUMN released_at TEXT;
 ALTER TABLE execution_lease_history ADD COLUMN release_reason TEXT;
+`;
+
+const SCHEMA_V5_SQL = `
+ALTER TABLE execution_records ADD COLUMN lease_expires_at TEXT;
+UPDATE execution_records
+  SET lease_expires_at = json_extract(record_json, '$.lease.expiresAt');
+CREATE INDEX execution_records_lease_expiry
+  ON execution_records (julianday(lease_expires_at), julianday(updated_at), execution_id);
+CREATE INDEX execution_records_updated_time
+  ON execution_records (julianday(updated_at), execution_id);
 `;
