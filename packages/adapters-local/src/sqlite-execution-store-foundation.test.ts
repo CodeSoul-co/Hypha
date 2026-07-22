@@ -6,11 +6,13 @@ import type {
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseRenewRequest,
 } from '@hypha/core';
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionLeaseGuardExample,
+  executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
   executionRecordExample,
@@ -330,6 +332,109 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await store.close();
   });
 
+  it('renews a durable lease and replays the original renewal after restart', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(createRequest());
+    const acquired = await store.acquireLease(acquireLeaseRequest());
+    const request = renewLeaseRequest();
+
+    const renewed = await store.renewLease(request);
+    expect(renewed).toMatchObject({
+      revision: 2,
+      status: acquired.status,
+      attempt: acquired.attempt,
+      lease: {
+        ...acquired.lease,
+        heartbeatAt: request.heartbeatAt,
+        expiresAt: '2026-07-16T00:00:40.000Z',
+      },
+      updatedAt: request.heartbeatAt,
+    });
+    await store.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(reopened.renewLease(request)).resolves.toEqual(renewed);
+    await expect(reopened.get(request.executionId)).resolves.toEqual(renewed);
+    await expect(
+      reopened.renewLease({ ...request, ttlMs: request.ttlMs + 1 })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT' });
+    await reopened.close();
+  });
+
+  it('rejects missing, stale, expired, and unfenced lease renewals atomically', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const queued = await store.create(createRequest());
+    await expect(
+      store.renewLease({ ...renewLeaseRequest(), expectedRevision: 0 })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_LOST' });
+    await expect(store.get(queued.id)).resolves.toEqual(queued);
+
+    const acquired = await store.acquireLease(acquireLeaseRequest());
+    await expect(
+      store.renewLease({ ...renewLeaseRequest(), expectedRevision: 0 })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+    await expect(
+      store.renewLease({
+        ...renewLeaseRequest(),
+        leaseGuard: { ...executionLeaseGuardExample, fencingToken: 2 },
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+    await expect(
+      store.renewLease({
+        ...renewLeaseRequest(),
+        heartbeatAt: '2026-07-15T23:59:59.999Z',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+    await expect(
+      store.renewLease({
+        ...renewLeaseRequest(),
+        heartbeatAt: acquired.updatedAt,
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+    await expect(
+      store.renewLease({
+        ...renewLeaseRequest(),
+        ttlMs: 1,
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+    await expect(
+      store.renewLease({
+        ...renewLeaseRequest(),
+        heartbeatAt: acquired.lease!.expiresAt,
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_LOST' });
+    await expect(store.get(acquired.id)).resolves.toEqual(acquired);
+    await store.close();
+  });
+
+  it('rejects renewal from the old worker after an expired lease is replaced', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(createRequest());
+    await store.acquireLease(acquireLeaseRequest());
+    const takeover = await store.acquireLease({
+      ...acquireLeaseRequest(),
+      operationId: 'operation.lease.acquire.takeover',
+      expectedRevision: 1,
+      requestedLeaseId: 'lease.execution.example.takeover',
+      ownerId: 'worker.takeover',
+      acquiredAt: '2026-07-16T00:00:30.000Z',
+      idempotencyKey: 'lease-acquire:takeover',
+    });
+
+    await expect(
+      store.renewLease({
+        ...renewLeaseRequest(),
+        expectedRevision: takeover.revision,
+        heartbeatAt: '2026-07-16T00:00:40.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+    await expect(store.get(takeover.id)).resolves.toEqual(takeover);
+    await store.close();
+  });
+
   it('migrates schema version one without losing existing records', async () => {
     const root = await temporaryRoot();
     const filename = path.join(root, 'executions.sqlite');
@@ -381,6 +486,10 @@ function createRequest(): ExecutionRecordCreateRequest {
 
 function acquireLeaseRequest(): ExecutionLeaseAcquireRequest {
   return structuredClone(executionLeaseAcquireRequestExample);
+}
+
+function renewLeaseRequest(): ExecutionLeaseRenewRequest {
+  return structuredClone(executionLeaseRenewRequestExample);
 }
 
 function compareAndSetRequest(

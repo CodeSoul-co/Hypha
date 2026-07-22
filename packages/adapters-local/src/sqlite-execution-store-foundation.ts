@@ -6,6 +6,7 @@ import type {
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseRenewRequest,
   ProviderHealth,
 } from '@hypha/core';
 import {
@@ -13,6 +14,7 @@ import {
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
   validateExecutionLeaseAcquireRequest,
+  validateExecutionLeaseRenewRequest,
 } from '@hypha/core';
 import {
   migrateSQLiteExecutionStore,
@@ -50,6 +52,7 @@ export type SQLiteExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_FENCING_REJECTED'
   | 'EXECUTION_STORE_LEASE_HELD'
   | 'EXECUTION_STORE_LEASE_ID_CONFLICT'
+  | 'EXECUTION_STORE_LEASE_LOST'
   | 'EXECUTION_STORE_TERMINAL'
   | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT'
   | 'EXECUTION_STORE_UNSUPPORTED_SCHEMA';
@@ -231,49 +234,15 @@ export class SQLiteExecutionStoreFoundation {
       }
       assertLeaseContinuity(current, request);
 
-      const nextJson = JSON.stringify(request.next);
-      const update = this.database
-        .prepare(
-          'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
-            'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-            'record_json = ? WHERE execution_id = ? AND revision = ?'
-        )
-        .run(
-          request.next.revision,
-          request.next.status,
-          request.next.request.tenantId ?? null,
-          request.next.request.userId,
-          request.next.request.workspaceId,
-          request.next.request.runId ?? null,
-          request.next.providerId,
-          request.next.createdAt,
-          request.next.updatedAt,
-          nextJson,
-          request.executionId,
-          request.expectedRevision
-        );
-      if (Number(update.changes) !== 1) {
-        throw storeError(
-          'EXECUTION_STORE_REVISION_CONFLICT',
-          'Execution record changed during compare-and-set.',
-          { executionId: request.executionId, expectedRevision: request.expectedRevision }
-        );
-      }
-      if (request.idempotencyKey) {
-        this.database
-          .prepare(
-            'INSERT INTO execution_mutation_idempotency ' +
-              '(operation_id, idempotency_key, execution_id, request_hash, result_json) ' +
-              'VALUES (?, ?, ?, ?, ?)'
-          )
-          .run(
-            request.operationId,
-            request.idempotencyKey,
-            request.executionId,
-            requestHash,
-            nextJson
-          );
-      }
+      const fencingToken = lastFencingToken(row);
+      const nextJson = this.replaceRecord(
+        request.next,
+        request.expectedRevision,
+        fencingToken,
+        fencingToken,
+        'Execution record changed during compare-and-set.'
+      );
+      this.rememberMutation(request, requestHash, nextJson);
       return structuredClone(request.next);
     });
   }
@@ -338,10 +307,7 @@ export class SQLiteExecutionStoreFoundation {
         );
       }
 
-      const previousFencingToken = nonNegativeInteger(
-        Number(row.last_fencing_token),
-        'lastFencingToken'
-      );
+      const previousFencingToken = lastFencingToken(row);
       const fencingToken = previousFencingToken + 1;
       if (!Number.isSafeInteger(fencingToken)) {
         throw storeError(
@@ -380,51 +346,110 @@ export class SQLiteExecutionStoreFoundation {
           request.ownerId,
           request.acquiredAt
         );
-      const update = this.database
-        .prepare(
-          'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
-            'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-            'record_json = ?, last_fencing_token = ? ' +
-            'WHERE execution_id = ? AND revision = ? AND last_fencing_token = ?'
-        )
-        .run(
-          next.revision,
-          next.status,
-          next.request.tenantId ?? null,
-          next.request.userId,
-          next.request.workspaceId,
-          next.request.runId ?? null,
-          next.providerId,
-          next.createdAt,
-          next.updatedAt,
-          nextJson,
-          fencingToken,
-          request.executionId,
-          request.expectedRevision,
-          previousFencingToken
-        );
-      if (Number(update.changes) !== 1) {
+      this.replaceRecord(
+        next,
+        request.expectedRevision,
+        previousFencingToken,
+        fencingToken,
+        'Execution record changed during lease acquisition.'
+      );
+      this.rememberMutation(request, requestHash, nextJson);
+      return structuredClone(next);
+    });
+  }
+
+  async renewLease(input: ExecutionLeaseRenewRequest): Promise<ExecutionRecord> {
+    this.assertOpen();
+    const request = validateExecutionLeaseRenewRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    return this.writeOperation(() => {
+      if (request.idempotencyKey) {
+        const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
+        if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
+      }
+
+      const row = this.selectRecord(request.executionId);
+      if (!row) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const current = parseRecordRow(row);
+      if (current.revision !== request.expectedRevision) {
         throw storeError(
           'EXECUTION_STORE_REVISION_CONFLICT',
-          'Execution record changed during lease acquisition.',
-          { executionId: request.executionId, expectedRevision: request.expectedRevision }
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
         );
       }
-      if (request.idempotencyKey) {
-        this.database
-          .prepare(
-            'INSERT INTO execution_mutation_idempotency ' +
-              '(operation_id, idempotency_key, execution_id, request_hash, result_json) ' +
-              'VALUES (?, ?, ?, ?, ?)'
-          )
-          .run(
-            request.operationId,
-            request.idempotencyKey,
-            request.executionId,
-            requestHash,
-            nextJson
-          );
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw storeError('EXECUTION_STORE_TERMINAL', 'Terminal Execution records are immutable.', {
+          executionId: request.executionId,
+          status: current.status,
+        });
       }
+      const lease = current.lease;
+      if (!lease) {
+        throw storeError('EXECUTION_STORE_LEASE_LOST', 'Execution has no active lease.', {
+          executionId: request.executionId,
+        });
+      }
+      assertLeaseGuard(lease, request.leaseGuard, request.executionId);
+      const heartbeatTime = Date.parse(request.heartbeatAt);
+      if (heartbeatTime <= Date.parse(current.updatedAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease heartbeat must advance the current Execution revision.',
+          {
+            executionId: request.executionId,
+            heartbeatAt: request.heartbeatAt,
+            updatedAt: current.updatedAt,
+          }
+        );
+      }
+      if (heartbeatTime >= Date.parse(lease.expiresAt)) {
+        throw storeError('EXECUTION_STORE_LEASE_LOST', 'Execution lease has expired.', {
+          executionId: request.executionId,
+          leaseId: lease.id,
+          expiresAt: lease.expiresAt,
+        });
+      }
+      const expiresAt = leaseExpiry(request.heartbeatAt, request.ttlMs);
+      if (Date.parse(expiresAt) <= Date.parse(lease.expiresAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease renewal must extend the current expiry.',
+          {
+            executionId: request.executionId,
+            currentExpiresAt: lease.expiresAt,
+            requestedExpiresAt: expiresAt,
+          }
+        );
+      }
+
+      const next = validateExecutionRecord({
+        ...current,
+        revision: current.revision + 1,
+        lease: {
+          ...lease,
+          heartbeatAt: request.heartbeatAt,
+          expiresAt,
+        },
+        updatedAt: request.heartbeatAt,
+      });
+      const fencingToken = lastFencingToken(row);
+      const nextJson = this.replaceRecord(
+        next,
+        request.expectedRevision,
+        fencingToken,
+        fencingToken,
+        'Execution record changed during lease renewal.'
+      );
+      this.rememberMutation(request, requestHash, nextJson);
       return structuredClone(next);
     });
   }
@@ -505,6 +530,67 @@ export class SQLiteExecutionStoreFoundation {
           'WHERE lease_id = ?'
       )
       .get(leaseId);
+  }
+
+  private replaceRecord(
+    next: ExecutionRecord,
+    expectedRevision: number,
+    expectedFencingToken: number,
+    nextFencingToken: number,
+    conflictMessage: string
+  ): string {
+    const nextJson = JSON.stringify(next);
+    const update = this.database
+      .prepare(
+        'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
+          'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
+          'record_json = ?, last_fencing_token = ? ' +
+          'WHERE execution_id = ? AND revision = ? AND last_fencing_token = ?'
+      )
+      .run(
+        next.revision,
+        next.status,
+        next.request.tenantId ?? null,
+        next.request.userId,
+        next.request.workspaceId,
+        next.request.runId ?? null,
+        next.providerId,
+        next.createdAt,
+        next.updatedAt,
+        nextJson,
+        nextFencingToken,
+        next.id,
+        expectedRevision,
+        expectedFencingToken
+      );
+    if (Number(update.changes) !== 1) {
+      throw storeError('EXECUTION_STORE_REVISION_CONFLICT', conflictMessage, {
+        executionId: next.id,
+        expectedRevision,
+      });
+    }
+    return nextJson;
+  }
+
+  private rememberMutation(
+    request: { operationId: string; executionId: string; idempotencyKey?: string },
+    requestHash: string,
+    resultJson: string
+  ): void {
+    if (!request.idempotencyKey) return;
+    this.database
+      .prepare(
+        'INSERT INTO execution_mutation_idempotency ' +
+          '(operation_id, idempotency_key, execution_id, request_hash, result_json) ' +
+          'VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(
+        request.operationId,
+        request.idempotencyKey,
+        request.executionId,
+        requestHash,
+        resultJson
+      );
   }
 
   private readOperation<T>(operation: () => T): T {
@@ -615,6 +701,24 @@ function assertLeaseContinuity(
   }
 }
 
+function assertLeaseGuard(
+  lease: NonNullable<ExecutionRecord['lease']>,
+  guard: ExecutionLeaseRenewRequest['leaseGuard'],
+  executionId: string
+): void {
+  if (
+    guard.leaseId !== lease.id ||
+    guard.ownerId !== lease.ownerId ||
+    guard.fencingToken !== lease.fencingToken
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_FENCING_REJECTED',
+      'Execution lease or fencing token is stale.',
+      { executionId, fencingToken: lease.fencingToken }
+    );
+  }
+}
+
 const TERMINAL_STATUSES = new Set<ExecutionRecord['status']>([
   'cancelled',
   'completed',
@@ -640,7 +744,7 @@ function parseRecordRow(row: Record<string, unknown>): ExecutionRecord {
       record.providerId !== String(row.provider_id) ||
       record.createdAt !== String(row.created_at) ||
       record.updatedAt !== String(row.updated_at) ||
-      (record.lease?.fencingToken ?? 0) > lastFencingToken
+      (record.lease !== undefined && record.lease.fencingToken !== lastFencingToken)
     ) {
       throw new Error('indexed columns do not match record JSON');
     }
@@ -718,6 +822,10 @@ function nonNegativeInteger(value: number, name: string): number {
     throw new TypeError(`${name} must be a non-negative safe integer.`);
   }
   return value;
+}
+
+function lastFencingToken(row: Record<string, unknown>): number {
+  return nonNegativeInteger(Number(row.last_fencing_token), 'lastFencingToken');
 }
 
 function leaseExpiry(acquiredAt: string, ttlMs: number): string {
