@@ -8,6 +8,11 @@ import type {
   StateExecutionClaimStore,
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
+import type { ReActAgentRuntime, ReActRunner, ReActRunnerOptions } from '@hypha/kernel';
+
+export interface ScopedReActRunnerFactory {
+  create(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner;
+}
 
 export interface RuntimeCompositionDependencies {
   events: EventRuntime;
@@ -22,6 +27,7 @@ export interface RuntimeComposition extends RuntimeCompositionDependencies {
   runManager: RunManager;
   fsmDriver: FencedBoundedFSMDriver;
   reactRunner: HarnessedReActFSMRunner;
+  scopedReActRunners: ScopedReActRunnerFactory;
 }
 
 export interface RuntimeCompositionFactories {
@@ -35,6 +41,13 @@ export interface RuntimeCompositionFactories {
       fsmDriver: FencedBoundedFSMDriver;
     }
   ): HarnessedReActFSMRunner;
+  createScopedReActRunnerFactory(
+    input: RuntimeCompositionDependencies & {
+      runManager: RunManager;
+      fsmDriver: FencedBoundedFSMDriver;
+      reactRunner: HarnessedReActFSMRunner;
+    }
+  ): ScopedReActRunnerFactory;
 }
 
 export interface RuntimeCompositionRootOptions extends RuntimeCompositionDependencies {
@@ -74,12 +87,22 @@ export class RuntimeCompositionRoot {
       'HarnessedReActFSMRunner',
       factories.createReActRunner({ ...dependencies, runManager, fsmDriver })
     );
+    const scopedReActRunners = requiredComponent(
+      'ScopedReActRunnerFactory',
+      factories.createScopedReActRunnerFactory({
+        ...dependencies,
+        runManager,
+        fsmDriver,
+        reactRunner,
+      })
+    );
 
     this.composition = Object.freeze({
       ...dependencies,
       runManager,
       fsmDriver,
       reactRunner,
+      scopedReActRunners,
     });
     return this.composition;
   }

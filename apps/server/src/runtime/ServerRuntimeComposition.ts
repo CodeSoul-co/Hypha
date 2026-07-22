@@ -8,6 +8,7 @@ import {
   type FencedBoundedFSMDriverOptions,
 } from '@hypha/harness';
 import type { InferenceProvider } from '@hypha/inference';
+import { ReActRunner } from '@hypha/kernel';
 import type { ToolRunner } from '@hypha/tools';
 import type { RuntimeBackbone } from './RuntimeBackbone';
 import { RuntimeCompositionRoot, type RuntimeComposition } from './RuntimeCompositionRoot';
@@ -58,6 +59,9 @@ export function createServerRuntimeComposition(
           runManager,
           fsmSpec: options.fsmSpec,
         }),
+      createScopedReActRunnerFactory: () => ({
+        create: (runtime, runnerOptions) => new ReActRunner(runtime, runnerOptions),
+      }),
     },
   }).compose();
 }

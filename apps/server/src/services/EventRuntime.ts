@@ -75,7 +75,7 @@ import {
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
-import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
+import type { ReActAgentRuntime, ReActAgentSpec } from '@hypha/kernel';
 import type { LoadedSkillContext, SkillRef } from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
@@ -1089,12 +1089,12 @@ class EventRuntimeService {
       spec.skillRefs?.length && skillManager.resolveSkills
         ? await skillManager.resolveSkills({
             agentSkillRefs: spec.skillRefs,
-            inputText: [...input.messages]
-              .reverse()
-              .find((message) => message.role === 'user')?.content,
+            inputText: [...input.messages].reverse().find((message) => message.role === 'user')
+              ?.content,
             allowedSkills: stringArray(workflowState?.allowedSkills),
             requiredSkills: stringArray(workflowState?.requiredSkills),
-            availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+            availableToolRefs:
+              spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
             metadata: spec.metadata,
           })
         : [];
@@ -1279,7 +1279,7 @@ class EventRuntimeService {
         };
       },
     };
-    const runner = new ReActRunner(reactRuntime, {
+    const runner = this.canonicalRuntimeComposition().scopedReActRunners.create(reactRuntime, {
       inference: reactInference,
       toolRunner: this.createReActToolRunner({
         runId: input.runId,
@@ -1847,10 +1847,13 @@ class EventRuntimeService {
       try {
         await this.transition(runId, 'HumanReview', { reason });
       } catch (error) {
-        logger.warn('Custom FSM has no direct Skill HumanReview transition; Run wait remains durable', {
-          runId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        logger.warn(
+          'Custom FSM has no direct Skill HumanReview transition; Run wait remains durable',
+          {
+            runId,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
       }
       return;
     }
@@ -3489,9 +3492,7 @@ function createDefaultDomainPack(): DomainPackSpec {
       'Acting',
       'ObservationRecorded',
       'Verifying',
-    ].map(
-      (from) => ({ from, to: 'HumanReview', description: `${from} requires human review` })
-    ),
+    ].map((from) => ({ from, to: 'HumanReview', description: `${from} requires human review` })),
     ...states
       .filter((state) => state !== 'Completed' && state !== 'Failed')
       .map((from) => ({ from, to: 'Failed', description: `${from} failed` })),

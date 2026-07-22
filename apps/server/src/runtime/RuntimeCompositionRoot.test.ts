@@ -8,9 +8,11 @@ import type {
   StateExecutionClaimStore,
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
+import type { ReActRunner } from '@hypha/kernel';
 import {
   RuntimeCompositionRoot,
   type RuntimeCompositionDependencies,
+  type ScopedReActRunnerFactory,
 } from './RuntimeCompositionRoot';
 
 function dependencies(): RuntimeCompositionDependencies {
@@ -30,12 +32,19 @@ describe('RuntimeCompositionRoot', () => {
     const runManager = {} as RunManager;
     const fsmDriver = {} as FencedBoundedFSMDriver;
     const reactRunner = {} as HarnessedReActFSMRunner;
+    const scopedReActRunners = {} as ScopedReActRunnerFactory;
     const createRunManager = jest.fn(() => runManager);
     const createFSMDriver = jest.fn(() => fsmDriver);
     const createReActRunner = jest.fn(() => reactRunner);
+    const createScopedReActRunnerFactory = jest.fn(() => scopedReActRunners);
     const root = new RuntimeCompositionRoot({
       ...durable,
-      factories: { createRunManager, createFSMDriver, createReActRunner },
+      factories: {
+        createRunManager,
+        createFSMDriver,
+        createReActRunner,
+        createScopedReActRunnerFactory,
+      },
     });
 
     const first = root.compose();
@@ -43,13 +52,26 @@ describe('RuntimeCompositionRoot', () => {
 
     expect(second).toBe(first);
     expect(Object.isFrozen(first)).toBe(true);
-    expect(first).toEqual({ ...durable, runManager, fsmDriver, reactRunner });
+    expect(first).toEqual({
+      ...durable,
+      runManager,
+      fsmDriver,
+      reactRunner,
+      scopedReActRunners,
+    });
     expect(createRunManager).toHaveBeenCalledTimes(1);
     expect(createRunManager).toHaveBeenCalledWith({ events: durable.events });
     expect(createFSMDriver).toHaveBeenCalledTimes(1);
     expect(createFSMDriver).toHaveBeenCalledWith({ ...durable, runManager });
     expect(createReActRunner).toHaveBeenCalledTimes(1);
     expect(createReActRunner).toHaveBeenCalledWith({ ...durable, runManager, fsmDriver });
+    expect(createScopedReActRunnerFactory).toHaveBeenCalledTimes(1);
+    expect(createScopedReActRunnerFactory).toHaveBeenCalledWith({
+      ...durable,
+      runManager,
+      fsmDriver,
+      reactRunner,
+    });
   });
 
   it('fails composition when a required canonical component is absent', () => {
@@ -59,9 +81,26 @@ describe('RuntimeCompositionRoot', () => {
         createRunManager: () => undefined as unknown as RunManager,
         createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
         createReActRunner: () => ({}) as HarnessedReActFSMRunner,
+        createScopedReActRunnerFactory: () => undefined as unknown as ScopedReActRunnerFactory,
       },
     });
 
     expect(() => root.compose()).toThrow('Runtime composition factory did not provide RunManager');
+  });
+
+  it('fails composition when the scoped ReAct runner factory is absent', () => {
+    const root = new RuntimeCompositionRoot({
+      ...dependencies(),
+      factories: {
+        createRunManager: () => ({}) as RunManager,
+        createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
+        createReActRunner: () => ({}) as HarnessedReActFSMRunner,
+        createScopedReActRunnerFactory: () => undefined as unknown as ScopedReActRunnerFactory,
+      },
+    });
+
+    expect(() => root.compose()).toThrow(
+      'Runtime composition factory did not provide ScopedReActRunnerFactory'
+    );
   });
 });
