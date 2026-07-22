@@ -65,8 +65,25 @@ export interface MemoryServerMigrationAcceptance {
   redisWorkingMemory: {
     trimMode: 'MAXLEN';
     trimArgumentSemantics: 'target_max_length';
+    trimPrecision: 'exact';
+    maxZeroBehavior: 'clear';
     newestReadCommand: 'XREVRANGE';
+    emptyLatestResult: 'null';
     cleanupCommand: 'SCAN';
+    scanBudgetRequired: true;
+    requiredBoundaryCases: readonly [
+      'max_zero',
+      'empty_to_one',
+      'at_max',
+      'max_plus_one',
+      'large_batch',
+      'concurrent',
+      'scope_isolation',
+      'restart_latest',
+      'empty_latest',
+      'scan_multi_page',
+      'repeated_cursor',
+    ];
     prohibitedCommands: readonly ['XTRIM MAXLEN with deletion count', 'XRANGE + -', 'KEYS'];
     retentionCases: readonly RedisWorkingMemoryRetentionCase[];
   };
@@ -87,7 +104,7 @@ export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = 
   contractRef: {
     id: 'memory.server-migration-acceptance',
     version: '1.0.0',
-    revision: 'p0-1-stage-2',
+    revision: 'p0-2-stage-3',
   },
   issues: ['P0-1', 'P0-2', 'P0-3'],
   canonicalService: '@hypha/memory.MemoryApplicationService',
@@ -153,8 +170,25 @@ export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = 
   redisWorkingMemory: {
     trimMode: 'MAXLEN',
     trimArgumentSemantics: 'target_max_length',
+    trimPrecision: 'exact',
+    maxZeroBehavior: 'clear',
     newestReadCommand: 'XREVRANGE',
+    emptyLatestResult: 'null',
     cleanupCommand: 'SCAN',
+    scanBudgetRequired: true,
+    requiredBoundaryCases: [
+      'max_zero',
+      'empty_to_one',
+      'at_max',
+      'max_plus_one',
+      'large_batch',
+      'concurrent',
+      'scope_isolation',
+      'restart_latest',
+      'empty_latest',
+      'scan_multi_page',
+      'repeated_cursor',
+    ],
     prohibitedCommands: ['XTRIM MAXLEN with deletion count', 'XRANGE + -', 'KEYS'],
     retentionCases: [
       { beforeAppend: 99, maxMessages: 100, expectedAfterAppend: 100 },

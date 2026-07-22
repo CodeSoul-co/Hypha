@@ -27,8 +27,12 @@ describe('Memory Server migration acceptance', () => {
     expect(memoryServerMigrationAcceptance.redisWorkingMemory).toMatchObject({
       trimMode: 'MAXLEN',
       trimArgumentSemantics: 'target_max_length',
+      trimPrecision: 'exact',
+      maxZeroBehavior: 'clear',
       newestReadCommand: 'XREVRANGE',
+      emptyLatestResult: 'null',
       cleanupCommand: 'SCAN',
+      scanBudgetRequired: true,
     });
   });
 });
