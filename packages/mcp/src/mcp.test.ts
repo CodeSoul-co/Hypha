@@ -10,6 +10,7 @@ import {
   MCPCapabilityCatalog,
   MCPSchemaCache,
   MCPConnectionManager,
+  NORMALIZED_MCP_ERROR_CODES,
   SDKMCPConnectionSessionFactory,
   MockMCPGateway,
   classicMCPIntegrationSpec,
@@ -22,6 +23,7 @@ import {
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
   normalizeMCPToolSpec,
+  normalizedMCPErrorSchema,
   RedisMCPCapabilityCatalogStore,
   RedisToolContractSnapshotStore,
   registerMCPGatewayTools,
@@ -33,6 +35,27 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('keeps NormalizedMCPError TypeScript, Zod, and JSON Schema in parity', () => {
+    const jsonSchema = governedMCPIntegrationJsonSchemas.NormalizedMCPError;
+    expect(jsonSchema.required).toEqual(['code', 'message', 'retryable']);
+    expect(jsonSchema.additionalProperties).toBe(false);
+    expect((jsonSchema.properties?.code as { enum?: unknown[] }).enum).toEqual([
+      ...NORMALIZED_MCP_ERROR_CODES,
+    ]);
+    for (const code of NORMALIZED_MCP_ERROR_CODES) {
+      expect(
+        normalizedMCPErrorSchema.parse({ code, message: `fixture:${code}`, retryable: false })
+      ).toMatchObject({ code });
+    }
+    expect(() =>
+      normalizedMCPErrorSchema.parse({
+        code: 'MCP_INTERNAL_ERROR',
+        message: 'unexpected field',
+        retryable: false,
+        unexpected: true,
+      })
+    ).toThrow();
+  });
   it('persists catalog records and contract snapshots in a shared Redis-compatible store', async () => {
     const strings = new Map<string, string>();
     const sets = new Map<string, Set<string>>();

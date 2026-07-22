@@ -58,6 +58,7 @@ import {
 export * from './contracts';
 export * from './common-tools';
 export * from './common-tool-ports';
+export * from './common-tool-catalog';
 export * from './media';
 export * from './workspace';
 export * from './adapter-factory';
