@@ -13,6 +13,7 @@ import {
   extendDomainPack,
   initializeDomainSession,
   LocalDomainPackLoader,
+  loadDomainPackFile,
   parseDomainPackDocument,
   reasoningSpecDefinition,
   resolveWorkflowToolExecutionScope,
@@ -713,6 +714,33 @@ defaultWorkflow: workflow.file
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('loads and compiles the shipped minimal pack with pinned Prompt and Tool profiles', async () => {
+    const filePath = path.resolve(process.cwd(), 'configs/domain-packs/minimal.domain.yaml');
+    const pack = await loadDomainPackFile(filePath);
+    expect(pack.sessionProfiles?.[0]?.defaultToolProfileRef).toBe('tools.minimal.search');
+    expect(pack.toolProfiles).toEqual([
+      expect.objectContaining({
+        id: 'tools.minimal.search',
+        toolRefs: [{ id: 'common.search', version: '1.0.0' }],
+        contractSnapshotMode: 'run',
+      }),
+    ]);
+    const compiled = compileDomainPackToHarnessedSystem(pack, {
+      sessionProfileId: 'session.local',
+      agentRef: { id: 'agent.minimal', version: '1.0.0' },
+    });
+    const reasoning = compiled.bindings.workflowStates.find((state) => state.stateId === 'Reasoning');
+    expect(reasoning).toMatchObject({
+      toolProfileRefs: [{ id: 'tools.minimal.search', version: '1.0.0' }],
+      allowedToolRefs: [{ id: 'common.search', version: '1.0.0' }],
+      humanApprovalPolicyRef: { id: 'policy.search-approval', version: '1.0.0' },
+      permissionScopes: ['search.query'],
+      requiredPromptRefs: [
+        expect.objectContaining({ id: 'prompt.agent.default', version: '1.0.0' }),
+      ],
+    });
   });
 
   it('rejects broken internal DomainPack references', () => {
