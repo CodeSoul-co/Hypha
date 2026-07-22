@@ -27,6 +27,11 @@ import {
   type ExternalMemoryMappingStore,
 } from './external-adapters';
 import { createExternalMemoryId } from './external-memory-identity';
+import {
+  createExternalProviderOperation,
+  resolveExternalProviderOperationStore,
+  type ExternalProviderOperationStore,
+} from './external-provider-operations';
 import type { Mem0HttpFetch } from './mem0-rest-client';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
 
@@ -41,6 +46,9 @@ export interface MemoryBankManagedClientOptions {
   mappingStore?: ExternalMemoryMappingStore;
   mappingProfile?: ExternalMemoryMappingRuntimeProfile;
   profileRef?: MemoryContractSpecRef;
+  operationStore?: ExternalProviderOperationStore;
+  operationDeadlineMs?: number;
+  maxOperationAttempts?: number;
   now?: () => Date;
   allowInsecureForTests?: boolean;
 }
@@ -72,7 +80,10 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   private readonly parent: string;
   private readonly providerId: string;
   private readonly mappingStore: ExternalMemoryMappingStore;
+  private readonly operationStore: ExternalProviderOperationStore;
   private readonly profileRef: MemoryContractSpecRef;
+  private readonly operationDeadlineMs: number;
+  private readonly maxOperationAttempts: number;
   private readonly now: () => Date;
 
   constructor(private readonly options: MemoryBankManagedClientOptions) {
@@ -97,6 +108,10 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     this.providerId = options.providerId ?? 'memory.provider.memorybank.vertex-ai';
     const mappingProfile = options.mappingProfile ?? 'production';
     this.mappingStore = resolveExternalMemoryMappingStore(options.mappingStore, mappingProfile);
+    this.operationStore = resolveExternalProviderOperationStore(
+      options.operationStore,
+      mappingProfile
+    );
     if (mappingProfile === 'production' && !options.profileRef) {
       throw memoryError(
         'MEMORY_INVALID_INPUT',
@@ -104,6 +119,8 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
       );
     }
     this.profileRef = options.profileRef ?? { id: 'memory.profile.ephemeral' };
+    this.operationDeadlineMs = options.operationDeadlineMs ?? 300_000;
+    this.maxOperationAttempts = options.maxOperationAttempts ?? 5;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -113,22 +130,45 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
 
   async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
     const fact = typeof request.input === 'string' ? request.input : stableStringify(request.input);
-    const body = await this.request('/' + this.parent + '/memories:generate', {
-      method: 'POST',
-      signal,
-      body: {
-        directMemoriesSource: { directMemories: [{ fact }] },
-        scope: toVertexScope(request.scope),
-        revisionLabels: { hypha_operation_id: request.operationId },
-        metadata: toVertexMetadata(request.metadata),
-      },
-    });
+    let body: unknown;
+    try {
+      body = await this.request('/' + this.parent + '/memories:generate', {
+        method: 'POST',
+        signal,
+        body: {
+          directMemoriesSource: { directMemories: [{ fact }] },
+          scope: toVertexScope(request.scope),
+          revisionLabels: { hypha_operation_id: request.operationId },
+          metadata: toVertexMetadata(request.metadata),
+        },
+      });
+    } catch (error) {
+      if (isUnknownWriteOutcome(error)) {
+        await this.persistOperation(request, undefined, 'unknown_write', 'reconcile_required');
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Managed MemoryBank write outcome is unknown and requires reconciliation.',
+          false,
+          { operationId: request.operationId, quarantined: true }
+        );
+      }
+      throw error;
+    }
     const operation = asObject(body);
     const operationName = readString(operation, 'name');
     const records = extractVertexMemories(operation.response).map((item) =>
       this.toRecord(item, request.scope, request.source)
     );
     await this.remember(records);
+    if (operation.done !== true) {
+      if (!operationName) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Managed MemoryBank returned an asynchronous response without an operation name.'
+        );
+      }
+      await this.persistOperation(request, operationName, 'vertex_lro', 'pending');
+    }
     return {
       operationId: request.operationId,
       status: operation.done === true ? 'committed' : 'queued',
@@ -137,6 +177,102 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     };
   }
 
+  async reconcileOperation(
+    operationId: string,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult | null> {
+    const operation = await this.operationStore.get(this.providerId, operationId);
+    if (!operation || !['pending', 'running', 'reconcile_required'].includes(operation.state)) {
+      return null;
+    }
+    const now = this.now().toISOString();
+    if (operation.cancellationRequestedAt || signal?.aborted) {
+      await this.operationStore.set({ ...operation, state: 'cancelled', updatedAt: now });
+      return null;
+    }
+    if (operation.deadlineAt && operation.deadlineAt <= now) {
+      await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: now });
+      return null;
+    }
+    if (!operation.externalOperationId) {
+      return {
+        operationId,
+        status: 'queued',
+        records: [],
+        warnings: ['Unknown write outcome remains quarantined for provider-side reconciliation.'],
+      };
+    }
+    try {
+      const response = asObject(
+        await this.request('/' + operation.externalOperationId, { signal })
+      );
+      if (response.done !== true) {
+        await this.operationStore.set({
+          ...operation,
+          state: 'running',
+          attempts: operation.attempts + 1,
+          updatedAt: now,
+        });
+        return {
+          operationId,
+          status: 'queued',
+          records: [],
+          events: [operation.externalOperationId],
+        };
+      }
+      if (response.error) {
+        throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Managed MemoryBank operation failed.');
+      }
+      const records = extractVertexMemories(response.response).map((item) =>
+        this.toRecord(item, operation.scope, {
+          type: 'derived',
+          sourceId: 'vertex-memory-bank:operation',
+        })
+      );
+      await this.remember(records);
+      await this.operationStore.set({
+        ...operation,
+        state: 'succeeded',
+        attempts: operation.attempts + 1,
+        updatedAt: now,
+      });
+      return { operationId, status: 'committed', records, events: [operation.externalOperationId] };
+    } catch (error) {
+      const attempts = operation.attempts + 1;
+      await this.operationStore.set({
+        ...operation,
+        state: attempts >= this.maxOperationAttempts ? 'dead_letter' : 'running',
+        attempts,
+        updatedAt: now,
+      });
+      throw error;
+    }
+  }
+
+  private persistOperation(
+    request: MemoryAddRequest,
+    externalOperationId: string | undefined,
+    kind: 'vertex_lro' | 'unknown_write',
+    state: 'pending' | 'reconcile_required'
+  ): Promise<void> {
+    return this.operationStore.set(
+      createExternalProviderOperation({
+        providerId: this.providerId,
+        operationId: request.operationId,
+        externalOperationId,
+        kind,
+        state,
+        scope: request.scope,
+        profileRef: request.profileRef,
+        principal: {
+          principalId: request.principal.principalId,
+          userId: request.principal.userId,
+        },
+        deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
+        now: this.now().toISOString(),
+      })
+    );
+  }
   async search(
     request: ManagedMemorySearchRequest,
     signal?: AbortSignal
@@ -485,6 +621,13 @@ function toVertexMetadata(metadata?: Record<string, unknown>): Record<string, un
     ])
   );
 }
+function isUnknownWriteOutcome(error: unknown): boolean {
+  if (error instanceof Error) return error.name === 'AbortError' || error.name === 'TimeoutError';
+  if (!error || typeof error !== 'object') return false;
+  const value = error as { code?: string; details?: Record<string, unknown> };
+  return value.code === 'MEMORY_PROVIDER_TIMEOUT' || value.details?.status === undefined;
+}
+
 function extractVertexMemories(response: unknown): Record<string, unknown>[] {
   return asArray(asObject(response).generatedMemories).map((item) =>
     asObject(asObject(item).memory)

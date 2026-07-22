@@ -20,6 +20,11 @@ import type {
   ExternalMemoryMappingStore,
 } from './external-adapters';
 import { Mem0OssClient, type Mem0HttpFetch, type Mem0HttpResponse } from './mem0-rest-client';
+import {
+  createExternalProviderOperation,
+  resolveExternalProviderOperationStore,
+  type ExternalProviderOperationStore,
+} from './external-provider-operations';
 import { memoryError } from './memory-utils';
 
 export interface Mem0PlatformClientOptions {
@@ -29,6 +34,8 @@ export interface Mem0PlatformClientOptions {
   providerId?: string;
   mappingStore?: ExternalMemoryMappingStore;
   mappingProfile?: ExternalMemoryMappingRuntimeProfile;
+  operationStore?: ExternalProviderOperationStore;
+  operationDeadlineMs?: number;
   now?: () => Date;
 }
 
@@ -65,7 +72,10 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   private readonly fetcher: Mem0HttpFetch;
   private readonly baseUrl: string;
   private readonly apiToken: string;
-  private readonly uncertainOperations = new Map<string, MemoryAddRequest>();
+  private readonly providerId: string;
+  private readonly operationStore: ExternalProviderOperationStore;
+  private readonly operationDeadlineMs: number;
+  private readonly now: () => Date;
 
   constructor(options: Mem0PlatformClientOptions) {
     if (!options.apiToken.trim()) {
@@ -76,6 +86,14 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
     }
     this.baseUrl = (options.baseUrl ?? 'https://api.mem0.ai').replace(/\/$/, '');
     this.apiToken = options.apiToken;
+    this.providerId = options.providerId ?? 'memory.provider.mem0.platform.v3';
+    const mappingProfile = options.mappingProfile ?? 'production';
+    this.operationStore = resolveExternalProviderOperationStore(
+      options.operationStore,
+      mappingProfile
+    );
+    this.operationDeadlineMs = options.operationDeadlineMs ?? 300_000;
+    this.now = options.now ?? (() => new Date());
     const runtimeFetch = (globalThis as unknown as { fetch?: Mem0HttpFetch }).fetch;
     const fetcher = options.fetch ?? runtimeFetch;
     if (!fetcher) {
@@ -87,11 +105,11 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
     this.fetcher = fetcher;
     this.delegate = new Mem0OssClient({
       baseUrl: this.baseUrl,
-      providerId: options.providerId ?? 'memory.provider.mem0.platform.v3',
+      providerId: this.providerId,
       fetch: (url, init) => this.platformFetch(url, init),
       authMode: 'none',
       mappingStore: options.mappingStore,
-      mappingProfile: options.mappingProfile ?? 'production',
+      mappingProfile,
       now: options.now,
       healthPath: '/v1/events/?page=1&page_size=1',
     });
@@ -104,16 +122,48 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
     try {
       const result = await this.delegate.add(request, signal);
-      if (result.status !== 'queued') {
+      if (result.status !== 'queued' || !result.events?.[0]) {
         throw memoryError(
           'MEMORY_PROVIDER_UNAVAILABLE',
           'Mem0 Platform v3 add did not return the required asynchronous event receipt.'
         );
       }
+      await this.operationStore.set(
+        createExternalProviderOperation({
+          providerId: this.providerId,
+          operationId: request.operationId,
+          externalOperationId: result.events[0],
+          kind: 'mem0_event',
+          state: 'pending',
+          scope: request.scope,
+          profileRef: request.profileRef,
+          principal: {
+            principalId: request.principal.principalId,
+            userId: request.principal.userId,
+          },
+          deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
+          now: this.now().toISOString(),
+        })
+      );
       return result;
     } catch (error) {
       if (isUnknownWriteOutcome(error)) {
-        this.uncertainOperations.set(request.operationId, structuredClone(request));
+        await this.operationStore.set(
+          createExternalProviderOperation({
+            providerId: this.providerId,
+            operationId: request.operationId,
+            kind: 'unknown_write',
+            state: 'reconcile_required',
+            scope: request.scope,
+            profileRef: request.profileRef,
+            principal: {
+              principalId: request.principal.principalId,
+              userId: request.principal.userId,
+            },
+            deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
+            now: this.now().toISOString(),
+          })
+        );
         throw memoryError(
           'MEMORY_PROVIDER_UNAVAILABLE',
           'Mem0 Platform write outcome is unknown and quarantined for reconciliation.',
@@ -179,20 +229,32 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   }
 
   async reconcile(operationId: string, signal?: AbortSignal): Promise<ManagedMemorySearchResult[]> {
-    const request = this.uncertainOperations.get(operationId);
-    if (!request) return [];
+    const operation = await this.operationStore.get(this.providerId, operationId);
+    if (!operation || operation.state !== 'reconcile_required') return [];
     const results = await this.search(
       {
         operationId: operationId + ':reconcile',
-        principal: request.principal,
-        scope: request.scope,
-        profileRef: request.profileRef,
+        principal: {
+          principalId: operation.principal.principalId,
+          type: 'user',
+          userId: operation.principal.userId,
+          permissionScopes: ['memory:read'],
+        },
+        scope: operation.scope,
+        profileRef: operation.profileRef,
         filters: { metadata: { _hypha_operation_id: operationId } },
         topK: 100,
       },
       signal
     );
-    if (results.length > 0) this.uncertainOperations.delete(operationId);
+    if (results.length > 0) {
+      await this.operationStore.set({
+        ...operation,
+        state: 'succeeded',
+        attempts: operation.attempts + 1,
+        updatedAt: this.now().toISOString(),
+      });
+    }
     return results;
   }
 
