@@ -2460,7 +2460,7 @@ class EventRuntimeService {
       (skill) => skill.policyDecision.requiresHumanReview === true
     );
     if (requiringReview.length === 0) return [];
-    const events = await this.runtime.listEvents(input.run.runId);
+    const events = await this.listEvents(input.run.runId);
     const existing = projectSkillHumanReviewTasks(events);
     const pending: SkillHumanReviewTask[] = [];
     for (const skill of requiringReview) {
@@ -2524,7 +2524,7 @@ class EventRuntimeService {
 
   async listSkillHumanReviews(runId: string, userId: string): Promise<SkillHumanReviewTask[]> {
     await this.requireOwnedRunScope(runId, userId);
-    return projectSkillHumanReviewTasks(await this.runtime.listEvents(runId));
+    return projectSkillHumanReviewTasks(await this.listEvents(runId));
   }
 
   async decideSkillHumanReview(input: {
@@ -2535,7 +2535,7 @@ class EventRuntimeService {
     reason?: string;
   }): Promise<SkillHumanReviewTask> {
     const run = await this.requireRun(input.runId);
-    const tasks = projectSkillHumanReviewTasks(await this.runtime.listEvents(input.runId));
+    const tasks = projectSkillHumanReviewTasks(await this.listEvents(input.runId));
     const task = tasks.find((candidate) => candidate.taskId === input.taskId);
     if (!task || task.status !== 'pending') {
       throw new FrameworkError({
