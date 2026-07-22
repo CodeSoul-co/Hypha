@@ -215,16 +215,24 @@ describe('Mem0 REST client', () => {
       })
     ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_UNAVAILABLE', retryable: true });
   });
-  it('provides stable cursor pagination and rejects invalid JSON', async () => {
+  it('uses protected provider cursors and rejects invalid JSON', async () => {
     const metadata = { _hypha_scope_hash: hashMemoryScope(scope) };
     const paging = new Mem0OssClient({
       baseUrl: 'http://mem0.local',
-      fetch: async () =>
-        jsonResponse([
-          { id: '1', memory: 'one', metadata },
-          { id: '2', memory: 'two', metadata },
-          { id: '3', memory: 'three', metadata },
-        ]),
+      fetch: async (url) => {
+        const cursor = new URL(url).searchParams.get('cursor');
+        return cursor
+          ? jsonResponse({
+              memories: [{ id: '3', memory: 'three', metadata }],
+            })
+          : jsonResponse({
+              memories: [
+                { id: '1', memory: 'one', metadata },
+                { id: '2', memory: 'two', metadata },
+              ],
+              next_cursor: 'provider-page-2',
+            });
+      },
     });
     const first = await paging.list({
       operationId: 'list-1',
@@ -232,7 +240,8 @@ describe('Mem0 REST client', () => {
       scope,
       pagination: { limit: 2 },
     });
-    expect(first).toMatchObject({ hasMore: true, nextCursor: 'offset:2' });
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toMatch(/^hypha-provider-cursor:v1:/u);
     const second = await paging.list({
       operationId: 'list-2',
       principal,
@@ -240,6 +249,7 @@ describe('Mem0 REST client', () => {
       pagination: { limit: 2, cursor: first.nextCursor },
     });
     expect(second.records.map((record) => record.canonicalText)).toEqual(['three']);
+    expect(second.hasMore).toBe(false);
 
     const invalid = new Mem0OssClient({
       baseUrl: 'http://mem0.local',
@@ -257,7 +267,6 @@ describe('Mem0 REST client', () => {
       { code: 'MEMORY_PROVIDER_UNAVAILABLE', details: { schemaDrift: true } }
     );
   });
-
   it('cancels in-flight requests when closed', async () => {
     let aborted = false;
     const client = new Mem0OssClient({

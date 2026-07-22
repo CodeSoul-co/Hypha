@@ -12,6 +12,11 @@ import type {
 export interface PaginationRequest {
   cursor?: string;
   limit?: number;
+  maxPages?: number;
+  maxItems?: number;
+  maxBytes?: number;
+  maxDurationMs?: number;
+  maxCalls?: number;
 }
 
 export interface PaginationResult {

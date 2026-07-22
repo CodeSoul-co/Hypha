@@ -27,6 +27,7 @@ import {
   type ExternalMemoryMappingStore,
 } from './external-adapters';
 import { createExternalMemoryId } from './external-memory-identity';
+import { beginProviderPage, finishProviderPage } from './provider-pagination';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
 
 export interface Mem0HttpResponse {
@@ -204,10 +205,18 @@ export class Mem0OssClient implements ExternalMemoryClient {
   }
 
   async list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult> {
+    const page = beginProviderPage(
+      this.providerId,
+      request.scope,
+      request.pagination,
+      this.now().getTime()
+    );
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(toMem0Scope(request.scope))) {
       if (value) query.set(key, value);
     }
+    if (request.pagination?.limit) query.set('page_size', String(request.pagination.limit));
+    if (page.providerCursor) query.set('cursor', page.providerCursor);
     const body = await this.request('/memories' + (query.size > 0 ? '?' + query.toString() : ''), {
       signal,
     });
@@ -218,16 +227,16 @@ export class Mem0OssClient implements ExternalMemoryClient {
     });
     await this.rememberMappings(records);
     const filtered = records.filter((record) => matchesFilter(record, request.filter));
-    const offset = decodeOffsetCursor(request.pagination?.cursor);
-    const limit = request.pagination?.limit ?? Math.max(0, filtered.length - offset);
-    const end = offset + limit;
-    return {
-      records: filtered.slice(offset, end),
-      nextCursor: end < filtered.length ? encodeOffsetCursor(end) : undefined,
-      hasMore: end < filtered.length,
-    };
+    const pagination = finishProviderPage(
+      page,
+      this.providerId,
+      request.scope,
+      filtered,
+      readProviderCursor(body),
+      this.now().getTime()
+    );
+    return { records: filtered, ...pagination };
   }
-
   async update(
     request: ManagedMemoryUpdateRequest,
     signal?: AbortSignal
@@ -583,15 +592,21 @@ function extractItems(body: unknown): Array<Record<string, unknown>> {
   return Object.keys(object).length > 0 ? [object] : [];
 }
 
-function encodeOffsetCursor(offset: number): string {
-  return 'offset:' + offset;
+function readProviderCursor(body: unknown): string | undefined {
+  const value = asObject(body);
+  for (const key of ['next_cursor', 'nextCursor', 'cursor', 'next_page_token']) {
+    const cursor = readString(value, key);
+    if (cursor) return cursor;
+  }
+  const next = readString(value, 'next');
+  if (!next) return undefined;
+  try {
+    const url = new URL(next);
+    return url.searchParams.get('cursor') ?? url.searchParams.get('page') ?? undefined;
+  } catch {
+    return next;
+  }
 }
-
-function decodeOffsetCursor(cursor?: string): number {
-  const match = cursor ? /^offset:(\d+)$/.exec(cursor) : null;
-  return match ? Number(match[1]) : 0;
-}
-
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

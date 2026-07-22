@@ -875,6 +875,7 @@ export * from './index-outbox';
 export * from './lifecycle-workers';
 export * from './dead-letter-management';
 export * from './external-provider-operations';
+export * from './provider-pagination';
 export * from './native-maintenance';
 export * from './native-memory';
 export * from './extraction';

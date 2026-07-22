@@ -271,12 +271,15 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
       url.pathname = '/v3/memories/search/';
       body = toV3SearchBody(body ?? {});
     } else if (url.pathname === '/memories' && method === 'GET') {
-      const filters = Object.fromEntries(url.searchParams.entries());
+      const params = Object.fromEntries(url.searchParams.entries());
+      const { cursor, page_size: pageSize, ...filters } = params;
       url.pathname = '/v3/memories/';
       url.search = '';
-      url.searchParams.set('page', '1');
-      url.searchParams.set('page_size', '50');
-      body = { filters };
+      body = {
+        filters,
+        page: cursor ?? '1',
+        page_size: pageSize ? Number(pageSize) : 50,
+      };
       method = 'POST';
     } else if (url.pathname.startsWith('/memories/')) {
       url.pathname = '/v1' + url.pathname + (url.pathname.endsWith('/') ? '' : '/');

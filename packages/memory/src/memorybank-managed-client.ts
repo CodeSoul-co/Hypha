@@ -33,6 +33,7 @@ import {
   type ExternalProviderOperationStore,
 } from './external-provider-operations';
 import type { Mem0HttpFetch } from './mem0-rest-client';
+import { beginProviderPage, finishProviderPage } from './provider-pagination';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
 
 export interface MemoryBankManagedClientOptions {
@@ -320,10 +321,16 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   }
 
   async list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult> {
+    const page = beginProviderPage(
+      this.providerId,
+      request.scope,
+      request.pagination,
+      this.now().getTime()
+    );
     const query = new URLSearchParams();
-    query.set('filter', `scope = ${JSON.stringify(stableStringify(toVertexScope(request.scope)))}`);
+    query.set('filter', 'scope = ' + JSON.stringify(stableStringify(toVertexScope(request.scope))));
     if (request.pagination?.limit) query.set('pageSize', String(request.pagination.limit));
-    if (request.pagination?.cursor) query.set('pageToken', request.pagination.cursor);
+    if (page.providerCursor) query.set('pageToken', page.providerCursor);
     const body = asObject(
       await this.request('/' + this.parent + '/memories' + (query.size ? '?' + query : ''), {
         signal,
@@ -336,10 +343,16 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
       })
     );
     await this.remember(records);
-    const nextCursor = readString(body, 'nextPageToken');
-    return { records, nextCursor, hasMore: Boolean(nextCursor) };
+    const pagination = finishProviderPage(
+      page,
+      this.providerId,
+      request.scope,
+      records,
+      readString(body, 'nextPageToken'),
+      this.now().getTime()
+    );
+    return { records, ...pagination };
   }
-
   async update(
     request: ManagedMemoryUpdateRequest,
     signal?: AbortSignal
