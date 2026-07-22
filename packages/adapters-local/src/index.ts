@@ -40,6 +40,7 @@ import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
 
 export * from './workspace-runtime';
+export * from './common-tool-port-bindings';
 export * from './local-process-output-collector';
 export * from './execution-provider-error';
 export * from './local-process-policy';
