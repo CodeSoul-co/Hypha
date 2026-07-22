@@ -61,6 +61,7 @@ export * from './common-tool-ports';
 export * from './media';
 export * from './workspace';
 export * from './adapter-factory';
+export * from './execution-adapter';
 
 class ToolTimeoutError extends Error {
   readonly code = 'TOOL_TIMEOUT';
@@ -2804,15 +2805,23 @@ export class GovernedToolRunner implements ToolRunner {
         for (const middleware of this.middleware) {
           await middleware.onError?.({ ...middlewareContext, attempt }, error);
         }
-        const cancelled = invocationController.signal.aborted;
+        const executionTerminalState = executionTerminalStateOf(error);
+        const executionContext = frameworkErrorContext(error);
+        const cancelled =
+          invocationController.signal.aborted || executionTerminalState === 'cancelled';
         if (cancelled) {
           const result = failedToolResult(
             request.toolId,
             invocationId,
             'TOOL_CANCELLED',
-            String(invocationController.signal.reason ?? 'Tool invocation cancelled.'),
+            invocationController.signal.aborted
+              ? String(invocationController.signal.reason ?? 'Tool invocation cancelled.')
+              : error instanceof Error
+                ? error.message
+                : 'Execution provider cancelled the Tool invocation.',
             'execution',
-            'cancelled'
+            'cancelled',
+            executionContext
           );
           await record('tool.call.cancelled', 'cancelled:' + attempt, {
             ...basePayload,
@@ -2821,7 +2830,8 @@ export class GovernedToolRunner implements ToolRunner {
           });
           return result;
         }
-        const timedOut = error instanceof ToolTimeoutError;
+        const timedOut =
+          error instanceof ToolTimeoutError || executionTerminalState === 'timed_out';
         const message = error instanceof Error ? error.message : String(error);
         let timeoutReconciliation: ToolReceiptReconciliation | undefined;
         let sideEffectTimeoutRetrySafe = !hasExternalSideEffect(spec.sideEffectLevel);
@@ -2905,6 +2915,12 @@ export class GovernedToolRunner implements ToolRunner {
             attempts: attempt,
           });
         }
+        const executionFailureCode =
+          executionTerminalState === 'unknown'
+            ? 'TOOL_EXECUTION_UNKNOWN'
+            : executionTerminalState === 'quarantined'
+              ? 'TOOL_EXECUTION_QUARANTINED'
+              : 'TOOL_EXECUTION_FAILED';
         const result = failedToolResult(
           request.toolId,
           invocationId,
@@ -2912,11 +2928,11 @@ export class GovernedToolRunner implements ToolRunner {
             ? 'TOOL_EXTERNAL_COMMIT_UNCERTAIN'
             : timedOut
               ? 'TOOL_TIMEOUT'
-              : 'TOOL_EXECUTION_FAILED',
+              : executionFailureCode,
           message,
           timedOut ? 'timeout' : 'execution',
           'failed',
-          { attempts: attempt }
+          { ...executionContext, attempts: attempt, executionTerminalState }
         );
         result.attempts = attempt;
         if (timeoutReconciliation?.receipt) {
@@ -3119,7 +3135,7 @@ export const toolSpecSchema = z.object({
       mode: z.enum(['none', 'optional', 'required']),
     })
     .optional(),
-  source: z.enum(['local', 'mcp', 'http', 'plugin', 'hosted', 'custom']).optional(),
+  source: z.enum(['local', 'mcp', 'http', 'plugin', 'hosted', 'execution', 'custom']).optional(),
   sourceRef: z
     .object({
       serverId: z.string().optional(),
@@ -3633,6 +3649,28 @@ function shouldRetry(
       ? String((error as { code?: unknown }).code)
       : undefined;
   return !!code && retryableCodes.includes(code);
+}
+
+function executionTerminalStateOf(
+  error: unknown
+): 'failed' | 'timed_out' | 'cancelled' | 'unknown' | 'quarantined' | undefined {
+  if (!error || typeof error !== 'object' || !('terminalState' in error)) return undefined;
+  const terminalState = (error as { terminalState?: unknown }).terminalState;
+  return terminalState === 'failed' ||
+    terminalState === 'timed_out' ||
+    terminalState === 'cancelled' ||
+    terminalState === 'unknown' ||
+    terminalState === 'quarantined'
+    ? terminalState
+    : undefined;
+}
+
+function frameworkErrorContext(error: unknown): Record<string, unknown> | undefined {
+  if (!error || typeof error !== 'object' || !('context' in error)) return undefined;
+  const context = (error as { context?: unknown }).context;
+  return context && typeof context === 'object' && !Array.isArray(context)
+    ? (context as Record<string, unknown>)
+    : undefined;
 }
 
 function hasExternalSideEffect(sideEffectLevel: SideEffectLevel): boolean {
