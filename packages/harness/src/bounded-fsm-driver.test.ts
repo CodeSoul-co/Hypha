@@ -19,6 +19,7 @@ import {
 import type { FSMProcessSpec } from '@hypha/fsm';
 import {
   FencedBoundedFSMDriver,
+  type BoundedFSMDriverRunInput,
   type BoundedStateExecutorInput,
   type BoundedStateExecutionDecision,
 } from './bounded-fsm-driver';
@@ -53,14 +54,25 @@ const process: FSMProcessSpec = {
   terminalStates: ['Completed', 'Failed'],
 };
 
+function testClock() {
+  let milliseconds = 0;
+  const origin = Date.UTC(2026, 6, 18, 5, 0, 0);
+  return {
+    now: () => new Date(origin + milliseconds++).toISOString(),
+    advance: (durationMs: number) => {
+      milliseconds += durationMs;
+    },
+  };
+}
+
 async function fixture(
   executeState: (
     input: BoundedStateExecutorInput
-  ) => Promise<BoundedStateExecutionDecision> | BoundedStateExecutionDecision
+  ) => Promise<BoundedStateExecutionDecision> | BoundedStateExecutionDecision,
+  clock = testClock()
 ) {
-  let milliseconds = 0;
   let idSequence = 0;
-  const now = () => new Date(Date.UTC(2026, 6, 18, 5, 0, 0, milliseconds++)).toISOString();
+  const now = clock.now;
   const nextId = (namespace: string) => `${namespace}.${++idSequence}`;
   const schemas = new InMemoryEventSchemaRegistry();
   await registerRuntimeOrchestrationEventSchemas(schemas);
@@ -139,7 +151,13 @@ async function fixture(
   };
 }
 
-function runInput(maxSteps: number, abortSignal?: AbortSignal) {
+function runInput(
+  maxSteps: number,
+  abortSignal?: AbortSignal,
+  overrides: Partial<
+    Pick<BoundedFSMDriverRunInput, 'leaseTtlMs' | 'stateClaimTtlMs' | 'deadlineAt'>
+  > = {}
+) {
   return {
     scope,
     process,
@@ -148,6 +166,7 @@ function runInput(maxSteps: number, abortSignal?: AbortSignal) {
     leaseTtlMs: 60_000,
     stateClaimTtlMs: 30_000,
     ...(abortSignal === undefined ? {} : { abortSignal }),
+    ...overrides,
   };
 }
 
@@ -458,6 +477,103 @@ describe('FencedBoundedFSMDriver', () => {
       projection: { runStatus: 'cancelled', terminalState: 'Start' },
     });
     expect(calls).toBe(0);
+  });
+
+  it('rejects a State result when cancellation arrives during execution', async () => {
+    const controller = new AbortController();
+    const target = await fixture(() => {
+      controller.abort();
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    });
+
+    await expect(target.driver.run(runInput(1, controller.signal))).rejects.toMatchObject({
+      code: 'RUNTIME_CANCELLED',
+    });
+    const events = await target.events.read({ scope: streamScope() });
+    expect(events.some((event) => event.type === 'fsm.transition.accepted')).toBe(false);
+  });
+
+  it('rejects a State result when the Run deadline elapses during execution', async () => {
+    const clock = testClock();
+    const target = await fixture(() => {
+      clock.advance(10_001);
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    }, clock);
+
+    await expect(
+      target.driver.run(runInput(1, undefined, { deadlineAt: '2026-07-18T05:00:10.000Z' }))
+    ).rejects.toMatchObject({ code: 'RUNTIME_RUN_TIMEOUT' });
+    const events = await target.events.read({ scope: streamScope() });
+    expect(events.some((event) => event.type === 'fsm.transition.accepted')).toBe(false);
+  });
+
+  it('rejects a State result after its Run Lease expires without a new owner', async () => {
+    const clock = testClock();
+    const target = await fixture(() => {
+      clock.advance(60_001);
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    }, clock);
+
+    await expect(target.driver.run(runInput(1))).rejects.toMatchObject({
+      code: 'RUNTIME_FENCING_REJECTED',
+    });
+    const events = await target.events.read({ scope: streamScope() });
+    expect(events.some((event) => event.type === 'fsm.transition.accepted')).toBe(false);
+  });
+
+  it('rejects a State result after its State Claim expires', async () => {
+    const clock = testClock();
+    const target = await fixture(() => {
+      clock.advance(20);
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    }, clock);
+
+    await expect(
+      target.driver.run(runInput(1, undefined, { stateClaimTtlMs: 10 }))
+    ).rejects.toMatchObject({ code: 'RUNTIME_FENCING_REJECTED' });
+    const events = await target.events.read({ scope: streamScope() });
+    expect(events.some((event) => event.type === 'fsm.transition.accepted')).toBe(false);
+  });
+
+  it('rejects a State result when the Run revision changes during execution', async () => {
+    let notifyStarted = (): void => undefined;
+    let continueExecution = (): void => undefined;
+    let fencingToken = 0;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const executionGate = new Promise<void>((resolve) => {
+      continueExecution = resolve;
+    });
+    const target = await fixture(async (input) => {
+      fencingToken = input.runLease.fencingToken;
+      notifyStarted();
+      await executionGate;
+      return { result: { kind: 'completed' }, transition: { to: 'Completed' } };
+    });
+
+    const running = target.driver.run(runInput(1));
+    await started;
+    const head = await target.events.getStreamHead(streamScope());
+    expect(head).not.toBeNull();
+    await target.events.append({
+      scope: streamScope(),
+      events: [
+        {
+          ...seedEvent('run.started.concurrent', 'run.started', target.now()),
+          payload: { runId: scope.runId },
+        },
+      ],
+      expectedLastSequence: head!.lastSequence,
+      expectedRunRevision: head!.runRevision,
+      fencingToken,
+      idempotencyKey: 'concurrent.run.started',
+    });
+
+    continueExecution();
+    await expect(running).rejects.toMatchObject({ code: 'RUNTIME_RUN_CONFLICT' });
+    const events = await target.events.read({ scope: streamScope() });
+    expect(events.some((event) => event.type === 'fsm.transition.accepted')).toBe(false);
   });
 
   it('preempts an executing driver and rejects its stale State commit', async () => {

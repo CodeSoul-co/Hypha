@@ -60,6 +60,7 @@ export interface BoundedFSMDriverRunInput {
   maxSteps: number;
   leaseTtlMs: number;
   stateClaimTtlMs: number;
+  deadlineAt?: string;
   abortSignal?: AbortSignal;
 }
 
@@ -198,13 +199,30 @@ export class FencedBoundedFSMDriver {
         }
 
         const result = validateRuntimeStateExecutionResult(decision.result);
+        const transition =
+          result.kind === 'completed'
+            ? await this.resolveTransition(input.process, projection, decision)
+            : undefined;
+        await this.assertExecutionAuthority(input, claim, authorization, abortSignal);
         if (result.kind === 'waiting') {
-          projection = await this.commitWait(input, projection, result.wait, authorization);
+          projection = await this.commitWait(
+            input,
+            projection,
+            result.wait,
+            authorization,
+            claim.expectedRunRevision
+          );
           await this.completeStateClaim(input, claim, authorization);
           return { disposition: 'waiting', steps, projection, wait: result.wait };
         }
         if (result.kind === 'failed') {
-          projection = await this.commitFailure(input, projection, result.error, authorization);
+          projection = await this.commitFailure(
+            input,
+            projection,
+            result.error,
+            authorization,
+            claim.expectedRunRevision
+          );
           await this.completeStateClaim(input, claim, authorization);
           return { disposition: 'failed', steps, projection };
         }
@@ -225,20 +243,21 @@ export class FencedBoundedFSMDriver {
                 projection.stateAttempt + 1
               ),
             ],
-            `state-continue:${state.id}:${projection.stateAttempt}`
+            `state-continue:${state.id}:${projection.stateAttempt}`,
+            claim.expectedRunRevision
           );
           await this.completeStateClaim(input, claim, authorization);
           projection = await this.project(input);
           continue;
         }
 
-        const transition = await this.resolveTransition(input.process, projection, decision);
         projection = await this.commitTransition(
           input,
           projection,
-          transition,
+          transition!,
           result,
-          authorization
+          authorization,
+          claim.expectedRunRevision
         );
         await this.completeStateClaim(input, claim, authorization);
         if (isTerminal(projection.runStatus)) {
@@ -323,6 +342,74 @@ export class FencedBoundedFSMDriver {
     });
   }
 
+  private async assertExecutionAuthority(
+    input: BoundedFSMDriverRunInput,
+    claim: StateExecutionClaim,
+    runLease: RunLeaseAuthorization,
+    abortSignal: AbortSignal
+  ): Promise<void> {
+    const head = await this.options.events.getStreamHead(streamScope(input.scope));
+    const assertedClaim = await this.options.stateClaims.assertCurrent({
+      scope: claimScope(input.scope, claim),
+      guard: claimGuard(claim),
+      checkedAt: this.timestamp('State Claim authority check'),
+    });
+    const assertedLease = await this.options.runLeases.assertCurrent({
+      scope: runLease.scope,
+      guard: runLease.guard,
+      checkedAt: this.timestamp('Run Lease authority check'),
+    });
+    const checkedAt = this.timestamp('Execution authority check');
+
+    if (abortSignal.aborted) {
+      throw new FrameworkError({
+        code: 'RUNTIME_CANCELLED',
+        message: `Run was cancelled while State was executing: ${input.scope.runId}`,
+        context: { runId: input.scope.runId, stateId: claim.stateId },
+      });
+    }
+    if (input.deadlineAt !== undefined && Date.parse(checkedAt) >= Date.parse(input.deadlineAt)) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_TIMEOUT',
+        message: `Run deadline elapsed while State was executing: ${input.scope.runId}`,
+        context: {
+          runId: input.scope.runId,
+          stateId: claim.stateId,
+          deadlineAt: input.deadlineAt,
+          checkedAt,
+        },
+      });
+    }
+    if (
+      Date.parse(assertedLease.expiresAt) <= Date.parse(checkedAt) ||
+      Date.parse(assertedClaim.expiresAt) <= Date.parse(checkedAt)
+    ) {
+      throw new FrameworkError({
+        code: 'RUNTIME_FENCING_REJECTED',
+        message: `Execution authority expired before State result commit: ${input.scope.runId}`,
+        context: {
+          runId: input.scope.runId,
+          stateId: claim.stateId,
+          leaseExpiresAt: assertedLease.expiresAt,
+          claimExpiresAt: assertedClaim.expiresAt,
+          checkedAt,
+        },
+      });
+    }
+    if (!head || head.runRevision !== claim.expectedRunRevision) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_CONFLICT',
+        message: `Run revision changed while State was executing: ${input.scope.runId}`,
+        context: {
+          runId: input.scope.runId,
+          stateId: claim.stateId,
+          expectedRunRevision: claim.expectedRunRevision,
+          actualRunRevision: head?.runRevision,
+        },
+      });
+    }
+  }
+
   private async resolveTransition(
     process: FSMProcessSpec,
     projection: RuntimeOrchestrationProjection,
@@ -366,7 +453,8 @@ export class FencedBoundedFSMDriver {
     projection: RuntimeOrchestrationProjection,
     transition: FSMTransitionSpec,
     result: Extract<RuntimeStateExecutionResult, { kind: 'completed' }>,
-    runLease: RunLeaseAuthorization
+    runLease: RunLeaseAuthorization,
+    expectedRunRevision: number
   ): Promise<RuntimeOrchestrationProjection> {
     const target = requireState(input.process, transition.to);
     const targetAttempt = (projection.stateVisitCounts[target.id] ?? 0) + 1;
@@ -411,7 +499,8 @@ export class FencedBoundedFSMDriver {
       input.scope,
       runLease,
       events,
-      `transition:${transition.from}:${transition.to}:${projection.stateAttempt}`
+      `transition:${transition.from}:${transition.to}:${projection.stateAttempt}`,
+      expectedRunRevision
     );
     return this.project(input);
   }
@@ -420,7 +509,8 @@ export class FencedBoundedFSMDriver {
     input: BoundedFSMDriverRunInput,
     projection: RuntimeOrchestrationProjection,
     wait: RuntimeWaitIntent,
-    runLease: RunLeaseAuthorization
+    runLease: RunLeaseAuthorization,
+    expectedRunRevision: number
   ): Promise<RuntimeOrchestrationProjection> {
     const type = waitEventType(wait);
     const waitId = this.nextId('wait');
@@ -470,7 +560,8 @@ export class FencedBoundedFSMDriver {
       input.scope,
       runLease,
       events,
-      `wait:${wait.type}:${projection.currentState}:${projection.stateAttempt}`
+      `wait:${wait.type}:${projection.currentState}:${projection.stateAttempt}`,
+      expectedRunRevision
     );
     return this.project(input);
   }
@@ -479,7 +570,8 @@ export class FencedBoundedFSMDriver {
     input: BoundedFSMDriverRunInput,
     projection: RuntimeOrchestrationProjection,
     error: NormalizedRuntimeError,
-    runLease: RunLeaseAuthorization
+    runLease: RunLeaseAuthorization,
+    expectedRunRevision: number
   ): Promise<RuntimeOrchestrationProjection> {
     const current = requireState(input.process, projection.currentState);
     const failed = findTerminalState(input.process, 'failed');
@@ -537,7 +629,8 @@ export class FencedBoundedFSMDriver {
       input.scope,
       runLease,
       events,
-      `run-failed:${current.id}:${projection.stateAttempt}`
+      `run-failed:${current.id}:${projection.stateAttempt}`,
+      expectedRunRevision
     );
     return this.project(input);
   }
@@ -614,7 +707,8 @@ export class FencedBoundedFSMDriver {
     scope: RuntimeScope,
     runLease: RunLeaseAuthorization,
     events: EventCreateInput[],
-    operation: string
+    operation: string,
+    expectedRunRevision?: number
   ): Promise<void> {
     const stream = streamScope(scope);
     const head = await this.options.events.getStreamHead(stream);
@@ -622,7 +716,11 @@ export class FencedBoundedFSMDriver {
       scope: stream,
       events,
       expectedLastSequence: head?.lastSequence ?? 0,
-      ...(head === null ? {} : { expectedRunRevision: head.runRevision }),
+      ...(expectedRunRevision === undefined
+        ? head === null
+          ? {}
+          : { expectedRunRevision: head.runRevision }
+        : { expectedRunRevision }),
       fencingToken: runLease.guard.fencingToken,
       idempotencyKey: `driver:${scope.runId}:${operation}:${runLease.guard.fencingToken}`,
       transactionGroupId: operation,
@@ -685,6 +783,9 @@ function validateRunInput(input: BoundedFSMDriverRunInput): void {
   positive(input.maxSteps, 'maxSteps');
   positive(input.leaseTtlMs, 'leaseTtlMs');
   positive(input.stateClaimTtlMs, 'stateClaimTtlMs');
+  if (input.deadlineAt !== undefined && !Number.isFinite(Date.parse(input.deadlineAt))) {
+    invalid('deadlineAt must be a valid date-time');
+  }
 }
 
 function authorizationFor(lease: FencedRunLease): RunLeaseAuthorization {
