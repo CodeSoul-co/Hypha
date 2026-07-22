@@ -9,6 +9,17 @@ import type {
   WorkspaceRuntimeRequest,
 } from '@hypha/tools';
 
+const executionEnvironmentAllowList = ['PATH', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL'] as const;
+const windowsIdentityEnvironmentVariables = [
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'USERNAME',
+  'USERDOMAIN',
+  'LOGONSERVER',
+] as const;
+
 export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   private readonly workingDirectory: string;
   private readonly readRoots: string[];
@@ -238,11 +249,16 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   }
 
   private executionEnvironment(): NodeJS.ProcessEnv {
-    const names = ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL'];
-    return Object.fromEntries(
-      names
+    const environment = Object.fromEntries(
+      executionEnvironmentAllowList
         .filter((name) => process.env[name] !== undefined)
         .map((name) => [name, process.env[name]])
     );
+    if (process.platform === 'win32') {
+      // Node/Windows restores selected identity variables even with a custom
+      // environment block, so mask their values rather than relying on omission.
+      for (const name of windowsIdentityEnvironmentVariables) environment[name] = '';
+    }
+    return environment;
   }
 }
