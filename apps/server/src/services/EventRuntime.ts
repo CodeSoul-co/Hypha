@@ -43,7 +43,6 @@ import {
 import {
   createInitialSnapshot,
   evaluateGuardExpression,
-  FSMRuntime,
   type FSMProcessSpec,
   type FSMSnapshot,
 } from '@hypha/fsm';
@@ -2235,10 +2234,10 @@ class EventRuntimeService {
     participant: RecoveryParticipant<TValue>;
   }): Promise<TValue> {
     const context = await this.requireRun(input.runId);
-    const recoveryFsm = new FSMRuntime(
-      context.fsm,
-      input.runId,
-      {
+    const recoveryFsm = this.canonicalRuntimeComposition().recoveryFSMs.create({
+      process: context.fsm,
+      runId: input.runId,
+      options: {
         onTransition: async (transition) => {
           await this.append(
             input.runId,
@@ -2276,8 +2275,8 @@ class EventRuntimeService {
           );
         },
       },
-      context.snapshot
-    );
+      snapshot: context.snapshot,
+    });
     const result = await runRecoverySupervisor({
       fsm: recoveryFsm,
       caseId: input.caseId,

@@ -1,5 +1,5 @@
 import type { EventStore } from '@hypha/core';
-import type { FSMProcessSpec } from '@hypha/fsm';
+import { FSMRuntime, type FSMProcessSpec } from '@hypha/fsm';
 import {
   EventFirstRuntime,
   FencedBoundedFSMDriver,
@@ -61,6 +61,10 @@ export function createServerRuntimeComposition(
         }),
       createScopedReActRunnerFactory: () => ({
         create: (runtime, runnerOptions) => new ReActRunner(runtime, runnerOptions),
+      }),
+      createRecoveryFSMFactory: () => ({
+        create: (input) =>
+          new FSMRuntime(input.process, input.runId, input.options, input.snapshot),
       }),
     },
   }).compose();

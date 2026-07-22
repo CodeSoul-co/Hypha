@@ -8,10 +8,20 @@ import type {
   StateExecutionClaimStore,
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
+import type { FSMProcessSpec, FSMRuntime, FSMRuntimeOptions, FSMSnapshot } from '@hypha/fsm';
 import type { ReActAgentRuntime, ReActRunner, ReActRunnerOptions } from '@hypha/kernel';
 
 export interface ScopedReActRunnerFactory {
   create(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner;
+}
+
+export interface RecoveryFSMFactory {
+  create(input: {
+    process: FSMProcessSpec;
+    runId: string;
+    options?: FSMRuntimeOptions;
+    snapshot?: FSMSnapshot;
+  }): FSMRuntime;
 }
 
 export interface RuntimeCompositionDependencies {
@@ -28,6 +38,7 @@ export interface RuntimeComposition extends RuntimeCompositionDependencies {
   fsmDriver: FencedBoundedFSMDriver;
   reactRunner: HarnessedReActFSMRunner;
   scopedReActRunners: ScopedReActRunnerFactory;
+  recoveryFSMs: RecoveryFSMFactory;
 }
 
 export interface RuntimeCompositionFactories {
@@ -48,6 +59,14 @@ export interface RuntimeCompositionFactories {
       reactRunner: HarnessedReActFSMRunner;
     }
   ): ScopedReActRunnerFactory;
+  createRecoveryFSMFactory(
+    input: RuntimeCompositionDependencies & {
+      runManager: RunManager;
+      fsmDriver: FencedBoundedFSMDriver;
+      reactRunner: HarnessedReActFSMRunner;
+      scopedReActRunners: ScopedReActRunnerFactory;
+    }
+  ): RecoveryFSMFactory;
 }
 
 export interface RuntimeCompositionRootOptions extends RuntimeCompositionDependencies {
@@ -96,6 +115,16 @@ export class RuntimeCompositionRoot {
         reactRunner,
       })
     );
+    const recoveryFSMs = requiredComponent(
+      'RecoveryFSMFactory',
+      factories.createRecoveryFSMFactory({
+        ...dependencies,
+        runManager,
+        fsmDriver,
+        reactRunner,
+        scopedReActRunners,
+      })
+    );
 
     this.composition = Object.freeze({
       ...dependencies,
@@ -103,6 +132,7 @@ export class RuntimeCompositionRoot {
       fsmDriver,
       reactRunner,
       scopedReActRunners,
+      recoveryFSMs,
     });
     return this.composition;
   }

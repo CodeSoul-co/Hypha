@@ -1,5 +1,5 @@
 import { InMemoryEventStore, type EventRuntime } from '@hypha/core';
-import { defaultReActFSMProcessSpec } from '@hypha/fsm';
+import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
 import { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
 import type { InferenceProvider } from '@hypha/inference';
 import { ReActRunner, type ReActAgentRuntime } from '@hypha/kernel';
@@ -41,6 +41,12 @@ describe('createServerRuntimeComposition', () => {
     expect(
       composition.scopedReActRunners.create({} as ReActAgentRuntime, { inference })
     ).toBeInstanceOf(ReActRunner);
+    expect(
+      composition.recoveryFSMs.create({
+        process: defaultReActFSMProcessSpec,
+        runId: 'run.recovery.test',
+      })
+    ).toBeInstanceOf(FSMRuntime);
 
     await composition.runManager.createSession({ id: 'session.test', userId: 'user.test' });
     await expect(composition.runManager.projectSession('session.test')).resolves.toMatchObject({

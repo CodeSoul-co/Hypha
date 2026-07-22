@@ -11,6 +11,7 @@ import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from
 import type { ReActRunner } from '@hypha/kernel';
 import {
   RuntimeCompositionRoot,
+  type RecoveryFSMFactory,
   type RuntimeCompositionDependencies,
   type ScopedReActRunnerFactory,
 } from './RuntimeCompositionRoot';
@@ -33,10 +34,12 @@ describe('RuntimeCompositionRoot', () => {
     const fsmDriver = {} as FencedBoundedFSMDriver;
     const reactRunner = {} as HarnessedReActFSMRunner;
     const scopedReActRunners = {} as ScopedReActRunnerFactory;
+    const recoveryFSMs = {} as RecoveryFSMFactory;
     const createRunManager = jest.fn(() => runManager);
     const createFSMDriver = jest.fn(() => fsmDriver);
     const createReActRunner = jest.fn(() => reactRunner);
     const createScopedReActRunnerFactory = jest.fn(() => scopedReActRunners);
+    const createRecoveryFSMFactory = jest.fn(() => recoveryFSMs);
     const root = new RuntimeCompositionRoot({
       ...durable,
       factories: {
@@ -44,6 +47,7 @@ describe('RuntimeCompositionRoot', () => {
         createFSMDriver,
         createReActRunner,
         createScopedReActRunnerFactory,
+        createRecoveryFSMFactory,
       },
     });
 
@@ -58,6 +62,7 @@ describe('RuntimeCompositionRoot', () => {
       fsmDriver,
       reactRunner,
       scopedReActRunners,
+      recoveryFSMs,
     });
     expect(createRunManager).toHaveBeenCalledTimes(1);
     expect(createRunManager).toHaveBeenCalledWith({ events: durable.events });
@@ -72,6 +77,14 @@ describe('RuntimeCompositionRoot', () => {
       fsmDriver,
       reactRunner,
     });
+    expect(createRecoveryFSMFactory).toHaveBeenCalledTimes(1);
+    expect(createRecoveryFSMFactory).toHaveBeenCalledWith({
+      ...durable,
+      runManager,
+      fsmDriver,
+      reactRunner,
+      scopedReActRunners,
+    });
   });
 
   it('fails composition when a required canonical component is absent', () => {
@@ -82,6 +95,7 @@ describe('RuntimeCompositionRoot', () => {
         createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
         createReActRunner: () => ({}) as HarnessedReActFSMRunner,
         createScopedReActRunnerFactory: () => undefined as unknown as ScopedReActRunnerFactory,
+        createRecoveryFSMFactory: () => undefined as unknown as RecoveryFSMFactory,
       },
     });
 
@@ -96,11 +110,29 @@ describe('RuntimeCompositionRoot', () => {
         createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
         createReActRunner: () => ({}) as HarnessedReActFSMRunner,
         createScopedReActRunnerFactory: () => undefined as unknown as ScopedReActRunnerFactory,
+        createRecoveryFSMFactory: () => undefined as unknown as RecoveryFSMFactory,
       },
     });
 
     expect(() => root.compose()).toThrow(
       'Runtime composition factory did not provide ScopedReActRunnerFactory'
+    );
+  });
+
+  it('fails composition when the recovery FSM factory is absent', () => {
+    const root = new RuntimeCompositionRoot({
+      ...dependencies(),
+      factories: {
+        createRunManager: () => ({}) as RunManager,
+        createFSMDriver: () => ({}) as FencedBoundedFSMDriver,
+        createReActRunner: () => ({}) as HarnessedReActFSMRunner,
+        createScopedReActRunnerFactory: () => ({}) as ScopedReActRunnerFactory,
+        createRecoveryFSMFactory: () => undefined as unknown as RecoveryFSMFactory,
+      },
+    });
+
+    expect(() => root.compose()).toThrow(
+      'Runtime composition factory did not provide RecoveryFSMFactory'
     );
   });
 });
