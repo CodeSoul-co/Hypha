@@ -37,7 +37,7 @@ export interface MemoryRuntimeConfig {
   profiles: Record<string, MemoryRuntimeProfile>;
 }
 
-const memoryRuntimeProfileSchema: ZodType<MemoryRuntimeProfile> = z
+export const memoryRuntimeProfileSchema: ZodType<MemoryRuntimeProfile> = z
   .object({
     profile: memoryProfileSpecSchema,
     management: memoryManagementProviderSpecSchema,
@@ -93,6 +93,7 @@ export function validateMemoryRuntimeConfig(input: unknown): MemoryRuntimeConfig
 export interface MemoryManagementProviderFactoryContext {
   profile: MemoryProfileSpec;
   spec: MemoryManagementProviderSpec;
+  references?: ReadonlyMap<string, unknown>;
 }
 
 export interface MemoryManagementProviderInstallation {
@@ -183,13 +184,17 @@ export class MemoryRuntimeFactory {
     }
   }
 
-  async create(input: unknown): Promise<MemoryRuntime> {
+  async create(
+    input: unknown,
+    references: ReadonlyMap<string, unknown> = new Map()
+  ): Promise<MemoryRuntime> {
     const config = validateMemoryRuntimeConfig(input);
     const selected = config.profiles[config.activeProfile];
     const factory = this.options.registry.resolve(selected.management);
     const created = await factory.create({
       profile: selected.profile,
       spec: selected.management,
+      references,
     });
     const installation = isProviderInstallation(created) ? created : undefined;
     const provider: MemoryManagementProvider = installation

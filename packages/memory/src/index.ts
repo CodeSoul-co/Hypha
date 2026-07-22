@@ -877,6 +877,7 @@ export * from './dead-letter-management';
 export * from './external-provider-operations';
 export * from './provider-pagination';
 export * from './managed-credentials';
+export * from './canonical-runtime-config';
 export * from './native-maintenance';
 export * from './native-memory';
 export * from './extraction';
