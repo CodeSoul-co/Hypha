@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ArtifactProfileSpec, ExecutionPrincipal } from '@hypha/core';
 import { DefaultArtifactManager } from '@hypha/core';
+import { hashArtifactBytes } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';
 import {
@@ -140,6 +141,35 @@ describe('LegacyToolArtifactImporter', () => {
         invocationId: 'invocation-link',
       })
     ).rejects.toMatchObject({ code: 'LEGACY_ARTIFACT_INVALID_PATH' });
+    await expect(fixture.repository.list()).resolves.toHaveLength(0);
+  });
+
+  it('rejects inventory size or content evidence that no longer matches the source', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-legacy-artifact-evidence-'));
+    const relativePath = 'tool-results/tool.report/invocation-evidence.txt';
+    const original = 'before';
+    await writeLegacyFile(root, relativePath, original);
+    const fixture = createFixture(root);
+    const baseRequest = {
+      relativePath,
+      context: fixture.context,
+      toolId: 'tool.report',
+      invocationId: 'invocation-evidence',
+    };
+
+    await expect(
+      fixture.importer.import({ ...baseRequest, expectedSizeBytes: original.length + 1 })
+    ).rejects.toMatchObject({ code: 'LEGACY_ARTIFACT_SIZE_MISMATCH' });
+
+    await writeLegacyFile(root, relativePath, 'after!');
+    await expect(
+      fixture.importer.import({
+        ...baseRequest,
+        expectedLegacyArtifactId: legacyArtifactReference(relativePath, original.length),
+        expectedSizeBytes: original.length,
+        expectedContentHash: hashArtifactBytes(new TextEncoder().encode(original)),
+      })
+    ).rejects.toMatchObject({ code: 'LEGACY_ARTIFACT_CONTENT_MISMATCH' });
     await expect(fixture.repository.list()).resolves.toHaveLength(0);
   });
 });

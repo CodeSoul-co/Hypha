@@ -9,7 +9,9 @@ export type LegacyToolArtifactImportErrorCode =
   | 'LEGACY_ARTIFACT_INVALID_PATH'
   | 'LEGACY_ARTIFACT_NOT_FOUND'
   | 'LEGACY_ARTIFACT_TOO_LARGE'
-  | 'LEGACY_ARTIFACT_ID_MISMATCH';
+  | 'LEGACY_ARTIFACT_ID_MISMATCH'
+  | 'LEGACY_ARTIFACT_SIZE_MISMATCH'
+  | 'LEGACY_ARTIFACT_CONTENT_MISMATCH';
 
 export class LegacyToolArtifactImportError extends Error {
   constructor(
@@ -31,6 +33,8 @@ export interface LegacyToolArtifactImporterOptions {
 export interface LegacyToolArtifactImportRequest {
   relativePath: string;
   expectedLegacyArtifactId?: string;
+  expectedContentHash?: string;
+  expectedSizeBytes?: number;
   context: ToolArtifactManagerContext;
   toolId: string;
   invocationId: string;
@@ -77,8 +81,31 @@ export class LegacyToolArtifactImporter {
         }
       );
     }
+    if (
+      request.expectedSizeBytes !== undefined &&
+      request.expectedSizeBytes !== content.byteLength
+    ) {
+      throw new LegacyToolArtifactImportError(
+        'LEGACY_ARTIFACT_SIZE_MISMATCH',
+        'Legacy Artifact size does not match its inventory evidence.',
+        {
+          expectedSizeBytes: request.expectedSizeBytes,
+          actualSizeBytes: content.byteLength,
+        }
+      );
+    }
 
     const contentHash = hashArtifactBytes(content);
+    if (request.expectedContentHash && request.expectedContentHash !== contentHash) {
+      throw new LegacyToolArtifactImportError(
+        'LEGACY_ARTIFACT_CONTENT_MISMATCH',
+        'Legacy Artifact content does not match its inventory evidence.',
+        {
+          expectedContentHash: request.expectedContentHash,
+          actualContentHash: contentHash,
+        }
+      );
+    }
     const record = await this.manager.create({
       operationId: `legacy-tool-artifact-import:${legacyArtifactId}`,
       principal: request.context.principal,
