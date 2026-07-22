@@ -9,6 +9,7 @@ describe('Memory Server migration acceptance', () => {
     expect(memoryServerMigrationAcceptance.requiredConsumers).toEqual([
       'chat',
       'memory-routes',
+      'tool',
       'workflow',
       'harness',
     ]);
@@ -25,6 +26,7 @@ describe('Memory Server migration acceptance', () => {
     ]);
     expect(memoryServerMigrationAcceptance.redisWorkingMemory).toMatchObject({
       trimMode: 'MAXLEN',
+      trimArgumentSemantics: 'target_max_length',
       newestReadCommand: 'XREVRANGE',
       cleanupCommand: 'SCAN',
     });

@@ -1,17 +1,47 @@
+import type { ManagedMemoryScope, MemoryContractSpecRef, NormalizedMemoryError } from './contracts';
+
+export type MemoryServerMigrationIssue = 'P0-1' | 'P0-2' | 'P0-3';
+export type MemoryServerConsumer = 'chat' | 'memory-routes' | 'tool' | 'workflow' | 'harness';
+
+export interface MemoryServerMigrationSharedFixture {
+  scope: ManagedMemoryScope;
+  observedAt: string;
+  canonicalServiceInstanceId: string;
+  migration: {
+    revision: string;
+    phase: 'planned';
+    deadlineAt: string;
+  };
+  failure: {
+    operation: 'get';
+    providerId: string;
+    expectedError: NormalizedMemoryError;
+  };
+}
+
 /**
  * Framework-owned handoff contract for the Server/dev composition migration.
  * It contains no Server implementation and can be consumed by integration tests.
  */
 export interface MemoryServerMigrationAcceptance {
+  contractRef: MemoryContractSpecRef;
+  issues: readonly ['P0-1', 'P0-2', 'P0-3'];
   canonicalService: '@hypha/memory.MemoryApplicationService';
-  requiredConsumers: readonly ['chat', 'memory-routes', 'workflow', 'harness'];
+  requiredConsumers: readonly ['chat', 'memory-routes', 'tool', 'workflow', 'harness'];
   prohibitedRuntimeDependencies: readonly ['TemporaryMemory', 'PermanentMemory'];
+  sharedFixture: MemoryServerMigrationSharedFixture;
   redisWorkingMemory: {
     trimMode: 'MAXLEN';
+    trimArgumentSemantics: 'target_max_length';
     newestReadCommand: 'XREVRANGE';
     cleanupCommand: 'SCAN';
-    prohibitedCommands: readonly ['XTRIM MINID with message count', 'XRANGE + -', 'KEYS'];
+    prohibitedCommands: readonly ['XTRIM MAXLEN with deletion count', 'XRANGE + -', 'KEYS'];
     retentionCases: readonly RedisWorkingMemoryRetentionCase[];
+  };
+  permanentMemory: {
+    emptyResultCause: 'not_found_only';
+    providerFailureResult: 'normalized_error';
+    requiredFailureDisposition: 'retry_reconcile_or_quarantine';
   };
 }
 
@@ -22,19 +52,56 @@ export interface RedisWorkingMemoryRetentionCase {
 }
 
 export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = {
+  contractRef: {
+    id: 'memory.server-migration-acceptance',
+    version: '1.0.0',
+    revision: 'p0-123-stage-1',
+  },
+  issues: ['P0-1', 'P0-2', 'P0-3'],
   canonicalService: '@hypha/memory.MemoryApplicationService',
-  requiredConsumers: ['chat', 'memory-routes', 'workflow', 'harness'],
+  requiredConsumers: ['chat', 'memory-routes', 'tool', 'workflow', 'harness'],
   prohibitedRuntimeDependencies: ['TemporaryMemory', 'PermanentMemory'],
+  sharedFixture: {
+    scope: {
+      tenantId: 'tenant:p0-acceptance',
+      userId: 'user:p0-acceptance',
+      workspaceId: 'workspace:p0-acceptance',
+      sessionId: 'session:p0-acceptance',
+    },
+    observedAt: '2026-07-22T00:00:00.000Z',
+    canonicalServiceInstanceId: 'memory-application-service:primary',
+    migration: {
+      revision: 'memory-server-migration:p0-123:v1',
+      phase: 'planned',
+      deadlineAt: '2026-08-22T00:00:00.000Z',
+    },
+    failure: {
+      operation: 'get',
+      providerId: 'mongodb:memory',
+      expectedError: {
+        code: 'MEMORY_STORE_UNAVAILABLE',
+        message: 'Structured memory store is unavailable.',
+        retryable: true,
+        providerCode: 'MONGO_NETWORK_ERROR',
+      },
+    },
+  },
   redisWorkingMemory: {
     trimMode: 'MAXLEN',
+    trimArgumentSemantics: 'target_max_length',
     newestReadCommand: 'XREVRANGE',
     cleanupCommand: 'SCAN',
-    prohibitedCommands: ['XTRIM MINID with message count', 'XRANGE + -', 'KEYS'],
+    prohibitedCommands: ['XTRIM MAXLEN with deletion count', 'XRANGE + -', 'KEYS'],
     retentionCases: [
       { beforeAppend: 99, maxMessages: 100, expectedAfterAppend: 100 },
       { beforeAppend: 100, maxMessages: 100, expectedAfterAppend: 100 },
       { beforeAppend: 101, maxMessages: 100, expectedAfterAppend: 100 },
     ],
+  },
+  permanentMemory: {
+    emptyResultCause: 'not_found_only',
+    providerFailureResult: 'normalized_error',
+    requiredFailureDisposition: 'retry_reconcile_or_quarantine',
   },
 };
 
