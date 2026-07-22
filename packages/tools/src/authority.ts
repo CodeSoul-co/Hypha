@@ -15,6 +15,7 @@ export interface ToolAuthorityConstraint {
 export interface ResolveToolAuthorityInput<TPrincipal extends ToolAuthorityPrincipalLike> {
   requestedToolId: string;
   principal: TPrincipal;
+  principalHasAllPermissions?: boolean;
   requiredPermissionScopes?: readonly string[];
   constraints?: readonly ToolAuthorityConstraint[];
   fsmState?: string;
@@ -46,7 +47,7 @@ export function resolveToolAuthority<TPrincipal extends ToolAuthorityPrincipalLi
   const principalPermissionScopes = normalized(input.principal.permissionScopes);
   const effectivePermissionScopes = requiredPermissionScopes.filter(
     (scope) =>
-      allows(principalPermissionScopes, scope) &&
+      (input.principalHasAllPermissions === true || allows(principalPermissionScopes, scope)) &&
       constraints.every(
         (constraint) =>
           constraint.permissionScopes === undefined || allows(constraint.permissionScopes, scope)
@@ -66,6 +67,7 @@ export function resolveToolAuthority<TPrincipal extends ToolAuthorityPrincipalLi
   const policyRefs = constraints.map((constraint) => constraint.policyRef);
   const policyRevision = hashToolContract({
     principalId,
+    principalHasAllPermissions: input.principalHasAllPermissions === true,
     requestedToolId,
     requiredPermissionScopes,
     effectivePermissionScopes,

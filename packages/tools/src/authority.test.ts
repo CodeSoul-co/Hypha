@@ -2,19 +2,34 @@ import { describe, expect, it } from 'vitest';
 import { resolveToolAuthority } from './authority';
 
 describe('resolveToolAuthority', () => {
-  it('narrows an authenticated wildcard grant to the Tool required scopes', () => {
+  it('narrows an authenticated all-permissions grant to the Tool required scopes', () => {
     const authority = resolveToolAuthority({
       requestedToolId: 'tool.filesystem',
       principal: {
         id: 'user.admin',
-        permissionScopes: ['*'],
+        permissionScopes: [],
       },
+      principalHasAllPermissions: true,
       requiredPermissionScopes: ['filesystem:write', 'filesystem:read'],
     });
 
     expect(authority.principal.permissionScopes).toEqual(['filesystem:read', 'filesystem:write']);
     expect(authority.principal.permissionScopes).not.toContain('*');
     expect(authority.missingPermissionScopes).toEqual([]);
+  });
+
+  it('does not treat an empty principal as all-permissions without an authenticated grant', () => {
+    const authority = resolveToolAuthority({
+      requestedToolId: 'tool.filesystem',
+      principal: {
+        id: 'user.standard',
+        permissionScopes: [],
+      },
+      requiredPermissionScopes: ['filesystem:read'],
+    });
+
+    expect(authority.principal.permissionScopes).toEqual([]);
+    expect(authority.missingPermissionScopes).toEqual(['filesystem:read']);
   });
 
   it('does not invent a permission missing from the authenticated principal', () => {
