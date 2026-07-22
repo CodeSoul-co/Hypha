@@ -32,6 +32,11 @@ import {
   resolveExternalProviderOperationStore,
   type ExternalProviderOperationStore,
 } from './external-provider-operations';
+import {
+  RenewableCredentialManager,
+  staticCredentialProvider,
+  type RenewableCredentialProvider,
+} from './managed-credentials';
 import type { Mem0HttpFetch } from './mem0-rest-client';
 import { beginProviderPage, finishProviderPage } from './provider-pagination';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
@@ -40,7 +45,8 @@ export interface MemoryBankManagedClientOptions {
   projectId: string;
   location: string;
   reasoningEngineId: string;
-  accessToken: string;
+  accessToken?: string;
+  credentialProvider?: RenewableCredentialProvider;
   fetch?: Mem0HttpFetch;
   baseUrl?: string;
   providerId?: string;
@@ -77,6 +83,7 @@ const capabilities: MemoryManagementCapabilities = {
 /** Google Vertex AI Agent Engine Memory Bank managed client. */
 export class MemoryBankManagedClient implements ExternalMemoryClient {
   private readonly fetcher: Mem0HttpFetch;
+  private readonly credentials: RenewableCredentialManager;
   private readonly baseUrl: string;
   private readonly parent: string;
   private readonly providerId: string;
@@ -88,12 +95,18 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   private readonly now: () => Date;
 
   constructor(private readonly options: MemoryBankManagedClientOptions) {
-    if (!options.accessToken.trim()) {
+    if (Boolean(options.accessToken) === Boolean(options.credentialProvider)) {
       throw memoryError(
         'MEMORY_PERMISSION_DENIED',
-        'Managed MemoryBank requires an injected OAuth token.'
+        'Managed MemoryBank requires exactly one OAuth token or renewable credential provider.'
       );
     }
+    this.credentials = new RenewableCredentialManager({
+      provider:
+        options.credentialProvider ??
+        staticCredentialProvider(options.accessToken ?? '', 'oauth_bearer'),
+      now: options.now,
+    });
     this.baseUrl = (
       options.baseUrl ?? `https://${options.location}-aiplatform.googleapis.com/v1`
     ).replace(/\/$/, '');
@@ -438,7 +451,9 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     }
   }
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    await this.credentials.close();
+  }
 
   private async request(
     path: string,
@@ -448,17 +463,19 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
       signal?: AbortSignal;
     }
   ): Promise<unknown> {
+    const credential = await this.credentials.get(input.signal);
     const response = await this.fetcher(this.baseUrl + path, {
       method: input.method ?? 'GET',
       signal: input.signal,
       headers: {
-        Authorization: 'Bearer ' + this.options.accessToken,
+        Authorization: 'Bearer ' + credential.token,
         Accept: 'application/json',
         ...(input.body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: input.body ? JSON.stringify(input.body) : undefined,
     });
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) this.credentials.invalidate();
       const code =
         response.status === 401 || response.status === 403
           ? 'MEMORY_PERMISSION_DENIED'

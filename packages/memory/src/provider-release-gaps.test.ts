@@ -166,8 +166,6 @@ describe('external provider release gap baseline', () => {
     expect(changes).toContain('quarantined');
   });
 
-  it.todo('refreshes and revokes managed credentials without persisting access tokens');
-
   it('keeps the release fixture tied to a versioned profile', () => {
     expect(memoryProfileSpecExample).toMatchObject({
       id: expect.any(String),

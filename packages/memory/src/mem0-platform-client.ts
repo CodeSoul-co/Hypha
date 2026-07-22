@@ -25,11 +25,17 @@ import {
   resolveExternalProviderOperationStore,
   type ExternalProviderOperationStore,
 } from './external-provider-operations';
+import {
+  RenewableCredentialManager,
+  staticCredentialProvider,
+  type RenewableCredentialProvider,
+} from './managed-credentials';
 import { memoryError } from './memory-utils';
 
 export interface Mem0PlatformClientOptions {
   baseUrl?: string;
-  apiToken: string;
+  apiToken?: string;
+  credentialProvider?: RenewableCredentialProvider;
   fetch?: Mem0HttpFetch;
   providerId?: string;
   mappingStore?: ExternalMemoryMappingStore;
@@ -71,21 +77,25 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   private readonly delegate: Mem0OssClient;
   private readonly fetcher: Mem0HttpFetch;
   private readonly baseUrl: string;
-  private readonly apiToken: string;
+  private readonly credentials: RenewableCredentialManager;
   private readonly providerId: string;
   private readonly operationStore: ExternalProviderOperationStore;
   private readonly operationDeadlineMs: number;
   private readonly now: () => Date;
 
   constructor(options: Mem0PlatformClientOptions) {
-    if (!options.apiToken.trim()) {
+    if (Boolean(options.apiToken) === Boolean(options.credentialProvider)) {
       throw memoryError(
         'MEMORY_PERMISSION_DENIED',
-        'Mem0 Platform requires an injected API token.'
+        'Mem0 Platform requires exactly one API token or renewable credential provider.'
       );
     }
     this.baseUrl = (options.baseUrl ?? 'https://api.mem0.ai').replace(/\/$/, '');
-    this.apiToken = options.apiToken;
+    this.credentials = new RenewableCredentialManager({
+      provider:
+        options.credentialProvider ?? staticCredentialProvider(options.apiToken ?? '', 'api_token'),
+      now: options.now,
+    });
     this.providerId = options.providerId ?? 'memory.provider.mem0.platform.v3';
     const mappingProfile = options.mappingProfile ?? 'production';
     this.operationStore = resolveExternalProviderOperationStore(
@@ -205,8 +215,12 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   health(signal?: AbortSignal): Promise<ProviderHealth> {
     return this.delegate.health(signal);
   }
-  close(): Promise<void> {
-    return this.delegate.close();
+  async close(): Promise<void> {
+    try {
+      await this.delegate.close();
+    } finally {
+      await this.credentials.close();
+    }
   }
 
   async getEvent(eventId: string, signal?: AbortSignal): Promise<Mem0PlatformEvent> {
@@ -284,18 +298,20 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
     } else if (url.pathname.startsWith('/memories/')) {
       url.pathname = '/v1' + url.pathname + (url.pathname.endsWith('/') ? '' : '/');
     }
+    const credential = await this.credentials.get(init?.signal);
     const response = await this.fetcher(url.toString(), {
       ...init,
       method,
       headers: {
         ...init?.headers,
-        Authorization: 'Token ' + this.apiToken,
+        Authorization: 'Token ' + credential.token,
         Accept: 'application/json',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) this.credentials.invalidate();
       const retryable = response.status === 429 || response.status >= 500;
       const code =
         response.status === 401 || response.status === 403
