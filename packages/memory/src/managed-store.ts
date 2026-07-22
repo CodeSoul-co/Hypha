@@ -54,6 +54,7 @@ export interface MemoryIndexOutboxRecord {
   availableAt: string;
   completedVectorStoreIds?: string[];
   leaseOwner?: string;
+  leaseToken?: string;
   leaseExpiresAt?: string;
   lastError?: import('./contracts').NormalizedMemoryError;
   createdAt: string;
@@ -68,13 +69,15 @@ export interface MemoryIndexOutboxStore {
     leaseUntil: string,
     limit: number
   ): Promise<MemoryIndexOutboxRecord[]>;
-  complete(id: string, now: string): Promise<void>;
+  complete(id: string, owner: string, leaseToken: string, now: string): Promise<boolean>;
   fail(
     id: string,
+    owner: string,
+    leaseToken: string,
     error: import('./contracts').NormalizedMemoryError,
     retryAt: string,
     deadLetter?: boolean
-  ): Promise<void>;
+  ): Promise<boolean>;
   list(): Promise<MemoryIndexOutboxRecord[]>;
   transaction<T>(fn: (store: MemoryIndexOutboxStore) => Promise<T>): Promise<T>;
 }
@@ -241,34 +244,41 @@ export class InMemoryMemoryIndexOutboxStore implements MemoryIndexOutboxStore {
     for (const record of leased) {
       record.state = 'processing';
       record.leaseOwner = owner;
+      record.leaseToken = createLeaseToken(owner, record.id, record.attempts + 1, leaseUntil);
       record.leaseExpiresAt = leaseUntil;
       record.attempts += 1;
       record.updatedAt = now;
     }
     return leased.map((record) => ({ ...record }));
   }
-  async complete(id: string, now: string): Promise<void> {
+  async complete(id: string, owner: string, leaseToken: string, now: string): Promise<boolean> {
     const record = this.records.get(id);
-    if (!record) return;
+    if (!hasOutboxLease(record, owner, leaseToken)) return false;
     record.state = 'completed';
     record.updatedAt = now;
     record.leaseOwner = undefined;
+    record.leaseToken = undefined;
     record.leaseExpiresAt = undefined;
+    return true;
   }
   async fail(
     id: string,
+    owner: string,
+    leaseToken: string,
     error: import('./contracts').NormalizedMemoryError,
     retryAt: string,
     deadLetter = false
-  ): Promise<void> {
+  ): Promise<boolean> {
     const record = this.records.get(id);
-    if (!record) return;
+    if (!hasOutboxLease(record, owner, leaseToken)) return false;
     record.state = deadLetter ? 'dead_letter' : 'failed';
     record.lastError = error;
     record.availableAt = retryAt;
     record.updatedAt = new Date().toISOString();
     record.leaseOwner = undefined;
+    record.leaseToken = undefined;
     record.leaseExpiresAt = undefined;
+    return true;
   }
   async list(): Promise<MemoryIndexOutboxRecord[]> {
     return Array.from(this.records.values()).map((record) => ({ ...record }));
@@ -328,4 +338,20 @@ export function matchesFilter(record: ManagedMemoryRecord, filter?: MemorySearch
     return false;
   if (filter.verifiedOnly && !record.humanVerified) return false;
   return true;
+}
+
+function createLeaseToken(owner: string, id: string, attempt: number, leaseUntil: string): string {
+  return owner + ':' + id + ':' + attempt + ':' + leaseUntil;
+}
+
+function hasOutboxLease(
+  record: MemoryIndexOutboxRecord | undefined,
+  owner: string,
+  leaseToken: string
+): record is MemoryIndexOutboxRecord {
+  return (
+    record?.state === 'processing' &&
+    record.leaseOwner === owner &&
+    record.leaseToken === leaseToken
+  );
 }

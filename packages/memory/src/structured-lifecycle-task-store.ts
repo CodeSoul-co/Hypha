@@ -50,6 +50,7 @@ export class StructuredMemoryLifecycleTaskStore implements MemoryLifecycleTaskSt
           state: 'processing',
           attempts: current.attempts + 1,
           leaseOwner: ownerId,
+          leaseToken: lifecycleLeaseToken(ownerId, current.id, current.attempts + 1, leaseUntil),
           leaseExpiresAt: leaseUntil,
           updatedAt: now,
         };
@@ -60,29 +61,38 @@ export class StructuredMemoryLifecycleTaskStore implements MemoryLifecycleTaskSt
     });
   }
 
-  async complete(taskId: string, now: string): Promise<void> {
-    await this.options.store.transaction(async (transaction) => {
+  async complete(
+    taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string
+  ): Promise<boolean> {
+    return this.options.store.transaction(async (transaction) => {
       const task = await transaction.get<MemoryLifecycleTask>(this.table, taskId);
-      if (!task) return;
+      if (!hasLifecycleLease(task, ownerId, leaseToken)) return false;
       await transaction.update(this.table, taskId, {
         ...task,
         state: 'completed',
         updatedAt: now,
         leaseOwner: undefined,
+        leaseToken: undefined,
         leaseExpiresAt: undefined,
       });
+      return true;
     });
   }
 
   async fail(
     taskId: string,
+    ownerId: string,
+    leaseToken: string,
     error: NormalizedMemoryError,
     retryAt: string,
     deadLetter: boolean
-  ): Promise<void> {
-    await this.options.store.transaction(async (transaction) => {
+  ): Promise<boolean> {
+    return this.options.store.transaction(async (transaction) => {
       const task = await transaction.get<MemoryLifecycleTask>(this.table, taskId);
-      if (!task) return;
+      if (!hasLifecycleLease(task, ownerId, leaseToken)) return false;
       await transaction.update(this.table, taskId, {
         ...task,
         state: deadLetter ? 'dead_letter' : 'failed',
@@ -90,8 +100,10 @@ export class StructuredMemoryLifecycleTaskStore implements MemoryLifecycleTaskSt
         availableAt: retryAt,
         updatedAt: retryAt,
         leaseOwner: undefined,
+        leaseToken: undefined,
         leaseExpiresAt: undefined,
       });
+      return true;
     });
   }
 
@@ -114,4 +126,23 @@ function isLeaseable(task: MemoryLifecycleTask, now: string): boolean {
 
 function compareLifecycleTasks(left: MemoryLifecycleTask, right: MemoryLifecycleTask): number {
   return left.availableAt.localeCompare(right.availableAt) || left.id.localeCompare(right.id);
+}
+
+function lifecycleLeaseToken(
+  ownerId: string,
+  taskId: string,
+  attempt: number,
+  leaseUntil: string
+): string {
+  return ownerId + ':' + taskId + ':' + attempt + ':' + leaseUntil;
+}
+
+function hasLifecycleLease(
+  task: MemoryLifecycleTask | null,
+  ownerId: string,
+  leaseToken: string
+): task is MemoryLifecycleTask {
+  return (
+    task?.state === 'processing' && task.leaseOwner === ownerId && task.leaseToken === leaseToken
+  );
 }

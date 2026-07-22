@@ -23,7 +23,7 @@ profiles:
       persistence: local-durable
       coordination: single-process
   native-default:
-    status: framework-validated
+    status: framework-validated-non-ha
     management:
       id: memory.provider.native-default
       version: '1.0.0'
@@ -43,7 +43,8 @@ profiles:
       vector: vector.local.in-memory
       artifact: artifact.local.filesystem
       persistence: durable
-      coordination: distributed
+      coordination: distributed-contract
+      highAvailability: unpublished
       outbox: enabled
   mem0-oss:
     status: validated-contract

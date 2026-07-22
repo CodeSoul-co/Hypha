@@ -18,6 +18,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [Governed Memory](architecture/memory.md): scoped records, atomic persistence and index outbox, deterministic retrieval, bounded context, external adapters, and replay/cache bindings.
 - [Managed Memory Migration](guides/memory-managed-migration.md): move legacy memory consumers to the policy, harness, event, timeout, and recovery boundary.
 - [External Memory Provider Runtime](guides/memory-external-provider-runtime.md): stable provider ID mapping, restart-safe persistence, cancellation, and deployment boundaries.
+- [Native Memory Multi-Instance Validation](guides/memory-native-multi-instance-validation.md): fenced leases, takeover evidence, drain behavior, and the explicit non-HA release boundary.
 - [Execution Threat Model](architecture/execution-threat-model.md): trust boundaries, audited runtime surfaces, required controls, and residual limitations.
 - [Execution Provider Matrix](reference/execution-provider-capability-matrix.md): provider guarantees and fail-closed capability negotiation.
 - [ADRs](adr/README.md): accepted architecture decisions.

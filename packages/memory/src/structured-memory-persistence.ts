@@ -55,6 +55,7 @@ export class StructuredMemoryIndexOutboxStore implements MemoryIndexOutboxStore 
         await provider.update<MemoryIndexOutboxRecord>(this.table, record.id, {
           state: 'processing',
           leaseOwner: owner,
+          leaseToken: outboxLeaseToken(owner, record.id, record.attempts + 1, leaseUntil),
           leaseExpiresAt: leaseUntil,
           attempts: record.attempts + 1,
           updatedAt: now,
@@ -64,6 +65,7 @@ export class StructuredMemoryIndexOutboxStore implements MemoryIndexOutboxStore 
         ...structuredClone(record),
         state: 'processing',
         leaseOwner: owner,
+        leaseToken: outboxLeaseToken(owner, record.id, record.attempts + 1, leaseUntil),
         leaseExpiresAt: leaseUntil,
         attempts: record.attempts + 1,
         updatedAt: now,
@@ -71,36 +73,42 @@ export class StructuredMemoryIndexOutboxStore implements MemoryIndexOutboxStore 
     });
   }
 
-  async complete(id: string, now: string): Promise<void> {
-    await this.mutate(async (provider) => {
+  async complete(id: string, owner: string, leaseToken: string, now: string): Promise<boolean> {
+    return this.mutate(async (provider) => {
       const record = await provider.get<MemoryIndexOutboxRecord>(this.table, id);
-      if (!record) return;
+      if (!hasOutboxLease(record, owner, leaseToken)) return false;
       await provider.update<MemoryIndexOutboxRecord>(this.table, id, {
         state: 'completed',
         updatedAt: now,
         leaseOwner: undefined,
+        leaseToken: undefined,
         leaseExpiresAt: undefined,
       });
+      return true;
     });
   }
 
   async fail(
     id: string,
+    owner: string,
+    leaseToken: string,
     error: NormalizedMemoryError,
     retryAt: string,
     deadLetter = false
-  ): Promise<void> {
-    await this.mutate(async (provider) => {
+  ): Promise<boolean> {
+    return this.mutate(async (provider) => {
       const record = await provider.get<MemoryIndexOutboxRecord>(this.table, id);
-      if (!record) return;
+      if (!hasOutboxLease(record, owner, leaseToken)) return false;
       await provider.update<MemoryIndexOutboxRecord>(this.table, id, {
         state: deadLetter ? 'dead_letter' : 'failed',
         lastError: error,
         availableAt: retryAt,
         updatedAt: retryAt,
         leaseOwner: undefined,
+        leaseToken: undefined,
         leaseExpiresAt: undefined,
       });
+      return true;
     });
   }
 
@@ -178,4 +186,20 @@ export class StructuredMemoryPersistenceUnitOfWork implements MemoryPersistenceU
       inTransaction,
     });
   }
+}
+
+function outboxLeaseToken(owner: string, id: string, attempt: number, leaseUntil: string): string {
+  return owner + ':' + id + ':' + attempt + ':' + leaseUntil;
+}
+
+function hasOutboxLease(
+  record: MemoryIndexOutboxRecord | null,
+  owner: string,
+  leaseToken: string
+): record is MemoryIndexOutboxRecord {
+  return (
+    record?.state === 'processing' &&
+    record.leaseOwner === owner &&
+    record.leaseToken === leaseToken
+  );
 }

@@ -6,13 +6,13 @@ not a claim that the current Server default path uses the profile.
 
 ## Support matrix
 
-| Profile              | Framework status       | Store/deployment contract                                  | Live evidence |
-| -------------------- | ---------------------- | ---------------------------------------------------------- | ------------- |
-| `native-lite`        | framework-validated    | bounded working state + SQLite records + local vector/file | package suite |
-| `native-default`     | framework-validated    | Redis working + Mongo records + local vector/file          | Server E2E deferred to `dev` |
-| `mem0-oss`           | contract-validated     | self-hosted Mem0                                           | `HYPHA_TEST_MEM0_OSS_URL`; not run without endpoint |
-| `mem0-platform`      | controlled-test        | Mem0 Platform v3                                          | `HYPHA_TEST_MEM0_PLATFORM_TOKEN`; not run without credential |
-| `memorybank-managed` | controlled-test        | Vertex AI Agent Engine Memory Bank                         | `HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN`; not run without credential |
+| Profile              | Framework status            | Store/deployment contract                                  | Live evidence                                                     |
+| -------------------- | --------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------- |
+| `native-lite`        | framework-validated         | bounded working state + SQLite records + local vector/file | package suite                                                     |
+| `native-default`     | framework-validated, non-HA | Redis working + Mongo records + local vector/file          | deterministic multi-instance recovery suite; real HA gate open    |
+| `mem0-oss`           | contract-validated          | self-hosted Mem0                                           | `HYPHA_TEST_MEM0_OSS_URL`; not run without endpoint               |
+| `mem0-platform`      | controlled-test             | Mem0 Platform v3                                           | `HYPHA_TEST_MEM0_PLATFORM_TOKEN`; not run without credential      |
+| `memorybank-managed` | controlled-test             | Vertex AI Agent Engine Memory Bank                         | `HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN`; not run without credential |
 
 Status meanings:
 
@@ -42,7 +42,7 @@ coordination: single process only
 Its structured records are locally durable; its working state and coordination are not
 multi-process services. It must not be described as a production distributed database.
 
-`native-default` is the distributed deployment contract:
+`native-default` is a distributed-store deployment contract, not a released HA profile:
 
 ```text
 working: Redis
@@ -50,11 +50,16 @@ record/history: MongoDB
 vector: configured local or cloud adapter
 artifact: configured local or cloud adapter
 outbox: enabled
-coordination: distributed
+coordination: distributed contract
+high availability: unpublished
 ```
 
-The Memory Framework provides the store/runtime contracts and worker supervision. Server creation
-of Redis/Mongo clients, migrations, readiness, credentials, and shutdown drain belongs to `dev`.
+The Memory Framework provides fenced leases, store/runtime contracts, and worker supervision. Its
+deterministic multi-instance suite covers exclusive claim, lease-expiry takeover, stale-owner rejection,
+restart recovery, and drain. It does not simulate a real network partition or shared vector service.
+Because the configured vector adapter is process-local, the profile remains non-HA. Server creation of
+Redis/Mongo clients, shared vector infrastructure, migrations, readiness, credentials, and shutdown
+drain belongs to `dev`. See [Native multi-instance validation](memory-native-multi-instance-validation.md).
 
 ## External protocol evidence
 

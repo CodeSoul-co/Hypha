@@ -24,7 +24,7 @@ describe('public memory provider profile templates', () => {
       'native-lite',
     ]);
     expect(parsed.profiles['native-lite']?.status).toBe('framework-validated');
-    expect(parsed.profiles['native-default']?.status).toBe('framework-validated');
+    expect(parsed.profiles['native-default']?.status).toBe('framework-validated-non-ha');
     expect(parsed.profiles['mem0-platform']?.status).toBe('controlled-test');
     expect(parsed.profiles['native-lite']?.stores).toMatchObject({
       working: 'working.in-memory.bounded',
@@ -40,7 +40,8 @@ describe('public memory provider profile templates', () => {
       vector: 'vector.local.in-memory',
       artifact: 'artifact.local.filesystem',
       persistence: 'durable',
-      coordination: 'distributed',
+      coordination: 'distributed-contract',
+      highAvailability: 'unpublished',
       outbox: 'enabled',
     });
     expect(parsed.profiles['native-default']?.stores?.structured).not.toContain('sqlite');

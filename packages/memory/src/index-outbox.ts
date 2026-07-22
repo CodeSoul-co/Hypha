@@ -167,7 +167,13 @@ export class IndexOutboxWorker {
       await this.emit('memory.index.started', record);
       try {
         await this.process(record);
-        await this.options.outboxStore.complete(record.id, this.now().toISOString());
+        const completed = await this.options.outboxStore.complete(
+          record.id,
+          this.options.ownerId,
+          requiredLeaseToken(record),
+          this.now().toISOString()
+        );
+        if (!completed) throw new Error('Memory index outbox lease was lost.');
         result.completed += 1;
         await this.emit('memory.index.completed', record);
       } catch (error) {
@@ -176,7 +182,19 @@ export class IndexOutboxWorker {
         const retryAt = new Date(
           this.now().getTime() + (this.options.retryDelayMs ?? 1_000) * Math.max(1, record.attempts)
         ).toISOString();
-        await this.options.outboxStore.fail(record.id, normalized, retryAt, deadLetter);
+        const failed = await this.options.outboxStore.fail(
+          record.id,
+          this.options.ownerId,
+          requiredLeaseToken(record),
+          normalized,
+          retryAt,
+          deadLetter
+        );
+        if (!failed) {
+          await this.options.onError?.(
+            normalizeMemoryError(new Error('Memory index outbox lease was lost.'))
+          );
+        }
         if (deadLetter) result.deadLettered += 1;
         else result.failed += 1;
         await this.emit(
@@ -315,4 +333,9 @@ function cosineSimilarity(left: number[], right: number[]): number {
 
 function stringify(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function requiredLeaseToken(record: MemoryIndexOutboxRecord): string {
+  if (!record.leaseToken) throw new Error('Leased Memory index record is missing its lease token.');
+  return record.leaseToken;
 }

@@ -169,7 +169,13 @@ describe('structured memory reliability stores', () => {
         1
       )
     ).toMatchObject([{ attempts: 2, leaseOwner: 'worker:second' }]);
-    await restarted.complete(task.id, '2026-07-20T00:00:12.000Z');
+    const [secondLease] = await restarted.list('retention');
+    await restarted.complete(
+      task.id,
+      'worker:second',
+      secondLease?.leaseToken ?? '',
+      '2026-07-20T00:00:12.000Z'
+    );
     expect(await restarted.list('retention')).toMatchObject([{ state: 'completed' }]);
   });
 
