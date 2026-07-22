@@ -4,6 +4,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import {
   AgentPromptRegistry,
+  type AgentPromptResolutionContext,
   type AgentPromptRef,
   type AgentPromptResolution,
   type AgentPromptSpec,
@@ -138,9 +139,9 @@ export class PromptManager {
 
   resolveAgentPrompts(
     refs: AgentPromptRef[],
-    variables: Record<string, unknown>
+    context: AgentPromptResolutionContext
   ): AgentPromptResolution {
-    return this.agentPrompts.resolve(refs, variables);
+    return this.agentPrompts.resolve(refs, context);
   }
 
   render(id: string, variables: Record<string, any>, category?: string): string {

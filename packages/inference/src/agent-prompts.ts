@@ -26,6 +26,8 @@ export interface AgentPromptSpec {
   tenantId?: string;
   scope?: 'global' | 'tenant' | 'owner';
   trustLevel?: 'trusted' | 'reviewed' | 'untrusted';
+  agentIds?: string[];
+  domainIds?: string[];
   provenance?: Record<string, unknown>;
   revision?: number;
   contentHash?: string;
@@ -50,7 +52,40 @@ export interface ResolvedAgentPromptBlock {
   order: number;
   templateId: string;
   templateVersion: string;
+  templateRevision: number;
+  templateContentHash: string;
+  scope: 'global' | 'tenant' | 'owner';
+  trustLevel: 'trusted' | 'reviewed' | 'untrusted';
+  ownerId?: string;
+  tenantId?: string;
+  provenance?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+}
+
+export interface AgentPromptPrincipal {
+  principalId: string;
+  tenantId?: string;
+  agentId?: string;
+  domainId?: string;
+}
+
+export interface AgentPromptApproval {
+  promptId: string;
+  promptVersion: string;
+  promptRevision: number;
+  contentHash: string;
+  approvedBy: string;
+  principalId?: string;
+  tenantId?: string;
+  agentId?: string;
+  domainId?: string;
+  expiresAt?: string;
+}
+
+export interface AgentPromptResolutionContext {
+  variables: Record<string, unknown>;
+  principal: AgentPromptPrincipal;
+  approvals?: AgentPromptApproval[];
 }
 
 export interface AgentPromptResolution {
@@ -81,6 +116,8 @@ export const agentPromptSpecSchema = z.object({
   tenantId: z.string().min(1).optional(),
   scope: z.enum(['global', 'tenant', 'owner']).optional(),
   trustLevel: z.enum(['trusted', 'reviewed', 'untrusted']).optional(),
+  agentIds: z.array(z.string().min(1)).min(1).optional(),
+  domainIds: z.array(z.string().min(1)).min(1).optional(),
   provenance: z.record(z.unknown()).optional(),
   revision: z.number().int().positive().optional(),
   contentHash: z
@@ -88,6 +125,22 @@ export const agentPromptSpecSchema = z.object({
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
   metadata: z.record(z.unknown()).optional(),
+}).superRefine((spec, context) => {
+  const scope = spec.scope ?? 'global';
+  if (scope === 'tenant' && !spec.tenantId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['tenantId'],
+      message: 'tenantId is required for tenant-scoped prompts',
+    });
+  }
+  if (scope === 'owner' && !spec.ownerId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ownerId'],
+      message: 'ownerId is required for owner-scoped prompts',
+    });
+  }
 }) satisfies ZodType<AgentPromptSpec>;
 
 export const agentPromptRefSchema = z.object({
@@ -158,7 +211,7 @@ export class AgentPromptRegistry {
     });
   }
 
-  resolve(refs: AgentPromptRef[], variables: Record<string, unknown>): AgentPromptResolution {
+  resolve(refs: AgentPromptRef[], context: AgentPromptResolutionContext): AgentPromptResolution {
     const ordered = [...refs].sort((left, right) => (left.priority ?? 0) - (right.priority ?? 0));
     const blocks: ResolvedAgentPromptBlock[] = [];
     const missing: AgentPromptRef[] = [];
@@ -169,7 +222,8 @@ export class AgentPromptRegistry {
         missing.push(ref);
         continue;
       }
-      const content = renderAgentPrompt(spec, variables);
+      assertPromptAccess(spec, context);
+      const content = renderAgentPrompt(spec, context.variables);
       blocks.push({
         id: `${spec.id}@${spec.version}`,
         type: 'prompt-template',
@@ -181,6 +235,13 @@ export class AgentPromptRegistry {
         order: ref.priority ?? index,
         templateId: spec.id,
         templateVersion: spec.version,
+        templateRevision: spec.revision!,
+        templateContentHash: spec.contentHash!,
+        scope: spec.scope ?? 'global',
+        trustLevel: spec.trustLevel ?? 'reviewed',
+        ownerId: spec.ownerId,
+        tenantId: spec.tenantId,
+        provenance: spec.provenance,
         metadata: spec.metadata,
       });
     }
@@ -216,9 +277,64 @@ function promptContentHash(spec: AgentPromptSpec): string {
       tenantId: spec.tenantId,
       scope: spec.scope ?? 'global',
       trustLevel: spec.trustLevel ?? 'reviewed',
+      agentIds: spec.agentIds,
+      domainIds: spec.domainIds,
       provenance: spec.provenance,
     })
   );
+}
+
+function assertPromptAccess(
+  spec: AgentPromptSpec,
+  context: AgentPromptResolutionContext
+): void {
+  const principal = context.principal;
+  const scope = spec.scope ?? 'global';
+  if (scope === 'tenant' && spec.tenantId !== principal.tenantId) {
+    throw promptAccessError(spec, 'tenant scope does not match the request principal');
+  }
+  if (scope === 'owner' && spec.ownerId !== principal.principalId) {
+    throw promptAccessError(spec, 'owner scope does not match the request principal');
+  }
+  if (spec.tenantId && spec.tenantId !== principal.tenantId) {
+    throw promptAccessError(spec, 'tenant binding does not match the request principal');
+  }
+  if (spec.agentIds && (!principal.agentId || !spec.agentIds.includes(principal.agentId))) {
+    throw promptAccessError(spec, 'agent binding does not match the request principal');
+  }
+  if (spec.domainIds && (!principal.domainId || !spec.domainIds.includes(principal.domainId))) {
+    throw promptAccessError(spec, 'domain binding does not match the request principal');
+  }
+  if ((spec.trustLevel ?? 'reviewed') !== 'untrusted') return;
+  const approval = context.approvals?.find(
+    (candidate) =>
+      candidate.promptId === spec.id &&
+      candidate.promptVersion === spec.version &&
+      candidate.promptRevision === spec.revision &&
+      candidate.contentHash === spec.contentHash &&
+      (!candidate.principalId || candidate.principalId === principal.principalId) &&
+      (!candidate.tenantId || candidate.tenantId === principal.tenantId) &&
+      (!candidate.agentId || candidate.agentId === principal.agentId) &&
+      (!candidate.domainId || candidate.domainId === principal.domainId) &&
+      (!candidate.expiresAt ||
+        (Number.isFinite(Date.parse(candidate.expiresAt)) &&
+          Date.parse(candidate.expiresAt) > Date.now()))
+  );
+  if (!approval) {
+    throw promptAccessError(spec, 'untrusted prompt requires an exact, unexpired approval');
+  }
+}
+
+function promptAccessError(spec: AgentPromptSpec, reason: string): Error {
+  return Object.assign(new Error(`Agent prompt access denied: ${spec.id}@${spec.version}; ${reason}`), {
+    code: 'AGENT_PROMPT_ACCESS_DENIED',
+    context: {
+      promptId: spec.id,
+      promptVersion: spec.version,
+      promptRevision: spec.revision,
+      contentHash: spec.contentHash,
+    },
+  });
 }
 
 export function renderAgentPrompt(

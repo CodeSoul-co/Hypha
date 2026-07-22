@@ -186,8 +186,11 @@ describe('@hypha/inference', () => {
     });
 
     const resolved = registry.resolve([{ id: 'agent.base', required: true }], {
-      agent_name: 'Hypha',
-      user_id: 'user-1',
+      variables: {
+        agent_name: 'Hypha',
+        user_id: 'user-1',
+      },
+      principal: { principalId: 'user-1', agentId: 'agent.base' },
     });
     expect(resolved.instructions).toBe('Act as Hypha for user-1.');
     expect(resolved.blocks[0]).toMatchObject({
@@ -211,8 +214,115 @@ describe('@hypha/inference', () => {
     });
 
     expect(() =>
-      registry.resolve([{ id: 'agent.invalid', required: true }], { known: 'value' })
+      registry.resolve([{ id: 'agent.invalid', required: true }], {
+        variables: { known: 'value' },
+        principal: { principalId: 'user-1' },
+      })
     ).toThrow('Undeclared agent prompt variables: agent.invalid.unknown');
+  });
+
+  it('enforces prompt tenant, owner, agent, domain, and exact untrusted approval scope', () => {
+    const registry = new AgentPromptRegistry();
+    const stored = registry.register({
+      id: 'agent.scoped',
+      version: '1.0.0',
+      name: 'Scoped prompt',
+      role: 'developer',
+      template: 'Scoped instructions.',
+      scope: 'tenant',
+      tenantId: 'tenant-a',
+      ownerId: 'owner-a',
+      trustLevel: 'untrusted',
+      agentIds: ['agent-a'],
+      domainIds: ['domain-a'],
+      provenance: { source: 'remote-package', signer: 'vendor-a' },
+    });
+    const ref = [{ id: stored.id, version: stored.version, required: true }];
+    const principal = {
+      principalId: 'owner-a',
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      domainId: 'domain-a',
+    };
+
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, tenantId: 'tenant-b' },
+      })
+    ).toThrow(/access denied/);
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, agentId: 'agent-b' },
+      })
+    ).toThrow(/agent binding/);
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, domainId: 'domain-b' },
+      })
+    ).toThrow(/domain binding/);
+    expect(() => registry.resolve(ref, { variables: {}, principal })).toThrow(
+      /exact, unexpired approval/
+    );
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal,
+        approvals: [
+          {
+            promptId: stored.id,
+            promptVersion: stored.version,
+            promptRevision: stored.revision!,
+            contentHash: '0'.repeat(64),
+            approvedBy: 'reviewer-a',
+          },
+        ],
+      })
+    ).toThrow(/exact, unexpired approval/);
+
+    const resolved = registry.resolve(ref, {
+      variables: {},
+      principal,
+      approvals: [
+        {
+          promptId: stored.id,
+          promptVersion: stored.version,
+          promptRevision: stored.revision!,
+          contentHash: stored.contentHash!,
+          approvedBy: 'reviewer-a',
+          tenantId: 'tenant-a',
+          agentId: 'agent-a',
+          domainId: 'domain-a',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      ],
+    });
+    expect(resolved.blocks[0]).toMatchObject({
+      templateRevision: stored.revision,
+      templateContentHash: stored.contentHash,
+      scope: 'tenant',
+      trustLevel: 'untrusted',
+      tenantId: 'tenant-a',
+      provenance: { source: 'remote-package', signer: 'vendor-a' },
+    });
+
+    registry.register({
+      id: 'agent.owner',
+      version: '1.0.0',
+      name: 'Owner prompt',
+      role: 'system',
+      template: 'Owner instructions.',
+      scope: 'owner',
+      ownerId: 'owner-a',
+    });
+    expect(() =>
+      registry.resolve([{ id: 'agent.owner', required: true }], {
+        variables: {},
+        principal: { principalId: 'owner-b' },
+      })
+    ).toThrow(/owner scope/);
   });
 
   it('enforces compare-and-swap revisions for agent prompt updates', () => {

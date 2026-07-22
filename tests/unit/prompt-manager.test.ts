@@ -123,7 +123,10 @@ describe('PromptManager', () => {
 
     const resolved = manager.resolveAgentPrompts(
       [{ id: 'agent-managed', version: '2.1.0', required: true }],
-      { agent_name: 'Hypha', user_id: 'user-1' }
+      {
+        variables: { agent_name: 'Hypha', user_id: 'user-1' },
+        principal: { principalId: 'user-1' },
+      }
     );
     expect(resolved.instructions).toBe('You are Hypha for user-1.');
     expect(resolved.blocks[0]).toMatchObject({

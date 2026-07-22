@@ -866,6 +866,8 @@ class EventRuntimeService {
           agentName: name,
           userId,
           sessionId,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          domainId: this.runs.get(input.runId)?.domainPackId,
           promptRefs,
         });
     const baseSystemInstructions =
@@ -922,6 +924,8 @@ class EventRuntimeService {
     agentName: string;
     userId: string;
     sessionId: string;
+    tenantId?: string;
+    domainId?: string;
     promptRefs: AgentPromptRef[];
   }): Promise<AgentPromptResolution | undefined> {
     const variables = {
@@ -935,7 +939,15 @@ class EventRuntimeService {
 
     const promptManager = getPromptManager();
     await promptManager.ensureInitialized();
-    return promptManager.resolveAgentPrompts(input.promptRefs, variables);
+    return promptManager.resolveAgentPrompts(input.promptRefs, {
+      variables,
+      principal: {
+        principalId: input.userId,
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        domainId: input.domainId,
+      },
+    });
   }
 
   async runReActChat(
