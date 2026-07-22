@@ -65,12 +65,20 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   async health(): Promise<ProviderHealth> {
     try {
       await fs.access(this.workingDirectory, fsConstants.R_OK);
-      return { status: 'healthy', checkedAt: new Date().toISOString() };
+      return {
+        status: 'healthy',
+        checkedAt: new Date().toISOString(),
+        message: this.config.execution.enabled
+          ? 'Trusted local Workspace is available; command execution is explicitly enabled without OS isolation.'
+          : 'Trusted local Workspace is available; command execution is disabled.',
+        details: this.healthDetails(),
+      };
     } catch (error) {
       return {
         status: 'unhealthy',
         checkedAt: new Date().toISOString(),
         message: error instanceof Error ? error.message : String(error),
+        details: this.healthDetails(),
       };
     }
   }
@@ -260,5 +268,22 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
       for (const name of windowsIdentityEnvironmentVariables) environment[name] = '';
     }
     return environment;
+  }
+
+  private healthDetails(): Record<string, unknown> {
+    return {
+      profile: 'trusted-workspace',
+      trustBoundary: 'trusted_local_development_only',
+      commandExecution: this.config.execution.enabled ? 'explicitly_enabled' : 'disabled',
+      isolation: {
+        filesystem: 'path_confinement_only',
+        process: false,
+        network: false,
+        cpu: false,
+        memory: false,
+        disk: false,
+        pids: false,
+      },
+    };
   }
 }

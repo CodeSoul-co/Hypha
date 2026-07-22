@@ -67,8 +67,68 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     });
   });
 
+  it('reports the trusted-only boundary and keeps command execution disabled', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-health-'));
+    const executableRoot = path.join(root, 'bin');
+    await fs.mkdir(executableRoot, { recursive: true });
+    await fs.writeFile(path.join(executableRoot, 'command.js'), 'process.stdout.write("run");\n');
+    const runtime = createRuntime(root, executableRoot, false);
+    await runtime.initialize();
+
+    await expect(runtime.health()).resolves.toMatchObject({
+      status: 'healthy',
+      message: 'Trusted local Workspace is available; command execution is disabled.',
+      details: {
+        profile: 'trusted-workspace',
+        trustBoundary: 'trusted_local_development_only',
+        commandExecution: 'disabled',
+        isolation: {
+          filesystem: 'path_confinement_only',
+          process: false,
+          network: false,
+          cpu: false,
+          memory: false,
+          disk: false,
+          pids: false,
+        },
+      },
+    });
+    await expect(runtime.execute({ operation: 'execute', path: 'bin/command.js' })).rejects.toThrow(
+      'Workspace execution is disabled'
+    );
+  });
+
+  it('does not hide the trusted-only boundary when the Workspace is unavailable', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-unavailable-'));
+    const missingWorkingDirectory = path.join(root, 'missing');
+    const runtime = createRuntime(missingWorkingDirectory, root, true);
+
+    await expect(runtime.health()).resolves.toMatchObject({
+      status: 'unhealthy',
+      details: {
+        profile: 'trusted-workspace',
+        trustBoundary: 'trusted_local_development_only',
+        commandExecution: 'explicitly_enabled',
+      },
+    });
+  });
+
   function setEnvironment(name: string, value: string): void {
     previousEnvironment.set(name, process.env[name]);
     process.env[name] = value;
+  }
+
+  function createRuntime(
+    workingDirectory: string,
+    executableRoot: string,
+    executionEnabled: boolean
+  ): LocalWorkspaceRuntime {
+    return new LocalWorkspaceRuntime({
+      workingDirectory,
+      readPaths: [workingDirectory],
+      writePaths: [workingDirectory],
+      executePaths: [executableRoot],
+      execution: { enabled: executionEnabled, timeoutMs: 2_000, maxOutputBytes: 8_192 },
+    });
   }
 });
