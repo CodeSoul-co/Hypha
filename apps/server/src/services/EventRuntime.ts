@@ -29,7 +29,6 @@ import {
 } from '@hypha/core';
 import {
   DurableEventStoreBridge,
-  EventFirstRuntime,
   runRecoverySupervisor,
   type RecoveryParticipant,
 } from '@hypha/harness';
@@ -125,6 +124,8 @@ import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { createRuntimeBackbone, type RuntimeBackbone } from '../runtime/RuntimeBackbone';
 import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
+import type { RuntimeComposition } from '../runtime/RuntimeCompositionRoot';
+import { createServerRuntimeComposition } from '../runtime/ServerRuntimeComposition';
 import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
 import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
 import {
@@ -533,7 +534,6 @@ function legacyToolToModelTool(
 class EventRuntimeService {
   private readonly legacyEvents: SQLiteEventStore;
   private readonly events: EventStore & TraceRecorder;
-  private readonly runtime: EventFirstRuntime;
   private readonly knownSessions = new Set<string>();
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
@@ -546,6 +546,7 @@ class EventRuntimeService {
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
   private canonicalLifecycle?: RuntimeBackboneLifecycle;
+  private canonicalComposition?: Readonly<RuntimeComposition>;
   private canonicalEvents?: DurableEventStoreBridge;
   private cancellationService?: RuntimeCancellationService;
   private recoveryKnowledge?: RecoveryKnowledgePort;
@@ -611,7 +612,6 @@ class EventRuntimeService {
       resultCacheTimeoutMs: toolCacheConfig.operationTimeoutMs,
       resultCacheMaxEntryBytes: toolCacheConfig.maxEntryBytes,
     });
-    this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
@@ -646,7 +646,23 @@ class EventRuntimeService {
         return createRuntimeBackbone({ filename, schemaRegistry });
       });
     }
-    return this.canonicalLifecycle.initialize();
+    const backbone = await this.canonicalLifecycle.initialize();
+    if (!this.canonicalComposition) {
+      this.canonicalComposition = createServerRuntimeComposition({
+        backbone,
+        compatibilityEvents: this.events,
+        inference: this.reasoning,
+        toolRunner: this.toolRunner,
+        fsmSpec: this.defaultFsm,
+        executeState: async () => {
+          throw new FrameworkError({
+            code: 'RUNTIME_STATE_COMMAND_REQUIRED',
+            message: 'Canonical FSM state execution requires a dispatched RuntimeCommand.',
+          });
+        },
+      });
+    }
+    return backbone;
   }
 
   canonicalRuntime(): RuntimeBackbone {
@@ -654,6 +670,14 @@ class EventRuntimeService {
       throw new Error('Canonical Runtime backbone is not initialized');
     }
     return this.canonicalLifecycle.get();
+  }
+
+  canonicalRuntimeComposition(): Readonly<RuntimeComposition> {
+    this.canonicalRuntime();
+    if (!this.canonicalComposition) {
+      throw new Error('Canonical Runtime composition is not initialized');
+    }
+    return this.canonicalComposition;
   }
 
   async restoreRunContexts(): Promise<number> {
@@ -670,6 +694,7 @@ class EventRuntimeService {
 
   async close(): Promise<void> {
     await this.canonicalLifecycle?.close();
+    this.canonicalComposition = undefined;
     this.canonicalEvents = undefined;
     this.cancellationService = undefined;
   }
@@ -737,7 +762,7 @@ class EventRuntimeService {
       snapshot,
     };
 
-    await this.runtime.createRun({
+    await this.canonicalRuntimeComposition().runManager.createRun({
       id: runId,
       sessionId: runtimeSessionId,
       userId: input.userId,
@@ -1681,7 +1706,7 @@ class EventRuntimeService {
   }
 
   private async latestChatCheckpoint(runId: string): Promise<Record<string, unknown> | undefined> {
-    const events = await this.runtime.listEvents(runId);
+    const events = await this.canonicalRuntimeComposition().runManager.listEvents(runId);
     for (const event of [...events].reverse()) {
       if (event.type !== 'run.waiting_human') continue;
       const checkpoint = asRecord(asRecord(event.payload)?.chatCheckpoint);
@@ -2914,28 +2939,28 @@ class EventRuntimeService {
   }
 
   projectRun(runId: string) {
-    return this.runtime.projectRun(runId);
+    return this.canonicalRuntimeComposition().runManager.projectRun(runId);
   }
 
   async projectOwnedRun(runId: string, userId: string) {
-    const run = await this.runtime.projectRun(runId);
+    const run = await this.canonicalRuntimeComposition().runManager.projectRun(runId);
     return run?.userId === userId ? run : null;
   }
 
   projectReplay(runId: string) {
-    return this.runtime.projectReplay(runId);
+    return this.canonicalRuntimeComposition().runManager.projectReplay(runId);
   }
 
   projectAudit(runId: string) {
-    return this.runtime.projectAudit(runId);
+    return this.canonicalRuntimeComposition().runManager.projectAudit(runId);
   }
 
   projectRegression(runId: string) {
-    return this.runtime.projectRegression(runId);
+    return this.canonicalRuntimeComposition().runManager.projectRegression(runId);
   }
 
   listEvents(runId: string): Promise<FrameworkEvent[]> {
-    return this.runtime.listEvents(runId);
+    return this.canonicalRuntimeComposition().runManager.listEvents(runId);
   }
 
   private async ensureSession(
@@ -2946,7 +2971,7 @@ class EventRuntimeService {
   ): Promise<void> {
     const runtimeSessionId = this.runtimeSessionId(userId, clientSessionId);
     if (this.knownSessions.has(runtimeSessionId)) return;
-    await this.runtime.createSession({
+    await this.canonicalRuntimeComposition().runManager.createSession({
       id: runtimeSessionId,
       userId,
       domainPackRef: { id: domainPack.id, version: domainPack.version },
@@ -2966,7 +2991,7 @@ class EventRuntimeService {
     options: { stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = await this.requireRun(runId);
-    await this.runtime.appendRunEvent({
+    await this.canonicalRuntimeComposition().runManager.appendRunEvent({
       id: `${runId}:${type}:${generateId()}`,
       type,
       runId,
@@ -2999,7 +3024,10 @@ class EventRuntimeService {
   }
 
   private async isRunCancelled(runId: string): Promise<boolean> {
-    return (await this.runtime.projectRun(runId))?.status === 'cancelled';
+    return (
+      (await this.canonicalRuntimeComposition().runManager.projectRun(runId))?.status ===
+      'cancelled'
+    );
   }
 
   private runtimeCancellationService(): RuntimeCancellationService {

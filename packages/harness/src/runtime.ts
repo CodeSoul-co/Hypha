@@ -338,6 +338,10 @@ export class RunManager {
     return this.runtime.createRun(input);
   }
 
+  async appendRunEvent(input: AppendRunEventInput): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent(input);
+  }
+
   async startRun(run: RuntimeRun, timestamp?: string): Promise<FrameworkEvent> {
     return this.runtime.appendRunEvent({
       id: this.nextEventId(run.id, 'run.started'),
