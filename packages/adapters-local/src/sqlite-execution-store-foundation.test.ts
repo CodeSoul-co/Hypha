@@ -6,12 +6,14 @@ import type {
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
 } from '@hypha/core';
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionLeaseGuardExample,
+  executionLeaseReleaseRequestExample,
   executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
@@ -48,7 +50,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
       status: 'healthy',
       checkedAt: now(),
       message: 'SQLite Execution store is available.',
-      details: { schemaVersion: 3 },
+      details: { schemaVersion: 4 },
     });
     await store.close();
     await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
@@ -297,6 +299,19 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await firstStore.close();
     await secondStore.close();
 
+    const historyDatabase = openTestDatabase(path.join(root, 'executions.sqlite'));
+    expect(
+      historyDatabase
+        .prepare(
+          'SELECT released_at, release_reason FROM execution_lease_history WHERE lease_id = ?'
+        )
+        .get(firstRequest.requestedLeaseId)
+    ).toEqual({
+      released_at: '2026-07-16T00:00:30.000Z',
+      release_reason: 'expired_and_replaced',
+    });
+    historyDatabase.close();
+
     const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
     await expect(
       reopened.acquireLease({
@@ -435,6 +450,132 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await store.close();
   });
 
+  it('releases a durable lease and replays the original release after restart', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(createRequest());
+    await store.acquireLease(acquireLeaseRequest());
+    await store.renewLease(renewLeaseRequest());
+    const request = releaseLeaseRequest();
+
+    const released = await store.releaseLease(request);
+    expect(released).toMatchObject({
+      revision: 3,
+      status: 'starting',
+      attempt: 1,
+      updatedAt: request.releasedAt,
+    });
+    expect(released.lease).toBeUndefined();
+    const filename = store.filename;
+    await store.close();
+
+    const database = openTestDatabase(filename);
+    expect(
+      database
+        .prepare(
+          'SELECT released_at, release_reason FROM execution_lease_history WHERE lease_id = ?'
+        )
+        .get(request.leaseGuard.leaseId)
+    ).toEqual({ released_at: request.releasedAt, release_reason: request.reason });
+    database.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(reopened.releaseLease(request)).resolves.toEqual(released);
+    await expect(reopened.get(request.executionId)).resolves.toEqual(released);
+    await expect(
+      reopened.releaseLease({ ...request, reason: 'reused with a different reason' })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT' });
+    await reopened.close();
+  });
+
+  it('preserves an immutable terminal result while releasing its lease', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(createRequest());
+    const acquired = await store.acquireLease(acquireLeaseRequest());
+    const terminal = terminalLeasedCompareAndSetRequest(acquired);
+    const completed = await store.compareAndSet(terminal);
+
+    const released = await store.releaseLease({
+      ...releaseLeaseRequest(),
+      expectedRevision: completed.revision,
+      releasedAt: '2026-07-16T00:00:03.000Z',
+    });
+    expect(released).toEqual({
+      ...completed,
+      revision: completed.revision + 1,
+      lease: undefined,
+      updatedAt: '2026-07-16T00:00:03.000Z',
+    });
+    expect(released.result).toEqual(completed.result);
+    await store.close();
+  });
+
+  it('rejects missing, stale, unfenced, and time-regressing lease releases atomically', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const queued = await store.create(createRequest());
+    await expect(
+      store.releaseLease({ ...releaseLeaseRequest(), expectedRevision: 0 })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_LOST' });
+    await expect(store.get(queued.id)).resolves.toEqual(queued);
+
+    const acquired = await store.acquireLease(acquireLeaseRequest());
+    await expect(
+      store.releaseLease({ ...releaseLeaseRequest(), expectedRevision: 0 })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+    await expect(
+      store.releaseLease({
+        ...releaseLeaseRequest(),
+        expectedRevision: 1,
+        leaseGuard: { ...executionLeaseGuardExample, fencingToken: 2 },
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+    await expect(
+      store.releaseLease({
+        ...releaseLeaseRequest(),
+        expectedRevision: 1,
+        releasedAt: '2026-07-15T23:59:59.999Z',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+    await expect(store.get(acquired.id)).resolves.toEqual(acquired);
+    await store.close();
+  });
+
+  it('keeps fencing monotonic after release and rejects the previous worker', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(createRequest());
+    await store.acquireLease(acquireLeaseRequest());
+    const released = await store.releaseLease({
+      ...releaseLeaseRequest(),
+      expectedRevision: 1,
+      releasedAt: '2026-07-16T00:00:02.000Z',
+    });
+    const reacquired = await store.acquireLease({
+      ...acquireLeaseRequest(),
+      operationId: 'operation.lease.acquire.after-release',
+      expectedRevision: released.revision,
+      requestedLeaseId: 'lease.execution.example.after-release',
+      ownerId: 'worker.after-release',
+      acquiredAt: released.updatedAt,
+      idempotencyKey: 'lease-acquire:after-release',
+    });
+    expect(reacquired.lease?.fencingToken).toBe(2);
+
+    await expect(
+      store.releaseLease({
+        ...releaseLeaseRequest(),
+        operationId: 'operation.lease.release.stale-worker',
+        expectedRevision: reacquired.revision,
+        releasedAt: '2026-07-16T00:00:03.000Z',
+        idempotencyKey: 'lease-release:stale-worker',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+    await expect(store.get(reacquired.id)).resolves.toEqual(reacquired);
+    await store.close();
+  });
+
   it('migrates schema version one without losing existing records', async () => {
     const root = await temporaryRoot();
     const filename = path.join(root, 'executions.sqlite');
@@ -448,7 +589,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await expect(migrated.get(created.id)).resolves.toEqual(created);
     await expect(migrated.health()).resolves.toMatchObject({
       status: 'healthy',
-      details: { schemaVersion: 3 },
+      details: { schemaVersion: 4 },
     });
     await expect(
       migrated.compareAndSet(compareAndSetRequest(0, 'starting', 'cas:migrated'))
@@ -467,7 +608,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
     const filename = path.join(root, 'newer.sqlite');
     const database = openTestDatabase(filename);
-    database.exec('PRAGMA user_version = 4');
+    database.exec('PRAGMA user_version = 5');
     database.close();
     expect(
       () => new SQLiteExecutionStoreFoundation({ rootPath: root, filename: 'newer.sqlite' })
@@ -490,6 +631,10 @@ function acquireLeaseRequest(): ExecutionLeaseAcquireRequest {
 
 function renewLeaseRequest(): ExecutionLeaseRenewRequest {
   return structuredClone(executionLeaseRenewRequestExample);
+}
+
+function releaseLeaseRequest(): ExecutionLeaseReleaseRequest {
+  return structuredClone(executionLeaseReleaseRequestExample);
 }
 
 function compareAndSetRequest(
@@ -529,6 +674,29 @@ function terminalCompareAndSetRequest(): ExecutionRecordCompareAndSetRequest {
       updatedAt: '2026-07-16T00:00:02.000Z',
     },
     idempotencyKey: 'cas:terminal',
+  };
+}
+
+function terminalLeasedCompareAndSetRequest(
+  current: ExecutionRecord
+): ExecutionRecordCompareAndSetRequest {
+  return {
+    operationId: 'operation.cas:terminal-leased',
+    executionId: current.id,
+    expectedRevision: current.revision,
+    leaseGuard: executionLeaseGuardExample,
+    next: {
+      ...structuredClone(current),
+      revision: current.revision + 1,
+      status: 'completed',
+      sandboxId: commandExecutionResultExample.sandboxId,
+      result: {
+        ...structuredClone(commandExecutionResultExample),
+        revision: current.revision + 1,
+      },
+      updatedAt: '2026-07-16T00:00:02.000Z',
+    },
+    idempotencyKey: 'cas:terminal-leased',
   };
 }
 
@@ -617,7 +785,10 @@ async function temporaryRoot(): Promise<string> {
 
 function openTestDatabase(filename: string): {
   exec(sql: string): void;
-  prepare(sql: string): { run(...params: unknown[]): { changes: number | bigint } };
+  prepare(sql: string): {
+    run(...params: unknown[]): { changes: number | bigint };
+    get(...params: unknown[]): Record<string, unknown> | undefined;
+  };
   close(): void;
 } {
   try {

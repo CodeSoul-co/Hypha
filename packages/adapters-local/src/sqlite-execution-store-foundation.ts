@@ -6,6 +6,8 @@ import type {
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseGuard,
+  ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
   ProviderHealth,
 } from '@hypha/core';
@@ -14,6 +16,7 @@ import {
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
   validateExecutionLeaseAcquireRequest,
+  validateExecutionLeaseReleaseRequest,
   validateExecutionLeaseRenewRequest,
 } from '@hypha/core';
 import {
@@ -334,6 +337,9 @@ export class SQLiteExecutionStoreFoundation {
       });
       const nextJson = JSON.stringify(next);
 
+      if (current.lease) {
+        this.closeLeaseHistory(current.lease, request.acquiredAt, 'expired_and_replaced');
+      }
       this.database
         .prepare(
           'INSERT INTO execution_lease_history ' +
@@ -454,6 +460,73 @@ export class SQLiteExecutionStoreFoundation {
     });
   }
 
+  async releaseLease(input: ExecutionLeaseReleaseRequest): Promise<ExecutionRecord> {
+    this.assertOpen();
+    const request = validateExecutionLeaseReleaseRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    return this.writeOperation(() => {
+      if (request.idempotencyKey) {
+        const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
+        if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
+      }
+
+      const row = this.selectRecord(request.executionId);
+      if (!row) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const current = parseRecordRow(row);
+      if (current.revision !== request.expectedRevision) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
+        );
+      }
+      const lease = current.lease;
+      if (!lease) {
+        throw storeError('EXECUTION_STORE_LEASE_LOST', 'Execution has no active lease.', {
+          executionId: request.executionId,
+        });
+      }
+      assertLeaseGuard(lease, request.leaseGuard, request.executionId);
+      if (Date.parse(request.releasedAt) < Date.parse(current.updatedAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease release time cannot precede the current Execution revision.',
+          {
+            executionId: request.executionId,
+            releasedAt: request.releasedAt,
+            updatedAt: current.updatedAt,
+          }
+        );
+      }
+
+      const next = validateExecutionRecord({
+        ...current,
+        revision: current.revision + 1,
+        lease: undefined,
+        updatedAt: request.releasedAt,
+      });
+      this.closeLeaseHistory(lease, request.releasedAt, request.reason ?? null);
+      const fencingToken = lastFencingToken(row);
+      const nextJson = this.replaceRecord(
+        next,
+        request.expectedRevision,
+        fencingToken,
+        fencingToken,
+        'Execution record changed during lease release.'
+      );
+      this.rememberMutation(request, requestHash, nextJson);
+      return structuredClone(next);
+    });
+  }
+
   async health(): Promise<ProviderHealth> {
     if (this.closed) {
       return {
@@ -530,6 +603,26 @@ export class SQLiteExecutionStoreFoundation {
           'WHERE lease_id = ?'
       )
       .get(leaseId);
+  }
+
+  private closeLeaseHistory(
+    lease: NonNullable<ExecutionRecord['lease']>,
+    releasedAt: string,
+    reason: string | null
+  ): void {
+    const update = this.database
+      .prepare(
+        'UPDATE execution_lease_history SET released_at = ?, release_reason = ? ' +
+          'WHERE lease_id = ? AND execution_id = ? AND fencing_token = ? AND released_at IS NULL'
+      )
+      .run(releasedAt, reason, lease.id, lease.executionId, lease.fencingToken);
+    if (Number(update.changes) !== 1) {
+      throw storeError(
+        'EXECUTION_STORE_CORRUPT',
+        'Execution lease history is missing or already closed.',
+        { executionId: lease.executionId, leaseId: lease.id }
+      );
+    }
   }
 
   private replaceRecord(
@@ -703,7 +796,7 @@ function assertLeaseContinuity(
 
 function assertLeaseGuard(
   lease: NonNullable<ExecutionRecord['lease']>,
-  guard: ExecutionLeaseRenewRequest['leaseGuard'],
+  guard: ExecutionLeaseGuard,
   executionId: string
 ): void {
   if (

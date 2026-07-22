@@ -5,7 +5,7 @@ export interface SQLiteExecutionStoreSchemaDatabase {
   };
 }
 
-export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 3;
+export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 4;
 
 export class SQLiteExecutionStoreSchemaVersionError extends Error {
   constructor(
@@ -36,6 +36,7 @@ export function migrateSQLiteExecutionStore(database: SQLiteExecutionStoreSchema
     if (current === 0) database.exec(SCHEMA_V1_SQL);
     if (current <= 1) database.exec(SCHEMA_V2_SQL);
     if (current <= 2) database.exec(SCHEMA_V3_SQL);
+    if (current <= 3) database.exec(SCHEMA_V4_SQL);
     database.exec(`PRAGMA user_version = ${SQLITE_EXECUTION_STORE_SCHEMA_VERSION}`);
     database.exec('COMMIT');
   } catch (error) {
@@ -100,4 +101,9 @@ CREATE TABLE execution_lease_history (
   UNIQUE (execution_id, fencing_token),
   FOREIGN KEY (execution_id) REFERENCES execution_records(execution_id)
 );
+`;
+
+const SCHEMA_V4_SQL = `
+ALTER TABLE execution_lease_history ADD COLUMN released_at TEXT;
+ALTER TABLE execution_lease_history ADD COLUMN release_reason TEXT;
 `;
