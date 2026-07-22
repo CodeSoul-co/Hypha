@@ -32,6 +32,7 @@ sessionProfiles:
       runtimeMode: single-user
     defaultMemoryProfileRef: memory.local
     defaultContextProfileRef: context.local
+    defaultToolProfileRef: tools.minimal.search
     defaultMCPProfileRef: mcp.local
     defaultReasoningProfileRef: reasoning.local
     defaultPolicyRefs:
@@ -51,7 +52,18 @@ workflows:
       - id: Reasoning
         goal: Build context, reason, and choose the next action.
         allowedTools:
-          - tool.search
+          - common.search
+        allowedToolRefs:
+          - id: common.search
+            version: 1.0.0
+        toolProfileRefs:
+          - id: tools.minimal.search
+            version: 1.0.0
+        permissionScopes:
+          - search.query
+        humanApprovalPolicyRef:
+          id: policy.search-approval
+          version: 1.0.0
         allowedSkills:
           - skill.context-enrichment
         requiredSkills:
@@ -104,7 +116,7 @@ skillPolicies:
     policyRefs:
       - policy.readonly
     allowedTools:
-      - tool.search
+      - common.search
     trustLevel: reviewed
 allowedPromptRefs:
   - id: prompt.agent.default
@@ -115,9 +127,10 @@ defaultPromptRefs:
     required: true
     priority: 0
 tools:
-  - id: tool.search
-    version: 0.0.0
-    description: Search local or network-readable references.
+  - id: common.search
+    version: 1.0.0
+    name: common.search
+    description: Run a provider-neutral bounded search with citations and provenance.
     inputSchema:
       type: object
       required:
@@ -125,9 +138,36 @@ tools:
       properties:
         query:
           type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        providerHint:
+          type: string
       additionalProperties: false
-    sideEffectLevel: read
-    source: local
+    outputSchema:
+      type: object
+    sideEffectLevel: external_effect
+    permissionScope:
+      - search.query
+    humanApprovalPolicy:
+      required: true
+      reason: External search requires policy approval.
+    source: http
+toolProfiles:
+  - id: tools.minimal.search
+    version: 1.0.0
+    toolRefs:
+      - id: common.search
+        version: 1.0.0
+    policyRefs:
+      - id: policy.search-approval
+        version: 1.0.0
+    defaultPermissionScopes:
+      - search.query
+    contractSnapshotMode: run
+    lazyLoad: true
+    maxLoadedTools: 1
 mcpProfiles:
   - id: mcp.local
     version: 0.0.0
@@ -218,6 +258,15 @@ policies:
         sideEffectLevels:
           - none
           - read
+  - id: policy.search-approval
+    version: 1.0.0
+    defaultEffect: deny
+    rules:
+      - id: policy.rule.search
+        version: 1.0.0
+        effect: allow
+        sideEffectLevels:
+          - external_effect
 evaluationProfiles:
   - id: eval.output-contract
     version: 0.0.0
