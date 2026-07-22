@@ -24,7 +24,9 @@ import {
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type NormalizedRuntimeError,
   type RuntimeCancelResult,
+  type RuntimeJsonValue,
   type SpecRef,
 } from '@hypha/core';
 import {
@@ -39,7 +41,6 @@ import {
   type WorkflowSpec,
 } from '@hypha/domain';
 import {
-  applyTransitionWithRuntimePolicy,
   createInitialSnapshot,
   evaluateGuardExpression,
   FSMRuntime,
@@ -128,6 +129,10 @@ import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
 import type { RuntimeComposition } from '../runtime/RuntimeCompositionRoot';
 import { createServerRuntimeComposition } from '../runtime/ServerRuntimeComposition';
 import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
+import {
+  RuntimeTransitionDispatcher,
+  type RuntimeTransitionCommand,
+} from '../runtime/RuntimeTransitionDispatcher';
 import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
 import {
   projectRuntimeRunContext,
@@ -583,6 +588,8 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private readonly transitionDispatcher = new RuntimeTransitionDispatcher();
+  private readonly runtimeWorkerId = `server.runtime:${process.pid}`;
   private canonicalLifecycle?: RuntimeBackboneLifecycle;
   private canonicalComposition?: Readonly<RuntimeComposition>;
   private canonicalEvents?: DurableEventStoreBridge;
@@ -692,12 +699,8 @@ class EventRuntimeService {
         inference: this.reasoning,
         toolRunner: this.toolRunner,
         fsmSpec: this.defaultFsm,
-        executeState: async () => {
-          throw new FrameworkError({
-            code: 'RUNTIME_STATE_COMMAND_REQUIRED',
-            message: 'Canonical FSM state execution requires a dispatched RuntimeCommand.',
-          });
-        },
+        executeState: (input) => this.transitionDispatcher.executeState(input),
+        nextId: (namespace) => `${namespace}:${generateId()}`,
       });
     }
     return backbone;
@@ -833,50 +836,92 @@ class EventRuntimeService {
     const context = await this.requireRun(runId);
     if (context.snapshot.currentState === to) return;
     const from = context.snapshot.currentState;
-    await this.append(runId, 'fsm.transition.requested', { from, to, ...payload }, undefined, {
-      fsmState: from,
-    });
+    const command = this.createTransitionCommand(context, to, payload);
+    await this.append(
+      runId,
+      'fsm.transition.requested',
+      { commandId: command.id, from, to, ...payload },
+      undefined,
+      { fsmState: from }
+    );
     try {
-      const next = await applyTransitionWithRuntimePolicy(context.fsm, context.snapshot, to, {
-        userId: context.userId,
-        stepId: String(payload.stepId ?? to),
-        guardContext: {
-          input: payload,
-          variables: payload,
-          metadata: {
-            clientSessionId: context.clientSessionId,
-            runtimeSessionId: context.sessionId,
+      const result = await this.transitionDispatcher.dispatch(command, () =>
+        this.canonicalRuntimeComposition().fsmDriver.run({
+          scope: {
+            userId: context.userId,
+            sessionId: context.sessionId,
+            runId,
           },
-        },
-      });
-      await this.append(runId, 'fsm.state.exited', { stateId: from }, undefined, {
-        fsmState: from,
-      });
-      await this.append(
-        runId,
-        'fsm.transition.accepted',
-        { from, to, ...payload, snapshot: next },
-        undefined,
-        { fsmState: to }
+          process: context.fsm,
+          ownerId: this.runtimeWorkerId,
+          maxSteps: 1,
+          leaseTtlMs: 30_000,
+          stateClaimTtlMs: 30_000,
+        })
       );
-      await this.append(runId, 'fsm.state.entered', { stateId: to, snapshot: next }, undefined, {
-        fsmState: to,
-      });
+      if (result.steps !== 1 || result.projection.currentState !== to) {
+        throw new FrameworkError({
+          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+          message: `Canonical FSM transition was not executed: ${runId} ${from} -> ${to}`,
+          context: { runId, from, to, disposition: result.disposition },
+        });
+      }
     } catch (error) {
       if (error instanceof FrameworkError && error.code === 'FSM_HUMAN_REVIEW_REQUIRED') {
         await this.append(runId, 'human.review.requested', {
+          commandId: command.id,
           from,
           to,
           reason: error.message,
         });
       }
       await this.append(runId, 'fsm.transition.rejected', {
+        commandId: command.id,
         from,
         to,
         reason: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }
+  }
+
+  private createTransitionCommand(
+    context: RuntimeRunContext,
+    to: string,
+    payload: Record<string, unknown>
+  ): RuntimeTransitionCommand {
+    const target = context.fsm.states.find((state) => state.id === to);
+    const reason = stringValue(payload.reason);
+    const failure: NormalizedRuntimeError | undefined =
+      target?.kind === 'failed'
+        ? {
+            code: 'RUNTIME_INTERNAL_ERROR',
+            message: reason ?? `Runtime entered failed State: ${to}`,
+            retryable: false,
+            stateId: context.snapshot.currentState,
+          }
+        : undefined;
+    const output = failure ? undefined : toRuntimeJsonValue(payload.output);
+    return {
+      id: `runtime-transition:${context.runId}:${generateId()}`,
+      runId: context.runId,
+      userId: context.userId,
+      from: context.snapshot.currentState,
+      to,
+      snapshot: context.snapshot,
+      stepId: String(payload.stepId ?? to),
+      guardContext: {
+        input: payload,
+        variables: payload,
+        metadata: {
+          clientSessionId: context.clientSessionId,
+          runtimeSessionId: context.sessionId,
+        },
+      },
+      ...(reason === undefined ? {} : { reason }),
+      ...(output === undefined ? {} : { output }),
+      ...(failure === undefined ? {} : { failure }),
+    };
   }
 
   async inferChat(input: ChatInferenceInput): Promise<ChatResponse> {
@@ -2354,29 +2399,18 @@ class EventRuntimeService {
 
   async completeRun(runId: string, output?: unknown): Promise<void> {
     const context = await this.requireRun(runId);
-    let terminalState = context.snapshot.currentState;
-    if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
-      terminalState = inferCompletedState(context.fsm);
-      await this.transition(runId, terminalState, { reason: 'completed' });
-    }
-    await this.append(runId, 'run.completed', {
-      terminalState,
+    if (context.fsm.terminalStates.includes(context.snapshot.currentState)) return;
+    await this.transition(runId, inferCompletedState(context.fsm), {
+      reason: 'completed',
       output,
     });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
     const context = await this.requireRun(runId);
+    if (context.fsm.terminalStates.includes(context.snapshot.currentState)) return;
     const message = error instanceof Error ? error.message : String(error);
-    let terminalState = context.snapshot.currentState;
-    if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
-      terminalState = inferFailedState(context.fsm);
-      await this.transition(runId, terminalState, { reason: message });
-    }
-    await this.append(runId, 'run.failed', {
-      terminalState,
-      error: message,
-    });
+    await this.transition(runId, inferFailedState(context.fsm), { reason: message });
   }
 
   async projectWorkflowExecution(executionId: string): Promise<WorkflowExecutionProjection | null> {
@@ -3778,6 +3812,21 @@ function parseExpiresAt(record: Record<string, unknown>): string | undefined {
 
 function stringValue(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
+}
+
+function toRuntimeJsonValue(input: unknown): RuntimeJsonValue | undefined {
+  if (input === undefined) return undefined;
+  try {
+    const encoded = JSON.stringify(input);
+    if (encoded === undefined) throw new TypeError('Value is not JSON serializable');
+    return JSON.parse(encoded) as RuntimeJsonValue;
+  } catch (error) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: 'Runtime transition output must be JSON serializable.',
+      context: { reason: error instanceof Error ? error.message : String(error) },
+    });
+  }
 }
 
 function mergeSystemPrompts(...prompts: Array<string | undefined>): string | undefined {

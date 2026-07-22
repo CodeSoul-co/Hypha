@@ -19,6 +19,7 @@ export interface ServerRuntimeCompositionOptions {
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
   executeState: FencedBoundedFSMDriverOptions['executeState'];
+  nextId?: FencedBoundedFSMDriverOptions['nextId'];
 }
 
 /**
@@ -48,6 +49,7 @@ export function createServerRuntimeComposition(
           runLeases,
           stateClaims,
           executeState: options.executeState,
+          ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
         }),
       createReActRunner: ({ runManager }) =>
         new HarnessedReActFSMRunner({
