@@ -268,6 +268,12 @@ describe('@hypha/mcp normalization', () => {
       capabilityHash: initial.capabilityHash,
       approvedBy: 'admin-1',
     });
+    const unchanged = await catalog.refresh('catalog-fixture', 'unchanged-after-approval');
+    expect(unchanged.capabilities[0]).toMatchObject({
+      capabilityHash: initial.capabilityHash,
+      driftState: 'approved',
+      approvedAt: expect.any(String),
+    });
 
     const registry = new ToolRegistry();
     await catalog.importTools(registry, [
@@ -327,6 +333,108 @@ describe('@hypha/mcp normalization', () => {
     );
     expect(telemetry.sum('mcp_capability_drift_total')).toBeGreaterThanOrEqual(2);
     expect(telemetry.sum('mcp_capability_quarantined_total')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('fails closed unless import, snapshot, and invocation use the same live approved revision', async () => {
+    let now = '2026-07-22T00:00:00.000Z';
+    const gateway = new MockMCPGateway([
+      {
+        id: 'strict-search',
+        version: '1.0.0',
+        serverId: 'strict-server',
+        capabilityId: 'search',
+        type: 'tool',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        permissionScope: ['search.read'],
+        trustLevel: 'reviewed',
+        declarationSource: 'server',
+        protocolVersion: '2025-11-25',
+        serverIdentity: { name: 'strict-server', version: '1.0.0' },
+      },
+    ]);
+    gateway.registerToolHandler('strict-server', 'search', ({ input }) => ({ input }));
+    const catalog = new MCPCapabilityCatalog({
+      integration: {
+        id: 'strict-integration',
+        version: '1.0.0',
+        servers: [{ id: 'strict-server', mode: 'local' }],
+      },
+      gateway,
+      trustPolicy: {
+        defaultTrustLevel: 'restricted',
+        requireApprovalForNewCapability: true,
+        requireApprovalForSchemaChange: true,
+      },
+      driftPolicy: {
+        onDescriptionChange: 'snapshot_next_run',
+        onSchemaChange: 'require_approval',
+        onRemoval: 'allow_existing_run',
+        onServerIdentityChange: 'quarantine',
+      },
+      now: () => now,
+    });
+    const discovered = await catalog.refresh('strict-server');
+    const capability = discovered.capabilities[0];
+    const ref = {
+      serverId: 'strict-server',
+      capabilityId: 'search',
+      capabilityHash: capability.capabilityHash,
+    };
+    const registry = new ToolRegistry();
+
+    await expect(catalog.importTools(registry, [ref])).rejects.toMatchObject({
+      code: 'MCP_CAPABILITY_NOT_APPROVED',
+    });
+    await expect(
+      catalog.importTools(registry, [{ serverId: 'strict-server', capabilityId: 'search' }])
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_HASH_REQUIRED' });
+    await expect(
+      catalog.approveRevision({
+        ...ref,
+        approvedBy: 'admin.strict',
+        expiresAt: '2026-07-21T00:00:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'MCP_APPROVAL_EXPIRED' });
+
+    await catalog.approveRevision({
+      ...ref,
+      approvedBy: 'admin.strict',
+      expiresAt: '2026-07-23T00:00:00.000Z',
+    });
+    await catalog.importTools(registry, [ref]);
+    const adapter = registry.getAdapter('mcp.strict-server.search')!;
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'hypha' },
+        context: {
+          runId: 'run.strict',
+          stepId: 'search',
+          invocationId: 'invocation.no-snapshot',
+        },
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SNAPSHOT_MISMATCH' });
+
+    const snapshot = await catalog.snapshot('run.strict', [ref]);
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'hypha' },
+        context: {
+          runId: 'run.strict',
+          stepId: 'search',
+          invocationId: 'invocation.approved',
+          contractSnapshotRef: snapshot.id,
+        },
+      })
+    ).resolves.toMatchObject({ output: { input: { query: 'hypha' } } });
+
+    now = '2026-07-24T00:00:00.000Z';
+    await expect(catalog.snapshot('run.expired', [ref])).rejects.toMatchObject({
+      code: 'MCP_APPROVAL_EXPIRED',
+    });
   });
 
   it('registers discovered MCP tools into the governed ToolRunner path', async () => {

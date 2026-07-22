@@ -17,7 +17,7 @@ import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
 import { EnvironmentSecretResolver } from '../../services/SecretResolver';
 import { InMemoryTelemetryRecorder } from '@hypha/core';
-import { filesystemToolConfig, getConfig } from '../../config';
+import { filesystemToolConfig, getConfig, storageConfig } from '../../config';
 import {
   FileMCPCapabilityCatalogStore,
   FileToolContractSnapshotStore,
@@ -40,6 +40,7 @@ import {
 import {
   LocalFunctionToolAdapter,
   MCPToolAdapter,
+  ToolRegistry,
   type ToolAdapter,
   type ToolSpec as HyphaToolSpec,
   type ToolContractSnapshotStore,
@@ -62,6 +63,10 @@ type MCPToolMetadata = {
   trustLevel?: MCPCapabilityDescriptor['trustLevel'];
   version?: string;
 };
+
+function resolveConfiguredPath(filePath: string): string {
+  return path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+}
 
 class ManagedMCPClient implements MCPClient {
   status: MCPClient['status'] = 'disconnected';
@@ -92,21 +97,12 @@ class ManagedMCPClient implements MCPClient {
   }
 
   async invoke(name: string, args: any): Promise<ToolResult> {
-    try {
-      const output = await this.manager.call({
-        serverId: this.id,
-        capabilityId: name,
-        input: args,
-        context: {
-          runId: 'server-mcp',
-          stepId: `mcp:${this.id}:${name}`,
-          invocationId: `server-mcp:${this.id}:${name}:${Date.now()}`,
-        },
-      });
-      return { success: true, output };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
-    }
+    void name;
+    void args;
+    return {
+      success: false,
+      error: 'Managed MCP tools must be invoked through the approved capability registry.',
+    };
   }
 
   async listTools(): Promise<ToolDefinition[]> {
@@ -323,13 +319,15 @@ export class ToolManager {
     telemetry: this.mcpTelemetry,
   });
   private readonly mcpCatalogs = new Map<string, MCPCapabilityCatalog>();
+  private readonly mcpServerModes = new Map<string, MCPServerConfig['mode']>();
+  private readonly approvedMCPRegistry = new ToolRegistry();
   private mcpCatalogStore: MCPCapabilityCatalogStore = new FileMCPCapabilityCatalogStore(
     process.env.HYPHA_MCP_CATALOG_STORE ??
       path.resolve(process.cwd(), 'data/runtime/mcp-capability-catalog.json')
   );
   private mcpSnapshotStore: ToolContractSnapshotStore = new FileToolContractSnapshotStore(
     process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ??
-      path.resolve(process.cwd(), 'data/runtime/tool-contract-snapshots')
+      `${resolveConfiguredPath(storageConfig().relational.sqlite.eventDbPath)}.tool-snapshots`
   );
 
   async initialize(): Promise<void> {
@@ -410,6 +408,10 @@ export class ToolManager {
       await client.disconnect();
     }
     this.mcpClients.clear();
+    this.mcpServerModes.clear();
+    for (const spec of this.approvedMCPRegistry.list()) {
+      this.approvedMCPRegistry.unregister(spec.id);
+    }
     await this.connectionManager.closeAll();
 
     // Call unload on all tools
@@ -472,15 +474,19 @@ export class ToolManager {
       }
     }
 
-    // Also include MCP tools
-    for (const client of this.mcpClients.values()) {
-      if (client.status === 'connected') {
-        list.push(
-          ...client.tools.map((tool) =>
-            this.toolSpecToDefinition(this.normalizeMCPTool(client, tool))
-          )
-        );
-      }
+    for (const spec of this.approvedMCPRegistry.list()) {
+      const client = spec.sourceRef?.serverId
+        ? this.mcpClients.get(spec.sourceRef.serverId)
+        : undefined;
+      if (client?.status === 'connected') list.push(this.toolSpecToDefinition(spec));
+    }
+
+    // Fixture servers are deterministic test-only gateways and do not have a catalog.
+    for (const client of this.fixtureMCPClients()) {
+      if (client.status !== 'connected') continue;
+      list.push(
+        ...client.tools.map((tool) => this.toolSpecToDefinition(this.normalizeMCPTool(client, tool)))
+      );
     }
 
     return list;
@@ -525,7 +531,24 @@ export class ToolManager {
       };
     }
 
-    const mcpTool = this.findMCPToolByName(name);
+    const approved = this.findApprovedMCPTool(name);
+    if (approved) {
+      const normalized = approved.spec;
+      return {
+        id: normalized.id,
+        name: normalized.id,
+        description: normalized.description,
+        inputSchema: this.asObjectInputSchema(normalized.inputSchema),
+        outputSchema: normalized.outputSchema,
+        source: 'mcp',
+        sideEffectLevel: normalized.sideEffectLevel,
+        permissionScope: normalized.permissionScope,
+        serverId: normalized.sourceRef?.serverId,
+        capabilityId: normalized.sourceRef?.capabilityId,
+      };
+    }
+
+    const mcpTool = this.findFixtureMCPToolByName(name);
     if (mcpTool) {
       const normalized = mcpTool.spec;
       return {
@@ -581,7 +604,10 @@ export class ToolManager {
       };
     }
 
-    const mcpTool = this.findMCPToolByName(nameOrId);
+    const approved = this.findApprovedMCPTool(nameOrId);
+    if (approved) return approved;
+
+    const mcpTool = this.findFixtureMCPToolByName(nameOrId);
     if (mcpTool) {
       const serverId = mcpTool.spec.sourceRef?.serverId ?? mcpTool.client.id;
       const capabilityId = mcpTool.spec.sourceRef?.capabilityId ?? mcpTool.tool.name;
@@ -607,6 +633,7 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
+    this.mcpServerModes.set(config.id, config.mode);
     if (config.mode !== 'fixture') {
       this.connectionManager.register({
         id: config.id,
@@ -682,6 +709,7 @@ export class ToolManager {
       try {
         await client.connect();
         await this.mcpCatalogs.get(config.id)?.refresh(config.id, 'server-auto-connect');
+        await this.syncApprovedMCPTools(config.id);
       } catch (error) {
         logger.error(`Failed to auto-connect MCP server ${config.id}:`, error);
       }
@@ -694,6 +722,7 @@ export class ToolManager {
     const client = this.mcpClients.get(serverId);
     if (client) {
       await client.disconnect();
+      this.removeApprovedMCPTools(serverId);
     }
   }
 
@@ -702,6 +731,7 @@ export class ToolManager {
     if (!client) throw new Error(`MCP server not found: ${serverId}`);
     await client.connect();
     await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-connect-command');
+    await this.syncApprovedMCPTools(serverId);
   }
 
   async listMCPCapabilities(): Promise<MCPCapabilityRecord[]> {
@@ -722,7 +752,7 @@ export class ToolManager {
     return catalog.list({
       serverId,
       kind,
-      states: ['stable', 'approved'],
+      states: ['approved'],
       loadDescriptors: true,
     });
   }
@@ -767,7 +797,10 @@ export class ToolManager {
     const catalog = this.mcpCatalogs.get(serverId);
     if (!catalog) throw new Error(`MCP server not found: ${serverId}`);
     const capability = await catalog.getCapability({ serverId, capabilityId, kind });
-    if (!capability || !['stable', 'approved'].includes(capability.driftState)) {
+    const approvalExpired =
+      capability?.approvalExpiresAt !== undefined &&
+      Date.parse(capability.approvalExpiresAt) <= Date.now();
+    if (!capability || capability.driftState !== 'approved' || approvalExpired) {
       throw Object.assign(new Error(`MCP ${kind} is unavailable or awaiting approval.`), {
         code: 'MCP_CAPABILITY_QUARANTINED',
       });
@@ -789,10 +822,12 @@ export class ToolManager {
     capabilityHash?: string;
     approvedBy: string;
     restrictions?: string[];
+    expiresAt?: string;
   }): Promise<void> {
     const catalog = this.mcpCatalogs.get(request.serverId);
     if (!catalog) throw new Error(`MCP server not found: ${request.serverId}`);
     await catalog.approveRevision(request);
+    await this.syncApprovedMCPTools(request.serverId);
   }
 
   async quarantineMCPCapability(request: {
@@ -804,6 +839,7 @@ export class ToolManager {
     const catalog = this.mcpCatalogs.get(request.serverId);
     if (!catalog) throw new Error(`MCP server not found: ${request.serverId}`);
     await catalog.quarantine(request);
+    await this.syncApprovedMCPTools(request.serverId);
   }
 
   hasMCPServer(serverId: string): boolean {
@@ -824,7 +860,7 @@ export class ToolManager {
       name: client.name,
       status: client.status,
       healthy: await client.healthCheck(),
-      toolCount: client.tools.length,
+      toolCount: this.mcpToolCount(serverId, client),
     };
   }
 
@@ -838,7 +874,12 @@ export class ToolManager {
       .map((client) => ({
         serverId: client.id,
         serverName: client.name,
-        tools: client.tools.map((tool) => this.normalizeMCPTool(client, tool)),
+        tools:
+          this.mcpServerModes.get(client.id) === 'fixture'
+            ? client.tools.map((tool) => this.normalizeMCPTool(client, tool))
+            : this.approvedMCPRegistry
+                .list()
+                .filter((spec) => spec.sourceRef?.serverId === client.id),
       }));
   }
 
@@ -847,7 +888,7 @@ export class ToolManager {
       id: client.id,
       name: client.name,
       status: client.status,
-      toolCount: client.tools.length,
+      toolCount: this.mcpToolCount(client.id, client),
     }));
   }
 
@@ -865,8 +906,28 @@ export class ToolManager {
     return normalizeMCPToolSpec(this.toMCPCapabilityDescriptor(client, tool));
   }
 
-  private findMCPToolByName(name: string): MCPToolResolution | null {
-    for (const client of this.mcpClients.values()) {
+  private findApprovedMCPTool(
+    name: string
+  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+    for (const spec of this.approvedMCPRegistry.list()) {
+      const candidateNames = new Set(
+        [spec.id, spec.name, spec.sourceRef?.capabilityId].filter(
+          (value): value is string => typeof value === 'string' && value.length > 0
+        )
+      );
+      if (!candidateNames.has(name)) continue;
+      const resolved = this.approvedMCPRegistry.resolve({
+        id: spec.id,
+        version: spec.version,
+        revision: spec.revision,
+      });
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+
+  private findFixtureMCPToolByName(name: string): MCPToolResolution | null {
+    for (const client of this.fixtureMCPClients()) {
       if (client.status !== 'connected') continue;
       for (const tool of client.tools) {
         const spec = this.normalizeMCPTool(client, tool);
@@ -877,6 +938,47 @@ export class ToolManager {
       }
     }
     return null;
+  }
+
+  private fixtureMCPClients(): MCPClient[] {
+    return Array.from(this.mcpClients.values()).filter(
+      (client) => this.mcpServerModes.get(client.id) === 'fixture'
+    );
+  }
+
+  private removeApprovedMCPTools(serverId: string): void {
+    for (const spec of this.approvedMCPRegistry.list()) {
+      if (spec.sourceRef?.serverId === serverId) this.approvedMCPRegistry.unregister(spec.id);
+    }
+  }
+
+  private async syncApprovedMCPTools(serverId: string): Promise<void> {
+    const catalog = this.mcpCatalogs.get(serverId);
+    if (!catalog) return;
+    this.removeApprovedMCPTools(serverId);
+    const approved = await catalog.list({
+      serverId,
+      kind: 'tool',
+      states: ['approved'],
+      loadDescriptors: true,
+    });
+    if (approved.length === 0) return;
+    await catalog.importTools(
+      this.approvedMCPRegistry,
+      approved.map((record) => ({
+        serverId: record.serverId,
+        capabilityId: record.remoteName,
+        capabilityHash: record.capabilityHash,
+        kind: 'tool' as const,
+      }))
+    );
+  }
+
+  private mcpToolCount(serverId: string, client: MCPClient): number {
+    if (this.mcpServerModes.get(serverId) === 'fixture') return client.tools.length;
+    return this.approvedMCPRegistry
+      .list()
+      .filter((spec) => spec.sourceRef?.serverId === serverId).length;
   }
 
   private toMCPCapabilityDescriptor(

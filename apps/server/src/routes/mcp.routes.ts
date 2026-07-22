@@ -129,6 +129,7 @@ router.post(
       restrictions: Array.isArray(req.body?.restrictions)
         ? req.body.restrictions.map(String)
         : undefined,
+      expiresAt: typeof req.body?.expiresAt === 'string' ? req.body.expiresAt : undefined,
     });
     res.json({ success: true, data: { status: 'approved' } });
   })

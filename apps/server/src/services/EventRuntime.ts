@@ -63,6 +63,7 @@ import {
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
+import { RedisToolContractSnapshotStore } from '@hypha/mcp';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
 import type { LoadedSkillContext } from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
@@ -521,9 +522,13 @@ class EventRuntimeService {
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
-    this.toolSnapshotStore = new FileToolContractSnapshotStore(
-      process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
-    );
+    const redis = getRedisClient();
+    this.toolSnapshotStore =
+      process.env.NODE_ENV === 'production' && redis
+        ? new RedisToolContractSnapshotStore(redis)
+        : new FileToolContractSnapshotStore(
+            process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
+          );
     const artifactPort = new ArtifactStoreToolPort(
       new FileArtifactStore({
         rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
@@ -533,7 +538,6 @@ class EventRuntimeService {
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
     const toolCacheConfig = toolResultCacheConfig();
-    const redis = getRedisClient();
     const toolResultCache =
       toolCacheConfig.store === 'memory'
         ? new InMemoryToolResultCache({
