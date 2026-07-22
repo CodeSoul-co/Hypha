@@ -204,6 +204,9 @@ class Application {
     // Recover persisted Tool invocations after their adapters are available.
     await this.eventRuntime.recoverToolInvocations();
 
+    // Rebuild safe Runtime state before accepting new Timer and Session command work.
+    await this.eventRuntime.startRuntimeRecoveryScheduler();
+
     // Resume persisted Timer Waits and Session commands only after side effects are reconciled.
     await this.eventRuntime.startRuntimeTimerScheduler();
     await this.eventRuntime.startSessionCommandScheduler();

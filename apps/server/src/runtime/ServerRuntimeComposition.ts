@@ -1,4 +1,11 @@
-import { DurableRuntimeTimerWorker, type EventStore } from '@hypha/core';
+import {
+  DurableRuntimeTimerWorker,
+  RuntimeRecoveryService,
+  type EventStore,
+  type RuntimeActivityReconciliationPort,
+  type RuntimeCancellationRecoveryPort,
+  type RuntimeRecoveryRequeuePort,
+} from '@hypha/core';
 import { FSMRuntime, type FSMProcessSpec } from '@hypha/fsm';
 import {
   EventFirstRuntime,
@@ -20,6 +27,9 @@ export interface ServerRuntimeCompositionOptions {
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
   executeState: FencedBoundedFSMDriverOptions['executeState'];
+  recoveryActivities: RuntimeActivityReconciliationPort;
+  recoveryCancellations: RuntimeCancellationRecoveryPort;
+  recoveryRequeue: RuntimeRecoveryRequeuePort;
   nextId?: FencedBoundedFSMDriverOptions['nextId'];
 }
 
@@ -48,6 +58,17 @@ export function createServerRuntimeComposition(
           projections,
           projectionStore,
           runLeases,
+          ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
+        }),
+      createRecoveryService: ({ events, projections, projectionStore, runLeases }) =>
+        new RuntimeRecoveryService({
+          events,
+          projections,
+          projectionStore,
+          runLeases,
+          activities: options.recoveryActivities,
+          cancellations: options.recoveryCancellations,
+          requeue: options.recoveryRequeue,
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
         }),
       createFSMDriver: ({ events, projections, projectionStore, runLeases, stateClaims }) =>

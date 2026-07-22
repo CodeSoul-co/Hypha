@@ -4,6 +4,7 @@ import type {
   ProjectionEngine,
   ProjectionStore,
   RunLeaseStore,
+  RuntimeRecoveryService,
   RuntimeCheckpointStore,
   RuntimeOrchestrationProjection,
   SessionQueue,
@@ -39,6 +40,7 @@ export interface RuntimeCompositionDependencies {
 export interface RuntimeComposition extends RuntimeCompositionDependencies {
   runManager: RunManager;
   timerWorker: DurableRuntimeTimerWorker;
+  recoveryService: RuntimeRecoveryService;
   fsmDriver: FencedBoundedFSMDriver;
   reactRunner: HarnessedReActFSMRunner;
   scopedReActRunners: ScopedReActRunnerFactory;
@@ -48,6 +50,7 @@ export interface RuntimeComposition extends RuntimeCompositionDependencies {
 export interface RuntimeCompositionFactories {
   createRunManager(input: { events: EventRuntime }): RunManager;
   createTimerWorker(input: RuntimeCompositionDependencies): DurableRuntimeTimerWorker;
+  createRecoveryService(input: RuntimeCompositionDependencies): RuntimeRecoveryService;
   createFSMDriver(
     input: RuntimeCompositionDependencies & { runManager: RunManager }
   ): FencedBoundedFSMDriver;
@@ -116,6 +119,10 @@ export class RuntimeCompositionRoot {
       'DurableRuntimeTimerWorker',
       factories.createTimerWorker(dependencies)
     );
+    const recoveryService = requiredComponent(
+      'RuntimeRecoveryService',
+      factories.createRecoveryService(dependencies)
+    );
     const fsmDriver = requiredComponent(
       'FencedBoundedFSMDriver',
       factories.createFSMDriver({ ...dependencies, runManager })
@@ -148,6 +155,7 @@ export class RuntimeCompositionRoot {
       ...dependencies,
       runManager,
       timerWorker,
+      recoveryService,
       fsmDriver,
       reactRunner,
       scopedReActRunners,

@@ -1,4 +1,10 @@
-import { DurableRuntimeTimerWorker, InMemoryEventStore, type EventRuntime } from '@hypha/core';
+import {
+  DurableRuntimeTimerWorker,
+  InMemoryEventStore,
+  RuntimeRecoveryService,
+  type EventRuntime,
+  type RuntimeCancelResult,
+} from '@hypha/core';
 import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
 import { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
 import type { InferenceProvider } from '@hypha/inference';
@@ -32,12 +38,26 @@ describe('createServerRuntimeComposition', () => {
       toolRunner: {} as ToolRunner,
       fsmSpec: defaultReActFSMProcessSpec,
       executeState: async () => ({ result: { kind: 'continued' } }),
+      recoveryActivities: {
+        reconcile: async (request) => ({
+          activityId: request.invocation.activityId,
+          status: 'unknown',
+        }),
+        retry: async () => {
+          throw new Error('not configured');
+        },
+      },
+      recoveryCancellations: {
+        cancel: async () => ({}) as RuntimeCancelResult,
+      },
+      recoveryRequeue: { requeue: async () => undefined },
     });
 
     expect(Object.isFrozen(composition)).toBe(true);
     expect(composition.events).toBe(canonicalEvents);
     expect(composition.runManager).toBeInstanceOf(RunManager);
     expect(composition.timerWorker).toBeInstanceOf(DurableRuntimeTimerWorker);
+    expect(composition.recoveryService).toBeInstanceOf(RuntimeRecoveryService);
     expect(composition.fsmDriver).toBeInstanceOf(FencedBoundedFSMDriver);
     expect(composition.reactRunner).toBeInstanceOf(HarnessedReActFSMRunner);
     expect(

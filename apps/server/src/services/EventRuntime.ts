@@ -30,6 +30,8 @@ import {
   type RecoveryKnowledgePort,
   type NormalizedRuntimeError,
   type RuntimeCancelResult,
+  type RuntimeActivityReconciliationPort,
+  type RuntimeRecoveryRequeuePort,
   type RuntimeJsonValue,
   type ListSessionCommandsRequest,
   type SessionCommandHandlerResult,
@@ -137,6 +139,10 @@ import { createRuntimeBackbone, type RuntimeBackbone } from '../runtime/RuntimeB
 import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
 import type { RuntimeComposition } from '../runtime/RuntimeCompositionRoot';
 import { createServerRuntimeComposition } from '../runtime/ServerRuntimeComposition';
+import {
+  ServerRuntimeRecoveryScheduler,
+  type ServerRuntimeRecoverySweepResult,
+} from '../runtime/ServerRuntimeRecoveryScheduler';
 import {
   ServerRuntimeTimerScheduler,
   type ServerRuntimeTimerSweepResult,
@@ -656,6 +662,7 @@ class EventRuntimeService {
   private sessionCommandArtifacts?: LocalFilesystemExecutionArtifactStore;
   private sessionCommands?: ServerSessionCommandRuntime<RuntimeSessionCommandPayloads>;
   private runtimeTimerScheduler?: ServerRuntimeTimerScheduler;
+  private runtimeRecoveryScheduler?: ServerRuntimeRecoveryScheduler;
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -762,6 +769,9 @@ class EventRuntimeService {
         toolRunner: this.toolRunner,
         fsmSpec: this.defaultFsm,
         executeState: (input) => this.transitionDispatcher.executeState(input),
+        recoveryActivities: this.runtimeRecoveryActivities(),
+        recoveryCancellations: this.runtimeCancellationService(),
+        recoveryRequeue: this.runtimeRecoveryRequeue(),
         nextId: (namespace) => `${namespace}:${generateId()}`,
       });
     }
@@ -787,6 +797,32 @@ class EventRuntimeService {
           }
         },
         onError: (error) => logger.error('Runtime Timer Scheduler sweep failed', error),
+      });
+    }
+    if (!this.runtimeRecoveryScheduler) {
+      this.runtimeRecoveryScheduler = new ServerRuntimeRecoveryScheduler({
+        service: this.canonicalRuntimeComposition().recoveryService,
+        ownerId: `${this.runtimeWorkerId}:recovery`,
+        leaseTtlMs: 30_000,
+        pageLimit: 100,
+        autoRecoverReasons: ['PROJECTION_BEHIND', 'CANCELLATION_INCOMPLETE'],
+        pollIntervalMs: 5_000,
+        errorBackoffMs: 10_000,
+        onSweep: (result) => {
+          if (result.attempted > 0 || result.failed > 0) {
+            logger.info('Runtime Recovery Supervisor completed a durable sweep', {
+              detected: result.detected,
+              attempted: result.attempted,
+              deferred: result.deferred,
+              failed: result.failed,
+              pages: result.pages,
+              checkedAt: result.checkedAt,
+            });
+          }
+        },
+        onCandidateError: (error, candidateId) =>
+          logger.error(`Runtime Recovery candidate failed: ${candidateId}`, error),
+        onError: (error) => logger.error('Runtime Recovery Scheduler scan failed', error),
       });
     }
     return backbone;
@@ -842,6 +878,23 @@ class EventRuntimeService {
   sweepRuntimeTimers(firedAt?: string): Promise<ServerRuntimeTimerSweepResult> {
     const scheduler = this.requireRuntimeTimerScheduler();
     return scheduler.sweepOnce(firedAt);
+  }
+
+  async startRuntimeRecoveryScheduler(): Promise<void> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const scheduler = this.requireRuntimeRecoveryScheduler();
+    if (!scheduler.isRunning()) {
+      await scheduler.sweepOnce();
+      scheduler.start();
+    }
+  }
+
+  isRuntimeRecoverySchedulerRunning(): boolean {
+    return this.runtimeRecoveryScheduler?.isRunning() ?? false;
+  }
+
+  sweepRuntimeRecovery(checkedAt?: string): Promise<ServerRuntimeRecoverySweepResult> {
+    return this.requireRuntimeRecoveryScheduler().sweepOnce(checkedAt);
   }
 
   async enqueueStartRun(
@@ -962,6 +1015,11 @@ class EventRuntimeService {
     await this.sessionCommandInitialization?.catch(() => undefined);
     const failures: unknown[] = [];
     try {
+      await this.runtimeRecoveryScheduler?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
       await this.runtimeTimerScheduler?.close();
     } catch (error) {
       failures.push(error);
@@ -982,6 +1040,7 @@ class EventRuntimeService {
       failures.push(error);
     }
     this.sessionCommands = undefined;
+    this.runtimeRecoveryScheduler = undefined;
     this.runtimeTimerScheduler = undefined;
     this.sessionCommandArtifacts = undefined;
     this.sessionCommandInitialization = undefined;
@@ -1063,6 +1122,13 @@ class EventRuntimeService {
       throw new Error('Runtime Timer Scheduler is not initialized');
     }
     return this.runtimeTimerScheduler;
+  }
+
+  private requireRuntimeRecoveryScheduler(): ServerRuntimeRecoveryScheduler {
+    if (!this.runtimeRecoveryScheduler) {
+      throw new Error('Runtime Recovery Scheduler is not initialized');
+    }
+    return this.runtimeRecoveryScheduler;
   }
 
   private async handleStartRunCommand(
@@ -3860,6 +3926,37 @@ class EventRuntimeService {
       nextId: (namespace) => `${namespace}:${generateId()}`,
     });
     return this.cancellationService;
+  }
+
+  private runtimeRecoveryActivities(): RuntimeActivityReconciliationPort {
+    return {
+      reconcile: async (request) => ({
+        activityId: request.invocation.activityId,
+        status: 'unknown',
+      }),
+      retry: async (request) => {
+        throw new FrameworkError({
+          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+          message: 'Runtime Activity recovery adapter is not available for automatic retry.',
+          context: {
+            activityId: request.invocation.activityId,
+            activityType: request.invocation.activityType,
+          },
+        });
+      },
+    };
+  }
+
+  private runtimeRecoveryRequeue(): RuntimeRecoveryRequeuePort {
+    return {
+      requeue: async (request) => {
+        throw new FrameworkError({
+          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+          message: 'Runtime Run recovery requeue requires a durable transition command.',
+          context: { runId: request.scope.runId, reason: request.reason },
+        });
+      },
+    };
   }
 
   private runtimeRunControlService(): RuntimeRunControlService {
