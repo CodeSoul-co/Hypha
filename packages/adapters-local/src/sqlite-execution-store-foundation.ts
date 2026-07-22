@@ -7,6 +7,8 @@ import type {
   ExecutionRecordCreateRequest,
   ExecutionRecordPage,
   ExecutionRecordQuery,
+  ExecutionIdempotencyQuery,
+  ExecutionIdempotencyResolution,
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseGuard,
   ExecutionLeaseReleaseRequest,
@@ -18,6 +20,8 @@ import {
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
   validateExecutionRecordQuery,
+  validateExecutionIdempotencyQuery,
+  validateExecutionIdempotencyResolution,
   validateExecutionLeaseAcquireRequest,
   validateExecutionLeaseReleaseRequest,
   validateExecutionLeaseRenewRequest,
@@ -171,12 +175,34 @@ export class SQLiteExecutionStoreFoundation {
           executionId: request.record.id,
         });
       }
+      const semanticKey = request.record.request.idempotencyKey;
+      const semanticFingerprint = request.record.idempotencyFingerprint;
+      if (semanticKey && semanticFingerprint) {
+        const existingRows = this.selectScopedIdempotencyRows({
+          tenantId: request.record.request.tenantId,
+          userId: request.record.request.userId,
+          workspaceId: request.record.request.workspaceId,
+          idempotencyKey: semanticKey,
+        });
+        const existing = uniqueIdempotencyRow(existingRows);
+        if (existing) {
+          if (String(existing.idempotency_fingerprint) === semanticFingerprint) {
+            return parseRecordRow(existing);
+          }
+          throw storeError(
+            'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+            'Execution idempotency key was reused with a different fingerprint.',
+            { executionId: String(existing.execution_id) }
+          );
+        }
+      }
       this.database
         .prepare(
           'INSERT INTO execution_records ' +
             '(execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, ' +
-            'provider_id, created_at, updated_at, lease_expires_at, record_json) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'provider_id, created_at, updated_at, execution_idempotency_key, ' +
+            'idempotency_fingerprint, lease_expires_at, record_json) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
         .run(
           request.record.id,
@@ -189,6 +215,8 @@ export class SQLiteExecutionStoreFoundation {
           request.record.providerId,
           request.record.createdAt,
           request.record.updatedAt,
+          request.record.request.idempotencyKey ?? null,
+          request.record.idempotencyFingerprint ?? null,
           request.record.lease?.expiresAt ?? null,
           recordJson
         );
@@ -239,6 +267,26 @@ export class SQLiteExecutionStoreFoundation {
     });
   }
 
+  async resolveIdempotency(
+    input: ExecutionIdempotencyQuery
+  ): Promise<ExecutionIdempotencyResolution> {
+    this.assertOpen();
+    const query = validateExecutionIdempotencyQuery(input);
+    return this.readOperation(() => {
+      const row = uniqueIdempotencyRow(this.selectScopedIdempotencyRows(query));
+      if (!row) return validateExecutionIdempotencyResolution({ status: 'miss' });
+      const record = parseRecordRow(row);
+      const existingFingerprint = String(row.idempotency_fingerprint);
+      return existingFingerprint === query.fingerprint
+        ? validateExecutionIdempotencyResolution({ status: 'match', record })
+        : validateExecutionIdempotencyResolution({
+            status: 'conflict',
+            recordId: record.id,
+            existingFingerprint,
+          });
+    });
+  }
+
   async compareAndSet(input: ExecutionRecordCompareAndSetRequest): Promise<ExecutionRecord> {
     this.assertOpen();
     const request = validateExecutionRecordCompareAndSetRequest(input);
@@ -274,6 +322,7 @@ export class SQLiteExecutionStoreFoundation {
         });
       }
       assertLeaseContinuity(current, request);
+      assertRecordIdentityContinuity(current, request.next);
 
       const fencingToken = lastFencingToken(row);
       const nextJson = this.replaceRecord(
@@ -620,6 +669,26 @@ export class SQLiteExecutionStoreFoundation {
       .get(operationId, idempotencyKey);
   }
 
+  private selectScopedIdempotencyRows(query: {
+    tenantId?: string;
+    userId: string;
+    workspaceId: string;
+    idempotencyKey: string;
+  }): Record<string, unknown>[] {
+    const tenantCondition = query.tenantId === undefined ? 'tenant_id IS NULL' : 'tenant_id = ?';
+    const parameters =
+      query.tenantId === undefined
+        ? [query.userId, query.workspaceId, query.idempotencyKey]
+        : [query.tenantId, query.userId, query.workspaceId, query.idempotencyKey];
+    return this.database
+      .prepare(
+        `SELECT ${SQLITE_EXECUTION_RECORD_COLUMNS} FROM execution_records ` +
+          `WHERE ${tenantCondition} AND user_id = ? AND workspace_id = ? ` +
+          'AND execution_idempotency_key = ? AND idempotency_fingerprint IS NOT NULL LIMIT 2'
+      )
+      .all(...parameters);
+  }
+
   private findMutationIdempotency(
     operationId: string,
     idempotencyKey: string
@@ -673,7 +742,8 @@ export class SQLiteExecutionStoreFoundation {
       .prepare(
         'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
           'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-          'lease_expires_at = ?, record_json = ?, last_fencing_token = ? ' +
+          'execution_idempotency_key = ?, idempotency_fingerprint = ?, lease_expires_at = ?, ' +
+          'record_json = ?, last_fencing_token = ? ' +
           'WHERE execution_id = ? AND revision = ? AND last_fencing_token = ?'
       )
       .run(
@@ -686,6 +756,8 @@ export class SQLiteExecutionStoreFoundation {
         next.providerId,
         next.createdAt,
         next.updatedAt,
+        next.request.idempotencyKey ?? null,
+        next.idempotencyFingerprint ?? null,
         next.lease?.expiresAt ?? null,
         nextJson,
         nextFencingToken,
@@ -831,6 +903,32 @@ function assertLeaseContinuity(
   }
 }
 
+function assertRecordIdentityContinuity(current: ExecutionRecord, next: ExecutionRecord): void {
+  if (
+    current.createdAt !== next.createdAt ||
+    current.idempotencyFingerprint !== next.idempotencyFingerprint ||
+    JSON.stringify(current.request) !== JSON.stringify(next.request)
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_CONFLICT',
+      'Execution request identity and idempotency evidence are immutable.',
+      { executionId: current.id }
+    );
+  }
+}
+
+function uniqueIdempotencyRow(
+  rows: Record<string, unknown>[]
+): Record<string, unknown> | undefined {
+  if (rows.length > 1) {
+    throw storeError(
+      'EXECUTION_STORE_CORRUPT',
+      'SQLite Execution store contains duplicate scoped idempotency records.'
+    );
+  }
+  return rows[0];
+}
+
 function assertLeaseGuard(
   lease: NonNullable<ExecutionRecord['lease']>,
   guard: ExecutionLeaseGuard,
@@ -874,6 +972,8 @@ function parseRecordRow(row: Record<string, unknown>): ExecutionRecord {
       record.providerId !== String(row.provider_id) ||
       record.createdAt !== String(row.created_at) ||
       record.updatedAt !== String(row.updated_at) ||
+      (record.request.idempotencyKey ?? null) !== nullableText(row.execution_idempotency_key) ||
+      (record.idempotencyFingerprint ?? null) !== nullableText(row.idempotency_fingerprint) ||
       (record.lease?.expiresAt ?? null) !== nullableText(row.lease_expires_at) ||
       (record.lease !== undefined && record.lease.fencingToken !== lastFencingToken)
     ) {

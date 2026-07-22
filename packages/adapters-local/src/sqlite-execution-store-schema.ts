@@ -5,7 +5,7 @@ export interface SQLiteExecutionStoreSchemaDatabase {
   };
 }
 
-export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 5;
+export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 6;
 
 export class SQLiteExecutionStoreSchemaVersionError extends Error {
   constructor(
@@ -38,6 +38,7 @@ export function migrateSQLiteExecutionStore(database: SQLiteExecutionStoreSchema
     if (current <= 2) database.exec(SCHEMA_V3_SQL);
     if (current <= 3) database.exec(SCHEMA_V4_SQL);
     if (current <= 4) database.exec(SCHEMA_V5_SQL);
+    if (current <= 5) database.exec(SCHEMA_V6_SQL);
     database.exec(`PRAGMA user_version = ${SQLITE_EXECUTION_STORE_SCHEMA_VERSION}`);
     database.exec('COMMIT');
   } catch (error) {
@@ -117,4 +118,17 @@ CREATE INDEX execution_records_lease_expiry
   ON execution_records (julianday(lease_expires_at), julianday(updated_at), execution_id);
 CREATE INDEX execution_records_updated_time
   ON execution_records (julianday(updated_at), execution_id);
+`;
+
+const SCHEMA_V6_SQL = `
+ALTER TABLE execution_records ADD COLUMN execution_idempotency_key TEXT;
+ALTER TABLE execution_records ADD COLUMN idempotency_fingerprint TEXT;
+UPDATE execution_records
+  SET execution_idempotency_key = json_extract(record_json, '$.request.idempotencyKey'),
+      idempotency_fingerprint = json_extract(record_json, '$.idempotencyFingerprint');
+CREATE UNIQUE INDEX execution_records_scoped_idempotency
+  ON execution_records (
+    COALESCE(tenant_id, ''), user_id, workspace_id, execution_idempotency_key
+  )
+  WHERE execution_idempotency_key IS NOT NULL AND idempotency_fingerprint IS NOT NULL;
 `;

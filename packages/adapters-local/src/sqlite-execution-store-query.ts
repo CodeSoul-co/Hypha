@@ -3,7 +3,8 @@ import type { ExecutionRecord, ExecutionRecordQuery } from '@hypha/core';
 
 export const SQLITE_EXECUTION_RECORD_COLUMNS =
   'execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, ' +
-  'provider_id, created_at, updated_at, lease_expires_at, record_json, last_fencing_token';
+  'provider_id, created_at, updated_at, execution_idempotency_key, idempotency_fingerprint, ' +
+  'lease_expires_at, record_json, last_fencing_token';
 
 interface ExecutionListCursor {
   version: 1;

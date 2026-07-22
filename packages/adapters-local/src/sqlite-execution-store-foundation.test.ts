@@ -50,7 +50,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
       status: 'healthy',
       checkedAt: now(),
       message: 'SQLite Execution store is available.',
-      details: { schemaVersion: 5 },
+      details: { schemaVersion: 6 },
     });
     await store.close();
     await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
@@ -196,6 +196,101 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await expect(store.list({ leaseExpiresBefore: '2026-07-16T00:00:30.000Z' })).resolves.toEqual({
       records: [],
     });
+    await store.close();
+  });
+
+  it('resolves scoped idempotency as miss, match, or conflict across restart', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const request = queuedCreateRequest('execution.idempotency.owner', {
+      tenantId: 'tenant.idempotency',
+      userId: 'user.idempotency',
+      workspaceId: 'workspace.idempotency',
+    });
+    request.record.request.idempotencyKey = 'command:idempotency:shared';
+    request.record.idempotencyFingerprint = 'sha256:fingerprint.owner';
+    const query = idempotencyQueryFor(request.record);
+
+    await expect(store.resolveIdempotency(query)).resolves.toEqual({ status: 'miss' });
+    const created = await store.create(request);
+    await expect(store.resolveIdempotency(query)).resolves.toEqual({
+      status: 'match',
+      record: created,
+    });
+    await store.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(
+      reopened.resolveIdempotency({ ...query, fingerprint: 'sha256:fingerprint.changed' })
+    ).resolves.toEqual({
+      status: 'conflict',
+      recordId: created.id,
+      existingFingerprint: created.idempotencyFingerprint,
+    });
+    for (const scope of [
+      { ...query, tenantId: 'tenant.other' },
+      { ...query, tenantId: undefined },
+      { ...query, userId: 'user.other' },
+      { ...query, workspaceId: 'workspace.other' },
+    ]) {
+      await expect(reopened.resolveIdempotency(scope)).resolves.toEqual({ status: 'miss' });
+    }
+    await reopened.close();
+  });
+
+  it('deduplicates semantic creates and rejects conflicting fingerprints atomically', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const firstRequest = queuedCreateRequest('execution.idempotency.first');
+    firstRequest.record.request.idempotencyKey = 'command:idempotency:deduplicate';
+    firstRequest.record.idempotencyFingerprint = 'sha256:fingerprint.same';
+    const first = await store.create(firstRequest);
+
+    const duplicate = queuedCreateRequest('execution.idempotency.duplicate');
+    duplicate.record.request.idempotencyKey = firstRequest.record.request.idempotencyKey;
+    duplicate.record.idempotencyFingerprint = firstRequest.record.idempotencyFingerprint;
+    await expect(store.create(duplicate)).resolves.toEqual(first);
+    await expect(store.get(duplicate.record.id)).resolves.toBeNull();
+
+    const conflict = queuedCreateRequest('execution.idempotency.conflict');
+    conflict.record.request.idempotencyKey = firstRequest.record.request.idempotencyKey;
+    conflict.record.idempotencyFingerprint = 'sha256:fingerprint.different';
+    await expect(store.create(conflict)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+      details: { executionId: first.id },
+    });
+    await expect(store.get(conflict.record.id)).resolves.toBeNull();
+
+    const untracked = queuedCreateRequest('execution.idempotency.untracked');
+    untracked.record.request.idempotencyKey = 'command:idempotency:untracked';
+    untracked.record.idempotencyFingerprint = undefined;
+    await store.create(untracked);
+    await expect(
+      store.resolveIdempotency({
+        ...idempotencyQueryFor(untracked.record),
+        fingerprint: 'sha256:fingerprint.query',
+      })
+    ).resolves.toEqual({ status: 'miss' });
+    await store.close();
+  });
+
+  it('prevents compare-and-set from moving owner scope or changing idempotency evidence', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const current = await store.create(createRequest());
+    const moved = compareAndSetRequest(0, 'starting', 'cas:move-owner', current);
+    moved.next.request.userId = 'user.moved';
+    moved.next.request.principal.userId = 'user.moved';
+    await expect(store.compareAndSet(moved)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+    });
+
+    const refingerprinted = compareAndSetRequest(0, 'starting', 'cas:refingerprint', current);
+    refingerprinted.next.idempotencyFingerprint = 'sha256:fingerprint.changed';
+    await expect(store.compareAndSet(refingerprinted)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+    });
+    await expect(store.get(current.id)).resolves.toEqual(current);
     await store.close();
   });
 
@@ -725,7 +820,11 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await expect(migrated.get(created.id)).resolves.toEqual(created);
     await expect(migrated.health()).resolves.toMatchObject({
       status: 'healthy',
-      details: { schemaVersion: 5 },
+      details: { schemaVersion: 6 },
+    });
+    await expect(migrated.resolveIdempotency(idempotencyQueryFor(created))).resolves.toMatchObject({
+      status: 'match',
+      record: { id: created.id },
     });
     await expect(
       migrated.compareAndSet(compareAndSetRequest(0, 'starting', 'cas:migrated'))
@@ -744,7 +843,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
     const filename = path.join(root, 'newer.sqlite');
     const database = openTestDatabase(filename);
-    database.exec('PRAGMA user_version = 6');
+    database.exec('PRAGMA user_version = 7');
     database.close();
     expect(
       () => new SQLiteExecutionStoreFoundation({ rootPath: root, filename: 'newer.sqlite' })
@@ -807,6 +906,16 @@ function acquireLeaseRequestFor(
     ownerId: `worker.${record.id}`,
     acquiredAt,
     idempotencyKey: `lease-acquire:${record.id}`,
+  };
+}
+
+function idempotencyQueryFor(record: ExecutionRecord) {
+  return {
+    tenantId: record.request.tenantId,
+    userId: record.request.userId,
+    workspaceId: record.request.workspaceId,
+    idempotencyKey: record.request.idempotencyKey!,
+    fingerprint: record.idempotencyFingerprint!,
   };
 }
 
@@ -891,7 +1000,8 @@ function replacePersistedRecord(filename: string, record: ExecutionRecord): void
     .prepare(
       'UPDATE execution_records SET revision = ?, status = ?, tenant_id = ?, user_id = ?, ' +
         'workspace_id = ?, run_id = ?, provider_id = ?, created_at = ?, updated_at = ?, ' +
-        'lease_expires_at = ?, record_json = ?, last_fencing_token = ? WHERE execution_id = ?'
+        'execution_idempotency_key = ?, idempotency_fingerprint = ?, lease_expires_at = ?, ' +
+        'record_json = ?, last_fencing_token = ? WHERE execution_id = ?'
     )
     .run(
       record.revision,
@@ -903,6 +1013,8 @@ function replacePersistedRecord(filename: string, record: ExecutionRecord): void
       record.providerId,
       record.createdAt,
       record.updatedAt,
+      record.request.idempotencyKey ?? null,
+      record.idempotencyFingerprint ?? null,
       record.lease?.expiresAt ?? null,
       JSON.stringify(record),
       record.lease?.fencingToken ?? 0,
