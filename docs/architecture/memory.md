@@ -81,8 +81,15 @@ Only searches with `updateAccessStats: false` are reusable; searches that may mu
 always reach the Memory provider. Add, update, and delete operations execute against the source
 provider first and then invalidate every cached query in the same scope. Cache Store timeouts,
 oversized records, and trace failures bypass by default, while a provider failure is never retried by
-the Cache adapter. `InMemoryMemorySearchCacheStore` supplies bounded local storage; shared providers
-implement the same `MemorySearchCacheStore` contract.
+the Cache adapter. Every scope has a monotonic cache revision. A successful mutation advances that
+revision before old keys are removed, so a search that overlaps the mutation cannot publish a stale
+result; one bounded retry recomputes against the new revision. Failed invalidation quarantines the
+scope locally and is retried before another lookup instead of serving the prior view.
+
+`InMemoryMemorySearchCacheStore` supplies bounded local storage.
+`RedisMemorySearchCacheStore` supplies key-bound, TTL-limited shared storage for local,
+self-hosted, or managed Redis. Both enforce the same record schema, hard scope, scope revision, size,
+and physical/logical key rules.
 
 ## Minimal Managed Provider
 

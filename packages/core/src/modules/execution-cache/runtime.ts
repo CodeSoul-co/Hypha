@@ -77,7 +77,7 @@ export class ExecutionResultCache {
 
       let record: ExecutionCacheRecord;
       try {
-        record = validateExecutionCacheRecord(rawRecord);
+        record = validateExecutionCacheRecord(rawRecord, this.maxEntryBytes);
       } catch {
         await this.safeDelete(identity.key);
         return this.miss(scope, 'corrupt', identity.key, 'execution.cache.invalidate');
@@ -178,7 +178,7 @@ export class ExecutionResultCache {
         await this.miss(scope, 'entry_oversized', identity.key, 'execution.cache.bypass');
         return false;
       }
-      const persisted = validateExecutionCacheRecord({ ...record, sizeBytes });
+      const persisted = validateExecutionCacheRecord({ ...record, sizeBytes }, this.maxEntryBytes);
       await this.storeOperation('set', this.options.store.set(identity.key, persisted));
       await this.emit({ type: 'execution.cache.write', key: identity.key, scope });
       return true;

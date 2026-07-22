@@ -445,7 +445,10 @@ scope-qualified search cache. Its identity includes principal roles/permission s
 semantics; `operationId` and trace metadata are excluded. It caches only searches that explicitly
 set `updateAccessStats: false`, validates returned records at runtime, bounds entry size and Store
 latency, coalesces only identical scoped reads, and invalidates the scope after every successful
-mutation. `InMemoryMemorySearchCacheStore` is the bounded local reference implementation.
+mutation. Monotonic scope revisions fence searches that overlap mutations; retries are bounded and
+failed invalidation quarantines that scope before another lookup. `InMemoryMemorySearchCacheStore`
+is the bounded local implementation and `RedisMemorySearchCacheStore` provides the same key-bound,
+TTL-limited contract for shared local, self-hosted, or managed Redis.
 
 `ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
 and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
@@ -596,6 +599,7 @@ same policy and trace path. See [Governed Memory](../architecture/memory.md).
 | `FileArtifactStore`              | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
 | `MockEmbeddingProvider`          | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
 | `InMemoryExecutionCacheStore`    | bounded memory          | Local `ExecutionCacheStore` with LRU-style eviction, byte limits, defensive copies, and strict physical/logical key binding.                                                                 |
+| `RedisExecutionCacheStore`       | Redis-compatible KV     | Shared local/self-hosted/managed Store with TTL, serialized-size limits, runtime validation, and physical/logical key binding.                                                               |
 | `NodeExecutionFingerprintHasher` | Node crypto             | SHA-256 implementation for canonical Execution command, validity, scope, and Result Cache keys.                                                                                              |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.

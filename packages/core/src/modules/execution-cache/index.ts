@@ -21,7 +21,7 @@ import {
   executionResourceUsageSchema,
 } from '../command-execution';
 
-const nonEmptyString = z.string().min(1);
+const nonEmptyString = z.string().min(1).max(16_384);
 const timestampSchema = z.string().datetime({ offset: true });
 const hashSchema = nonEmptyString.regex(
   /^[a-z0-9][a-z0-9+._-]*:[^\s]+$/iu,
@@ -142,7 +142,7 @@ export const executionCacheEntryProjectionSchema = z
     validityHash: hashSchema,
     validity: executionCacheValidityInputSchema,
     resultMetadata: executionCacheResultMetadataSchema,
-    artifacts: z.array(executionCacheArtifactReferenceSchema),
+    artifacts: z.array(executionCacheArtifactReferenceSchema).max(1_000),
   })
   .strict()
   .superRefine((value, context) => {
@@ -197,9 +197,14 @@ export const executionCacheRecordSchema = z
 const hashJsonSchema: JsonSchema = {
   type: 'string',
   minLength: 1,
+  maxLength: 16_384,
   pattern: '^[A-Za-z0-9][A-Za-z0-9+._-]*:[^\\s]+$',
 };
-const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
+const nonEmptyStringJsonSchema: JsonSchema = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 16_384,
+};
 const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
 
 export const executionCacheValidityInputJsonSchema: JsonSchema = {
@@ -323,6 +328,7 @@ export const executionCacheEntryProjectionJsonSchema: JsonSchema = {
     resultMetadata: executionCacheResultMetadataJsonSchema,
     artifacts: {
       type: 'array',
+      maxItems: 1000,
       items: executionCacheArtifactReferenceJsonSchema,
     },
   },
@@ -485,8 +491,25 @@ export function validateExecutionCacheScope(input: unknown): ExecutionCacheScope
   return executionCacheScopeSchema.parse(input);
 }
 
-export function validateExecutionCacheRecord(input: unknown): ExecutionCacheRecord {
-  return executionCacheRecordSchema.parse(input);
+export function validateExecutionCacheRecord(
+  input: unknown,
+  maxEntryBytes = 1024 * 1024
+): ExecutionCacheRecord {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(input);
+  } catch (error) {
+    throw new Error(
+      `Execution Cache record is not JSON-safe: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!serialized) throw new Error('Execution Cache record is empty.');
+  const limit = positiveInteger(maxEntryBytes, 'maxEntryBytes');
+  const actualBytes = Buffer.byteLength(serialized, 'utf8');
+  if (actualBytes > limit) {
+    throw new Error(`Execution Cache record is ${actualBytes} bytes; limit is ${limit} bytes.`);
+  }
+  return executionCacheRecordSchema.parse(JSON.parse(serialized));
 }
 
 export function canonicalizeExecutionFingerprintInput(
@@ -534,6 +557,13 @@ function canonicalizeJsonValue(value: unknown): unknown {
         .filter((key) => record[key] !== undefined)
         .map((key) => [key, canonicalizeJsonValue(record[key])])
     );
+  }
+  return value;
+}
+
+function positiveInteger(value: number, field: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive integer.`);
   }
   return value;
 }
