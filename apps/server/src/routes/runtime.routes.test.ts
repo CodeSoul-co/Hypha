@@ -8,7 +8,7 @@ jest.mock('../services/EventRuntime', () => ({
   getEventRuntime: jest.fn(),
 }));
 
-describe('runtime run authorization', () => {
+describe('runtime authorization', () => {
   const ownerId = 'runtime-owner';
   const run = { id: 'run-owned', userId: ownerId, sessionId: 'session-1', status: 'running' };
   const runtime = {
@@ -19,6 +19,8 @@ describe('runtime run authorization', () => {
     projectRegression: jest.fn(),
     listSkillHumanReviews: jest.fn(),
     decideSkillHumanReview: jest.fn(),
+    enqueueStartRun: jest.fn(),
+    listSessionCommands: jest.fn(),
   };
   const app = express();
   app.use(express.json());
@@ -55,6 +57,96 @@ describe('runtime run authorization', () => {
       taskId: 'skill-review-1',
       status: 'approved',
     });
+    runtime.enqueueStartRun.mockResolvedValue({
+      id: 'session-command-1',
+      commandType: 'start_run',
+      idempotencyKey: 'request-1',
+      userId: ownerId,
+      sessionId: 'session-1',
+      targetRunId: 'run-1',
+      enqueueSequence: 4,
+      priority: 50,
+      attempts: 0,
+      maxAttempts: 5,
+      payloadRef: 'artifact://session-command-1',
+      payloadHash: `sha256:${'a'.repeat(64)}`,
+      claimedBy: 'runtime-worker',
+      leaseExpiresAt: '2026-07-22T08:01:00.000Z',
+      status: 'queued',
+      createdAt: '2026-07-22T08:00:00.000Z',
+      availableAt: '2026-07-22T08:00:00.000Z',
+    });
+    runtime.listSessionCommands.mockResolvedValue([]);
+  });
+
+  it('accepts a durable start_run command in the authenticated Session scope', async () => {
+    const response = await request(app)
+      .post('/runtime/sessions/session-1/commands/start-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', ' request-1 ')
+      .send({ input: { task: 'test' }, agentId: 'agent-1' })
+      .expect(202);
+
+    expect(runtime.enqueueStartRun).toHaveBeenCalledWith(
+      {
+        input: { task: 'test' },
+        agentId: 'agent-1',
+        userId: ownerId,
+        sessionId: 'session-1',
+      },
+      'request-1'
+    );
+    expect(response.body.data).toMatchObject({
+      id: 'session-command-1',
+      enqueueSequence: 4,
+      status: 'queued',
+    });
+    expect(response.body.data).not.toHaveProperty('payloadRef');
+    expect(response.body.data).not.toHaveProperty('payloadHash');
+    expect(response.body.data).not.toHaveProperty('claimedBy');
+    expect(response.body.data).not.toHaveProperty('leaseExpiresAt');
+  });
+
+  it('rejects a start_run command without an idempotency key or with ownership fields', async () => {
+    await request(app)
+      .post('/runtime/sessions/session-1/commands/start-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ input: { task: 'test' } })
+      .expect(400);
+
+    const response = await request(app)
+      .post('/runtime/sessions/session-1/commands/start-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-1')
+      .send({ input: { task: 'test' }, userId: 'runtime-foreign' })
+      .expect(400);
+
+    expect(response.body.error.code).toBe('INVALID_SESSION_COMMAND');
+    expect(runtime.enqueueStartRun).not.toHaveBeenCalled();
+  });
+
+  it('lists commands only in the authenticated Session scope with validated pagination', async () => {
+    await request(app)
+      .get('/runtime/sessions/session-1/commands')
+      .query({ status: 'queued,failed', fromSequence: '4', limit: '25' })
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+
+    expect(runtime.listSessionCommands).toHaveBeenCalledWith(
+      { userId: ownerId, sessionId: 'session-1' },
+      { statuses: ['queued', 'failed'], fromSequence: 4, limit: 25 }
+    );
+  });
+
+  it('rejects unsupported command query values before reading the queue', async () => {
+    const response = await request(app)
+      .get('/runtime/sessions/session-1/commands')
+      .query({ status: 'unknown', limit: '1001' })
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(400);
+
+    expect(response.body.error.code).toBe('INVALID_SESSION_COMMAND');
+    expect(runtime.listSessionCommands).not.toHaveBeenCalled();
   });
 
   it('returns an owned run and its events', async () => {

@@ -30,6 +30,7 @@ import {
   type NormalizedRuntimeError,
   type RuntimeCancelResult,
   type RuntimeJsonValue,
+  type ListSessionCommandsRequest,
   type SessionCommandHandlerResult,
   type SessionCommandRecord,
   type SessionQueueScope,
@@ -793,9 +794,12 @@ class EventRuntimeService {
     });
   }
 
-  async listSessionCommands(scope: SessionQueueScope): Promise<SessionCommandRecord[]> {
+  async listSessionCommands(
+    scope: SessionQueueScope,
+    options: Omit<ListSessionCommandsRequest, 'scope'> = {}
+  ): Promise<SessionCommandRecord[]> {
     if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
-    return this.canonicalRuntime().sessionQueue.list({ scope });
+    return this.canonicalRuntime().sessionQueue.list({ scope, ...options });
   }
 
   async drainSessionCommands(scope: SessionQueueScope): Promise<void> {
