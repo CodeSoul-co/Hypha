@@ -238,8 +238,18 @@ export interface StartRunInput {
 
 type StartRunCommandPayload = Omit<StartRunInput, 'userId' | 'sessionId'>;
 
+export interface CancelRunCommandInput {
+  userId: string;
+  sessionId: string;
+  runId: string;
+  reason?: string;
+}
+
+type CancelRunCommandPayload = Pick<CancelRunCommandInput, 'reason'>;
+
 interface RuntimeSessionCommandPayloads extends ServerSessionCommandPayloads {
   start_run: StartRunCommandPayload;
+  cancel: CancelRunCommandPayload;
 }
 
 export interface ChatInferenceInput {
@@ -794,6 +804,38 @@ class EventRuntimeService {
     });
   }
 
+  async enqueueCancelRun(
+    input: CancelRunCommandInput,
+    idempotencyKey: string
+  ): Promise<SessionCommandRecord> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const normalizedKey = idempotencyKey.trim();
+    if (!normalizedKey) invalidRuntimeInput('idempotencyKey must be non-empty');
+    const run = await this.requireOwnedRunScope(input.runId, input.userId);
+    if (run.clientSessionId !== input.sessionId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Runtime run was not found for the authenticated Session scope.',
+        context: { runId: input.runId },
+      });
+    }
+    const digest = hashCanonicalJson({
+      commandType: 'cancel',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      idempotencyKey: normalizedKey,
+    }).slice('sha256:'.length);
+    return this.requireSessionCommands().enqueue({
+      id: `session-command:${digest}`,
+      commandType: 'cancel',
+      idempotencyKey: normalizedKey,
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetRunId: input.runId,
+      payload: input.reason === undefined ? {} : { reason: input.reason },
+    });
+  }
+
   async listSessionCommands(
     scope: SessionQueueScope,
     options: Omit<ListSessionCommandsRequest, 'scope'> = {}
@@ -876,6 +918,10 @@ class EventRuntimeService {
             decode: decodeStartRunCommandPayload,
             handle: ({ command, payload }) => this.handleStartRunCommand(command, payload),
           },
+          cancel: {
+            decode: decodeCancelRunCommandPayload,
+            handle: ({ command, payload }) => this.handleCancelRunCommand(command, payload),
+          },
         },
         classifyFailure: classifySessionCommandFailure,
         onError: (error) => logger.error('Session Command Scheduler polling failed', error),
@@ -903,6 +949,31 @@ class EventRuntimeService {
       command.targetRunId
     );
     return { disposition: 'applied', resultRunId: run.runId };
+  }
+
+  private async handleCancelRunCommand(
+    command: Readonly<SessionCommandRecord>,
+    payload: CancelRunCommandPayload
+  ): Promise<SessionCommandHandlerResult> {
+    if (!command.targetRunId) invalidRuntimeInput('cancel command requires targetRunId');
+    const result = await this.cancelOwnedRun({
+      runId: command.targetRunId,
+      userId: command.userId,
+      reason: payload.reason,
+      idempotencyKey: command.id,
+    });
+    if (!result) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Runtime run was not found for the authenticated principal.',
+        context: { runId: command.targetRunId },
+      });
+    }
+    return {
+      disposition: 'applied',
+      resultRunId: command.targetRunId,
+      resultEventIds: result.eventIds,
+    };
   }
 
   private canonicalEventStore(): DurableEventStoreBridge {
@@ -2643,9 +2714,24 @@ class EventRuntimeService {
   }): Promise<RuntimeCancelResult | null> {
     const execution = await this.projectOwnedWorkflowExecution(input.executionId, input.userId);
     if (!execution) return null;
-    const context = await this.requireRun(execution.runId);
-    const commandId = input.idempotencyKey ?? `workflow-cancel:${execution.runId}`;
-    const priorRequest = (await this.events.list({ runId: execution.runId })).find(
+    return this.cancelOwnedRun({
+      runId: execution.runId,
+      userId: input.userId,
+      reason: input.reason,
+      idempotencyKey: input.idempotencyKey ?? `workflow-cancel:${execution.runId}`,
+    });
+  }
+
+  async cancelOwnedRun(input: {
+    runId: string;
+    userId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  }): Promise<RuntimeCancelResult | null> {
+    const context = await this.findRun(input.runId);
+    if (!context || context.userId !== input.userId) return null;
+    const commandId = input.idempotencyKey ?? `run-cancel:${input.runId}`;
+    const priorRequest = (await this.events.list({ runId: input.runId })).find(
       (event) =>
         event.type === 'run.cancel.requested' &&
         stringValue(asRecord(event.payload)?.commandId) === commandId
@@ -2657,7 +2743,7 @@ class EventRuntimeService {
       scope: {
         userId: input.userId,
         sessionId: context.sessionId,
-        runId: execution.runId,
+        runId: input.runId,
       },
       principal: {
         principalId: input.userId,
@@ -2665,9 +2751,9 @@ class EventRuntimeService {
         userId: input.userId,
         permissionScopes: ['runtime.run.cancel'],
       },
-      ownerId: 'server.workflow-cancellation',
+      ownerId: 'server.runtime-cancellation',
       leaseTtlMs: 30_000,
-      reason: input.reason?.trim() || 'Workflow execution cancelled by owner.',
+      reason: input.reason?.trim() || 'Runtime run cancelled by owner.',
       policy: {
         propagation: 'all_descendants',
         cancelRunningActivities: true,
@@ -2838,14 +2924,18 @@ class EventRuntimeService {
   }
 
   async requireOwnedRunScope(runId: string, userId: string): Promise<OwnedRunScope> {
+    const owned = await this.findOwnedRunScope(runId, userId);
+    if (owned) return owned;
+    throw new FrameworkError({
+      code: 'RUNTIME_RUN_NOT_FOUND',
+      message: 'Runtime run was not found for the authenticated principal.',
+      context: { runId },
+    });
+  }
+
+  async findOwnedRunScope(runId: string, userId: string): Promise<OwnedRunScope | null> {
     const run = await this.findRun(runId);
-    if (!run || run.userId !== userId) {
-      throw new FrameworkError({
-        code: 'RUNTIME_RUN_NOT_FOUND',
-        message: 'Runtime run was not found for the authenticated principal.',
-        context: { runId },
-      });
-    }
+    if (!run || run.userId !== userId) return null;
     return {
       runId: run.runId,
       userId: run.userId,
@@ -4146,6 +4236,17 @@ function decodeStartRunCommandPayload(payload: unknown): StartRunCommandPayload 
     decoded.metadata = metadata;
   }
   return decoded;
+}
+
+function decodeCancelRunCommandPayload(payload: unknown): CancelRunCommandPayload {
+  const record = asRecord(payload);
+  if (!record) invalidRuntimeInput('cancel payload must be an object');
+  const unexpected = Object.keys(record).find((key) => key !== 'reason');
+  if (unexpected) invalidRuntimeInput(`cancel payload contains an unknown field: ${unexpected}`);
+  if (!('reason' in record)) return {};
+  const reason = stringValue(record.reason);
+  if (!reason) invalidRuntimeInput('cancel reason must be a non-empty string');
+  return { reason };
 }
 
 function decodeSpecRef(value: unknown, label: string): SpecRef {

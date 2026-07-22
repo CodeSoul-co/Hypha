@@ -25,7 +25,8 @@ describe('workflow execution authorization', () => {
   };
   const runtime = {
     projectOwnedWorkflowExecution: jest.fn(),
-    cancelOwnedWorkflowExecution: jest.fn(),
+    requireOwnedRunScope: jest.fn(),
+    enqueueCancelRun: jest.fn(),
   };
   const app = express();
   app.use(express.json());
@@ -47,12 +48,17 @@ describe('workflow execution authorization', () => {
     runtime.projectOwnedWorkflowExecution.mockImplementation(
       async (_executionId: string, userId: string) => (userId === ownerId ? execution : null)
     );
-    runtime.cancelOwnedWorkflowExecution.mockImplementation(
-      async ({ userId }: { userId: string }) =>
-        userId === ownerId
-          ? { disposition: 'applied', projection: { runStatus: 'cancelled' } }
-          : null
-    );
+    runtime.requireOwnedRunScope.mockResolvedValue({
+      runId: execution.runId,
+      userId: ownerId,
+      sessionId: 'runtime-session-1',
+      clientSessionId: 'workflow-session-1',
+    });
+    runtime.enqueueCancelRun.mockResolvedValue({
+      id: 'session-command-cancel-1',
+      enqueueSequence: 3,
+      status: 'queued',
+    });
   });
 
   it('allows the owner to read and cancel an execution', async () => {
@@ -63,14 +69,23 @@ describe('workflow execution authorization', () => {
     await request(app)
       .post(`/workflows/executions/${execution.executionId}/cancel`)
       .set('Authorization', `Bearer ${ownerToken}`)
-      .expect(200);
+      .set('Idempotency-Key', 'workflow-cancel-request-1')
+      .send({ reason: 'Stop workflow' })
+      .expect(202);
 
     expect(runtime.projectOwnedWorkflowExecution).toHaveBeenCalledWith(
       execution.executionId,
       ownerId
     );
-    expect(runtime.cancelOwnedWorkflowExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ executionId: execution.executionId, userId: ownerId })
+    expect(runtime.requireOwnedRunScope).toHaveBeenCalledWith(execution.runId, ownerId);
+    expect(runtime.enqueueCancelRun).toHaveBeenCalledWith(
+      {
+        userId: ownerId,
+        sessionId: 'workflow-session-1',
+        runId: execution.runId,
+        reason: 'Stop workflow',
+      },
+      'workflow-cancel-request-1'
     );
   });
 
@@ -84,11 +99,17 @@ describe('workflow execution authorization', () => {
       .set('Authorization', `Bearer ${foreignToken}`)
       .expect(404);
 
-    expect(runtime.cancelOwnedWorkflowExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionId: execution.executionId,
-        userId: 'workflow-foreign',
-      })
-    );
+    expect(runtime.enqueueCancelRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty cancellation reason before enqueueing', async () => {
+    const response = await request(app)
+      .post(`/workflows/executions/${execution.executionId}/cancel`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ reason: '   ' })
+      .expect(400);
+
+    expect(response.body.error.code).toBe('INVALID_SESSION_COMMAND');
+    expect(runtime.enqueueCancelRun).not.toHaveBeenCalled();
   });
 });

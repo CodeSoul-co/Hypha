@@ -112,4 +112,37 @@ describe('EventRuntime canonical transitions', () => {
       status: 'running',
     });
   });
+
+  it('cancels an owned Run through a durable Session command exactly once', async () => {
+    if (!runtime.isSessionCommandSchedulerRunning()) await runtime.startSessionCommandScheduler();
+    const input = {
+      userId: 'user.cancel-command',
+      sessionId: 'session.cancel-command',
+    };
+    const run = await runtime.startRun({ ...input, input: { task: 'cancel-me' } });
+    const first = await runtime.enqueueCancelRun(
+      { ...input, runId: run.runId, reason: 'No longer required' },
+      'request.cancel.1'
+    );
+    const reused = await runtime.enqueueCancelRun(
+      { ...input, runId: run.runId, reason: 'No longer required' },
+      'request.cancel.1'
+    );
+    expect(reused).toMatchObject({ id: first.id, status: 'reused' });
+
+    const scope = { userId: input.userId, sessionId: input.sessionId };
+    await runtime.drainSessionCommands(scope);
+    const commands = await runtime.listSessionCommands(scope);
+    expect(commands).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        status: 'applied',
+        attempts: 1,
+        resultRunId: run.runId,
+      }),
+    ]);
+    expect(Array.isArray(commands[0]?.resultEventIds)).toBe(true);
+    expect(commands[0]?.resultEventIds?.length).toBeGreaterThan(0);
+    await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'cancelled' });
+  });
 });

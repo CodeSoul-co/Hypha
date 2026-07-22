@@ -33,6 +33,13 @@ const startRunCommandBodySchema = z
   })
   .strict();
 
+const cancelRunCommandBodySchema = z
+  .object({
+    runId: z.string().trim().min(1),
+    reason: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
 const sessionCommandListQuerySchema = z
   .object({
     status: z.string().trim().min(1).optional(),
@@ -47,13 +54,8 @@ router.post(
     const userId = authenticatedUserId(req);
     if (!userId) return unauthorized(res);
 
-    const idempotencyKey = req.get('Idempotency-Key')?.trim();
-    if (!idempotencyKey || idempotencyKey.length > 256) {
-      return invalidSessionCommand(
-        res,
-        'Idempotency-Key header must contain between 1 and 256 characters'
-      );
-    }
+    const idempotencyKey = requireIdempotencyKey(req, res);
+    if (!idempotencyKey) return;
 
     const parsed = startRunCommandBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -70,6 +72,35 @@ router.post(
         ...payload,
         userId,
         sessionId: req.params.sessionId,
+      },
+      idempotencyKey
+    );
+    res.status(HTTP_STATUS.ACCEPTED).json({ success: true, data: publicSessionCommand(command) });
+  })
+);
+
+router.post(
+  '/sessions/:sessionId/commands/cancel-run',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = authenticatedUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const idempotencyKey = requireIdempotencyKey(req, res);
+    if (!idempotencyKey) return;
+    const parsed = cancelRunCommandBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(res, 'cancel command body is invalid', parsed.error.flatten());
+    }
+
+    const runtime = getEventRuntime();
+    const run = await runtime.findOwnedRunScope(parsed.data.runId, userId);
+    if (!run || run.clientSessionId !== req.params.sessionId) return runNotFound(res);
+    const command = await runtime.enqueueCancelRun(
+      {
+        userId,
+        sessionId: req.params.sessionId,
+        runId: parsed.data.runId,
+        reason: parsed.data.reason,
       },
       idempotencyKey
     );
@@ -286,6 +317,22 @@ function invalidSessionCommand(res: Response, message: string, details?: unknown
       message,
       ...(details === undefined ? {} : { details }),
     },
+  });
+}
+
+function requireIdempotencyKey(req: Request, res: Response): string | undefined {
+  const idempotencyKey = req.get('Idempotency-Key')?.trim();
+  if (!idempotencyKey || idempotencyKey.length > 256) {
+    invalidSessionCommand(res, 'Idempotency-Key header must contain between 1 and 256 characters');
+    return undefined;
+  }
+  return idempotencyKey;
+}
+
+function runNotFound(res: Response): Response {
+  return res.status(HTTP_STATUS.NOT_FOUND).json({
+    success: false,
+    error: { code: 'RUN_NOT_FOUND', message: 'Run not found' },
   });
 }
 

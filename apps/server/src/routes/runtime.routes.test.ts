@@ -10,9 +10,16 @@ jest.mock('../services/EventRuntime', () => ({
 
 describe('runtime authorization', () => {
   const ownerId = 'runtime-owner';
-  const run = { id: 'run-owned', userId: ownerId, sessionId: 'session-1', status: 'running' };
+  const run = {
+    id: 'run-owned',
+    userId: ownerId,
+    sessionId: 'runtime-session-1',
+    clientSessionId: 'session-1',
+    status: 'running',
+  };
   const runtime = {
     projectOwnedRun: jest.fn(),
+    findOwnedRunScope: jest.fn(),
     listEvents: jest.fn(),
     projectReplay: jest.fn(),
     projectAudit: jest.fn(),
@@ -20,6 +27,7 @@ describe('runtime authorization', () => {
     listSkillHumanReviews: jest.fn(),
     decideSkillHumanReview: jest.fn(),
     enqueueStartRun: jest.fn(),
+    enqueueCancelRun: jest.fn(),
     listSessionCommands: jest.fn(),
   };
   const app = express();
@@ -46,6 +54,9 @@ describe('runtime authorization', () => {
     jest.clearAllMocks();
     (getEventRuntime as jest.Mock).mockReturnValue(runtime);
     runtime.projectOwnedRun.mockImplementation(async (_runId: string, userId: string) =>
+      userId === ownerId ? run : null
+    );
+    runtime.findOwnedRunScope.mockImplementation(async (_runId: string, userId: string) =>
       userId === ownerId ? run : null
     );
     runtime.listEvents.mockResolvedValue([{ id: 'event-1' }]);
@@ -77,6 +88,23 @@ describe('runtime authorization', () => {
       availableAt: '2026-07-22T08:00:00.000Z',
     });
     runtime.listSessionCommands.mockResolvedValue([]);
+    runtime.enqueueCancelRun.mockResolvedValue({
+      id: 'session-command-cancel-1',
+      commandType: 'cancel',
+      idempotencyKey: 'request-cancel-1',
+      userId: ownerId,
+      sessionId: 'session-1',
+      targetRunId: run.id,
+      enqueueSequence: 5,
+      priority: 50,
+      attempts: 0,
+      maxAttempts: 5,
+      payloadRef: 'artifact://session-command-cancel-1',
+      payloadHash: `sha256:${'b'.repeat(64)}`,
+      status: 'queued',
+      createdAt: '2026-07-22T08:00:00.000Z',
+      availableAt: '2026-07-22T08:00:00.000Z',
+    });
   });
 
   it('accepts a durable start_run command in the authenticated Session scope', async () => {
@@ -123,6 +151,44 @@ describe('runtime authorization', () => {
 
     expect(response.body.error.code).toBe('INVALID_SESSION_COMMAND');
     expect(runtime.enqueueStartRun).not.toHaveBeenCalled();
+  });
+
+  it('accepts cancellation only for a Run in the authenticated Session scope', async () => {
+    const response = await request(app)
+      .post('/runtime/sessions/session-1/commands/cancel-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-cancel-1')
+      .send({ runId: run.id, reason: 'Stop requested' })
+      .expect(202);
+
+    expect(runtime.findOwnedRunScope).toHaveBeenCalledWith(run.id, ownerId);
+    expect(runtime.enqueueCancelRun).toHaveBeenCalledWith(
+      {
+        userId: ownerId,
+        sessionId: 'session-1',
+        runId: run.id,
+        reason: 'Stop requested',
+      },
+      'request-cancel-1'
+    );
+    expect(response.body.data).toMatchObject({
+      id: 'session-command-cancel-1',
+      commandType: 'cancel',
+      status: 'queued',
+    });
+    expect(response.body.data).not.toHaveProperty('payloadRef');
+  });
+
+  it('hides a Run when the cancellation Session scope does not match', async () => {
+    const response = await request(app)
+      .post('/runtime/sessions/session-other/commands/cancel-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-cancel-1')
+      .send({ runId: run.id })
+      .expect(404);
+
+    expect(response.body.error.code).toBe('RUN_NOT_FOUND');
+    expect(runtime.enqueueCancelRun).not.toHaveBeenCalled();
   });
 
   it('lists commands only in the authenticated Session scope with validated pagination', async () => {
