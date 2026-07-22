@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { FrameworkError } from '@hypha/core';
-import type { ToolAdapter, ToolAdapterCapabilities, ToolSpec } from './index';
+import type {
+  MCPToolInvocationPort,
+  ToolAdapter,
+  ToolAdapterCapabilities,
+  ToolHandler,
+  ToolSpec,
+} from './index';
 
 export const toolAdapterKinds = [
   'local_function',
@@ -22,6 +28,7 @@ export interface ToolSpecReference {
 export interface ToolAdapterProfile {
   id: string;
   kind: ToolAdapterKind;
+  required?: boolean;
   toolSpecRef: ToolSpecReference;
   endpoint?: string;
   credentialRef?: string;
@@ -32,6 +39,7 @@ export interface ToolAdapterProfile {
 export const toolAdapterProfileSchema = z.object({
   id: z.string().min(1),
   kind: z.enum(toolAdapterKinds),
+  required: z.boolean().default(true),
   toolSpecRef: z.object({
     id: z.string().min(1),
     version: z.string().min(1).optional(),
@@ -43,7 +51,7 @@ export const toolAdapterProfileSchema = z.object({
     .array(z.enum(['execute', 'cancel', 'health', 'close', 'streaming']))
     .optional(),
   config: z.record(z.unknown()).optional(),
-});
+}).strict();
 
 export interface ToolSecretResolver {
   resolve(reference: string): Promise<string | null>;
@@ -155,6 +163,15 @@ export class ToolAdapterFactoryRegistry {
         );
       }
     }
+    const health = await adapter.health();
+    if (health.status !== 'healthy') {
+      await adapter.close?.().catch(() => undefined);
+      throw factoryError(
+        'TOOL_ADAPTER_HEALTH_CHECK_FAILED',
+        `Adapter ${profile.id} failed its startup health probe.`,
+        { profileId: profile.id, health }
+      );
+    }
     return { profile, toolSpec, adapter };
   }
 
@@ -176,6 +193,106 @@ export class ToolAdapterFactoryRegistry {
       );
     }
   }
+}
+
+export interface ConcreteToolAdapterFactoryDependencies {
+  localFunctions?: Readonly<Record<string, ToolHandler>>;
+  plugins?: Readonly<Record<string, ToolHandler>>;
+  mcpPort?: MCPToolInvocationPort;
+  createExecutionAdapter?(input: ToolAdapterFactoryInput): Promise<ToolAdapter>;
+  fetch?: typeof fetch;
+}
+
+/** Registers the complete declarative factory surface used by server composition. */
+export function registerConcreteToolAdapterFactories(
+  registry: ToolAdapterFactoryRegistry,
+  dependencies: ConcreteToolAdapterFactoryDependencies = {}
+): void {
+  registry.register({
+    kind: 'local_function',
+    create: async (input) => {
+      const handler = dependencies.localFunctions?.[input.toolSpec.id];
+      if (!handler) throw bindingUnavailable(input.profile, 'local function');
+      const { LocalFunctionToolAdapter } = await import('./index');
+      return new LocalFunctionToolAdapter(`profile:${input.profile.id}`, handler);
+    },
+  });
+  registry.register({
+    kind: 'http',
+    create: async (input) => {
+      if (!input.profile.endpoint) {
+        throw factoryError('TOOL_ADAPTER_PROFILE_INVALID', 'HTTP profiles require endpoint.', {
+          profileId: input.profile.id,
+        });
+      }
+      const credential = await input.resolveCredential();
+      const { HttpToolAdapter } = await import('./index');
+      return new HttpToolAdapter(`profile:${input.profile.id}`, {
+        endpoint: input.profile.endpoint,
+        ...(credential ? { headers: { authorization: `Bearer ${credential}` } } : {}),
+        fetch: dependencies.fetch,
+      });
+    },
+  });
+  registry.register({
+    kind: 'plugin',
+    create: async (input) => {
+      const pluginId = stringConfig(input.profile, 'pluginId') ?? input.toolSpec.sourceRef?.pluginId;
+      const handler = pluginId ? dependencies.plugins?.[pluginId] : undefined;
+      if (!handler) throw bindingUnavailable(input.profile, 'plugin');
+      const { PluginToolAdapter } = await import('./index');
+      return new PluginToolAdapter(`profile:${input.profile.id}`, handler);
+    },
+  });
+  for (const kind of ['mcp_stdio', 'mcp_streamable_http'] as const) {
+    registry.register({
+      kind,
+      create: async (input) => {
+        if (!dependencies.mcpPort) throw bindingUnavailable(input.profile, 'MCP gateway');
+        const serverId =
+          stringConfig(input.profile, 'serverId') ?? input.toolSpec.sourceRef?.mcpServerId;
+        const capabilityId =
+          stringConfig(input.profile, 'capabilityId') ??
+          input.toolSpec.sourceRef?.mcpCapabilityId;
+        if (!serverId || !capabilityId) {
+          throw factoryError(
+            'TOOL_ADAPTER_PROFILE_INVALID',
+            'MCP profiles require pinned serverId and capabilityId bindings.',
+            { profileId: input.profile.id }
+          );
+        }
+        const { MCPToolAdapter } = await import('./index');
+        return new MCPToolAdapter(
+          `profile:${input.profile.id}`,
+          serverId,
+          capabilityId,
+          dependencies.mcpPort
+        );
+      },
+    });
+  }
+  registry.register({
+    kind: 'execution',
+    create: async (input) => {
+      if (!dependencies.createExecutionAdapter) {
+        throw bindingUnavailable(input.profile, 'execution port');
+      }
+      return dependencies.createExecutionAdapter(input);
+    },
+  });
+}
+
+function stringConfig(profile: ToolAdapterProfile, key: string): string | undefined {
+  const value = profile.config?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function bindingUnavailable(profile: ToolAdapterProfile, binding: string): FrameworkError {
+  return factoryError(
+    'TOOL_ADAPTER_BINDING_UNAVAILABLE',
+    `Profile ${profile.id} has no configured ${binding} binding.`,
+    { profileId: profile.id, kind: profile.kind, binding }
+  );
 }
 
 function factoryError(

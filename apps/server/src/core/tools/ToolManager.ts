@@ -40,8 +40,12 @@ import {
 import {
   LocalFunctionToolAdapter,
   MCPToolAdapter,
+  ToolAdapterFactoryRegistry,
   ToolRegistry,
+  registerConcreteToolAdapterFactories,
+  resolveCommonToolSpec,
   type ToolAdapter,
+  type ToolAdapterProfile,
   type ToolSpec as HyphaToolSpec,
   type ToolContractSnapshotStore,
 } from '@hypha/tools';
@@ -321,6 +325,11 @@ export class ToolManager {
   private readonly mcpCatalogs = new Map<string, MCPCapabilityCatalog>();
   private readonly mcpServerModes = new Map<string, MCPServerConfig['mode']>();
   private readonly approvedMCPRegistry = new ToolRegistry();
+  private readonly profileToolRegistry = new ToolRegistry();
+  private readonly profileStates = new Map<
+    string,
+    { status: 'ready' | 'degraded'; required: boolean; error?: string }
+  >();
   private mcpCatalogStore: MCPCapabilityCatalogStore = new FileMCPCapabilityCatalogStore(
     process.env.HYPHA_MCP_CATALOG_STORE ??
       path.resolve(process.cwd(), 'data/runtime/mcp-capability-catalog.json')
@@ -352,23 +361,22 @@ export class ToolManager {
       ...createUtilityTools(),
     ];
     for (const tool of builtinTools) {
-      try {
-        await this.register(tool);
-      } catch (err) {
-        logger.error('Failed to register built-in tool:', err);
-      }
+      await this.register(tool);
     }
 
     // 2. Apply configs/tools.yaml — toggles `enabled` per tool id. Tools listed
     //    in yaml without a built-in implementation are warned and skipped.
     await this.loadToolsFromConfig(config.tools.configPath);
 
-    // 3. Initialize local/remote MCP servers (unchanged).
+    // 3. Initialize local/remote MCP servers.
     if (config.tools.mcpServers) {
       for (const serverConfig of config.tools.mcpServers) {
         await this.registerMCPServer(serverConfig);
       }
     }
+
+    // 4. Compose declarative Tool profiles only after their concrete ports exist.
+    await this.loadAdapterProfiles(config.tools.profiles);
 
     logger.info('ToolManager initialized', {
       toolCount: this.tools.size,
@@ -412,6 +420,19 @@ export class ToolManager {
     for (const spec of this.approvedMCPRegistry.list()) {
       this.approvedMCPRegistry.unregister(spec.id);
     }
+    for (const spec of this.profileToolRegistry.list()) {
+      const adapter = this.profileToolRegistry.getAdapter(spec.id);
+      try {
+        await adapter?.close?.();
+      } catch (error) {
+        this.profileStates.set(spec.id, {
+          status: 'degraded',
+          required: true,
+          error: `cleanup failed: ${String(error)}`,
+        });
+      }
+      this.profileToolRegistry.unregister(spec.id);
+    }
     await this.connectionManager.closeAll();
 
     // Call unload on all tools
@@ -430,11 +451,16 @@ export class ToolManager {
   }
 
   async register(tool: ITool): Promise<void> {
-    this.tools.set(tool.id, { tool, enabled: true });
-
-    if (tool.onLoad) {
-      await tool.onLoad();
+    if (this.tools.has(tool.id)) {
+      throw Object.assign(new Error(`Tool already registered: ${tool.id}`), {
+        code: 'TOOL_ALREADY_REGISTERED',
+        toolId: tool.id,
+      });
     }
+
+    // Prepare and load completely before making the implementation visible.
+    await tool.onLoad?.();
+    this.tools.set(tool.id, { tool, enabled: true });
 
     logger.info(`Tool registered: ${tool.id}`);
   }
@@ -443,8 +469,19 @@ export class ToolManager {
     const registration = this.tools.get(toolId);
     if (!registration) return false;
 
-    if (registration.tool.onUnload) {
-      await registration.tool.onUnload();
+    try {
+      await registration.tool.onUnload?.();
+    } catch (error) {
+      registration.enabled = false;
+      registration.metadata = {
+        ...registration.metadata,
+        lifecycle: 'quarantined',
+        cleanupError: String(error),
+      };
+      throw Object.assign(new Error(`Tool cleanup failed: ${toolId}`), {
+        code: 'TOOL_CLEANUP_QUARANTINED',
+        cause: error,
+      });
     }
 
     this.tools.delete(toolId);
@@ -467,6 +504,10 @@ export class ToolManager {
 
   listTools(enabledOnly: boolean = false): ToolDefinition[] {
     const list: ToolDefinition[] = [];
+
+    for (const spec of this.profileToolRegistry.list()) {
+      list.push(this.toolSpecToDefinition(spec));
+    }
 
     for (const registration of this.tools.values()) {
       if (!enabledOnly || registration.enabled) {
@@ -570,6 +611,9 @@ export class ToolManager {
   }
 
   resolveGovernedTool(nameOrId: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+    const configured = this.findProfileTool(nameOrId);
+    if (configured) return configured;
+
     const localTool = this.getTool(nameOrId) ?? this.getToolByName(nameOrId);
     if (localTool) {
       const governance = localTool.governance;
@@ -901,6 +945,75 @@ export class ToolManager {
     }
 
     return health;
+  }
+
+  profileReadiness(): Record<
+    string,
+    { status: 'ready' | 'degraded'; required: boolean; error?: string }
+  > {
+    return Object.fromEntries(this.profileStates);
+  }
+
+  private async loadAdapterProfiles(profiles: ToolAdapterProfile[]): Promise<void> {
+    if (profiles.length === 0) return;
+    const localFunctions = Object.fromEntries(
+      Array.from(this.tools.values()).map(({ tool }) => [
+        tool.id,
+        async (input: unknown) => {
+          const result = await tool.execute(input as ToolParams);
+          if (!result.success) throw new Error(result.error ?? `Tool failed: ${tool.id}`);
+          return result.output;
+        },
+      ])
+    );
+    const registry = new ToolAdapterFactoryRegistry({
+      resolveToolSpec: async (reference) => {
+        const common = resolveCommonToolSpec(reference.id);
+        if (common) return common;
+        return this.approvedMCPRegistry.getSpec(reference.id);
+      },
+      secretResolver: this.secretResolver,
+    });
+    registerConcreteToolAdapterFactories(registry, {
+      localFunctions,
+      mcpPort: {
+        invoke: (request) => this.connectionManager.call(request),
+        health: async (serverId) => (await this.connectionManager.status(serverId)).health,
+      },
+    });
+
+    for (const profile of profiles) {
+      const required = profile.required !== false;
+      try {
+        const created = await registry.create(profile);
+        try {
+          this.profileToolRegistry.registerAdapter(created.toolSpec, created.adapter);
+        } catch (error) {
+          await created.adapter.close?.().catch(() => undefined);
+          throw error;
+        }
+        this.profileStates.set(profile.id, { status: 'ready', required });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.profileStates.set(profile.id, { status: 'degraded', required, error: message });
+        if (required) throw error;
+        logger.warn(`Optional Tool profile degraded: ${profile.id}`, { error: message });
+      }
+    }
+  }
+
+  private findProfileTool(
+    nameOrId: string
+  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+    for (const spec of this.profileToolRegistry.list()) {
+      if (spec.id !== nameOrId && spec.name !== nameOrId) continue;
+      return this.profileToolRegistry.resolve({
+        id: spec.id,
+        version: spec.version,
+        revision: spec.revision,
+      });
+    }
+    return null;
   }
 
   private normalizeMCPTool(client: MCPClient, tool: ToolDefinition): HyphaToolSpec {
