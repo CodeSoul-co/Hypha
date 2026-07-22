@@ -49,6 +49,7 @@ import {
   type ToolSchemaSpec,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveAgentCapabilitySnapshot,
   type ToolSemanticSpec,
   type ToolSource,
   type ToolSourceRef,
@@ -135,6 +136,7 @@ export interface ToolCallContext {
   causationId?: string;
   parentEventId?: string;
   contractSnapshotRef?: string;
+  capabilitySnapshotRef?: string;
   deadlineAt?: string;
   signal?: AbortSignal;
   abortSignal?: AbortSignal;
@@ -1371,6 +1373,90 @@ export class ToolRegistry {
     return `${id}\u0000${version}\u0000${revision}`;
   }
 }
+export function validateEffectiveCapabilityAccess(input: {
+  snapshot: ToolContractSnapshot | null;
+  context: ToolCallContext;
+  spec: ToolSpec;
+}): string | null {
+  const effective = input.snapshot?.effectiveCapabilities;
+  if (!effective) {
+    return input.context.capabilitySnapshotRef
+      ? 'The requested effective capability snapshot is unavailable.'
+      : null;
+  }
+  if (input.context.capabilitySnapshotRef !== input.snapshot?.id) {
+    return 'Invocation is missing the exact effective capability snapshot reference.';
+  }
+  if (effective.runId !== input.context.runId) {
+    return 'Effective capability snapshot belongs to a different Run.';
+  }
+  if (
+    effective.expiresAt &&
+    (!Number.isFinite(Date.parse(effective.expiresAt)) || Date.parse(effective.expiresAt) <= Date.now())
+  ) {
+    return 'Effective capability snapshot is expired.';
+  }
+  const contextAgentId = input.context.agentId ?? input.context.principal?.agentId;
+  if (effective.agentId !== contextAgentId) {
+    return 'Effective capability snapshot belongs to a different Agent.';
+  }
+  const principalId =
+    input.context.principal?.principalId ?? input.context.principal?.id;
+  if (effective.principalId !== principalId) {
+    return 'Effective capability snapshot belongs to a different principal.';
+  }
+  if (effective.tenantId && effective.tenantId !== input.context.tenantId) {
+    return 'Effective capability snapshot belongs to a different tenant.';
+  }
+  if (!effective.allowedToolIds.includes(input.spec.id)) {
+    return `Tool ${input.spec.id} is not allowed by the effective capability snapshot.`;
+  }
+  if (
+    capabilitySideEffectRank(input.spec.sideEffectLevel) >
+    capabilitySideEffectRank(effective.maximumSideEffectLevel)
+  ) {
+    return `Tool ${input.spec.id} exceeds the effective side-effect ceiling.`;
+  }
+  if (
+    input.spec.source === 'mcp' &&
+    (!(input.spec.sourceRef?.serverId ?? input.spec.sourceRef?.mcpServerId) ||
+      !effective.allowedMCPServerIds.includes(
+        (input.spec.sourceRef?.serverId ?? input.spec.sourceRef?.mcpServerId)!
+      ))
+  ) {
+    return `MCP server for ${input.spec.id} is not allowed by the effective capability snapshot.`;
+  }
+  if (input.spec.source === 'execution') {
+    const profile = input.spec.sourceRef?.adapterId;
+    if (!profile || !effective.allowedExecutionProfiles.includes(profile)) {
+      return `Execution profile for ${input.spec.id} is not allowed by the effective capability snapshot.`;
+    }
+  }
+  const isMemoryTool =
+    input.spec.id === 'common.memory' || input.spec.permissionScope?.includes('memory.activity');
+  if (isMemoryTool) {
+    const required =
+      capabilitySideEffectRank(input.spec.sideEffectLevel) >= capabilitySideEffectRank('write')
+        ? 'write'
+        : 'read';
+    if (!capabilityMemoryAllows(effective.memoryAccess, required)) {
+      return `Memory ${required} is not allowed by the effective capability snapshot.`;
+    }
+  }
+  return null;
+}
+
+function capabilitySideEffectRank(level: SideEffectLevel): number {
+  return ['none', 'read', 'write', 'external_effect', 'irreversible'].indexOf(level);
+}
+
+function capabilityMemoryAllows(
+  access: EffectiveAgentCapabilitySnapshot['memoryAccess'],
+  required: 'read' | 'write'
+): boolean {
+  return access === 'read_write' || access === required;
+}
+
 export class GovernedToolRunner implements ToolRunner {
   private readonly approvalStore: ToolApprovalStore;
   private readonly invocationStore: ToolInvocationStore;
@@ -2136,6 +2222,20 @@ export class GovernedToolRunner implements ToolRunner {
     }
 
     const snapshotRef = request.context.contractSnapshotRef;
+    let activeContractSnapshot: ToolContractSnapshot | null = null;
+    if (
+      request.context.capabilitySnapshotRef &&
+      request.context.capabilitySnapshotRef !== snapshotRef
+    ) {
+      return failedToolResult(
+        request.toolId,
+        invocationId,
+        'TOOL_CAPABILITY_SNAPSHOT_MISMATCH',
+        'The effective capability snapshot ref must match the Run Tool contract snapshot ref.',
+        'authorization',
+        'denied'
+      );
+    }
     if (snapshotRef) {
       if (!this.snapshotStore) {
         return failedToolResult(
@@ -2147,6 +2247,7 @@ export class GovernedToolRunner implements ToolRunner {
         );
       }
       const snapshot = await this.snapshotStore.get(snapshotRef);
+      activeContractSnapshot = snapshot;
       const snapshotItem = snapshot?.toolContracts.find(
         (item) => item.toolId === executionRequest.toolId || item.toolId === request.toolId
       );
@@ -2181,6 +2282,27 @@ export class GovernedToolRunner implements ToolRunner {
         toolId: snapshotItem.toolId,
         toolRevision: snapshotItem.toolRevision,
       });
+    }
+
+    const capabilityDenial = validateEffectiveCapabilityAccess({
+      snapshot: activeContractSnapshot,
+      context: request.context,
+      spec,
+    });
+    if (capabilityDenial) {
+      const result = failedToolResult(
+        request.toolId,
+        invocationId,
+        'TOOL_CAPABILITY_SCOPE_DENIED',
+        capabilityDenial,
+        'authorization',
+        'denied'
+      );
+      await record('tool.call.rejected', 'rejected:capability-snapshot', {
+        error: result.error,
+        capabilitySnapshotRef: request.context.capabilitySnapshotRef,
+      });
+      return result;
     }
 
     const basePayload = {
@@ -2382,7 +2504,8 @@ export class GovernedToolRunner implements ToolRunner {
         scopeHash: toolInvocationScopeHash(request),
         policyRevision: resolvePolicyRevision(decision, request),
         contractSnapshotHash: snapshot?.snapshotHash,
-        capabilityHash: spec.sourceRef?.capabilityHash,
+        capabilityHash:
+          spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
         externalStateVersion,
       };
       const key = createToolCacheValidityKey(validityInput);
@@ -2611,8 +2734,9 @@ export class GovernedToolRunner implements ToolRunner {
     if (spec.source === 'mcp') {
       await record('mcp.call.started', 'mcp-started', {
         ...basePayload,
-        serverId: spec.sourceRef?.serverId,
-        capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
+        serverId: spec.sourceRef?.serverId ?? spec.sourceRef?.mcpServerId,
+        capabilityId:
+          spec.sourceRef?.capabilityId ?? spec.sourceRef?.mcpCapabilityId ?? request.toolId,
       });
     }
 
@@ -2742,8 +2866,11 @@ export class GovernedToolRunner implements ToolRunner {
         if (spec.source === 'mcp') {
           await record('mcp.call.completed', 'mcp-completed:' + attempt, {
             ...basePayload,
-            serverId: spec.sourceRef?.serverId,
-            capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
+            serverId: spec.sourceRef?.serverId ?? spec.sourceRef?.mcpServerId,
+            capabilityId:
+              spec.sourceRef?.capabilityId ??
+              spec.sourceRef?.mcpCapabilityId ??
+              request.toolId,
             ...(auditedInput.included ? { input: auditedInput.value } : {}),
             ...(auditedOutput.included ? { output: auditedOutput.value } : {}),
             attempts: attempt,
@@ -2910,8 +3037,11 @@ export class GovernedToolRunner implements ToolRunner {
         if (spec.source === 'mcp') {
           await record('mcp.call.failed', 'mcp-failed:' + attempt, {
             ...basePayload,
-            serverId: spec.sourceRef?.serverId,
-            capabilityId: spec.sourceRef?.capabilityId ?? request.toolId,
+            serverId: spec.sourceRef?.serverId ?? spec.sourceRef?.mcpServerId,
+            capabilityId:
+              spec.sourceRef?.capabilityId ??
+              spec.sourceRef?.mcpCapabilityId ??
+              request.toolId,
             error: message,
             attempts: attempt,
           });

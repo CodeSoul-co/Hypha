@@ -9,9 +9,15 @@ import {
   specMetadataSchema,
   versionedSpecSchema,
   type JsonSchema,
+  type SideEffectLevel,
   type SpecMetadata,
   type VersionedSpec,
 } from '@hypha/core';
+import {
+  effectiveAgentCapabilitySnapshotSchema,
+  hashToolContract,
+  type EffectiveAgentCapabilitySnapshot,
+} from '@hypha/tools';
 
 export interface SkillRef {
   id: string;
@@ -123,6 +129,9 @@ export interface LoadedSkillContext {
   references: LoadedSkillAsset[];
   allowedTools: string[];
   requiredTools: string[];
+  requiredMCPServers: string[];
+  memoryAccessPolicy?: string;
+  sideEffectPolicy?: string;
   trustLevel?: SkillSpec['trustLevel'];
   provenance?: Record<string, unknown>;
   policyDecision: SkillPolicyDecision;
@@ -131,6 +140,28 @@ export interface LoadedSkillContext {
     matchedPatterns: string[];
   };
   metadata?: Record<string, unknown>;
+}
+
+export interface AgentCapabilityConstraint {
+  allowedToolIds?: string[];
+  allowedMCPServerIds?: string[];
+  memoryAccess?: EffectiveAgentCapabilitySnapshot['memoryAccess'];
+  allowedExecutionProfiles?: string[];
+  maximumSideEffectLevel?: SideEffectLevel;
+  policyRefs?: string[];
+}
+
+export interface EffectiveAgentCapabilitySnapshotInput {
+  runId: string;
+  agentId: string;
+  principalId: string;
+  tenantId?: string;
+  domainId?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  agent: AgentCapabilityConstraint;
+  domain: AgentCapabilityConstraint;
+  activeSkills: LoadedSkillContext[];
 }
 
 export interface SkillContextLoadInput {
@@ -371,6 +402,9 @@ export class SkillContextLoader {
       references,
       allowedTools: input.policyDecision.allowedTools,
       requiredTools: input.selection.spec.requiredTools ?? [],
+      requiredMCPServers: input.selection.spec.requiredMCPServers ?? [],
+      memoryAccessPolicy: input.selection.spec.memoryAccessPolicy,
+      sideEffectPolicy: input.selection.spec.sideEffectPolicy,
       trustLevel: input.selection.spec.trustLevel,
       provenance: input.selection.spec.provenance,
       policyDecision: input.policyDecision,
@@ -482,6 +516,181 @@ async function readTextWithTimeout(filePath: string, timeoutMs: number): Promise
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+export function createEffectiveAgentCapabilitySnapshot(
+  input: EffectiveAgentCapabilitySnapshotInput
+): Readonly<EffectiveAgentCapabilitySnapshot> {
+  const allowedToolIds = intersectConstraints([
+    input.agent.allowedToolIds,
+    input.domain.allowedToolIds,
+    ...input.activeSkills.map((skill) => skill.allowedTools),
+  ]);
+  const baseMCPServers = intersectConstraints([
+    input.agent.allowedMCPServerIds,
+    input.domain.allowedMCPServerIds,
+  ]);
+  const requiredMCPServers = uniqueSorted(
+    input.activeSkills.flatMap((skill) => skill.requiredMCPServers)
+  );
+  const allowedMCPServerIds =
+    baseMCPServers.length > 0 ? baseMCPServers : requiredMCPServers;
+  const missingMCPServers = requiredMCPServers.filter(
+    (serverId) => !allowedMCPServerIds.includes(serverId)
+  );
+  if (missingMCPServers.length > 0) {
+    throw new Error(
+      `Effective capability snapshot is missing required MCP servers: ${missingMCPServers.join(', ')}.`
+    );
+  }
+  const memoryAccess = intersectMemoryAccess([
+    input.agent.memoryAccess,
+    input.domain.memoryAccess,
+    ...input.activeSkills.map((skill) => parseMemoryAccess(skill.memoryAccessPolicy)),
+  ]);
+  const maximumSideEffectLevel = minimumSideEffectLevel([
+    input.agent.maximumSideEffectLevel,
+    input.domain.maximumSideEffectLevel,
+    ...input.activeSkills.map((skill) => parseMaximumSideEffect(skill.sideEffectPolicy)),
+  ]);
+  const allowedExecutionProfiles = intersectConstraints([
+    input.agent.allowedExecutionProfiles,
+    input.domain.allowedExecutionProfiles,
+  ]);
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const skillRevisions = input.activeSkills
+    .map((skill) => ({
+      id: skill.id,
+      version: skill.version,
+      contentHash: skillContentHash(skill),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const body = {
+    runId: input.runId,
+    agentId: input.agentId,
+    principalId: input.principalId,
+    tenantId: input.tenantId,
+    domainId: input.domainId,
+    createdAt,
+    expiresAt: input.expiresAt,
+    skillRevisions,
+    allowedToolIds,
+    allowedMCPServerIds,
+    memoryAccess,
+    allowedExecutionProfiles,
+    maximumSideEffectLevel,
+    requiresHumanReview: input.activeSkills.some(
+      (skill) => skill.policyDecision.requiresHumanReview === true
+    ),
+    policyRefs: uniqueSorted([
+      ...(input.agent.policyRefs ?? []),
+      ...(input.domain.policyRefs ?? []),
+      ...input.activeSkills
+        .map((skill) => skill.policyDecision.policyId)
+        .filter((value): value is string => Boolean(value)),
+    ]),
+  };
+  const snapshot = effectiveAgentCapabilitySnapshotSchema.parse({
+    id: `agent-capability:${input.runId}:${input.agentId}`,
+    ...body,
+    snapshotHash: hashToolContract(body),
+  });
+  return deepFreeze(snapshot);
+}
+
+function intersectConstraints(constraints: Array<string[] | undefined>): string[] {
+  const defined = constraints.filter((value): value is string[] => Array.isArray(value));
+  if (defined.length === 0) return [];
+  let result = new Set(defined[0]);
+  for (const constraint of defined.slice(1)) {
+    const allowed = new Set(constraint);
+    result = new Set(Array.from(result).filter((value) => allowed.has(value)));
+  }
+  return uniqueSorted(Array.from(result));
+}
+
+function intersectMemoryAccess(
+  constraints: Array<EffectiveAgentCapabilitySnapshot['memoryAccess'] | undefined>
+): EffectiveAgentCapabilitySnapshot['memoryAccess'] {
+  const masks = constraints
+    .filter(
+      (value): value is EffectiveAgentCapabilitySnapshot['memoryAccess'] => value !== undefined
+    )
+    .map(memoryMask);
+  if (masks.length === 0) return 'none';
+  return memoryAccessFromMask(masks.reduce((result, mask) => result & mask));
+}
+
+function parseMemoryAccess(
+  value: string | undefined
+): EffectiveAgentCapabilitySnapshot['memoryAccess'] | undefined {
+  if (!value || value === 'inherit') return undefined;
+  const normalized = value.toLowerCase().replace(/[-+]/g, '_');
+  if (normalized === 'none' || normalized === 'deny') return 'none';
+  if (normalized === 'read' || normalized === 'read_only') return 'read';
+  if (normalized === 'write' || normalized === 'write_only') return 'write';
+  if (normalized === 'read_write' || normalized === 'all') return 'read_write';
+  throw new Error(`Unsupported Skill memoryAccessPolicy: ${value}.`);
+}
+
+function memoryMask(value: EffectiveAgentCapabilitySnapshot['memoryAccess']): number {
+  return value === 'read_write' ? 3 : value === 'read' ? 1 : value === 'write' ? 2 : 0;
+}
+
+function memoryAccessFromMask(mask: number): EffectiveAgentCapabilitySnapshot['memoryAccess'] {
+  return mask === 3 ? 'read_write' : mask === 1 ? 'read' : mask === 2 ? 'write' : 'none';
+}
+
+const SIDE_EFFECT_RANK: Record<SideEffectLevel, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  external_effect: 3,
+  irreversible: 4,
+};
+
+function minimumSideEffectLevel(values: Array<SideEffectLevel | undefined>): SideEffectLevel {
+  const defined = values.filter((value): value is SideEffectLevel => value !== undefined);
+  if (defined.length === 0) return 'none';
+  return defined.reduce((minimum, value) =>
+    SIDE_EFFECT_RANK[value] < SIDE_EFFECT_RANK[minimum] ? value : minimum
+  );
+}
+
+function parseMaximumSideEffect(value: string | undefined): SideEffectLevel | undefined {
+  if (!value || value === 'inherit') return undefined;
+  if (value === 'human_review') return 'write';
+  if (value in SIDE_EFFECT_RANK) return value as SideEffectLevel;
+  throw new Error(`Unsupported Skill sideEffectPolicy: ${value}.`);
+}
+
+function skillContentHash(skill: LoadedSkillContext): string {
+  const install = recordField(skill.provenance ?? {}, 'install');
+  const installedHash = typeof install?.contentHash === 'string' ? install.contentHash : undefined;
+  return installedHash && /^[a-f0-9]{64}$/u.test(installedHash)
+    ? installedHash
+    : hashToolContract({
+        id: skill.id,
+        version: skill.version,
+        instructions: skill.instructions,
+        references: skill.references.map((reference) => ({
+          path: reference.path,
+          content: reference.content,
+        })),
+        provenance: skill.provenance,
+      });
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return Array.from(new Set(values)).sort();
+}
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
 }
 
 export class SkillResolver {

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
 import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@hypha/core';
-import { GovernedToolRunner, ToolRegistry, toolContractSnapshotExample } from '@hypha/tools';
+import {
+  GovernedToolRunner,
+  ToolRegistry,
+  hashToolContract,
+  toolContractSnapshotExample,
+} from '@hypha/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -430,6 +435,67 @@ describe('@hypha/mcp normalization', () => {
         },
       })
     ).resolves.toMatchObject({ output: { input: { query: 'hypha' } } });
+
+    const capabilityBody = {
+      runId: 'run.strict',
+      agentId: 'agent.strict',
+      principalId: 'user.strict',
+      createdAt: now,
+      skillRevisions: [],
+      allowedToolIds: ['mcp.strict-server.search'],
+      allowedMCPServerIds: [],
+      memoryAccess: 'none' as const,
+      allowedExecutionProfiles: [],
+      maximumSideEffectLevel: 'read' as const,
+      requiresHumanReview: false,
+      policyRefs: ['strict.policy'],
+    };
+    snapshot.effectiveCapabilities = {
+      id: 'agent-capability:run.strict:agent.strict',
+      ...capabilityBody,
+      snapshotHash: hashToolContract(capabilityBody),
+    };
+    await catalog.snapshotStore.save(snapshot);
+    const capabilityContext = {
+      runId: 'run.strict',
+      stepId: 'search',
+      contractSnapshotRef: snapshot.id,
+      capabilitySnapshotRef: snapshot.id,
+      agentId: 'agent.strict',
+      principal: {
+        id: 'user.strict',
+        principalId: 'user.strict',
+        type: 'user' as const,
+        agentId: 'agent.strict',
+        permissionScopes: ['search.read'],
+      },
+    };
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'blocked' },
+        context: capabilityContext,
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SCOPE_DENIED' });
+
+    snapshot.effectiveCapabilities = {
+      ...snapshot.effectiveCapabilities,
+      allowedMCPServerIds: ['strict-server'],
+    };
+    await catalog.snapshotStore.save(snapshot);
+    expect((await catalog.snapshotStore.get(snapshot.id))?.effectiveCapabilities).toMatchObject({
+      allowedMCPServerIds: ['strict-server'],
+    });
+    expect(registry.getSpec('mcp.strict-server.search')?.sourceRef).toMatchObject({
+      mcpServerId: 'strict-server',
+    });
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'allowed' },
+        context: capabilityContext,
+      })
+    ).resolves.toMatchObject({ output: { input: { query: 'allowed' } } });
 
     now = '2026-07-24T00:00:00.000Z';
     await expect(catalog.snapshot('run.expired', [ref])).rejects.toMatchObject({

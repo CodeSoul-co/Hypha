@@ -65,7 +65,11 @@ import {
 import { classifyMemoryFailure } from '@hypha/memory';
 import { RedisToolContractSnapshotStore } from '@hypha/mcp';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
-import type { LoadedSkillContext } from '@hypha/skills';
+import {
+  createEffectiveAgentCapabilitySnapshot,
+  type EffectiveAgentCapabilitySnapshotInput,
+  type LoadedSkillContext,
+} from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -75,6 +79,7 @@ import {
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveAgentCapabilitySnapshot,
   type ToolCallResult,
   type ToolRunner,
   type ToolSpec,
@@ -509,6 +514,10 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private readonly runCapabilitySnapshots = new Map<
+    string,
+    Readonly<EffectiveAgentCapabilitySnapshot>
+  >();
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor() {
@@ -886,6 +895,20 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
+    const availableToolIds =
+      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const capabilityMetadata = asRecord(spec.metadata);
+    const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
+      runId: input.runId,
+      agentId: id,
+      principalId: userId,
+      tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+      domainId: this.runs.get(input.runId)?.domainPackId,
+      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
+      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+      activeSkills,
+    });
+    this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
     const skillInstructions = activeSkills.map(
       (skill) =>
         `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
@@ -1337,6 +1360,7 @@ class EventRuntimeService {
     const invocationId = `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
     const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
+    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1347,10 +1371,16 @@ class EventRuntimeService {
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
+        capabilitySnapshotRef: effectiveCapabilities ? contractSnapshotRef : undefined,
+        agentId: effectiveCapabilities?.agentId,
+        tenantId: effectiveCapabilities?.tenantId,
         principal: {
           id: input.userId,
+          principalId: input.userId,
           type: 'user',
           userId: input.userId,
+          agentId: effectiveCapabilities?.agentId,
+          tenantId: effectiveCapabilities?.tenantId,
           permissionScopes: ['*'],
         },
       },
@@ -1504,7 +1534,8 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash: spec.sourceRef?.capabilityHash,
+      sourceCapabilityHash:
+        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -1513,6 +1544,7 @@ class EventRuntimeService {
       runId,
       createdAt,
       toolContracts,
+      effectiveCapabilities: this.runCapabilitySnapshots.get(runId),
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
@@ -2981,6 +3013,36 @@ function asRecord(input: unknown): Record<string, unknown> | undefined {
 function stringList(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) return undefined;
   return input.filter((value): value is string => typeof value === 'string');
+}
+
+function capabilityConstraint(
+  source: Record<string, unknown> | undefined,
+  fallbackToolIds: string[],
+  defaultPolicyRef: string
+): EffectiveAgentCapabilitySnapshotInput['agent'] {
+  const memory = stringValue(source?.memoryAccess);
+  const sideEffect = stringValue(source?.maximumSideEffectLevel);
+  const memoryAccess = ['none', 'read', 'write', 'read_write'].includes(memory ?? '')
+    ? (memory as EffectiveAgentCapabilitySnapshot['memoryAccess'])
+    : 'none';
+  const maximumSideEffectLevel = [
+    'none',
+    'read',
+    'write',
+    'external_effect',
+    'irreversible',
+  ].includes(sideEffect ?? '')
+    ? (sideEffect as EffectiveAgentCapabilitySnapshot['maximumSideEffectLevel'])
+    : 'read';
+  return {
+    allowedToolIds:
+      stringList(source?.allowedToolIds) ?? stringList(source?.allowedTools) ?? fallbackToolIds,
+    allowedMCPServerIds: stringList(source?.allowedMCPServerIds),
+    memoryAccess,
+    allowedExecutionProfiles: stringList(source?.allowedExecutionProfiles) ?? [],
+    maximumSideEffectLevel,
+    policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
+  };
 }
 
 function inferToolSideEffect(

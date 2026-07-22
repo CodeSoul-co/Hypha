@@ -171,6 +171,27 @@ export interface ToolContractSnapshot {
   toolContracts: ToolContractSnapshotItem[];
   catalogRevision?: string;
   policyRevision?: string;
+  effectiveCapabilities?: EffectiveAgentCapabilitySnapshot;
+  snapshotHash: string;
+}
+
+export interface EffectiveAgentCapabilitySnapshot {
+  id: string;
+  runId: string;
+  agentId: string;
+  principalId: string;
+  tenantId?: string;
+  domainId?: string;
+  createdAt: string;
+  expiresAt?: string;
+  skillRevisions: Array<{ id: string; version: string; contentHash: string }>;
+  allowedToolIds: string[];
+  allowedMCPServerIds: string[];
+  memoryAccess: 'none' | 'read' | 'write' | 'read_write';
+  allowedExecutionProfiles: string[];
+  maximumSideEffectLevel: SideEffectLevel;
+  requiresHumanReview: boolean;
+  policyRefs: string[];
   snapshotHash: string;
 }
 
@@ -242,6 +263,7 @@ export interface ToolExecutionContextSpec {
   causationId?: string;
   parentEventId?: string;
   contractSnapshotRef?: string;
+  capabilitySnapshotRef?: string;
   deadlineAt?: string;
   abortSignal?: AbortSignal;
   metadata?: Record<string, unknown>;
@@ -591,6 +613,32 @@ export const toolContractSnapshotItemSchema = z.object({
   adapterRef: z.string().min(1),
 }) satisfies ZodType<ToolContractSnapshotItem>;
 
+export const effectiveAgentCapabilitySnapshotSchema = z.object({
+  id: z.string().min(1),
+  runId: z.string().min(1),
+  agentId: z.string().min(1),
+  principalId: z.string().min(1),
+  tenantId: z.string().min(1).optional(),
+  domainId: z.string().min(1).optional(),
+  createdAt: z.string().min(1),
+  expiresAt: z.string().min(1).optional(),
+  skillRevisions: z.array(
+    z.object({
+      id: z.string().min(1),
+      version: z.string().min(1),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    })
+  ),
+  allowedToolIds: z.array(z.string().min(1)),
+  allowedMCPServerIds: z.array(z.string().min(1)),
+  memoryAccess: z.enum(['none', 'read', 'write', 'read_write']),
+  allowedExecutionProfiles: z.array(z.string().min(1)),
+  maximumSideEffectLevel: sideEffectLevelSchema,
+  requiresHumanReview: z.boolean(),
+  policyRefs: z.array(z.string().min(1)),
+  snapshotHash: z.string().min(1),
+}) satisfies ZodType<EffectiveAgentCapabilitySnapshot>;
+
 export const toolContractSnapshotSchema = z.object({
   id: z.string().min(1),
   runId: z.string().min(1),
@@ -598,6 +646,7 @@ export const toolContractSnapshotSchema = z.object({
   toolContracts: z.array(toolContractSnapshotItemSchema),
   catalogRevision: z.string().optional(),
   policyRevision: z.string().optional(),
+  effectiveCapabilities: effectiveAgentCapabilitySnapshotSchema.optional(),
   snapshotHash: z.string().min(1),
 }) satisfies ZodType<ToolContractSnapshot>;
 
@@ -633,6 +682,7 @@ export const toolExecutionContextSpecSchema = z.object({
   causationId: z.string().optional(),
   parentEventId: z.string().optional(),
   contractSnapshotRef: z.string().optional(),
+  capabilitySnapshotRef: z.string().optional(),
   deadlineAt: z.string().optional(),
   abortSignal: z.custom<AbortSignal>().optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -904,6 +954,22 @@ export const toolContractSnapshotExample: ToolContractSnapshot = {
   createdAt: '2026-07-16T00:00:00.000Z',
   catalogRevision: '12',
   policyRevision: 'policy-v1',
+  effectiveCapabilities: {
+    id: 'capability-snapshot:run-example',
+    runId: 'run-example',
+    agentId: 'agent-example',
+    principalId: 'user-example',
+    createdAt: '2026-07-16T00:00:00.000Z',
+    skillRevisions: [],
+    allowedToolIds: ['tool.search'],
+    allowedMCPServerIds: [],
+    memoryAccess: 'read',
+    allowedExecutionProfiles: [],
+    maximumSideEffectLevel: 'read',
+    requiresHumanReview: false,
+    policyRefs: ['policy-v1'],
+    snapshotHash: 'sha256:capability-example',
+  },
   snapshotHash: 'sha256:snapshot-example',
   toolContracts: [
     {
@@ -926,6 +992,59 @@ export const toolContractSnapshotJsonSchema: JsonSchema = {
     createdAt: { type: 'string' },
     catalogRevision: { type: 'string' },
     policyRevision: { type: 'string' },
+    effectiveCapabilities: {
+      type: 'object',
+      required: [
+        'id',
+        'runId',
+        'agentId',
+        'principalId',
+        'createdAt',
+        'skillRevisions',
+        'allowedToolIds',
+        'allowedMCPServerIds',
+        'memoryAccess',
+        'allowedExecutionProfiles',
+        'maximumSideEffectLevel',
+        'requiresHumanReview',
+        'policyRefs',
+        'snapshotHash',
+      ],
+      properties: {
+        id: { type: 'string' },
+        runId: { type: 'string' },
+        agentId: { type: 'string' },
+        principalId: { type: 'string' },
+        tenantId: { type: 'string' },
+        domainId: { type: 'string' },
+        createdAt: { type: 'string' },
+        expiresAt: { type: 'string' },
+        skillRevisions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['id', 'version', 'contentHash'],
+            properties: {
+              id: { type: 'string' },
+              version: { type: 'string' },
+              contentHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+            },
+            additionalProperties: false,
+          },
+        },
+        allowedToolIds: { type: 'array', items: { type: 'string' } },
+        allowedMCPServerIds: { type: 'array', items: { type: 'string' } },
+        memoryAccess: { enum: ['none', 'read', 'write', 'read_write'] },
+        allowedExecutionProfiles: { type: 'array', items: { type: 'string' } },
+        maximumSideEffectLevel: {
+          enum: ['none', 'read', 'write', 'external_effect', 'irreversible'],
+        },
+        requiresHumanReview: { type: 'boolean' },
+        policyRefs: { type: 'array', items: { type: 'string' } },
+        snapshotHash: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
     snapshotHash: { type: 'string' },
     toolContracts: {
       type: 'array',

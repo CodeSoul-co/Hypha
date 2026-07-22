@@ -4,6 +4,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   DefaultSkillPolicy,
+  createEffectiveAgentCapabilitySnapshot,
   LocalSkillLoader,
   SkillContextLoader,
   SkillRegistry,
@@ -15,6 +16,68 @@ import {
 } from './index';
 
 describe('@hypha/skills resolver', () => {
+  it('builds an immutable least-privilege Agent capability intersection', () => {
+    const activeSkill = {
+      id: 'skill-a',
+      version: '1.0.0',
+      description: 'Scoped skill',
+      instructions: 'Use only approved capabilities.',
+      references: [],
+      allowedTools: ['tool.b', 'common.memory'],
+      requiredTools: [],
+      requiredMCPServers: ['mcp-b'],
+      memoryAccessPolicy: 'read',
+      sideEffectPolicy: 'human_review',
+      provenance: { install: { contentHash: 'a'.repeat(64) } },
+      policyDecision: {
+        allowed: true,
+        allowedTools: ['tool.b', 'common.memory'],
+        requiresHumanReview: true,
+        policyId: 'skill.policy',
+      },
+      activation: { reason: 'required', matchedPatterns: [] },
+    };
+    const snapshot = createEffectiveAgentCapabilitySnapshot({
+      runId: 'run-a',
+      agentId: 'agent-a',
+      principalId: 'user-a',
+      domainId: 'domain-a',
+      createdAt: '2026-07-22T00:00:00.000Z',
+      agent: {
+        allowedToolIds: ['tool.a', 'tool.b', 'common.memory'],
+        allowedMCPServerIds: ['mcp-a', 'mcp-b'],
+        memoryAccess: 'read_write',
+        allowedExecutionProfiles: ['exec-a', 'exec-b'],
+        maximumSideEffectLevel: 'external_effect',
+        policyRefs: ['agent.policy'],
+      },
+      domain: {
+        allowedToolIds: ['tool.b', 'common.memory'],
+        allowedMCPServerIds: ['mcp-b'],
+        memoryAccess: 'read',
+        allowedExecutionProfiles: ['exec-b'],
+        maximumSideEffectLevel: 'write',
+        policyRefs: ['domain.policy'],
+      },
+      activeSkills: [activeSkill],
+    });
+
+    expect(snapshot).toMatchObject({
+      allowedToolIds: ['common.memory', 'tool.b'],
+      allowedMCPServerIds: ['mcp-b'],
+      memoryAccess: 'read',
+      allowedExecutionProfiles: ['exec-b'],
+      maximumSideEffectLevel: 'write',
+      requiresHumanReview: true,
+      policyRefs: ['agent.policy', 'domain.policy', 'skill.policy'],
+    });
+    expect(snapshot.skillRevisions).toEqual([
+      { id: 'skill-a', version: '1.0.0', contentHash: 'a'.repeat(64) },
+    ]);
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.allowedToolIds)).toBe(true);
+  });
+
   it.each([
     '../secret.md',
     '..\\secret.md',

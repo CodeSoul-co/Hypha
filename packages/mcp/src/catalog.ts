@@ -11,6 +11,7 @@ import {
   ToolRegistry,
   createToolSchemaSpec,
   hashToolContract,
+  validateEffectiveCapabilityAccess,
   type ToolCallContext,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
@@ -785,6 +786,19 @@ export class MCPCapabilityCatalog {
           runId: context.runId,
         }
       );
+    }
+    const capabilityDenial = validateEffectiveCapabilityAccess({
+      snapshot,
+      context,
+      spec: approved.normalizedToolSpec!,
+    });
+    if (capabilityDenial) {
+      throw catalogError('MCP_CAPABILITY_SCOPE_DENIED', capabilityDenial, {
+        serverId: record.serverId,
+        capabilityId: record.remoteName,
+        capabilityHash: record.capabilityHash,
+        capabilitySnapshotRef: context.capabilitySnapshotRef,
+      });
     }
     const active = await this.getCapability({
       serverId: record.serverId,

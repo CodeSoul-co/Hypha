@@ -475,8 +475,9 @@ export class ToolManager {
     }
 
     for (const spec of this.approvedMCPRegistry.list()) {
-      const client = spec.sourceRef?.serverId
-        ? this.mcpClients.get(spec.sourceRef.serverId)
+      const serverId = mcpServerId(spec);
+      const client = serverId
+        ? this.mcpClients.get(serverId)
         : undefined;
       if (client?.status === 'connected') list.push(this.toolSpecToDefinition(spec));
     }
@@ -543,8 +544,8 @@ export class ToolManager {
         source: 'mcp',
         sideEffectLevel: normalized.sideEffectLevel,
         permissionScope: normalized.permissionScope,
-        serverId: normalized.sourceRef?.serverId,
-        capabilityId: normalized.sourceRef?.capabilityId,
+        serverId: mcpServerId(normalized),
+        capabilityId: mcpCapabilityId(normalized),
       };
     }
 
@@ -560,8 +561,8 @@ export class ToolManager {
         source: 'mcp',
         sideEffectLevel: normalized.sideEffectLevel,
         permissionScope: normalized.permissionScope,
-        serverId: normalized.sourceRef?.serverId,
-        capabilityId: normalized.sourceRef?.capabilityId,
+        serverId: mcpServerId(normalized),
+        capabilityId: mcpCapabilityId(normalized),
       };
     }
 
@@ -609,8 +610,8 @@ export class ToolManager {
 
     const mcpTool = this.findFixtureMCPToolByName(nameOrId);
     if (mcpTool) {
-      const serverId = mcpTool.spec.sourceRef?.serverId ?? mcpTool.client.id;
-      const capabilityId = mcpTool.spec.sourceRef?.capabilityId ?? mcpTool.tool.name;
+      const serverId = mcpServerId(mcpTool.spec) ?? mcpTool.client.id;
+      const capabilityId = mcpCapabilityId(mcpTool.spec) ?? mcpTool.tool.name;
       return {
         spec: mcpTool.spec,
         adapter: new MCPToolAdapter(`server-mcp:${serverId}`, serverId, capabilityId, {
@@ -879,7 +880,7 @@ export class ToolManager {
             ? client.tools.map((tool) => this.normalizeMCPTool(client, tool))
             : this.approvedMCPRegistry
                 .list()
-                .filter((spec) => spec.sourceRef?.serverId === client.id),
+                .filter((spec) => mcpServerId(spec) === client.id),
       }));
   }
 
@@ -911,7 +912,7 @@ export class ToolManager {
   ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.approvedMCPRegistry.list()) {
       const candidateNames = new Set(
-        [spec.id, spec.name, spec.sourceRef?.capabilityId].filter(
+        [spec.id, spec.name, mcpCapabilityId(spec)].filter(
           (value): value is string => typeof value === 'string' && value.length > 0
         )
       );
@@ -948,7 +949,7 @@ export class ToolManager {
 
   private removeApprovedMCPTools(serverId: string): void {
     for (const spec of this.approvedMCPRegistry.list()) {
-      if (spec.sourceRef?.serverId === serverId) this.approvedMCPRegistry.unregister(spec.id);
+      if (mcpServerId(spec) === serverId) this.approvedMCPRegistry.unregister(spec.id);
     }
   }
 
@@ -978,7 +979,7 @@ export class ToolManager {
     if (this.mcpServerModes.get(serverId) === 'fixture') return client.tools.length;
     return this.approvedMCPRegistry
       .list()
-      .filter((spec) => spec.sourceRef?.serverId === serverId).length;
+      .filter((spec) => mcpServerId(spec) === serverId).length;
   }
 
   private toMCPCapabilityDescriptor(
@@ -1052,6 +1053,14 @@ export async function destroyToolManager(): Promise<void> {
     await toolManagerInstance.destroy();
     toolManagerInstance = null;
   }
+}
+
+function mcpServerId(spec: HyphaToolSpec): string | undefined {
+  return spec.sourceRef?.serverId ?? spec.sourceRef?.mcpServerId;
+}
+
+function mcpCapabilityId(spec: HyphaToolSpec): string | undefined {
+  return spec.sourceRef?.capabilityId ?? spec.sourceRef?.mcpCapabilityId;
 }
 
 export default ToolManager;
