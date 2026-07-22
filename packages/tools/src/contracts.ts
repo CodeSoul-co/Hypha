@@ -16,7 +16,7 @@ import {
   type TimeoutPolicySpec,
 } from '@hypha/core';
 
-export type ToolSource = 'local' | 'mcp' | 'http' | 'plugin' | 'execution' | 'hosted' | 'custom';
+export type ToolSource = 'local' | 'mcp' | 'http' | 'plugin' | 'hosted' | 'custom';
 
 export interface ToolSchemaSpec {
   jsonSchema: JsonSchema;
@@ -559,7 +559,7 @@ export const governedToolContractSpecSchema = z.object({
   tags: z.array(z.string()).optional(),
   input: toolSchemaSpecSchema,
   output: toolSchemaSpecSchema.optional(),
-  source: z.enum(['local', 'mcp', 'http', 'plugin', 'execution', 'hosted', 'custom']),
+  source: z.enum(['local', 'mcp', 'http', 'plugin', 'hosted', 'custom']),
   sourceRef: toolSourceRefSchema.optional(),
   semantics: toolSemanticSpecSchema,
   execution: toolExecutionPolicySpecSchema,
@@ -882,7 +882,7 @@ export const governedToolContractJsonSchema: JsonSchema = {
     tags: { type: 'array', items: { type: 'string' } },
     input: { type: 'object' },
     output: { type: 'object' },
-    source: { enum: ['local', 'mcp', 'http', 'plugin', 'execution', 'hosted', 'custom'] },
+    source: { enum: ['local', 'mcp', 'http', 'plugin', 'hosted', 'custom'] },
     sourceRef: { type: 'object' },
     semantics: { type: 'object' },
     execution: { type: 'object' },

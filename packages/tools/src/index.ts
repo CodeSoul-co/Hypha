@@ -27,8 +27,6 @@ import {
   type TelemetryRecorder,
   type TraceRecorder,
   type VersionedSpec,
-  type ExecutionDispatchRequest,
-  type ExecutionPort,
 } from '@hypha/core';
 import {
   createToolSchemaSpec,
@@ -1239,120 +1237,6 @@ export class MCPToolAdapter implements ToolAdapter {
 
   async health(): Promise<ProviderHealth> {
     return this.gateway.health(this.serverId);
-  }
-}
-
-export type ExecutionDispatchFactory<TInput = unknown> = (
-  request: AdapterExecutionRequest<TInput>
-) => Promise<ExecutionDispatchRequest> | ExecutionDispatchRequest;
-
-/**
- * The only Tool adapter permitted to cross into command/workspace execution.
- * Authorization evidence is produced by trusted composition code and is
- * revalidated by the ExecutionPort before any provider receives the request.
- */
-export class ExecutionToolAdapter<TInput = unknown> implements ToolAdapter<
-  TInput,
-  Awaited<ReturnType<ExecutionPort['execute']>>
-> {
-  readonly source: ToolSource = 'execution';
-  private readonly active = new Map<string, AbortController>();
-
-  constructor(
-    readonly id: string,
-    private readonly port: ExecutionPort,
-    private readonly createDispatch: ExecutionDispatchFactory<TInput>,
-    private readonly now: () => string = () => new Date().toISOString()
-  ) {}
-
-  async capabilities(): Promise<ToolAdapterCapabilities> {
-    return { execute: true, cancel: true, health: true, close: true };
-  }
-
-  async execute(
-    request: AdapterExecutionRequest<TInput>
-  ): Promise<ToolExecutionEnvelope<Awaited<ReturnType<ExecutionPort['execute']>>>> {
-    const invocationId = request.context.invocationId;
-    if (!invocationId) {
-      throw new FrameworkError({
-        code: 'EXECUTION_INVALID_REQUEST',
-        message: 'Execution Tool adapters require a governed invocationId.',
-      });
-    }
-    const dispatch = await this.createDispatch(request);
-    this.assertDispatchMatchesToolCall(request, dispatch);
-    const controller = new AbortController();
-    if (this.active.has(invocationId)) {
-      throw new FrameworkError({
-        code: 'TOOL_INVOCATION_STATE_CONFLICT',
-        message: `Execution invocation is already active: ${request.context.invocationId}`,
-      });
-    }
-    this.active.set(invocationId, controller);
-    try {
-      const result = await this.port.execute(dispatch, controller.signal);
-      return {
-        kind: 'tool_execution_envelope',
-        output: result,
-        artifactRefs: result.artifactRefs,
-        content: result.artifactRefs?.map((artifactRef) => ({ type: 'artifact', artifactRef })),
-        externalReceipt: result.executionId
-          ? {
-              receiptId: result.executionId,
-              provider: 'execution-port',
-              status: result.status === 'completed' ? 'committed' : 'unknown',
-              metadata: { activityId: result.activityId, eventIds: result.eventIds },
-            }
-          : undefined,
-        metadata: {
-          activityId: result.activityId,
-          executionId: result.executionId,
-          eventIds: result.eventIds,
-        },
-      };
-    } finally {
-      this.active.delete(invocationId);
-    }
-  }
-
-  async cancel(request: AdapterCancellationRequest): Promise<void> {
-    this.active.get(request.invocationId)?.abort(request.reason ?? 'Tool invocation cancelled');
-  }
-
-  async health(): Promise<ProviderHealth> {
-    return {
-      status: 'healthy',
-      checkedAt: this.now(),
-      details: { adapter: this.id, activeExecutions: this.active.size },
-    };
-  }
-
-  async close(): Promise<void> {
-    for (const controller of this.active.values()) controller.abort('Execution adapter closed');
-    this.active.clear();
-  }
-
-  private assertDispatchMatchesToolCall(
-    request: AdapterExecutionRequest<TInput>,
-    dispatch: ExecutionDispatchRequest
-  ): void {
-    const mismatches = [
-      dispatch.binding.toolId !== request.toolId && 'binding.toolId',
-      dispatch.activity.runId !== request.context.runId && 'activity.runId',
-      dispatch.authorization.runId !== request.context.runId && 'authorization.runId',
-      dispatch.authorization.invocationId !== request.context.invocationId &&
-        'authorization.invocationId',
-      dispatch.authorization.toolId !== request.toolId && 'authorization.toolId',
-      dispatch.activity.activityId !== dispatch.authorization.activityId &&
-        'authorization.activityId',
-    ].filter(Boolean);
-    if (mismatches.length) {
-      throw new FrameworkError({
-        code: 'EXECUTION_POLICY_DENIED',
-        message: 'Execution dispatch evidence does not match the governed Tool invocation.',
-        context: { invocationId: request.context.invocationId, mismatches },
-      });
-    }
   }
 }
 
