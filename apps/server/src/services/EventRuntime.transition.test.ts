@@ -11,6 +11,7 @@ describe('EventRuntime canonical transitions', () => {
   process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT = path.join(root, 'tool-snapshots');
   process.env.HYPHA_TOOL_ARTIFACT_ROOT = path.join(root, 'tool-artifacts');
   process.env.HYPHA_TOOL_OBSERVATION_ROOT = path.join(root, 'tool-observations');
+  process.env.HYPHA_SESSION_COMMAND_ARTIFACT_ROOT = path.join(root, 'session-command-artifacts');
   const runtime = getEventRuntime();
 
   beforeAll(async () => {
@@ -77,5 +78,38 @@ describe('EventRuntime canonical transitions', () => {
       },
     });
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'failed' });
+  });
+
+  it('recovers a durable start_run command through the Server scheduler exactly once', async () => {
+    expect(runtime.isSessionCommandSchedulerRunning()).toBe(false);
+    await runtime.startSessionCommandScheduler();
+    expect(runtime.isSessionCommandSchedulerRunning()).toBe(true);
+
+    const input = {
+      userId: 'user.command',
+      sessionId: 'session.command',
+      input: { task: 'queued' },
+      metadata: { surface: 'test.session-command' },
+    };
+    const first = await runtime.enqueueStartRun(input, 'request.command.1');
+    const reused = await runtime.enqueueStartRun(input, 'request.command.1');
+    expect(reused).toMatchObject({ id: first.id, status: 'reused' });
+
+    const scope = { userId: input.userId, sessionId: input.sessionId };
+    await runtime.drainSessionCommands(scope);
+    const commands = await runtime.listSessionCommands(scope);
+    expect(commands).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        status: 'applied',
+        attempts: 1,
+        resultRunId: first.targetRunId,
+      }),
+    ]);
+    await expect(runtime.projectRun(first.targetRunId!)).resolves.toMatchObject({
+      id: first.targetRunId,
+      sessionId: expect.any(String),
+      status: 'running',
+    });
   });
 });

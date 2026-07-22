@@ -5,10 +5,13 @@ import {
   FileToolContractSnapshotStore,
   FileToolObservationStore,
   FileToolRuntimeStore,
+  LocalFilesystemExecutionArtifactStore,
   SQLiteEventStore,
 } from '@hypha/adapters-local';
 import {
+  ArtifactSessionCommandPayloadStore,
   createFrameworkEvent,
+  hashCanonicalJson,
   InMemoryEventSchemaRegistry,
   InMemoryTelemetryRecorder,
   FrameworkError,
@@ -27,6 +30,9 @@ import {
   type NormalizedRuntimeError,
   type RuntimeCancelResult,
   type RuntimeJsonValue,
+  type SessionCommandHandlerResult,
+  type SessionCommandRecord,
+  type SessionQueueScope,
   type SpecRef,
 } from '@hypha/core';
 import {
@@ -43,6 +49,8 @@ import {
 import {
   createInitialSnapshot,
   evaluateGuardExpression,
+  fsmProcessSpecSchema,
+  validateFSMProcessSpec,
   type FSMProcessSpec,
   type FSMSnapshot,
 } from '@hypha/fsm';
@@ -127,6 +135,10 @@ import { createRuntimeBackbone, type RuntimeBackbone } from '../runtime/RuntimeB
 import { RuntimeBackboneLifecycle } from '../runtime/RuntimeBackboneLifecycle';
 import type { RuntimeComposition } from '../runtime/RuntimeCompositionRoot';
 import { createServerRuntimeComposition } from '../runtime/ServerRuntimeComposition';
+import {
+  ServerSessionCommandRuntime,
+  type ServerSessionCommandPayloads,
+} from '../runtime/ServerSessionCommandRuntime';
 import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
 import {
   RuntimeTransitionDispatcher,
@@ -221,6 +233,12 @@ export interface StartRunInput {
   domainPack?: DomainPackSpec;
   fsm?: FSMProcessSpec;
   metadata?: Record<string, unknown>;
+}
+
+type StartRunCommandPayload = Omit<StartRunInput, 'userId' | 'sessionId'>;
+
+interface RuntimeSessionCommandPayloads extends ServerSessionCommandPayloads {
+  start_run: StartRunCommandPayload;
 }
 
 export interface ChatInferenceInput {
@@ -594,6 +612,10 @@ class EventRuntimeService {
   private canonicalEvents?: DurableEventStoreBridge;
   private cancellationService?: RuntimeCancellationService;
   private recoveryKnowledge?: RecoveryKnowledgePort;
+  private canonicalRuntimeFilename?: string;
+  private sessionCommandInitialization?: Promise<void>;
+  private sessionCommandArtifacts?: LocalFilesystemExecutionArtifactStore;
+  private sessionCommands?: ServerSessionCommandRuntime<RuntimeSessionCommandPayloads>;
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -684,6 +706,7 @@ class EventRuntimeService {
         options.filename ??
         process.env.HYPHA_CANONICAL_RUNTIME_DB ??
         `${legacyEventDbPath}.canonical.sqlite`;
+      this.canonicalRuntimeFilename = filename;
       const schemaRegistry = options.schemaRegistry ?? new InMemoryEventSchemaRegistry();
       this.canonicalLifecycle = new RuntimeBackboneLifecycle(async () => {
         await registerRuntimeOrchestrationEventSchemas(schemaRegistry);
@@ -702,6 +725,9 @@ class EventRuntimeService {
         nextId: (namespace) => `${namespace}:${generateId()}`,
       });
     }
+    await this.initializeSessionCommands(
+      this.canonicalRuntimeFilename ?? options.filename ?? 'runtime.canonical.sqlite'
+    );
     return backbone;
   }
 
@@ -732,11 +758,147 @@ class EventRuntimeService {
     return this.canonicalLifecycle?.isInitialized() ?? false;
   }
 
+  async startSessionCommandScheduler(): Promise<void> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const commands = this.requireSessionCommands();
+    if (!commands.isRunning()) commands.start();
+  }
+
+  isSessionCommandSchedulerRunning(): boolean {
+    return this.sessionCommands?.isRunning() ?? false;
+  }
+
+  async enqueueStartRun(
+    input: StartRunInput,
+    idempotencyKey: string
+  ): Promise<SessionCommandRecord> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const normalizedKey = idempotencyKey.trim();
+    if (!normalizedKey) invalidRuntimeInput('idempotencyKey must be non-empty');
+    const digest = hashCanonicalJson({
+      commandType: 'start_run',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      idempotencyKey: normalizedKey,
+    }).slice('sha256:'.length);
+    const { userId, sessionId, ...payload } = input;
+    return this.requireSessionCommands().enqueue({
+      id: `session-command:${digest}`,
+      commandType: 'start_run',
+      idempotencyKey: normalizedKey,
+      userId,
+      sessionId,
+      targetRunId: `run:${digest}`,
+      payload,
+    });
+  }
+
+  async listSessionCommands(scope: SessionQueueScope): Promise<SessionCommandRecord[]> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    return this.canonicalRuntime().sessionQueue.list({ scope });
+  }
+
+  async drainSessionCommands(scope: SessionQueueScope): Promise<void> {
+    if (!this.isSessionCommandSchedulerRunning()) {
+      throw new FrameworkError({
+        code: 'RUNTIME_SESSION_QUEUE_CONFLICT',
+        message: 'Session Command Scheduler must be running before awaiting drain',
+      });
+    }
+    await this.canonicalRuntime().sessionQueue.drain(scope);
+  }
+
   async close(): Promise<void> {
-    await this.canonicalLifecycle?.close();
+    await this.sessionCommandInitialization?.catch(() => undefined);
+    const failures: unknown[] = [];
+    try {
+      await this.sessionCommands?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.sessionCommandArtifacts?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.canonicalLifecycle?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    this.sessionCommands = undefined;
+    this.sessionCommandArtifacts = undefined;
+    this.sessionCommandInitialization = undefined;
     this.canonicalComposition = undefined;
     this.canonicalEvents = undefined;
     this.cancellationService = undefined;
+    if (failures.length > 0) throw failures[0];
+  }
+
+  private async initializeSessionCommands(filename: string): Promise<void> {
+    if (this.sessionCommands) return;
+    const pending = this.sessionCommandInitialization ?? this.openSessionCommands(filename);
+    this.sessionCommandInitialization = pending;
+    try {
+      await pending;
+    } catch (error) {
+      if (this.sessionCommandInitialization === pending) {
+        this.sessionCommandInitialization = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async openSessionCommands(filename: string): Promise<void> {
+    const artifacts = new LocalFilesystemExecutionArtifactStore({
+      rootPath:
+        process.env.HYPHA_SESSION_COMMAND_ARTIFACT_ROOT ??
+        `${path.resolve(filename)}.session-command-artifacts`,
+    });
+    try {
+      const health = await artifacts.health();
+      if (health.status !== 'healthy') {
+        throw new Error(
+          `Session Command Artifact Store is ${health.status}${health.message ? `: ${health.message}` : ''}`
+        );
+      }
+      const commands = new ServerSessionCommandRuntime<RuntimeSessionCommandPayloads>({
+        queue: this.canonicalRuntime().sessionQueue,
+        payloads: new ArtifactSessionCommandPayloadStore({ artifacts }),
+        workerId: `${this.runtimeWorkerId}:session-commands`,
+        leaseMs: 30_000,
+        definitions: {
+          start_run: {
+            decode: decodeStartRunCommandPayload,
+            handle: ({ command, payload }) => this.handleStartRunCommand(command, payload),
+          },
+        },
+        classifyFailure: classifySessionCommandFailure,
+        onError: (error) => logger.error('Session Command Scheduler polling failed', error),
+      });
+      this.sessionCommandArtifacts = artifacts;
+      this.sessionCommands = commands;
+    } catch (error) {
+      await artifacts.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private requireSessionCommands(): ServerSessionCommandRuntime<RuntimeSessionCommandPayloads> {
+    if (!this.sessionCommands) throw new Error('Session Command Runtime is not initialized');
+    return this.sessionCommands;
+  }
+
+  private async handleStartRunCommand(
+    command: Readonly<SessionCommandRecord>,
+    payload: StartRunCommandPayload
+  ): Promise<SessionCommandHandlerResult> {
+    if (!command.targetRunId) invalidRuntimeInput('start_run command requires targetRunId');
+    const run = await this.startRunWithId(
+      { ...payload, userId: command.userId, sessionId: command.sessionId },
+      command.targetRunId
+    );
+    return { disposition: 'applied', resultRunId: run.runId };
   }
 
   private canonicalEventStore(): DurableEventStoreBridge {
@@ -779,13 +941,16 @@ class EventRuntimeService {
   }
 
   async startRun(input: StartRunInput): Promise<EventRunHandle> {
+    return this.startRunWithId(input, generateId());
+  }
+
+  private async startRunWithId(input: StartRunInput, runId: string): Promise<EventRunHandle> {
     if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
     await this.ensureSession(input.userId, input.sessionId, domainPack, input.metadata);
 
-    const runId = generateId();
     const timestamp = new Date().toISOString();
     const workflowRef = input.workflowRef ?? {
       id: fsm.id,
@@ -802,28 +967,49 @@ class EventRuntimeService {
       snapshot,
     };
 
-    await this.canonicalRuntimeComposition().runManager.createRun({
-      id: runId,
-      sessionId: runtimeSessionId,
-      userId: input.userId,
-      domainPackRef: { id: domainPack.id, version: domainPack.version },
-      workflowRef,
-      agentRef: input.agentId ? { id: input.agentId } : undefined,
-      input: input.input,
-      metadata: {
-        ...input.metadata,
-        ...runtimeRunContextMetadata(context),
-      },
-      timestamp,
-    });
-    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
-    await this.append(
-      runId,
-      'fsm.state.entered',
-      { stateId: snapshot.currentState, snapshot },
-      timestamp,
-      { fsmState: snapshot.currentState }
-    );
+    const existingEvents = await this.canonicalEventStore().list({ runId });
+    const existingContext = projectRuntimeRunContext(existingEvents, runId);
+    if (existingContext) {
+      if (
+        existingContext.userId !== input.userId ||
+        existingContext.clientSessionId !== input.sessionId ||
+        existingContext.sessionId !== runtimeSessionId
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+          message: `Run id is already bound to another Session scope: ${runId}`,
+        });
+      }
+    } else {
+      await this.canonicalRuntimeComposition().runManager.createRun({
+        id: runId,
+        sessionId: runtimeSessionId,
+        userId: input.userId,
+        domainPackRef: { id: domainPack.id, version: domainPack.version },
+        workflowRef,
+        agentRef: input.agentId ? { id: input.agentId } : undefined,
+        input: input.input,
+        metadata: {
+          ...input.metadata,
+          ...runtimeRunContextMetadata(context),
+        },
+        timestamp,
+      });
+    }
+    if (!existingEvents.some((event) => event.type === 'run.started')) {
+      await this.append(runId, 'run.started', { runId, input: input.input }, timestamp, {
+        eventId: `${runId}:started`,
+      });
+    }
+    if (!existingEvents.some((event) => event.type === 'fsm.state.entered')) {
+      await this.append(
+        runId,
+        'fsm.state.entered',
+        { stateId: snapshot.currentState, snapshot },
+        timestamp,
+        { eventId: `${runId}:initial-state`, fsmState: snapshot.currentState }
+      );
+    }
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
@@ -3294,11 +3480,11 @@ class EventRuntimeService {
     type: FrameworkEventType,
     payload: unknown,
     timestamp?: string,
-    options: { stepId?: string; fsmState?: string } = {}
+    options: { eventId?: string; stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = await this.requireRun(runId);
     await this.canonicalRuntimeComposition().runManager.appendRunEvent({
-      id: `${runId}:${type}:${generateId()}`,
+      id: options.eventId ?? `${runId}:${type}:${generateId()}`,
       type,
       runId,
       sessionId: context.sessionId,
@@ -3926,6 +4112,79 @@ function inferToolSideEffect(
     return 'read';
   }
   return 'read';
+}
+
+function decodeStartRunCommandPayload(payload: unknown): StartRunCommandPayload {
+  const record = asRecord(payload);
+  if (!record) invalidRuntimeInput('start_run payload must be an object');
+  const allowed = new Set(['input', 'agentId', 'workflowRef', 'domainPack', 'fsm', 'metadata']);
+  const unexpected = Object.keys(record).find((key) => !allowed.has(key));
+  if (unexpected) invalidRuntimeInput(`start_run payload contains an unknown field: ${unexpected}`);
+
+  const decoded: StartRunCommandPayload = {};
+  if ('input' in record) decoded.input = record.input;
+  if ('agentId' in record) {
+    const agentId = stringValue(record.agentId);
+    if (!agentId) invalidRuntimeInput('start_run agentId must be a non-empty string');
+    decoded.agentId = agentId;
+  }
+  if ('workflowRef' in record)
+    decoded.workflowRef = decodeSpecRef(record.workflowRef, 'workflowRef');
+  if ('domainPack' in record) decoded.domainPack = validateDomainPackSpec(record.domainPack);
+  if ('fsm' in record) {
+    const fsm = fsmProcessSpecSchema.parse(record.fsm);
+    validateFSMProcessSpec(fsm);
+    decoded.fsm = fsm;
+  }
+  if ('metadata' in record) {
+    const metadata = asRecord(record.metadata);
+    if (!metadata) invalidRuntimeInput('start_run metadata must be an object');
+    decoded.metadata = metadata;
+  }
+  return decoded;
+}
+
+function decodeSpecRef(value: unknown, label: string): SpecRef {
+  const record = asRecord(value);
+  const id = stringValue(record?.id);
+  if (!record || !id) invalidRuntimeInput(`${label}.id must be a non-empty string`);
+  const version = record.version === undefined ? undefined : stringValue(record.version);
+  const revision = record.revision === undefined ? undefined : stringValue(record.revision);
+  if (record.version !== undefined && !version) {
+    invalidRuntimeInput(`${label}.version must be a non-empty string`);
+  }
+  if (record.revision !== undefined && !revision) {
+    invalidRuntimeInput(`${label}.revision must be a non-empty string`);
+  }
+  return {
+    id,
+    ...(version === undefined ? {} : { version }),
+    ...(revision === undefined ? {} : { revision }),
+  };
+}
+
+function classifySessionCommandFailure(
+  error: unknown,
+  command: Readonly<SessionCommandRecord>
+): SessionCommandHandlerResult {
+  const normalized = asRecord(asRecord(error)?.normalizedError);
+  const frameworkCode = error instanceof FrameworkError ? error.code : undefined;
+  const normalizedCode = stringValue(normalized?.code);
+  const rejectionCode = (frameworkCode ?? normalizedCode ?? 'session_command_unexpected_error')
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/gu, '_');
+  if (normalized?.retryable === true) {
+    const delayMs = Math.min(30_000, 1_000 * 2 ** Math.max(0, command.attempts - 1));
+    return {
+      disposition: 'retry',
+      availableAt: new Date(Date.now() + delayMs).toISOString(),
+    };
+  }
+  return { disposition: 'failed', rejectionCode, deadLetter: true };
+}
+
+function invalidRuntimeInput(message: string): never {
+  throw new FrameworkError({ code: 'RUNTIME_INVALID_INPUT', message });
 }
 
 let service: EventRuntimeService | null = null;

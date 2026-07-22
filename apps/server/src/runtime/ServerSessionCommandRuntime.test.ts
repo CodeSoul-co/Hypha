@@ -95,7 +95,8 @@ describe('ServerSessionCommandRuntime', () => {
   });
 
   it('maps handler failures explicitly instead of letting the Worker misclassify them', async () => {
-    const queue = new InMemorySessionQueue();
+    const now = () => '2026-07-22T08:00:00.000Z';
+    const queue = new InMemorySessionQueue({ now });
     const runtime = new ServerSessionCommandRuntime<TestPayloads>({
       queue,
       payloads: new ArtifactSessionCommandPayloadStore({
@@ -115,7 +116,7 @@ describe('ServerSessionCommandRuntime', () => {
           },
         },
       },
-      now: () => '2026-07-22T08:00:00.000Z',
+      now,
     });
     await runtime.enqueue({
       id: 'command.retry',
