@@ -27,25 +27,31 @@ export function runtimeRunContextMetadata(context: RuntimeRunContext): Record<st
 /** Rebuilds the disposable Server cache exclusively from persisted Events. */
 export function projectRuntimeRunContexts(events: FrameworkEvent[]): RuntimeRunContext[] {
   const ordered = [...events].sort(compareEvents);
-  const latestSnapshots = new Map<string, FSMSnapshot>();
+  const contexts = new Map<string, RuntimeRunContext>();
+
   for (const event of ordered) {
+    if (event.type === 'run.created') {
+      const persisted = event.metadata?.[RUNTIME_RUN_CONTEXT_METADATA_KEY];
+      if (persisted !== undefined) contexts.set(event.runId, parseContext(persisted, event));
+      continue;
+    }
     if (!isSnapshotEvent(event.type)) continue;
-    const snapshot = record(event.payload)?.snapshot;
-    if (snapshot !== undefined) latestSnapshots.set(event.runId, snapshot as FSMSnapshot);
+    const context = contexts.get(event.runId);
+    if (!context) continue;
+
+    const payload = record(event.payload);
+    const persistedSnapshot = payload?.snapshot;
+    if (persistedSnapshot !== undefined) {
+      context.snapshot = persistedSnapshot as FSMSnapshot;
+    } else if (event.type === 'fsm.state.entered') {
+      context.snapshot = snapshotFromCanonicalStateEntry(context, payload?.stateId, event);
+    }
   }
-  const contexts: RuntimeRunContext[] = [];
 
-  for (const created of ordered.filter((event) => event.type === 'run.created')) {
-    const persisted = created.metadata?.[RUNTIME_RUN_CONTEXT_METADATA_KEY];
-    if (persisted === undefined) continue;
-
-    const context = parseContext(persisted, created);
-    context.snapshot = latestSnapshots.get(context.runId) ?? context.snapshot;
+  return [...contexts.values()].map((context) => {
     validateFSMSnapshot(context.fsm, context.snapshot, context.runId);
-    contexts.push(structuredClone(context));
-  }
-
-  return contexts;
+    return structuredClone(context);
+  });
 }
 
 export function projectRuntimeRunContext(
@@ -74,6 +80,33 @@ function parseContext(value: unknown, created: FrameworkEvent): RuntimeRunContex
   validateFSMProcessSpec(context.fsm);
   validateFSMSnapshot(context.fsm, context.snapshot, context.runId);
   return context;
+}
+
+function snapshotFromCanonicalStateEntry(
+  context: RuntimeRunContext,
+  stateIdValue: unknown,
+  event: FrameworkEvent
+): FSMSnapshot {
+  const stateId = requiredString(stateIdValue, 'stateId', event.id);
+  const state = context.fsm.states.find((candidate) => candidate.id === stateId);
+  if (!state) invalidContext(event.id, `Run context State is not declared: ${stateId}`);
+  const repeatedCurrentState = context.snapshot.currentState === stateId;
+  const status: FSMSnapshot['status'] = context.fsm.terminalStates.includes(stateId)
+    ? state.kind === 'failed'
+      ? 'failed'
+      : state.kind === 'cancelled'
+        ? 'cancelled'
+        : 'completed'
+    : 'running';
+  return {
+    ...context.snapshot,
+    currentState: stateId,
+    statePath: repeatedCurrentState
+      ? context.snapshot.statePath
+      : [...context.snapshot.statePath, stateId],
+    status,
+    updatedAt: event.timestamp,
+  };
 }
 
 function isSnapshotEvent(type: FrameworkEvent['type']): boolean {
