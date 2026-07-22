@@ -16,6 +16,7 @@ import {
   InMemoryTelemetryRecorder,
   FrameworkError,
   RuntimeCancellationService,
+  RuntimeRunControlService,
   registerRuntimeOrchestrationEventSchemas,
   recoveryFailureFingerprint,
   stableRecoveryHash,
@@ -247,9 +248,31 @@ export interface CancelRunCommandInput {
 
 type CancelRunCommandPayload = Pick<CancelRunCommandInput, 'reason'>;
 
+export interface ResumeRunCommandInput {
+  userId: string;
+  sessionId: string;
+  runId: string;
+  key?: string;
+  payload?: RuntimeJsonValue;
+}
+
+type ResumeRunCommandPayload = Pick<ResumeRunCommandInput, 'key' | 'payload'>;
+
+export interface SignalRunCommandInput {
+  userId: string;
+  sessionId: string;
+  runId: string;
+  key: string;
+  payload: RuntimeJsonValue;
+}
+
+type SignalRunCommandPayload = Pick<SignalRunCommandInput, 'key' | 'payload'>;
+
 interface RuntimeSessionCommandPayloads extends ServerSessionCommandPayloads {
   start_run: StartRunCommandPayload;
   cancel: CancelRunCommandPayload;
+  resume: ResumeRunCommandPayload;
+  signal: SignalRunCommandPayload;
 }
 
 export interface ChatInferenceInput {
@@ -622,6 +645,7 @@ class EventRuntimeService {
   private canonicalComposition?: Readonly<RuntimeComposition>;
   private canonicalEvents?: DurableEventStoreBridge;
   private cancellationService?: RuntimeCancellationService;
+  private runControlService?: RuntimeRunControlService;
   private recoveryKnowledge?: RecoveryKnowledgePort;
   private canonicalRuntimeFilename?: string;
   private sessionCommandInitialization?: Promise<void>;
@@ -836,6 +860,45 @@ class EventRuntimeService {
     });
   }
 
+  async enqueueResumeRun(
+    input: ResumeRunCommandInput,
+    idempotencyKey: string
+  ): Promise<SessionCommandRecord> {
+    await this.requireCommandRunScope(input, idempotencyKey);
+    const normalizedKey = idempotencyKey.trim();
+    const digest = sessionCommandDigest('resume', input, normalizedKey);
+    return this.requireSessionCommands().enqueue({
+      id: `session-command:${digest}`,
+      commandType: 'resume',
+      idempotencyKey: normalizedKey,
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetRunId: input.runId,
+      payload: {
+        ...(input.key === undefined ? {} : { key: input.key }),
+        ...(input.payload === undefined ? {} : { payload: input.payload }),
+      },
+    });
+  }
+
+  async enqueueSignalRun(
+    input: SignalRunCommandInput,
+    idempotencyKey: string
+  ): Promise<SessionCommandRecord> {
+    await this.requireCommandRunScope(input, idempotencyKey);
+    const normalizedKey = idempotencyKey.trim();
+    const digest = sessionCommandDigest('signal', input, normalizedKey);
+    return this.requireSessionCommands().enqueue({
+      id: `session-command:${digest}`,
+      commandType: 'signal',
+      idempotencyKey: normalizedKey,
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetRunId: input.runId,
+      payload: { key: input.key, payload: input.payload },
+    });
+  }
+
   async listSessionCommands(
     scope: SessionQueueScope,
     options: Omit<ListSessionCommandsRequest, 'scope'> = {}
@@ -878,6 +941,7 @@ class EventRuntimeService {
     this.canonicalComposition = undefined;
     this.canonicalEvents = undefined;
     this.cancellationService = undefined;
+    this.runControlService = undefined;
     if (failures.length > 0) throw failures[0];
   }
 
@@ -921,6 +985,14 @@ class EventRuntimeService {
           cancel: {
             decode: decodeCancelRunCommandPayload,
             handle: ({ command, payload }) => this.handleCancelRunCommand(command, payload),
+          },
+          resume: {
+            decode: decodeResumeRunCommandPayload,
+            handle: ({ command, payload }) => this.handleResumeRunCommand(command, payload),
+          },
+          signal: {
+            decode: decodeSignalRunCommandPayload,
+            handle: ({ command, payload }) => this.handleSignalRunCommand(command, payload),
           },
         },
         classifyFailure: classifySessionCommandFailure,
@@ -974,6 +1046,91 @@ class EventRuntimeService {
       resultRunId: command.targetRunId,
       resultEventIds: result.eventIds,
     };
+  }
+
+  private handleResumeRunCommand(
+    command: Readonly<SessionCommandRecord>,
+    payload: ResumeRunCommandPayload
+  ): Promise<SessionCommandHandlerResult> {
+    return this.handleRunControlCommand(command, {
+      kind: 'resume',
+      ...payload,
+      requestedAt: command.createdAt,
+    });
+  }
+
+  private handleSignalRunCommand(
+    command: Readonly<SessionCommandRecord>,
+    payload: SignalRunCommandPayload
+  ): Promise<SessionCommandHandlerResult> {
+    return this.handleRunControlCommand(command, {
+      kind: 'signal',
+      ...payload,
+      sentAt: command.createdAt,
+    });
+  }
+
+  private async handleRunControlCommand(
+    command: Readonly<SessionCommandRecord>,
+    control:
+      | ({ kind: 'resume'; requestedAt: string } & ResumeRunCommandPayload)
+      | ({ kind: 'signal'; sentAt: string } & SignalRunCommandPayload)
+  ): Promise<SessionCommandHandlerResult> {
+    if (!command.targetRunId) invalidRuntimeInput(`${control.kind} command requires targetRunId`);
+    const run = await this.requireOwnedRunScope(command.targetRunId, command.userId);
+    if (run.clientSessionId !== command.sessionId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Runtime run was not found for the authenticated Session scope.',
+        context: { runId: command.targetRunId },
+      });
+    }
+    const result = await this.runtimeRunControlService().execute({
+      commandId: command.id,
+      scope: {
+        userId: command.userId,
+        sessionId: run.sessionId,
+        runId: command.targetRunId,
+      },
+      principal: {
+        principalId: command.userId,
+        type: 'user',
+        userId: command.userId,
+        permissionScopes: [`runtime.run.${control.kind}`],
+      },
+      ownerId: this.runtimeWorkerId,
+      leaseTtlMs: 30_000,
+      idempotencyKey: command.idempotencyKey,
+      ...control,
+    });
+    if (result.disposition === 'lease_unavailable') {
+      return {
+        disposition: 'retry',
+        availableAt: new Date(Date.now() + 250).toISOString(),
+      };
+    }
+    return {
+      disposition: 'applied',
+      resultRunId: command.targetRunId,
+      resultEventIds: result.eventIds,
+    };
+  }
+
+  private async requireCommandRunScope(
+    input: { userId: string; sessionId: string; runId: string },
+    idempotencyKey: string
+  ): Promise<OwnedRunScope> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    if (!idempotencyKey.trim()) invalidRuntimeInput('idempotencyKey must be non-empty');
+    const run = await this.requireOwnedRunScope(input.runId, input.userId);
+    if (run.clientSessionId !== input.sessionId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Runtime run was not found for the authenticated Session scope.',
+        context: { runId: input.runId },
+      });
+    }
+    return run;
   }
 
   private canonicalEventStore(): DurableEventStoreBridge {
@@ -3651,6 +3808,19 @@ class EventRuntimeService {
     return this.cancellationService;
   }
 
+  private runtimeRunControlService(): RuntimeRunControlService {
+    if (this.runControlService) return this.runControlService;
+    const runtime = this.canonicalRuntime();
+    this.runControlService = new RuntimeRunControlService({
+      events: runtime.events,
+      projections: runtime.projections,
+      projectionStore: runtime.projectionStore,
+      runLeases: runtime.runLeases,
+      nextId: (namespace) => `${namespace}:${generateId()}`,
+    });
+    return this.runControlService;
+  }
+
   private runtimeSessionId(userId: string, clientSessionId: string): string {
     return `user:${userId}:session:${clientSessionId}`;
   }
@@ -4247,6 +4417,62 @@ function decodeCancelRunCommandPayload(payload: unknown): CancelRunCommandPayloa
   const reason = stringValue(record.reason);
   if (!reason) invalidRuntimeInput('cancel reason must be a non-empty string');
   return { reason };
+}
+
+function decodeResumeRunCommandPayload(payload: unknown): ResumeRunCommandPayload {
+  const record = strictCommandPayload(payload, 'resume', ['key', 'payload']);
+  const decoded: ResumeRunCommandPayload = {};
+  if ('key' in record) {
+    const key = stringValue(record.key);
+    if (!key) invalidRuntimeInput('resume key must be a non-empty string');
+    decoded.key = key;
+  }
+  if ('payload' in record) decoded.payload = runtimeJsonValue(record.payload, 'resume payload');
+  return decoded;
+}
+
+function decodeSignalRunCommandPayload(payload: unknown): SignalRunCommandPayload {
+  const record = strictCommandPayload(payload, 'signal', ['key', 'payload']);
+  const key = stringValue(record.key);
+  if (!key) invalidRuntimeInput('signal key must be a non-empty string');
+  if (!('payload' in record)) invalidRuntimeInput('signal payload is required');
+  return { key, payload: runtimeJsonValue(record.payload, 'signal payload') };
+}
+
+function strictCommandPayload(
+  payload: unknown,
+  commandType: string,
+  allowed: readonly string[]
+): Record<string, unknown> {
+  const record = asRecord(payload);
+  if (!record) invalidRuntimeInput(`${commandType} payload must be an object`);
+  const unexpected = Object.keys(record).find((key) => !allowed.includes(key));
+  if (unexpected) {
+    invalidRuntimeInput(`${commandType} payload contains an unknown field: ${unexpected}`);
+  }
+  return record;
+}
+
+function runtimeJsonValue(value: unknown, label: string): RuntimeJsonValue {
+  try {
+    hashCanonicalJson(value);
+  } catch {
+    invalidRuntimeInput(`${label} must be JSON-serializable`);
+  }
+  return value as RuntimeJsonValue;
+}
+
+function sessionCommandDigest(
+  commandType: 'resume' | 'signal',
+  scope: { userId: string; sessionId: string },
+  idempotencyKey: string
+): string {
+  return hashCanonicalJson({
+    commandType,
+    userId: scope.userId,
+    sessionId: scope.sessionId,
+    idempotencyKey,
+  }).slice('sha256:'.length);
 }
 
 function decodeSpecRef(value: unknown, label: string): SpecRef {

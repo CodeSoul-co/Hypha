@@ -24,6 +24,64 @@ describe('EventRuntime canonical transitions', () => {
     await runtime.close();
   });
 
+  async function seedPendingWait(
+    runId: string,
+    userId: string,
+    wait:
+      | { type: 'pause'; key: string }
+      | {
+          type: 'signal';
+          key: string;
+          expectedSchema: Record<string, unknown>;
+          expiresAt: string;
+        }
+  ): Promise<void> {
+    const owned = await runtime.requireOwnedRunScope(runId, userId);
+    const events = runtime.canonicalRuntime().events;
+    const scope = { userId, runId };
+    const head = await events.getStreamHead(scope);
+    if (!head) throw new Error('Expected a canonical Run Event stream');
+    const timestamp = new Date().toISOString();
+    const waitId = `wait:${runId}`;
+    const event = (
+      id: string,
+      type: 'runtime.wait.created' | 'run.paused' | 'run.waiting_signal'
+    ) => ({
+      id,
+      type,
+      version: '1.0.0' as const,
+      userId,
+      sessionId: owned.sessionId,
+      runId,
+      fsmState: 'RunInitialized',
+      timestamp,
+      payload:
+        type === 'runtime.wait.created'
+          ? {
+              waitId,
+              stateId: 'RunInitialized',
+              stateAttempt: 1,
+              wait,
+              createdAt: timestamp,
+            }
+          : { waitId, stateId: 'RunInitialized', wait },
+      metadata: { stateAttempt: 1 },
+    });
+    await events.append({
+      scope,
+      events: [
+        event(`event:${runId}:wait-created`, 'runtime.wait.created'),
+        event(
+          `event:${runId}:waiting`,
+          wait.type === 'pause' ? 'run.paused' : 'run.waiting_signal'
+        ),
+      ],
+      expectedLastSequence: head.lastSequence,
+      expectedRunRevision: head.runRevision,
+      idempotencyKey: `seed-wait:${runId}`,
+    });
+  }
+
   it('executes State transitions through the fenced driver and completes once', async () => {
     const run = await runtime.startRun({
       userId: 'user.transition',
@@ -144,5 +202,93 @@ describe('EventRuntime canonical transitions', () => {
     expect(Array.isArray(commands[0]?.resultEventIds)).toBe(true);
     expect(commands[0]?.resultEventIds?.length).toBeGreaterThan(0);
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+  it('resumes a paused Run through a durable Session command exactly once', async () => {
+    const input = {
+      userId: 'user.resume-command',
+      sessionId: 'session.resume-command',
+    };
+    const run = await runtime.startRun({ ...input, input: { task: 'resume-me' } });
+    await seedPendingWait(run.runId, input.userId, { type: 'pause', key: 'resume.plan' });
+    const first = await runtime.enqueueResumeRun(
+      {
+        ...input,
+        runId: run.runId,
+        key: 'resume.plan',
+        payload: { note: 'continue' },
+      },
+      'request.resume.1'
+    );
+    const reused = await runtime.enqueueResumeRun(
+      {
+        ...input,
+        runId: run.runId,
+        key: 'resume.plan',
+        payload: { note: 'continue' },
+      },
+      'request.resume.1'
+    );
+    expect(reused).toMatchObject({ id: first.id, status: 'reused' });
+
+    const scope = { userId: input.userId, sessionId: input.sessionId };
+    await runtime.drainSessionCommands(scope);
+    const commands = await runtime.listSessionCommands(scope);
+    expect(commands).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        status: 'applied',
+        attempts: 1,
+        resultRunId: run.runId,
+      }),
+    ]);
+    const events = await runtime.listEvents(run.runId);
+    expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'runtime.wait.resolved')).toHaveLength(1);
+    await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('delivers a validated Signal through a durable Session command exactly once', async () => {
+    const input = {
+      userId: 'user.signal-command',
+      sessionId: 'session.signal-command',
+    };
+    const run = await runtime.startRun({ ...input, input: { task: 'signal-me' } });
+    await seedPendingWait(run.runId, input.userId, {
+      type: 'signal',
+      key: 'approval.received',
+      expectedSchema: {
+        type: 'object',
+        required: ['approved'],
+        properties: { approved: { type: 'boolean' } },
+        additionalProperties: false,
+      },
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    const commandInput = {
+      ...input,
+      runId: run.runId,
+      key: 'approval.received',
+      payload: { approved: true },
+    };
+    const first = await runtime.enqueueSignalRun(commandInput, 'request.signal.1');
+    const reused = await runtime.enqueueSignalRun(commandInput, 'request.signal.1');
+    expect(reused).toMatchObject({ id: first.id, status: 'reused' });
+
+    const scope = { userId: input.userId, sessionId: input.sessionId };
+    await runtime.drainSessionCommands(scope);
+    const commands = await runtime.listSessionCommands(scope);
+    expect(commands).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        status: 'applied',
+        attempts: 1,
+        resultRunId: run.runId,
+      }),
+    ]);
+    const events = await runtime.listEvents(run.runId);
+    expect(events.filter((event) => event.type === 'runtime.signal.received')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
+    await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
   });
 });
