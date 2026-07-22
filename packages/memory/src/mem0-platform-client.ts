@@ -42,6 +42,7 @@ export interface Mem0PlatformClientOptions {
   mappingProfile?: ExternalMemoryMappingRuntimeProfile;
   operationStore?: ExternalProviderOperationStore;
   operationDeadlineMs?: number;
+  maxOperationAttempts?: number;
   now?: () => Date;
 }
 
@@ -81,6 +82,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   private readonly providerId: string;
   private readonly operationStore: ExternalProviderOperationStore;
   private readonly operationDeadlineMs: number;
+  private readonly maxOperationAttempts: number;
   private readonly now: () => Date;
 
   constructor(options: Mem0PlatformClientOptions) {
@@ -103,6 +105,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
       mappingProfile
     );
     this.operationDeadlineMs = options.operationDeadlineMs ?? 300_000;
+    this.maxOperationAttempts = options.maxOperationAttempts ?? 5;
     this.now = options.now ?? (() => new Date());
     const runtimeFetch = (globalThis as unknown as { fetch?: Mem0HttpFetch }).fetch;
     const fetcher = options.fetch ?? runtimeFetch;
@@ -242,6 +245,49 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
     };
   }
 
+  async resumeEvent(operationId: string, signal?: AbortSignal): Promise<Mem0PlatformEvent | null> {
+    const operation = await this.operationStore.get(this.providerId, operationId);
+    if (
+      !operation ||
+      operation.kind !== 'mem0_event' ||
+      !operation.externalOperationId ||
+      !['pending', 'running'].includes(operation.state)
+    ) {
+      return null;
+    }
+    const now = this.now().toISOString();
+    if (operation.cancellationRequestedAt || signal?.aborted) {
+      await this.operationStore.set({ ...operation, state: 'cancelled', updatedAt: now });
+      return null;
+    }
+    if (operation.deadlineAt && operation.deadlineAt <= now) {
+      await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: now });
+      return null;
+    }
+    try {
+      const event = await this.getEvent(operation.externalOperationId, signal);
+      const attempts = operation.attempts + 1;
+      const state =
+        event.status === 'SUCCEEDED'
+          ? 'succeeded'
+          : event.status === 'FAILED' || attempts >= this.maxOperationAttempts
+            ? 'dead_letter'
+            : event.status === 'RUNNING'
+              ? 'running'
+              : 'pending';
+      await this.operationStore.set({ ...operation, state, attempts, updatedAt: now });
+      return event;
+    } catch (error) {
+      const attempts = operation.attempts + 1;
+      await this.operationStore.set({
+        ...operation,
+        state: attempts >= this.maxOperationAttempts ? 'dead_letter' : 'running',
+        attempts,
+        updatedAt: now,
+      });
+      throw error;
+    }
+  }
   async reconcile(operationId: string, signal?: AbortSignal): Promise<ManagedMemorySearchResult[]> {
     const operation = await this.operationStore.get(this.providerId, operationId);
     if (!operation || operation.state !== 'reconcile_required') return [];

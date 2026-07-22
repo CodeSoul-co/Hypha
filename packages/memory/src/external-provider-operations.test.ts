@@ -87,6 +87,23 @@ describe('durable external provider operations', () => {
       },
     ]);
     expect(JSON.stringify([...database.values.values()])).not.toContain('must-not-persist');
+
+    const resumed = new Mem0PlatformClient({
+      apiToken: 'fresh-process-token',
+      mappingProfile: 'test',
+      operationStore: restarted,
+      fetch: async () => response({ id: 'event:1', status: 'SUCCEEDED', results: [] }),
+    });
+    await expect(resumed.resumeEvent('operation:mem0:1')).resolves.toMatchObject({
+      id: 'event:1',
+      status: 'SUCCEEDED',
+    });
+    await expect(
+      restarted.get('memory.provider.mem0.platform.v3', 'operation:mem0:1')
+    ).resolves.toMatchObject({
+      state: 'succeeded',
+      attempts: 1,
+    });
   });
 
   it('resumes a Vertex LRO after restart and commits its provider-scoped result', async () => {
