@@ -23,7 +23,13 @@ import type {
   MemoryVersion,
   ProviderHealth,
 } from './operations';
-import { hashMemoryScope, memoryError, normalizeMemoryError } from './memory-utils';
+import {
+  hashMemoryScope,
+  memoryError,
+  normalizeMemoryError,
+  stableStringify,
+} from './memory-utils';
+import { memoryManagementCapabilitiesSchema } from './profile-contract';
 
 export interface ExternalMemoryMappingBinding {
   scopeHash: string;
@@ -176,13 +182,13 @@ export interface ExternalMemoryAdapterOptions {
 }
 
 export interface ExternalProviderStateChange {
-  type: 'degraded' | 'recovered' | 'circuit_opened';
+  type: 'degraded' | 'recovered' | 'circuit_opened' | 'quarantined';
   providerId: string;
   occurredAt: string;
   error?: NormalizedMemoryError;
 }
 
-const unsupportedCapabilities: MemoryManagementCapabilities = {
+export const unsupportedMemoryManagementCapabilities: MemoryManagementCapabilities = {
   add: false,
   search: false,
   get: false,
@@ -202,11 +208,31 @@ const unsupportedCapabilities: MemoryManagementCapabilities = {
   batchOperations: false,
 };
 
+export function negotiateMemoryManagementCapabilities(
+  value: unknown
+): MemoryManagementCapabilities {
+  const candidate =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? { ...unsupportedMemoryManagementCapabilities, ...(value as Record<string, unknown>) }
+      : value;
+  const parsed = memoryManagementCapabilitiesSchema.safeParse(candidate);
+  if (!parsed.success) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Memory provider capability response violates the protocol.',
+      false,
+      { schemaDrift: true, capabilityNegotiation: true }
+    );
+  }
+  return parsed.data;
+}
+
 type CapabilityName = keyof MemoryManagementCapabilities;
 
 export class ExternalMemoryManagementAdapter implements MemoryManagementProvider {
   readonly id: string;
   private negotiated?: MemoryManagementCapabilities;
+  private quarantineError?: NormalizedMemoryError;
   private readonly tombstones = new Set<string>();
   private readonly mappingStore: ExternalMemoryMappingStore;
   private readonly now: () => Date;
@@ -223,10 +249,30 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
   }
 
   async capabilities(): Promise<MemoryManagementCapabilities> {
-    if (this.negotiated) return { ...this.negotiated };
-    const discovered = await this.callWithResilience(() => this.options.client.capabilities());
-    this.negotiated = { ...unsupportedCapabilities, ...discovered };
-    return { ...this.negotiated };
+    if (this.quarantineError) throw this.quarantineError;
+    let negotiated: MemoryManagementCapabilities;
+    try {
+      const discovered = await this.callWithResilience(() => this.options.client.capabilities());
+      negotiated = negotiateMemoryManagementCapabilities(discovered);
+    } catch (error) {
+      const normalized = normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
+      if (normalized.details?.capabilityNegotiation === true) {
+        throw await this.quarantine(normalized);
+      }
+      throw normalized;
+    }
+    if (this.negotiated && stableStringify(this.negotiated) !== stableStringify(negotiated)) {
+      throw await this.quarantine(
+        memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          `Memory provider capability drift detected: ${this.id}`,
+          false,
+          { quarantined: true, capabilityDrift: true }
+        )
+      );
+    }
+    this.negotiated = negotiated;
+    return { ...negotiated };
   }
 
   async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
@@ -366,6 +412,14 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
   }
 
   async health(): Promise<ProviderHealth> {
+    if (this.quarantineError) {
+      return {
+        status: 'unhealthy',
+        checkedAt: this.now().toISOString(),
+        message: this.quarantineError.message,
+        details: { quarantined: true },
+      };
+    }
     if (this.circuitOpenUntil > this.now().getTime()) {
       return {
         status: 'degraded',
@@ -404,11 +458,16 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
       primaryStarted = true;
       return await this.callWithResilience(primary, mode === 'read', signal);
     } catch (error) {
-      if (this.shouldFallback() && (mode === 'read' || !primaryStarted)) {
+      const normalized = normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
+      if (
+        normalized.details?.quarantined !== true &&
+        this.shouldFallback() &&
+        (mode === 'read' || !primaryStarted)
+      ) {
         const alternative = fallback(signal);
         if (alternative) return alternative;
       }
-      throw normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
+      throw normalized;
     }
   }
 
@@ -509,6 +568,20 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     }
   }
 
+  private async quarantine(error: NormalizedMemoryError): Promise<NormalizedMemoryError> {
+    this.quarantineError = {
+      ...error,
+      retryable: false,
+      details: { ...error.details, quarantined: true },
+    };
+    await this.options.onStateChange?.({
+      type: 'quarantined',
+      providerId: this.id,
+      occurredAt: this.now().toISOString(),
+      error: this.quarantineError,
+    });
+    return this.quarantineError;
+  }
   private shouldFallback(): boolean {
     return (
       Boolean(this.options.fallback) &&

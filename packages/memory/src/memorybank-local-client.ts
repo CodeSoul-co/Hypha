@@ -14,8 +14,9 @@ import type {
   MemoryVersion,
   ProviderHealth,
 } from './operations';
-import type {
-  ExternalMemoryClient,
+import {
+  negotiateMemoryManagementCapabilities,
+  type ExternalMemoryClient,
   ExternalMemoryMappingRuntimeProfile,
   ExternalMemoryMappingStore,
 } from './external-adapters';
@@ -43,26 +44,6 @@ export interface MemoryBankLocalClientOptions {
   now?: () => Date;
 }
 
-const defaults: MemoryManagementCapabilities = {
-  add: true,
-  search: true,
-  get: true,
-  list: true,
-  update: true,
-  delete: true,
-  deleteByFilter: true,
-  history: true,
-  summarize: true,
-  consolidate: true,
-  decay: true,
-  reinforce: true,
-  conflictDetection: true,
-  hybridSearch: true,
-  graphRelations: false,
-  asyncWrite: false,
-  batchOperations: false,
-};
-
 /** Concrete HTTP client for a local service implementing hypha.memorybank.v1. */
 export class MemoryBankLocalClient implements MemoryBankClient {
   readonly protocol = MEMORYBANK_LOCAL_PROTOCOL;
@@ -70,7 +51,6 @@ export class MemoryBankLocalClient implements MemoryBankClient {
   private readonly fetcher: Mem0HttpFetch;
   private readonly baseUrl: string;
   private readonly apiKey?: string;
-  private negotiated?: MemoryManagementCapabilities;
 
   constructor(options: MemoryBankLocalClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
@@ -97,17 +77,8 @@ export class MemoryBankLocalClient implements MemoryBankClient {
   }
 
   async capabilities(signal?: AbortSignal): Promise<Partial<MemoryManagementCapabilities>> {
-    if (this.negotiated) return { ...this.negotiated };
     const response = await this.localFetch(this.baseUrl + '/capabilities', { signal });
-    const body = await response.json();
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      throw memoryError(
-        'MEMORY_PROVIDER_UNAVAILABLE',
-        'MemoryBank capability response is invalid.'
-      );
-    }
-    this.negotiated = { ...defaults, ...(body as Partial<MemoryManagementCapabilities>) };
-    return { ...this.negotiated };
+    return negotiateMemoryManagementCapabilities(await response.json());
   }
 
   add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {

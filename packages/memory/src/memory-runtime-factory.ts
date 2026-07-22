@@ -6,6 +6,7 @@ import type {
   MemoryProfileSpec,
 } from './contracts';
 import type { ContextInjectionGateway, MemoryContextBuilder } from './context-contracts';
+import { negotiateMemoryManagementCapabilities } from './external-adapters';
 import {
   GovernedMemoryManager,
   registerMemoryManagementProviderHandlers,
@@ -194,7 +195,14 @@ export class MemoryRuntimeFactory {
     const provider: MemoryManagementProvider = installation
       ? installation.provider
       : (created as MemoryManagementProvider);
-    const capabilities = await provider.capabilities();
+    let capabilities: MemoryManagementCapabilities;
+    try {
+      capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
+    } catch (error) {
+      await provider.close?.();
+      await installation?.close?.();
+      throw error;
+    }
     const errors = [
       ...validateDeclaredCapabilities(selected.management.capabilities, capabilities),
       ...validateMemoryProfileCapabilities(selected.profile, capabilities),

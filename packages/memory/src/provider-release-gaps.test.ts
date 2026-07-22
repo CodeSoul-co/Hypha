@@ -131,7 +131,7 @@ describe('external provider release gap baseline', () => {
     ).toThrow('durable external identity mapping store');
   });
 
-  it.fails('treats omitted local capabilities as unsupported', async () => {
+  it('treats omitted local capabilities as unsupported', async () => {
     const client = new MemoryBankLocalClient({
       baseUrl: 'http://memorybank.local',
       fetch: async () => response({ search: true }),
@@ -140,7 +140,7 @@ describe('external provider release gap baseline', () => {
     await expect(client.capabilities()).resolves.toEqual(completeCapabilities({ search: true }));
   });
 
-  it.fails('quarantines a provider when its negotiated capabilities drift', async () => {
+  it('quarantines a provider when its negotiated capabilities drift', async () => {
     const snapshots = [
       completeCapabilities({ search: true }),
       completeCapabilities({ search: false }),

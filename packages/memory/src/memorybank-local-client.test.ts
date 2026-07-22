@@ -31,7 +31,7 @@ describe('MemoryBankLocalClient', () => {
       add: true,
       search: true,
       update: false,
-      decay: true,
+      decay: false,
     });
     expect(calls[0]).toMatchObject({
       url: 'http://memorybank.local/hypha-memorybank/v1/capabilities',
@@ -54,6 +54,25 @@ describe('MemoryBankLocalClient', () => {
     await expect(client.capabilities()).rejects.toMatchObject({
       code: 'MEMORY_REVISION_CONFLICT',
       retryable: false,
+    });
+  });
+  it('rejects unknown or non-boolean capability fields as protocol drift', async () => {
+    const unknown = new MemoryBankLocalClient({
+      baseUrl: 'http://memorybank.local',
+      fetch: async () => json({ search: true, inventedCapability: true }),
+    });
+    await expect(unknown.capabilities()).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      details: { schemaDrift: true, capabilityNegotiation: true },
+    });
+
+    const invalid = new MemoryBankLocalClient({
+      baseUrl: 'http://memorybank.local',
+      fetch: async () => json({ search: 'yes' }),
+    });
+    await expect(invalid.capabilities()).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      details: { schemaDrift: true, capabilityNegotiation: true },
     });
   });
 });
