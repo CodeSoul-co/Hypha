@@ -40,7 +40,8 @@ router.post(
   '/install',
   adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
-    const { source, path, url, content, filename, expectedSha256, activate } = req.body || {};
+    const { source, path, url, content, filename, expectedSha256, signer, signature, manifest, activate } =
+      req.body || {};
     if (!source || !['path', 'url', 'inline'].includes(source)) {
       throw new AppError(
         'VALIDATION_ERROR',
@@ -55,6 +56,10 @@ router.post(
       content,
       filename,
       expectedSha256,
+      signer,
+      signature,
+      manifest,
+      reviewedBy: req.user?.userId ?? req.apiKey?.userId ?? 'admin',
       activate,
     });
     res.json({ success: true, data: result });
@@ -66,7 +71,11 @@ router.post(
   adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
     const contentHash = typeof req.body?.contentHash === 'string' ? req.body.contentHash : '';
-    const result = await activateQuarantinedSkill(req.params.id, contentHash);
+    const result = await activateQuarantinedSkill(
+      req.params.id,
+      contentHash,
+      req.user?.userId ?? req.apiKey?.userId ?? 'admin'
+    );
     res.json({ success: true, data: result });
   })
 );

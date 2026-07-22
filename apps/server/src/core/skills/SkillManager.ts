@@ -1,5 +1,7 @@
 import path from 'path';
 import os from 'os';
+import fs from 'fs/promises';
+import crypto from 'crypto';
 import {
   DefaultSkillPolicy,
   SkillContextLoader,
@@ -17,6 +19,15 @@ import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 
 const DEFAULT_BUILTIN_DIR = path.resolve(process.cwd(), 'apps/server/src/core/skills/builtins');
+
+function skillDataRoot(): string {
+  return path.resolve(
+    (process.env.HYPHA_SKILL_DATA_ROOT ?? path.join(os.homedir(), '.hypha', 'skills')).replace(
+      /^~/,
+      os.homedir()
+    )
+  );
+}
 
 export interface RegisteredSkill {
   config: SkillConfig;
@@ -55,8 +66,12 @@ export class SkillManager {
       .map((entry) => entry.trim())
       .filter(Boolean);
     const home = os.homedir();
-    this.dirs = [...(opts?.dirs ?? []), ...envDirs, ...(configDirs ?? []), DEFAULT_BUILTIN_DIR].map(
-      (directory) => path.resolve(directory.replace(/^~/, home))
+    // Loading is low-to-high precedence: builtins are fallback, installed user Skills win.
+    this.dirs = Array.from(
+      new Set(
+        [DEFAULT_BUILTIN_DIR, ...(configDirs ?? []), ...envDirs, ...(opts?.dirs ?? []), skillDataRoot()]
+          .map((directory) => path.resolve(directory.replace(/^~/, home)))
+      )
     );
   }
 
@@ -75,7 +90,18 @@ export class SkillManager {
       for (const filePath of await listSkillFiles(directory)) {
         try {
           const parsed = await loadSkillMarkdownFile(filePath);
-          this.registerPackageSkill(parsed.spec, filePath);
+          const installRecord = await readSkillInstallRecord(filePath);
+          const spec: SkillSpec = installRecord
+            ? {
+                ...parsed.spec,
+                trustLevel: installRecord.signer ? 'trusted' : 'reviewed',
+                provenance: {
+                  ...(parsed.spec.provenance ?? {}),
+                  install: installRecord,
+                },
+              }
+            : parsed.spec;
+          this.registerPackageSkill(spec, filePath);
         } catch (error) {
           logger.error(`Failed to load governed Skill from ${filePath}:`, error);
         }
@@ -187,6 +213,28 @@ export class SkillManager {
     const registry = new SkillRegistry();
     for (const skill of this.skills.values()) registry.register(skill.spec);
     this.registry = registry;
+  }
+}
+
+async function readSkillInstallRecord(filePath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(`${filePath}.install.json`, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    if (parsed.status !== 'active') return null;
+    const actualHash = crypto
+      .createHash('sha256')
+      .update(await fs.readFile(filePath, 'utf8'))
+      .digest('hex');
+    if (parsed.contentHash !== actualHash) {
+      throw new Error(`Installed Skill content hash mismatch: ${filePath}`);
+    }
+    return parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    logger.warn('Rejecting Skill with invalid install provenance record', { filePath, error });
+    throw error;
   }
 }
 

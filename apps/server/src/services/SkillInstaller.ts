@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import dns from 'dns/promises';
 import fs from 'fs/promises';
 import net from 'net';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 import axios from 'axios';
@@ -23,7 +24,32 @@ export interface InstallInput {
   /** Retained for compatibility but never used as a filesystem path. */
   filename?: string;
   expectedSha256?: string;
+  signer?: string;
+  signature?: string;
+  manifest?: SkillPackageManifest;
+  reviewedBy?: string;
   activate?: boolean;
+}
+
+export interface SkillPackageManifest {
+  skillId: string;
+  contentSha256: string;
+  assets?: Record<string, string>;
+  issuedAt?: string;
+  revokedAt?: string;
+}
+
+export interface SkillInstallRecord {
+  id: string;
+  source: InstallInput['source'];
+  sourceRef?: string;
+  contentHash: string;
+  manifestHash?: string;
+  signer?: string;
+  reviewer?: string;
+  status: 'active' | 'quarantined' | 'removed' | 'revoked';
+  installedAt: string;
+  updatedAt: string;
 }
 
 export interface InstallResult {
@@ -33,6 +59,7 @@ export interface InstallResult {
   sourceUrl?: string;
   contentHash: string;
   status: 'active' | 'quarantined';
+  record: SkillInstallRecord;
 }
 
 function configuredList(name: string): string[] {
@@ -43,19 +70,18 @@ function configuredList(name: string): string[] {
 }
 
 function getInstallDir(): string {
-  const dirs = (() => {
-    try {
-      return getSkillManager().getDirs();
-    } catch {
-      return [];
-    }
-  })();
   const home = os.homedir();
-  for (const directory of dirs) {
-    const resolved = path.resolve(directory.replace(/^~/, home));
-    if (isPathWithin(home, resolved)) return resolved;
+  const resolved = path.resolve(
+    (process.env.HYPHA_SKILL_DATA_ROOT ?? path.join(home, '.hypha', 'skills')).replace(/^~/, home)
+  );
+  if (isPathWithin(process.cwd(), resolved)) {
+    throw new AppError(
+      'SKILL_DATA_ROOT_IN_SOURCE_TREE',
+      'Skill installation data root must be outside the repository source tree.',
+      HTTP_STATUS.INTERNAL_SERVER_ERROR
+    );
   }
-  return path.join(home, '.hypha', 'skills');
+  return resolved;
 }
 
 function getQuarantineDir(): string {
@@ -151,7 +177,9 @@ function isForbiddenAddress(address: string): boolean {
   return false;
 }
 
-async function validateRemoteUrl(value: string): Promise<URL> {
+async function validateRemoteUrl(
+  value: string
+): Promise<{ url: URL; address: string; family: number }> {
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -183,7 +211,8 @@ async function validateRemoteUrl(value: string): Promise<URL> {
       HTTP_STATUS.FORBIDDEN
     );
   }
-  return parsed;
+  const pinned = addresses[0]!;
+  return { url: parsed, address: pinned.address, family: pinned.family };
 }
 
 async function readLocalSource(value: string): Promise<string> {
@@ -223,9 +252,9 @@ async function readLocalSource(value: string): Promise<string> {
 }
 
 async function readRemoteSource(value: string): Promise<string> {
-  const parsed = await validateRemoteUrl(value);
+  const pinned = await validateRemoteUrl(value);
   try {
-    const response = await axios.get<string>(parsed.toString(), {
+    const response = await axios.get<string>(pinned.url.toString(), {
       responseType: 'text',
       timeout: 15_000,
       maxRedirects: 0,
@@ -233,6 +262,11 @@ async function readRemoteSource(value: string): Promise<string> {
       maxBodyLength: MAX_SKILL_BYTES,
       validateStatus: (status) => status >= 200 && status < 300,
       headers: { Accept: 'text/markdown,text/plain;q=0.9' },
+      proxy: false,
+      httpsAgent: new https.Agent({
+        lookup: (_hostname, _options, callback) =>
+          callback(null, pinned.address, pinned.family as 4 | 6),
+      }),
     });
     const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
     if (
@@ -249,6 +283,117 @@ async function readRemoteSource(value: string): Promise<string> {
       `Failed to fetch approved Skill URL: ${(error as Error).message}`,
       HTTP_STATUS.BAD_REQUEST
     );
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function validateManifest(
+  manifest: SkillPackageManifest | undefined,
+  id: string,
+  contentHash: string
+): string | undefined {
+  if (!manifest) return undefined;
+  if (manifest.skillId !== id || manifest.contentSha256.toLowerCase() !== contentHash) {
+    throw new AppError(
+      'SKILL_MANIFEST_MISMATCH',
+      'Skill manifest id or content hash does not match the package.',
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+  if (
+    manifest.revokedAt &&
+    (!Number.isFinite(Date.parse(manifest.revokedAt)) || Date.parse(manifest.revokedAt) <= Date.now())
+  ) {
+    throw new AppError(
+      'SKILL_PACKAGE_REVOKED',
+      'Skill package manifest is revoked.',
+      HTTP_STATUS.FORBIDDEN
+    );
+  }
+  for (const [asset, hash] of Object.entries(manifest.assets ?? {})) {
+    if (!asset || !/^[a-f0-9]{64}$/i.test(hash)) {
+      throw new AppError(
+        'INVALID_SKILL_MANIFEST',
+        'Every Skill dependency asset requires a valid SHA-256 hash.',
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+  }
+  return sha256(canonicalJson(manifest));
+}
+
+function verifySignature(input: InstallInput, raw: string): boolean {
+  if (!input.signature && !input.signer) return false;
+  if (!input.signature || !input.signer) {
+    throw new AppError(
+      'INVALID_SKILL_SIGNATURE',
+      'Both signer and signature are required.',
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+  let signers: Record<string, string>;
+  try {
+    signers = JSON.parse(process.env.HYPHA_SKILL_TRUSTED_SIGNERS ?? '{}') as Record<string, string>;
+  } catch {
+    throw new AppError(
+      'INVALID_SKILL_SIGNER_CONFIG',
+      'Trusted Skill signer configuration is invalid.',
+      HTTP_STATUS.INTERNAL_SERVER_ERROR
+    );
+  }
+  const publicKey = signers[input.signer];
+  if (!publicKey) {
+    throw new AppError(
+      'SKILL_SIGNER_NOT_TRUSTED',
+      'Skill signer is not trusted.',
+      HTTP_STATUS.FORBIDDEN
+    );
+  }
+  const signedPayload = input.manifest ? canonicalJson(input.manifest) : raw;
+  let valid = false;
+  try {
+    valid = crypto.verify(
+      null,
+      Buffer.from(signedPayload, 'utf8'),
+      publicKey,
+      Buffer.from(input.signature, 'base64')
+    );
+  } catch {
+    valid = false;
+  }
+  if (!valid) {
+    throw new AppError(
+      'SKILL_SIGNATURE_INVALID',
+      'Skill package signature verification failed.',
+      HTTP_STATUS.FORBIDDEN
+    );
+  }
+  return true;
+}
+
+async function writeInstallRecord(filePath: string, record: SkillInstallRecord): Promise<void> {
+  await fs.writeFile(`${filePath}.install.json`, `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+}
+
+async function readInstallRecord(filePath: string): Promise<SkillInstallRecord | null> {
+  try {
+    return JSON.parse(await fs.readFile(`${filePath}.install.json`, 'utf8')) as SkillInstallRecord;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }
 
@@ -311,11 +456,16 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
   const id = validateSkillId(parsed.config.id);
   const contentHash = sha256(raw);
   verifyExpectedHash(contentHash, input.expectedSha256);
+  const manifestHash = validateManifest(input.manifest, id, contentHash);
+  const signatureVerified = verifySignature(input, raw);
 
   const activeTarget = await confinedTarget(getInstallDir(), `${id}.md`);
   await assertNotInstalled(activeTarget, id);
   const externalSource = input.source !== 'inline';
-  const canActivate = input.activate === true && (!externalSource || Boolean(input.expectedSha256));
+  const canActivate =
+    input.activate === true &&
+    (!externalSource ||
+      (Boolean(input.expectedSha256) && (signatureVerified || Boolean(input.reviewedBy))));
   const activeInline = input.source === 'inline' && input.activate !== false;
   const status = canActivate || activeInline ? 'active' : 'quarantined';
   const target =
@@ -324,12 +474,28 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
       : await confinedTarget(getQuarantineDir(), `${id}.${contentHash}.md`);
 
   await fs.writeFile(target, raw, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  const timestamp = new Date().toISOString();
+  const record: SkillInstallRecord = {
+    id,
+    source: input.source,
+    sourceRef: input.source === 'url' ? input.url : input.source === 'path' ? input.path : undefined,
+    contentHash,
+    manifestHash,
+    signer: signatureVerified ? input.signer : undefined,
+    reviewer: input.reviewedBy,
+    status,
+    installedAt: timestamp,
+    updatedAt: timestamp,
+  };
+  await writeInstallRecord(target, record);
   logger.info('Skill installation recorded', {
     event: 'skill.lifecycle',
     action: 'install',
     id,
     contentHash,
     status,
+    signer: record.signer,
+    reviewer: record.reviewer,
     source: input.source,
   });
   return {
@@ -339,12 +505,14 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
     sourceUrl: input.source === 'url' ? input.url : undefined,
     contentHash,
     status,
+    record,
   };
 }
 
 export async function activateQuarantinedSkill(
   idInput: string,
-  contentHash: string
+  contentHash: string,
+  reviewedBy: string
 ): Promise<InstallResult> {
   const id = validateSkillId(idInput);
   if (!/^[a-f0-9]{64}$/.test(contentHash)) {
@@ -367,22 +535,49 @@ export async function activateQuarantinedSkill(
   }
   const target = await confinedTarget(getInstallDir(), `${id}.md`);
   await assertNotInstalled(target, id);
+  const priorRecord = await readInstallRecord(source);
   await fs.writeFile(target, raw, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  const timestamp = new Date().toISOString();
+  const record: SkillInstallRecord = {
+    id,
+    source: priorRecord?.source ?? 'inline',
+    sourceRef: priorRecord?.sourceRef,
+    contentHash,
+    manifestHash: priorRecord?.manifestHash,
+    signer: priorRecord?.signer,
+    reviewer: reviewedBy,
+    status: 'active',
+    installedAt: priorRecord?.installedAt ?? timestamp,
+    updatedAt: timestamp,
+  };
+  await writeInstallRecord(target, record);
   await fs.unlink(source);
+  await fs.unlink(`${source}.install.json`).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
   logger.info('Skill activation recorded', {
     event: 'skill.lifecycle',
     action: 'activate',
     id,
     contentHash,
+    reviewedBy,
   });
-  return { id, filePath: target, skill: parsed.config, contentHash, status: 'active' };
+  return { id, filePath: target, skill: parsed.config, contentHash, status: 'active', record };
 }
 
 export async function uninstallSkill(idInput: string): Promise<boolean> {
   const id = validateSkillId(idInput);
   const target = await confinedTarget(getInstallDir(), `${id}.md`);
   try {
+    const priorRecord = await readInstallRecord(target);
     await fs.unlink(target);
+    if (priorRecord) {
+      await writeInstallRecord(target, {
+        ...priorRecord,
+        status: 'removed',
+        updatedAt: new Date().toISOString(),
+      });
+    }
     logger.info('Skill uninstall recorded', { event: 'skill.lifecycle', action: 'uninstall', id });
     return true;
   } catch (error) {
@@ -392,7 +587,7 @@ export async function uninstallSkill(idInput: string): Promise<boolean> {
 }
 
 export async function listInstalledSkills(): Promise<
-  Array<{ id: string; filePath: string; name: string }>
+  Array<{ id: string; filePath: string; name: string; record?: SkillInstallRecord }>
 > {
   const directory = getInstallDir();
   let entries: string[];
@@ -402,13 +597,23 @@ export async function listInstalledSkills(): Promise<
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
-  const installed: Array<{ id: string; filePath: string; name: string }> = [];
+  const installed: Array<{
+    id: string;
+    filePath: string;
+    name: string;
+    record?: SkillInstallRecord;
+  }> = [];
   for (const filename of entries) {
     if (!filename.endsWith('.md')) continue;
     const filePath = await confinedTarget(directory, filename);
     try {
       const parsed = await loadSkillFile(filePath);
-      installed.push({ id: parsed.config.id, filePath, name: parsed.config.name });
+      installed.push({
+        id: parsed.config.id,
+        filePath,
+        name: parsed.config.name,
+        record: (await readInstallRecord(filePath)) ?? undefined,
+      });
     } catch (error) {
       logger.warn('Skipping invalid installed Skill', { filePath, error });
     }
