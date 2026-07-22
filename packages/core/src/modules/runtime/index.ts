@@ -9,6 +9,7 @@ export * from './message-bus';
 export * from './message-inbox-outbox';
 export * from './session-queue';
 export * from './session-command-worker';
+export * from './session-command-scheduler';
 export * from './run-lease-store';
 export * from './state-execution-claim-store';
 export * from './resource-coordinator';
