@@ -66,7 +66,7 @@ function completeCapabilities(
 }
 
 describe('external provider release gap baseline', () => {
-  it.fails('rejects managed records whose immutable provider scope is missing', async () => {
+  it('rejects managed records whose immutable provider scope is missing', async () => {
     const client = managedClient(async () =>
       response({
         retrievedMemories: [
@@ -81,11 +81,17 @@ describe('external provider release gap baseline', () => {
     );
 
     await expect(
-      client.search({ operationId: 'scope:missing', principal, scope, query: 'record' })
+      client.search({
+        operationId: 'scope:missing',
+        principal,
+        scope,
+        profileRef: memoryProfileSpecExample,
+        query: 'record',
+      })
     ).rejects.toMatchObject({ code: 'MEMORY_SCOPE_DENIED' });
   });
 
-  it.fails('rejects a malicious managed result relabelled from another user', async () => {
+  it('rejects a malicious managed result relabelled from another user', async () => {
     const client = managedClient(async () =>
       response({
         retrievedMemories: [
@@ -101,7 +107,13 @@ describe('external provider release gap baseline', () => {
     );
 
     await expect(
-      client.search({ operationId: 'scope:attack', principal, scope, query: 'record' })
+      client.search({
+        operationId: 'scope:attack',
+        principal,
+        scope,
+        profileRef: memoryProfileSpecExample,
+        query: 'record',
+      })
     ).rejects.toMatchObject({ code: 'MEMORY_SCOPE_DENIED' });
   });
 
@@ -128,12 +140,14 @@ describe('external provider release gap baseline', () => {
     const client = {
       capabilities: vi.fn(async () => snapshots.shift() ?? snapshots[0]),
       health: async () => ({ status: 'healthy' as const, checkedAt: '2026-07-22T00:00:00.000Z' }),
-    } as ExternalMemoryClient;
+    } as unknown as ExternalMemoryClient;
     const changes: string[] = [];
     const adapter = new ExternalMemoryManagementAdapter({
       id: 'memory.provider.drifting',
       client,
-      onStateChange: (event) => changes.push(event.type),
+      onStateChange: (event) => {
+        changes.push(event.type);
+      },
     });
 
     await expect(adapter.capabilities()).resolves.toMatchObject({ search: true });

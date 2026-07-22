@@ -80,4 +80,26 @@ describe('MemoryBankManagedClient', () => {
         })
     ).toThrow();
   });
+  it('sends an exact-scope list filter', async () => {
+    let requestedUrl = '';
+    const client = new MemoryBankManagedClient({
+      projectId: 'project',
+      location: 'us-central1',
+      reasoningEngineId: 'engine',
+      accessToken: 'oauth-token',
+      fetch: async (url) => {
+        requestedUrl = url;
+        return json({ memories: [] });
+      },
+    });
+
+    await client.list({
+      operationId: 'list:scope-filter',
+      principal,
+      scope: { userId: 'u1', workspaceId: 'w1' },
+    });
+    expect(new URL(requestedUrl).searchParams.get('filter')).toBe(
+      'scope = "{\\"user_id\\":\\"u1\\",\\"workspace_id\\":\\"w1\\"}"'
+    );
+  });
 });

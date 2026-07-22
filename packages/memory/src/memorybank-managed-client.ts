@@ -157,7 +157,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
   }
 
   async get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null> {
-    const name = await this.resolveName(request.memoryId);
+    const name = await this.resolveName(request.memoryId, request.scope);
     const body = await this.request('/' + name, { signal });
     const record = this.toRecord(asObject(body), request.scope, {
       type: 'derived',
@@ -169,6 +169,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
 
   async list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult> {
     const query = new URLSearchParams();
+    query.set('filter', `scope = ${JSON.stringify(stableStringify(toVertexScope(request.scope)))}`);
     if (request.pagination?.limit) query.set('pageSize', String(request.pagination.limit));
     if (request.pagination?.cursor) query.set('pageToken', request.pagination.cursor);
     const body = asObject(
@@ -176,14 +177,12 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         signal,
       })
     );
-    const records = asArray(body.memories)
-      .map((item) =>
-        this.toRecord(asObject(item), request.scope, {
-          type: 'derived',
-          sourceId: 'vertex-memory-bank:list',
-        })
-      )
-      .filter((record) => record.scopeHash === hashMemoryScope(request.scope));
+    const records = asArray(body.memories).map((item) =>
+      this.toRecord(asObject(item), request.scope, {
+        type: 'derived',
+        sourceId: 'vertex-memory-bank:list',
+      })
+    );
     await this.remember(records);
     const nextCursor = readString(body, 'nextPageToken');
     return { records, nextCursor, hasMore: Boolean(nextCursor) };
@@ -193,7 +192,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     request: ManagedMemoryUpdateRequest,
     signal?: AbortSignal
   ): Promise<ManagedMemoryWriteResult> {
-    const name = await this.resolveName(request.memoryId);
+    const name = await this.resolveName(request.memoryId, request.scope);
     const body = await this.request('/' + name + '?updateMask=fact', {
       method: 'PATCH',
       signal,
@@ -221,14 +220,17 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     }
     const deleted: string[] = [];
     for (const id of request.memoryIds) {
-      await this.request('/' + (await this.resolveName(id)), { method: 'DELETE', signal });
+      await this.request('/' + (await this.resolveName(id, request.scope)), {
+        method: 'DELETE',
+        signal,
+      });
       deleted.push(id);
     }
     return { operationId: request.operationId, status: 'completed', deletedMemoryIds: deleted };
   }
 
   async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
-    const name = await this.resolveName(request.memoryId);
+    const name = await this.resolveName(request.memoryId, request.scope);
     const body = asObject(await this.request('/' + name + '/revisions', { signal }));
     return asArray(body.memoryRevisions).map((item, index) => {
       const revision = asObject(item);
@@ -237,6 +239,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
           name,
           fact: revision.fact,
           createTime: revision.createTime,
+          scope: toVertexScope(request.scope),
           metadata: { providerExternalVersion: revision.name },
         },
         request.scope,
@@ -326,6 +329,8 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     const id = createExternalMemoryId(this.providerId, name);
     const createdAt = readString(item, 'createTime') ?? this.now().toISOString();
     const updatedAt = readString(item, 'updateTime') ?? createdAt;
+    const providerScope = parseVertexScope(item.scope);
+    assertExactScope(providerScope, scope);
     return {
       id,
       versionId: id + ':v1',
@@ -333,7 +338,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
       type: 'semantic',
       content: fact,
       canonicalText: fact,
-      scope,
+      scope: providerScope,
       visibility: 'private',
       source,
       provenance: { createdBy: 'vertex-ai-memory-bank', providerId: this.providerId, createdAt },
@@ -356,12 +361,26 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         externalId: String(record.metadata?.providerExternalId),
         lastSyncedAt: this.now().toISOString(),
         syncState: 'synced',
+        metadata: {
+          scopeHash: record.scopeHash,
+          scope: record.scope,
+          profileRevision: record.versionId,
+          provenance: record.provenance,
+        },
       });
   }
 
-  private async resolveName(id: string): Promise<string> {
+  private async resolveName(id: string, scope: ManagedMemoryScope): Promise<string> {
     const mapping = await this.mappingStore.get(this.providerId, id);
     if (!mapping) throw memoryError('MEMORY_NOT_FOUND', 'No managed MemoryBank mapping for ' + id);
+    if (mapping.metadata?.scopeHash !== hashMemoryScope(scope)) {
+      throw memoryError(
+        'MEMORY_SCOPE_DENIED',
+        'Managed MemoryBank mapping does not belong to the requested scope.',
+        false,
+        { memoryId: id }
+      );
+    }
     return mapping.externalId;
   }
 }
@@ -369,13 +388,54 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
 function toVertexScope(scope: ManagedMemoryScope): Record<string, string> {
   return Object.fromEntries(
     Object.entries({
+      tenant_id: scope.tenantId,
       user_id: scope.userId,
       workspace_id: scope.workspaceId,
+      project_id: scope.projectId,
       session_id: scope.sessionId,
       run_id: scope.runId,
       agent_id: scope.agentId,
+      domain_pack_id: scope.domainPackId,
     }).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   );
+}
+const vertexScopeKeys = {
+  tenant_id: 'tenantId',
+  user_id: 'userId',
+  workspace_id: 'workspaceId',
+  project_id: 'projectId',
+  session_id: 'sessionId',
+  run_id: 'runId',
+  agent_id: 'agentId',
+  domain_pack_id: 'domainPackId',
+} as const satisfies Record<string, keyof ManagedMemoryScope>;
+
+function parseVertexScope(value: unknown): ManagedMemoryScope {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw scopeError('Managed MemoryBank memory lacks an immutable scope.');
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) throw scopeError('Managed MemoryBank memory has an empty scope.');
+  const scope: Partial<ManagedMemoryScope> = {};
+  for (const [key, raw] of entries) {
+    const dimension = vertexScopeKeys[key as keyof typeof vertexScopeKeys];
+    if (!dimension || typeof raw !== 'string' || raw.length === 0) {
+      throw scopeError('Managed MemoryBank memory has an invalid immutable scope.');
+    }
+    scope[dimension] = raw;
+  }
+  if (!scope.userId) throw scopeError('Managed MemoryBank memory scope lacks user_id.');
+  return scope as ManagedMemoryScope;
+}
+
+function assertExactScope(actual: ManagedMemoryScope, expected: ManagedMemoryScope): void {
+  if (hashMemoryScope(actual) !== hashMemoryScope(expected)) {
+    throw scopeError('Managed MemoryBank returned a memory outside the requested scope.');
+  }
+}
+
+function scopeError(message: string) {
+  return memoryError('MEMORY_SCOPE_DENIED', message, false, { providerScopeRejected: true });
 }
 function toVertexMetadata(metadata?: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
