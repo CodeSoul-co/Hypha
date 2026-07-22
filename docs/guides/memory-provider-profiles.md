@@ -12,7 +12,6 @@ not a claim that the current Server default path uses the profile.
 | `native-default`     | framework-validated    | Redis working + Mongo records + local vector/file          | Server E2E deferred to `dev` |
 | `mem0-oss`           | contract-validated     | self-hosted Mem0                                           | `HYPHA_TEST_MEM0_OSS_URL`; not run without endpoint |
 | `mem0-platform`      | controlled-test        | Mem0 Platform v3                                          | `HYPHA_TEST_MEM0_PLATFORM_TOKEN`; not run without credential |
-| `memorybank-local`   | contract-validated     | `hypha.memorybank.v1` local service                       | `HYPHA_TEST_MEMORYBANK_LOCAL_URL`; not run without endpoint |
 | `memorybank-managed` | controlled-test        | Vertex AI Agent Engine Memory Bank                         | `HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN`; not run without credential |
 
 Status meanings:
@@ -65,8 +64,10 @@ not infer its dialect from the base URL.
 
 Managed MemoryBank targets the Google Vertex AI Agent Engine Memory Bank contract. The client keeps
 Vertex resource names inside the adapter and maps Hypha scope and stable IDs at the boundary.
-`hypha.memorybank.v1` remains a separate Hypha-defined local protocol and is never presented as the
-Vertex managed protocol.
+There is no released `memorybank-local` product profile. `hypha.memorybank.v1` is retained only as
+an unpublished protocol-development fixture and must not be selected in deployment configuration.
+Use `mem0-oss` for a supported self-hosted external service. See
+[RFC: MemoryBank Local product boundary](../rfc/2026-07-22-memorybank-local-product-boundary.md).
 
 The shared concrete-client test is
 `packages/memory/src/external-provider-concrete-contract.test.ts`. Credential-gated live entry

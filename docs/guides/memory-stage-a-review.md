@@ -16,14 +16,15 @@ This decision means the frozen Memory Framework scope is internally consistent, 
 - `native-lite` Framework profile and single-process topology.
 - `native-default` Framework deployment contract: Redis working state, Mongo structured record/history, local vector/artifact adapter references, distributed coordination, and outbox.
 - Native persistence, outbox, lifecycle, worker, bounded recovery, deletion evidence, and migration contracts already covered by the package suite.
-- All four concrete external clients at protocol-contract level.
+- Three released external profiles at protocol-contract level; the additional local protocol client is an unpublished development fixture.
 - Public consumer composition from factory to service, context builder/gateway, health/resources, and close.
 
 ### Deferred or controlled
 
 - Server routes, Chat, Workflow, Harness default-path integration, and legacy path retirement belong to `dev`.
 - Server assembly of `native-default` Redis/Mongo clients and deployment readiness belongs to `dev`; the repository integration suite did exercise real Redis/Mongo dependencies successfully.
-- Mem0 OSS and MemoryBank Local live-service lifecycle tests were not run because their endpoints were absent. Their status is `contract-validated`, not `live-validated`.
+- Mem0 OSS live-service lifecycle tests were not run because its endpoint was absent. Its status is `contract-validated`, not `live-validated`.
+- The former MemoryBank Local template is withdrawn: `hypha.memorybank.v1` has no selected deployable product and remains only an unpublished protocol fixture.
 - Mem0 Platform and Vertex AI Memory Bank tests were not run because controlled-cloud credentials were absent. Their status is `controlled-test`.
 - Windows symlink permission verification remains a CI/environment gate.
 
@@ -45,7 +46,7 @@ No deferred item is represented as working product behavior or as a passed live 
 | `packages/memory/src/memory-runtime-factory.ts`                   | Strict rejection of inline credentials while allowing validated environment/secret references            |
 | `packages/memory/src/memory-runtime-config-validation.test.ts`    | Unknown fields, reference format, profile/provider drift, and duplicate factory rejection                |
 | `packages/memory/src/provider-profile-templates.test.ts`          | Profile parity, topology separation, and credential leakage assertions                                   |
-| `packages/memory/src/external-provider-concrete-contract.test.ts` | Shared full lifecycle against all four actual concrete client classes using stateful protocol transports |
+| `packages/memory/src/external-provider-concrete-contract.test.ts` | Shared full lifecycle against concrete client classes using stateful protocol transports; local protocol coverage is not product evidence |
 | `packages/memory/src/memory-consumer-composition.test.ts`         | Public-only consumer assembly and partial-installation fail-fast behavior                                |
 | `tests/integration/memory-external-providers.integration.test.ts` | Credential-gated lifecycle entries for local providers and controlled-cloud smoke entries                |
 | `docs/guides/memory-provider-profiles.md`                         | Evidence-aligned status definitions, topology, protocol boundary, and handoff boundary                   |
@@ -60,7 +61,7 @@ All implementation changes are inside the `memory` branch owner boundary. No Ser
 | M1 Single composition contract | Public consumer fixture creates the canonical factory/service/context lifecycle without internal imports                      | Framework review-ready; Server migration deferred             |
 | M2 Native Redis + Mongo        | Correct profile topology plus existing real Redis/Mongo integration and native recovery/package tests                         | Framework contract review-ready; Server assembly deferred     |
 | M3 Mem0                        | Separate OSS/Platform clients execute the common stateful lifecycle; OSS live entry executes the same fixture when enabled    | Contract-ready; live OSS and cloud evidence deferred          |
-| M4 MemoryBank                  | Separate Local/Managed clients execute the common stateful lifecycle; Local live entry executes the same fixture when enabled | Contract-ready; live local/cloud evidence deferred            |
+| M4 MemoryBank                  | Managed client executes the common stateful lifecycle; the local protocol client is an unpublished development fixture     | Managed controlled-test; no local product profile             |
 | M5 Context/runtime             | Consumer fixture proves service-to-context builder/gateway wiring and explainability                                          | Framework review-ready; Chat/Workflow/Harness wiring deferred |
 | M6 Operational reliability     | Existing health, worker, recovery, dead-letter, quota, deletion, outbox, and restart tests remain green in package suite      | Framework review-ready; Server supervision deferred           |
 | M7 Documentation/templates     | Statuses now distinguish framework, contract, controlled, live, skipped, and deferred evidence                                | Review-ready                                                  |
@@ -94,7 +95,6 @@ The Windows symlink exception is not a green result. It must be rerun in a Windo
 | `native-default`     | Native recovery, worker, persistence, and integration suite | Profile/deployment contract                                    | Real Redis/Mongo integration passed; Server composition not in scope | `framework-validated` |
 | `mem0-oss`           | Protocol and failure suites                                 | Full shared lifecycle passed against `Mem0OssClient`           | Not run: `HYPHA_TEST_MEM0_OSS_URL` absent                            | `contract-validated`  |
 | `mem0-platform`      | v3 protocol and reconciliation suites                       | Full shared lifecycle passed against `Mem0PlatformClient`      | Not run: controlled token absent                                     | `controlled-test`     |
-| `memorybank-local`   | Local protocol and failure suites                           | Full shared lifecycle passed against `MemoryBankLocalClient`   | Not run: `HYPHA_TEST_MEMORYBANK_LOCAL_URL` absent                    | `contract-validated`  |
 | `memorybank-managed` | Vertex protocol and resource mapping suites                 | Full shared lifecycle passed against `MemoryBankManagedClient` | Not run: controlled token absent                                     | `controlled-test`     |
 
 The concrete lifecycle covers add, search, list, get, update, history, delete, and health through the common acceptance harness. Broader failure, scope, cancellation, idempotency, reconciliation, and unsupported-capability behavior remains covered by the existing focused package suites.
@@ -130,7 +130,7 @@ This demonstrates that `dev` can assemble the Framework without copying package 
 
 1. `dev` must create the single Server Memory composition root and retire direct legacy Memory access.
 2. `dev` must assemble production Redis/Mongo, migrations, readiness, credential resolution, worker start/drain, and shutdown behavior.
-3. A release-capable environment must produce real lifecycle reports for Mem0 OSS and MemoryBank Local before either may be called `live-validated`.
+3. A release-capable environment must produce a real lifecycle report for Mem0 OSS before it may be called `live-validated`; MemoryBank Local cannot enter release acceptance unless a new RFC selects a concrete product.
 4. Controlled cloud accounts must validate Mem0 Platform and Vertex AI Memory Bank before release enablement.
 5. The Windows symlink test must pass in an appropriately privileged CI environment.
 6. Full product E2E, migration rehearsal, Chat/Workflow/Harness routing, and release gates remain later phases.

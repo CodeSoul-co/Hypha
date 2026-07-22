@@ -70,18 +70,6 @@ profiles:
         apiTokenEnv: HYPHA_MEM0_PLATFORM_TOKEN
         protocol: mem0-platform-v3
         mappingStoreRef: memory.mapping.durable
-  memorybank-local:
-    status: validated-contract
-    management:
-      id: memory.provider.memorybank.local
-      version: '1.0.0'
-      type: memorybank
-      deployment: local
-      connectionRef: memory.connection.memorybank-local
-      config:
-        baseUrlEnv: HYPHA_MEMORYBANK_LOCAL_URL
-        apiKeyEnv: HYPHA_MEMORYBANK_LOCAL_API_KEY
-        protocol: hypha.memorybank.v1
   memorybank-managed:
     status: controlled-test
     management:

@@ -19,7 +19,6 @@ describe('public memory provider profile templates', () => {
     expect(Object.keys(parsed.profiles).sort()).toEqual([
       'mem0-oss',
       'mem0-platform',
-      'memorybank-local',
       'memorybank-managed',
       'native-default',
       'native-lite',
