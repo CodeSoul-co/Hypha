@@ -10,6 +10,7 @@ import {
 } from '@hypha/adapters-local';
 import {
   ArtifactSessionCommandPayloadStore,
+  createRuntimeOrchestrationProjectionDefinition,
   createFrameworkEvent,
   hashCanonicalJson,
   InMemoryEventSchemaRegistry,
@@ -34,6 +35,9 @@ import {
   type RecoveryKnowledgePort,
   type NormalizedRuntimeError,
   type RuntimeCancelResult,
+  type RuntimeActivityInvocation,
+  type RuntimeActivityObservation,
+  type RuntimeActivityReconciliationResult,
   type RuntimeActivityReconciliationPort,
   type RuntimeRecoveryRequeuePort,
   type RuntimeJsonValue,
@@ -834,7 +838,12 @@ class EventRuntimeService {
         ownerId: `${this.runtimeWorkerId}:recovery`,
         leaseTtlMs: 30_000,
         pageLimit: 100,
-        autoRecoverReasons: ['PROJECTION_BEHIND', 'CANCELLATION_INCOMPLETE'],
+        autoRecoverReasons: [
+          'PROJECTION_BEHIND',
+          'ACTIVITY_RESULT_UNAPPLIED',
+          'STATE_CLAIM_EXPIRED',
+          'CANCELLATION_INCOMPLETE',
+        ],
         pollIntervalMs: 5_000,
         errorBackoffMs: 10_000,
         onSweep: (result) => {
@@ -4404,19 +4413,30 @@ class EventRuntimeService {
 
   private runtimeRecoveryActivities(): RuntimeActivityReconciliationPort {
     return {
-      reconcile: async (request) => ({
-        activityId: request.invocation.activityId,
-        status: 'unknown',
-      }),
+      reconcile: async (request) => {
+        if (request.invocation.activityType !== 'tool') {
+          return { activityId: request.invocation.activityId, status: 'unknown' };
+        }
+        const invocation = await this.toolRunner.getInvocation(request.invocation.activityId);
+        return toolInvocationReconciliation(request.invocation, invocation);
+      },
       retry: async (request) => {
-        throw new FrameworkError({
-          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
-          message: 'Runtime Activity recovery adapter is not available for automatic retry.',
-          context: {
-            activityId: request.invocation.activityId,
-            activityType: request.invocation.activityType,
-          },
-        });
+        if (
+          request.invocation.activityType !== 'tool' ||
+          !['pure', 'idempotent'].includes(request.invocation.effect)
+        ) {
+          throw activityRecoveryUnavailable(request.invocation, 'Activity is not safely retryable');
+        }
+        const invocation = await this.toolRunner.getInvocation(request.invocation.activityId);
+        if (!invocation) {
+          throw activityRecoveryUnavailable(
+            request.invocation,
+            'Durable Tool invocation evidence is unavailable'
+          );
+        }
+        const result = await this.toolRunner.run(invocation.request);
+        const refreshed = await this.toolRunner.getInvocation(request.invocation.activityId);
+        return toolResultObservation(request.invocation, result, refreshed ?? invocation);
       },
     };
   }
@@ -4424,11 +4444,99 @@ class EventRuntimeService {
   private runtimeRecoveryRequeue(): RuntimeRecoveryRequeuePort {
     return {
       requeue: async (request) => {
-        throw new FrameworkError({
-          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
-          message: 'Runtime Run recovery requeue requires a durable transition command.',
-          context: { runId: request.scope.runId, reason: request.reason },
+        if (request.expectedStateId === undefined || request.expectedStateAttempt === undefined) {
+          throw new FrameworkError({
+            code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+            message: 'Runtime recovery requeue requires an expected State attempt.',
+            context: { runId: request.scope.runId, reason: request.reason },
+          });
+        }
+        const runtime = this.canonicalRuntime();
+        const lease = await runtime.runLeases.get({
+          ...(request.scope.tenantId === undefined ? {} : { tenantId: request.scope.tenantId }),
+          userId: request.scope.userId,
+          runId: request.scope.runId,
+          partitionKey: `runtime:${request.scope.runId}`,
         });
+        if (!lease || lease.fencingToken !== request.fencingToken) {
+          throw new FrameworkError({
+            code: 'RUNTIME_FENCING_REJECTED',
+            message: 'Runtime recovery lost its Run Lease before durable requeue.',
+            context: { runId: request.scope.runId, fencingToken: request.fencingToken },
+          });
+        }
+        const context = await this.requireRun(request.scope.runId);
+        const projection = (
+          await runtime.projections.update(
+            createRuntimeOrchestrationProjectionDefinition(request.scope.runId),
+            runtime.projectionStore,
+            {
+              ...(request.scope.tenantId === undefined ? {} : { tenantId: request.scope.tenantId }),
+              userId: request.scope.userId,
+              runId: request.scope.runId,
+            }
+          )
+        ).state;
+        if (
+          projection.currentState !== request.expectedStateId ||
+          projection.stateAttempt !== request.expectedStateAttempt
+        ) {
+          throw new FrameworkError({
+            code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+            message: 'Interrupted State attempt no longer matches the current Run projection.',
+            context: {
+              runId: request.scope.runId,
+              expectedStateId: request.expectedStateId,
+              expectedStateAttempt: request.expectedStateAttempt,
+              currentStateId: projection.currentState,
+              currentStateAttempt: projection.stateAttempt,
+            },
+          });
+        }
+        const commands = await runtime.sessionQueue.list({
+          scope: {
+            ...(request.scope.tenantId === undefined ? {} : { tenantId: request.scope.tenantId }),
+            userId: context.userId,
+            sessionId: context.clientSessionId,
+          },
+          statuses: ['queued', 'claimed'],
+          limit: 1_000,
+        });
+        const transitionCommand = commands.find(
+          (command) =>
+            command.commandType === 'transition' && command.targetRunId === request.scope.runId
+        );
+        if (!transitionCommand) {
+          throw new FrameworkError({
+            code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+            message: 'Interrupted State attempt has no reclaimable transition command.',
+            context: {
+              runId: request.scope.runId,
+              stateId: request.expectedStateId,
+              stateAttempt: request.expectedStateAttempt,
+            },
+          });
+        }
+        const events = await runtime.events.read({
+          scope: {
+            ...(request.scope.tenantId === undefined ? {} : { tenantId: request.scope.tenantId }),
+            userId: request.scope.userId,
+            runId: request.scope.runId,
+          },
+        });
+        const requested = events.find(
+          (event) =>
+            event.type === 'fsm.transition.requested' &&
+            stringValue(asRecord(event.payload)?.commandId) === transitionCommand.id &&
+            stringValue(asRecord(event.payload)?.from) === request.expectedStateId
+        );
+        if (!requested) {
+          throw new FrameworkError({
+            code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+            message: 'Interrupted transition command has no matching Event evidence.',
+            context: { runId: request.scope.runId, commandId: transitionCommand.id },
+          });
+        }
       },
     };
   }
@@ -4710,6 +4818,128 @@ function summarizeValue(value: unknown): Record<string, unknown> {
 function toolResultErrorMessage(result: ToolCallResult, fallback: string): string {
   if (typeof result.error === 'string') return result.error;
   return result.error?.message ?? fallback;
+}
+
+function toolInvocationReconciliation(
+  invocation: RuntimeActivityInvocation,
+  record: ToolInvocationRecord | null
+): RuntimeActivityReconciliationResult {
+  if (!record) return { activityId: invocation.activityId, status: 'not_started' };
+  if (record.result) {
+    const observation = toolResultObservation(invocation, record.result, record);
+    return {
+      activityId: invocation.activityId,
+      status: observation.status,
+      observation,
+      providerRevision: String(record.revision),
+      ...(record.externalReceipt?.receiptId === undefined
+        ? {}
+        : { receiptId: record.externalReceipt.receiptId }),
+    };
+  }
+  if (record.status === 'waiting_approval') {
+    const observation: RuntimeActivityObservation = {
+      activityId: invocation.activityId,
+      status: 'waiting',
+      eventIds: record.observationRefs ?? [],
+      metadata: { provider: 'tool-runner', invocationRevision: record.revision },
+    };
+    return {
+      activityId: invocation.activityId,
+      status: 'waiting',
+      observation,
+      providerRevision: String(record.revision),
+    };
+  }
+  if (
+    ['created', 'validating', 'validated', 'policy_checked', 'approved'].includes(record.status) &&
+    record.startedAt === undefined &&
+    record.attemptCount === 0
+  ) {
+    return {
+      activityId: invocation.activityId,
+      status: 'not_started',
+      providerRevision: String(record.revision),
+    };
+  }
+  return {
+    activityId: invocation.activityId,
+    status: 'unknown',
+    providerRevision: String(record.revision),
+    ...(record.externalReceipt?.receiptId === undefined
+      ? {}
+      : { receiptId: record.externalReceipt.receiptId }),
+  };
+}
+
+function toolResultObservation(
+  invocation: RuntimeActivityInvocation,
+  result: ToolCallResult,
+  record: ToolInvocationRecord
+): RuntimeActivityObservation {
+  const eventIds = record.observationRefs ?? [];
+  const metadata = {
+    provider: 'tool-runner',
+    invocationRevision: record.revision,
+    toolStatus: result.status,
+  };
+  if (result.status === 'completed') {
+    return {
+      activityId: invocation.activityId,
+      status: 'completed',
+      eventIds,
+      ...(result.output === undefined
+        ? {}
+        : { output: runtimeJsonValue(result.output, 'recovered Tool output') }),
+      ...(result.artifactRefs === undefined ? {} : { artifactRefs: result.artifactRefs }),
+      metadata,
+    };
+  }
+  if (result.status === 'cancelled') {
+    return {
+      activityId: invocation.activityId,
+      status: 'cancelled',
+      eventIds,
+      metadata,
+    };
+  }
+  if (result.status === 'human_review_required') {
+    return {
+      activityId: invocation.activityId,
+      status: 'waiting',
+      eventIds,
+      metadata,
+    };
+  }
+  return {
+    activityId: invocation.activityId,
+    status: 'failed',
+    eventIds,
+    retryable: false,
+    error: {
+      code: 'RUNTIME_INTERNAL_ERROR',
+      message: toolResultErrorMessage(result, `Recovered Tool invocation ${result.status}.`),
+      retryable: false,
+      stateId: invocation.stateId,
+      details: { toolId: result.toolId, toolStatus: result.status },
+    },
+    metadata,
+  };
+}
+
+function activityRecoveryUnavailable(
+  invocation: RuntimeActivityInvocation,
+  reason: string
+): FrameworkError {
+  return new FrameworkError({
+    code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+    message: reason,
+    context: {
+      activityId: invocation.activityId,
+      activityType: invocation.activityType,
+      effect: invocation.effect,
+    },
+  });
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> {

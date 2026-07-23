@@ -68,6 +68,8 @@ export interface RuntimeRecoveryCandidate {
   eventHeadSequence: number;
   projectionSequence?: number;
   activityId?: string;
+  stateId?: string;
+  stateAttempt?: number;
   currentLease?: FencedRunLease;
   detectedAt: string;
 }
@@ -128,6 +130,8 @@ export interface RuntimeRecoveryRequeueRequest {
   reason: RuntimeRecoveryCandidateReason;
   requestedAt: string;
   fencingToken: number;
+  expectedStateId?: string;
+  expectedStateAttempt?: number;
   idempotencyKey: string;
 }
 

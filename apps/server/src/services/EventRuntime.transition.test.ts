@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createRuntimeOrchestrationProjectionDefinition } from '@hypha/core';
 import { getEventRuntime } from './EventRuntime';
 
 describe('EventRuntime canonical transitions', () => {
@@ -205,6 +206,69 @@ describe('EventRuntime canonical transitions', () => {
     const events = await runtime.listEvents(run.runId);
     expect(events.filter((event) => event.type === 'recovery.case.opened')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'recovery.case.resolved')).toHaveLength(1);
+  });
+
+  it('fails closed when an expired State Claim has no durable transition command', async () => {
+    const input = {
+      userId: 'user.state-claim-recovery',
+      sessionId: 'session.state-claim-recovery',
+    };
+    const run = await runtime.startRun({ ...input, input: { task: 'missing-command' } });
+    const canonical = runtime.canonicalRuntime();
+    await canonical.projections.update(
+      createRuntimeOrchestrationProjectionDefinition(run.runId),
+      canonical.projectionStore,
+      { userId: input.userId, runId: run.runId }
+    );
+    const head = await canonical.events.getStreamHead({
+      userId: input.userId,
+      runId: run.runId,
+    });
+    const acquiredAt = new Date().toISOString();
+    const lease = await canonical.runLeases.acquire({
+      userId: input.userId,
+      runId: run.runId,
+      partitionKey: `runtime:${run.runId}`,
+      requestedLeaseId: `lease:${run.runId}:stale`,
+      ownerId: 'worker.state-claim.stale',
+      ttlMs: 1,
+      acquiredAt,
+      idempotencyKey: `lease:${run.runId}:stale`,
+    });
+    await canonical.stateClaims.acquire({
+      userId: input.userId,
+      runId: run.runId,
+      stateId: 'RunInitialized',
+      stateAttempt: 1,
+      requestedClaimId: `claim:${run.runId}:stale`,
+      processRevision: 'default-workflow@1.0.0',
+      expectedRunRevision: head!.runRevision,
+      runLease: {
+        scope: {
+          userId: input.userId,
+          runId: run.runId,
+          partitionKey: `runtime:${run.runId}`,
+        },
+        guard: {
+          leaseId: lease!.id,
+          ownerId: lease!.ownerId,
+          fencingToken: lease!.fencingToken,
+        },
+      },
+      ttlMs: 1,
+      acquiredAt,
+      idempotencyKey: `claim:${run.runId}:stale`,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const sweep = await runtime.sweepRuntimeRecovery(new Date().toISOString());
+
+    expect(sweep.failed).toBe(0);
+    expect(sweep.results).toEqual(
+      expect.arrayContaining([expect.objectContaining({ disposition: 'requires_review' })])
+    );
+    const events = await runtime.listEvents(run.runId);
+    expect(events.filter((event) => event.type === 'recovery.case.escalated')).toHaveLength(1);
   });
 
   it('reclaims and executes an interrupted durable FSM transition exactly once', async () => {

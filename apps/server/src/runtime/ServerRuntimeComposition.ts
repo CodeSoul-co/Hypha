@@ -73,12 +73,13 @@ export function createServerRuntimeComposition(
           runLeases,
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
         }),
-      createRecoveryService: ({ events, projections, projectionStore, runLeases }) =>
+      createRecoveryService: ({ events, projections, projectionStore, runLeases, stateClaims }) =>
         new RuntimeRecoveryService({
           events,
           projections,
           projectionStore,
           runLeases,
+          stateClaims,
           activities: options.recoveryActivities,
           cancellations: options.recoveryCancellations,
           requeue: options.recoveryRequeue,
