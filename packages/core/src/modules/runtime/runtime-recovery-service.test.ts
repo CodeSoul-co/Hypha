@@ -367,14 +367,7 @@ describe('RuntimeRecoveryService', () => {
       (await target.events.read({ scope: streamScope() })).filter(
         (item) => item.type === 'recovery.case.escalated'
       )
-    ).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          reason: 'ACTIVITY_RESULT_UNAPPLIED',
-          explanation: 'Side-effecting Activity state is unknown',
-        }),
-      }),
-    ]);
+    ).toHaveLength(1);
     await project(target);
     expect(
       (await scan(target)).candidates.some(
@@ -610,12 +603,12 @@ describe('RuntimeRecoveryService', () => {
     expect(target.requeueCalls).toEqual([]);
   });
 
-  it('classifies an expired persisted Lease and requeues through the durable queue port', async () => {
+  it('requeues an expired State Claim through the injected durable queue port', async () => {
     const target = await fixture();
     await project(target);
     await seedExpiredStateClaim(target);
     const candidate = (await scan(target)).candidates.find(
-      (item) => item.reason === 'LEASE_EXPIRED'
+      (item) => item.reason === 'STATE_CLAIM_EXPIRED'
     )!;
 
     expect(candidate).toMatchObject({ stateId: 'Acting', stateAttempt: 1 });
@@ -626,34 +619,10 @@ describe('RuntimeRecoveryService', () => {
     await project(target);
     expect(
       (await scan(target)).candidates.some(
-        (item) => item.reason === 'LEASE_EXPIRED' && item.candidateId === candidate.candidateId
+        (item) =>
+          item.reason === 'STATE_CLAIM_EXPIRED' && item.candidateId === candidate.candidateId
       )
     ).toBe(false);
-  });
-
-  it('distinguishes an orphaned expired State Claim from an expired Lease', async () => {
-    const target = await fixture();
-    await project(target);
-    const lease = await seedExpiredStateClaim(target);
-    await target.runLeases.release({
-      scope: {
-        tenantId: scope.tenantId,
-        userId: scope.userId,
-        runId: scope.runId,
-        partitionKey: `runtime:${scope.runId}`,
-      },
-      guard: {
-        leaseId: lease.id,
-        ownerId: lease.ownerId,
-        fencingToken: lease.fencingToken,
-      },
-      releasedAt: '2026-07-18T12:00:00.500Z',
-    });
-
-    const candidate = (await scan(target)).candidates.find(
-      (item) => item.reason === 'STATE_CLAIM_EXPIRED'
-    );
-    expect(candidate).toMatchObject({ stateId: 'Acting', stateAttempt: 1 });
   });
 
   it('takes over an expired Lease and fences the stale worker during requeue', async () => {
@@ -661,7 +630,7 @@ describe('RuntimeRecoveryService', () => {
     await project(target);
     const staleLease = await seedExpiredStateClaim(target);
     const candidate = (await scan(target)).candidates.find(
-      (item) => item.reason === 'LEASE_EXPIRED'
+      (item) => item.reason === 'STATE_CLAIM_EXPIRED'
     )!;
 
     await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({

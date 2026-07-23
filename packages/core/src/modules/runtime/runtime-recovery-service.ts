@@ -95,11 +95,10 @@ export class RuntimeRecoveryService {
         RUNTIME_ORCHESTRATION_PROJECTION_ID,
         eventStreamKey(head.scope)
       );
-      const runLeaseScope = leaseScope(head.scope);
-      const [storedLease, currentLease] = await Promise.all([
-        this.options.runLeases.getStored(runLeaseScope),
-        this.options.runLeases.get(runLeaseScope, request.checkedAt),
-      ]);
+      const currentLease = await this.options.runLeases.get(
+        leaseScope(head.scope),
+        request.checkedAt
+      );
       if (
         !record ||
         record.projectionVersion !== RUNTIME_ORCHESTRATION_PROJECTION_VERSION ||
@@ -169,13 +168,10 @@ export class RuntimeRecoveryService {
           request.checkedAt
         );
         if (stateClaim?.status === 'expired') {
-          const leaseExpired =
-            storedLease !== null &&
-            Date.parse(storedLease.expiresAt) <= Date.parse(request.checkedAt);
           addCandidate(
             candidate({
               scope: head.scope,
-              reason: leaseExpired ? 'LEASE_EXPIRED' : 'STATE_CLAIM_EXPIRED',
+              reason: 'STATE_CLAIM_EXPIRED',
               safeAction: 'requeue',
               eventHeadSequence: head.lastSequence,
               projectionSequence: record.lastSequence,
@@ -499,7 +495,7 @@ export class RuntimeRecoveryService {
       [
         this.recoveryEvent(command, 'recovery.case.escalated', {
           disposition: 'requires_review',
-          explanation: reason,
+          reason,
         }),
       ],
       'escalated'

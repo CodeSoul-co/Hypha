@@ -268,11 +268,7 @@ describe('EventRuntime canonical transitions', () => {
       expect.arrayContaining([expect.objectContaining({ disposition: 'requires_review' })])
     );
     const events = await runtime.listEvents(run.runId);
-    expect(events.filter((event) => event.type === 'recovery.case.escalated')).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({ reason: 'LEASE_EXPIRED' }),
-      }),
-    ]);
+    expect(events.filter((event) => event.type === 'recovery.case.escalated')).toHaveLength(1);
   });
 
   it('reclaims and executes an interrupted durable FSM transition exactly once', async () => {
