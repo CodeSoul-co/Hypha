@@ -2,6 +2,18 @@ import type { MemoryServerMigrationAcceptancePorts } from './memory-server-migra
 import { memoryServerMigrationAcceptance } from './memory-server-migration-contract';
 
 const canonicalId = memoryServerMigrationAcceptance.sharedFixture.canonicalServiceInstanceId;
+const canonicalReceipt = {
+  runtimeId: 'memory-runtime:acceptance',
+  serviceInstanceId: canonicalId,
+  serviceContract: '@hypha/memory.MemoryApplicationService' as const,
+  activeProfileId: 'memory.profile.native',
+  providerId: 'memory.provider.native',
+  providerSpecId: 'memory.provider.native',
+  configHash: 'sha256:acceptance-config',
+  profileHash: 'sha256:acceptance-profile',
+  resolvedDependencyRefs: [],
+  createdAt: '2026-07-23T00:00:00.000Z',
+};
 
 /** Reproduces the three audited legacy gaps without importing Server-owned code. */
 export const legacyMemoryServerGapPorts: MemoryServerMigrationAcceptancePorts = {
@@ -54,6 +66,7 @@ export const compliantMemoryServerSkeletonPorts: MemoryServerMigrationAcceptance
   canonicalConsumer: {
     async observe() {
       return {
+        compositionReceipt: canonicalReceipt,
         consumerServiceInstanceIds: {
           chat: canonicalId,
           'memory-routes': canonicalId,

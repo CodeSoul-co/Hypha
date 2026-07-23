@@ -10,8 +10,10 @@ import {
   allowedLegacyAdapterResponsibilities,
   type CanonicalProfileSwitchObservation,
 } from './memory-server-consumer-migration';
+import type { MemoryRuntimeCompositionReceipt } from './memory-runtime-factory';
 
 export interface CanonicalMemoryConsumerObservation {
+  compositionReceipt?: MemoryRuntimeCompositionReceipt;
   consumerServiceInstanceIds: Partial<Record<MemoryServerConsumer, string>>;
   serviceRegistrationCount: number;
   runtimeDependencies: readonly string[];
@@ -69,13 +71,27 @@ export async function runCanonicalConsumerMigrationAcceptance(
 ): Promise<MemoryServerMigrationSuiteReport> {
   const observation = await port.observe(acceptance.sharedFixture);
   const findings: MemoryServerMigrationFinding[] = [];
+  const serviceInstanceId = observation.compositionReceipt?.serviceInstanceId;
+  if (
+    !observation.compositionReceipt ||
+    observation.compositionReceipt.serviceContract !== '@hypha/memory.MemoryApplicationService' ||
+    !serviceInstanceId
+  ) {
+    findings.push(
+      finding(
+        'P0-1',
+        'COMPOSITION_RECEIPT_MISSING',
+        'Canonical consumer evidence must include a valid Memory runtime composition receipt.'
+      )
+    );
+  }
   for (const consumer of acceptance.requiredConsumers) {
     const serviceId = observation.consumerServiceInstanceIds[consumer];
     if (!serviceId) {
       findings.push(
         finding('P0-1', 'MISSING_CANONICAL_CONSUMER', `${consumer} has no Memory service.`)
       );
-    } else if (serviceId !== acceptance.sharedFixture.canonicalServiceInstanceId) {
+    } else if (!serviceInstanceId || serviceId !== serviceInstanceId) {
       findings.push(
         finding('P0-1', 'NON_CANONICAL_SERVICE_INSTANCE', `${consumer} uses ${serviceId}.`)
       );
