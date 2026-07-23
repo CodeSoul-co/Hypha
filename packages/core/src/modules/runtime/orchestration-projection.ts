@@ -288,7 +288,7 @@ function runResumeRequested(
   event: PersistedFrameworkEvent
 ): RuntimeOrchestrationProjection {
   requireCreated(state, event);
-  if (!['paused', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
+  if (!['paused', 'waiting_human', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
     divergence(`Run cannot resume from ${state.runStatus}`, event);
   }
   if (!state.pendingWait) divergence('Run resume requires a pending Wait', event);

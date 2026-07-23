@@ -16,6 +16,7 @@ import {
   InMemoryTelemetryRecorder,
   FrameworkError,
   RuntimeCancellationService,
+  RuntimeHumanWaitService,
   RuntimeRunControlService,
   assertRuntimeEventCatalogComplete,
   migrateLegacyHumanWaitEvents,
@@ -666,6 +667,7 @@ class EventRuntimeService {
   private canonicalComposition?: Readonly<RuntimeComposition>;
   private canonicalEvents?: DurableEventStoreBridge;
   private cancellationService?: RuntimeCancellationService;
+  private humanWaitService?: RuntimeHumanWaitService;
   private runControlService?: RuntimeRunControlService;
   private recoveryKnowledge?: RecoveryKnowledgePort;
   private canonicalRuntimeFilename?: string;
@@ -2466,18 +2468,31 @@ class EventRuntimeService {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     if (invocation) this.registerManagedTool(invocation.toolId);
     const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
-    if (invocation && result.status === 'completed') {
-      await this.resumeApprovedRun(invocation, result);
+    if (invocation && result.status !== 'human_review_required') {
+      await this.resolveHumanReviewForTool(invocation, 'approved', approvedBy);
+      if (result.status === 'completed') {
+        await this.resumeApprovedRun(invocation, result);
+      } else {
+        const runId = invocation.scope?.runId ?? invocation.request.context.runId;
+        await this.failRun(
+          runId,
+          toolResultErrorMessage(result, 'Approved Tool execution did not complete.')
+        );
+      }
     }
     return result;
   }
 
-  async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
+  async rejectToolInvocation(
+    invocationId: string,
+    rejectedBy = 'runtime.operator'
+  ): Promise<ToolCallResult> {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     const result = await this.toolRunner.rejectInvocation(invocationId);
     const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
     const run = runId ? await this.findRun(runId) : null;
     if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      if (invocation) await this.resolveHumanReviewForTool(invocation, 'rejected', rejectedBy);
       await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
     }
     return result;
@@ -3388,13 +3403,22 @@ class EventRuntimeService {
       decidedAt,
     });
     if (input.decision === 'rejected') {
+      await this.resolveHumanReview(
+        input.runId,
+        task.taskId,
+        'rejected',
+        input.decidedBy,
+        decidedAt
+      );
       await this.failRun(input.runId, input.reason ?? `Skill ${task.skillId} was rejected.`);
     } else {
-      await this.append(input.runId, 'run.resume.requested', {
-        taskId: task.taskId,
-        taskKind: 'skill_activation',
-        requestedBy: input.decidedBy,
-      });
+      await this.resolveHumanReview(
+        input.runId,
+        task.taskId,
+        'approved',
+        input.decidedBy,
+        decidedAt
+      );
       if (run.snapshot.currentState === 'HumanReview') {
         try {
           await this.transition(input.runId, 'Reasoning', {
@@ -3409,11 +3433,6 @@ class EventRuntimeService {
           });
         }
       }
-      await this.append(input.runId, 'run.resumed', {
-        taskId: task.taskId,
-        taskKind: 'skill_activation',
-        resumedBy: input.decidedBy,
-      });
     }
     return {
       ...task,
@@ -3446,22 +3465,96 @@ class EventRuntimeService {
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    const waitId = stringValue(payload.waitId) ?? `human-review:${runId}`;
     const existingWait = asRecord(payload.wait) ?? {};
-    await this.append(runId, 'run.waiting_human', {
-      ...payload,
-      waitId,
-      wait: {
-        ...existingWait,
-        type: 'human',
-        reason:
-          stringValue(existingWait.reason) ??
-          stringValue(payload.reason) ??
-          'Human review requires an operator decision',
-        pendingActionRef:
-          stringValue(existingWait.pendingActionRef) ?? humanReviewActionRef(payload) ?? waitId,
+    const pendingActionRef =
+      stringValue(existingWait.pendingActionRef) ?? humanReviewActionRef(payload) ?? `run:${runId}`;
+    const waitId = stringValue(payload.waitId) ?? `human-review:${pendingActionRef}`;
+    const priorWait = (await this.listEvents(runId)).find(
+      (event) =>
+        event.type === 'runtime.wait.created' &&
+        stringValue(asRecord(event.payload)?.waitId) === waitId
+    );
+    const requestedAt =
+      stringValue(asRecord(priorWait?.payload)?.createdAt) ??
+      stringValue(payload.requestedAt) ??
+      new Date().toISOString();
+    const context = await this.requireRun(runId);
+    const result = await this.runtimeHumanWaitService().create({
+      commandId: `human-wait-create:${waitId}`,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId,
       },
+      ownerId: `${this.runtimeWorkerId}:human-wait`,
+      leaseTtlMs: 30_000,
+      waitId,
+      pendingActionRef,
+      reason:
+        stringValue(existingWait.reason) ??
+        stringValue(payload.reason) ??
+        'Human review requires an operator decision',
+      requestedAt,
+      idempotencyKey: `human-wait-create:${waitId}`,
     });
+    if (result.disposition === 'lease_unavailable') {
+      throw new FrameworkError({
+        code: 'RUNTIME_LEASE_UNAVAILABLE',
+        message: 'Human review Wait could not acquire the Run Lease.',
+        context: { runId, waitId, pendingActionRef },
+      });
+    }
+  }
+
+  private async resolveHumanReviewForTool(
+    invocation: ToolInvocationRecord,
+    decision: 'approved' | 'rejected',
+    principalId: string
+  ): Promise<void> {
+    const runId = invocation.scope?.runId ?? invocation.request.context.runId;
+    await this.resolveHumanReview(runId, invocation.id, decision, principalId);
+  }
+
+  private async resolveHumanReview(
+    runId: string,
+    pendingActionRef: string,
+    decision: 'approved' | 'rejected',
+    principalId: string,
+    resolvedAt?: string
+  ): Promise<void> {
+    const context = await this.requireRun(runId);
+    const commandId = `human-wait-resolve:${pendingActionRef}:${decision}`;
+    const priorResolution = (await this.listEvents(runId)).find(
+      (event) =>
+        event.operationId === `runtime-human-wait:resolve:${commandId}` &&
+        event.type === 'runtime.wait.resolved'
+    );
+    const effectiveResolvedAt =
+      stringValue(asRecord(priorResolution?.payload)?.resolvedAt) ??
+      resolvedAt ??
+      new Date().toISOString();
+    const result = await this.runtimeHumanWaitService().resolve({
+      commandId,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId,
+      },
+      ownerId: `${this.runtimeWorkerId}:human-wait`,
+      leaseTtlMs: 30_000,
+      pendingActionRef,
+      principalId,
+      decision,
+      resolvedAt: effectiveResolvedAt,
+      idempotencyKey: `human-wait-resolve:${pendingActionRef}:${decision}`,
+    });
+    if (result.disposition === 'lease_unavailable') {
+      throw new FrameworkError({
+        code: 'RUNTIME_LEASE_UNAVAILABLE',
+        message: 'Human review resolution could not acquire the Run Lease.',
+        context: { runId, pendingActionRef, decision },
+      });
+    }
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {
@@ -4230,6 +4323,19 @@ class EventRuntimeService {
       nextId: (namespace) => `${namespace}:${generateId()}`,
     });
     return this.cancellationService;
+  }
+
+  private runtimeHumanWaitService(): RuntimeHumanWaitService {
+    if (this.humanWaitService) return this.humanWaitService;
+    const runtime = this.canonicalRuntime();
+    this.humanWaitService = new RuntimeHumanWaitService({
+      events: runtime.events,
+      projections: runtime.projections,
+      projectionStore: runtime.projectionStore,
+      runLeases: runtime.runLeases,
+      nextId: (namespace) => `${namespace}:${generateId()}`,
+    });
+    return this.humanWaitService;
   }
 
   private runtimeRecoveryActivities(): RuntimeActivityReconciliationPort {

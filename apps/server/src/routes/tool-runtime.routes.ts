@@ -82,7 +82,14 @@ approvalRouter.post(
 approvalRouter.post(
   '/:id/reject',
   asyncHandler(async (req: Request, res: Response) => {
-    const result = await getEventRuntime().rejectToolInvocation(req.params.id);
+    const rejectedBy = req.user?.userId || req.apiKey?.userId;
+    if (!rejectedBy) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Rejector identity required' },
+      });
+    }
+    const result = await getEventRuntime().rejectToolInvocation(req.params.id, rejectedBy);
     res.json({ success: true, data: result });
   })
 );
