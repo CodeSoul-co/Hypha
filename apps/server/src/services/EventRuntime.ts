@@ -931,7 +931,6 @@ class EventRuntimeService {
     options: { filename?: string; schemaRegistry?: EventSchemaRegistry } = {}
   ): Promise<RuntimeBackbone> {
     assertRuntimeEventCatalogComplete();
-    this.legacyEvents.reopen();
     await this.validateLegacyHumanWaits();
     if (!this.canonicalLifecycle) {
       const sqliteStorage = storageConfig().relational.sqlite;
@@ -1324,11 +1323,6 @@ class EventRuntimeService {
     }
     try {
       await this.canonicalLifecycle?.close();
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      await this.legacyEvents.close();
     } catch (error) {
       failures.push(error);
     }

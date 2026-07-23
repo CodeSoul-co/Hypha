@@ -184,59 +184,30 @@ export interface SQLiteEventStoreOptions {
   jsonFallbackFilename?: string;
 }
 
-type EventStoreBackend = EventStore &
-  TraceRecorder & {
-    close?(): void | Promise<void>;
-  };
-
 export class SQLiteEventStore implements EventStore, TraceRecorder {
-  private backend?: EventStoreBackend;
+  private readonly backend: EventStore & TraceRecorder;
 
-  constructor(private readonly options: SQLiteEventStoreOptions) {
-    this.backend = this.openBackend();
-  }
-
-  reopen(): void {
-    if (!this.backend) this.backend = this.openBackend();
-  }
-
-  async close(): Promise<void> {
-    const backend = this.backend;
-    if (!backend) return;
-    this.backend = undefined;
-    await backend.close?.();
-  }
-
-  private openBackend(): EventStoreBackend {
-    fs.mkdirSync(path.dirname(this.options.filename), { recursive: true });
+  constructor(options: SQLiteEventStoreOptions) {
+    fs.mkdirSync(path.dirname(options.filename), { recursive: true });
     const sqlite =
-      this.options.mode === 'json'
+      options.mode === 'json'
         ? null
-        : loadSqlite(this.options.mode === 'sqlite' || this.options.mode === 'node-sqlite');
-    return sqlite
-      ? new NodeSQLiteEventStoreBackend(this.options.filename, sqlite)
-      : new JsonEventStoreBackend(
-          this.options.jsonFallbackFilename ?? `${this.options.filename}.json`
-        );
-  }
-
-  private requireBackend(): EventStoreBackend {
-    if (!this.backend) {
-      throw new Error('SQLiteEventStore is closed. Call reopen() before using it.');
-    }
-    return this.backend;
+        : loadSqlite(options.mode === 'sqlite' || options.mode === 'node-sqlite');
+    this.backend = sqlite
+      ? new NodeSQLiteEventStoreBackend(options.filename, sqlite)
+      : new JsonEventStoreBackend(options.jsonFallbackFilename ?? `${options.filename}.json`);
   }
 
   async append(event: FrameworkEvent): Promise<void> {
-    await this.requireBackend().append(event);
+    await this.backend.append(event);
   }
 
   async record(event: FrameworkEvent): Promise<void> {
-    await this.requireBackend().record(event);
+    await this.backend.record(event);
   }
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
-    return this.requireBackend().list(filter);
+    return this.backend.list(filter);
   }
 
   async exportJsonl(filename: string, filter: EventFilter = {}): Promise<number> {
@@ -557,10 +528,6 @@ class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
       rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent),
       filter
     );
-  }
-
-  close(): void {
-    this.db.close?.();
   }
 }
 

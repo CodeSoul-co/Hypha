@@ -43,8 +43,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await application.stop();
-  const runtimeRoot = process.env.HYPHA_INTEGRATION_TEMP_ROOT;
-  if (runtimeRoot) await fs.rm(runtimeRoot, { recursive: true, force: true });
 });
 
 describe('GET /api/v1/health', () => {

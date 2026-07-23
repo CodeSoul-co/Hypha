@@ -403,28 +403,6 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(reopenedEvents.list({ runId: 'run_sqlite' })).resolves.toHaveLength(1);
   });
 
-  it('releases and reopens the SQLite event database lifecycle', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-sqlite-event-lifecycle-'));
-    const filename = path.join(root, 'events.sqlite');
-    const events = new SQLiteEventStore({ filename, mode: 'sqlite' });
-    await events.append(
-      createFrameworkEvent({
-        id: 'run_lifecycle:created',
-        type: 'run.created',
-        runId: 'run_lifecycle',
-        payload: { id: 'run_lifecycle' },
-      })
-    );
-
-    await events.close();
-    await expect(events.list()).rejects.toThrow('SQLiteEventStore is closed');
-    events.reopen();
-    await expect(events.list({ runId: 'run_lifecycle' })).resolves.toHaveLength(1);
-    await events.close();
-    fs.rmSync(root, { recursive: true, force: true });
-    expect(fs.existsSync(root)).toBe(false);
-  });
-
   it('creates a durable local storage backbone for events and hybrid memory', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-storage-backbone-'));
     const storage = createLocalStorageBackbone({ rootPath: root, sqliteMode: 'sqlite' });
