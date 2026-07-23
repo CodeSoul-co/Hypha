@@ -902,6 +902,75 @@ describe('SQLiteExecutionStoreFoundation', () => {
       status: 'starting',
     });
     await migrated.close();
+
+    const backupFilename = `${filename}.backup-v1.sqlite`;
+    await expect(fs.stat(backupFilename)).resolves.toMatchObject({ size: expect.any(Number) });
+    const backup = openTestDatabase(backupFilename);
+    expect(backup.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+    expect(
+      backup
+        .prepare('SELECT record_json FROM execution_records WHERE execution_id = ?')
+        .get(created.id)
+    ).toMatchObject({ record_json: JSON.stringify(created) });
+    backup.close();
+  });
+
+  it('preserves the source and verified backup when migration rolls back', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const backupFilename = `${filename}.backup-v1.sqlite`;
+    const created = structuredClone(executionRecordCreateRequestExample.record);
+    const database = openTestDatabase(filename);
+    createVersionOneDatabase(database);
+    database.exec(
+      'ALTER TABLE execution_records ADD COLUMN ' + 'last_fencing_token INTEGER NOT NULL DEFAULT 0'
+    );
+    insertLegacyRecord(database, created);
+    database.close();
+
+    expect(() => new SQLiteExecutionStoreFoundation({ rootPath: root })).toThrowError(
+      SQLiteExecutionStoreFoundationError
+    );
+    const firstBackup = await fs.readFile(backupFilename);
+
+    const sourceAfterFailure = openTestDatabase(filename);
+    expect(sourceAfterFailure.prepare('PRAGMA user_version').get()).toMatchObject({
+      user_version: 1,
+    });
+    expect(
+      sourceAfterFailure
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get('execution_mutation_idempotency')
+    ).toBeUndefined();
+    expect(
+      sourceAfterFailure
+        .prepare('SELECT record_json FROM execution_records WHERE execution_id = ?')
+        .get(created.id)
+    ).toMatchObject({ record_json: JSON.stringify(created) });
+    sourceAfterFailure.close();
+
+    const backup = openTestDatabase(backupFilename);
+    expect(backup.prepare('PRAGMA quick_check').get()).toMatchObject({ quick_check: 'ok' });
+    expect(backup.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+    backup.close();
+
+    expect(() => new SQLiteExecutionStoreFoundation({ rootPath: root })).toThrowError(
+      SQLiteExecutionStoreFoundationError
+    );
+    await expect(fs.readFile(backupFilename)).resolves.toEqual(firstBackup);
+
+    const invalidBackup = openTestDatabase(backupFilename);
+    invalidBackup.exec('PRAGMA user_version = 0');
+    invalidBackup.close();
+    try {
+      new SQLiteExecutionStoreFoundation({ rootPath: root });
+      throw new Error('Expected the invalid migration backup to be rejected.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'EXECUTION_STORE_CORRUPT',
+        details: { expectedVersion: 1, actualVersion: 0 },
+      });
+    }
   });
 
   it('rejects unsafe filenames and database schemas newer than this adapter', async () => {

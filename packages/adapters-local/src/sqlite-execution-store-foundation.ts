@@ -110,6 +110,8 @@ export class SQLiteExecutionStoreFoundation {
     const basename = storeFilename(options.filename ?? 'executions.sqlite');
     this.filename = path.join(root, basename);
     rejectAliasedDatabaseFile(this.filename);
+    const existingDatabaseHasContent =
+      fs.existsSync(this.filename) && fs.statSync(this.filename).size > 0;
     this.now = options.now ?? (() => new Date().toISOString());
     const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, 'busyTimeoutMs');
     let database: SQLiteDatabase | undefined;
@@ -119,6 +121,7 @@ export class SQLiteExecutionStoreFoundation {
       database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
       database.exec('PRAGMA journal_mode = WAL');
       database.exec('PRAGMA foreign_keys = ON');
+      backupBeforeMigration(database, this.filename, existingDatabaseHasContent);
       migrateSQLiteExecutionStore(database);
       this.database = database;
       this.quarantineCorruptRecords();
@@ -1107,6 +1110,54 @@ function rejectAliasedDatabaseFile(filename: string): void {
   if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
     throw new TypeError('SQLite Execution store file must be a non-aliased regular file.');
   }
+}
+
+function backupBeforeMigration(
+  database: SQLiteDatabase,
+  filename: string,
+  existingDatabaseHasContent: boolean
+): void {
+  if (!existingDatabaseHasContent) return;
+  const currentVersion = Number(database.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+  if (
+    !Number.isInteger(currentVersion) ||
+    currentVersion < 0 ||
+    currentVersion >= SQLITE_EXECUTION_STORE_SCHEMA_VERSION
+  ) {
+    return;
+  }
+
+  const backupFilename = `${filename}.backup-v${currentVersion}.sqlite`;
+  if (!fs.existsSync(backupFilename)) {
+    database.exec(`VACUUM INTO ${sqliteStringLiteral(backupFilename)}`);
+  }
+  if (process.platform !== 'win32') fs.chmodSync(backupFilename, 0o600);
+  validateMigrationBackup(backupFilename, currentVersion);
+}
+
+function validateMigrationBackup(filename: string, expectedVersion: number): void {
+  rejectAliasedDatabaseFile(filename);
+  let backup: SQLiteDatabase | undefined;
+  try {
+    backup = openSQLiteDatabase(filename);
+    rejectAliasedDatabaseFile(filename);
+    const integrityRow = backup.prepare('PRAGMA integrity_check').get();
+    const integrity = String(Object.values(integrityRow ?? {})[0] ?? '');
+    const version = Number(backup.prepare('PRAGMA user_version').get()?.user_version);
+    if (integrity !== 'ok' || version !== expectedVersion) {
+      throw storeError(
+        'EXECUTION_STORE_CORRUPT',
+        'SQLite Execution migration backup failed validation.',
+        { expectedVersion, actualVersion: version }
+      );
+    }
+  } finally {
+    backup?.close();
+  }
+}
+
+function sqliteStringLiteral(value: string): string {
+  return `'${value.replace(/'/gu, "''")}'`;
 }
 
 function openSQLiteDatabase(filename: string): SQLiteDatabase {
