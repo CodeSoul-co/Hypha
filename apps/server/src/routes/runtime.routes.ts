@@ -104,6 +104,61 @@ router.get(
 );
 
 router.get(
+  '/runs/:runId/human-reviews',
+  asyncHandler(async (req: Request, res: Response) => {
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    res.json({
+      success: true,
+      data: await owned.runtime.listHumanReviews(req.params.runId, owned.run.userId),
+    });
+  })
+);
+
+router.post(
+  '/runs/:runId/human-reviews/:taskId/decision',
+  adminOnly,
+  asyncHandler(async (req: Request, res: Response) => {
+    const decision = req.body?.decision;
+    if (!['approved', 'rejected', 'cancelled'].includes(decision)) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_DECISION',
+          message: 'decision must be approved, rejected, or cancelled',
+        },
+      });
+    }
+    const expectedRevision = Number(req.body?.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_REVISION',
+          message: 'expectedRevision must be a positive integer',
+        },
+      });
+    }
+    const decidedBy = req.user?.userId ?? req.apiKey?.userId;
+    if (!decidedBy) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Reviewer identity required' },
+      });
+    }
+    const task = await getEventRuntime().decideHumanReview({
+      runId: req.params.runId,
+      taskId: req.params.taskId,
+      expectedRevision,
+      decision,
+      decidedBy,
+      reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
+    });
+    res.json({ success: true, data: task });
+  })
+);
+
+router.get(
   '/runs/:runId/human-reviews/skills',
   asyncHandler(async (req: Request, res: Response) => {
     const owned = await findOwnedRun(req, res);

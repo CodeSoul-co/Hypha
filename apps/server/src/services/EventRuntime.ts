@@ -56,6 +56,8 @@ import {
   InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
   classifyInferenceFailure,
+  agentPromptSubjectHash,
+  type AgentPromptApproval,
   type AgentPromptRef,
   type AgentPromptResolution,
   type AgentPromptSpec,
@@ -90,6 +92,7 @@ import {
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveCapabilityApproval,
   type EffectiveAgentCapabilitySnapshot,
   type ToolCallResult,
   type ToolAuthorityConstraint,
@@ -135,6 +138,11 @@ import type { RuntimeComposition } from '../runtime/RuntimeCompositionRoot';
 import { createServerRuntimeComposition } from '../runtime/ServerRuntimeComposition';
 import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
 import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
+import {
+  assertHumanTaskCAS,
+  projectHumanTasks,
+  type HumanTask,
+} from '../runtime/HumanTask';
 import {
   projectRuntimeRunContext,
   projectRuntimeRunContexts,
@@ -1031,6 +1039,14 @@ class EventRuntimeService {
     );
     const run = await this.requireOwnedRunScope(input.runId, userId);
     const promptRefs = this.resolveAgentPromptRefs(spec);
+    const promptApprovals = explicitInstructions
+      ? []
+      : await this.requirePromptReviewApprovals({
+          run,
+          agentId: id,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          promptRefs,
+        });
     const promptResolution = explicitInstructions
       ? undefined
       : await this.resolveAgentPromptInstructions({
@@ -1041,6 +1057,7 @@ class EventRuntimeService {
           tenantId: stringValue(asRecord(input.metadata)?.tenantId),
           domainId: run.domainPackId,
           promptRefs,
+          approvals: promptApprovals,
         });
     const baseSystemInstructions =
       explicitInstructions ??
@@ -1067,19 +1084,16 @@ class EventRuntimeService {
       principalId: userId,
       tenantId: stringValue(asRecord(input.metadata)?.tenantId),
       domainId: run.domainPackId,
+      createdAt: await this.runCreatedAt(input.runId),
       agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
       domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
       activeSkills,
     });
     this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
-    const reviewTasks = await this.requireSkillReviewApprovals({
-      run,
-      agentId: id,
-      skills: activeSkills,
-    });
+    const reviewTasks = await this.requireEffectiveCapabilityApproval(run, effectiveCapabilities);
     if (reviewTasks.length > 0) {
       const approval = {
-        taskKind: 'skill_activation',
+        taskKind: 'effective_capability_snapshot',
         tasks: reviewTasks,
         stepId: input.stepId,
         agentId: id,
@@ -1128,6 +1142,7 @@ class EventRuntimeService {
     tenantId?: string;
     domainId?: string;
     promptRefs: AgentPromptRef[];
+    approvals?: AgentPromptApproval[];
   }): Promise<AgentPromptResolution | undefined> {
     const variables = {
       agent_id: input.agentId,
@@ -1148,6 +1163,7 @@ class EventRuntimeService {
         agentId: input.agentId,
         domainId: input.domainId,
       },
+      approvals: input.approvals,
     });
   }
 
@@ -1644,6 +1660,10 @@ class EventRuntimeService {
       authority.policyRevision
     );
     const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
+    const capabilityApprovals = await this.approvedCapabilityApprovals(
+      input.runId,
+      effectiveCapabilities
+    );
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1655,6 +1675,7 @@ class EventRuntimeService {
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
         capabilitySnapshotRef: effectiveCapabilities ? contractSnapshotRef : undefined,
+        capabilityApprovals,
         agentId: effectiveCapabilities?.agentId,
         tenantId: effectiveCapabilities?.tenantId,
         principal: {
@@ -2492,6 +2513,292 @@ class EventRuntimeService {
       requestedAt,
       idempotencyKey: input.idempotencyKey ?? commandId,
     });
+  }
+
+  private async requirePromptReviewApprovals(input: {
+    run: OwnedRunScope;
+    agentId: string;
+    tenantId?: string;
+    promptRefs: AgentPromptRef[];
+  }): Promise<AgentPromptApproval[]> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    const specs = manager.listAgentPrompts();
+    const events = await this.listEvents(input.run.runId);
+    const tasks = projectHumanTasks(events);
+    const approvals: AgentPromptApproval[] = [];
+    const pending: HumanTask[] = [];
+    for (const ref of input.promptRefs) {
+      const spec = specs.find(
+        (candidate) =>
+          candidate.id === ref.id && (ref.version === undefined || candidate.version === ref.version)
+      );
+      if (!spec || (spec.trustLevel ?? 'reviewed') !== 'untrusted') continue;
+      const subjectHash = agentPromptSubjectHash(spec);
+      const matching = tasks.filter(
+        (task) =>
+          task.taskKind === 'agent_prompt' &&
+          task.subjectHash === subjectHash &&
+          task.subjectId === spec.id &&
+          task.principalId === input.run.userId &&
+          task.agentId === input.agentId &&
+          task.domainId === input.run.domainPackId
+      );
+      const approved = matching.find(
+        (task) =>
+          task.status === 'approved' &&
+          Boolean(task.decidedBy && task.decidedAt) &&
+          Date.parse(task.expiresAt) > Date.now()
+      );
+      if (approved) {
+        approvals.push({
+          taskId: approved.taskId,
+          subjectType: 'agent_prompt',
+          subjectHash,
+          promptId: spec.id,
+          promptVersion: spec.version,
+          promptRevision: spec.revision!,
+          contentHash: spec.contentHash!,
+          approvedBy: approved.decidedBy!,
+          principalId: approved.principalId,
+          tenantId: approved.tenantId,
+          agentId: approved.agentId,
+          domainId: approved.domainId,
+          expiresAt: approved.expiresAt,
+          status: 'approved',
+        });
+        continue;
+      }
+      const active = matching.find(
+        (task) => task.status === 'requested' && Date.parse(task.expiresAt) > Date.now()
+      );
+      if (active) {
+        pending.push(active);
+        continue;
+      }
+      const requested = await this.requestHumanTask({
+        taskKind: 'agent_prompt',
+        run: input.run,
+        subjectType: 'agent_prompt',
+        subjectId: spec.id,
+        subjectRevision: `${spec.version}:${spec.revision}`,
+        subjectHash,
+        agentId: input.agentId,
+        tenantId: input.tenantId,
+        reason: `Untrusted Prompt ${spec.id}@${spec.version} requires review.`,
+        ordinal: matching.length + 1,
+      });
+      pending.push(requested);
+    }
+    if (pending.length > 0) {
+      await this.advanceToHumanReview(input.run.runId, 'skill-human-review');
+      const approval = { taskKind: 'agent_prompt', tasks: pending, agentId: input.agentId };
+      await this.waitForHumanReview(input.run.runId, approval);
+      throw new HumanReviewRequiredError(input.run.runId, approval);
+    }
+    return approvals;
+  }
+
+  private async requireEffectiveCapabilityApproval(
+    run: OwnedRunScope,
+    effective: Readonly<EffectiveAgentCapabilitySnapshot>
+  ): Promise<HumanTask[]> {
+    if (!effective.requiresHumanReview) return [];
+    const tasks = projectHumanTasks(await this.listEvents(run.runId));
+    const matching = tasks.filter(
+      (task) =>
+        task.taskKind === 'effective_capability_snapshot' &&
+        task.subjectHash === effective.snapshotHash &&
+        task.subjectId === effective.id &&
+        task.principalId === effective.principalId &&
+        task.agentId === effective.agentId
+    );
+    if (
+      matching.some(
+        (task) => task.status === 'approved' && Date.parse(task.expiresAt) > Date.now()
+      )
+    ) {
+      return [];
+    }
+    const active = matching.find(
+      (task) => task.status === 'requested' && Date.parse(task.expiresAt) > Date.now()
+    );
+    if (active) return [active];
+    return [
+      await this.requestHumanTask({
+        taskKind: 'effective_capability_snapshot',
+        run,
+        subjectType: 'effective_capability_snapshot',
+        subjectId: effective.id,
+        subjectRevision: effective.snapshotHash,
+        subjectHash: effective.snapshotHash,
+        agentId: effective.agentId,
+        tenantId: effective.tenantId,
+        reason: 'One or more active Skills require human review.',
+        ordinal: matching.length + 1,
+      }),
+    ];
+  }
+
+  private async requestHumanTask(input: {
+    taskKind: string;
+    run: OwnedRunScope;
+    subjectType: string;
+    subjectId: string;
+    subjectRevision: string;
+    subjectHash: string;
+    agentId?: string;
+    tenantId?: string;
+    reason?: string;
+    ordinal: number;
+  }): Promise<HumanTask> {
+    const requestedAt = new Date().toISOString();
+    const task: HumanTask = {
+      taskId: `human-review:${input.run.runId}:${input.taskKind}:${input.subjectHash.slice(0, 16)}:${input.ordinal}`,
+      taskKind: input.taskKind,
+      runId: input.run.runId,
+      subjectType: input.subjectType,
+      subjectId: input.subjectId,
+      subjectRevision: input.subjectRevision,
+      subjectHash: input.subjectHash,
+      principalId: input.run.userId,
+      agentId: input.agentId,
+      tenantId: input.tenantId,
+      domainId: input.run.domainPackId,
+      requestedAt,
+      expiresAt: new Date(Date.parse(requestedAt) + 24 * 60 * 60 * 1_000).toISOString(),
+      status: 'requested',
+      revision: 1,
+      reason: input.reason,
+    };
+    await this.append(input.run.runId, 'human.review.requested', task);
+    return task;
+  }
+
+  async listHumanReviews(runId: string, userId: string): Promise<HumanTask[]> {
+    await this.requireOwnedRunScope(runId, userId);
+    return projectHumanTasks(await this.listEvents(runId));
+  }
+
+  async decideHumanReview(input: {
+    runId: string;
+    taskId: string;
+    expectedRevision: number;
+    decision: 'approved' | 'rejected' | 'cancelled';
+    decidedBy: string;
+    reason?: string;
+  }): Promise<HumanTask> {
+    const run = await this.requireRun(input.runId);
+    const tasks = projectHumanTasks(await this.listEvents(input.runId));
+    const now = new Date().toISOString();
+    let task: HumanTask;
+    try {
+      task = assertHumanTaskCAS(
+        tasks.find((candidate) => candidate.taskId === input.taskId),
+        input.expectedRevision,
+        now
+      );
+    } catch (error) {
+      if (error instanceof FrameworkError && error.code === 'HUMAN_TASK_EXPIRED') {
+        await this.append(input.runId, 'human.review.expired', {
+          taskId: input.taskId,
+          expectedRevision: input.expectedRevision,
+          decidedAt: now,
+        });
+      }
+      throw error;
+    }
+    const eventType =
+      input.decision === 'approved'
+        ? 'human.review.approved'
+        : input.decision === 'rejected'
+          ? 'human.review.rejected'
+          : 'human.review.cancelled';
+    await this.append(input.runId, eventType, {
+      taskId: task.taskId,
+      taskKind: task.taskKind,
+      expectedRevision: task.revision,
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt: now,
+      reason: input.reason,
+    });
+    const resolved = projectHumanTasks(await this.listEvents(input.runId)).find(
+      (candidate) => candidate.taskId === task.taskId
+    );
+    if (!resolved || resolved.revision !== task.revision + 1 || resolved.status !== input.decision) {
+      throw new FrameworkError({
+        code: 'HUMAN_TASK_REVISION_CONFLICT',
+        message: 'Human task was concurrently resolved.',
+        context: { taskId: task.taskId, expectedRevision: task.revision },
+      });
+    }
+    await this.append(input.runId, 'human.review.resolved', {
+      taskId: task.taskId,
+      taskKind: task.taskKind,
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt: now,
+    });
+    if (input.decision === 'approved') {
+      await this.append(input.runId, 'run.resume.requested', {
+        taskId: task.taskId,
+        taskKind: task.taskKind,
+        requestedBy: input.decidedBy,
+      });
+      if (run.snapshot.currentState === 'HumanReview') {
+        await this.transition(input.runId, 'Reasoning', {
+          taskId: task.taskId,
+          reason: `${task.taskKind}-approved`,
+        }).catch(() => undefined);
+      }
+      await this.append(input.runId, 'run.resumed', {
+        taskId: task.taskId,
+        taskKind: task.taskKind,
+        resumedBy: input.decidedBy,
+      });
+    } else {
+      await this.failRun(
+        input.runId,
+        input.reason ?? `Human task ${task.taskId} was ${input.decision}.`
+      );
+    }
+    return resolved;
+  }
+
+  private async approvedCapabilityApprovals(
+    runId: string,
+    effective: Readonly<EffectiveAgentCapabilitySnapshot> | undefined
+  ): Promise<EffectiveCapabilityApproval[]> {
+    if (!effective) return [];
+    return projectHumanTasks(await this.listEvents(runId))
+      .filter(
+        (task) =>
+          task.taskKind === 'effective_capability_snapshot' &&
+          task.subjectHash === effective.snapshotHash &&
+          task.subjectId === effective.id &&
+          task.status === 'approved' &&
+          Boolean(task.decidedBy && task.decidedAt) &&
+          Date.parse(task.expiresAt) > Date.now()
+      )
+      .map((task) => ({
+        taskId: task.taskId,
+        subjectType: 'effective_capability_snapshot' as const,
+        subjectHash: task.subjectHash,
+        snapshotId: effective.id,
+        runId,
+        agentId: effective.agentId,
+        principalId: effective.principalId,
+        approvedBy: task.decidedBy!,
+        approvedAt: task.decidedAt!,
+        expiresAt: task.expiresAt,
+        status: 'approved' as const,
+      }));
+  }
+
+  private async runCreatedAt(runId: string): Promise<string> {
+    const events = await this.listEvents(runId);
+    return events[0]?.timestamp ?? new Date().toISOString();
   }
 
   private async requireSkillReviewApprovals(input: {
