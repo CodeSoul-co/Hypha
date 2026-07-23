@@ -1,4 +1,4 @@
-import { FrameworkError, type FrameworkEvent } from '@hypha/core';
+import { FrameworkError, hashCanonicalJson, type FrameworkEvent } from '@hypha/core';
 
 export type HumanTaskStatus =
   | 'requested'
@@ -86,6 +86,17 @@ export function assertHumanTaskCAS(
     });
   }
   return task;
+}
+
+export function humanTaskResolutionEventId(input: {
+  runId: string;
+  taskId: string;
+  expectedRevision: number;
+}): string {
+  const subject = hashCanonicalJson({ runId: input.runId, taskId: input.taskId }).slice(
+    'sha256:'.length
+  );
+  return `${input.runId}:human-review:${subject}:revision:${input.expectedRevision + 1}`;
 }
 
 function parseRequestedTask(payload: Record<string, unknown> | undefined): HumanTask | null {

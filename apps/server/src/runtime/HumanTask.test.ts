@@ -1,5 +1,9 @@
 import { createFrameworkEvent, type FrameworkEventType } from '@hypha/core';
-import { assertHumanTaskCAS, projectHumanTasks } from './HumanTask';
+import {
+  assertHumanTaskCAS,
+  humanTaskResolutionEventId,
+  projectHumanTasks,
+} from './HumanTask';
 
 function event(type: FrameworkEventType, payload: Record<string, unknown>, index: number) {
   return createFrameworkEvent({
@@ -51,5 +55,27 @@ describe('Generic HumanTask projection', () => {
     expect(assertHumanTaskCAS(requestedTask, 1, '2026-07-23T01:00:00.000Z')).toBe(
       requestedTask
     );
+  });
+
+  it('uses one durable terminal event identity per task revision', () => {
+    const first = humanTaskResolutionEventId({
+      runId: requested.runId,
+      taskId: requested.taskId,
+      expectedRevision: 1,
+    });
+    expect(
+      humanTaskResolutionEventId({
+        runId: requested.runId,
+        taskId: requested.taskId,
+        expectedRevision: 1,
+      })
+    ).toBe(first);
+    expect(
+      humanTaskResolutionEventId({
+        runId: requested.runId,
+        taskId: requested.taskId,
+        expectedRevision: 2,
+      })
+    ).not.toBe(first);
   });
 });

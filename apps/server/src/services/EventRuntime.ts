@@ -178,6 +178,7 @@ import {
 import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
 import {
   assertHumanTaskCAS,
+  humanTaskResolutionEventId,
   projectHumanTasks,
   type HumanTask,
 } from '../runtime/HumanTask';
@@ -3574,11 +3575,24 @@ class EventRuntimeService {
       );
     } catch (error) {
       if (error instanceof FrameworkError && error.code === 'HUMAN_TASK_EXPIRED') {
-        await this.append(input.runId, 'human.review.expired', {
-          taskId: input.taskId,
-          expectedRevision: input.expectedRevision,
-          decidedAt: now,
-        });
+        await this.append(
+          input.runId,
+          'human.review.expired',
+          {
+            taskId: input.taskId,
+            expectedRevision: input.expectedRevision,
+            resolutionOperationId: generateId(),
+            decidedAt: now,
+          },
+          undefined,
+          {
+            eventId: humanTaskResolutionEventId({
+              runId: input.runId,
+              taskId: input.taskId,
+              expectedRevision: input.expectedRevision,
+            }),
+          }
+        );
       }
       throw error;
     }
@@ -3588,15 +3602,40 @@ class EventRuntimeService {
         : input.decision === 'rejected'
           ? 'human.review.rejected'
           : 'human.review.cancelled';
-    await this.append(input.runId, eventType, {
-      taskId: task.taskId,
-      taskKind: task.taskKind,
-      expectedRevision: task.revision,
-      decision: input.decision,
-      decidedBy: input.decidedBy,
-      decidedAt: now,
-      reason: input.reason,
-    });
+    try {
+      await this.append(
+        input.runId,
+        eventType,
+        {
+          taskId: task.taskId,
+          taskKind: task.taskKind,
+          expectedRevision: task.revision,
+          resolutionOperationId: generateId(),
+          decision: input.decision,
+          decidedBy: input.decidedBy,
+          decidedAt: now,
+          reason: input.reason,
+        },
+        undefined,
+        {
+          eventId: humanTaskResolutionEventId({
+            runId: input.runId,
+            taskId: task.taskId,
+            expectedRevision: task.revision,
+          }),
+        }
+      );
+    } catch (error) {
+      if (error instanceof FrameworkError && error.code === 'RUNTIME_IDEMPOTENCY_CONFLICT') {
+        throw new FrameworkError({
+          code: 'HUMAN_TASK_REVISION_CONFLICT',
+          message: 'Human task was concurrently resolved.',
+          context: { taskId: task.taskId, expectedRevision: task.revision },
+          cause: error,
+        });
+      }
+      throw error;
+    }
     const resolved = projectHumanTasks(await this.listEvents(input.runId)).find(
       (candidate) => candidate.taskId === task.taskId
     );
