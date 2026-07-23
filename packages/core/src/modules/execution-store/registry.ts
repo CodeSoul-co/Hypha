@@ -80,6 +80,7 @@ function assertStore(store: ExecutionStore, storeId: string): void {
     'acquireLease',
     'renewLease',
     'releaseLease',
+    'health',
   ];
   if (!store || methods.some((method) => typeof store[method] !== 'function')) {
     throw registryError(

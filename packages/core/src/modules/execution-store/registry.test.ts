@@ -59,5 +59,9 @@ function executionStore(): ExecutionStore {
     acquireLease: async () => record,
     renewLease: async () => record,
     releaseLease: async () => record,
+    health: async () => ({
+      status: 'healthy',
+      checkedAt: '2026-07-23T00:00:00.000Z',
+    }),
   };
 }

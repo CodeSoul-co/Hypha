@@ -17,6 +17,10 @@ describe('SQLiteExecutionStore public adapter', () => {
   it('implements the public ExecutionStore contract across restart', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-store-'));
     const store: ExecutionStore = new SQLiteExecutionStore({ rootPath: root });
+    await expect(store.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: SQLiteExecutionStore.schemaVersion },
+    });
     const created = await store.create(structuredClone(executionRecordCreateRequestExample));
     await store.close?.();
 
