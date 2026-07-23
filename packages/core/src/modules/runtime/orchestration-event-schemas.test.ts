@@ -114,6 +114,24 @@ describe('Runtime orchestration Event schemas', () => {
         })
       )
     ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('react.continuation.checkpointed', {
+          checkpointVersion: '1.0.0',
+          stepId: 'react',
+          scopeHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          stepSequence: 12,
+          nextPhase: 'reason',
+          iterations: 2,
+          modelCalls: 3,
+          toolCalls: 2,
+          totalTokens: 120,
+          consecutiveNoProgress: 0,
+          checkpointHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          updatedAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
   });
 
   it('rejects missing orchestration evidence and unregistered Event types', async () => {
@@ -130,6 +148,23 @@ describe('Runtime orchestration Event schemas', () => {
     ).resolves.toMatchObject({
       valid: false,
       issues: [expect.objectContaining({ code: 'schema_not_registered' })],
+    });
+    await expect(
+      registry.validate(
+        event('react.continuation.suspended', {
+          stepId: 'react',
+          scopeHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          stepSequence: 12,
+          reason: 'quantum_exhausted',
+          retryable: true,
+          requiresHumanReview: false,
+          checkpointHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          leakedMessages: [],
+        })
+      )
+    ).resolves.toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ path: '$', code: 'additionalProperties' })],
     });
   });
 });

@@ -93,6 +93,9 @@ export const RUNTIME_RUN_MANAGER_EVENT_TYPES = [
   'agent.deliberation.completed',
   'reasoning.decision.recorded',
   'react.step.completed',
+  'react.continuation.checkpointed',
+  'react.continuation.suspended',
+  'react.continuation.resumed',
 ] as const satisfies readonly FrameworkEventType[];
 
 export type RuntimeRunManagerEventType = (typeof RUNTIME_RUN_MANAGER_EVENT_TYPES)[number];
@@ -280,6 +283,9 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'agent.deliberation.completed': openPayload(),
   'reasoning.decision.recorded': openPayload(),
   'react.step.completed': openPayload(),
+  'react.continuation.checkpointed': reactContinuationCheckpointPayload(),
+  'react.continuation.suspended': reactContinuationSuspensionPayload(),
+  'react.continuation.resumed': reactContinuationResumePayload(),
 };
 
 export const runtimeEventSchemaDefinitions: readonly EventSchemaDefinition[] = Object.freeze(
@@ -340,6 +346,90 @@ function payload(required: string[], properties: Record<string, JsonSchema>): Js
 
 function openPayload(): JsonSchema {
   return payload([], {});
+}
+
+function strictPayload(required: string[], properties: Record<string, JsonSchema>): JsonSchema {
+  return { type: 'object', required, properties, additionalProperties: false };
+}
+
+function reactContinuationCheckpointPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'checkpointVersion',
+      'stepId',
+      'scopeHash',
+      'stepSequence',
+      'nextPhase',
+      'iterations',
+      'modelCalls',
+      'toolCalls',
+      'totalTokens',
+      'consecutiveNoProgress',
+      'checkpointHash',
+      'updatedAt',
+    ],
+    {
+      checkpointVersion: { const: '1.0.0' },
+      stepId: stringSchema,
+      scopeHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      stepSequence: { type: 'integer', minimum: 0 },
+      nextPhase: { type: 'string', enum: ['reason', 'act'] },
+      iterations: { type: 'integer', minimum: 0 },
+      modelCalls: { type: 'integer', minimum: 0 },
+      toolCalls: { type: 'integer', minimum: 0 },
+      totalTokens: { type: 'integer', minimum: 0 },
+      consecutiveNoProgress: { type: 'integer', minimum: 0 },
+      checkpointHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      updatedAt: timestampSchema,
+    }
+  );
+}
+
+function reactContinuationSuspensionPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'stepId',
+      'scopeHash',
+      'stepSequence',
+      'reason',
+      'retryable',
+      'requiresHumanReview',
+      'checkpointHash',
+    ],
+    {
+      stepId: stringSchema,
+      scopeHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      stepSequence: { type: 'integer', minimum: 0 },
+      reason: {
+        type: 'string',
+        enum: [
+          'quantum_exhausted',
+          'iteration_budget_exhausted',
+          'model_call_budget_exhausted',
+          'tool_call_budget_exhausted',
+          'token_budget_exhausted',
+          'non_progress',
+          'deadline_exceeded',
+        ],
+      },
+      retryable: { type: 'boolean' },
+      requiresHumanReview: { type: 'boolean' },
+      checkpointHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+    }
+  );
+}
+
+function reactContinuationResumePayload(): JsonSchema {
+  return strictPayload(
+    ['stepId', 'scopeHash', 'checkpointStepSequence', 'checkpointHash', 'resumedAt'],
+    {
+      stepId: stringSchema,
+      scopeHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      checkpointStepSequence: { type: 'integer', minimum: 0 },
+      checkpointHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      resumedAt: timestampSchema,
+    }
+  );
 }
 
 function waitingRunPayload(): JsonSchema {

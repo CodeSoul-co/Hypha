@@ -12,7 +12,12 @@ import type {
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
 import type { FSMProcessSpec, FSMRuntime, FSMRuntimeOptions, FSMSnapshot } from '@hypha/fsm';
-import type { ReActAgentRuntime, ReActRunner, ReActRunnerOptions } from '@hypha/kernel';
+import type {
+  ReActAgentRuntime,
+  ReActContinuationCheckpointStore,
+  ReActRunner,
+  ReActRunnerOptions,
+} from '@hypha/kernel';
 
 export interface ScopedReActRunnerFactory {
   create(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner;
@@ -35,6 +40,7 @@ export interface RuntimeCompositionDependencies {
   runLeases: RunLeaseStore;
   stateClaims: StateExecutionClaimStore;
   sessionQueue: SessionQueue;
+  reactCheckpoints: ReActContinuationCheckpointStore;
 }
 
 export interface RuntimeComposition extends RuntimeCompositionDependencies {
@@ -103,6 +109,7 @@ export class RuntimeCompositionRoot {
       runLeases,
       stateClaims,
       sessionQueue,
+      reactCheckpoints,
       factories,
     } = this.options;
     const dependencies = {
@@ -113,6 +120,7 @@ export class RuntimeCompositionRoot {
       runLeases,
       stateClaims,
       sessionQueue,
+      reactCheckpoints,
     };
     const runManager = requiredComponent('RunManager', factories.createRunManager(dependencies));
     const timerWorker = requiredComponent(

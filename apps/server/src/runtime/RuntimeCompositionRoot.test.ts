@@ -11,7 +11,7 @@ import type {
   StateExecutionClaimStore,
 } from '@hypha/core';
 import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
-import type { ReActRunner } from '@hypha/kernel';
+import type { ReActContinuationCheckpointStore, ReActRunner } from '@hypha/kernel';
 import {
   RuntimeCompositionRoot,
   type RecoveryFSMFactory,
@@ -28,6 +28,7 @@ function dependencies(): RuntimeCompositionDependencies {
     runLeases: {} as RunLeaseStore,
     stateClaims: {} as StateExecutionClaimStore,
     sessionQueue: {} as SessionQueue,
+    reactCheckpoints: {} as ReActContinuationCheckpointStore,
   };
 }
 

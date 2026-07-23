@@ -1006,6 +1006,11 @@ function streamChunkToModelStreamEvent(chunk: StreamChunk): ModelStreamEvent {
         type: 'error',
         error: `Run ${chunk.runId ?? 'unknown'} is waiting for human review.`,
       };
+    case 'continuation_required':
+      return {
+        type: 'error',
+        error: `Run ${chunk.runId ?? 'unknown'} requires a new bounded ReAct execution quantum.`,
+      };
   }
 }
 
