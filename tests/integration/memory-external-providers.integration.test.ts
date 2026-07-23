@@ -392,33 +392,113 @@ describe('external memory real integration entry points', () => {
     process.env.HYPHA_TEST_MEMORYBANK_ENGINE
   );
   registerExternalCase('memorybank-managed', vertexReady, async () => {
-    const startedAt = new Date().toISOString();
-    const metadata = evidence(
-      'memory.provider.memorybank.vertex-ai',
-      'HYPHA_TEST_MEMORYBANK_MANAGED_VERSION'
-    );
-    const client = new MemoryBankManagedClient({
-      projectId: process.env.HYPHA_TEST_MEMORYBANK_PROJECT!,
-      location: process.env.HYPHA_TEST_MEMORYBANK_LOCATION!,
-      reasoningEngineId: process.env.HYPHA_TEST_MEMORYBANK_ENGINE!,
-      accessToken: process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN!,
-      mappingProfile: 'test',
-    });
-    try {
-      const capabilitySnapshot = await client.capabilities();
-      const health = await client.health();
-      expect(capabilitySnapshot).toBeTruthy();
-      expect(health).toHaveProperty('status');
-      emitEvidence({
-        status: 'passed',
-        ...metadata,
-        capabilitySnapshot,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        healthStatus: health.status,
+    const fixture = managedLiveFixture('memorybank-managed');
+    const stores = await createDurableAcceptanceStores('memorybank-managed');
+    const { mappingStore, operationStore } = stores;
+    const createClient = (token = process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN!) =>
+      new MemoryBankManagedClient({
+        projectId: process.env.HYPHA_TEST_MEMORYBANK_PROJECT!,
+        location: process.env.HYPHA_TEST_MEMORYBANK_LOCATION!,
+        reasoningEngineId: process.env.HYPHA_TEST_MEMORYBANK_ENGINE!,
+        accessToken: token,
+        mappingStore,
+        operationStore,
+        mappingProfile: 'test',
       });
-    } finally {
-      await client.close();
-    }
+    const client = createClient();
+    const settle = (operationId: string, signal?: AbortSignal) =>
+      pollSettlement({
+        poll: () => client.reconcileOperation(operationId, signal),
+        isSettled: (result) => result.status === 'committed',
+        isFailed: (result) => result.status === 'rejected',
+        signal,
+      });
+    const report = await runExternalProviderAcceptance(
+      client,
+      fixture,
+      undefined,
+      evidence('memory.provider.memorybank.vertex-ai', 'HYPHA_TEST_MEMORYBANK_MANAGED_VERSION'),
+      {
+        settleAdd: (_result, signal) => settle(fixture.add.operationId, signal),
+        preparePagination: async (signal) => {
+          const operationId = fixture.add.operationId + ':pagination';
+          const result = await client.add(
+            {
+              ...fixture.add,
+              operationId,
+              input: String(fixture.add.input) + ' pagination companion',
+              idempotencyKey: operationId,
+            },
+            signal
+          );
+          if (result.status === 'queued') await settle(operationId, signal);
+        },
+        verifyRestart: async (memoryId, signal) => {
+          const restarted = createClient();
+          try {
+            await expect(restarted.get(fixture.get(memoryId), signal)).resolves.toBeTruthy();
+            await expect(restarted.list(fixture.list, signal)).resolves.toMatchObject({
+              records: expect.any(Array),
+            });
+          } finally {
+            await restarted.close();
+          }
+        },
+        failureProbes: [
+          {
+            id: 'invalid-token',
+            expectedCodes: ['MEMORY_PERMISSION_DENIED'],
+            run: async (signal) => {
+              const denied = createClient('hypha-invalid-live-probe-token');
+              try {
+                await denied.search(
+                  {
+                    ...fixture.search,
+                    operationId: fixture.search.operationId + ':invalid-token',
+                  },
+                  signal
+                );
+              } finally {
+                await denied.close();
+              }
+            },
+          },
+        ],
+        cleanup: async (signal) => {
+          try {
+            await cleanupAcceptanceScope(
+              client,
+              fixture.list,
+              (memoryIds) => ({
+                ...fixture.delete(memoryIds[0]),
+                operationId: fixture.delete(memoryIds[0]).operationId + ':scope-cleanup',
+                memoryIds,
+              }),
+              signal
+            );
+          } finally {
+            await stores.close();
+          }
+        },
+      }
+    );
+    expect(report).toMatchObject({
+      status: 'passed',
+      scopeIsolationVerified: true,
+      restartVerified: true,
+      failureProbeCount: 1,
+      deleteStatus: 'completed',
+      healthStatus: 'healthy',
+      evidence: {
+        commitSha: expect.any(String),
+        providerVersion: expect.any(String),
+        profileHash: expect.stringMatching(/^sha256:/u),
+        capabilitySnapshot: expect.any(Object),
+        environmentHash: expect.stringMatching(/^sha256:/u),
+      },
+    });
+    expect(report.paginationPageCount).toBeGreaterThan(1);
+    expect(report.searchCount).toBeGreaterThan(0);
+    expect(report.listCount).toBeGreaterThan(1);
   });
 });
