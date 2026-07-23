@@ -2,7 +2,11 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ExecutionStore } from '@hypha/core';
+import type {
+  ExecutionRecord,
+  ExecutionRecordCompareAndSetRequest,
+  ExecutionStore,
+} from '@hypha/core';
 import {
   executionLeaseAcquireRequestExample,
   executionRecordCreateRequestExample,
@@ -130,9 +134,49 @@ describe('SQLiteExecutionStore public adapter', () => {
     },
     20_000
   );
+
+  it(
+    'recovers atomically when a worker crashes immediately before or after compare-and-set',
+    async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-cas-'));
+      const store = new SQLiteExecutionStore({ rootPath: root });
+      const queued = await store.create(structuredClone(executionRecordCreateRequestExample));
+      await store.close();
+      const mutation = startingMutation(
+        queued,
+        'operation.execution.update.crash-boundary',
+        'execution-update:crash-boundary'
+      );
+
+      await runStoreCrashInChild(
+        root,
+        'crashBeforeCompareAndSet',
+        mutation,
+        CRASH_BEFORE_CAS_EXIT_CODE
+      );
+      const beforeCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
+      await expect(beforeCrashRecovery.get(queued.id)).resolves.toEqual(queued);
+      await beforeCrashRecovery.close();
+
+      await runStoreCrashInChild(
+        root,
+        'crashAfterCompareAndSet',
+        mutation,
+        CRASH_AFTER_CAS_EXIT_CODE
+      );
+      const afterCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
+      await expect(afterCrashRecovery.get(queued.id)).resolves.toEqual(mutation.next);
+      await afterCrashRecovery.close();
+    },
+    20_000
+  );
 });
 
 type ChildStoreOperation = 'acquireLease' | 'compareAndSet';
+type ChildStoreCrashOperation = 'crashAfterCompareAndSet' | 'crashBeforeCompareAndSet';
+
+const CRASH_BEFORE_CAS_EXIT_CODE = 71;
+const CRASH_AFTER_CAS_EXIT_CODE = 72;
 
 interface ChildStoreResponse<T> {
   ready?: boolean;
@@ -193,6 +237,85 @@ async function runStoreOperationInChild<T>(
   });
 }
 
+async function runStoreCrashInChild(
+  rootPath: string,
+  operation: ChildStoreCrashOperation,
+  request: ExecutionRecordCompareAndSetRequest,
+  expectedExitCode: number
+): Promise<void> {
+  const repoRoot = process.cwd();
+  const child = spawn(
+    process.execPath,
+    ['-r', require.resolve('ts-node/register/transpile-only'), '-e', SQLITE_STORE_CHILD_SOURCE],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HYPHA_REPO_ROOT: repoRoot,
+        TS_NODE_PROJECT: path.join(repoRoot, 'tsconfig.typecheck.json'),
+      },
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    }
+  );
+  let stderr = '';
+  let settled = false;
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+
+  return new Promise<void>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('message', (message: ChildStoreResponse<never>) => {
+      if (message.ready) {
+        child.send({ rootPath, operation, request });
+        return;
+      }
+      if (message.ok === false && !settled) {
+        settled = true;
+        reject(
+          Object.assign(new Error(message.error?.message ?? 'SQLite child crash setup failed.'), {
+            code: message.error?.code,
+          })
+        );
+      }
+    });
+    child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      if (code === expectedExitCode) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `SQLite crash child exited with code ${code}; expected ${expectedExitCode}: ${stderr.trim()}`
+        )
+      );
+    });
+  });
+}
+
+function startingMutation(
+  current: ExecutionRecord,
+  operationId: string,
+  idempotencyKey: string
+): ExecutionRecordCompareAndSetRequest {
+  return {
+    operationId,
+    executionId: current.id,
+    expectedRevision: current.revision,
+    next: {
+      ...structuredClone(current),
+      revision: current.revision + 1,
+      status: 'starting',
+      attempt: current.attempt + 1,
+      updatedAt: '2026-07-16T00:00:01.000Z',
+    },
+    idempotencyKey,
+  };
+}
+
 const SQLITE_STORE_CHILD_SOURCE = String.raw`
 const Module = require('node:module');
 const path = require('node:path');
@@ -212,6 +335,13 @@ const { SQLiteExecutionStore } = require(
 process.on('message', async ({ rootPath, operation, request }) => {
   const store = new SQLiteExecutionStore({ rootPath });
   try {
+    if (operation === 'crashBeforeCompareAndSet') {
+      process.exit(${CRASH_BEFORE_CAS_EXIT_CODE});
+    }
+    if (operation === 'crashAfterCompareAndSet') {
+      await store.compareAndSet(request);
+      process.exit(${CRASH_AFTER_CAS_EXIT_CODE});
+    }
     const result = await store[operation](request);
     process.send({ ok: true, result });
   } catch (error) {
