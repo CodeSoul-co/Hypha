@@ -1040,14 +1040,11 @@ export function projectRun(events: FrameworkEvent[]): RuntimeRun | null {
   const terminal = [...events]
     .reverse()
     .find((event) => ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type));
-  const waitingHuman = [...events].reverse().find((event) => event.type === 'run.waiting_human');
   return {
     ...run,
     status: terminal
       ? statusFromRunEvent(terminal.type)
-      : waitingHuman
-        ? 'waiting_human'
-        : statusFromEvents(events, run.status),
+      : statusFromEvents(events, run.status),
     updatedAt: last.timestamp,
     completedAt: terminal?.timestamp,
     output: terminal ? (terminal.payload as Record<string, unknown>).output : run.output,
@@ -1130,7 +1127,15 @@ function statusFromEvents(
   events: FrameworkEvent[],
   fallback: RuntimeRun['status']
 ): RuntimeRun['status'] {
-  if (events.some((event) => event.type === 'run.started')) return 'running';
+  const latestActiveStatus = [...events]
+    .reverse()
+    .find((event) =>
+      ['run.started', 'run.resumed', 'run.waiting_human'].includes(event.type)
+    )?.type;
+  if (latestActiveStatus === 'run.waiting_human') return 'waiting_human';
+  if (latestActiveStatus === 'run.started' || latestActiveStatus === 'run.resumed') {
+    return 'running';
+  }
   return fallback;
 }
 

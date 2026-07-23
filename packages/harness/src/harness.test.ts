@@ -948,6 +948,23 @@ describe('@hypha/harness contracts', () => {
     await expect(runManager.projectRun('run_stage4_human')).resolves.toMatchObject({
       status: 'waiting_human',
     });
+
+    await runManager.appendRunEvent({
+      id: 'run_stage4_human:run.resumed:1',
+      type: 'run.resumed',
+      runId: 'run_stage4_human',
+      sessionId: 'session_stage4',
+      userId: 'owner',
+      agentId: 'agent.stage4',
+      timestamp: '2026-07-03T00:01:00.000Z',
+      payload: {
+        waitId: 'human-review:run_stage4_human',
+        resolution: 'approved',
+      },
+    });
+    await expect(runManager.projectRun('run_stage4_human')).resolves.toMatchObject({
+      status: 'running',
+    });
   });
 
   it('records human-review decisions, context compaction, and cancellation as events', async () => {
