@@ -103,12 +103,25 @@ export interface ToolCall {
 
 // Stream chunk
 export interface StreamChunk {
-  type: 'content' | 'tool_call' | 'tool_result' | 'waiting_human' | 'error' | 'done';
+  type:
+    | 'content'
+    | 'tool_call'
+    | 'tool_result'
+    | 'waiting_human'
+    | 'continuation_required'
+    | 'error'
+    | 'done';
   content?: string;
   toolCall?: ToolCall;
   error?: string;
   runId?: string;
   approval?: Record<string, unknown>;
+  continuation?: {
+    stepId: string;
+    stepSequence: number;
+    reason: 'quantum_exhausted';
+    checkpointHash: string;
+  };
   finishReason?: string;
   usage?: {
     inputTokens: number;

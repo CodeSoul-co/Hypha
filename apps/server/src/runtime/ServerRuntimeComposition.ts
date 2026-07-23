@@ -95,15 +95,20 @@ export function createServerRuntimeComposition(
           executeState: options.executeState,
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
         }),
-      createReActRunner: ({ runManager }) =>
+      createReActRunner: ({ runManager, reactCheckpoints }) =>
         new HarnessedReActFSMRunner({
           inference: options.inference,
           toolRunner: options.toolRunner,
           runManager,
           fsmSpec: options.fsmSpec,
+          reactCheckpointStore: reactCheckpoints,
         }),
-      createScopedReActRunnerFactory: () => ({
-        create: (runtime, runnerOptions) => new ReActRunner(runtime, runnerOptions),
+      createScopedReActRunnerFactory: ({ reactCheckpoints }) => ({
+        create: (runtime, runnerOptions) =>
+          new ReActRunner(runtime, {
+            ...runnerOptions,
+            checkpointStore: runnerOptions.checkpointStore ?? reactCheckpoints,
+          }),
       }),
       createRecoveryFSMFactory: () => ({
         create: (input) =>

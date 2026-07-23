@@ -9,6 +9,7 @@ import {
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import type { ReActContinuationCheckpoint } from '@hypha/kernel';
 import { createRuntimeBackbone, type RuntimeBackbone } from './RuntimeBackbone';
 
 const timestamp = '2026-07-21T06:00:00.000Z';
@@ -34,6 +35,7 @@ describe('RuntimeBackbone', () => {
     expect(backbone.runLeases).toBeDefined();
     expect(backbone.stateClaims).toBeDefined();
     expect(backbone.sessionQueue).toBeDefined();
+    expect(backbone.reactCheckpoints).toBeDefined();
     expect(Object.isFrozen(backbone)).toBe(true);
   });
 
@@ -101,6 +103,25 @@ describe('RuntimeBackbone', () => {
       payloadHash: commandPayloadHash,
       createdAt: timestamp,
     });
+    const reactCheckpoint: ReActContinuationCheckpoint = {
+      version: '1.0.0',
+      runId: scope.runId,
+      stepId: 'react',
+      scopeHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+      agentRef: { id: 'agent.example', version: '1.0.0' },
+      nextPhase: 'reason',
+      messages: [{ role: 'user', content: 'continue after restart' }],
+      iterations: 1,
+      modelCalls: 2,
+      toolCalls: 1,
+      totalTokens: 30,
+      toolInvocationSequence: 1,
+      stepSequence: 10,
+      consecutiveNoProgress: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await first.reactCheckpoints.put(reactCheckpoint, 'react-checkpoint:10');
     first.close();
     backbones.splice(backbones.indexOf(first), 1);
 
@@ -131,6 +152,9 @@ describe('RuntimeBackbone', () => {
     ).resolves.toMatchObject([
       { id: 'command.session.1', targetRunId: scope.runId, status: 'queued' },
     ]);
+    await expect(
+      reopened.reactCheckpoints.get(scope.runId, 'react', reactCheckpoint.scopeHash)
+    ).resolves.toEqual(reactCheckpoint);
   });
 
   function open(filename: string, schemaRegistry: InMemoryEventSchemaRegistry): RuntimeBackbone {

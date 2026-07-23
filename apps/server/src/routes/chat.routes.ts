@@ -5,7 +5,11 @@ import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../core/memory/PermanentMemory';
 import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
-import { getEventRuntime, isHumanReviewRequiredError } from '../services/EventRuntime';
+import {
+  getEventRuntime,
+  isHumanReviewRequiredError,
+  isReActContinuationRequiredError,
+} from '../services/EventRuntime';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
@@ -398,6 +402,18 @@ router.post(
         });
         return;
       }
+      if (runId && isReActContinuationRequiredError(error)) {
+        res.status(202).json({
+          success: true,
+          data: {
+            sessionId: session,
+            runId,
+            status: 'continuation_required',
+            continuation: error.continuation,
+          },
+        });
+        return;
+      }
       if (runId) {
         await runtime
           .failRun(runId, error)
@@ -674,6 +690,16 @@ router.post('/stream', async (req: Request, res: Response) => {
             sessionId: session,
             runId: chunk.runId ?? runId,
             approval: chunk.approval,
+          })}\n\n`
+        );
+      } else if (chunk.type === 'continuation_required') {
+        completed = true;
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'continuation_required',
+            sessionId: session,
+            runId: chunk.runId ?? runId,
+            continuation: chunk.continuation,
           })}\n\n`
         );
       } else if (chunk.type === 'error') {

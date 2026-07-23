@@ -102,7 +102,12 @@ import {
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
 import { RedisToolContractSnapshotStore } from '@hypha/mcp';
-import type { ReActAgentRuntime, ReActAgentSpec } from '@hypha/kernel';
+import type {
+  ReActAgentRuntime,
+  ReActAgentSpec,
+  ReActContinuationCheckpoint,
+  ReActExecutionBudget,
+} from '@hypha/kernel';
 import {
   createEffectiveAgentCapabilitySnapshot,
   type EffectiveAgentCapabilitySnapshotInput,
@@ -216,6 +221,31 @@ export class HumanReviewRequiredError extends Error {
 
 export function isHumanReviewRequiredError(error: unknown): error is HumanReviewRequiredError {
   return error instanceof HumanReviewRequiredError;
+}
+
+export interface ReActContinuationReceipt {
+  stepId: string;
+  stepSequence: number;
+  reason: 'quantum_exhausted';
+  checkpointHash: string;
+}
+
+export class ReActContinuationRequiredError extends Error {
+  readonly code = 'REACT_CONTINUATION_REQUIRED';
+
+  constructor(
+    readonly runId: string,
+    readonly continuation: ReActContinuationReceipt
+  ) {
+    super(`Run ${runId} reached a bounded ReAct quantum and requires continuation.`);
+    this.name = 'ReActContinuationRequiredError';
+  }
+}
+
+export function isReActContinuationRequiredError(
+  error: unknown
+): error is ReActContinuationRequiredError {
+  return error instanceof ReActContinuationRequiredError;
 }
 
 export interface EventRunHandle {
@@ -349,6 +379,8 @@ export interface ChatInferenceInput {
   toolPrincipalHasAllPermissions?: boolean;
   toolAuthorityConstraints?: readonly ToolAuthorityConstraint[];
   metadata?: Record<string, unknown>;
+  reactExecutionBudget?: Partial<ReActExecutionBudget>;
+  resumeFromReactCheckpoint?: boolean;
 }
 
 interface ChatCachePolicyBuildInput {
@@ -2406,6 +2438,7 @@ class EventRuntimeService {
         (chatOptions?.tools?.length ?? 0) + 2
       ),
       continueAfterTool: true,
+      executionBudget: input.reactExecutionBudget,
       onStep: async (step) => {
         await this.record(
           input.runId,
@@ -2419,31 +2452,52 @@ class EventRuntimeService {
           step.phase
         );
       },
-    });
-    const result = await runner.run({
-      runId: input.runId,
-      stepId: input.stepId,
-      agent,
-      messages: input.messages,
-      memoryScope: { userId, sessionId },
-      toolPrincipal,
-      toolExecutionScope,
-      metadata: {
-        skills: agent.activeSkills?.map((skill) => ({
-          id: skill.id,
-          version: skill.version,
-          trustLevel: skill.trustLevel,
-          provenance: skill.provenance,
-        })),
-        prompt: agent.promptResolution
-          ? {
-              refs: agent.promptRefs,
-              blocks: agent.promptResolution.blocks,
-              missing: agent.promptResolution.missing,
-            }
-          : asRecord(input.agentSpec?.metadata)?.prompt,
+      onCheckpoint: async (checkpoint) => {
+        await this.recordReactContinuationCheckpoint(input.runId, checkpoint);
+      },
+      onResume: async (checkpoint) => {
+        const resumedAt = new Date().toISOString();
+        await this.record(
+          input.runId,
+          'react.continuation.resumed',
+          {
+            stepId: checkpoint.stepId,
+            scopeHash: checkpoint.scopeHash,
+            checkpointStepSequence: checkpoint.stepSequence,
+            checkpointHash: hashCanonicalJson(checkpoint),
+            resumedAt,
+          },
+          'react-continuation-resume'
+        );
       },
     });
+    const result = await runner.run(
+      {
+        runId: input.runId,
+        stepId: input.stepId,
+        agent,
+        messages: input.messages,
+        memoryScope: { userId, sessionId },
+        toolPrincipal,
+        toolExecutionScope,
+        metadata: {
+          skills: agent.activeSkills?.map((skill) => ({
+            id: skill.id,
+            version: skill.version,
+            trustLevel: skill.trustLevel,
+            provenance: skill.provenance,
+          })),
+          prompt: agent.promptResolution
+            ? {
+                refs: agent.promptRefs,
+                blocks: agent.promptResolution.blocks,
+                missing: agent.promptResolution.missing,
+              }
+            : asRecord(input.agentSpec?.metadata)?.prompt,
+        },
+      },
+      input.resumeFromReactCheckpoint ? { resumeFromCheckpointStore: true } : {}
+    );
     if (result.status === 'human_review_required') {
       const approval = {
         finalAction: safeSerialize(result.finalAction),
@@ -2463,6 +2517,46 @@ class EventRuntimeService {
           userId,
           sessionId,
         }),
+      };
+      await this.advanceToHumanReview(input.runId);
+      await this.waitForHumanReview(input.runId, approval);
+      throw new HumanReviewRequiredError(input.runId, approval);
+    }
+    if (result.status === 'suspended' && result.checkpoint && result.suspension) {
+      await this.record(
+        input.runId,
+        'react.continuation.suspended',
+        {
+          stepId: result.checkpoint.stepId,
+          scopeHash: result.checkpoint.scopeHash,
+          stepSequence: result.checkpoint.stepSequence,
+          reason: result.suspension.reason,
+          retryable: result.suspension.retryable,
+          requiresHumanReview: result.suspension.requiresHumanReview,
+          checkpointHash: hashCanonicalJson(result.checkpoint),
+        },
+        'react-continuation-suspend'
+      );
+      if (
+        result.suspension.reason === 'quantum_exhausted' &&
+        result.suspension.retryable &&
+        !result.suspension.requiresHumanReview
+      ) {
+        throw new ReActContinuationRequiredError(input.runId, {
+          stepId: result.checkpoint.stepId,
+          stepSequence: result.checkpoint.stepSequence,
+          reason: result.suspension.reason,
+          checkpointHash: hashCanonicalJson(result.checkpoint),
+        });
+      }
+      const approval = {
+        taskKind: 'react_continuation_boundary',
+        reason: result.suspension.reason,
+        checkpointRef: `react-checkpoint://${encodeURIComponent(
+          result.checkpoint.runId
+        )}/${encodeURIComponent(result.checkpoint.stepId)}/${result.checkpoint.stepSequence}`,
+        stepId: input.stepId,
+        agentId: agent.id,
       };
       await this.advanceToHumanReview(input.runId);
       await this.waitForHumanReview(input.runId, approval);
@@ -2497,8 +2591,41 @@ class EventRuntimeService {
         };
         return;
       }
+      if (isReActContinuationRequiredError(error)) {
+        yield {
+          type: 'continuation_required',
+          runId: error.runId,
+          continuation: error.continuation,
+        };
+        return;
+      }
       throw error;
     }
+  }
+
+  private async recordReactContinuationCheckpoint(
+    runId: string,
+    checkpoint: ReActContinuationCheckpoint
+  ): Promise<void> {
+    await this.record(
+      runId,
+      'react.continuation.checkpointed',
+      {
+        checkpointVersion: checkpoint.version,
+        stepId: checkpoint.stepId,
+        scopeHash: checkpoint.scopeHash,
+        stepSequence: checkpoint.stepSequence,
+        nextPhase: checkpoint.nextPhase,
+        iterations: checkpoint.iterations,
+        modelCalls: checkpoint.modelCalls,
+        toolCalls: checkpoint.toolCalls,
+        totalTokens: checkpoint.totalTokens,
+        consecutiveNoProgress: checkpoint.consecutiveNoProgress,
+        checkpointHash: hashCanonicalJson(checkpoint),
+        updatedAt: checkpoint.updatedAt,
+      },
+      'react-continuation-checkpoint'
+    );
   }
 
   private async *legacyStreamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
