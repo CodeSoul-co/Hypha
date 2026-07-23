@@ -4,7 +4,10 @@ import { hashCanonicalJson } from './canonical-json';
 import { InMemoryEventSchemaRegistry } from './event-schema-registry';
 import {
   RUNTIME_ORCHESTRATION_EVENT_TYPES,
+  RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+  assertRuntimeEventCatalogComplete,
   registerRuntimeOrchestrationEventSchemas,
+  runtimeEventSchemaDefinitions,
   runtimeOrchestrationEventSchemaDefinitions,
 } from './orchestration-event-schemas';
 
@@ -19,6 +22,20 @@ describe('Runtime orchestration Event schemas', () => {
     for (const definition of runtimeOrchestrationEventSchemaDefinitions) {
       expect(definition.schemaHash).toBe(hashCanonicalJson(definition.schema));
     }
+  });
+
+  it('publishes exactly one versioned schema for every Runtime service-emittable Event', () => {
+    expect(runtimeEventSchemaDefinitions).toHaveLength(
+      RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES.length
+    );
+    expect(() => assertRuntimeEventCatalogComplete()).not.toThrow();
+
+    const withoutRecoveryOpened = runtimeEventSchemaDefinitions.filter(
+      (definition) => definition.eventType !== 'recovery.case.opened'
+    );
+    expect(() => assertRuntimeEventCatalogComplete(withoutRecoveryOpened)).toThrow(
+      'missing=recovery.case.opened'
+    );
   });
 
   it('registers idempotently and validates concrete lifecycle payloads', async () => {
@@ -52,6 +69,23 @@ describe('Runtime orchestration Event schemas', () => {
           reason: 'PROJECTION_BEHIND',
           safeAction: 'rebuild_projection',
           disposition: 'recovered',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('human.review.requested', {
+          taskId: 'human-task.schema',
+          subjectRef: 'tool-invocation.schema',
+          subjectHash: 'sha256:subject',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('runtime.checkpoint.failed', {
+          checkpointId: 'checkpoint.schema',
+          error: 'projection unavailable',
         })
       )
     ).resolves.toEqual(expect.objectContaining({ valid: true }));

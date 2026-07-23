@@ -27,6 +27,7 @@ const eventTypes: FrameworkEventType[] = [
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'human.review.requested',
   'fsm.transition.accepted',
   'fsm.state.entered',
   'fsm.state.exited',
@@ -195,7 +196,7 @@ describe('Runtime orchestration projection', () => {
     await expect(
       target.engine.update(definition, target.projectionStore, scope)
     ).resolves.toMatchObject({
-      projectionVersion: '1.3.0',
+      projectionVersion: '1.4.0',
       state: {
         runStatus: 'cancelling',
         cancellation: {
@@ -233,7 +234,7 @@ describe('Runtime orchestration projection', () => {
         scope
       )
     ).resolves.toMatchObject({
-      projectionVersion: '1.3.0',
+      projectionVersion: '1.4.0',
       state: {
         runStatus: 'waiting_signal',
         pendingWait: {
@@ -242,6 +243,98 @@ describe('Runtime orchestration projection', () => {
           stateAttempt: 1,
           type: 'signal',
           key: 'legacy.signal',
+        },
+      },
+    });
+  });
+
+  it('migrates a legacy Human Wait when a stable Tool action is present', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        tool: 'approval-test-tool',
+        reason: 'Integration approval required',
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).resolves.toMatchObject({
+      state: {
+        runStatus: 'waiting_human',
+        pendingWait: {
+          waitId: 'legacy-human-wait:legacy.human.waiting',
+          stateId: 'Acting',
+          stateAttempt: 1,
+          type: 'human',
+          pendingActionRef: 'tool:approval-test-tool',
+          reason: 'Integration approval required',
+        },
+      },
+    });
+  });
+
+  it('migrates a legacy Human Wait from a preceding review request', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('review.requested', 'human.review.requested', {
+        taskId: 'review-task:legacy',
+      }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        reason: 'Review task persisted before the Wait contract existed',
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).resolves.toMatchObject({
+      state: {
+        runStatus: 'waiting_human',
+        pendingWait: {
+          type: 'human',
+          pendingActionRef: 'review-task:legacy',
+        },
+      },
+    });
+  });
+
+  it('quarantines a legacy Human Wait without stable pending-action evidence', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        reason: 'No action reference was persisted',
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_REPLAY_DIVERGENCE',
+      context: {
+        migration: {
+          status: 'quarantined',
+          eventId: 'legacy.human.waiting',
         },
       },
     });

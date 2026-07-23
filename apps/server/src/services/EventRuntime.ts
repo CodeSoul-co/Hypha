@@ -17,6 +17,8 @@ import {
   FrameworkError,
   RuntimeCancellationService,
   RuntimeRunControlService,
+  assertRuntimeEventCatalogComplete,
+  migrateLegacyHumanWaitEvents,
   registerRuntimeOrchestrationEventSchemas,
   recoveryFailureFingerprint,
   stableRecoveryHash,
@@ -34,6 +36,7 @@ import {
   type RuntimeRecoveryRequeuePort,
   type RuntimeJsonValue,
   type ListSessionCommandsRequest,
+  type LegacyHumanWaitMigrationReport,
   type SessionCommandHandlerResult,
   type SessionCommandRecord,
   type SessionQueueScope,
@@ -671,6 +674,8 @@ class EventRuntimeService {
   private sessionCommands?: ServerSessionCommandRuntime<RuntimeSessionCommandPayloads>;
   private runtimeTimerScheduler?: ServerRuntimeTimerScheduler;
   private runtimeRecoveryScheduler?: ServerRuntimeRecoveryScheduler;
+  private legacyHumanWaitMigrationReport?: LegacyHumanWaitMigrationReport;
+  private runtimeFailureReporter: (error: unknown) => void = () => undefined;
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -753,6 +758,8 @@ class EventRuntimeService {
   async initializeCanonicalRuntime(
     options: { filename?: string; schemaRegistry?: EventSchemaRegistry } = {}
   ): Promise<RuntimeBackbone> {
+    assertRuntimeEventCatalogComplete();
+    await this.validateLegacyHumanWaits();
     if (!this.canonicalLifecycle) {
       const sqliteStorage = storageConfig().relational.sqlite;
       const legacyEventDbPath =
@@ -804,7 +811,10 @@ class EventRuntimeService {
             });
           }
         },
-        onError: (error) => logger.error('Runtime Timer Scheduler sweep failed', error),
+        onError: (error) => {
+          logger.error('Runtime Timer Scheduler sweep failed', error);
+          this.reportRuntimeFailure(error);
+        },
       });
     }
     if (!this.runtimeRecoveryScheduler) {
@@ -828,9 +838,14 @@ class EventRuntimeService {
             });
           }
         },
-        onCandidateError: (error, candidateId) =>
-          logger.error(`Runtime Recovery candidate failed: ${candidateId}`, error),
-        onError: (error) => logger.error('Runtime Recovery Scheduler scan failed', error),
+        onCandidateError: (error, candidateId) => {
+          logger.error(`Runtime Recovery candidate failed: ${candidateId}`, error);
+          this.reportRuntimeFailure(error);
+        },
+        onError: (error) => {
+          logger.error('Runtime Recovery Scheduler scan failed', error);
+          this.reportRuntimeFailure(error);
+        },
       });
     }
     return backbone;
@@ -861,6 +876,38 @@ class EventRuntimeService {
 
   isCanonicalRuntimeInitialized(): boolean {
     return this.canonicalLifecycle?.isInitialized() ?? false;
+  }
+
+  setRuntimeFailureReporter(reporter: (error: unknown) => void): void {
+    this.runtimeFailureReporter = reporter;
+  }
+
+  getLegacyHumanWaitMigrationReport(): LegacyHumanWaitMigrationReport | undefined {
+    return this.legacyHumanWaitMigrationReport
+      ? structuredClone(this.legacyHumanWaitMigrationReport)
+      : undefined;
+  }
+
+  private async validateLegacyHumanWaits(): Promise<void> {
+    const migration = migrateLegacyHumanWaitEvents(await this.legacyEvents.list());
+    this.legacyHumanWaitMigrationReport = migration.report;
+    if (migration.report.quarantinedEvents === 0) return;
+
+    const error = new FrameworkError({
+      code: 'RUNTIME_REPLAY_DIVERGENCE',
+      message: 'Legacy Human Wait migration found Runs that require operator repair.',
+      context: { migrationReport: migration.report },
+    });
+    this.reportRuntimeFailure(error);
+    throw error;
+  }
+
+  private reportRuntimeFailure(error: unknown): void {
+    try {
+      this.runtimeFailureReporter(error);
+    } catch (reportingError) {
+      logger.error('Runtime readiness failure reporter failed', reportingError);
+    }
   }
 
   async startSessionCommandScheduler(): Promise<void> {
@@ -3399,9 +3446,21 @@ class EventRuntimeService {
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
+    const waitId = stringValue(payload.waitId) ?? `human-review:${runId}`;
+    const existingWait = asRecord(payload.wait) ?? {};
     await this.append(runId, 'run.waiting_human', {
       ...payload,
-      waitId: stringValue(payload.waitId) ?? `human-review:${runId}`,
+      waitId,
+      wait: {
+        ...existingWait,
+        type: 'human',
+        reason:
+          stringValue(existingWait.reason) ??
+          stringValue(payload.reason) ??
+          'Human review requires an operator decision',
+        pendingActionRef:
+          stringValue(existingWait.pendingActionRef) ?? humanReviewActionRef(payload) ?? waitId,
+      },
     });
   }
 
@@ -4658,6 +4717,30 @@ function parseExpiresAt(record: Record<string, unknown>): string | undefined {
 
 function stringValue(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
+}
+
+function humanReviewActionRef(payload: Record<string, unknown>): string | undefined {
+  const wait = asRecord(payload.wait) ?? {};
+  const finalAction = asRecord(payload.finalAction) ?? {};
+  const firstTask = Array.isArray(payload.tasks) ? (asRecord(payload.tasks[0]) ?? {}) : {};
+  const direct =
+    stringValue(wait.pendingActionRef) ??
+    stringValue(payload.pendingActionRef) ??
+    stringValue(payload.invocationId) ??
+    stringValue(payload.taskId) ??
+    stringValue(payload.requestId) ??
+    stringValue(finalAction.invocationId) ??
+    stringValue(finalAction.toolCallId) ??
+    stringValue(firstTask.taskId);
+  if (direct) return direct;
+
+  const toolId =
+    stringValue(payload.toolId) ??
+    stringValue(payload.requestedToolId) ??
+    stringValue(payload.tool) ??
+    stringValue(finalAction.toolId) ??
+    stringValue(finalAction.tool);
+  return toolId ? `tool:${toolId}` : undefined;
 }
 
 function toRuntimeJsonValue(input: unknown): RuntimeJsonValue | undefined {

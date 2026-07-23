@@ -41,6 +41,26 @@ export const RUNTIME_ORCHESTRATION_EVENT_TYPES = [
 
 export type RuntimeOrchestrationEventType = (typeof RUNTIME_ORCHESTRATION_EVENT_TYPES)[number];
 
+export const RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES = [
+  ...RUNTIME_ORCHESTRATION_EVENT_TYPES,
+  'runtime.checkpoint.created',
+  'runtime.checkpoint.failed',
+  'fsm.transition.requested',
+  'fsm.transition.rejected',
+  'human.review.requested',
+  'human.review.approved',
+  'human.review.rejected',
+  'human.review.expired',
+  'human.review.cancelled',
+  'human.review.resume.started',
+  'human.review.resume.revalidated',
+  'human.review.resume.failed',
+  'human.review.resolved',
+] as const satisfies readonly FrameworkEventType[];
+
+export type RuntimeServiceEmittableEventType =
+  (typeof RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES)[number];
+
 const stringSchema: JsonSchema = { type: 'string', minLength: 1 };
 const timestampSchema: JsonSchema = { type: 'string', format: 'date-time' };
 const integerSchema: JsonSchema = { type: 'integer', minimum: 1 };
@@ -76,7 +96,7 @@ const resumeSchema: JsonSchema = {
   additionalProperties: false,
 };
 
-const payloadSchemas: Record<RuntimeOrchestrationEventType, JsonSchema> = {
+const payloadSchemas: Record<RuntimeServiceEmittableEventType, JsonSchema> = {
   'run.created': payload(['runId'], { runId: stringSchema }),
   'run.started': payload(['runId'], { runId: stringSchema, input: jsonValueSchema }),
   'run.resume.requested': payload(['commandId', 'waitId'], {
@@ -153,9 +173,12 @@ const payloadSchemas: Record<RuntimeOrchestrationEventType, JsonSchema> = {
   'runtime.activity.failed': activityPayload(),
   'runtime.activity.waiting': activityPayload(),
   'runtime.activity.cancelled': activityPayload(),
+  'runtime.checkpoint.created': checkpointPayload(),
+  'runtime.checkpoint.failed': checkpointPayload(),
   'recovery.case.opened': recoveryCasePayload(),
   'recovery.case.resolved': recoveryCasePayload(),
   'recovery.case.escalated': recoveryCasePayload(),
+  'fsm.transition.requested': transitionPayload(),
   'fsm.state.entered': payload(['stateId'], {
     commandId: stringSchema,
     commandHash: stringSchema,
@@ -173,26 +196,67 @@ const payloadSchemas: Record<RuntimeOrchestrationEventType, JsonSchema> = {
     reason: stringSchema,
     variablesPatch: metadataSchema,
   }),
+  'fsm.transition.rejected': transitionPayload(),
+  'human.review.requested': humanReviewPayload(),
+  'human.review.approved': humanReviewPayload(),
+  'human.review.rejected': humanReviewPayload(),
+  'human.review.expired': humanReviewPayload(),
+  'human.review.cancelled': humanReviewPayload(),
+  'human.review.resume.started': humanReviewPayload(),
+  'human.review.resume.revalidated': humanReviewPayload(),
+  'human.review.resume.failed': humanReviewPayload(),
+  'human.review.resolved': humanReviewPayload(),
 };
+
+export const runtimeEventSchemaDefinitions: readonly EventSchemaDefinition[] = Object.freeze(
+  RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES.map((eventType) => {
+    const schema = payloadSchemas[eventType];
+    return Object.freeze({
+      eventType,
+      version: RUNTIME_ORCHESTRATION_EVENT_SCHEMA_VERSION,
+      schema,
+      schemaHash: hashCanonicalJson(schema),
+    });
+  })
+);
 
 export const runtimeOrchestrationEventSchemaDefinitions: readonly EventSchemaDefinition[] =
   Object.freeze(
-    RUNTIME_ORCHESTRATION_EVENT_TYPES.map((eventType) => {
-      const schema = payloadSchemas[eventType];
-      return Object.freeze({
-        eventType,
-        version: RUNTIME_ORCHESTRATION_EVENT_SCHEMA_VERSION,
-        schema,
-        schemaHash: hashCanonicalJson(schema),
-      });
-    })
+    runtimeEventSchemaDefinitions.filter((definition) =>
+      RUNTIME_ORCHESTRATION_EVENT_TYPES.includes(
+        definition.eventType as RuntimeOrchestrationEventType
+      )
+    )
   );
 
 export async function registerRuntimeOrchestrationEventSchemas(
   registry: EventSchemaRegistry
 ): Promise<void> {
-  for (const definition of runtimeOrchestrationEventSchemaDefinitions) {
+  assertRuntimeEventCatalogComplete();
+  for (const definition of runtimeEventSchemaDefinitions) {
     await registry.register(definition);
+  }
+}
+
+export function assertRuntimeEventCatalogComplete(
+  definitions: readonly EventSchemaDefinition[] = runtimeEventSchemaDefinitions,
+  requiredEventTypes: readonly RuntimeServiceEmittableEventType[] = RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES
+): void {
+  const definitionsByType = new Map<string, EventSchemaDefinition[]>();
+  for (const definition of definitions) {
+    const current = definitionsByType.get(definition.eventType) ?? [];
+    current.push(definition);
+    definitionsByType.set(definition.eventType, current);
+  }
+  const missing = requiredEventTypes.filter((eventType) => !definitionsByType.has(eventType));
+  const duplicated = requiredEventTypes.filter(
+    (eventType) => (definitionsByType.get(eventType)?.length ?? 0) !== 1
+  );
+  if (missing.length > 0 || duplicated.length > 0) {
+    throw new Error(
+      `Runtime Event catalog is incomplete: missing=${missing.join(',') || 'none'}; ` +
+        `nonUnique=${duplicated.join(',') || 'none'}`
+    );
   }
 }
 
@@ -240,6 +304,48 @@ function activityPayload(): JsonSchema {
     status: stringSchema,
     result: jsonValueSchema,
     error: jsonValueSchema,
+  });
+}
+
+function checkpointPayload(): JsonSchema {
+  return payload(['checkpointId'], {
+    checkpointId: stringSchema,
+    checkpointSequence: integerSchema,
+    lastEventSequence: integerSchema,
+    projectionVersion: stringSchema,
+    currentState: stringSchema,
+    reason: stringSchema,
+    requestHash: stringSchema,
+    checksum: stringSchema,
+    error: stringSchema,
+  });
+}
+
+function transitionPayload(): JsonSchema {
+  return payload(['from', 'to'], {
+    commandId: stringSchema,
+    commandHash: stringSchema,
+    from: stringSchema,
+    to: stringSchema,
+    reason: stringSchema,
+    guard: jsonValueSchema,
+    variablesPatch: metadataSchema,
+  });
+}
+
+function humanReviewPayload(): JsonSchema {
+  return payload([], {
+    taskId: stringSchema,
+    invocationId: stringSchema,
+    requestId: stringSchema,
+    taskKind: stringSchema,
+    subjectRef: stringSchema,
+    subjectHash: stringSchema,
+    status: stringSchema,
+    decidedBy: stringSchema,
+    decidedAt: timestampSchema,
+    expiresAt: timestampSchema,
+    reason: stringSchema,
   });
 }
 

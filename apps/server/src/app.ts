@@ -195,6 +195,9 @@ class Application {
 
     // Open and health-check the canonical durable Runtime before recovery or readiness.
     this.eventRuntime = getEventRuntime();
+    this.eventRuntime.setRuntimeFailureReporter((error) =>
+      getHealthService().setRuntimeFailure(error)
+    );
     await this.eventRuntime.initializeCanonicalRuntime();
     const restoredRuns = await this.eventRuntime.restoreRunContexts();
     logger.info('Validated recoverable Runtime Run/FSM contexts from durable Events', {

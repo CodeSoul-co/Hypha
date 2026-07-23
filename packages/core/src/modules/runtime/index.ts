@@ -5,6 +5,7 @@ export * from './event-runtime';
 export * from './projection';
 export * from './orchestration-projection';
 export * from './orchestration-event-schemas';
+export * from './legacy-wait-migration';
 export * from './message-bus';
 export * from './message-inbox-outbox';
 export * from './session-queue';

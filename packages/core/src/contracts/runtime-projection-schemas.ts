@@ -44,6 +44,7 @@ export const runtimeOrchestrationProjectionSchema = z
       })
       .strict()
       .optional(),
+    pendingHumanActionRef: nonEmptyStringSchema.optional(),
     pendingWait: z
       .object({
         waitId: nonEmptyStringSchema,
@@ -51,6 +52,8 @@ export const runtimeOrchestrationProjectionSchema = z
         stateAttempt: z.number().int().positive(),
         type: z.enum(RUNTIME_WAIT_INTENT_TYPES),
         key: nonEmptyStringSchema.optional(),
+        pendingActionRef: nonEmptyStringSchema.optional(),
+        reason: nonEmptyStringSchema.optional(),
         expectedSchema: jsonSchemaSchema.optional(),
         expiresAt: timestampSchema.optional(),
         createdAt: timestampSchema,
@@ -191,6 +194,7 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
       },
       additionalProperties: false,
     },
+    pendingHumanActionRef: nonEmptyStringJsonSchema,
     pendingWait: {
       type: 'object',
       required: ['waitId', 'stateId', 'stateAttempt', 'type', 'createdAt'],
@@ -200,6 +204,8 @@ export const runtimeOrchestrationProjectionJsonSchema: JsonSchema = {
         stateAttempt: { type: 'integer', minimum: 1 },
         type: { type: 'string', enum: [...RUNTIME_WAIT_INTENT_TYPES] },
         key: nonEmptyStringJsonSchema,
+        pendingActionRef: nonEmptyStringJsonSchema,
+        reason: nonEmptyStringJsonSchema,
         expectedSchema: { type: 'object', additionalProperties: true },
         expiresAt: { type: 'string', format: 'date-time' },
         createdAt: { type: 'string', format: 'date-time' },
