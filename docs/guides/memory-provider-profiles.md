@@ -1,8 +1,13 @@
 # Memory provider profiles
 
-The templates in `configs/memory-profiles.yaml` describe Framework profiles. They do not assemble
-Server clients, resolve secrets, start containers, or create cloud accounts. A Framework status is
-not a claim that the current Server default path uses the profile.
+`configs/memory-profiles.yaml` is the canonical runtime-profile document. It contains one
+`activeProfile` and a strict `{ profile, management }` entry for every selectable profile. Load it
+through `CanonicalMemoryRuntimeLoader`; do not translate it into a second configuration shape.
+
+The loader validates profile/provider identity and resolves connection, secret, Store, Vector,
+Artifact, Embedding, and other dependency references before creating a runtime. Server clients,
+containers, cloud accounts, and secret values remain deployment responsibilities. A Framework
+status is not a claim that the current Server default path uses the profile.
 
 ## Support matrix
 
@@ -59,7 +64,7 @@ deterministic multi-instance suite covers exclusive claim, lease-expiry takeover
 restart recovery, and drain. It does not simulate a real network partition or shared vector service.
 Because the configured vector adapter is process-local, the profile remains non-HA. Server creation of
 Redis/Mongo clients, shared vector infrastructure, migrations, readiness, credentials, and shutdown
-drain belongs to `dev`. See [Native multi-instance validation](memory-native-multi-instance-validation.md).
+drain belongs to `dev`. See [Native Memory deployment and operations](memory-native-multi-instance-validation.md).
 
 ## External protocol evidence
 
@@ -102,10 +107,3 @@ structured source of truth.
 Unknown external writes remain quarantined until reconciliation proves their outcome. Deletion is
 complete only when `MemoryDeletionEvidence` verifies all requested IDs or lists the outstanding
 provider work.
-
-## Stage A handoff boundary
-
-Stage A is ready for review when the package suite, concrete-client lifecycle suite, public consumer
-composition fixture, strict configuration tests, and documentation evidence agree. This handoff does
-not claim that Server routes, Chat, Workflow, Redis/Mongo deployment, or cloud accounts are already
-integrated. Those remain explicit `dev` and release gates.
