@@ -230,6 +230,9 @@ describe('ToolAdapterFactoryRegistry', () => {
       localFunctions: {
         'utility.text': async (input) => ({ provider: 'local', input }),
       },
+      plugins: {
+        'trusted.hash': async (input) => ({ provider: 'plugin', input }),
+      },
       fetch,
       createExecutionAdapter: async ({ profile }) => ({
         id: `execution:${profile.id}`,
@@ -267,7 +270,7 @@ describe('ToolAdapterFactoryRegistry', () => {
     });
 
     const loaded = await loadToolAdapterProfiles(document, registry);
-    expect(loaded.list()).toHaveLength(4);
+    expect(loaded.list()).toHaveLength(5);
     expect(loaded.list().every((entry) => entry.status === 'ready')).toBe(true);
     const context: ToolCallContext = {
       runId: 'run-profile',
@@ -290,6 +293,7 @@ describe('ToolAdapterFactoryRegistry', () => {
       'local.text-normalize': expect.objectContaining({ status: 'healthy' }),
       'local.command': expect.objectContaining({ status: 'healthy' }),
       'cloud.search': expect.objectContaining({ status: 'healthy' }),
+      'plugin.hash': expect.objectContaining({ status: 'healthy' }),
       'cloud.mcp': expect.objectContaining({ status: 'healthy' }),
     });
     await loaded.close();
