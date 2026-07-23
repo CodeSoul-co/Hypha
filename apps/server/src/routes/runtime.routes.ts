@@ -25,6 +25,7 @@ router.get(
 
 router.post(
   '/agent-prompts',
+  adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = agentPromptSpecSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -37,13 +38,38 @@ router.post(
         },
       });
     }
-    await getEventRuntime().registerAgentPrompt(parsed.data);
-    res.status(HTTP_STATUS.CREATED).json({ success: true, data: parsed.data });
+    const stored = await getEventRuntime().registerAgentPrompt(parsed.data);
+    res.status(HTTP_STATUS.CREATED).json({ success: true, data: stored });
+  })
+);
+
+router.put(
+  '/agent-prompts/:id/:version',
+  adminOnly,
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = agentPromptSpecSchema.safeParse({
+      ...req.body,
+      id: req.params.id,
+      version: req.params.version,
+    });
+    const expectedRevision = Number(req.header('if-match'));
+    if (!parsed.success || !Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_AGENT_PROMPT_UPDATE',
+          message: 'A valid prompt and numeric If-Match revision are required.',
+        },
+      });
+    }
+    const stored = await getEventRuntime().registerAgentPrompt(parsed.data, { expectedRevision });
+    res.json({ success: true, data: stored });
   })
 );
 
 router.delete(
   '/agent-prompts/:id',
+  adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
     const version = typeof req.query.version === 'string' ? req.query.version : undefined;
     const removed = await getEventRuntime().unregisterAgentPrompt(req.params.id, version);

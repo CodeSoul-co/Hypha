@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
 import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@hypha/core';
-import { GovernedToolRunner, ToolRegistry } from '@hypha/tools';
+import {
+  GovernedToolRunner,
+  ToolRegistry,
+  hashToolContract,
+  toolContractSnapshotExample,
+} from '@hypha/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -10,6 +15,7 @@ import {
   MCPCapabilityCatalog,
   MCPSchemaCache,
   MCPConnectionManager,
+  NORMALIZED_MCP_ERROR_CODES,
   SDKMCPConnectionSessionFactory,
   MockMCPGateway,
   classicMCPIntegrationSpec,
@@ -22,6 +28,9 @@ import {
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
   normalizeMCPToolSpec,
+  normalizedMCPErrorSchema,
+  RedisMCPCapabilityCatalogStore,
+  RedisToolContractSnapshotStore,
   registerMCPGatewayTools,
   validateMCPIntegrationSpec,
   type MCPConnectionSession,
@@ -31,6 +40,62 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('keeps NormalizedMCPError TypeScript, Zod, and JSON Schema in parity', () => {
+    const jsonSchema = governedMCPIntegrationJsonSchemas.NormalizedMCPError;
+    expect(jsonSchema.required).toEqual(['code', 'message', 'retryable']);
+    expect(jsonSchema.additionalProperties).toBe(false);
+    expect((jsonSchema.properties?.code as { enum?: unknown[] }).enum).toEqual([
+      ...NORMALIZED_MCP_ERROR_CODES,
+    ]);
+    for (const code of NORMALIZED_MCP_ERROR_CODES) {
+      expect(
+        normalizedMCPErrorSchema.parse({ code, message: `fixture:${code}`, retryable: false })
+      ).toMatchObject({ code });
+    }
+    expect(() =>
+      normalizedMCPErrorSchema.parse({
+        code: 'MCP_INTERNAL_ERROR',
+        message: 'unexpected field',
+        retryable: false,
+        unexpected: true,
+      })
+    ).toThrow();
+  });
+  it('persists catalog records and contract snapshots in a shared Redis-compatible store', async () => {
+    const strings = new Map<string, string>();
+    const sets = new Map<string, Set<string>>();
+    const redis = {
+      async get(key: string) {
+        return strings.get(key) ?? null;
+      },
+      async set(key: string, value: string) {
+        strings.set(key, value);
+        return 'OK';
+      },
+      async sadd(key: string, ...members: string[]) {
+        const values = sets.get(key) ?? new Set<string>();
+        const size = values.size;
+        members.forEach((member) => values.add(member));
+        sets.set(key, values);
+        return values.size - size;
+      },
+      async smembers(key: string) {
+        return Array.from(sets.get(key) ?? []);
+      },
+    };
+    const catalog = new RedisMCPCapabilityCatalogStore(redis, 'test:catalog');
+    await catalog.save(mcpCapabilityRecordExample);
+    await expect(catalog.list(mcpCapabilityRecordExample.serverId)).resolves.toEqual([
+      mcpCapabilityRecordExample,
+    ]);
+
+    const snapshots = new RedisToolContractSnapshotStore(redis, 'test:snapshots');
+    await snapshots.save(toolContractSnapshotExample);
+    await expect(snapshots.get(toolContractSnapshotExample.id)).resolves.toEqual(
+      toolContractSnapshotExample
+    );
+  });
+
   it('bounds the MCP schema cache with least-recently-used eviction', () => {
     const schemaCache = new MCPSchemaCache({
       maxEntries: 2,
@@ -208,6 +273,12 @@ describe('@hypha/mcp normalization', () => {
       capabilityHash: initial.capabilityHash,
       approvedBy: 'admin-1',
     });
+    const unchanged = await catalog.refresh('catalog-fixture', 'unchanged-after-approval');
+    expect(unchanged.capabilities[0]).toMatchObject({
+      capabilityHash: initial.capabilityHash,
+      driftState: 'approved',
+      approvedAt: expect.any(String),
+    });
 
     const registry = new ToolRegistry();
     await catalog.importTools(registry, [
@@ -267,6 +338,169 @@ describe('@hypha/mcp normalization', () => {
     );
     expect(telemetry.sum('mcp_capability_drift_total')).toBeGreaterThanOrEqual(2);
     expect(telemetry.sum('mcp_capability_quarantined_total')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('fails closed unless import, snapshot, and invocation use the same live approved revision', async () => {
+    let now = '2026-07-22T00:00:00.000Z';
+    const gateway = new MockMCPGateway([
+      {
+        id: 'strict-search',
+        version: '1.0.0',
+        serverId: 'strict-server',
+        capabilityId: 'search',
+        type: 'tool',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        permissionScope: ['search.read'],
+        trustLevel: 'reviewed',
+        declarationSource: 'server',
+        protocolVersion: '2025-11-25',
+        serverIdentity: { name: 'strict-server', version: '1.0.0' },
+      },
+    ]);
+    gateway.registerToolHandler('strict-server', 'search', ({ input }) => ({ input }));
+    const catalog = new MCPCapabilityCatalog({
+      integration: {
+        id: 'strict-integration',
+        version: '1.0.0',
+        servers: [{ id: 'strict-server', mode: 'local' }],
+      },
+      gateway,
+      trustPolicy: {
+        defaultTrustLevel: 'restricted',
+        requireApprovalForNewCapability: true,
+        requireApprovalForSchemaChange: true,
+      },
+      driftPolicy: {
+        onDescriptionChange: 'snapshot_next_run',
+        onSchemaChange: 'require_approval',
+        onRemoval: 'allow_existing_run',
+        onServerIdentityChange: 'quarantine',
+      },
+      now: () => now,
+    });
+    const discovered = await catalog.refresh('strict-server');
+    const capability = discovered.capabilities[0];
+    const ref = {
+      serverId: 'strict-server',
+      capabilityId: 'search',
+      capabilityHash: capability.capabilityHash,
+    };
+    const registry = new ToolRegistry();
+
+    await expect(catalog.importTools(registry, [ref])).rejects.toMatchObject({
+      code: 'MCP_CAPABILITY_NOT_APPROVED',
+    });
+    await expect(
+      catalog.importTools(registry, [{ serverId: 'strict-server', capabilityId: 'search' }])
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_HASH_REQUIRED' });
+    await expect(
+      catalog.approveRevision({
+        ...ref,
+        approvedBy: 'admin.strict',
+        expiresAt: '2026-07-21T00:00:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'MCP_APPROVAL_EXPIRED' });
+
+    await catalog.approveRevision({
+      ...ref,
+      approvedBy: 'admin.strict',
+      expiresAt: '2026-07-23T00:00:00.000Z',
+    });
+    await catalog.importTools(registry, [ref]);
+    const adapter = registry.getAdapter('mcp.strict-server.search')!;
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'hypha' },
+        context: {
+          runId: 'run.strict',
+          stepId: 'search',
+          invocationId: 'invocation.no-snapshot',
+        },
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SNAPSHOT_MISMATCH' });
+
+    const snapshot = await catalog.snapshot('run.strict', [ref]);
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'hypha' },
+        context: {
+          runId: 'run.strict',
+          stepId: 'search',
+          invocationId: 'invocation.approved',
+          contractSnapshotRef: snapshot.id,
+        },
+      })
+    ).resolves.toMatchObject({ output: { input: { query: 'hypha' } } });
+
+    const capabilityBody = {
+      runId: 'run.strict',
+      agentId: 'agent.strict',
+      principalId: 'user.strict',
+      createdAt: now,
+      skillRevisions: [],
+      allowedToolIds: ['mcp.strict-server.search'],
+      allowedMCPServerIds: [],
+      memoryAccess: 'none' as const,
+      allowedExecutionProfiles: [],
+      maximumSideEffectLevel: 'read' as const,
+      requiresHumanReview: false,
+      policyRefs: ['strict.policy'],
+    };
+    snapshot.effectiveCapabilities = {
+      id: 'agent-capability:run.strict:agent.strict',
+      ...capabilityBody,
+      snapshotHash: hashToolContract(capabilityBody),
+    };
+    await catalog.snapshotStore.save(snapshot);
+    const capabilityContext = {
+      runId: 'run.strict',
+      stepId: 'search',
+      contractSnapshotRef: snapshot.id,
+      capabilitySnapshotRef: snapshot.id,
+      agentId: 'agent.strict',
+      principal: {
+        id: 'user.strict',
+        principalId: 'user.strict',
+        type: 'user' as const,
+        agentId: 'agent.strict',
+        permissionScopes: ['search.read'],
+      },
+    };
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'blocked' },
+        context: capabilityContext,
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SCOPE_DENIED' });
+
+    snapshot.effectiveCapabilities = {
+      ...snapshot.effectiveCapabilities,
+      allowedMCPServerIds: ['strict-server'],
+    };
+    await catalog.snapshotStore.save(snapshot);
+    expect((await catalog.snapshotStore.get(snapshot.id))?.effectiveCapabilities).toMatchObject({
+      allowedMCPServerIds: ['strict-server'],
+    });
+    expect(registry.getSpec('mcp.strict-server.search')?.sourceRef).toMatchObject({
+      mcpServerId: 'strict-server',
+    });
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'allowed' },
+        context: capabilityContext,
+      })
+    ).resolves.toMatchObject({ output: { input: { query: 'allowed' } } });
+
+    now = '2026-07-24T00:00:00.000Z';
+    await expect(catalog.snapshot('run.expired', [ref])).rejects.toMatchObject({
+      code: 'MCP_APPROVAL_EXPIRED',
+    });
   });
 
   it('registers discovered MCP tools into the governed ToolRunner path', async () => {
@@ -1022,5 +1256,60 @@ describe('@hypha/mcp normalization', () => {
       ])
     );
     expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(5);
+  });
+
+  it('enforces per-server bulkhead, rate limit, and circuit breaker policies', async () => {
+    let release: (() => void) | undefined;
+    let shouldFail = false;
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return { serverCapabilities: { tools: {} } };
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            if (shouldFail) throw new Error('provider failed');
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return { ok: true };
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({ sessionFactory: factory });
+    manager.register({
+      id: 'guarded',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      requestGuardPolicy: {
+        maxConcurrentRequests: 1,
+        rateLimit: { maxRequests: 2, windowMs: 60_000 },
+        circuitBreaker: { failureThreshold: 1, resetAfterMs: 60_000 },
+      },
+    });
+    const request = (invocationId: string) =>
+      manager.call({
+        serverId: 'guarded',
+        capabilityId: 'echo',
+        input: {},
+        context: { runId: 'run-guard', stepId: 'call', invocationId },
+      });
+
+    const first = request('first');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(request('bulkhead')).rejects.toMatchObject({ code: 'MCP_BULKHEAD_REJECTED' });
+    release?.();
+    await expect(first).resolves.toEqual({ ok: true });
+
+    shouldFail = true;
+    await expect(request('failure')).rejects.toMatchObject({ code: 'MCP_CONNECTION_FAILED' });
+    await expect(request('circuit')).rejects.toMatchObject({ code: 'MCP_CIRCUIT_OPEN' });
+    await manager.closeAll();
   });
 });

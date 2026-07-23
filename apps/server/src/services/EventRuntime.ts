@@ -74,8 +74,13 @@ import {
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
+import { RedisToolContractSnapshotStore } from '@hypha/mcp';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
-import type { LoadedSkillContext, SkillRef } from '@hypha/skills';
+import {
+  createEffectiveAgentCapabilitySnapshot,
+  type EffectiveAgentCapabilitySnapshotInput,
+  type LoadedSkillContext,
+} from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -85,6 +90,7 @@ import {
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveAgentCapabilitySnapshot,
   type ToolCallResult,
   type ToolAuthorityConstraint,
   type ToolExecutionScope,
@@ -197,16 +203,6 @@ export interface OwnedRunScope {
   domainPackId: string;
 }
 
-type SkillResolvingManager = {
-  resolveSkills?: (input: {
-    agentSkillRefs: SkillRef[];
-    inputText?: string;
-    allowedSkills?: string[];
-    requiredSkills?: string[];
-    availableToolRefs?: string[];
-    metadata?: Record<string, unknown>;
-  }) => Promise<LoadedSkillContext[]>;
-};
 
 export interface StartRunInput {
   userId: string;
@@ -583,6 +579,10 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private readonly runCapabilitySnapshots = new Map<
+    string,
+    Readonly<EffectiveAgentCapabilitySnapshot>
+  >();
   private canonicalLifecycle?: RuntimeBackboneLifecycle;
   private canonicalComposition?: Readonly<RuntimeComposition>;
   private canonicalEvents?: DurableEventStoreBridge;
@@ -604,9 +604,13 @@ class EventRuntimeService {
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
-    this.toolSnapshotStore = new FileToolContractSnapshotStore(
-      process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
-    );
+    const redis = getRedisClient();
+    this.toolSnapshotStore =
+      process.env.NODE_ENV === 'production' && redis
+        ? new RedisToolContractSnapshotStore(redis)
+        : new FileToolContractSnapshotStore(
+            process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
+          );
     const artifactPort = new ArtifactStoreToolPort(
       new FileArtifactStore({
         rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
@@ -616,7 +620,6 @@ class EventRuntimeService {
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
     const toolCacheConfig = toolResultCacheConfig();
-    const redis = getRedisClient();
     const toolResultCache =
       toolCacheConfig.store === 'memory'
         ? new InMemoryToolResultCache({
@@ -764,10 +767,13 @@ class EventRuntimeService {
     return manager.listAgentPrompts();
   }
 
-  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+  async registerAgentPrompt(
+    spec: AgentPromptSpec,
+    options: { expectedRevision?: number } = {}
+  ): Promise<AgentPromptSpec> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
-    manager.registerAgentPrompt(spec);
+    return manager.registerAgentPrompt(spec, options);
   }
 
   async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
@@ -1023,6 +1029,7 @@ class EventRuntimeService {
       spec.systemInstructions,
       input.options?.systemPrompt
     );
+    const run = await this.requireOwnedRunScope(input.runId, userId);
     const promptRefs = this.resolveAgentPromptRefs(spec);
     const promptResolution = explicitInstructions
       ? undefined
@@ -1031,28 +1038,40 @@ class EventRuntimeService {
           agentName: name,
           userId,
           sessionId,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          domainId: run.domainPackId,
           promptRefs,
         });
     const baseSystemInstructions =
       explicitInstructions ??
       promptResolution?.instructions ??
       `You are ${name}. Be helpful, harmless, and honest.`;
-    const run = await this.requireOwnedRunScope(input.runId, userId);
-    const skillManager = getSkillManager() as unknown as SkillResolvingManager;
     const workflowState = asRecord(asRecord(spec.metadata)?.workflowState);
-    const activeSkills =
-      spec.skillRefs?.length && skillManager.resolveSkills
-        ? await skillManager.resolveSkills({
-            agentSkillRefs: spec.skillRefs,
-            inputText: [...input.messages]
-              .reverse()
-              .find((message) => message.role === 'user')?.content,
-            allowedSkills: stringArray(workflowState?.allowedSkills),
-            requiredSkills: stringArray(workflowState?.requiredSkills),
-            availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
-            metadata: spec.metadata,
-          })
-        : [];
+    const activeSkills = spec.skillRefs?.length
+      ? await getSkillManager().resolveSkills({
+          agentSkillRefs: spec.skillRefs,
+          inputText: [...input.messages].reverse().find((message) => message.role === 'user')
+            ?.content,
+          allowedSkills: stringList(workflowState?.allowedSkills),
+          requiredSkills: stringList(workflowState?.requiredSkills),
+          availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+          metadata: spec.metadata,
+        })
+      : [];
+    const availableToolIds =
+      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const capabilityMetadata = asRecord(spec.metadata);
+    const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
+      runId: input.runId,
+      agentId: id,
+      principalId: userId,
+      tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+      domainId: run.domainPackId,
+      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
+      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+      activeSkills,
+    });
+    this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
     const reviewTasks = await this.requireSkillReviewApprovals({
       run,
       agentId: id,
@@ -1106,6 +1125,8 @@ class EventRuntimeService {
     agentName: string;
     userId: string;
     sessionId: string;
+    tenantId?: string;
+    domainId?: string;
     promptRefs: AgentPromptRef[];
   }): Promise<AgentPromptResolution | undefined> {
     const variables = {
@@ -1117,17 +1138,17 @@ class EventRuntimeService {
       current_date: new Date().toISOString(),
     };
 
-    try {
-      const promptManager = getPromptManager();
-      await promptManager.ensureInitialized();
-      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
-    } catch (error) {
-      logger.warn('Agent prompt template resolution failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return undefined;
+    const promptManager = getPromptManager();
+    await promptManager.ensureInitialized();
+    return promptManager.resolveAgentPrompts(input.promptRefs, {
+      variables,
+      principal: {
+        principalId: input.userId,
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        domainId: input.domainId,
+      },
+    });
   }
 
   async runReActChat(
@@ -1273,6 +1294,12 @@ class EventRuntimeService {
       toolPrincipal,
       toolExecutionScope,
       metadata: {
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1382,6 +1409,12 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1610,6 +1643,7 @@ class EventRuntimeService {
       input.runId,
       authority.policyRevision
     );
+    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1620,7 +1654,14 @@ class EventRuntimeService {
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
-        principal: authority.principal,
+        capabilitySnapshotRef: effectiveCapabilities ? contractSnapshotRef : undefined,
+        agentId: effectiveCapabilities?.agentId,
+        tenantId: effectiveCapabilities?.tenantId,
+        principal: {
+          ...authority.principal,
+          agentId: effectiveCapabilities?.agentId,
+          tenantId: effectiveCapabilities?.tenantId,
+        },
         executionScope: authority.executionScope,
       },
     });
@@ -1900,7 +1941,8 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash: spec.sourceRef?.capabilityHash,
+      sourceCapabilityHash:
+        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -1909,6 +1951,7 @@ class EventRuntimeService {
       runId,
       createdAt,
       toolContracts,
+      effectiveCapabilities: this.runCapabilitySnapshots.get(runId),
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
@@ -3864,6 +3907,41 @@ function authorityConstraintsFromExecutionScope(
       allowedToolIds: scope.allowedToolIds,
     },
   ];
+}
+
+function stringList(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter((value): value is string => typeof value === 'string');
+}
+
+function capabilityConstraint(
+  source: Record<string, unknown> | undefined,
+  fallbackToolIds: string[],
+  defaultPolicyRef: string
+): EffectiveAgentCapabilitySnapshotInput['agent'] {
+  const memory = stringValue(source?.memoryAccess);
+  const sideEffect = stringValue(source?.maximumSideEffectLevel);
+  const memoryAccess = ['none', 'read', 'write', 'read_write'].includes(memory ?? '')
+    ? (memory as EffectiveAgentCapabilitySnapshot['memoryAccess'])
+    : 'none';
+  const maximumSideEffectLevel = [
+    'none',
+    'read',
+    'write',
+    'external_effect',
+    'irreversible',
+  ].includes(sideEffect ?? '')
+    ? (sideEffect as EffectiveAgentCapabilitySnapshot['maximumSideEffectLevel'])
+    : 'read';
+  return {
+    allowedToolIds:
+      stringList(source?.allowedToolIds) ?? stringList(source?.allowedTools) ?? fallbackToolIds,
+    allowedMCPServerIds: stringList(source?.allowedMCPServerIds),
+    memoryAccess,
+    allowedExecutionProfiles: stringList(source?.allowedExecutionProfiles) ?? [],
+    maximumSideEffectLevel,
+    policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
+  };
 }
 
 function inferToolSideEffect(
