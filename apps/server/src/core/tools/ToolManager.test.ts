@@ -1,8 +1,14 @@
-import { LocalFunctionToolAdapter, type ToolRegistry } from '@hypha/tools';
+import {
+  LocalFunctionToolAdapter,
+  type ToolAdapter,
+  type ToolCallContext,
+  type ToolRegistry,
+} from '@hypha/tools';
 import { normalizeMCPToolSpec } from '@hypha/mcp';
 import { ToolManager } from './ToolManager';
 import type { MCPClient, ToolDefinition } from './types';
 import type { ITool } from './types';
+import { ToolProfileBindingRegistry } from './ToolProfileBindingRegistry';
 
 function managedClient(tool: ToolDefinition): MCPClient {
   return {
@@ -261,5 +267,176 @@ describe('ToolManager MCP governance boundary', () => {
         deadlineAt: new Date(Date.now() + 30_000).toISOString(),
       })
     ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_QUARANTINED' });
+  });
+
+  it('resolves trusted plugin and execution bindings and owns their lifecycle', async () => {
+    const bindings = new ToolProfileBindingRegistry();
+    const lifecycle: string[] = [];
+    bindings.registerPlugin('plugin.text', async (input) => ({ input, source: 'plugin' }));
+    bindings.registerExecutionAdapter('execution.default', async ({ profile }) => {
+      const adapter: ToolAdapter = {
+        id: `execution:${profile.id}`,
+        source: 'execution',
+        capabilities: async () => ({
+          execute: true,
+          cancel: true,
+          health: true,
+          close: true,
+        }),
+        execute: async ({ input }) => ({
+          kind: 'tool_execution_envelope',
+          output: { input, source: 'execution' },
+        }),
+        cancel: async ({ invocationId }) => {
+          lifecycle.push(`cancel:${invocationId}`);
+        },
+        health: async () => ({
+          status: 'healthy',
+          checkedAt: new Date(0).toISOString(),
+        }),
+        close: async () => {
+          lifecycle.push('close:execution');
+        },
+      };
+      return adapter;
+    });
+    const manager = new ToolManager(bindings);
+    await manager.register({
+      id: 'utility.text',
+      name: 'utility.text',
+      description: 'Built-in fallback',
+      schema: {
+        name: 'utility.text',
+        description: 'Built-in fallback',
+        inputSchema: { type: 'object' },
+      },
+      execute: async () => ({ success: true, output: { source: 'built-in' } }),
+    });
+    const load = (
+      manager as unknown as {
+        loadAdapterProfiles(profiles: Array<Record<string, unknown>>): Promise<void>;
+      }
+    ).loadAdapterProfiles.bind(manager);
+
+    await load([
+      {
+        id: 'plugin.text',
+        kind: 'plugin',
+        toolSpecRef: { id: 'utility.text', version: '1.0.0' },
+        binding: { pluginId: 'plugin.text' },
+      },
+      {
+        id: 'local.command',
+        kind: 'execution',
+        toolSpecRef: { id: 'common.command', version: '1.0.0' },
+        binding: { executionPortRef: 'execution.default' },
+        requiredCapabilities: ['execute', 'cancel', 'health', 'close'],
+      },
+    ]);
+
+    const context: ToolCallContext = {
+      runId: 'run-profile',
+      stepId: 'step-profile',
+      invocationId: 'invocation-profile',
+    };
+    await expect(
+      manager
+        .resolveGovernedTool('utility.text')!
+        .adapter.execute({ toolId: 'utility.text', input: { value: 'text' }, context })
+    ).resolves.toMatchObject({ output: { source: 'plugin' } });
+    const execution = manager.resolveGovernedTool('common.command')!.adapter;
+    await expect(
+      execution.execute({ toolId: 'common.command', input: { operation: 'status' }, context })
+    ).resolves.toMatchObject({ output: { source: 'execution' } });
+    await execution.cancel?.({ toolId: 'common.command', invocationId: 'cancel-me' });
+    expect(manager.profileReadiness()).toEqual({
+      'plugin.text': { status: 'ready', required: true },
+      'local.command': { status: 'ready', required: true },
+    });
+    expect(manager.listTools().filter((tool) => tool.name === 'utility.text')).toHaveLength(1);
+
+    await manager.destroy();
+    expect(lifecycle).toEqual(['cancel:cancel-me', 'close:execution']);
+  });
+
+  it('starts, invokes, checks, cancels, and releases a pinned MCP profile connection', async () => {
+    const calls: string[] = [];
+    const tool: ToolDefinition = {
+      name: 'resources.read',
+      description: 'Read resource',
+      inputSchema: { type: 'object', properties: {} },
+    };
+    const client: MCPClient = {
+      id: 'cloud',
+      name: 'Cloud',
+      status: 'disconnected',
+      tools: [tool],
+      connect: async function () {
+        calls.push('connect');
+        this.status = 'connected';
+      },
+      disconnect: async function () {
+        calls.push('disconnect');
+        this.status = 'disconnected';
+      },
+      invoke: async (name, input) => {
+        calls.push(`invoke:${name}`);
+        return { success: true, output: input };
+      },
+      listTools: async () => [tool],
+      healthCheck: async () => {
+        calls.push('health');
+        return true;
+      },
+    };
+    const manager = new ToolManager(new ToolProfileBindingRegistry());
+    const internals = manager as unknown as {
+      mcpClients: Map<string, MCPClient>;
+      mcpServerModes: Map<string, 'local' | 'remote' | 'fixture'>;
+      mcpConnectionProfiles: Map<string, string>;
+      loadAdapterProfiles(profiles: Array<Record<string, unknown>>): Promise<void>;
+    };
+    internals.mcpClients.set('cloud', client);
+    internals.mcpServerModes.set('cloud', 'fixture');
+    internals.mcpConnectionProfiles.set('mcp.cloud', 'cloud');
+
+    await internals.loadAdapterProfiles([
+      {
+        id: 'cloud.mcp',
+        kind: 'mcp_streamable_http',
+        endpoint: 'https://mcp.example.com/mcp',
+        toolSpecRef: { id: 'common.mcp_resource', version: '1.0.0' },
+        binding: {
+          mcpConnectionProfileRef: 'mcp.cloud',
+          mcpServerId: 'cloud',
+          mcpCapabilityId: 'resources.read',
+        },
+        requiredCapabilities: ['execute', 'cancel', 'health', 'close'],
+      },
+    ]);
+    const adapter = manager.resolveGovernedTool('common.mcp_resource')!.adapter;
+    await expect(
+      adapter.execute({
+        toolId: 'common.mcp_resource',
+        input: { uri: 'docs://one' },
+        context: {
+          runId: 'run-mcp',
+          stepId: 'step-mcp',
+          invocationId: 'invoke-mcp',
+        },
+      })
+    ).resolves.toMatchObject({ output: { uri: 'docs://one' } });
+    await expect(adapter.health()).resolves.toMatchObject({ status: 'healthy' });
+    await adapter.cancel?.({ toolId: 'common.mcp_resource', invocationId: 'invoke-mcp' });
+    await manager.destroy();
+
+    expect(calls).toEqual([
+      'connect',
+      'health',
+      'invoke:resources.read',
+      'health',
+      'disconnect',
+      'disconnect',
+    ]);
   });
 });

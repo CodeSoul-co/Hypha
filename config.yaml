@@ -636,6 +636,17 @@ skills:
   autoLoad: true
 
 tools:
+  # Profiles contain only declarative references. Executable plugin/execution
+  # bindings are registered by the trusted Server composition layer.
+  profiles:
+    - id: "local.text-normalize"
+      kind: "local_function"
+      toolSpecRef:
+        id: "utility.text"
+        version: "1.0.0"
+      binding:
+        localFunctionId: "utility.text"
+      requiredCapabilities: ["execute", "health"]
   # Optional, non-authoritative cache for governed none/read Tool results.
   # `redis` reuses the configured local, self-hosted, or managed Redis connection.
   resultCache:

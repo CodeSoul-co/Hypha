@@ -46,11 +46,17 @@ import {
   resolveCommonToolSpec,
   hashToolContract,
   type ToolAdapter,
+  type ToolAdapterFactoryInput,
+  type MCPToolInvocationPort,
   type ToolAdapterProfile,
   type ToolSpec as HyphaToolSpec,
   type ToolContractSnapshotStore,
 } from '@hypha/tools';
 import { getRedisClient } from '../../services/database';
+import {
+  getToolProfileBindingRegistry,
+  type ToolProfileBindingRegistry,
+} from './ToolProfileBindingRegistry';
 
 type MCPToolResolution = {
   client: MCPClient;
@@ -335,6 +341,8 @@ export class ToolManager {
   });
   private readonly mcpCatalogs = new Map<string, MCPCapabilityCatalog>();
   private readonly mcpServerModes = new Map<string, MCPServerConfig['mode']>();
+  private readonly mcpConnectionProfiles = new Map<string, string>();
+  private readonly mcpProfileLeases = new Map<string, number>();
   private readonly approvedMCPRegistry = new ToolRegistry();
   private readonly profileToolRegistry = new ToolRegistry();
   private readonly profileStates = new Map<
@@ -359,6 +367,11 @@ export class ToolManager {
     process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ??
       `${resolveConfiguredPath(storageConfig().relational.sqlite.eventDbPath)}.tool-snapshots`
   );
+
+  constructor(
+    private readonly profileBindings: ToolProfileBindingRegistry =
+      getToolProfileBindingRegistry()
+  ) {}
 
   async initialize(): Promise<void> {
     const config = getConfig();
@@ -438,6 +451,8 @@ export class ToolManager {
     }
     this.mcpClients.clear();
     this.mcpServerModes.clear();
+    this.mcpConnectionProfiles.clear();
+    this.mcpProfileLeases.clear();
     for (const spec of this.approvedMCPRegistry.list()) {
       this.approvedMCPRegistry.unregister(spec.id);
     }
@@ -525,13 +540,15 @@ export class ToolManager {
 
   listTools(enabledOnly: boolean = false): ToolDefinition[] {
     const list: ToolDefinition[] = [];
+    const profiledToolIds = new Set<string>();
 
     for (const spec of this.profileToolRegistry.list()) {
       list.push(this.toolSpecToDefinition(spec));
+      profiledToolIds.add(spec.id);
     }
 
     for (const registration of this.tools.values()) {
-      if (!enabledOnly || registration.enabled) {
+      if ((!enabledOnly || registration.enabled) && !profiledToolIds.has(registration.tool.id)) {
         list.push(registration.tool.schema);
       }
     }
@@ -701,6 +718,19 @@ export class ToolManager {
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
     const required = config.required !== false;
     this.mcpServerModes.set(config.id, config.mode);
+    const connectionProfileRef = config.connectionProfileRef ?? config.id;
+    const mappedServer = this.mcpConnectionProfiles.get(connectionProfileRef);
+    if (mappedServer && mappedServer !== config.id) {
+      throw Object.assign(
+        new Error(`MCP connection profile is already registered: ${connectionProfileRef}`),
+        {
+          code: 'MCP_CONNECTION_PROFILE_DUPLICATE',
+          connectionProfileRef,
+          serverIds: [mappedServer, config.id],
+        }
+      );
+    }
+    this.mcpConnectionProfiles.set(connectionProfileRef, config.id);
     if (config.mode !== 'fixture') {
       this.connectionManager.register({
         id: config.id,
@@ -1260,10 +1290,10 @@ export class ToolManager {
     });
     registerConcreteToolAdapterFactories(registry, {
       localFunctions,
-      mcpPort: {
-        invoke: (request) => this.connectionManager.call(request),
-        health: async (serverId) => (await this.connectionManager.status(serverId)).health,
-      },
+      plugins: this.profileBindings.pluginHandlers(),
+      createExecutionAdapter: (input) =>
+        this.profileBindings.createExecutionAdapter(input),
+      prepareMCPConnection: (input) => this.prepareMCPProfileConnection(input),
     });
 
     for (const profile of profiles) {
@@ -1286,7 +1316,108 @@ export class ToolManager {
     }
   }
 
-  private findProfileTool(nameOrId: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+  private async prepareMCPProfileConnection(input: ToolAdapterFactoryInput): Promise<{
+    port: MCPToolInvocationPort;
+    close: () => Promise<void>;
+  }> {
+    const binding = input.profile.binding;
+    const connectionProfileRef = binding?.mcpConnectionProfileRef;
+    const serverId = binding?.mcpServerId;
+    const capabilityId = binding?.mcpCapabilityId;
+    if (!connectionProfileRef || !serverId || !capabilityId) {
+      throw Object.assign(new Error(`MCP profile ${input.profile.id} has incomplete bindings.`), {
+        code: 'TOOL_ADAPTER_PROFILE_INVALID',
+        profileId: input.profile.id,
+      });
+    }
+    const mappedServerId = this.mcpConnectionProfiles.get(connectionProfileRef);
+    if (mappedServerId !== serverId) {
+      throw Object.assign(
+        new Error(
+          `MCP connection profile ${connectionProfileRef} is not bound to server ${serverId}.`
+        ),
+        {
+          code: 'TOOL_ADAPTER_BINDING_UNAVAILABLE',
+          profileId: input.profile.id,
+          connectionProfileRef,
+          serverId,
+        }
+      );
+    }
+    const client = this.mcpClients.get(serverId);
+    if (!client) {
+      throw Object.assign(new Error(`MCP server is not registered: ${serverId}`), {
+        code: 'TOOL_ADAPTER_BINDING_UNAVAILABLE',
+        profileId: input.profile.id,
+        serverId,
+      });
+    }
+
+    await client.connect();
+    this.mcpProfileLeases.set(serverId, (this.mcpProfileLeases.get(serverId) ?? 0) + 1);
+    let released = false;
+    const mode = this.mcpServerModes.get(serverId);
+    return {
+      port: {
+        invoke: async (request) => {
+          if (request.serverId !== serverId || request.capabilityId !== capabilityId) {
+            throw Object.assign(new Error('MCP invocation does not match its pinned binding.'), {
+              code: 'MCP_CAPABILITY_DRIFT',
+              expected: { serverId, capabilityId },
+              actual: {
+                serverId: request.serverId,
+                capabilityId: request.capabilityId,
+              },
+            });
+          }
+          if (mode !== 'fixture') return this.connectionManager.call(request);
+          const result = await client.invoke(capabilityId, request.input);
+          if (!result.success) {
+            throw Object.assign(new Error(result.error ?? `MCP call failed: ${capabilityId}`), {
+              code: result.metadata?.errorCode ?? 'MCP_REMOTE_ERROR',
+            });
+          }
+          return result.output;
+        },
+        health: async (requestedServerId) => {
+          if (requestedServerId !== serverId) {
+            return {
+              status: 'unhealthy' as const,
+              checkedAt: new Date().toISOString(),
+              message: 'MCP health request does not match the pinned server.',
+            };
+          }
+          if (mode === 'fixture') {
+            return {
+              status: (await client.healthCheck()) ? ('healthy' as const) : ('unhealthy' as const),
+              checkedAt: new Date().toISOString(),
+            };
+          }
+          return (await this.connectionManager.status(serverId)).health;
+        },
+        cancel: async (requestId) => {
+          if (mode !== 'fixture') {
+            await this.connectionManager.cancelRequest(`${serverId}:${requestId}`);
+          }
+        },
+      },
+      close: async () => {
+        if (released) return;
+        released = true;
+        const remaining = Math.max(0, (this.mcpProfileLeases.get(serverId) ?? 1) - 1);
+        if (remaining > 0) {
+          this.mcpProfileLeases.set(serverId, remaining);
+          return;
+        }
+        this.mcpProfileLeases.delete(serverId);
+        await client.disconnect();
+      },
+    };
+  }
+
+  private findProfileTool(
+    nameOrId: string
+  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.profileToolRegistry.list()) {
       if (spec.id !== nameOrId && spec.name !== nameOrId) continue;
       return this.profileToolRegistry.resolve({

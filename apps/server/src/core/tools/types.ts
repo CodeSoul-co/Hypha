@@ -90,6 +90,7 @@ export interface MCPServerConfig {
   id: string;
   name: string;
   mode: 'local' | 'remote' | 'fixture';
+  connectionProfileRef?: string;
   command?: string;
   args?: string[];
   endpoint?: string;
