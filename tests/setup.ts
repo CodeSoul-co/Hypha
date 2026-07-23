@@ -1,8 +1,24 @@
 // Test setup file
 import dotenv from 'dotenv';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 // Load test environment variables
 dotenv.config({ path: '.env.test' });
+
+const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-unit-runtime-'));
+process.env.HYPHA_RUNTIME_EVENT_DB = path.join(runtimeRoot, 'legacy.sqlite');
+process.env.HYPHA_CANONICAL_RUNTIME_DB = path.join(runtimeRoot, 'canonical.sqlite');
+process.env.HYPHA_TOOL_RUNTIME_STORE = path.join(runtimeRoot, 'tools.json');
+process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT = path.join(runtimeRoot, 'tool-snapshots');
+process.env.HYPHA_TOOL_ARTIFACT_ROOT = path.join(runtimeRoot, 'tool-artifacts');
+process.env.HYPHA_TOOL_OBSERVATION_ROOT = path.join(runtimeRoot, 'tool-observations');
+process.env.HYPHA_SKILL_DATA_ROOT = path.join(runtimeRoot, 'skills');
+process.env.HYPHA_SESSION_COMMAND_ARTIFACT_ROOT = path.join(
+  runtimeRoot,
+  'session-command-artifacts'
+);
 
 // Mock external services
 jest.mock('../apps/server/src/services/database', () => ({

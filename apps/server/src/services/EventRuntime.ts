@@ -180,10 +180,12 @@ import {
   type ServerSessionCommandPayloads,
 } from '../runtime/ServerSessionCommandRuntime';
 import {
+  auditCanonicalRuntimeStreams,
   OrchestrationEventStore,
   isCanonicalRuntimeEvent,
   migrateCanonicalEventFamilies,
   type CanonicalEventFamilyMigrationReport,
+  type CanonicalRuntimeStreamIntegrityReport,
 } from '../runtime/OrchestrationEventStore';
 import {
   RuntimeTransitionDispatcher,
@@ -874,6 +876,7 @@ class EventRuntimeService {
   private runtimeRecoveryScheduler?: ServerRuntimeRecoveryScheduler;
   private legacyHumanWaitMigrationReport?: LegacyHumanWaitMigrationReport;
   private canonicalEventFamilyMigrationReport?: CanonicalEventFamilyMigrationReport;
+  private canonicalStreamIntegrityReport?: CanonicalRuntimeStreamIntegrityReport;
   private migratedLegacyEvents?: FrameworkEvent[];
   private runtimeFailureReporter: (error: unknown) => void = () => undefined;
 
@@ -980,7 +983,13 @@ class EventRuntimeService {
       });
     }
     const backbone = await this.canonicalLifecycle.initialize();
-    await this.migrateCanonicalRuntimeEvents();
+    try {
+      await this.migrateCanonicalRuntimeEvents();
+      await this.validateCanonicalRuntimeStreams();
+    } catch (error) {
+      await this.rejectCanonicalRuntimeInitialization();
+      throw error;
+    }
     if (!this.canonicalComposition) {
       this.canonicalComposition = createServerRuntimeComposition({
         backbone,
@@ -1103,6 +1112,12 @@ class EventRuntimeService {
       : undefined;
   }
 
+  getCanonicalStreamIntegrityReport(): CanonicalRuntimeStreamIntegrityReport | undefined {
+    return this.canonicalStreamIntegrityReport
+      ? structuredClone(this.canonicalStreamIntegrityReport)
+      : undefined;
+  }
+
   private async validateLegacyHumanWaits(): Promise<void> {
     const migration = migrateLegacyHumanWaitEvents(await this.legacyEvents.list());
     this.legacyHumanWaitMigrationReport = migration.report;
@@ -1141,6 +1156,37 @@ class EventRuntimeService {
     });
     this.reportRuntimeFailure(error);
     throw error;
+  }
+
+  private async validateCanonicalRuntimeStreams(): Promise<void> {
+    const report = auditCanonicalRuntimeStreams(await this.canonicalEventStore().list());
+    this.canonicalStreamIntegrityReport = report;
+    if (report.quarantinedStreams === 0) return;
+
+    const error = new FrameworkError({
+      code: 'RUNTIME_REPLAY_DIVERGENCE',
+      message:
+        'Canonical Runtime stream integrity audit quarantined Runs that require operator repair: ' +
+        report.entries
+          .slice(0, 3)
+          .map((entry) => `${entry.runId}/${entry.eventType}/${entry.eventId}: ${entry.reason}`)
+          .join('; '),
+      context: { integrityReport: report },
+    });
+    this.reportRuntimeFailure(error);
+    throw error;
+  }
+
+  private async rejectCanonicalRuntimeInitialization(): Promise<void> {
+    const migrationReport = this.canonicalEventFamilyMigrationReport;
+    const integrityReport = this.canonicalStreamIntegrityReport;
+    try {
+      await this.close();
+    } catch (error) {
+      logger.error('Canonical Runtime startup rejection could not close every resource', error);
+    }
+    this.canonicalEventFamilyMigrationReport = migrationReport;
+    this.canonicalStreamIntegrityReport = integrityReport;
   }
 
   private reportRuntimeFailure(error: unknown): void {
@@ -1372,6 +1418,7 @@ class EventRuntimeService {
     this.migratedLegacyEvents = undefined;
     this.legacyHumanWaitMigrationReport = undefined;
     this.canonicalEventFamilyMigrationReport = undefined;
+    this.canonicalStreamIntegrityReport = undefined;
     this.knownSessions.clear();
     this.capabilitySnapshots.clear();
     if (failures.length > 0) throw failures[0];

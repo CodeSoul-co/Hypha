@@ -1,5 +1,6 @@
-import { createFrameworkEvent, InMemoryEventStore } from '@hypha/core';
+import { createPersistedEventBatch, createFrameworkEvent, InMemoryEventStore } from '@hypha/core';
 import {
+  auditCanonicalRuntimeStreams,
   CanonicalRunManagerEventStore,
   OrchestrationEventStore,
   migrateCanonicalEventFamilies,
@@ -132,6 +133,45 @@ describe('OrchestrationEventStore', () => {
     });
     await expect(canonical.list()).resolves.toHaveLength(1);
   });
+
+  it('audits valid canonical Run streams before Runtime workers start', () => {
+    const report = auditCanonicalRuntimeStreams(
+      persistedEvents([
+        event('run-created', 'run.created', '2026-07-21T06:00:00.000Z'),
+        event('run-started', 'run.started', '2026-07-21T06:00:01.000Z'),
+      ])
+    );
+
+    expect(report).toEqual({
+      scannedStreams: 1,
+      validatedStreams: 1,
+      ignoredStreams: 0,
+      quarantinedStreams: 0,
+      entries: [],
+    });
+  });
+
+  it('quarantines canonical streams whose first orchestration fact precedes run.created', () => {
+    const report = auditCanonicalRuntimeStreams(
+      persistedEvents([event('state-entered', 'fsm.state.entered', '2026-07-21T06:00:00.000Z')])
+    );
+
+    expect(report).toMatchObject({
+      scannedStreams: 1,
+      validatedStreams: 0,
+      ignoredStreams: 0,
+      quarantinedStreams: 1,
+      entries: [
+        {
+          userId: 'user-1',
+          runId: 'run-1',
+          eventId: 'state-entered',
+          eventType: 'fsm.state.entered',
+        },
+      ],
+    });
+    expect(report.entries[0]?.reason).toContain('Run Event precedes run.created');
+  });
 });
 
 function event(
@@ -148,4 +188,19 @@ function event(
     timestamp,
     payload: { id },
   });
+}
+
+function persistedEvents(events: ReturnType<typeof event>[]) {
+  return createPersistedEventBatch(
+    {
+      scope: { userId: 'user-1', runId: 'run-1' },
+      events,
+      expectedLastSequence: 0,
+      expectedRunRevision: 0,
+      idempotencyKey: 'canonical-stream-audit',
+    },
+    1,
+    1,
+    '2026-07-21T06:00:00.000Z'
+  );
 }

@@ -1,10 +1,13 @@
 import {
+  createRuntimeOrchestrationProjectionDefinition,
+  eventStreamKey,
   FrameworkError,
   RUNTIME_CANONICAL_EVENT_TYPES,
   RUNTIME_ORCHESTRATION_EVENT_TYPES,
   type EventFilter,
   type EventStore,
   type FrameworkEvent,
+  type PersistedFrameworkEvent,
   type TraceRecorder,
 } from '@hypha/core';
 
@@ -31,6 +34,23 @@ export interface CanonicalEventFamilyMigrationReport {
   alreadyCanonicalEvents: number;
   quarantinedEvents: number;
   entries: CanonicalEventFamilyMigrationEntry[];
+}
+
+export interface CanonicalRuntimeStreamQuarantineEntry {
+  tenantId?: string;
+  userId: string;
+  runId: string;
+  eventId: string;
+  eventType: FrameworkEvent['type'];
+  reason: string;
+}
+
+export interface CanonicalRuntimeStreamIntegrityReport {
+  scannedStreams: number;
+  validatedStreams: number;
+  ignoredStreams: number;
+  quarantinedStreams: number;
+  entries: CanonicalRuntimeStreamQuarantineEntry[];
 }
 
 /**
@@ -217,6 +237,82 @@ export async function migrateCanonicalEventFamilies(input: {
   };
 }
 
+/**
+ * Replays every canonical orchestration stream before workers start.
+ *
+ * A stream that cannot satisfy projection invariants is quarantined by
+ * preventing Runtime startup and returning deterministic repair evidence.
+ */
+export function auditCanonicalRuntimeStreams(
+  events: readonly FrameworkEvent[]
+): CanonicalRuntimeStreamIntegrityReport {
+  const streams = new Map<string, FrameworkEvent[]>();
+  for (const event of events) {
+    const userId = eventOwnerId(event) ?? '<missing>';
+    const key = eventStreamKey({
+      ...(event.tenantId === undefined ? {} : { tenantId: event.tenantId }),
+      userId,
+      runId: event.runId,
+    });
+    const stream = streams.get(key) ?? [];
+    stream.push(event);
+    streams.set(key, stream);
+  }
+
+  let validatedStreams = 0;
+  let ignoredStreams = 0;
+  const entries: CanonicalRuntimeStreamQuarantineEntry[] = [];
+  for (const key of [...streams.keys()].sort()) {
+    const stream = [...streams.get(key)!].sort(compareCanonicalEvents);
+    const malformed = stream.find((event) => !isPersistedFrameworkEvent(event));
+    if (malformed) {
+      entries.push({
+        ...(malformed.tenantId === undefined ? {} : { tenantId: malformed.tenantId }),
+        userId: eventOwnerId(malformed) ?? '<missing>',
+        runId: malformed.runId,
+        eventId: malformed.id,
+        eventType: malformed.type,
+        reason: 'Canonical Runtime stream contains a non-persisted Event record',
+      });
+      continue;
+    }
+    const persistedStream = stream.filter(isPersistedFrameworkEvent);
+    const definition = createRuntimeOrchestrationProjectionDefinition(persistedStream[0]!.runId);
+    const applicable = persistedStream.filter((event) => definition.applies(event));
+    if (applicable.length === 0) {
+      ignoredStreams += 1;
+      continue;
+    }
+
+    let state = definition.initialState();
+    let current = applicable[0]!;
+    try {
+      for (const event of applicable) {
+        current = event;
+        state = definition.reduce(state, event);
+      }
+      validatedStreams += 1;
+    } catch (error) {
+      entries.push({
+        ...(current.tenantId === undefined ? {} : { tenantId: current.tenantId }),
+        userId: current.userId,
+        runId: current.runId,
+        eventId: current.id,
+        eventType: current.type,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    scannedStreams: streams.size,
+    validatedStreams,
+    ignoredStreams,
+    quarantinedStreams: entries.length,
+    entries,
+  };
+}
+
 /** @deprecated Use isCanonicalRuntimeEvent. */
 export function isOrchestrationEvent(type: FrameworkEvent['type']): boolean {
   return isCanonicalRuntimeEvent(type);
@@ -230,6 +326,25 @@ function eventIdentity(event: FrameworkEvent): string {
   return [event.tenantId ?? '', event.userId ?? event.metadata?.userId ?? '', event.runId, event.id]
     .map(String)
     .join('\u0000');
+}
+
+function compareCanonicalEvents(left: FrameworkEvent, right: FrameworkEvent): number {
+  return (
+    (left.sequence ?? 0) - (right.sequence ?? 0) ||
+    (left.globalSequence ?? 0) - (right.globalSequence ?? 0) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function isPersistedFrameworkEvent(event: FrameworkEvent): event is PersistedFrameworkEvent {
+  return (
+    typeof event.version === 'string' &&
+    typeof event.userId === 'string' &&
+    Number.isInteger(event.sequence) &&
+    Number.isInteger(event.globalSequence) &&
+    typeof event.recordedAt === 'string' &&
+    typeof event.payloadHash === 'string'
+  );
 }
 
 function eventOwnerId(event: FrameworkEvent): string | undefined {
