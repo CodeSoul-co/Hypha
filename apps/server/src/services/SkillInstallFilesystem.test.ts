@@ -89,6 +89,34 @@ describe('Skill install filesystem boundary', () => {
     ).rejects.toMatchObject({ code: 'SKILL_DIRECTORY_IDENTITY_CHANGED' });
   });
 
+  it('rejects replacement of the final target immediately after promotion', async () => {
+    process.env.HYPHA_SKILL_DATA_ROOT = path.join(root, 'installed');
+    const roots = await resolveGovernedSkillRoots();
+    const target = path.join(roots.data.canonicalPath, 'replaced-after-rename.md');
+    const rename = fs.rename.bind(fs);
+    const renameSpy = jest.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      await rename(source, destination);
+      if (path.resolve(String(destination)) !== target) return;
+      await fs.unlink(target);
+      await fs.writeFile(target, 'replacement', { encoding: 'utf8', mode: 0o600 });
+    });
+
+    try {
+      await expect(
+        installVerifiedSkillFile({
+          roots,
+          destination: 'active',
+          filename: path.basename(target),
+          raw: 'verified',
+          verify: (raw) => expect(raw).toBe('verified'),
+        })
+      ).rejects.toMatchObject({ code: 'SKILL_TARGET_IDENTITY_CHANGED' });
+      await expect(fs.readFile(target, 'utf8')).resolves.toBe('replacement');
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
   it('canonicalizes trusted sources and rejects symlinks that leave the allow-listed root', async () => {
     if (process.platform === 'win32') return;
     const trusted = path.join(root, 'trusted');
