@@ -15,7 +15,7 @@ export interface PutSessionCommandPayloadRequest {
   payload: unknown;
 }
 
-export interface GetSessionCommandPayloadRequest extends SessionCommandPayloadReference {}
+export type GetSessionCommandPayloadRequest = SessionCommandPayloadReference;
 
 export interface ArtifactSessionCommandPayloadStoreOptions {
   artifacts: ArtifactStoreProvider;
