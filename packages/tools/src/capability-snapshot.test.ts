@@ -113,4 +113,134 @@ describe('EffectiveAgentCapabilitySnapshot enforcement', () => {
     });
     expect(calls).toBe(1);
   });
+
+  it('enforces an exact subject-bound approval when the effective snapshot requires review', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        id: 'tool.reviewed',
+        version: '1.0.0',
+        description: 'Reviewed read',
+        inputSchema: { type: 'object', additionalProperties: false },
+        sideEffectLevel: 'read',
+      },
+      async () => ({ ok: true })
+    );
+    const spec = registry.getSpec('tool.reviewed')!;
+    const effectiveBody = {
+      runId: 'run-review',
+      agentId: 'agent-review',
+      principalId: 'user-review',
+      createdAt: '2026-07-22T00:00:00.000Z',
+      skillRevisions: [
+        { id: 'skill.untrusted', version: '1.0.0', contentHash: 'a'.repeat(64) },
+      ],
+      allowedToolIds: [spec.id],
+      allowedMCPServerIds: [],
+      memoryAccess: 'none' as const,
+      allowedExecutionProfiles: [],
+      maximumSideEffectLevel: 'read' as const,
+      requiresHumanReview: true,
+      policyRefs: ['skill.review'],
+    };
+    const subjectHash = hashToolContract(effectiveBody);
+    const snapshot: ToolContractSnapshot = {
+      id: 'tool-snapshot:run-review',
+      runId: 'run-review',
+      createdAt: effectiveBody.createdAt,
+      toolContracts: [
+        {
+          toolId: spec.id,
+          toolVersion: spec.version,
+          toolRevision: spec.revision,
+          inputSchemaHash: spec.input.schemaHash,
+          sideEffectLevel: spec.sideEffectLevel,
+          adapterRef: 'local',
+        },
+      ],
+      effectiveCapabilities: {
+        id: 'agent-capability:run-review:agent-review',
+        ...effectiveBody,
+        snapshotHash: subjectHash,
+      },
+      snapshotHash: 'contract-snapshot-hash',
+    };
+    const runner = new GovernedToolRunner(registry, new InMemoryEventStore(), undefined, {
+      snapshotStore: new SnapshotStore(snapshot),
+    });
+    const context = {
+      runId: 'run-review',
+      stepId: 'step-review',
+      contractSnapshotRef: snapshot.id,
+      capabilitySnapshotRef: snapshot.id,
+      agentId: 'agent-review',
+      principal: {
+        id: 'user-review',
+        principalId: 'user-review',
+        type: 'user' as const,
+        agentId: 'agent-review',
+        permissionScopes: ['*'],
+      },
+    };
+
+    await expect(
+      runner.run({ toolId: spec.id, input: {}, context })
+    ).resolves.toMatchObject({
+      status: 'denied',
+      error: {
+        code: 'TOOL_CAPABILITY_SCOPE_DENIED',
+        message: expect.stringContaining('exact, unexpired human approval'),
+      },
+    });
+    await expect(
+      runner.run({
+        toolId: spec.id,
+        input: {},
+        context: {
+          ...context,
+          invocationId: 'wrong-subject',
+          capabilityApprovals: [
+            {
+              taskId: 'review:wrong',
+              subjectType: 'effective_capability_snapshot',
+              subjectHash: '0'.repeat(64),
+              snapshotId: snapshot.effectiveCapabilities!.id,
+              runId: context.runId,
+              agentId: context.agentId,
+              principalId: context.principal.principalId,
+              approvedBy: 'reviewer',
+              approvedAt: new Date().toISOString(),
+              expiresAt: new Date(Date.now() + 60_000).toISOString(),
+              status: 'approved',
+            },
+          ],
+        },
+      })
+    ).resolves.toMatchObject({ status: 'denied' });
+    await expect(
+      runner.run({
+        toolId: spec.id,
+        input: {},
+        context: {
+          ...context,
+          invocationId: 'exact-subject',
+          capabilityApprovals: [
+            {
+              taskId: 'review:approved',
+              subjectType: 'effective_capability_snapshot',
+              subjectHash,
+              snapshotId: snapshot.effectiveCapabilities!.id,
+              runId: context.runId,
+              agentId: context.agentId,
+              principalId: context.principal.principalId,
+              approvedBy: 'reviewer',
+              approvedAt: new Date().toISOString(),
+              expiresAt: new Date(Date.now() + 60_000).toISOString(),
+              status: 'approved',
+            },
+          ],
+        },
+      })
+    ).resolves.toMatchObject({ status: 'completed', output: { ok: true } });
+  });
 });

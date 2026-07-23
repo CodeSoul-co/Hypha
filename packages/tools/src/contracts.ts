@@ -195,6 +195,20 @@ export interface EffectiveAgentCapabilitySnapshot {
   snapshotHash: string;
 }
 
+export interface EffectiveCapabilityApproval {
+  taskId: string;
+  subjectType: 'effective_capability_snapshot';
+  subjectHash: string;
+  snapshotId: string;
+  runId: string;
+  agentId: string;
+  principalId: string;
+  approvedBy: string;
+  approvedAt: string;
+  expiresAt: string;
+  status: 'approved';
+}
+
 export interface ToolContractSnapshotItem {
   toolId: string;
   toolVersion: string;
@@ -264,6 +278,7 @@ export interface ToolExecutionContextSpec {
   parentEventId?: string;
   contractSnapshotRef?: string;
   capabilitySnapshotRef?: string;
+  capabilityApprovals?: EffectiveCapabilityApproval[];
   deadlineAt?: string;
   abortSignal?: AbortSignal;
   metadata?: Record<string, unknown>;
@@ -639,6 +654,22 @@ export const effectiveAgentCapabilitySnapshotSchema = z.object({
   snapshotHash: z.string().min(1),
 }) satisfies ZodType<EffectiveAgentCapabilitySnapshot>;
 
+export const effectiveCapabilityApprovalSchema = z
+  .object({
+    taskId: z.string().min(1),
+    subjectType: z.literal('effective_capability_snapshot'),
+    subjectHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    snapshotId: z.string().min(1),
+    runId: z.string().min(1),
+    agentId: z.string().min(1),
+    principalId: z.string().min(1),
+    approvedBy: z.string().min(1),
+    approvedAt: z.string().datetime({ offset: true }),
+    expiresAt: z.string().datetime({ offset: true }),
+    status: z.literal('approved'),
+  })
+  .strict() satisfies ZodType<EffectiveCapabilityApproval>;
+
 export const toolContractSnapshotSchema = z.object({
   id: z.string().min(1),
   runId: z.string().min(1),
@@ -683,6 +714,7 @@ export const toolExecutionContextSpecSchema = z.object({
   parentEventId: z.string().optional(),
   contractSnapshotRef: z.string().optional(),
   capabilitySnapshotRef: z.string().optional(),
+  capabilityApprovals: z.array(effectiveCapabilityApprovalSchema).optional(),
   deadlineAt: z.string().optional(),
   abortSignal: z.custom<AbortSignal>().optional(),
   metadata: z.record(z.unknown()).optional(),

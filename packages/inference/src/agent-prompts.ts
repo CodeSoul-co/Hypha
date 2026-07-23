@@ -70,6 +70,9 @@ export interface AgentPromptPrincipal {
 }
 
 export interface AgentPromptApproval {
+  taskId: string;
+  subjectType: 'agent_prompt';
+  subjectHash: string;
   promptId: string;
   promptVersion: string;
   promptRevision: number;
@@ -80,6 +83,7 @@ export interface AgentPromptApproval {
   agentId?: string;
   domainId?: string;
   expiresAt?: string;
+  status: 'approved';
 }
 
 export interface AgentPromptResolutionContext {
@@ -308,6 +312,9 @@ function assertPromptAccess(
   if ((spec.trustLevel ?? 'reviewed') !== 'untrusted') return;
   const approval = context.approvals?.find(
     (candidate) =>
+      candidate.status === 'approved' &&
+      candidate.subjectType === 'agent_prompt' &&
+      candidate.subjectHash === agentPromptSubjectHash(spec) &&
       candidate.promptId === spec.id &&
       candidate.promptVersion === spec.version &&
       candidate.promptRevision === spec.revision &&
@@ -323,6 +330,19 @@ function assertPromptAccess(
   if (!approval) {
     throw promptAccessError(spec, 'untrusted prompt requires an exact, unexpired approval');
   }
+}
+
+export function agentPromptSubjectHash(
+  spec: Pick<AgentPromptSpec, 'id' | 'version' | 'revision' | 'contentHash'>
+): string {
+  return hashContent(
+    JSON.stringify({
+      promptId: spec.id,
+      promptVersion: spec.version,
+      promptRevision: spec.revision,
+      contentHash: spec.contentHash,
+    })
+  );
 }
 
 function promptAccessError(spec: AgentPromptSpec, reason: string): Error {

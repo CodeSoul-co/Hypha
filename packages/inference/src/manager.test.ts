@@ -13,7 +13,7 @@ import { HyphaInferencePipeline } from './pipeline';
 import { InMemoryPlasmodHotLayer } from './plasmod';
 import { DefaultPrefixSegmenter } from './prefix';
 import { DefaultPromptCompiler } from './prompt';
-import { AgentPromptRegistry } from './agent-prompts';
+import { AgentPromptRegistry, agentPromptSubjectHash } from './agent-prompts';
 import { ReasoningOrchestrator } from './reasoning';
 import { ReasoningStrategyRegistry } from './reasoning-registry';
 import { REACT_OFFICIAL_REFERENCES } from './reasoning-sources';
@@ -272,11 +272,15 @@ describe('@hypha/inference', () => {
         principal,
         approvals: [
           {
+            taskId: 'prompt-review:wrong',
+            subjectType: 'agent_prompt',
+            subjectHash: '0'.repeat(64),
             promptId: stored.id,
             promptVersion: stored.version,
             promptRevision: stored.revision!,
             contentHash: '0'.repeat(64),
             approvedBy: 'reviewer-a',
+            status: 'approved',
           },
         ],
       })
@@ -287,6 +291,9 @@ describe('@hypha/inference', () => {
       principal,
       approvals: [
         {
+          taskId: 'prompt-review:approved',
+          subjectType: 'agent_prompt',
+          subjectHash: agentPromptSubjectHash(stored),
           promptId: stored.id,
           promptVersion: stored.version,
           promptRevision: stored.revision!,
@@ -296,6 +303,7 @@ describe('@hypha/inference', () => {
           agentId: 'agent-a',
           domainId: 'domain-a',
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          status: 'approved',
         },
       ],
     });

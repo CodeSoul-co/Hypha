@@ -50,6 +50,7 @@ import {
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
   type EffectiveAgentCapabilitySnapshot,
+  type EffectiveCapabilityApproval,
   type ToolSemanticSpec,
   type ToolSource,
   type ToolSourceRef,
@@ -137,6 +138,7 @@ export interface ToolCallContext {
   parentEventId?: string;
   contractSnapshotRef?: string;
   capabilitySnapshotRef?: string;
+  capabilityApprovals?: EffectiveCapabilityApproval[];
   deadlineAt?: string;
   signal?: AbortSignal;
   abortSignal?: AbortSignal;
@@ -1408,6 +1410,14 @@ export function validateEffectiveCapabilityAccess(input: {
   if (effective.tenantId && effective.tenantId !== input.context.tenantId) {
     return 'Effective capability snapshot belongs to a different tenant.';
   }
+  if (effective.requiresHumanReview) {
+    const approval = input.context.capabilityApprovals?.find((candidate) =>
+      isExactEffectiveCapabilityApproval(candidate, effective, input.context)
+    );
+    if (!approval) {
+      return 'Effective capability snapshot requires an exact, unexpired human approval.';
+    }
+  }
   if (!effective.allowedToolIds.includes(input.spec.id)) {
     return `Tool ${input.spec.id} is not allowed by the effective capability snapshot.`;
   }
@@ -1444,6 +1454,30 @@ export function validateEffectiveCapabilityAccess(input: {
     }
   }
   return null;
+}
+
+function isExactEffectiveCapabilityApproval(
+  approval: EffectiveCapabilityApproval,
+  effective: EffectiveAgentCapabilitySnapshot,
+  context: ToolCallContext
+): boolean {
+  const principalId = context.principal?.principalId ?? context.principal?.id;
+  const expiresAt = Date.parse(approval.expiresAt);
+  return (
+    approval.status === 'approved' &&
+    approval.subjectType === 'effective_capability_snapshot' &&
+    approval.subjectHash === effective.snapshotHash &&
+    approval.snapshotId === effective.id &&
+    approval.runId === effective.runId &&
+    approval.runId === context.runId &&
+    approval.agentId === effective.agentId &&
+    approval.agentId === (context.agentId ?? context.principal?.agentId) &&
+    approval.principalId === effective.principalId &&
+    approval.principalId === principalId &&
+    Number.isFinite(Date.parse(approval.approvedAt)) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > Date.now()
+  );
 }
 
 function capabilitySideEffectRank(level: SideEffectLevel): number {
