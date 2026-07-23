@@ -36,7 +36,8 @@ class RecordingLifecyclePort implements RuntimeActivityLifecycleCommitPort {
 
 function createFixture(
   dispatch?: RuntimeActivityDispatchPort,
-  abortSignal = new AbortController().signal
+  abortSignal = new AbortController().signal,
+  lifecycleOverride?: RuntimeActivityLifecycleCommitPort
 ) {
   let idSequence = 0;
   let clockSequence = 0;
@@ -75,7 +76,7 @@ function createFixture(
       ids: helpers.ids,
       clock: helpers.clock,
       dispatch: activityDispatch,
-      lifecycle,
+      lifecycle: lifecycleOverride ?? lifecycle,
       abortSignal,
     }),
   };
@@ -172,5 +173,41 @@ describe('DefaultRuntimeActivityHelper', () => {
     ).rejects.toMatchObject({ code: 'RUNTIME_CANCELLED' });
     expect(fixture.lifecycle.requests).toHaveLength(0);
     expect(fixture.invocations).toHaveLength(0);
+  });
+
+  it('leaves durable requested evidence when dispatch crashes before returning', async () => {
+    const fixture = createFixture({
+      async dispatch() {
+        throw new Error('simulated dispatch crash');
+      },
+    });
+
+    await expect(
+      fixture.helper.execution({ target: 'execution.python', input: { code: 'print(1)' } })
+    ).rejects.toThrow('simulated dispatch crash');
+    expect(fixture.lifecycle.requests.map((request) => request.event.type)).toEqual([
+      'runtime.activity.requested',
+    ]);
+  });
+
+  it('leaves durable requested evidence when the provider returns before result commit', async () => {
+    const lifecycle = new RecordingLifecyclePort();
+    const interruptedLifecycle: RuntimeActivityLifecycleCommitPort = {
+      append: async (request) => {
+        if (request.event.type !== 'runtime.activity.requested') {
+          throw new Error('simulated result commit crash');
+        }
+        return lifecycle.append(request);
+      },
+    };
+    const fixture = createFixture(undefined, new AbortController().signal, interruptedLifecycle);
+
+    await expect(
+      fixture.helper.memory({ target: 'memory.write', input: { value: 'durable' } })
+    ).rejects.toThrow('simulated result commit crash');
+    expect(fixture.invocations).toHaveLength(1);
+    expect(lifecycle.requests.map((request) => request.event.type)).toEqual([
+      'runtime.activity.requested',
+    ]);
   });
 });

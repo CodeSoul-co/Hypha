@@ -36,6 +36,13 @@ const eventTypes: FrameworkEventType[] = [
   'runtime.activity.failed',
   'runtime.activity.waiting',
   'runtime.activity.cancelled',
+  'inference.requested',
+  'inference.completed',
+  'llm.cache.lookup',
+  'llm.cache.hit',
+  'llm.cache.miss',
+  'llm.cache.write',
+  'llm.cache.bypass',
 ];
 
 const payloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
@@ -174,6 +181,59 @@ describe('Runtime orchestration projection', () => {
         stateVisitCounts: { Acting: 2 },
         stateAttempt: 2,
       },
+    });
+  });
+
+  it('preserves identical Run and FSM semantics with serving cache enabled or disabled', async () => {
+    const withoutCache = await fixture();
+    const withCache = await fixture();
+    const lifecycle = [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.reasoning.1', 'fsm.state.entered', { stateId: 'Reasoning' }),
+      event('inference.requested', 'inference.requested', {
+        stepId: 'reasoning.1',
+        modelAlias: 'default-fast',
+      }),
+      event('inference.completed', 'inference.completed', {
+        responseId: 'response.1',
+        usage: { totalTokens: 12 },
+      }),
+      event('transition.completed', 'fsm.transition.accepted', {
+        from: 'Reasoning',
+        to: 'Completed',
+      }),
+      event('state.reasoning.exit', 'fsm.state.exited', { stateId: 'Reasoning' }),
+      event('state.completed.1', 'fsm.state.entered', { stateId: 'Completed' }),
+      event('run.completed', 'run.completed', { terminalState: 'Completed' }),
+    ];
+    await append(withoutCache, lifecycle);
+    await append(withCache, [
+      ...lifecycle.slice(0, 4),
+      event('cache.lookup', 'llm.cache.lookup', { key: 'llm:exact:test' }),
+      event('cache.hit', 'llm.cache.hit', { key: 'llm:exact:test' }),
+      ...lifecycle.slice(4),
+    ]);
+
+    const definition = createRuntimeOrchestrationProjectionDefinition(scope.runId);
+    const cacheDisabledProjection = await withoutCache.engine.rebuild(
+      definition,
+      withoutCache.projectionStore,
+      scope
+    );
+    const cacheEnabledProjection = await withCache.engine.rebuild(
+      definition,
+      withCache.projectionStore,
+      scope
+    );
+
+    expect(cacheEnabledProjection.state).toEqual(cacheDisabledProjection.state);
+    expect(cacheEnabledProjection.state).toMatchObject({
+      runStatus: 'completed',
+      currentState: 'Completed',
+      terminalState: 'Completed',
+      statePath: ['Reasoning', 'Completed'],
+      stateAttempt: 1,
     });
   });
 
