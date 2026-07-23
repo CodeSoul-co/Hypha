@@ -94,9 +94,9 @@ export interface SQLiteExecutionStoreFoundationOptions {
 }
 
 /**
- * Internal durable foundation for the SQLite ExecutionStore adapter.
- * It is intentionally not exported from the package entrypoint until the
- * complete ExecutionStore contract, including CAS and leases, is implemented.
+ * Internal durable implementation used by the public SQLiteExecutionStore.
+ * Keeping persistence mechanics here prevents SQLite details from leaking into
+ * the Core ExecutionStore contract.
  */
 export class SQLiteExecutionStoreFoundation {
   static readonly schemaVersion = SQLITE_EXECUTION_STORE_SCHEMA_VERSION;
