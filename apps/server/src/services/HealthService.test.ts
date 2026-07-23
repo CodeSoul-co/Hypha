@@ -76,4 +76,41 @@ describe('HealthService', () => {
       },
     });
   });
+
+  it('does not let startup overwrite a fatal Runtime failure with ready', async () => {
+    dependencies.storageHealth.mockResolvedValue({ mongodb: true, redis: true });
+    dependencies.modelHealth.mockResolvedValue({ defaultProvider: 'deepseek', healthy: true });
+    const service = new HealthService(dependencies);
+    service.beginRuntimeInitialization();
+    service.setRuntimeFailure(new Error('missing recovery schema'));
+
+    expect(() => service.setRuntimeInitialized(true)).toThrow(
+      'Runtime cannot become ready after a fatal failure'
+    );
+    await expect(service.readiness()).resolves.toMatchObject({
+      ready: false,
+      components: {
+        runtime: {
+          status: 'unhealthy',
+          detail: 'Error: missing recovery schema',
+        },
+      },
+    });
+  });
+
+  it('clears an acknowledged startup failure only when a new initialization begins', async () => {
+    dependencies.storageHealth.mockResolvedValue({ mongodb: true, redis: true });
+    dependencies.modelHealth.mockResolvedValue({ defaultProvider: 'deepseek', healthy: true });
+    const service = new HealthService(dependencies);
+    service.setRuntimeFailure(new Error('first startup failed'));
+
+    service.beginRuntimeInitialization();
+    service.setRuntimeInitialized(true);
+
+    await expect(service.readiness()).resolves.toMatchObject({
+      status: 'ready',
+      ready: true,
+      components: { runtime: { status: 'healthy' } },
+    });
+  });
 });

@@ -32,7 +32,7 @@ import { getHealthService } from './services/HealthService';
 class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
-  private server: any = null;
+  private server: http.Server | null = null;
   private eventRuntime: ReturnType<typeof getEventRuntime> | null = null;
 
   constructor() {
@@ -41,21 +41,29 @@ class Application {
   }
 
   async initialize(): Promise<void> {
-    getHealthService().setRuntimeInitialized(false);
+    getHealthService().beginRuntimeInitialization();
 
-    // Setup middleware
-    this.setupMiddleware();
+    try {
+      // Setup middleware
+      this.setupMiddleware();
 
-    // Setup routes
-    this.setupRoutes();
+      // Setup routes
+      this.setupRoutes();
 
-    // Setup error handling
-    this.setupErrorHandling();
+      // Setup error handling
+      this.setupErrorHandling();
 
-    // Initialize services
-    await this.initializeServices();
+      // Initialize services
+      await this.initializeServices();
 
-    logger.info('Application initialized successfully');
+      logger.info('Application initialized successfully');
+    } catch (error) {
+      getHealthService().setRuntimeFailure(error);
+      await this.stop().catch((shutdownError) => {
+        logger.error('Failed to clean up after initialization failure:', shutdownError);
+      });
+      throw error;
+    }
   }
 
   private setupMiddleware(): void {
@@ -213,6 +221,7 @@ class Application {
     // Resume persisted Timer Waits and Session commands only after side effects are reconciled.
     await this.eventRuntime.startRuntimeTimerScheduler();
     await this.eventRuntime.startSessionCommandScheduler();
+    this.eventRuntime.assertRuntimeReady();
 
     // Initialize Workflow Engine
     await initializeWorkflowEngine();
@@ -265,21 +274,32 @@ class Application {
   async start(): Promise<void> {
     const { host, port } = this.config.app;
 
-    return new Promise((resolve) => {
-      this.server = this.app.listen(port, host, async () => {
-        logger.info(`Server started`, {
-          host,
-          port,
-          env: this.config.app.env,
-          url: `http://${host}:${port}`,
-        });
-
-        // Startup health check
-        await this.startupHealthCheck(host, port);
-
+    await new Promise<void>((resolve, reject) => {
+      const server = this.app.listen(port, host);
+      this.server = server;
+      const cleanup = () => {
+        server.off('error', onError);
+        server.off('listening', onListening);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onListening = () => {
+        cleanup();
         resolve();
-      });
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
     });
+    logger.info(`Server started`, {
+      host,
+      port,
+      env: this.config.app.env,
+      url: `http://${host}:${port}`,
+    });
+
+    await this.startupHealthCheck(host, port);
   }
 
   private async startupHealthCheck(host: string, port: number): Promise<void> {
@@ -450,30 +470,35 @@ class Application {
   async stop(): Promise<void> {
     logger.info('Shutting down...');
     getHealthService().setRuntimeInitialized(false);
+    const failures: unknown[] = [];
 
     // Stop accepting new connections
     if (this.server) {
+      const server = this.server;
+      this.server = null;
       await new Promise<void>((resolve) => {
-        this.server.close(() => resolve());
+        server.close((error?: Error) => {
+          if (error) failures.push(error);
+          resolve();
+        });
+        server.closeIdleConnections?.();
       });
     }
 
-    // Cleanup services
-    await getTemporaryMemory().stopCleanup();
-    await destroyLLM();
-    await destroySkillManager();
-    await destroyToolManager();
-    await destroyWorkflowEngine();
-    await destroyPromptManager();
-
-    // Runtime owns SQLite handles that must close before shared database shutdown.
-    await this.eventRuntime?.close();
+    // Runtime workers drain while Tool/Model providers are still available.
+    await settleCleanup(() => this.eventRuntime?.close(), failures);
     this.eventRuntime = null;
 
-    // Close databases
-    await closeDatabases();
+    await settleCleanup(() => getTemporaryMemory().stopCleanup(), failures);
+    await settleCleanup(() => destroyWorkflowEngine(), failures);
+    await settleCleanup(() => destroyPromptManager(), failures);
+    await settleCleanup(() => destroySkillManager(), failures);
+    await settleCleanup(() => destroyToolManager(), failures);
+    await settleCleanup(() => destroyLLM(), failures);
+    await settleCleanup(() => closeDatabases(), failures);
 
     logger.info('Shutdown complete');
+    if (failures.length > 0) throw failures[0];
   }
 
   getApp(): Express {
@@ -514,7 +539,21 @@ async function main() {
     await app.start();
   } catch (error) {
     logger.error('Failed to start application:', error);
+    await app.stop().catch((shutdownError) => {
+      logger.error('Failed to clean up after startup failure:', shutdownError);
+    });
     process.exit(1);
+  }
+}
+
+async function settleCleanup(
+  cleanup: () => void | Promise<void> | undefined,
+  failures: unknown[]
+): Promise<void> {
+  try {
+    await cleanup();
+  } catch (error) {
+    failures.push(error);
   }
 }
 

@@ -257,6 +257,13 @@ export interface OwnedRunScope {
   domainPackId: string;
 }
 
+export interface RuntimeReadinessStatus {
+  backbone: boolean;
+  sessionCommands: boolean;
+  timers: boolean;
+  recovery: boolean;
+}
+
 export interface StartRunInput {
   userId: string;
   sessionId: string;
@@ -888,7 +895,6 @@ class EventRuntimeService {
         },
         onCandidateError: (error, candidateId) => {
           logger.error(`Runtime Recovery candidate failed: ${candidateId}`, error);
-          this.reportRuntimeFailure(error);
         },
         onError: (error) => {
           logger.error('Runtime Recovery Scheduler scan failed', error);
@@ -1026,6 +1032,29 @@ class EventRuntimeService {
 
   isRuntimeRecoverySchedulerRunning(): boolean {
     return this.runtimeRecoveryScheduler?.isRunning() ?? false;
+  }
+
+  runtimeReadinessStatus(): RuntimeReadinessStatus {
+    return {
+      backbone: this.isCanonicalRuntimeInitialized(),
+      sessionCommands: this.isSessionCommandSchedulerRunning(),
+      timers: this.isRuntimeTimerSchedulerRunning(),
+      recovery: this.isRuntimeRecoverySchedulerRunning(),
+    };
+  }
+
+  assertRuntimeReady(): void {
+    const status = this.runtimeReadinessStatus();
+    const stopped = Object.entries(status)
+      .filter(([, running]) => !running)
+      .map(([component]) => component);
+    if (stopped.length > 0) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: `Runtime cannot become ready while required workers are stopped: ${stopped.join(', ')}`,
+        context: { status },
+      });
+    }
   }
 
   sweepRuntimeRecovery(checkedAt?: string): Promise<ServerRuntimeRecoverySweepResult> {
@@ -1179,10 +1208,17 @@ class EventRuntimeService {
     this.runtimeTimerScheduler = undefined;
     this.sessionCommandArtifacts = undefined;
     this.sessionCommandInitialization = undefined;
+    this.canonicalLifecycle = undefined;
     this.canonicalComposition = undefined;
     this.canonicalEvents = undefined;
+    this.canonicalRuntimeFilename = undefined;
     this.cancellationService = undefined;
     this.runControlService = undefined;
+    this.migratedLegacyEvents = undefined;
+    this.legacyHumanWaitMigrationReport = undefined;
+    this.canonicalEventFamilyMigrationReport = undefined;
+    this.knownSessions.clear();
+    this.runCapabilitySnapshots.clear();
     if (failures.length > 0) throw failures[0];
   }
 
@@ -1241,7 +1277,10 @@ class EventRuntimeService {
           },
         },
         classifyFailure: classifySessionCommandFailure,
-        onError: (error) => logger.error('Session Command Scheduler polling failed', error),
+        onError: (error) => {
+          logger.error('Session Command Scheduler polling failed', error);
+          this.reportRuntimeFailure(error);
+        },
       });
       this.sessionCommandArtifacts = artifacts;
       this.sessionCommands = commands;

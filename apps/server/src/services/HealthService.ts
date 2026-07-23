@@ -40,9 +40,21 @@ export class HealthService {
 
   constructor(private readonly dependencies: HealthServiceDependencies = defaultDependencies()) {}
 
+  beginRuntimeInitialization(): void {
+    this.runtimeInitialized = false;
+    this.runtimeFailure = undefined;
+  }
+
   setRuntimeInitialized(initialized: boolean): void {
-    this.runtimeInitialized = initialized;
-    if (initialized) this.runtimeFailure = undefined;
+    if (!initialized) {
+      this.runtimeInitialized = false;
+      return;
+    }
+    if (this.runtimeFailure) {
+      this.runtimeInitialized = false;
+      throw new Error(`Runtime cannot become ready after a fatal failure: ${this.runtimeFailure}`);
+    }
+    this.runtimeInitialized = true;
   }
 
   setRuntimeFailure(error: unknown): void {

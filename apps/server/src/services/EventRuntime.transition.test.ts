@@ -569,4 +569,48 @@ describe('EventRuntime canonical transitions', () => {
     expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
   });
+
+  it('becomes ready only with every worker running and can reopen after a full close', async () => {
+    expect(runtime.runtimeReadinessStatus().backbone).toBe(true);
+    expect(() => runtime.assertRuntimeReady()).toThrow(
+      'Runtime cannot become ready while required workers are stopped'
+    );
+
+    if (!runtime.isRuntimeRecoverySchedulerRunning()) {
+      await runtime.startRuntimeRecoveryScheduler();
+    }
+    if (!runtime.isRuntimeTimerSchedulerRunning()) {
+      await runtime.startRuntimeTimerScheduler();
+    }
+    if (!runtime.isSessionCommandSchedulerRunning()) {
+      await runtime.startSessionCommandScheduler();
+    }
+
+    expect(runtime.runtimeReadinessStatus()).toEqual({
+      backbone: true,
+      sessionCommands: true,
+      timers: true,
+      recovery: true,
+    });
+    expect(() => runtime.assertRuntimeReady()).not.toThrow();
+
+    await runtime.close();
+    expect(runtime.runtimeReadinessStatus()).toEqual({
+      backbone: false,
+      sessionCommands: false,
+      timers: false,
+      recovery: false,
+    });
+
+    await runtime.initializeCanonicalRuntime({
+      filename: process.env.HYPHA_CANONICAL_RUNTIME_DB,
+    });
+    expect(runtime.runtimeReadinessStatus()).toEqual({
+      backbone: true,
+      sessionCommands: false,
+      timers: false,
+      recovery: false,
+    });
+    await runtime.close();
+  });
 });
