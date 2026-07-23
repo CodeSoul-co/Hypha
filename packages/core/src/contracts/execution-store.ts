@@ -143,3 +143,8 @@ export interface ExecutionStore {
   releaseLease(request: ExecutionLeaseReleaseRequest): Promise<ExecutionRecord>;
   close?(): Promise<void>;
 }
+
+export interface ExecutionStoreFactory {
+  readonly storeId: string;
+  create(): Promise<ExecutionStore>;
+}

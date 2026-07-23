@@ -24,6 +24,8 @@ import {
   commandExecutionStatusSchema,
 } from '../command-execution';
 
+export * from './registry';
+
 const nonEmptyString = z.string().min(1);
 const nonNegativeInteger = z.number().int().nonnegative();
 const positiveInteger = z.number().int().positive();
