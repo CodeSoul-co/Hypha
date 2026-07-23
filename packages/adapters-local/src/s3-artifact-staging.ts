@@ -39,7 +39,7 @@ export async function stageS3ArtifactContent(
     await handle.sync();
   } catch (error) {
     await handle.close().catch(() => undefined);
-    await fsPromises.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    await cleanupStagingDirectory(directory);
     throw error;
   }
   await handle.close();
@@ -49,8 +49,24 @@ export async function stageS3ArtifactContent(
     contentHash: `sha256:${hash.digest('hex')}`,
     sizeBytes,
     createReadStream: () => fs.createReadStream(filename),
-    cleanup: () => fsPromises.rm(directory, { recursive: true, force: true }),
+    cleanup: async () => {
+      // Windows can retain a just-consumed ReadStream handle briefly. Cleanup
+      // is best-effort housekeeping and must not delay or replace the
+      // authoritative upload/validation result.
+      void cleanupStagingDirectory(directory);
+    },
   };
+}
+
+async function cleanupStagingDirectory(directory: string): Promise<void> {
+  await fsPromises
+    .rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 20,
+    })
+    .catch(() => undefined);
 }
 
 async function* toAsyncChunks(source: ArtifactByteSource): AsyncIterable<Uint8Array> {
