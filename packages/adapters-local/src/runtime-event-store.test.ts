@@ -181,9 +181,13 @@ describe('SQLiteDurableEventStore', () => {
     const first = await store.listStreamHeads({ limit: 2 });
     expect(first.heads.map((head) => head.scope.runId)).toEqual(['run-a', 'run-b']);
     expect(first.nextCursor).toBeDefined();
+    expect(first.nextCursor).not.toContain('\u0000');
     await expect(
       store.listStreamHeads({ cursor: first.nextCursor, limit: 2 })
     ).resolves.toMatchObject({ heads: [{ scope: { runId: 'run-c' } }] });
+    await expect(store.listStreamHeads({ cursor: 'run-b', limit: 2 })).rejects.toMatchObject({
+      code: 'RUNTIME_INVALID_INPUT',
+    });
   });
 
   it('reports persisted payload tampering as event stream corruption', async () => {

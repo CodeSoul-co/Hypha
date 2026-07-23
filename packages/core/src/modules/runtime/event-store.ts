@@ -137,15 +137,17 @@ export class InMemoryDurableEventStore implements DurableEventStore {
     request: ListEventStreamHeadsRequest = {}
   ): Promise<ListEventStreamHeadsResult> {
     const limit = streamHeadListLimit(request.limit);
+    const cursor =
+      request.cursor === undefined ? undefined : decodeEventStreamHeadCursor(request.cursor);
     const ordered = Array.from(this.streams.entries())
-      .filter(([key]) => request.cursor === undefined || key > request.cursor)
+      .filter(([key]) => cursor === undefined || key > cursor)
       .sort(([left], [right]) => left.localeCompare(right))
       .slice(0, limit + 1);
     const page = ordered.slice(0, limit);
     return {
       heads: page.map(([, stream]) => cloneHead(stream.head)),
       ...(ordered.length > limit && page.length > 0
-        ? { nextCursor: page[page.length - 1][0] }
+        ? { nextCursor: encodeEventStreamHeadCursor(page[page.length - 1][0]) }
         : {}),
     };
   }
@@ -257,6 +259,27 @@ export class InMemoryDurableEventStore implements DurableEventStore {
 export function eventStreamKey(scope: EventStreamScope): string {
   validateScope(scope);
   return `${scope.tenantId ?? ''}\u0000${scope.userId}\u0000${scope.runId}`;
+}
+
+const EVENT_STREAM_HEAD_CURSOR_PREFIX = 'event-stream-head:v1:';
+
+export function encodeEventStreamHeadCursor(streamKey: string): string {
+  if (streamKey.split('\u0000').length !== 3) invalid('stream head cursor key is invalid');
+  return `${EVENT_STREAM_HEAD_CURSOR_PREFIX}${encodeURIComponent(streamKey)}`;
+}
+
+export function decodeEventStreamHeadCursor(cursor: string): string {
+  if (!cursor.startsWith(EVENT_STREAM_HEAD_CURSOR_PREFIX)) {
+    invalid('stream head cursor version is invalid');
+  }
+  try {
+    const streamKey = decodeURIComponent(cursor.slice(EVENT_STREAM_HEAD_CURSOR_PREFIX.length));
+    if (streamKey.split('\u0000').length !== 3) invalid('stream head cursor payload is invalid');
+    return streamKey;
+  } catch (error) {
+    if (error instanceof FrameworkError) throw error;
+    invalid('stream head cursor encoding is invalid');
+  }
 }
 
 export function validateEventAppendRequest(request: EventAppendRequest): void {

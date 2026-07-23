@@ -1,6 +1,8 @@
 import {
   FrameworkError,
   createPersistedEventBatch,
+  decodeEventStreamHeadCursor,
+  encodeEventStreamHeadCursor,
   eventStreamKey,
   hashCanonicalJson,
   hashEventAppendRequest,
@@ -217,14 +219,16 @@ export class SQLiteDurableEventStore implements DurableEventStore {
     request: ListEventStreamHeadsRequest = {}
   ): Promise<ListEventStreamHeadsResult> {
     const limit = streamHeadListLimit(request.limit);
-    const rows = request.cursor
+    const cursor =
+      request.cursor === undefined ? undefined : decodeEventStreamHeadCursor(request.cursor);
+    const rows = cursor
       ? this.db
           .prepare(
             'SELECT stream_key, tenant_id, user_id, run_id, last_sequence, run_revision, ' +
               'fencing_token, updated_at FROM runtime_event_streams WHERE stream_key > ? ' +
               'ORDER BY stream_key ASC LIMIT ?'
           )
-          .all(request.cursor, limit + 1)
+          .all(cursor, limit + 1)
       : this.db
           .prepare(
             'SELECT stream_key, tenant_id, user_id, run_id, last_sequence, run_revision, ' +
@@ -236,7 +240,11 @@ export class SQLiteDurableEventStore implements DurableEventStore {
     return {
       heads: page.map(streamHeadFromRow),
       ...(rows.length > limit && page.length > 0
-        ? { nextCursor: String(page[page.length - 1].stream_key) }
+        ? {
+            nextCursor: encodeEventStreamHeadCursor(
+              eventStreamKey(streamHeadFromRow(page[page.length - 1]).scope)
+            ),
+          }
         : {}),
     };
   }
