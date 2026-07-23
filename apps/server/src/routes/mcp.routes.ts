@@ -14,15 +14,13 @@ type MCPContextManager = {
   readMCPResource?: (
     serverId: string,
     uri: string,
-    runId: string,
-    scope: OwnedRunScope
+    access: ReturnType<typeof mcpContextAccess>
   ) => Promise<unknown>;
   renderMCPPrompt?: (
     serverId: string,
     name: string,
     args: Record<string, string>,
-    runId: string,
-    scope: OwnedRunScope
+    access: ReturnType<typeof mcpContextAccess>
   ) => Promise<unknown>;
 };
 
@@ -103,8 +101,7 @@ router.post(
     const output = await manager.readMCPResource(
       req.params.serverId,
       uri,
-      scope.runId,
-      scope
+      mcpContextAccess(scope, 'mcp.resource.read')
     );
     res.json({ success: true, data: sanitizeMCPContextOutput(output) });
   })
@@ -127,8 +124,7 @@ router.post(
       req.params.serverId,
       req.params.name,
       args,
-      scope.runId,
-      scope
+      mcpContextAccess(scope, 'mcp.prompt.render')
     );
     res.json({ success: true, data: sanitizeMCPContextOutput(output) });
   })
@@ -140,6 +136,60 @@ router.get(
     res.json({ success: true, data: await getToolManager().listMCPDrifts() });
   })
 );
+
+router.post(
+  '/servers/:serverId/capabilities/:capabilityId/approve',
+  adminOnly,
+  asyncHandler(async (req: Request, res: Response) => {
+    await getToolManager().approveMCPCapability({
+      serverId: req.params.serverId,
+      capabilityId: req.params.capabilityId,
+      capabilityHash:
+        typeof req.body?.capabilityHash === 'string' ? req.body.capabilityHash : undefined,
+      approvedBy: req.user?.userId ?? req.apiKey?.userId ?? 'admin',
+      restrictions: Array.isArray(req.body?.restrictions)
+        ? req.body.restrictions.map(String)
+        : undefined,
+      expiresAt: typeof req.body?.expiresAt === 'string' ? req.body.expiresAt : undefined,
+    });
+    res.json({ success: true, data: { status: 'approved' } });
+  })
+);
+
+router.post(
+  '/servers/:serverId/capabilities/:capabilityId/quarantine',
+  adminOnly,
+  asyncHandler(async (req: Request, res: Response) => {
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Quarantine reason is required.' },
+      });
+    }
+    await getToolManager().quarantineMCPCapability({
+      serverId: req.params.serverId,
+      capabilityId: req.params.capabilityId,
+      capabilityHash:
+        typeof req.body?.capabilityHash === 'string' ? req.body.capabilityHash : undefined,
+      reason,
+    });
+    res.json({ success: true, data: { status: 'quarantined' } });
+  })
+);
+
+function mcpContextAccess(
+  scope: OwnedRunScope,
+  permissionScope: 'mcp.resource.read' | 'mcp.prompt.render'
+) {
+  return {
+    runId: scope.runId,
+    principalId: scope.userId,
+    userId: scope.userId,
+    permissionScopes: [permissionScope],
+    deadlineAt: new Date(Date.now() + 30_000).toISOString(),
+  };
+}
 
 export default router;
 

@@ -77,6 +77,8 @@ import {
   InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
   classifyInferenceFailure,
+  agentPromptSubjectHash,
+  type AgentPromptApproval,
   type AgentPromptRef,
   type AgentPromptResolution,
   type AgentPromptSpec,
@@ -95,8 +97,13 @@ import {
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
+import { RedisToolContractSnapshotStore } from '@hypha/mcp';
 import type { ReActAgentRuntime, ReActAgentSpec } from '@hypha/kernel';
-import type { LoadedSkillContext, SkillRef } from '@hypha/skills';
+import {
+  createEffectiveAgentCapabilitySnapshot,
+  type EffectiveAgentCapabilitySnapshotInput,
+  type LoadedSkillContext,
+} from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -106,6 +113,8 @@ import {
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveCapabilityApproval,
+  type EffectiveAgentCapabilitySnapshot,
   type ToolCallResult,
   type ToolAuthorityConstraint,
   type ToolExecutionScope,
@@ -171,6 +180,12 @@ import {
   type RuntimeTransitionCommand,
 } from '../runtime/RuntimeTransitionDispatcher';
 import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
+import {
+  assertHumanTaskCAS,
+  humanTaskResolutionEventId,
+  projectHumanTasks,
+  type HumanTask,
+} from '../runtime/HumanTask';
 import {
   projectRuntimeRunContext,
   projectRuntimeRunContexts,
@@ -239,16 +254,6 @@ export interface OwnedRunScope {
   domainPackId: string;
 }
 
-type SkillResolvingManager = {
-  resolveSkills?: (input: {
-    agentSkillRefs: SkillRef[];
-    inputText?: string;
-    allowedSkills?: string[];
-    requiredSkills?: string[];
-    availableToolRefs?: string[];
-    metadata?: Record<string, unknown>;
-  }) => Promise<LoadedSkillContext[]>;
-};
 
 export interface StartRunInput {
   userId: string;
@@ -671,6 +676,10 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private readonly runCapabilitySnapshots = new Map<
+    string,
+    Readonly<EffectiveAgentCapabilitySnapshot>
+  >();
   private readonly transitionDispatcher = new RuntimeTransitionDispatcher();
   private readonly runtimeWorkerId = `server.runtime:${process.pid}`;
   private canonicalLifecycle?: RuntimeBackboneLifecycle;
@@ -706,9 +715,13 @@ class EventRuntimeService {
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
-    this.toolSnapshotStore = new FileToolContractSnapshotStore(
-      process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
-    );
+    const redis = getRedisClient();
+    this.toolSnapshotStore =
+      process.env.NODE_ENV === 'production' && redis
+        ? new RedisToolContractSnapshotStore(redis)
+        : new FileToolContractSnapshotStore(
+            process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
+          );
     const artifactPort = new ArtifactStoreToolPort(
       new FileArtifactStore({
         rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
@@ -718,7 +731,6 @@ class EventRuntimeService {
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
     const toolCacheConfig = toolResultCacheConfig();
-    const redis = getRedisClient();
     const toolResultCache =
       toolCacheConfig.store === 'memory'
         ? new InMemoryToolResultCache({
@@ -1458,10 +1470,13 @@ class EventRuntimeService {
     return manager.listAgentPrompts();
   }
 
-  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+  async registerAgentPrompt(
+    spec: AgentPromptSpec,
+    options: { expectedRevision?: number } = {}
+  ): Promise<AgentPromptSpec> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
-    manager.registerAgentPrompt(spec);
+    return manager.registerAgentPrompt(spec, options);
   }
 
   async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
@@ -1886,7 +1901,16 @@ class EventRuntimeService {
       spec.systemInstructions,
       input.options?.systemPrompt
     );
+    const run = await this.requireOwnedRunScope(input.runId, userId);
     const promptRefs = this.resolveAgentPromptRefs(spec);
+    const promptApprovals = explicitInstructions
+      ? []
+      : await this.requirePromptReviewApprovals({
+          run,
+          agentId: id,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          promptRefs,
+        });
     const promptResolution = explicitInstructions
       ? undefined
       : await this.resolveAgentPromptInstructions({
@@ -1894,36 +1918,46 @@ class EventRuntimeService {
           agentName: name,
           userId,
           sessionId,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          domainId: run.domainPackId,
           promptRefs,
+          approvals: promptApprovals,
         });
     const baseSystemInstructions =
       explicitInstructions ??
       promptResolution?.instructions ??
       `You are ${name}. Be helpful, harmless, and honest.`;
-    const run = await this.requireOwnedRunScope(input.runId, userId);
-    const skillManager = getSkillManager() as unknown as SkillResolvingManager;
     const workflowState = asRecord(asRecord(spec.metadata)?.workflowState);
-    const activeSkills =
-      spec.skillRefs?.length && skillManager.resolveSkills
-        ? await skillManager.resolveSkills({
-            agentSkillRefs: spec.skillRefs,
-            inputText: [...input.messages].reverse().find((message) => message.role === 'user')
-              ?.content,
-            allowedSkills: stringArray(workflowState?.allowedSkills),
-            requiredSkills: stringArray(workflowState?.requiredSkills),
-            availableToolRefs:
-              spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
-            metadata: spec.metadata,
-          })
-        : [];
-    const reviewTasks = await this.requireSkillReviewApprovals({
-      run,
+    const activeSkills = spec.skillRefs?.length
+      ? await getSkillManager().resolveSkills({
+          agentSkillRefs: spec.skillRefs,
+          inputText: [...input.messages].reverse().find((message) => message.role === 'user')
+            ?.content,
+          allowedSkills: stringList(workflowState?.allowedSkills),
+          requiredSkills: stringList(workflowState?.requiredSkills),
+          availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+          metadata: spec.metadata,
+        })
+      : [];
+    const availableToolIds =
+      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const capabilityMetadata = asRecord(spec.metadata);
+    const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
+      runId: input.runId,
       agentId: id,
-      skills: activeSkills,
+      principalId: userId,
+      tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+      domainId: run.domainPackId,
+      createdAt: await this.runCreatedAt(input.runId),
+      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
+      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+      activeSkills,
     });
+    this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
+    const reviewTasks = await this.requireEffectiveCapabilityApproval(run, effectiveCapabilities);
     if (reviewTasks.length > 0) {
       const approval = {
-        taskKind: 'skill_activation',
+        taskKind: 'effective_capability_snapshot',
         tasks: reviewTasks,
         stepId: input.stepId,
         agentId: id,
@@ -1969,7 +2003,10 @@ class EventRuntimeService {
     agentName: string;
     userId: string;
     sessionId: string;
+    tenantId?: string;
+    domainId?: string;
     promptRefs: AgentPromptRef[];
+    approvals?: AgentPromptApproval[];
   }): Promise<AgentPromptResolution | undefined> {
     const variables = {
       agent_id: input.agentId,
@@ -1980,17 +2017,18 @@ class EventRuntimeService {
       current_date: new Date().toISOString(),
     };
 
-    try {
-      const promptManager = getPromptManager();
-      await promptManager.ensureInitialized();
-      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
-    } catch (error) {
-      logger.warn('Agent prompt template resolution failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return undefined;
+    const promptManager = getPromptManager();
+    await promptManager.ensureInitialized();
+    return promptManager.resolveAgentPrompts(input.promptRefs, {
+      variables,
+      principal: {
+        principalId: input.userId,
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        domainId: input.domainId,
+      },
+      approvals: input.approvals,
+    });
   }
 
   async runReActChat(
@@ -2136,6 +2174,12 @@ class EventRuntimeService {
       toolPrincipal,
       toolExecutionScope,
       metadata: {
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -2245,6 +2289,12 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -2473,6 +2523,11 @@ class EventRuntimeService {
       input.runId,
       authority.policyRevision
     );
+    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
+    const capabilityApprovals = await this.approvedCapabilityApprovals(
+      input.runId,
+      effectiveCapabilities
+    );
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -2483,7 +2538,15 @@ class EventRuntimeService {
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
-        principal: authority.principal,
+        capabilitySnapshotRef: effectiveCapabilities ? contractSnapshotRef : undefined,
+        capabilityApprovals,
+        agentId: effectiveCapabilities?.agentId,
+        tenantId: effectiveCapabilities?.tenantId,
+        principal: {
+          ...authority.principal,
+          agentId: effectiveCapabilities?.agentId,
+          tenantId: effectiveCapabilities?.tenantId,
+        },
         executionScope: authority.executionScope,
       },
     });
@@ -2779,7 +2842,8 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash: spec.sourceRef?.capabilityHash,
+      sourceCapabilityHash:
+        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -2788,6 +2852,7 @@ class EventRuntimeService {
       runId,
       createdAt,
       toolContracts,
+      effectiveCapabilities: this.runCapabilitySnapshots.get(runId),
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
@@ -3332,6 +3397,330 @@ class EventRuntimeService {
       requestedAt,
       idempotencyKey: input.idempotencyKey ?? commandId,
     });
+  }
+
+  private async requirePromptReviewApprovals(input: {
+    run: OwnedRunScope;
+    agentId: string;
+    tenantId?: string;
+    promptRefs: AgentPromptRef[];
+  }): Promise<AgentPromptApproval[]> {
+    const manager = getPromptManager();
+    await manager.ensureInitialized();
+    const specs = manager.listAgentPrompts();
+    const events = await this.listEvents(input.run.runId);
+    const tasks = projectHumanTasks(events);
+    const approvals: AgentPromptApproval[] = [];
+    const pending: HumanTask[] = [];
+    for (const ref of input.promptRefs) {
+      const spec = specs.find(
+        (candidate) =>
+          candidate.id === ref.id && (ref.version === undefined || candidate.version === ref.version)
+      );
+      if (!spec || (spec.trustLevel ?? 'reviewed') !== 'untrusted') continue;
+      const subjectHash = agentPromptSubjectHash(spec);
+      const matching = tasks.filter(
+        (task) =>
+          task.taskKind === 'agent_prompt' &&
+          task.subjectHash === subjectHash &&
+          task.subjectId === spec.id &&
+          task.principalId === input.run.userId &&
+          task.agentId === input.agentId &&
+          task.domainId === input.run.domainPackId
+      );
+      const approved = matching.find(
+        (task) =>
+          task.status === 'approved' &&
+          Boolean(task.decidedBy && task.decidedAt) &&
+          Date.parse(task.expiresAt) > Date.now()
+      );
+      if (approved) {
+        approvals.push({
+          taskId: approved.taskId,
+          subjectType: 'agent_prompt',
+          subjectHash,
+          promptId: spec.id,
+          promptVersion: spec.version,
+          promptRevision: spec.revision!,
+          contentHash: spec.contentHash!,
+          approvedBy: approved.decidedBy!,
+          principalId: approved.principalId,
+          tenantId: approved.tenantId,
+          agentId: approved.agentId,
+          domainId: approved.domainId,
+          expiresAt: approved.expiresAt,
+          status: 'approved',
+        });
+        continue;
+      }
+      const active = matching.find(
+        (task) => task.status === 'requested' && Date.parse(task.expiresAt) > Date.now()
+      );
+      if (active) {
+        pending.push(active);
+        continue;
+      }
+      const requested = await this.requestHumanTask({
+        taskKind: 'agent_prompt',
+        run: input.run,
+        subjectType: 'agent_prompt',
+        subjectId: spec.id,
+        subjectRevision: `${spec.version}:${spec.revision}`,
+        subjectHash,
+        agentId: input.agentId,
+        tenantId: input.tenantId,
+        reason: `Untrusted Prompt ${spec.id}@${spec.version} requires review.`,
+        ordinal: matching.length + 1,
+      });
+      pending.push(requested);
+    }
+    if (pending.length > 0) {
+      await this.advanceToHumanReview(input.run.runId, 'skill-human-review');
+      const approval = { taskKind: 'agent_prompt', tasks: pending, agentId: input.agentId };
+      await this.waitForHumanReview(input.run.runId, approval);
+      throw new HumanReviewRequiredError(input.run.runId, approval);
+    }
+    return approvals;
+  }
+
+  private async requireEffectiveCapabilityApproval(
+    run: OwnedRunScope,
+    effective: Readonly<EffectiveAgentCapabilitySnapshot>
+  ): Promise<HumanTask[]> {
+    if (!effective.requiresHumanReview) return [];
+    const tasks = projectHumanTasks(await this.listEvents(run.runId));
+    const matching = tasks.filter(
+      (task) =>
+        task.taskKind === 'effective_capability_snapshot' &&
+        task.subjectHash === effective.snapshotHash &&
+        task.subjectId === effective.id &&
+        task.principalId === effective.principalId &&
+        task.agentId === effective.agentId
+    );
+    if (
+      matching.some(
+        (task) => task.status === 'approved' && Date.parse(task.expiresAt) > Date.now()
+      )
+    ) {
+      return [];
+    }
+    const active = matching.find(
+      (task) => task.status === 'requested' && Date.parse(task.expiresAt) > Date.now()
+    );
+    if (active) return [active];
+    return [
+      await this.requestHumanTask({
+        taskKind: 'effective_capability_snapshot',
+        run,
+        subjectType: 'effective_capability_snapshot',
+        subjectId: effective.id,
+        subjectRevision: effective.snapshotHash,
+        subjectHash: effective.snapshotHash,
+        agentId: effective.agentId,
+        tenantId: effective.tenantId,
+        reason: 'One or more active Skills require human review.',
+        ordinal: matching.length + 1,
+      }),
+    ];
+  }
+
+  private async requestHumanTask(input: {
+    taskKind: string;
+    run: OwnedRunScope;
+    subjectType: string;
+    subjectId: string;
+    subjectRevision: string;
+    subjectHash: string;
+    agentId?: string;
+    tenantId?: string;
+    reason?: string;
+    ordinal: number;
+  }): Promise<HumanTask> {
+    const requestedAt = new Date().toISOString();
+    const task: HumanTask = {
+      taskId: `human-review:${input.run.runId}:${input.taskKind}:${input.subjectHash.slice(0, 16)}:${input.ordinal}`,
+      taskKind: input.taskKind,
+      runId: input.run.runId,
+      subjectType: input.subjectType,
+      subjectId: input.subjectId,
+      subjectRevision: input.subjectRevision,
+      subjectHash: input.subjectHash,
+      principalId: input.run.userId,
+      agentId: input.agentId,
+      tenantId: input.tenantId,
+      domainId: input.run.domainPackId,
+      requestedAt,
+      expiresAt: new Date(Date.parse(requestedAt) + 24 * 60 * 60 * 1_000).toISOString(),
+      status: 'requested',
+      revision: 1,
+      reason: input.reason,
+    };
+    await this.append(input.run.runId, 'human.review.requested', task);
+    return task;
+  }
+
+  async listHumanReviews(runId: string, userId: string): Promise<HumanTask[]> {
+    await this.requireOwnedRunScope(runId, userId);
+    return projectHumanTasks(await this.listEvents(runId));
+  }
+
+  async decideHumanReview(input: {
+    runId: string;
+    taskId: string;
+    expectedRevision: number;
+    decision: 'approved' | 'rejected' | 'cancelled';
+    decidedBy: string;
+    reason?: string;
+  }): Promise<HumanTask> {
+    const run = await this.requireRun(input.runId);
+    const tasks = projectHumanTasks(await this.listEvents(input.runId));
+    const now = new Date().toISOString();
+    let task: HumanTask;
+    try {
+      task = assertHumanTaskCAS(
+        tasks.find((candidate) => candidate.taskId === input.taskId),
+        input.expectedRevision,
+        now
+      );
+    } catch (error) {
+      if (error instanceof FrameworkError && error.code === 'HUMAN_TASK_EXPIRED') {
+        await this.append(
+          input.runId,
+          'human.review.expired',
+          {
+            taskId: input.taskId,
+            expectedRevision: input.expectedRevision,
+            resolutionOperationId: generateId(),
+            decidedAt: now,
+          },
+          undefined,
+          {
+            eventId: humanTaskResolutionEventId({
+              runId: input.runId,
+              taskId: input.taskId,
+              expectedRevision: input.expectedRevision,
+            }),
+          }
+        );
+      }
+      throw error;
+    }
+    const eventType =
+      input.decision === 'approved'
+        ? 'human.review.approved'
+        : input.decision === 'rejected'
+          ? 'human.review.rejected'
+          : 'human.review.cancelled';
+    try {
+      await this.append(
+        input.runId,
+        eventType,
+        {
+          taskId: task.taskId,
+          taskKind: task.taskKind,
+          expectedRevision: task.revision,
+          resolutionOperationId: generateId(),
+          decision: input.decision,
+          decidedBy: input.decidedBy,
+          decidedAt: now,
+          reason: input.reason,
+        },
+        undefined,
+        {
+          eventId: humanTaskResolutionEventId({
+            runId: input.runId,
+            taskId: task.taskId,
+            expectedRevision: task.revision,
+          }),
+        }
+      );
+    } catch (error) {
+      if (error instanceof FrameworkError && error.code === 'RUNTIME_IDEMPOTENCY_CONFLICT') {
+        throw new FrameworkError({
+          code: 'HUMAN_TASK_REVISION_CONFLICT',
+          message: 'Human task was concurrently resolved.',
+          context: { taskId: task.taskId, expectedRevision: task.revision },
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    const resolved = projectHumanTasks(await this.listEvents(input.runId)).find(
+      (candidate) => candidate.taskId === task.taskId
+    );
+    if (!resolved || resolved.revision !== task.revision + 1 || resolved.status !== input.decision) {
+      throw new FrameworkError({
+        code: 'HUMAN_TASK_REVISION_CONFLICT',
+        message: 'Human task was concurrently resolved.',
+        context: { taskId: task.taskId, expectedRevision: task.revision },
+      });
+    }
+    await this.append(input.runId, 'human.review.resolved', {
+      taskId: task.taskId,
+      taskKind: task.taskKind,
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt: now,
+    });
+    if (input.decision === 'approved') {
+      await this.append(input.runId, 'run.resume.requested', {
+        taskId: task.taskId,
+        taskKind: task.taskKind,
+        requestedBy: input.decidedBy,
+      });
+      if (run.snapshot.currentState === 'HumanReview') {
+        await this.transition(input.runId, 'Reasoning', {
+          taskId: task.taskId,
+          reason: `${task.taskKind}-approved`,
+        }).catch(() => undefined);
+      }
+      await this.append(input.runId, 'run.resumed', {
+        taskId: task.taskId,
+        taskKind: task.taskKind,
+        resumedBy: input.decidedBy,
+      });
+    } else {
+      await this.failRun(
+        input.runId,
+        input.reason ?? `Human task ${task.taskId} was ${input.decision}.`
+      );
+    }
+    return resolved;
+  }
+
+  private async approvedCapabilityApprovals(
+    runId: string,
+    effective: Readonly<EffectiveAgentCapabilitySnapshot> | undefined
+  ): Promise<EffectiveCapabilityApproval[]> {
+    if (!effective) return [];
+    return projectHumanTasks(await this.listEvents(runId))
+      .filter(
+        (task) =>
+          task.taskKind === 'effective_capability_snapshot' &&
+          task.subjectHash === effective.snapshotHash &&
+          task.subjectId === effective.id &&
+          task.status === 'approved' &&
+          Boolean(task.decidedBy && task.decidedAt) &&
+          Date.parse(task.expiresAt) > Date.now()
+      )
+      .map((task) => ({
+        taskId: task.taskId,
+        subjectType: 'effective_capability_snapshot' as const,
+        subjectHash: task.subjectHash,
+        snapshotId: effective.id,
+        runId,
+        agentId: effective.agentId,
+        principalId: effective.principalId,
+        approvedBy: task.decidedBy!,
+        approvedAt: task.decidedAt!,
+        expiresAt: task.expiresAt,
+        status: 'approved' as const,
+      }));
+  }
+
+  private async runCreatedAt(runId: string): Promise<string> {
+    const events = await this.listEvents(runId);
+    return events[0]?.timestamp ?? new Date().toISOString();
   }
 
   private async requireSkillReviewApprovals(input: {
@@ -5242,6 +5631,41 @@ function authorityConstraintsFromExecutionScope(
       allowedToolIds: scope.allowedToolIds,
     },
   ];
+}
+
+function stringList(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter((value): value is string => typeof value === 'string');
+}
+
+function capabilityConstraint(
+  source: Record<string, unknown> | undefined,
+  fallbackToolIds: string[],
+  defaultPolicyRef: string
+): EffectiveAgentCapabilitySnapshotInput['agent'] {
+  const memory = stringValue(source?.memoryAccess);
+  const sideEffect = stringValue(source?.maximumSideEffectLevel);
+  const memoryAccess = ['none', 'read', 'write', 'read_write'].includes(memory ?? '')
+    ? (memory as EffectiveAgentCapabilitySnapshot['memoryAccess'])
+    : 'none';
+  const maximumSideEffectLevel = [
+    'none',
+    'read',
+    'write',
+    'external_effect',
+    'irreversible',
+  ].includes(sideEffect ?? '')
+    ? (sideEffect as EffectiveAgentCapabilitySnapshot['maximumSideEffectLevel'])
+    : 'read';
+  return {
+    allowedToolIds:
+      stringList(source?.allowedToolIds) ?? stringList(source?.allowedTools) ?? fallbackToolIds,
+    allowedMCPServerIds: stringList(source?.allowedMCPServerIds),
+    memoryAccess,
+    allowedExecutionProfiles: stringList(source?.allowedExecutionProfiles) ?? [],
+    maximumSideEffectLevel,
+    policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
+  };
 }
 
 function inferToolSideEffect(

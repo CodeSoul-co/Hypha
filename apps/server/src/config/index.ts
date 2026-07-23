@@ -4,6 +4,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import { storageProviderProfileSchema } from '@hypha/storage';
+import { toolAdapterProfileSchema } from '@hypha/tools';
 import { logger } from '../utils/logger';
 
 // Load environment variables
@@ -455,6 +456,7 @@ const configSchema = z.object({
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
+    profiles: z.array(toolAdapterProfileSchema).default([]),
     resultCache: z
       .object({
         store: z.enum(['off', 'memory', 'redis']).default('off'),
@@ -483,17 +485,45 @@ const configSchema = z.object({
       .default({}),
     mcpServers: z
       .array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          mode: z.enum(['local', 'remote', 'fixture']),
-          command: z.string().optional(),
-          args: z.array(z.string()).optional(),
-          endpoint: z.string().optional(),
-          authToken: z.string().optional(),
-          autoStart: z.boolean().optional(),
-          autoConnect: z.boolean().optional(),
-        })
+        z
+          .object({
+            id: z.string(),
+            name: z.string(),
+            mode: z.enum(['local', 'remote', 'fixture']),
+            command: z.string().optional(),
+            args: z.array(z.string()).optional(),
+            endpoint: z.string().url().optional(),
+            credentialRef: z
+              .string()
+              .regex(/^env:[A-Z_][A-Z0-9_]*$/)
+              .optional(),
+            autoStart: z.boolean().optional(),
+            autoConnect: z.boolean().optional(),
+          })
+          .superRefine((server, context) => {
+            if (server.mode === 'remote') {
+              if (!server.endpoint) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: 'Remote MCP requires endpoint.',
+                  path: ['endpoint'],
+                });
+              } else if (!server.endpoint.startsWith('https://')) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: 'Remote MCP endpoint must use HTTPS.',
+                  path: ['endpoint'],
+                });
+              }
+            }
+            if (server.mode === 'local' && !server.command) {
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Local MCP requires command.',
+                path: ['command'],
+              });
+            }
+          })
       )
       .optional(),
   }),
@@ -504,6 +534,7 @@ const configSchema = z.object({
   prompts: z.object({
     templatesPath: z.string().default('./apps/server/src/prompts'),
     cacheEnabled: z.boolean().default(true),
+    registryPath: z.string().default('./data/prompts/registry.json'),
   }),
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),

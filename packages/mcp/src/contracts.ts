@@ -55,6 +55,16 @@ export interface MCPServerProfile {
     preferLatest?: boolean;
     rejectUnknown?: boolean;
   };
+  egressPolicy?: {
+    allowedHosts?: string[];
+    denyPrivateNetworks?: boolean;
+    requireTls?: boolean;
+  };
+  requestGuardPolicy?: {
+    maxConcurrentRequests?: number;
+    rateLimit?: { maxRequests: number; windowMs: number };
+    circuitBreaker?: { failureThreshold: number; resetAfterMs: number };
+  };
   metadata?: Record<string, unknown>;
 }
 
@@ -128,22 +138,31 @@ export interface GovernedMCPIntegrationSpec {
   metadata?: Record<string, unknown>;
 }
 
+export const NORMALIZED_MCP_ERROR_CODES = [
+  'MCP_SERVER_NOT_FOUND',
+  'MCP_CONNECTION_FAILED',
+  'MCP_INITIALIZATION_FAILED',
+  'MCP_PROTOCOL_MISMATCH',
+  'MCP_REQUEST_TIMEOUT',
+  'MCP_REQUEST_CANCELLED',
+  'MCP_CAPABILITY_NOT_FOUND',
+  'MCP_CAPABILITY_QUARANTINED',
+  'MCP_CAPABILITY_DRIFT',
+  'MCP_SCHEMA_INVALID',
+  'MCP_AUTH_FAILED',
+  'MCP_BULKHEAD_REJECTED',
+  'MCP_RATE_LIMITED',
+  'MCP_CIRCUIT_OPEN',
+  'MCP_EGRESS_DENIED',
+  'MCP_REMOTE_ERROR',
+  'MCP_TRANSPORT_CLOSED',
+  'MCP_INTERNAL_ERROR',
+] as const;
+
+export type NormalizedMCPErrorCode = (typeof NORMALIZED_MCP_ERROR_CODES)[number];
+
 export interface NormalizedMCPError {
-  code:
-    | 'MCP_SERVER_NOT_FOUND'
-    | 'MCP_CONNECTION_FAILED'
-    | 'MCP_INITIALIZATION_FAILED'
-    | 'MCP_PROTOCOL_MISMATCH'
-    | 'MCP_REQUEST_TIMEOUT'
-    | 'MCP_REQUEST_CANCELLED'
-    | 'MCP_CAPABILITY_NOT_FOUND'
-    | 'MCP_CAPABILITY_QUARANTINED'
-    | 'MCP_CAPABILITY_DRIFT'
-    | 'MCP_SCHEMA_INVALID'
-    | 'MCP_AUTH_FAILED'
-    | 'MCP_REMOTE_ERROR'
-    | 'MCP_TRANSPORT_CLOSED'
-    | 'MCP_INTERNAL_ERROR';
+  code: NormalizedMCPErrorCode;
   message: string;
   retryable: boolean;
   serverId?: string;
@@ -152,30 +171,17 @@ export interface NormalizedMCPError {
   details?: Record<string, unknown>;
 }
 
-export const normalizedMCPErrorSchema = z.object({
-  code: z.enum([
-    'MCP_SERVER_NOT_FOUND',
-    'MCP_CONNECTION_FAILED',
-    'MCP_INITIALIZATION_FAILED',
-    'MCP_PROTOCOL_MISMATCH',
-    'MCP_REQUEST_TIMEOUT',
-    'MCP_REQUEST_CANCELLED',
-    'MCP_CAPABILITY_NOT_FOUND',
-    'MCP_CAPABILITY_QUARANTINED',
-    'MCP_CAPABILITY_DRIFT',
-    'MCP_SCHEMA_INVALID',
-    'MCP_AUTH_FAILED',
-    'MCP_REMOTE_ERROR',
-    'MCP_TRANSPORT_CLOSED',
-    'MCP_INTERNAL_ERROR',
-  ]),
-  message: z.string().min(1),
-  retryable: z.boolean(),
-  serverId: z.string().optional(),
-  capabilityId: z.string().optional(),
-  remoteCode: z.union([z.string(), z.number()]).optional(),
-  details: z.record(z.unknown()).optional(),
-}) satisfies ZodType<NormalizedMCPError>;
+export const normalizedMCPErrorSchema = z
+  .object({
+    code: z.enum(NORMALIZED_MCP_ERROR_CODES),
+    message: z.string().min(1),
+    retryable: z.boolean(),
+    serverId: z.string().optional(),
+    capabilityId: z.string().optional(),
+    remoteCode: z.union([z.string(), z.number()]).optional(),
+    details: z.record(z.unknown()).optional(),
+  })
+  .strict() satisfies ZodType<NormalizedMCPError>;
 
 export const mcpTransportSpecSchema: ZodType<MCPTransportSpec> = z.discriminatedUnion('type', [
   z.object({
@@ -228,6 +234,30 @@ export const mcpServerProfileSchema = z.object({
       allowedVersions: z.array(z.string()).optional(),
       preferLatest: z.boolean().optional(),
       rejectUnknown: z.boolean().optional(),
+    })
+    .optional(),
+  egressPolicy: z
+    .object({
+      allowedHosts: z.array(z.string().min(1)).optional(),
+      denyPrivateNetworks: z.boolean().optional(),
+      requireTls: z.boolean().optional(),
+    })
+    .optional(),
+  requestGuardPolicy: z
+    .object({
+      maxConcurrentRequests: z.number().int().positive().optional(),
+      rateLimit: z
+        .object({
+          maxRequests: z.number().int().positive(),
+          windowMs: z.number().int().positive(),
+        })
+        .optional(),
+      circuitBreaker: z
+        .object({
+          failureThreshold: z.number().int().positive(),
+          resetAfterMs: z.number().int().positive(),
+        })
+        .optional(),
     })
     .optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -404,28 +434,13 @@ export const normalizedMCPErrorJsonSchema: JsonSchema = {
   required: ['code', 'message', 'retryable'],
   properties: {
     code: {
-      enum: [
-        'MCP_SERVER_NOT_FOUND',
-        'MCP_CONNECTION_FAILED',
-        'MCP_INITIALIZATION_FAILED',
-        'MCP_PROTOCOL_MISMATCH',
-        'MCP_REQUEST_TIMEOUT',
-        'MCP_REQUEST_CANCELLED',
-        'MCP_CAPABILITY_NOT_FOUND',
-        'MCP_CAPABILITY_QUARANTINED',
-        'MCP_CAPABILITY_DRIFT',
-        'MCP_SCHEMA_INVALID',
-        'MCP_AUTH_FAILED',
-        'MCP_REMOTE_ERROR',
-        'MCP_TRANSPORT_CLOSED',
-        'MCP_INTERNAL_ERROR',
-      ],
+      enum: [...NORMALIZED_MCP_ERROR_CODES],
     },
-    message: { type: 'string' },
+    message: { type: 'string', minLength: 1 },
     retryable: { type: 'boolean' },
     serverId: { type: 'string' },
     capabilityId: { type: 'string' },
-    remoteCode: {},
+    remoteCode: { oneOf: [{ type: 'string' }, { type: 'number' }] },
     details: { type: 'object' },
   },
   additionalProperties: false,

@@ -93,7 +93,7 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   endpoint?: string;
-  authToken?: string;
+  credentialRef?: string;
   autoStart?: boolean;
   autoConnect?: boolean;
 }

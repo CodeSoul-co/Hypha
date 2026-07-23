@@ -1,11 +1,17 @@
 import { randomUUID } from 'crypto';
 import { z, type ZodType } from 'zod';
-import { defineSpecSchema, type JsonSchema, type TelemetryRecorder } from '@hypha/core';
+import {
+  FrameworkError,
+  defineSpecSchema,
+  type JsonSchema,
+  type TelemetryRecorder,
+} from '@hypha/core';
 import {
   MCPToolAdapter,
   ToolRegistry,
   createToolSchemaSpec,
   hashToolContract,
+  validateEffectiveCapabilityAccess,
   type ToolCallContext,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
@@ -57,6 +63,7 @@ export interface MCPCapabilityRecord {
   firstSeenAt: string;
   lastSeenAt: string;
   approvedAt?: string;
+  approvalExpiresAt?: string;
   removedAt?: string;
   metadata?: Record<string, unknown>;
 }
@@ -101,6 +108,7 @@ export const mcpCapabilityRecordSchema = z.object({
   firstSeenAt: z.string().min(1),
   lastSeenAt: z.string().min(1),
   approvedAt: z.string().optional(),
+  approvalExpiresAt: z.string().optional(),
   removedAt: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
 }) as ZodType<MCPCapabilityRecord>;
@@ -160,6 +168,7 @@ export const mcpCapabilityRecordJsonSchema: JsonSchema = {
     firstSeenAt: { type: 'string' },
     lastSeenAt: { type: 'string' },
     approvedAt: { type: 'string' },
+    approvalExpiresAt: { type: 'string' },
     removedAt: { type: 'string' },
     metadata: { type: 'object' },
   },
@@ -206,6 +215,7 @@ export interface MCPCapabilityQuarantineRequest extends MCPCapabilityRef {
 
 export interface MCPCapabilityApprovalRequest extends MCPCapabilityRef {
   approvedBy: string;
+  expiresAt?: string;
   restrictions?: string[];
 }
 
@@ -227,6 +237,50 @@ export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogSt
 
   async save(record: MCPCapabilityRecord): Promise<void> {
     this.records.set(record.id, clone(record));
+  }
+}
+
+export interface RedisLikeMCPStoreClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<unknown>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
+}
+
+/** Multi-worker catalog store. Redis key operations are idempotent per capability id. */
+export class RedisMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
+  private readonly namespace: string;
+
+  constructor(
+    private readonly client: RedisLikeMCPStoreClient,
+    namespace = 'hypha:mcp:catalog:v1'
+  ) {
+    this.namespace = namespace.replace(/:+$/, '');
+  }
+
+  async list(serverId?: string): Promise<MCPCapabilityRecord[]> {
+    const ids = await this.client.smembers(this.indexKey(serverId));
+    const records = await Promise.all(ids.map((id) => this.client.get(this.recordKey(id))));
+    return records
+      .filter((raw): raw is string => raw !== null)
+      .map((raw) => JSON.parse(raw) as MCPCapabilityRecord)
+      .filter((record) => !serverId || record.serverId === serverId);
+  }
+
+  async save(record: MCPCapabilityRecord): Promise<void> {
+    await this.client.set(this.recordKey(record.id), JSON.stringify(record));
+    await Promise.all([
+      this.client.sadd(this.indexKey(), record.id),
+      this.client.sadd(this.indexKey(record.serverId), record.id),
+    ]);
+  }
+
+  private indexKey(serverId?: string): string {
+    return `${this.namespace}:index:${serverId ?? 'all'}`;
+  }
+
+  private recordKey(id: string): string {
+    return `${this.namespace}:record:${id}`;
   }
 }
 
@@ -492,10 +546,18 @@ export class MCPCapabilityCatalog {
   async approveRevision(request: MCPCapabilityApprovalRequest): Promise<void> {
     const record = await this.requireCapability(request);
     const approvedAt = this.now();
+    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.parse(approvedAt)) {
+      throw catalogError(
+        'MCP_APPROVAL_EXPIRED',
+        'MCP capability approval expiry must be later than the approval time.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
     await this.store.save({
       ...record,
       driftState: 'approved',
       approvedAt,
+      approvalExpiresAt: request.expiresAt,
       trust: {
         ...record.trust,
         level: record.trust.level === 'untrusted' ? 'restricted' : record.trust.level,
@@ -509,6 +571,7 @@ export class MCPCapabilityCatalog {
       capabilityId: record.remoteName,
       capabilityHash: record.capabilityHash,
       approvedBy: request.approvedBy,
+      expiresAt: request.expiresAt,
     });
   }
 
@@ -519,25 +582,18 @@ export class MCPCapabilityCatalog {
   ): Promise<ToolSpec[]> {
     const imported: ToolSpec[] = [];
     for (const ref of refs) {
-      const record = await this.requireCapability(ref);
-      if (
-        record.kind !== 'tool' ||
-        record.driftState === 'quarantined' ||
-        record.driftState === 'removed'
-      ) {
-        throw new Error(
-          `MCP capability is not importable: ${record.serverId}/${record.remoteName}`
-        );
-      }
+      const record = await this.requirePinnedApprovedCapability(ref, 'tool');
       const spec = record.normalizedToolSpec!;
       registry.registerAdapter(
         spec,
         new MCPToolAdapter(`mcp:${record.serverId}`, record.serverId, record.remoteName, {
-          invoke: (request) =>
-            this.options.gateway.call({
+          invoke: async (request) => {
+            await this.assertInvocationAuthorized(record, request.context);
+            return this.options.gateway.call({
               ...request,
               context: { ...context, ...request.context },
-            }),
+            });
+          },
           health: async () => ({ status: 'unknown', checkedAt: this.now() }),
         }),
         { replace: true }
@@ -554,7 +610,9 @@ export class MCPCapabilityCatalog {
   }
 
   async snapshot(runId: string, refs: MCPCapabilityRef[]): Promise<ToolContractSnapshot> {
-    const records = await Promise.all(refs.map((ref) => this.requireCapability(ref)));
+    const records = await Promise.all(
+      refs.map((ref) => this.requirePinnedApprovedCapability(ref, 'tool'))
+    );
     const toolContracts = records.map((record) => {
       if (!record.normalizedToolSpec) throw new Error(`Capability is not a Tool: ${record.id}`);
       const spec = record.normalizedToolSpec;
@@ -618,17 +676,148 @@ export class MCPCapabilityCatalog {
       descriptor: clone(descriptor) as unknown as Record<string, unknown>,
       normalizedToolSpec,
       trust,
-      driftState: quarantined
-        ? 'quarantined'
-        : driftTypes.length === 0
-          ? 'stable'
-          : prior
-            ? 'changed'
-            : 'new',
+      driftState:
+        !quarantined &&
+        driftTypes.length === 0 &&
+        prior?.driftState === 'approved' &&
+        prior.capabilityHash === capabilityHash
+          ? 'approved'
+          : quarantined
+            ? 'quarantined'
+            : driftTypes.length === 0
+              ? 'stable'
+              : prior
+                ? 'changed'
+                : 'new',
       driftTypes,
       firstSeenAt: prior?.firstSeenAt ?? now,
       lastSeenAt: now,
+      approvedAt:
+        driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
+          ? prior.approvedAt
+          : undefined,
+      approvalExpiresAt:
+        driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
+          ? prior.approvalExpiresAt
+          : undefined,
     };
+  }
+
+  private async requirePinnedApprovedCapability(
+    ref: MCPCapabilityRef,
+    kind?: MCPCapabilityKind
+  ): Promise<MCPCapabilityRecord> {
+    if (!ref.capabilityHash) {
+      throw catalogError(
+        'MCP_CAPABILITY_HASH_REQUIRED',
+        'MCP capability operations require an explicitly pinned capability hash.',
+        { serverId: ref.serverId, capabilityId: ref.capabilityId }
+      );
+    }
+    const record = await this.requireCapability(ref);
+    this.assertApproved(record, kind);
+    return record;
+  }
+
+  private assertApproved(record: MCPCapabilityRecord, kind?: MCPCapabilityKind): void {
+    const expired =
+      record.approvalExpiresAt !== undefined &&
+      Date.parse(record.approvalExpiresAt) <= Date.parse(this.now());
+    if (
+      (kind && record.kind !== kind) ||
+      record.driftState !== 'approved' ||
+      !record.approvedAt ||
+      !record.trust.approvedBy ||
+      !record.trust.approvedAt ||
+      record.trust.level === 'untrusted' ||
+      expired
+    ) {
+      throw catalogError(
+        expired ? 'MCP_APPROVAL_EXPIRED' : 'MCP_CAPABILITY_NOT_APPROVED',
+        `MCP capability is not an active approved revision: ${record.serverId}/${record.remoteName}`,
+        {
+          serverId: record.serverId,
+          capabilityId: record.remoteName,
+          capabilityHash: record.capabilityHash,
+          driftState: record.driftState,
+          approvalExpiresAt: record.approvalExpiresAt,
+        }
+      );
+    }
+  }
+
+  private async assertInvocationAuthorized(
+    record: MCPCapabilityRecord,
+    context: ToolCallContext
+  ): Promise<void> {
+    const signal = context.abortSignal ?? context.signal;
+    if (signal?.aborted) {
+      throw catalogError('MCP_REQUEST_CANCELLED', 'MCP invocation was cancelled before dispatch.');
+    }
+    if (context.deadlineAt && Date.parse(context.deadlineAt) <= Date.parse(this.now())) {
+      throw catalogError('MCP_REQUEST_TIMEOUT', 'MCP invocation deadline expired before dispatch.');
+    }
+    const approved = await this.requirePinnedApprovedCapability(
+      {
+        serverId: record.serverId,
+        capabilityId: record.remoteName,
+        kind: record.kind,
+        capabilityHash: record.capabilityHash,
+      },
+      'tool'
+    );
+    const snapshotRef = context.contractSnapshotRef;
+    const snapshot = snapshotRef ? await this.snapshotStore.get(snapshotRef) : null;
+    const contract = snapshot?.toolContracts.find(
+      (candidate) =>
+        candidate.toolId === approved.normalizedToolSpec?.id &&
+        candidate.sourceCapabilityHash === approved.capabilityHash &&
+        candidate.toolRevision === approved.normalizedToolSpec?.revision
+    );
+    if (!snapshot || snapshot.runId !== context.runId || !contract) {
+      throw catalogError(
+        'MCP_CAPABILITY_SNAPSHOT_MISMATCH',
+        'MCP invocation is not pinned by the active Run Tool contract snapshot.',
+        {
+          serverId: record.serverId,
+          capabilityId: record.remoteName,
+          capabilityHash: record.capabilityHash,
+          snapshotRef,
+          runId: context.runId,
+        }
+      );
+    }
+    const capabilityDenial = validateEffectiveCapabilityAccess({
+      snapshot,
+      context,
+      spec: approved.normalizedToolSpec!,
+    });
+    if (capabilityDenial) {
+      throw catalogError('MCP_CAPABILITY_SCOPE_DENIED', capabilityDenial, {
+        serverId: record.serverId,
+        capabilityId: record.remoteName,
+        capabilityHash: record.capabilityHash,
+        capabilitySnapshotRef: context.capabilitySnapshotRef,
+      });
+    }
+    const active = await this.getCapability({
+      serverId: record.serverId,
+      capabilityId: record.remoteName,
+      kind: record.kind,
+    });
+    if (
+      active &&
+      !same(
+        (active.descriptor as { serverIdentity?: unknown }).serverIdentity,
+        (approved.descriptor as { serverIdentity?: unknown }).serverIdentity
+      )
+    ) {
+      throw catalogError(
+        'MCP_SERVER_IDENTITY_DRIFT',
+        'MCP server identity changed after the capability revision was approved.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
   }
 
   private async requireCapability(ref: MCPCapabilityRef): Promise<MCPCapabilityRecord> {
@@ -665,6 +854,30 @@ export class InMemoryToolContractSnapshotStore implements ToolContractSnapshotSt
 
   async save(snapshot: ToolContractSnapshot): Promise<void> {
     this.snapshots.set(snapshot.id, clone(snapshot));
+  }
+}
+
+export class RedisToolContractSnapshotStore implements ToolContractSnapshotStore {
+  private readonly namespace: string;
+
+  constructor(
+    private readonly client: Pick<RedisLikeMCPStoreClient, 'get' | 'set'>,
+    namespace = 'hypha:tool:snapshot:v1'
+  ) {
+    this.namespace = namespace.replace(/:+$/, '');
+  }
+
+  async get(snapshotId: string): Promise<ToolContractSnapshot | null> {
+    const raw = await this.client.get(this.key(snapshotId));
+    return raw === null ? null : (JSON.parse(raw) as ToolContractSnapshot);
+  }
+
+  async save(snapshot: ToolContractSnapshot): Promise<void> {
+    await this.client.set(this.key(snapshot.id), JSON.stringify(snapshot));
+  }
+
+  private key(snapshotId: string): string {
+    return `${this.namespace}:${snapshotId}`;
   }
 }
 
@@ -787,4 +1000,12 @@ function same(left: unknown, right: unknown): boolean {
 function clone<T>(value: T): T {
   if (value === undefined) return value;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function catalogError(
+  code: string,
+  message: string,
+  context?: Record<string, unknown>
+): FrameworkError {
+  return new FrameworkError({ code, message, context });
 }

@@ -24,6 +24,8 @@ describe('runtime authorization', () => {
     projectReplay: jest.fn(),
     projectAudit: jest.fn(),
     projectRegression: jest.fn(),
+    listHumanReviews: jest.fn(),
+    decideHumanReview: jest.fn(),
     listSkillHumanReviews: jest.fn(),
     decideSkillHumanReview: jest.fn(),
     enqueueStartRun: jest.fn(),
@@ -65,6 +67,12 @@ describe('runtime authorization', () => {
     runtime.projectReplay.mockResolvedValue({ runId: run.id });
     runtime.projectAudit.mockResolvedValue({ runId: run.id });
     runtime.projectRegression.mockResolvedValue({ runId: run.id });
+    runtime.listHumanReviews.mockResolvedValue([{ taskId: 'human-review-1', revision: 1 }]);
+    runtime.decideHumanReview.mockResolvedValue({
+      taskId: 'human-review-1',
+      status: 'approved',
+      revision: 2,
+    });
     runtime.listSkillHumanReviews.mockResolvedValue([{ taskId: 'skill-review-1' }]);
     runtime.decideSkillHumanReview.mockResolvedValue({
       taskId: 'skill-review-1',
@@ -366,6 +374,40 @@ describe('runtime authorization', () => {
       expect.objectContaining({
         runId: run.id,
         taskId: 'skill-review-1',
+        decision: 'approved',
+        decidedBy: 'runtime-admin',
+      })
+    );
+  });
+
+  it('requires an admin and an expected revision for Generic HumanTask CAS', async () => {
+    const listed = await request(app)
+      .get(`/runtime/runs/${run.id}/human-reviews`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+    expect(listed.body.data).toEqual([{ taskId: 'human-review-1', revision: 1 }]);
+
+    await request(app)
+      .post(`/runtime/runs/${run.id}/human-reviews/human-review-1/decision`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ decision: 'approved' })
+      .expect(400);
+    await request(app)
+      .post(`/runtime/runs/${run.id}/human-reviews/human-review-1/decision`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ decision: 'approved', expectedRevision: 1 })
+      .expect(403);
+    await request(app)
+      .post(`/runtime/runs/${run.id}/human-reviews/human-review-1/decision`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ decision: 'approved', expectedRevision: 1 })
+      .expect(200);
+
+    expect(runtime.decideHumanReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.id,
+        taskId: 'human-review-1',
+        expectedRevision: 1,
         decision: 'approved',
         decidedBy: 'runtime-admin',
       })

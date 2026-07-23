@@ -235,6 +235,7 @@ router.get(
 
 router.post(
   '/agent-prompts',
+  adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = agentPromptSpecSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -247,13 +248,38 @@ router.post(
         },
       });
     }
-    await getEventRuntime().registerAgentPrompt(parsed.data);
-    res.status(HTTP_STATUS.CREATED).json({ success: true, data: parsed.data });
+    const stored = await getEventRuntime().registerAgentPrompt(parsed.data);
+    res.status(HTTP_STATUS.CREATED).json({ success: true, data: stored });
+  })
+);
+
+router.put(
+  '/agent-prompts/:id/:version',
+  adminOnly,
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = agentPromptSpecSchema.safeParse({
+      ...req.body,
+      id: req.params.id,
+      version: req.params.version,
+    });
+    const expectedRevision = Number(req.header('if-match'));
+    if (!parsed.success || !Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_AGENT_PROMPT_UPDATE',
+          message: 'A valid prompt and numeric If-Match revision are required.',
+        },
+      });
+    }
+    const stored = await getEventRuntime().registerAgentPrompt(parsed.data, { expectedRevision });
+    res.json({ success: true, data: stored });
   })
 );
 
 router.delete(
   '/agent-prompts/:id',
+  adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
     const version = typeof req.query.version === 'string' ? req.query.version : undefined;
     const removed = await getEventRuntime().unregisterAgentPrompt(req.params.id, version);
@@ -284,6 +310,61 @@ router.get(
     if (!owned) return;
     const events = await owned.runtime.listEvents(req.params.runId);
     res.json({ success: true, data: events });
+  })
+);
+
+router.get(
+  '/runs/:runId/human-reviews',
+  asyncHandler(async (req: Request, res: Response) => {
+    const owned = await findOwnedRun(req, res);
+    if (!owned) return;
+    res.json({
+      success: true,
+      data: await owned.runtime.listHumanReviews(req.params.runId, owned.run.userId),
+    });
+  })
+);
+
+router.post(
+  '/runs/:runId/human-reviews/:taskId/decision',
+  adminOnly,
+  asyncHandler(async (req: Request, res: Response) => {
+    const decision = req.body?.decision;
+    if (!['approved', 'rejected', 'cancelled'].includes(decision)) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_DECISION',
+          message: 'decision must be approved, rejected, or cancelled',
+        },
+      });
+    }
+    const expectedRevision = Number(req.body?.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_REVISION',
+          message: 'expectedRevision must be a positive integer',
+        },
+      });
+    }
+    const decidedBy = req.user?.userId ?? req.apiKey?.userId;
+    if (!decidedBy) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Reviewer identity required' },
+      });
+    }
+    const task = await getEventRuntime().decideHumanReview({
+      runId: req.params.runId,
+      taskId: req.params.taskId,
+      expectedRevision,
+      decision,
+      decidedBy,
+      reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
+    });
+    res.json({ success: true, data: task });
   })
 );
 
