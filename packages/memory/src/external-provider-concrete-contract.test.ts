@@ -294,7 +294,9 @@ describe('concrete external provider management contract', () => {
   it.each(cases)(
     '%s completes the shared lifecycle without provider branches',
     async (_name, create) => {
-      const report = await runExternalProviderAcceptance(create(), fixture);
+      const report = await runExternalProviderAcceptance(create(), fixture, undefined, undefined, {
+        settleAdd: async () => undefined,
+      });
       expect(report).toMatchObject({
         searchCount: 1,
         listCount: 1,
