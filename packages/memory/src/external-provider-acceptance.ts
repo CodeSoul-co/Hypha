@@ -1,15 +1,20 @@
-import type { ManagedMemoryRecord, MemoryManagementCapabilities } from './contracts';
+import type {
+  ManagedMemoryRecord,
+  MemoryManagementCapabilities,
+  NormalizedMemoryError,
+} from './contracts';
 import type { ExternalMemoryClient } from './external-adapters';
 import type {
   ManagedMemoryDeleteRequest,
   ManagedMemorySearchRequest,
   ManagedMemoryUpdateRequest,
+  ManagedMemoryWriteResult,
   MemoryAddRequest,
   MemoryGetRequest,
   MemoryHistoryRequest,
   MemoryListRequest,
 } from './operations';
-import { memoryError } from './memory-utils';
+import { isNormalizedMemoryError, memoryError } from './memory-utils';
 
 export interface ExternalProviderAcceptanceFixture {
   add: MemoryAddRequest;
@@ -19,6 +24,7 @@ export interface ExternalProviderAcceptanceFixture {
   update(memoryId: string): ManagedMemoryUpdateRequest;
   history(memoryId: string): MemoryHistoryRequest;
   delete(memoryId: string): ManagedMemoryDeleteRequest;
+  forbiddenGet?(memoryId: string): MemoryGetRequest;
   resolveMemoryId(result: {
     addedIds: string[];
     searchedIds: string[];
@@ -26,6 +32,17 @@ export interface ExternalProviderAcceptanceFixture {
   }): string | undefined;
 }
 
+export interface ExternalProviderFailureProbe {
+  id: string;
+  expectedCodes: readonly NormalizedMemoryError['code'][];
+  run(signal?: AbortSignal): Promise<void>;
+}
+
+export interface ExternalProviderAcceptanceHooks {
+  settleAdd?(result: ManagedMemoryWriteResult, signal?: AbortSignal): Promise<void>;
+  verifyRestart?(memoryId: string, signal?: AbortSignal): Promise<void>;
+  failureProbes?: readonly ExternalProviderFailureProbe[];
+}
 export interface ExternalProviderAcceptanceEvidenceInput {
   commitSha: string;
   providerId: string;
@@ -57,6 +74,10 @@ export interface ExternalProviderAcceptanceReport {
   historyCount?: number;
   deleteStatus: string;
   healthStatus: string;
+  paginationPageCount: number;
+  scopeIsolationVerified: boolean;
+  restartVerified: boolean;
+  failureProbeCount: number;
   evidence?: ExternalProviderAcceptanceEvidence;
 }
 
@@ -65,7 +86,8 @@ export async function runExternalProviderAcceptance(
   client: ExternalMemoryClient,
   fixture: ExternalProviderAcceptanceFixture,
   signal?: AbortSignal,
-  evidenceInput?: ExternalProviderAcceptanceEvidenceInput
+  evidenceInput?: ExternalProviderAcceptanceEvidenceInput,
+  hooks: ExternalProviderAcceptanceHooks = {}
 ): Promise<ExternalProviderAcceptanceReport> {
   const now = evidenceInput?.now ?? (() => new Date().toISOString());
   const startedAt = now();
@@ -85,11 +107,22 @@ export async function runExternalProviderAcceptance(
     }
 
     const added = await client.add(fixture.add, signal);
+    if (added.status === 'queued') {
+      if (!hooks.settleAdd) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Queued external provider acceptance requires an explicit settlement hook.'
+        );
+      }
+      await hooks.settleAdd(added, signal);
+    }
     const searched = await client.search(fixture.search, signal);
     const listedRecords: ManagedMemoryRecord[] = [];
     let listRequest = fixture.list;
+    let paginationPageCount = 0;
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
       const page = await client.list(listRequest, signal);
+      paginationPageCount += 1;
       listedRecords.push(...page.records);
       if (!page.hasMore || !page.nextCursor) break;
       if (pageNumber === 99) {
@@ -128,6 +161,31 @@ export async function runExternalProviderAcceptance(
       );
     }
 
+    let scopeIsolationVerified = false;
+    if (fixture.forbiddenGet) {
+      let rejection: unknown;
+      try {
+        await client.get(fixture.forbiddenGet(memoryId), signal);
+      } catch (error) {
+        rejection = error;
+      }
+      if (!rejection) {
+        throw memoryError(
+          'MEMORY_SCOPE_DENIED',
+          'External provider acceptance allowed a cross-scope get.'
+        );
+      }
+      if (
+        !isNormalizedMemoryError(rejection) ||
+        !['MEMORY_SCOPE_DENIED', 'MEMORY_NOT_FOUND'].includes(rejection.code)
+      ) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'External provider acceptance cross-scope rejection was not normalized.'
+        );
+      }
+      scopeIsolationVerified = true;
+    }
     let updateStatus: string | undefined;
     if (capabilities.update && client.update) {
       updateStatus = (await client.update(fixture.update(memoryId), signal)).status;
@@ -135,6 +193,29 @@ export async function runExternalProviderAcceptance(
     let historyCount: number | undefined;
     if (capabilities.history && client.history) {
       historyCount = (await client.history(fixture.history(memoryId), signal)).length;
+    }
+    let restartVerified = false;
+    if (hooks.verifyRestart) {
+      await hooks.verifyRestart(memoryId, signal);
+      restartVerified = true;
+    }
+    let failureProbeCount = 0;
+    for (const probe of hooks.failureProbes ?? []) {
+      try {
+        await probe.run(signal);
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          `External provider failure probe ${probe.id} did not fail.`
+        );
+      } catch (error) {
+        if (!isNormalizedMemoryError(error) || !probe.expectedCodes.includes(error.code)) {
+          throw memoryError(
+            'MEMORY_PROVIDER_UNAVAILABLE',
+            `External provider failure probe ${probe.id} was not normalized as expected.`
+          );
+        }
+        failureProbeCount += 1;
+      }
     }
     const deleted = await client.delete(fixture.delete(memoryId), signal);
     deleteStatus = deleted.status;
@@ -163,6 +244,10 @@ export async function runExternalProviderAcceptance(
       historyCount,
       deleteStatus,
       healthStatus: health.status,
+      paginationPageCount,
+      scopeIsolationVerified,
+      restartVerified,
+      failureProbeCount,
       evidence: evidenceInput
         ? {
             commitSha: evidenceInput.commitSha,

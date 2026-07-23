@@ -56,11 +56,20 @@ describe('external provider acceptance harness', () => {
       }),
       add: async (request) => ({
         operationId: request.operationId,
-        status: 'committed',
+        status: 'queued',
         records: [record],
       }),
       search: async () => [{ record, score: 1 }],
-      get: async () => record,
+      get: async (request) => {
+        if (request.scope.userId === 'other-user') {
+          throw {
+            code: 'MEMORY_SCOPE_DENIED',
+            message: 'scope denied',
+            retryable: false,
+          };
+        }
+        return record;
+      },
       list: async () => {
         listCalls += 1;
         return {
@@ -110,6 +119,12 @@ describe('external provider acceptance harness', () => {
           reason: 'acceptance',
         }),
         history: (memoryId) => ({ operationId: 'history', principal, scope, memoryId }),
+        forbiddenGet: (memoryId) => ({
+          operationId: 'forbidden-get',
+          principal,
+          scope: { userId: 'other-user' },
+          memoryId,
+        }),
         delete: (memoryId) => ({
           operationId: 'delete',
           principal,
@@ -128,15 +143,38 @@ describe('external provider acceptance harness', () => {
         profileHash: 'sha256:profile',
         environmentHash: 'sha256:environment',
         now: () => '2026-07-21T00:00:00.000Z',
+      },
+      {
+        settleAdd: async () => undefined,
+        verifyRestart: async (memoryId) => {
+          expect(memoryId).toBe(record.id);
+        },
+        failureProbes: [
+          {
+            id: 'permission-denied',
+            expectedCodes: ['MEMORY_PERMISSION_DENIED'],
+            run: async () => {
+              throw {
+                code: 'MEMORY_PERMISSION_DENIED',
+                message: 'permission denied',
+                retryable: false,
+              };
+            },
+          },
+        ],
       }
     );
     expect(report).toMatchObject({
       memoryId: record.id,
-      addStatus: 'committed',
+      addStatus: 'queued',
       updateStatus: 'committed',
       deleteStatus: 'completed',
       healthStatus: 'healthy',
       listCount: 2,
+      paginationPageCount: 2,
+      scopeIsolationVerified: true,
+      restartVerified: true,
+      failureProbeCount: 1,
       evidence: {
         commitSha: 'commit:acceptance',
         providerId: 'test-provider',
