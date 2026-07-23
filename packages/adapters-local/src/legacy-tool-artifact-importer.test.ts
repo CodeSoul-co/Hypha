@@ -46,10 +46,11 @@ describe('LegacyToolArtifactImporter', () => {
     const record = await fixture.manager.get({ principal, artifactId: first.artifactId });
     const read = await fixture.manager.read({ principal, artifactId: first.artifactId });
 
-    expect(first).toMatchObject({ legacyArtifactId: expectedLegacyArtifactId });
+    expect(first).toMatchObject({ legacyArtifactId: expectedLegacyArtifactId, revision: 0 });
     expect(record).toMatchObject({
       id: first.artifactId,
       versionId: first.versionId,
+      revision: first.revision,
       contentHash: first.contentHash,
       kind: 'tool_output',
       mimeType: 'application/json',

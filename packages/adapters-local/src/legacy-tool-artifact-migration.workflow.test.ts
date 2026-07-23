@@ -66,6 +66,7 @@ describe('legacy Tool Artifact migration workflow', () => {
     expect(migrated).toMatchObject({
       status: 'imported',
       legacyArtifactId,
+      revision: 0,
       contentHash: plan.imports[0].source.contentHash,
       sizeBytes: Buffer.byteLength(legacyContent),
     });
@@ -79,6 +80,7 @@ describe('legacy Tool Artifact migration workflow', () => {
     });
     expect(record).toMatchObject({
       versionId: migrated.versionId,
+      revision: migrated.revision,
       contentHash: migrated.contentHash,
       sizeBytes: migrated.sizeBytes,
       kind: 'tool_output',

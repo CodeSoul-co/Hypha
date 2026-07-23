@@ -79,7 +79,12 @@ describe('LegacyToolArtifactMigrationExecutor', () => {
           message: 'source changed private stack omitted',
         },
       },
-      { status: 'imported', artifactId: expect.any(String), versionId: expect.any(String) },
+      {
+        status: 'imported',
+        artifactId: expect.any(String),
+        versionId: expect.any(String),
+        revision: 0,
+      },
     ]);
     expect(importer.import).toHaveBeenCalledTimes(4);
     expect(importer.import.mock.calls[0][0]).toEqual(importer.import.mock.calls[2][0]);
@@ -92,6 +97,26 @@ describe('LegacyToolArtifactMigrationExecutor', () => {
       import: vi.fn(async (request: LegacyToolArtifactImportRequest) => ({
         ...successfulResult(request),
         contentHash: `sha256:${'0'.repeat(64)}`,
+      })),
+    };
+
+    const result = await new LegacyToolArtifactMigrationExecutor({ importer }).execute({
+      plan: fixture.plan,
+    });
+
+    expect(result.summary).toMatchObject({ imported: 0, failed: 1 });
+    expect(result.items[0]).toMatchObject({
+      status: 'failed',
+      failure: { code: 'LEGACY_MIGRATION_RESULT_MISMATCH' },
+    });
+  });
+
+  it('rejects an invalid revision in the importer evidence', async () => {
+    const fixture = await createPlan(true);
+    const importer = {
+      import: vi.fn(async (request: LegacyToolArtifactImportRequest) => ({
+        ...successfulResult(request),
+        revision: -1,
       })),
     };
 
@@ -171,6 +196,7 @@ function successfulResult(
     legacyArtifactId: request.expectedLegacyArtifactId ?? '',
     artifactId: `artifact.imported:${request.invocationId}`,
     versionId: `version.imported:${request.invocationId}`,
+    revision: 0,
     contentHash: request.expectedContentHash ?? '',
     sizeBytes: request.expectedSizeBytes ?? 0,
   };

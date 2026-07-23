@@ -55,6 +55,7 @@ export interface LegacyToolArtifactMigrationExecutionItem {
   status: 'dry_run' | 'imported' | 'failed';
   artifactId?: string;
   versionId?: string;
+  revision?: number;
   contentHash?: string;
   sizeBytes?: number;
   failure?: LegacyToolArtifactMigrationFailure;
@@ -109,6 +110,7 @@ export class LegacyToolArtifactMigrationExecutor {
           status: 'imported',
           artifactId: imported.artifactId,
           versionId: imported.versionId,
+          revision: imported.revision,
           contentHash: imported.contentHash,
           sizeBytes: imported.sizeBytes,
         });
@@ -265,6 +267,8 @@ function assertImportResult(
     result.legacyArtifactId !== item.source.legacyArtifactId ||
     result.contentHash !== item.source.contentHash ||
     result.sizeBytes !== item.source.sizeBytes ||
+    !Number.isSafeInteger(result.revision) ||
+    result.revision < 0 ||
     !result.artifactId ||
     !result.versionId
   ) {

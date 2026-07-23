@@ -46,6 +46,7 @@ export interface LegacyToolArtifactImportResult {
   legacyArtifactId: string;
   artifactId: string;
   versionId: string;
+  revision: number;
   contentHash: string;
   sizeBytes: number;
 }
@@ -149,6 +150,7 @@ export class LegacyToolArtifactImporter {
       legacyArtifactId,
       artifactId: record.id,
       versionId: record.versionId,
+      revision: record.revision,
       contentHash: record.contentHash,
       sizeBytes: record.sizeBytes,
     };
