@@ -116,9 +116,9 @@ describe('ToolManager MCP governance boundary', () => {
     expect(manager.profileReadiness()).toMatchObject({
       'plugin.missing': { status: 'degraded', required: false },
     });
-    await expect(load([{ ...profile, id: 'plugin.required', required: true }])).rejects.toMatchObject(
-      { code: 'TOOL_ADAPTER_BINDING_UNAVAILABLE' }
-    );
+    await expect(
+      load([{ ...profile, id: 'plugin.required', required: true }])
+    ).rejects.toMatchObject({ code: 'TOOL_ADAPTER_BINDING_UNAVAILABLE' });
   });
 
   it('fails readiness for required MCP auto-connect and supervises optional failures', async () => {
@@ -197,11 +197,69 @@ describe('ToolManager MCP governance boundary', () => {
 
   it('rejects caller-asserted Run ids for MCP Resource and Prompt access', async () => {
     const manager = new ToolManager();
-    await expect(manager.readMCPResource('server-a', 'docs://one', 'run-forged')).rejects.toMatchObject(
-      { code: 'MCP_CAPABILITY_SCOPE_DENIED' }
-    );
+    await expect(
+      manager.readMCPResource('server-a', 'docs://one', 'run-forged')
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SCOPE_DENIED' });
     await expect(
       manager.renderMCPPrompt('server-a', 'prompt-a', {}, 'run-forged')
     ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SCOPE_DENIED' });
+  });
+
+  it('rejects an MCP Resource result when approval changes while awaiting the server', async () => {
+    const manager = new ToolManager();
+    const snapshots = new Map<string, any>();
+    const capability = {
+      id: 'resource-revision',
+      serverId: 'server-a',
+      kind: 'resource',
+      remoteName: 'docs://one',
+      protocolVersion: '2025-11-25',
+      capabilityVersion: '1.0.0',
+      capabilityHash: 'sha256:resource-one',
+      descriptorHash: 'sha256:descriptor-one',
+      descriptor: {
+        serverIdentity: { name: 'server-a', version: '1.0.0' },
+      },
+      driftState: 'approved',
+      approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const internals = manager as unknown as {
+      mcpCatalogs: Map<
+        string,
+        {
+          getCapability(): Promise<typeof capability>;
+        }
+      >;
+      mcpSnapshotStore: {
+        get(id: string): Promise<any>;
+        save(snapshot: any): Promise<void>;
+      };
+      connectionManager: {
+        readResource(request: unknown): Promise<unknown>;
+      };
+    };
+    internals.mcpCatalogs.set('server-a', {
+      getCapability: async () => capability,
+    });
+    internals.mcpSnapshotStore = {
+      get: async (id) => snapshots.get(id) ?? null,
+      save: async (snapshot) => {
+        snapshots.set(snapshot.id, structuredClone(snapshot));
+      },
+    };
+    jest.spyOn(internals.connectionManager, 'readResource').mockImplementation(async () => {
+      capability.driftState = 'quarantined';
+      return { contents: [{ uri: 'docs://one', text: 'late result' }] };
+    });
+
+    await expect(
+      manager.readMCPResource('server-a', 'docs://one', {
+        runId: 'run-owned',
+        principalId: 'owner-one',
+        userId: 'owner-one',
+        permissionScopes: ['mcp.resource.read'],
+        deadlineAt: new Date(Date.now() + 30_000).toISOString(),
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_QUARANTINED' });
   });
 });

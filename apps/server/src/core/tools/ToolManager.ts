@@ -538,9 +538,7 @@ export class ToolManager {
 
     for (const spec of this.approvedMCPRegistry.list()) {
       const serverId = mcpServerId(spec);
-      const client = serverId
-        ? this.mcpClients.get(serverId)
-        : undefined;
+      const client = serverId ? this.mcpClients.get(serverId) : undefined;
       if (client?.status === 'connected') list.push(this.toolSpecToDefinition(spec));
     }
 
@@ -548,7 +546,9 @@ export class ToolManager {
     for (const client of this.fixtureMCPClients()) {
       if (client.status !== 'connected') continue;
       list.push(
-        ...client.tools.map((tool) => this.toolSpecToDefinition(this.normalizeMCPTool(client, tool)))
+        ...client.tools.map((tool) =>
+          this.toolSpecToDefinition(this.normalizeMCPTool(client, tool))
+        )
       );
     }
 
@@ -867,7 +867,7 @@ export class ToolManager {
   ): Promise<unknown> {
     if (typeof access === 'string') throw unverifiedMCPRunAccess(serverId, uri, 'resource');
     const binding = await this.bindMCPContextCapability(serverId, uri, 'resource', access);
-    return this.connectionManager.readResource({
+    const result = await this.connectionManager.readResource({
       serverId,
       uri,
       context: {
@@ -891,6 +891,8 @@ export class ToolManager {
         metadata: binding,
       },
     });
+    await this.assertMCPContextBindingCurrent(serverId, uri, 'resource', access, binding);
+    return result;
   }
 
   async renderMCPPrompt(
@@ -901,7 +903,7 @@ export class ToolManager {
   ): Promise<unknown> {
     if (typeof access === 'string') throw unverifiedMCPRunAccess(serverId, name, 'prompt');
     const binding = await this.bindMCPContextCapability(serverId, name, 'prompt', access);
-    return this.connectionManager.getPrompt({
+    const result = await this.connectionManager.getPrompt({
       serverId,
       name,
       arguments: args,
@@ -926,6 +928,8 @@ export class ToolManager {
         metadata: binding,
       },
     });
+    await this.assertMCPContextBindingCurrent(serverId, name, 'prompt', access, binding);
+    return result;
   }
 
   private async requireApprovedMCPContextCapability(
@@ -971,11 +975,7 @@ export class ToolManager {
         kind,
       });
     }
-    const capability = await this.requireApprovedMCPContextCapability(
-      serverId,
-      capabilityId,
-      kind
-    );
+    const capability = await this.requireApprovedMCPContextCapability(serverId, capabilityId, kind);
     const serverIdentityHash = hashToolContract(
       (capability.descriptor as { serverIdentity?: unknown }).serverIdentity ?? {
         serverId,
@@ -1049,6 +1049,48 @@ export class ToolManager {
     };
   }
 
+  private async assertMCPContextBindingCurrent(
+    serverId: string,
+    capabilityId: string,
+    kind: 'resource' | 'prompt',
+    access: MCPContextRunAccess,
+    binding: Record<string, string>
+  ): Promise<void> {
+    if (Date.parse(access.deadlineAt) <= Date.now()) {
+      throw Object.assign(new Error(`MCP ${kind} deadline expired before completion.`), {
+        code: 'MCP_REQUEST_TIMEOUT',
+        serverId,
+        capabilityId,
+        kind,
+      });
+    }
+    const persisted = await this.mcpSnapshotStore.get(binding.snapshotId);
+    const pinned = persisted?.toolContracts[0];
+    const current = await this.requireApprovedMCPContextCapability(serverId, capabilityId, kind);
+    const currentServerIdentityHash = hashToolContract(
+      (current.descriptor as { serverIdentity?: unknown }).serverIdentity ?? {
+        serverId,
+        protocolVersion: current.protocolVersion,
+      }
+    );
+    if (
+      !persisted ||
+      persisted.runId !== access.runId ||
+      persisted.snapshotHash !== binding.snapshotHash ||
+      pinned?.sourceCapabilityHash !== binding.capabilityHash ||
+      current.capabilityHash !== binding.capabilityHash ||
+      currentServerIdentityHash !== binding.serverIdentityHash
+    ) {
+      throw Object.assign(new Error('MCP context binding changed before completion.'), {
+        code: 'MCP_CAPABILITY_SNAPSHOT_MISMATCH',
+        serverId,
+        capabilityId,
+        kind,
+        snapshotId: binding.snapshotId,
+      });
+    }
+  }
+
   async listMCPDrifts(): Promise<MCPCapabilityRecord[]> {
     return (await this.listMCPCapabilities()).filter(
       (record) =>
@@ -1119,9 +1161,7 @@ export class ToolManager {
         tools:
           this.mcpServerModes.get(client.id) === 'fixture'
             ? client.tools.map((tool) => this.normalizeMCPTool(client, tool))
-            : this.approvedMCPRegistry
-                .list()
-                .filter((spec) => mcpServerId(spec) === client.id),
+            : this.approvedMCPRegistry.list().filter((spec) => mcpServerId(spec) === client.id),
       }));
   }
 
@@ -1246,9 +1286,7 @@ export class ToolManager {
     }
   }
 
-  private findProfileTool(
-    nameOrId: string
-  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+  private findProfileTool(nameOrId: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.profileToolRegistry.list()) {
       if (spec.id !== nameOrId && spec.name !== nameOrId) continue;
       return this.profileToolRegistry.resolve({
@@ -1264,9 +1302,7 @@ export class ToolManager {
     return normalizeMCPToolSpec(this.toMCPCapabilityDescriptor(client, tool));
   }
 
-  private findApprovedMCPTool(
-    name: string
-  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+  private findApprovedMCPTool(name: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.approvedMCPRegistry.list()) {
       const candidateNames = new Set(
         [spec.id, spec.name, mcpCapabilityId(spec)].filter(
@@ -1334,9 +1370,7 @@ export class ToolManager {
 
   private mcpToolCount(serverId: string, client: MCPClient): number {
     if (this.mcpServerModes.get(serverId) === 'fixture') return client.tools.length;
-    return this.approvedMCPRegistry
-      .list()
-      .filter((spec) => mcpServerId(spec) === serverId).length;
+    return this.approvedMCPRegistry.list().filter((spec) => mcpServerId(spec) === serverId).length;
   }
 
   private toMCPCapabilityDescriptor(
