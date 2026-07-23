@@ -483,7 +483,7 @@ const configSchema = z.object({
             endpoint: z.string().url().optional(),
             credentialRef: z
               .string()
-              .regex(/^env:[A-Z_][A-Z0-9_]*$/)
+              .regex(/^[a-z][a-z0-9+.-]*:[^\s]+$/)
               .optional(),
             autoStart: z.boolean().optional(),
             autoConnect: z.boolean().optional(),
