@@ -1,0 +1,86 @@
+name: Tool and MCP gates
+
+on:
+  pull_request:
+    branches: [dev, domain]
+  push:
+    branches: [tools, runtime, domain-tools]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tool-mcp-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform-security:
+    name: Platform security (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Skill filesystem and server composition
+        run: >-
+          npm exec -- jest --selectProjects unit --runInBand --forceExit
+          apps/server/src/services/SkillInstallFilesystem.test.ts
+          apps/server/src/services/SecretResolver.test.ts
+          apps/server/src/core/tools/ToolManager.test.ts
+      - name: Real MCP transports with zero skipped tests
+        run: >-
+          npm exec -- vitest run packages/mcp/src/mcp.test.ts
+          --reporter=json --outputFile=mcp-results.json
+      - name: Assert zero skipped MCP tests
+        run: >-
+          node -e "const r=require('./mcp-results.json');
+          if((r.numPendingTests??0)!==0) {
+          throw new Error('Skipped MCP tests: '+r.numPendingTests); }"
+
+  repository-gates:
+    name: Repository gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:unit
+      - run: npm run test:packages
+      - run: npm run test:integration
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017/hypha_test
+          REDIS_URL: redis://127.0.0.1:6379

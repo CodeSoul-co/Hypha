@@ -111,6 +111,7 @@ import {
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
+  effectiveAgentCapabilitySnapshotSchema,
   hashToolContract,
   InMemoryToolResultCache,
   RedisToolResultCache,
@@ -685,6 +686,125 @@ function legacyToolToModelTool(
   };
 }
 
+export class RunCapabilitySnapshotRepository {
+  private readonly cache = new Map<string, Readonly<EffectiveAgentCapabilitySnapshot>>();
+  private readonly pins = new Map<string, Promise<Readonly<EffectiveAgentCapabilitySnapshot>>>();
+
+  constructor(private readonly store: ToolContractSnapshotStore) {}
+
+  async pin(
+    candidate: Readonly<EffectiveAgentCapabilitySnapshot>
+  ): Promise<Readonly<EffectiveAgentCapabilitySnapshot>> {
+    const active = this.pins.get(candidate.runId);
+    if (active) return active;
+    const pin = this.pinOnce(candidate).finally(() => this.pins.delete(candidate.runId));
+    this.pins.set(candidate.runId, pin);
+    return pin;
+  }
+
+  async get(
+    runId: string,
+    fallbackContractSnapshotRef?: string
+  ): Promise<Readonly<EffectiveAgentCapabilitySnapshot> | undefined> {
+    const cached = this.cache.get(runId);
+    if (cached) return cached;
+    const carrier = await this.store.get(capabilityCarrierId(runId));
+    if (carrier) return this.restore(carrier, runId);
+    if (!fallbackContractSnapshotRef) return undefined;
+    const fallback = await this.store.get(fallbackContractSnapshotRef);
+    if (!fallback?.effectiveCapabilities) return undefined;
+    const effective = this.validateEffective(fallback.effectiveCapabilities, runId);
+    await this.store.save(capabilityCarrier(effective));
+    this.cache.set(runId, effective);
+    return effective;
+  }
+
+  private async pinOnce(
+    candidate: Readonly<EffectiveAgentCapabilitySnapshot>
+  ): Promise<Readonly<EffectiveAgentCapabilitySnapshot>> {
+    const existing = await this.get(candidate.runId);
+    if (existing) {
+      if (
+        existing.agentId !== candidate.agentId ||
+        existing.principalId !== candidate.principalId
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_CAPABILITY_SNAPSHOT_CONFLICT',
+          message: 'Runtime Run already has a capability snapshot for a different subject.',
+          context: { runId: candidate.runId },
+        });
+      }
+      return existing;
+    }
+    const effective = this.validateEffective(candidate, candidate.runId);
+    await this.store.save(capabilityCarrier(effective));
+    this.cache.set(effective.runId, effective);
+    return effective;
+  }
+
+  private restore(
+    carrier: ToolContractSnapshot,
+    runId: string
+  ): Readonly<EffectiveAgentCapabilitySnapshot> {
+    if (carrier.runId !== runId || carrier.id !== capabilityCarrierId(runId)) {
+      throw corruptCapabilitySnapshot(runId);
+    }
+    const { id: _id, snapshotHash, ...body } = carrier;
+    if (hashToolContract(body) !== snapshotHash || !carrier.effectiveCapabilities) {
+      throw corruptCapabilitySnapshot(runId);
+    }
+    const effective = this.validateEffective(carrier.effectiveCapabilities, runId);
+    this.cache.set(runId, effective);
+    return effective;
+  }
+
+  private validateEffective(
+    input: EffectiveAgentCapabilitySnapshot,
+    runId: string
+  ): Readonly<EffectiveAgentCapabilitySnapshot> {
+    const effective = effectiveAgentCapabilitySnapshotSchema.parse(input);
+    const { id: _id, snapshotHash, ...body } = effective;
+    if (
+      effective.runId !== runId ||
+      effective.id !== `agent-capability:${runId}:${effective.agentId}` ||
+      hashToolContract(body) !== snapshotHash
+    ) {
+      throw corruptCapabilitySnapshot(runId);
+    }
+    return Object.freeze(effective);
+  }
+}
+
+function capabilityCarrierId(runId: string): string {
+  return `runtime-capability-snapshot:${runId}`;
+}
+
+function capabilityCarrier(
+  effective: Readonly<EffectiveAgentCapabilitySnapshot>
+): ToolContractSnapshot {
+  const body = {
+    runId: effective.runId,
+    createdAt: effective.createdAt,
+    toolContracts: [],
+    catalogRevision: effective.snapshotHash,
+    policyRevision: effective.snapshotHash,
+    effectiveCapabilities: effective,
+  };
+  return {
+    id: capabilityCarrierId(effective.runId),
+    ...body,
+    snapshotHash: hashToolContract(body),
+  };
+}
+
+function corruptCapabilitySnapshot(runId: string): FrameworkError {
+  return new FrameworkError({
+    code: 'RUNTIME_CAPABILITY_SNAPSHOT_CORRUPT',
+    message: 'Persisted Runtime capability snapshot failed integrity validation.',
+    context: { runId },
+  });
+}
+
 class EventRuntimeService {
   private readonly legacyEvents: SQLiteEventStore;
   private readonly events: EventStore & TraceRecorder;
@@ -698,11 +818,8 @@ class EventRuntimeService {
   private readonly toolTelemetry = new InMemoryTelemetryRecorder();
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
+  private readonly capabilitySnapshots: RunCapabilitySnapshotRepository;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
-  private readonly runCapabilitySnapshots = new Map<
-    string,
-    Readonly<EffectiveAgentCapabilitySnapshot>
-  >();
   private readonly transitionDispatcher = new RuntimeTransitionDispatcher();
   private readonly runtimeWorkerId = `server.runtime:${process.pid}`;
   private canonicalLifecycle?: RuntimeBackboneLifecycle;
@@ -745,6 +862,7 @@ class EventRuntimeService {
         : new FileToolContractSnapshotStore(
             process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
           );
+    this.capabilitySnapshots = new RunCapabilitySnapshotRepository(this.toolSnapshotStore);
     const artifactPort = new ArtifactStoreToolPort(
       new FileArtifactStore({
         rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
@@ -2073,18 +2191,19 @@ class EventRuntimeService {
       : [];
     const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
-    const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
-      runId: input.runId,
-      agentId: id,
-      principalId: userId,
-      tenantId: stringValue(asRecord(input.metadata)?.tenantId),
-      domainId: run.domainPackId,
-      createdAt: await this.runCreatedAt(input.runId),
-      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
-      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
-      activeSkills,
-    });
-    this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
+    const effectiveCapabilities = await this.capabilitySnapshots.pin(
+      createEffectiveAgentCapabilitySnapshot({
+        runId: input.runId,
+        agentId: id,
+        principalId: userId,
+        tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+        domainId: run.domainPackId,
+        createdAt: await this.runCreatedAt(input.runId),
+        agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
+        domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+        activeSkills,
+      })
+    );
     const reviewTasks = await this.requireEffectiveCapabilityApproval(run, effectiveCapabilities);
     if (reviewTasks.length > 0) {
       const approval = {
@@ -2654,7 +2773,10 @@ class EventRuntimeService {
       input.runId,
       authority.policyRevision
     );
-    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
+    const effectiveCapabilities = await this.capabilitySnapshots.get(
+      input.runId,
+      contractSnapshotRef
+    );
     const capabilityApprovals = await this.approvedCapabilityApprovals(
       input.runId,
       effectiveCapabilities
@@ -2974,7 +3096,7 @@ class EventRuntimeService {
       runId,
       createdAt,
       toolContracts,
-      effectiveCapabilities: this.runCapabilitySnapshots.get(runId),
+      effectiveCapabilities: await this.capabilitySnapshots.get(runId),
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
