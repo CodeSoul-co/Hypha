@@ -14,15 +14,13 @@ type MCPContextManager = {
   readMCPResource?: (
     serverId: string,
     uri: string,
-    runId: string,
-    scope: OwnedRunScope
+    access: ReturnType<typeof mcpContextAccess>
   ) => Promise<unknown>;
   renderMCPPrompt?: (
     serverId: string,
     name: string,
     args: Record<string, string>,
-    runId: string,
-    scope: OwnedRunScope
+    access: ReturnType<typeof mcpContextAccess>
   ) => Promise<unknown>;
 };
 
@@ -103,8 +101,7 @@ router.post(
     const output = await manager.readMCPResource(
       req.params.serverId,
       uri,
-      scope.runId,
-      scope
+      mcpContextAccess(scope, 'mcp.resource.read')
     );
     res.json({ success: true, data: sanitizeMCPContextOutput(output) });
   })
@@ -127,8 +124,7 @@ router.post(
       req.params.serverId,
       req.params.name,
       args,
-      scope.runId,
-      scope
+      mcpContextAccess(scope, 'mcp.prompt.render')
     );
     res.json({ success: true, data: sanitizeMCPContextOutput(output) });
   })
@@ -138,72 +134,6 @@ router.get(
   '/drifts',
   asyncHandler(async (_req: Request, res: Response) => {
     res.json({ success: true, data: await getToolManager().listMCPDrifts() });
-  })
-);
-
-router.get(
-  '/servers/:serverId/resources',
-  asyncHandler(async (req: Request, res: Response) => {
-    res.json({
-      success: true,
-      data: await getToolManager().listMCPContextCapabilities(req.params.serverId, 'resource'),
-    });
-  })
-);
-
-router.post(
-  '/servers/:serverId/resources/read',
-  asyncHandler(async (req: Request, res: Response) => {
-    const uri = typeof req.body?.uri === 'string' ? req.body.uri : '';
-    if (!uri) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({
-        success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Resource URI is required.' },
-      });
-    }
-    const runId =
-      typeof req.body?.runId === 'string'
-        ? req.body.runId
-        : `mcp-context:${req.user?.userId ?? req.apiKey?.userId ?? 'anonymous'}`;
-    res.json({
-      success: true,
-      data: await getToolManager().readMCPResource(req.params.serverId, uri, runId),
-    });
-  })
-);
-
-router.get(
-  '/servers/:serverId/prompts',
-  asyncHandler(async (req: Request, res: Response) => {
-    res.json({
-      success: true,
-      data: await getToolManager().listMCPContextCapabilities(req.params.serverId, 'prompt'),
-    });
-  })
-);
-
-router.post(
-  '/servers/:serverId/prompts/:name/render',
-  asyncHandler(async (req: Request, res: Response) => {
-    const args =
-      req.body?.arguments && typeof req.body.arguments === 'object'
-        ? Object.fromEntries(
-            Object.entries(req.body.arguments).map(([key, value]) => [key, String(value)])
-          )
-        : {};
-    const runId =
-      typeof req.body?.runId === 'string'
-        ? req.body.runId
-        : `mcp-context:${req.user?.userId ?? req.apiKey?.userId ?? 'anonymous'}`;
-    res.json({
-      success: true,
-      data: await getToolManager().renderMCPPrompt(
-        req.params.serverId,
-        req.params.name,
-        args,
-        runId
-      ),
-    });
   })
 );
 
@@ -247,6 +177,19 @@ router.post(
     res.json({ success: true, data: { status: 'quarantined' } });
   })
 );
+
+function mcpContextAccess(
+  scope: OwnedRunScope,
+  permissionScope: 'mcp.resource.read' | 'mcp.prompt.render'
+) {
+  return {
+    runId: scope.runId,
+    principalId: scope.userId,
+    userId: scope.userId,
+    permissionScopes: [permissionScope],
+    deadlineAt: new Date(Date.now() + 30_000).toISOString(),
+  };
+}
 
 export default router;
 

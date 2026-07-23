@@ -74,8 +74,13 @@ describe('MCP context owned-Run boundary', () => {
     expect(tools.readMCPResource).toHaveBeenCalledWith(
       'server-a',
       'file:///safe.txt',
-      scope.runId,
-      scope
+      expect.objectContaining({
+        runId: scope.runId,
+        principalId: ownerId,
+        userId: ownerId,
+        permissionScopes: ['mcp.resource.read'],
+        deadlineAt: expect.any(String),
+      })
     );
     expect(response.body.data).toEqual({
       mimeType: 'application/json',
