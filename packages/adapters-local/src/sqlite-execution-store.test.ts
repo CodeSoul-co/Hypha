@@ -2,7 +2,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { ExecutionStore } from '@hypha/core';
-import { executionRecordCreateRequestExample } from '@hypha/core';
+import {
+  executionLeaseAcquireRequestExample,
+  executionRecordCreateRequestExample,
+} from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
 
@@ -27,5 +30,92 @@ describe('SQLiteExecutionStore public adapter', () => {
     const reopened: ExecutionStore = new SQLiteExecutionStore({ rootPath: root });
     await expect(reopened.get(created.id)).resolves.toEqual(created);
     await reopened.close?.();
+  });
+
+  it('allows only one compare-and-set across independent store instances', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
+    const first = new SQLiteExecutionStore({ rootPath: root });
+    const second = new SQLiteExecutionStore({ rootPath: root });
+    const queued = await first.create(structuredClone(executionRecordCreateRequestExample));
+    const mutation = {
+      operationId: 'operation.execution.update.first',
+      executionId: queued.id,
+      expectedRevision: queued.revision,
+      next: {
+        ...queued,
+        revision: queued.revision + 1,
+        status: 'starting' as const,
+        attempt: 1,
+        updatedAt: '2026-07-16T00:00:01.000Z',
+      },
+      idempotencyKey: 'execution-update:first',
+    };
+    const competing = structuredClone(mutation);
+    competing.operationId = 'operation.execution.update.competing';
+    competing.idempotencyKey = 'execution-update:competing';
+
+    try {
+      const results = await Promise.allSettled([
+        first.compareAndSet(mutation),
+        second.compareAndSet(competing),
+      ]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      const rejected = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      );
+      expect(rejected?.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+      await expect(first.get(queued.id)).resolves.toMatchObject({ revision: 1, status: 'starting' });
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it('fences an expired lease takeover across independent store instances', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-lease-'));
+    const first = new SQLiteExecutionStore({ rootPath: root });
+    const second = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      await first.create(structuredClone(executionRecordCreateRequestExample));
+      const acquired = await first.acquireLease(
+        structuredClone(executionLeaseAcquireRequestExample)
+      );
+
+      const takeover = await second.acquireLease({
+        ...structuredClone(executionLeaseAcquireRequestExample),
+        operationId: 'operation.lease.acquire.takeover',
+        expectedRevision: acquired.revision,
+        requestedLeaseId: 'lease.execution.example.takeover',
+        ownerId: 'runtime-worker.takeover',
+        acquiredAt: acquired.lease!.expiresAt,
+        idempotencyKey: 'lease-acquire:takeover',
+      });
+
+      expect(takeover.lease).toMatchObject({
+        id: 'lease.execution.example.takeover',
+        ownerId: 'runtime-worker.takeover',
+        fencingToken: acquired.lease!.fencingToken + 1,
+      });
+      await expect(
+        first.renewLease({
+          operationId: 'operation.lease.renew.stale',
+          executionId: acquired.id,
+          expectedRevision: takeover.revision,
+          leaseGuard: {
+            leaseId: acquired.lease!.id,
+            ownerId: acquired.lease!.ownerId,
+            fencingToken: acquired.lease!.fencingToken,
+          },
+          ttlMs: 30_000,
+          heartbeatAt: '2026-07-16T00:00:31.000Z',
+          idempotencyKey: 'lease-renew:stale',
+        })
+      ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+    } finally {
+      await first.close();
+      await second.close();
+    }
   });
 });
