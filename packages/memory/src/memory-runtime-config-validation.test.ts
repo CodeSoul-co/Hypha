@@ -68,6 +68,43 @@ describe('Memory runtime configuration boundary', () => {
     );
   });
 
+  it('rejects duplicate dependencies, invalid topology and ephemeral production coordination', () => {
+    const duplicateReference = config();
+    duplicateReference.profiles[memoryProfileSpecExample.id].profile.vectorStoreRefs = [
+      { id: 'memory.vector.duplicate', version: '1.0.0' },
+      { id: 'memory.vector.duplicate', version: '1.0.0' },
+    ];
+    expect(() => validateMemoryRuntimeConfig(duplicateReference)).toThrow(
+      'Memory profile dependency references must be unique'
+    );
+
+    const invalidNativeTopology = config();
+    invalidNativeTopology.profiles[memoryProfileSpecExample.id].management.deployment = 'local';
+    expect(() => validateMemoryRuntimeConfig(invalidNativeTopology)).toThrow(
+      'Local Native Memory requires distinct working and record store references'
+    );
+
+    const externalWithoutConnection = config();
+    const externalEntry = externalWithoutConnection.profiles[memoryProfileSpecExample.id];
+    externalEntry.management.type = 'mem0';
+    externalEntry.management.deployment = 'managed';
+    expect(() => validateMemoryRuntimeConfig(externalWithoutConnection)).toThrow(
+      'External Memory deployments require a connectionRef'
+    );
+
+    const ephemeralProduction = config();
+    const managedEntry = ephemeralProduction.profiles[memoryProfileSpecExample.id];
+    managedEntry.management.type = 'mem0';
+    managedEntry.management.deployment = 'managed';
+    managedEntry.management.connectionRef = 'memory.connection.managed';
+    managedEntry.management.config = {
+      mappingStoreRef: 'memory.mapping.in-memory',
+      operationStoreRef: 'memory.operation.ephemeral',
+    };
+    expect(() => validateMemoryRuntimeConfig(ephemeralProduction)).toThrow(
+      'Production Memory profiles require durable mapping and operation stores'
+    );
+  });
   it('rejects duplicate provider factory registration', () => {
     const factory = {
       id: 'duplicate',

@@ -129,6 +129,17 @@ function collectReferences(runtime: MemoryRuntimeProfile): Array<{
   if (runtime.management.connectionRef) {
     references.push({ value: runtime.management.connectionRef, kind: 'connection' });
   }
+  for (const reference of [
+    runtime.profile.workingStoreRef,
+    runtime.profile.recordStoreRef,
+    ...(runtime.profile.vectorStoreRefs ?? []),
+    runtime.profile.artifactStoreRef,
+    runtime.profile.embeddingProviderRef,
+    runtime.profile.rerankerProviderRef,
+    runtime.profile.contextProfileRef,
+  ]) {
+    if (reference) references.push({ value: reference.id, kind: 'dependency' });
+  }
   collectConfigReferences(runtime.management.config, references);
   return references;
 }

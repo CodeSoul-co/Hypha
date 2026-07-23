@@ -172,6 +172,7 @@ describe('MemoryRuntimeFactory', () => {
         id: 'memory.provider.memorybank',
         type: 'memorybank',
         deployment: 'remote',
+        connectionRef: 'memory.connection.memorybank',
       },
     };
 

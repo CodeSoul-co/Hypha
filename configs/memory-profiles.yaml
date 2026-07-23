@@ -1,56 +1,176 @@
 schemaVersion: '1.0'
+activeProfile: native-default
 profiles:
   native-lite:
-    status: framework-validated
+    profile:
+      id: native-lite
+      version: '1.0.0'
+      revision: native-lite-v1
+      name: Native Lite
+      enabled: true
+      managementProviderRef:
+        id: memory.provider.native-lite
+        version: '1.0.0'
+      workingStoreRef:
+        id: memory.store.working.in-memory
+        version: '1.0.0'
+      recordStoreRef:
+        id: memory.store.record.sqlite
+        version: '1.0.0'
+      vectorStoreRefs:
+        - id: memory.vector.local
+          version: '1.0.0'
+      artifactStoreRef:
+        id: memory.artifact.local
+        version: '1.0.0'
+      embeddingProviderRef:
+        id: memory.embedding.local
+        version: '1.0.0'
+      scopePolicy: &scope-policy
+        requiredDimensions: [userId]
+        allowedReadScopes: [userId, workspaceId, sessionId, runId]
+        allowedWriteScopes: [userId, workspaceId, sessionId, runId]
+        crossUserRead: deny
+        crossWorkspaceRead: deny
+        enforceTenantBoundary: true
+      retrievalPolicy: &retrieval-policy
+        defaultMode: hybrid
+        maxCandidates: 100
+        defaultTopK: 10
+        deduplication: hash
+        conflictHandling: prefer_verified
+        rerank: score_fusion
+      writePolicy: &write-policy
+        allowedTypes: [working, episodic, semantic, procedural, preference, artifact]
+        deduplicateBeforeWrite: true
+        conflictDetection: true
+        sensitiveDataMode: reject
+      retentionPolicy: &retention-policy
+        retainHistory: true
+        legalHoldSupported: true
+        deletionMode: soft
+      fallbackPolicy: &fallback-policy
+        onProviderUnavailable: record_store_only
+        onVectorUnavailable: structured_only
+        onRerankerUnavailable: score_fusion
+        maxFallbackDepth: 1
+      metadata:
+        releaseStatus: framework-validated
+        topology: single-process
     management:
       id: memory.provider.native-lite
       version: '1.0.0'
+      revision: native-lite-v1
       type: native
       deployment: embedded
-      capabilities:
+      connectionRef: memory.connection.native-lite
+      config:
+        workingStoreRef: memory.store.working.in-memory
+        recordStoreRef: memory.store.record.sqlite
+        vectorStoreRef: memory.vector.local
+        artifactStoreRef: memory.artifact.local
+        embeddingProviderRef: memory.embedding.local
+      capabilities: &native-capabilities
         add: true
         search: true
         get: true
         list: true
         update: true
         delete: true
+        deleteByFilter: true
         history: true
-    stores:
-      working: working.in-memory.bounded
-      structured: storage.sqlite.structured
-      vector: vector.local.in-memory
-      artifact: artifact.local.filesystem
-      persistence: local-durable
-      coordination: single-process
+        summarize: false
+        consolidate: false
+        decay: false
+        reinforce: false
+        conflictDetection: true
+        hybridSearch: true
+        graphRelations: false
+        asyncWrite: true
+        batchOperations: true
+      metadata:
+        releaseStatus: framework-validated
+        persistence: local-durable
+        coordination: single-process
   native-default:
-    status: framework-validated-non-ha
+    profile:
+      id: native-default
+      version: '1.0.0'
+      revision: native-default-v1
+      name: Native Default
+      enabled: true
+      managementProviderRef:
+        id: memory.provider.native-default
+        version: '1.0.0'
+      workingStoreRef:
+        id: memory.store.working.redis
+        version: '1.0.0'
+      recordStoreRef:
+        id: memory.store.record.mongodb
+        version: '1.0.0'
+      vectorStoreRefs:
+        - id: memory.vector.local
+          version: '1.0.0'
+      artifactStoreRef:
+        id: memory.artifact.local
+        version: '1.0.0'
+      embeddingProviderRef:
+        id: memory.embedding.local
+        version: '1.0.0'
+      scopePolicy: *scope-policy
+      retrievalPolicy: *retrieval-policy
+      writePolicy: *write-policy
+      retentionPolicy: *retention-policy
+      fallbackPolicy: *fallback-policy
+      metadata:
+        releaseStatus: framework-validated-non-ha
+        topology: distributed-contract
+        highAvailability: unpublished
     management:
       id: memory.provider.native-default
       version: '1.0.0'
+      revision: native-default-v1
       type: native
       deployment: local
-      capabilities:
-        add: true
-        search: true
-        get: true
-        list: true
-        update: true
-        delete: true
-        history: true
-    stores:
-      working: redis.working
-      structured: mongo.memory.structured
-      vector: vector.local.in-memory
-      artifact: artifact.local.filesystem
-      persistence: durable
-      coordination: distributed-contract
-      highAvailability: unpublished
-      outbox: enabled
+      connectionRef: memory.connection.native-default
+      config:
+        workingStoreRef: memory.store.working.redis
+        recordStoreRef: memory.store.record.mongodb
+        vectorStoreRef: memory.vector.local
+        artifactStoreRef: memory.artifact.local
+        embeddingProviderRef: memory.embedding.local
+        outboxStoreRef: memory.store.outbox.mongodb
+      capabilities: *native-capabilities
+      metadata:
+        releaseStatus: framework-validated-non-ha
+        persistence: durable
+        coordination: distributed-contract
+        highAvailability: unpublished
   mem0-oss:
-    status: validated-contract
+    profile:
+      id: mem0-oss
+      version: '1.0.0'
+      revision: mem0-oss-v1
+      name: Mem0 OSS
+      enabled: true
+      managementProviderRef:
+        id: memory.provider.mem0.oss
+        version: '1.0.0'
+      recordStoreRef:
+        id: memory.store.external.mem0-oss
+        version: '1.0.0'
+      scopePolicy: *scope-policy
+      retrievalPolicy: *retrieval-policy
+      writePolicy: *write-policy
+      retentionPolicy: *retention-policy
+      fallbackPolicy: *fallback-policy
+      metadata:
+        releaseStatus: contract-validated
+        topology: self-hosted
     management:
       id: memory.provider.mem0.oss
       version: '1.0.0'
+      revision: mem0-oss-v1
       type: mem0
       deployment: self_hosted
       connectionRef: memory.connection.mem0-oss
@@ -58,11 +178,52 @@ profiles:
         baseUrlEnv: HYPHA_MEM0_OSS_URL
         apiKeyEnv: HYPHA_MEM0_OSS_API_KEY
         protocol: mem0-oss-rest
+        mappingStoreRef: memory.mapping.durable
+      capabilities: &mem0-oss-capabilities
+        add: true
+        search: true
+        get: true
+        list: true
+        update: true
+        delete: true
+        deleteByFilter: true
+        history: true
+        summarize: false
+        consolidate: false
+        decay: false
+        reinforce: false
+        conflictDetection: true
+        hybridSearch: false
+        graphRelations: false
+        asyncWrite: false
+        batchOperations: false
+      metadata:
+        releaseStatus: contract-validated
   mem0-platform:
-    status: controlled-test
+    profile:
+      id: mem0-platform
+      version: '1.0.0'
+      revision: mem0-platform-v3
+      name: Mem0 Platform
+      enabled: true
+      managementProviderRef:
+        id: memory.provider.mem0.platform-v3
+        version: '1.0.0'
+      recordStoreRef:
+        id: memory.store.external.mem0-platform
+        version: '1.0.0'
+      scopePolicy: *scope-policy
+      retrievalPolicy: *retrieval-policy
+      writePolicy: *write-policy
+      retentionPolicy: *retention-policy
+      fallbackPolicy: *fallback-policy
+      metadata:
+        releaseStatus: controlled-test
+        topology: managed
     management:
       id: memory.provider.mem0.platform-v3
       version: '1.0.0'
+      revision: mem0-platform-v3
       type: mem0
       deployment: managed
       connectionRef: memory.connection.mem0-platform
@@ -71,11 +232,52 @@ profiles:
         apiTokenEnv: HYPHA_MEM0_PLATFORM_TOKEN
         protocol: mem0-platform-v3
         mappingStoreRef: memory.mapping.durable
+        operationStoreRef: memory.operation.durable
+      capabilities: &mem0-platform-capabilities
+        add: true
+        search: true
+        get: true
+        list: true
+        update: true
+        delete: true
+        deleteByFilter: true
+        history: true
+        summarize: false
+        consolidate: false
+        decay: false
+        reinforce: false
+        conflictDetection: true
+        hybridSearch: true
+        graphRelations: false
+        asyncWrite: true
+        batchOperations: false
+      metadata:
+        releaseStatus: controlled-test
   memorybank-managed:
-    status: controlled-test
+    profile:
+      id: memorybank-managed
+      version: '1.0.0'
+      revision: vertex-memorybank-v1
+      name: Vertex AI Memory Bank
+      enabled: true
+      managementProviderRef:
+        id: memory.provider.memorybank.vertex-ai
+        version: '1.0.0'
+      recordStoreRef:
+        id: memory.store.external.memorybank-managed
+        version: '1.0.0'
+      scopePolicy: *scope-policy
+      retrievalPolicy: *retrieval-policy
+      writePolicy: *write-policy
+      retentionPolicy: *retention-policy
+      fallbackPolicy: *fallback-policy
+      metadata:
+        releaseStatus: controlled-test
+        topology: managed
     management:
       id: memory.provider.memorybank.vertex-ai
       version: '1.0.0'
+      revision: vertex-memorybank-v1
       type: memorybank
       deployment: managed
       connectionRef: memory.connection.memorybank-managed
@@ -83,6 +285,28 @@ profiles:
         projectIdEnv: HYPHA_MEMORYBANK_PROJECT
         locationEnv: HYPHA_MEMORYBANK_LOCATION
         reasoningEngineIdEnv: HYPHA_MEMORYBANK_ENGINE
-        accessTokenEnv: HYPHA_MEMORYBANK_MANAGED_TOKEN
-        tlsRequired: true
+        credentialRef: credential:memorybank-managed
+        protocol: vertex-ai-agent-engine-memory-bank
         mappingStoreRef: memory.mapping.durable
+        operationStoreRef: memory.operation.durable
+        tlsRequired: true
+      capabilities:
+        add: true
+        search: true
+        get: true
+        list: true
+        update: true
+        delete: true
+        deleteByFilter: false
+        history: true
+        summarize: true
+        consolidate: true
+        decay: false
+        reinforce: false
+        conflictDetection: true
+        hybridSearch: true
+        graphRelations: false
+        asyncWrite: true
+        batchOperations: false
+      metadata:
+        releaseStatus: controlled-test

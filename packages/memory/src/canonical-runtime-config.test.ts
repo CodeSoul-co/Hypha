@@ -1,4 +1,7 @@
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { describe, expect, it, vi } from 'vitest';
+import { parse } from 'yaml';
 import {
   CanonicalMemoryRuntimeLoader,
   MemoryManagementProviderRegistry,
@@ -69,6 +72,8 @@ describe('canonical Memory runtime configuration', () => {
       'HYPHA_MEMORY_ENDPOINT',
       'memory.connection.native',
       'memory.mapping.durable',
+      'memory.store.record.sqlite',
+      'memory.vector.local',
       'secret:memory/native',
     ]);
     expect(runtime.compositionReceipt).toMatchObject({
@@ -78,14 +83,55 @@ describe('canonical Memory runtime configuration', () => {
         'HYPHA_MEMORY_ENDPOINT',
         'memory.connection.native',
         'memory.mapping.durable',
+        'memory.store.record.sqlite',
+        'memory.vector.local',
         'secret:memory/native',
       ],
     });
     expect(runtime.compositionReceipt.configHash).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(resolve).toHaveBeenCalledTimes(4);
+    expect(resolve).toHaveBeenCalledTimes(6);
     await runtime.close();
   });
 
+  it('loads the repository YAML through strict resolution, runtime creation, health and close', async () => {
+    const path = resolve(process.cwd(), 'configs/memory-profiles.yaml');
+    const document = parse(readFileSync(path, 'utf8'));
+    expect(canonicalMemoryRuntimeConfigSchema.parse(document)).toEqual(document);
+
+    const resolveReference = vi.fn(async (reference: string) => ({ reference }));
+    const loader = new CanonicalMemoryRuntimeLoader({ resolve: resolveReference });
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'repository-native-default',
+      supports: (spec) => spec.type === 'native' && spec.deployment === 'local',
+      create: async (input) => new NativeMemoryManagementProvider({ profile: input.profile }),
+    });
+    const factory = new MemoryRuntimeFactory({
+      registry,
+      activities: {
+        policy: { authorize: async () => ({ allowed: true }) },
+        events: { publish: async (type: MemoryEventType) => 'event:' + type },
+        harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
+      },
+      eventContext: (request) => ({ runId: request.operationId }),
+    });
+
+    const runtime = await loader.create(factory, document);
+    expect(runtime.compositionReceipt).toMatchObject({
+      activeProfileId: 'native-default',
+      providerSpecId: 'memory.provider.native-default',
+    });
+    await expect(runtime.provider.health()).resolves.toMatchObject({ status: 'healthy' });
+    expect(resolveReference.mock.calls.map(([reference]) => reference).sort()).toEqual([
+      'memory.artifact.local',
+      'memory.connection.native-default',
+      'memory.embedding.local',
+      'memory.store.outbox.mongodb',
+      'memory.store.record.mongodb',
+      'memory.store.working.redis',
+      'memory.vector.local',
+    ]);
+    await runtime.close();
+  });
   it('fails before provider creation when a reference cannot be resolved', async () => {
     const document = structuredClone(canonicalMemoryRuntimeConfigExample);
     document.profiles[document.activeProfile].management.connectionRef =

@@ -83,6 +83,55 @@ export const memoryRuntimeConfigSchema: ZodType<MemoryRuntimeConfig> = z
           message: 'Provider credentials must be resolved by connectionRef, not stored inline.',
         });
       }
+      const dependencyIds = [
+        entry.profile.workingStoreRef?.id,
+        entry.profile.recordStoreRef.id,
+        ...(entry.profile.vectorStoreRefs ?? []).map((reference) => reference.id),
+        entry.profile.artifactStoreRef?.id,
+        entry.profile.embeddingProviderRef?.id,
+        entry.profile.rerankerProviderRef?.id,
+        entry.profile.contextProfileRef?.id,
+      ].filter((value): value is string => Boolean(value));
+      if (new Set(dependencyIds).size !== dependencyIds.length) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['profiles', key, 'profile'],
+          message: 'Memory profile dependency references must be unique.',
+        });
+      }
+      if (
+        entry.management.type === 'native' &&
+        entry.management.deployment === 'local' &&
+        (!entry.profile.workingStoreRef ||
+          entry.profile.workingStoreRef.id === entry.profile.recordStoreRef.id)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['profiles', key, 'profile'],
+          message: 'Local Native Memory requires distinct working and record store references.',
+        });
+      }
+      if (
+        ['self_hosted', 'managed', 'remote'].includes(entry.management.deployment) &&
+        !entry.management.connectionRef
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['profiles', key, 'management', 'connectionRef'],
+          message: 'External Memory deployments require a connectionRef.',
+        });
+      }
+      const ephemeralPath = findEphemeralProductionReference(entry.management.config);
+      if (
+        ephemeralPath &&
+        ['self_hosted', 'managed', 'remote'].includes(entry.management.deployment)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['profiles', key, 'management', 'config', ...ephemeralPath],
+          message: 'Production Memory profiles require durable mapping and operation stores.',
+        });
+      }
     }
   });
 
@@ -342,6 +391,24 @@ function findInlineSecret(
   return undefined;
 }
 
+function findEphemeralProductionReference(
+  value: unknown,
+  path: Array<string | number> = []
+): Array<string | number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  for (const [key, nested] of Object.entries(value)) {
+    if (
+      /(?:mapping|operation)StoreRef$/i.test(key) &&
+      typeof nested === 'string' &&
+      /(?:in[-_]?memory|ephemeral)/i.test(nested)
+    ) {
+      return [...path, key];
+    }
+    const found = findEphemeralProductionReference(nested, [...path, key]);
+    if (found) return found;
+  }
+  return undefined;
+}
 function isCredentialReference(key: string, value: unknown): boolean {
   if (typeof value !== 'string') return false;
   if (/Env$/i.test(key)) return /^[A-Z][A-Z0-9_]*$/.test(value);
