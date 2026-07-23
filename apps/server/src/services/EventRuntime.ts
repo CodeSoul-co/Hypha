@@ -1000,6 +1000,7 @@ class EventRuntimeService {
         autoRecoverReasons: [
           'PROJECTION_BEHIND',
           'ACTIVITY_RESULT_UNAPPLIED',
+          'LEASE_EXPIRED',
           'STATE_CLAIM_EXPIRED',
           'CANCELLATION_INCOMPLETE',
         ],

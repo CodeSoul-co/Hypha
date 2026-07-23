@@ -42,6 +42,11 @@ describe('SQLiteRunLeaseStore', () => {
     const first = await store.acquire(
       acquireRequest('lease.1', 'worker.1', '2026-07-18T06:00:00.000Z')
     );
+    await expect(store.getStored(scope)).resolves.toMatchObject({
+      id: first!.id,
+      fencingToken: first!.fencingToken,
+    });
+    await expect(store.get(scope, '2026-07-18T06:00:30.000Z')).resolves.toBeNull();
     const second = await store.acquire(
       acquireRequest('lease.2', 'worker.2', '2026-07-18T06:00:30.000Z')
     );

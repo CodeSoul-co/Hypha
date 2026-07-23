@@ -64,6 +64,7 @@ export interface RunLeaseStore {
   preempt(request: RunLeasePreemptRequest): Promise<FencedRunLease>;
   heartbeat(request: RunLeaseHeartbeatRequest): Promise<FencedRunLease>;
   release(request: RunLeaseReleaseRequest): Promise<void>;
+  getStored(scope: RunLeaseScope): Promise<FencedRunLease | null>;
   get(scope: RunLeaseScope, checkedAt?: string): Promise<FencedRunLease | null>;
   assertCurrent(request: RunLeaseAssertionRequest): Promise<FencedRunLease>;
 }

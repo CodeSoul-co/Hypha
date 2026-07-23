@@ -477,6 +477,7 @@ function recoveryCasePayload(): JsonSchema {
       activityStatus: stringSchema,
       providerRevision: stringSchema,
       receiptId: stringSchema,
+      explanation: stringSchema,
     }
   );
 }

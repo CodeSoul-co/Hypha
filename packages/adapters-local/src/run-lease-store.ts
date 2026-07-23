@@ -181,6 +181,14 @@ export class SQLiteRunLeaseStore implements RunLeaseStore {
     }
   }
 
+  async getStored(scope: RunLeaseScope): Promise<FencedRunLease | null> {
+    const validatedScope = runLeaseScopeSchema.parse(scope);
+    const slot = this.readSlot(runLeaseScopeKey(validatedScope), validatedScope);
+    if (!slot) return null;
+    assertPartition(slot, validatedScope);
+    return slot.active ? structuredClone(slot.active) : null;
+  }
+
   async get(scope: RunLeaseScope, checkedAt = this.now()): Promise<FencedRunLease | null> {
     const validatedScope = runLeaseScopeSchema.parse(scope);
     validTimestamp(checkedAt, 'checkedAt');
