@@ -74,30 +74,6 @@ non-root and immutable-image evidence, mount and path confinement, secret and ne
 memory and PID enforcement, timeout and idle-timeout, cancellation, process-tree termination, and
 container cleanup.
 
-## S3-Compatible Artifact Store
-
-`S3ExecutionArtifactStore` and `S3ExecutionArtifactStoreFactory` in `@hypha/adapters-local`
-implement the shared Artifact Store contract without exposing AWS SDK values to Core. The adapter
-supports streamed and multipart upload, metadata and SHA-256 verification, range reads, conditional
-requests, version-aware references, server-side copy, signed download access, cancellation, retry,
-and idempotent cleanup. Versioning and encryption capabilities are reported only when enabled by
-configuration.
-
-Credentials are runtime configuration and must not be committed. Real-provider acceptance is
-opt-in for ordinary package tests and mandatory for an S3-compatible release claim. The acceptance
-environment must set `HYPHA_REAL_MINIO=1`, `HYPHA_REAL_MINIO_ACCESS_KEY`, and
-`HYPHA_REAL_MINIO_SECRET_KEY`; it may set `HYPHA_REAL_MINIO_ENDPOINT` and
-`HYPHA_REAL_MINIO_REGION`. Run:
-
-```bash
-npx vitest run packages/adapters-local/src/s3-execution-artifact-store.real.test.ts
-```
-
-The release result must execute every case with zero skipped tests. The suite verifies checksum
-rejection, range and signed access, multipart completion and cancellation, retry, conditional and
-idempotent behavior, version-addressed reads and deletes, and removal of all objects, versions,
-delete markers, multipart uploads, and the temporary bucket.
-
 ## Evidence Required for Capability Claims
 
 | Capability group                   | Minimum evidence before reporting `true`                                                                                                                                                                                                                                                      |
