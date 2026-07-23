@@ -98,7 +98,7 @@ describe('Skill install filesystem boundary', () => {
       await rename(source, destination);
       if (path.resolve(String(destination)) !== target) return;
       await fs.unlink(target);
-      await fs.writeFile(target, 'replacement', { encoding: 'utf8', mode: 0o600 });
+      await fs.writeFile(target, 'replaced', { encoding: 'utf8', mode: 0o600 });
     });
 
     try {
@@ -111,7 +111,7 @@ describe('Skill install filesystem boundary', () => {
           verify: (raw) => expect(raw).toBe('verified'),
         })
       ).rejects.toMatchObject({ code: 'SKILL_TARGET_IDENTITY_CHANGED' });
-      await expect(fs.readFile(target, 'utf8')).resolves.toBe('replacement');
+      await expect(fs.readFile(target, 'utf8')).resolves.toBe('replaced');
     } finally {
       renameSpy.mockRestore();
     }
