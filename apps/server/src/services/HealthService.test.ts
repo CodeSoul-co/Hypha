@@ -56,4 +56,24 @@ describe('HealthService', () => {
       },
     });
   });
+
+  it('fails readiness closed after the Runtime reports a fatal error', async () => {
+    dependencies.storageHealth.mockResolvedValue({ mongodb: true, redis: true });
+    dependencies.modelHealth.mockResolvedValue({ defaultProvider: 'deepseek', healthy: true });
+    const service = new HealthService(dependencies);
+    service.setRuntimeInitialized(true);
+    service.setRuntimeFailure(new Error('recovery replay diverged'));
+
+    await expect(service.readiness()).resolves.toMatchObject({
+      status: 'not_ready',
+      ready: false,
+      components: {
+        runtime: {
+          status: 'unhealthy',
+          required: true,
+          detail: 'Error: recovery replay diverged',
+        },
+      },
+    });
+  });
 });

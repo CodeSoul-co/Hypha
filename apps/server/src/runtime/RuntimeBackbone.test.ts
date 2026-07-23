@@ -13,6 +13,8 @@ import { createRuntimeBackbone, type RuntimeBackbone } from './RuntimeBackbone';
 
 const timestamp = '2026-07-21T06:00:00.000Z';
 const payloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
+const commandPayloadHash =
+  'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
 
 describe('RuntimeBackbone', () => {
   const backbones: RuntimeBackbone[] = [];
@@ -31,6 +33,7 @@ describe('RuntimeBackbone', () => {
     expect(backbone.checkpoints).toBeDefined();
     expect(backbone.runLeases).toBeDefined();
     expect(backbone.stateClaims).toBeDefined();
+    expect(backbone.sessionQueue).toBeDefined();
     expect(Object.isFrozen(backbone)).toBe(true);
   });
 
@@ -87,6 +90,17 @@ describe('RuntimeBackbone', () => {
       acquiredAt: '2026-07-21T06:00:01.000Z',
       idempotencyKey: 'acquire:claim.state.1',
     }))!;
+    await first.sessionQueue.enqueue({
+      id: 'command.session.1',
+      commandType: 'resume',
+      idempotencyKey: 'command.session.1',
+      tenantId: scope.tenantId,
+      userId: scope.userId,
+      sessionId: 'session.example',
+      targetRunId: scope.runId,
+      payloadHash: commandPayloadHash,
+      createdAt: timestamp,
+    });
     first.close();
     backbones.splice(backbones.indexOf(first), 1);
 
@@ -106,6 +120,17 @@ describe('RuntimeBackbone', () => {
         checkedAt: '2026-07-21T06:00:02.000Z',
       })
     ).resolves.toEqual(claim);
+    await expect(
+      reopened.sessionQueue.list({
+        scope: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          sessionId: 'session.example',
+        },
+      })
+    ).resolves.toMatchObject([
+      { id: 'command.session.1', targetRunId: scope.runId, status: 'queued' },
+    ]);
   });
 
   function open(filename: string, schemaRegistry: InMemoryEventSchemaRegistry): RuntimeBackbone {

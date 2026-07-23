@@ -8,11 +8,18 @@ jest.mock('../services/EventRuntime', () => ({
   getEventRuntime: jest.fn(),
 }));
 
-describe('runtime run authorization', () => {
+describe('runtime authorization', () => {
   const ownerId = 'runtime-owner';
-  const run = { id: 'run-owned', userId: ownerId, sessionId: 'session-1', status: 'running' };
+  const run = {
+    id: 'run-owned',
+    userId: ownerId,
+    sessionId: 'runtime-session-1',
+    clientSessionId: 'session-1',
+    status: 'running',
+  };
   const runtime = {
     projectOwnedRun: jest.fn(),
+    findOwnedRunScope: jest.fn(),
     listEvents: jest.fn(),
     projectReplay: jest.fn(),
     projectAudit: jest.fn(),
@@ -21,6 +28,11 @@ describe('runtime run authorization', () => {
     decideHumanReview: jest.fn(),
     listSkillHumanReviews: jest.fn(),
     decideSkillHumanReview: jest.fn(),
+    enqueueStartRun: jest.fn(),
+    enqueueCancelRun: jest.fn(),
+    enqueueResumeRun: jest.fn(),
+    enqueueSignalRun: jest.fn(),
+    listSessionCommands: jest.fn(),
   };
   const app = express();
   app.use(express.json());
@@ -48,6 +60,9 @@ describe('runtime run authorization', () => {
     runtime.projectOwnedRun.mockImplementation(async (_runId: string, userId: string) =>
       userId === ownerId ? run : null
     );
+    runtime.findOwnedRunScope.mockImplementation(async (_runId: string, userId: string) =>
+      userId === ownerId ? run : null
+    );
     runtime.listEvents.mockResolvedValue([{ id: 'event-1' }]);
     runtime.projectReplay.mockResolvedValue({ runId: run.id });
     runtime.projectAudit.mockResolvedValue({ runId: run.id });
@@ -63,6 +78,244 @@ describe('runtime run authorization', () => {
       taskId: 'skill-review-1',
       status: 'approved',
     });
+    runtime.enqueueStartRun.mockResolvedValue({
+      id: 'session-command-1',
+      commandType: 'start_run',
+      idempotencyKey: 'request-1',
+      userId: ownerId,
+      sessionId: 'session-1',
+      targetRunId: 'run-1',
+      enqueueSequence: 4,
+      priority: 50,
+      attempts: 0,
+      maxAttempts: 5,
+      payloadRef: 'artifact://session-command-1',
+      payloadHash: `sha256:${'a'.repeat(64)}`,
+      claimedBy: 'runtime-worker',
+      leaseExpiresAt: '2026-07-22T08:01:00.000Z',
+      status: 'queued',
+      createdAt: '2026-07-22T08:00:00.000Z',
+      availableAt: '2026-07-22T08:00:00.000Z',
+    });
+    runtime.listSessionCommands.mockResolvedValue([]);
+    runtime.enqueueCancelRun.mockResolvedValue({
+      id: 'session-command-cancel-1',
+      commandType: 'cancel',
+      idempotencyKey: 'request-cancel-1',
+      userId: ownerId,
+      sessionId: 'session-1',
+      targetRunId: run.id,
+      enqueueSequence: 5,
+      priority: 50,
+      attempts: 0,
+      maxAttempts: 5,
+      payloadRef: 'artifact://session-command-cancel-1',
+      payloadHash: `sha256:${'b'.repeat(64)}`,
+      status: 'queued',
+      createdAt: '2026-07-22T08:00:00.000Z',
+      availableAt: '2026-07-22T08:00:00.000Z',
+    });
+    runtime.enqueueResumeRun.mockResolvedValue({
+      id: 'session-command-resume-1',
+      commandType: 'resume',
+      idempotencyKey: 'request-resume-1',
+      userId: ownerId,
+      sessionId: 'session-1',
+      targetRunId: run.id,
+      enqueueSequence: 6,
+      priority: 50,
+      attempts: 0,
+      maxAttempts: 5,
+      payloadRef: 'artifact://session-command-resume-1',
+      payloadHash: `sha256:${'c'.repeat(64)}`,
+      status: 'queued',
+      createdAt: '2026-07-22T08:00:00.000Z',
+      availableAt: '2026-07-22T08:00:00.000Z',
+    });
+    runtime.enqueueSignalRun.mockResolvedValue({
+      id: 'session-command-signal-1',
+      commandType: 'signal',
+      idempotencyKey: 'request-signal-1',
+      userId: ownerId,
+      sessionId: 'session-1',
+      targetRunId: run.id,
+      enqueueSequence: 7,
+      priority: 50,
+      attempts: 0,
+      maxAttempts: 5,
+      payloadRef: 'artifact://session-command-signal-1',
+      payloadHash: `sha256:${'d'.repeat(64)}`,
+      status: 'queued',
+      createdAt: '2026-07-22T08:00:00.000Z',
+      availableAt: '2026-07-22T08:00:00.000Z',
+    });
+  });
+
+  it('accepts a durable start_run command in the authenticated Session scope', async () => {
+    const response = await request(app)
+      .post('/runtime/sessions/session-1/commands/start-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', ' request-1 ')
+      .send({ input: { task: 'test' }, agentId: 'agent-1', parentRunId: 'run-parent' })
+      .expect(202);
+
+    expect(runtime.enqueueStartRun).toHaveBeenCalledWith(
+      {
+        input: { task: 'test' },
+        agentId: 'agent-1',
+        parentRunId: 'run-parent',
+        userId: ownerId,
+        sessionId: 'session-1',
+      },
+      'request-1'
+    );
+    expect(response.body.data).toMatchObject({
+      id: 'session-command-1',
+      enqueueSequence: 4,
+      status: 'queued',
+    });
+    expect(response.body.data).not.toHaveProperty('payloadRef');
+    expect(response.body.data).not.toHaveProperty('payloadHash');
+    expect(response.body.data).not.toHaveProperty('claimedBy');
+    expect(response.body.data).not.toHaveProperty('leaseExpiresAt');
+  });
+
+  it('rejects a start_run command without an idempotency key or with ownership fields', async () => {
+    await request(app)
+      .post('/runtime/sessions/session-1/commands/start-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ input: { task: 'test' } })
+      .expect(400);
+
+    const response = await request(app)
+      .post('/runtime/sessions/session-1/commands/start-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-1')
+      .send({ input: { task: 'test' }, userId: 'runtime-foreign' })
+      .expect(400);
+
+    expect(response.body.error.code).toBe('INVALID_SESSION_COMMAND');
+    expect(runtime.enqueueStartRun).not.toHaveBeenCalled();
+  });
+
+  it('accepts cancellation only for a Run in the authenticated Session scope', async () => {
+    const response = await request(app)
+      .post('/runtime/sessions/session-1/commands/cancel-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-cancel-1')
+      .send({ runId: run.id, reason: 'Stop requested' })
+      .expect(202);
+
+    expect(runtime.findOwnedRunScope).toHaveBeenCalledWith(run.id, ownerId);
+    expect(runtime.enqueueCancelRun).toHaveBeenCalledWith(
+      {
+        userId: ownerId,
+        sessionId: 'session-1',
+        runId: run.id,
+        reason: 'Stop requested',
+      },
+      'request-cancel-1'
+    );
+    expect(response.body.data).toMatchObject({
+      id: 'session-command-cancel-1',
+      commandType: 'cancel',
+      status: 'queued',
+    });
+    expect(response.body.data).not.toHaveProperty('payloadRef');
+  });
+
+  it('hides a Run when the cancellation Session scope does not match', async () => {
+    const response = await request(app)
+      .post('/runtime/sessions/session-other/commands/cancel-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-cancel-1')
+      .send({ runId: run.id })
+      .expect(404);
+
+    expect(response.body.error.code).toBe('RUN_NOT_FOUND');
+    expect(runtime.enqueueCancelRun).not.toHaveBeenCalled();
+  });
+
+  it('accepts durable resume and signal commands in the authenticated Session scope', async () => {
+    const resume = await request(app)
+      .post('/runtime/sessions/session-1/commands/resume-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-resume-1')
+      .send({ runId: run.id, key: 'resume.plan', payload: { note: 'continue' } })
+      .expect(202);
+    const signal = await request(app)
+      .post('/runtime/sessions/session-1/commands/signal-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-signal-1')
+      .send({ runId: run.id, key: 'approval.received', payload: { approved: true } })
+      .expect(202);
+
+    expect(runtime.enqueueResumeRun).toHaveBeenCalledWith(
+      {
+        userId: ownerId,
+        sessionId: 'session-1',
+        runId: run.id,
+        key: 'resume.plan',
+        payload: { note: 'continue' },
+      },
+      'request-resume-1'
+    );
+    expect(runtime.enqueueSignalRun).toHaveBeenCalledWith(
+      {
+        userId: ownerId,
+        sessionId: 'session-1',
+        runId: run.id,
+        key: 'approval.received',
+        payload: { approved: true },
+      },
+      'request-signal-1'
+    );
+    expect(resume.body.data).toMatchObject({ commandType: 'resume', status: 'queued' });
+    expect(signal.body.data).toMatchObject({ commandType: 'signal', status: 'queued' });
+    expect(resume.body.data).not.toHaveProperty('payloadRef');
+    expect(signal.body.data).not.toHaveProperty('payloadRef');
+  });
+
+  it('rejects invalid or cross-Session run controls before enqueueing', async () => {
+    await request(app)
+      .post('/runtime/sessions/session-1/commands/signal-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-signal-1')
+      .send({ runId: run.id, key: 'approval.received' })
+      .expect(400);
+    await request(app)
+      .post('/runtime/sessions/session-other/commands/resume-run')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', 'request-resume-1')
+      .send({ runId: run.id })
+      .expect(404);
+
+    expect(runtime.enqueueResumeRun).not.toHaveBeenCalled();
+    expect(runtime.enqueueSignalRun).not.toHaveBeenCalled();
+  });
+
+  it('lists commands only in the authenticated Session scope with validated pagination', async () => {
+    await request(app)
+      .get('/runtime/sessions/session-1/commands')
+      .query({ status: 'queued,failed', fromSequence: '4', limit: '25' })
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+
+    expect(runtime.listSessionCommands).toHaveBeenCalledWith(
+      { userId: ownerId, sessionId: 'session-1' },
+      { statuses: ['queued', 'failed'], fromSequence: 4, limit: 25 }
+    );
+  });
+
+  it('rejects unsupported command query values before reading the queue', async () => {
+    const response = await request(app)
+      .get('/runtime/sessions/session-1/commands')
+      .query({ status: 'unknown', limit: '1001' })
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(400);
+
+    expect(response.body.error.code).toBe('INVALID_SESSION_COMMAND');
+    expect(runtime.listSessionCommands).not.toHaveBeenCalled();
   });
 
   it('returns an owned run and its events', async () => {

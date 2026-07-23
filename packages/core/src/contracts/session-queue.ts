@@ -4,6 +4,7 @@ export const SESSION_COMMAND_TYPES = [
   'resume',
   'signal',
   'cancel',
+  'transition',
   'close_session',
 ] as const;
 
@@ -17,6 +18,9 @@ export const SESSION_COMMAND_STATUSES = [
   'failed',
   'dead_letter',
 ] as const;
+
+export const DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS = 5;
+export const SESSION_COMMAND_MAX_ATTEMPTS_LIMIT = 100;
 
 export type SessionCommandType = (typeof SESSION_COMMAND_TYPES)[number];
 export type SessionCommandStatus = (typeof SESSION_COMMAND_STATUSES)[number];
@@ -38,6 +42,8 @@ export interface SessionCommandRecord {
   targetRunId?: string;
   enqueueSequence: number;
   priority: number;
+  attempts: number;
+  maxAttempts: number;
   payloadRef?: string;
   payloadHash: string;
   status: SessionCommandStatus;
@@ -62,6 +68,7 @@ export interface EnqueueSessionCommandRequest {
   sessionId: string;
   targetRunId?: string;
   priority?: number;
+  maxAttempts?: number;
   payloadRef?: string;
   payloadHash: string;
   createdAt?: string;

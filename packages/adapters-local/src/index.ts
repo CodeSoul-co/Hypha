@@ -57,6 +57,7 @@ export * from './runtime-event-store';
 export * from './runtime-checkpoint-store';
 export * from './run-lease-store';
 export * from './state-execution-claim-store';
+export * from './session-queue';
 export * from './projection-store';
 export * from './sqlite-driver';
 export * from './artifact-content-io';

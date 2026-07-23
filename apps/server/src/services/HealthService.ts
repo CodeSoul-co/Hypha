@@ -36,11 +36,23 @@ export interface HealthServiceDependencies {
 
 export class HealthService {
   private runtimeInitialized = false;
+  private runtimeFailure?: string;
 
   constructor(private readonly dependencies: HealthServiceDependencies = defaultDependencies()) {}
 
   setRuntimeInitialized(initialized: boolean): void {
     this.runtimeInitialized = initialized;
+    if (initialized) this.runtimeFailure = undefined;
+  }
+
+  setRuntimeFailure(error: unknown): void {
+    this.runtimeInitialized = false;
+    this.runtimeFailure =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : typeof error === 'string' && error.trim()
+          ? error.trim()
+          : 'Runtime service reported an unknown fatal error';
   }
 
   liveness(): LivenessSnapshot {
@@ -62,7 +74,9 @@ export class HealthService {
       runtime: component(
         this.runtimeInitialized,
         true,
-        this.runtimeInitialized ? undefined : 'Runtime services are still initializing'
+        this.runtimeInitialized
+          ? undefined
+          : (this.runtimeFailure ?? 'Runtime services are still initializing')
       ),
       mongodb: component(Boolean(storage?.mongodb), true),
       redis: component(Boolean(storage?.redis), true),

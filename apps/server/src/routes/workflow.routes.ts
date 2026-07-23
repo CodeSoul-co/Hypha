@@ -58,25 +58,55 @@ router.get('/executions/:executionId', asyncHandler(async (req: Request, res: Re
 router.post('/executions/:executionId/cancel', asyncHandler(async (req: Request, res: Response) => {
   const { executionId } = req.params;
   const userId = authenticatedUserId(req);
-  const cancellation = userId
-    ? await getEventRuntime().cancelOwnedWorkflowExecution({
-        executionId,
-        userId,
-        reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
-        idempotencyKey: req.get('Idempotency-Key') || undefined,
-      })
+  const runtime = getEventRuntime();
+  const execution = userId
+    ? await runtime.projectOwnedWorkflowExecution(executionId, userId)
     : null;
-  if (!cancellation) {
+  if (!execution || !userId) {
     return res.status(HTTP_STATUS.NOT_FOUND).json({
       success: false,
       error: { code: 'EXECUTION_NOT_FOUND', message: 'Execution not found' },
     });
   }
+  const reasonValue = req.body?.reason;
+  const reason = typeof reasonValue === 'string' ? reasonValue.trim() : undefined;
+  if (reasonValue !== undefined && !reason) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({
+      success: false,
+      error: { code: 'INVALID_SESSION_COMMAND', message: 'reason must be a non-empty string' },
+    });
+  }
+  const requestedKey = req.get('Idempotency-Key')?.trim();
+  if (requestedKey && requestedKey.length > 256) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({
+      success: false,
+      error: {
+        code: 'INVALID_SESSION_COMMAND',
+        message: 'Idempotency-Key header must not exceed 256 characters',
+      },
+    });
+  }
+  const run = await runtime.requireOwnedRunScope(execution.runId, userId);
+  const command = await runtime.enqueueCancelRun(
+    {
+      userId,
+      sessionId: run.clientSessionId,
+      runId: execution.runId,
+      reason,
+    },
+    requestedKey || `workflow-cancel:${executionId}`
+  );
 
-  res.json({
+  res.status(HTTP_STATUS.ACCEPTED).json({
     success: true,
-    message: 'Execution cancelled',
-    data: cancellation,
+    message: 'Execution cancellation accepted',
+    data: {
+      executionId,
+      commandId: command.id,
+      enqueueSequence: command.enqueueSequence,
+      status: command.status,
+      runId: execution.runId,
+    },
   });
 }));
 

@@ -71,6 +71,47 @@ describe('projectRuntimeRunContexts', () => {
     ]);
   });
 
+  it('derives snapshots from canonical State entry facts without embedded snapshots', () => {
+    const events = [
+      createFrameworkEvent({
+        id: 'run-1:created',
+        type: 'run.created',
+        runId: context.runId,
+        sessionId: context.sessionId,
+        userId: context.userId,
+        timestamp: initial.updatedAt,
+        payload: { runId: context.runId },
+        metadata: runtimeRunContextMetadata(context),
+      }),
+      createFrameworkEvent({
+        id: 'run-1:entered:running',
+        type: 'fsm.state.entered',
+        runId: context.runId,
+        sessionId: context.sessionId,
+        userId: context.userId,
+        timestamp: '2026-07-21T06:00:01.000Z',
+        payload: { stateId: 'Running', fromState: 'Queued' },
+      }),
+      createFrameworkEvent({
+        id: 'run-1:entered:completed',
+        type: 'fsm.state.entered',
+        runId: context.runId,
+        sessionId: context.sessionId,
+        userId: context.userId,
+        timestamp: '2026-07-21T06:00:02.000Z',
+        payload: { stateId: 'Completed', fromState: 'Running' },
+      }),
+    ];
+
+    expect(projectRuntimeRunContext(events, 'run-1')?.snapshot).toEqual({
+      ...initial,
+      currentState: 'Completed',
+      statePath: ['Queued', 'Running', 'Completed'],
+      status: 'completed',
+      updatedAt: '2026-07-21T06:00:02.000Z',
+    });
+  });
+
   it('ignores pre-migration Runs without persisted recovery context', () => {
     expect(
       projectRuntimeRunContexts([
@@ -99,6 +140,27 @@ describe('projectRuntimeRunContexts', () => {
 
     expect(projectRuntimeRunContext([created], 'run-1')).toEqual(context);
     expect(projectRuntimeRunContext([created], 'missing-run')).toBeNull();
+  });
+
+  it('rebuilds an optional parent Run relation from run.created metadata', () => {
+    const child: RuntimeRunContext = {
+      ...context,
+      runId: 'run-child',
+      parentRunId: 'run-parent',
+      snapshot: { ...initial, runId: 'run-child' },
+    };
+    const created = createFrameworkEvent({
+      id: 'run-child:created',
+      type: 'run.created',
+      runId: child.runId,
+      sessionId: child.sessionId,
+      userId: child.userId,
+      timestamp: initial.updatedAt,
+      payload: { runId: child.runId },
+      metadata: runtimeRunContextMetadata(child),
+    });
+
+    expect(projectRuntimeRunContext([created], child.runId)).toEqual(child);
   });
 
   it('fails closed when a persisted snapshot does not belong to the Run', () => {

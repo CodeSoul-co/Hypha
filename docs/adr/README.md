@@ -21,3 +21,7 @@ ADRs record accepted architecture decisions for hypha. They should explain the d
 - [ADR 0015: Canonical Runtime Compatibility Facade](0015-canonical-runtime-compatibility-facade.md)
 - [ADR 0016: Runtime Orchestration Event Schema Catalog](0016-runtime-orchestration-event-schema-catalog.md)
 - [ADR 0017: Durable EventStore Compatibility Bridge](0017-durable-event-store-compatibility-bridge.md)
+- [ADR 0018: Canonical Orchestration Event Activation](0018-canonical-orchestration-event-activation.md)
+- [ADR 0019: Event-Derived Server Run Context](0019-event-derived-server-run-context.md)
+- [ADR 0020: Event-Derived Workflow Executions](0020-event-derived-workflow-executions.md)
+- [ADR 0021: RunManager Canonical Event Boundary](0021-run-manager-canonical-event-boundary.md)

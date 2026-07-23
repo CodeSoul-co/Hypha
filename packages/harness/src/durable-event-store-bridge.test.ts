@@ -4,6 +4,7 @@ import {
   FrameworkError,
   InMemoryDurableEventStore,
   InMemoryEventSchemaRegistry,
+  InMemoryRunLeaseStore,
   hashCanonicalJson,
   type FrameworkEvent,
   type JsonSchema,
@@ -111,9 +112,102 @@ describe('DurableEventStoreBridge', () => {
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_MESSAGE_SCHEMA_INVALID' });
   });
+
+  it('coordinates canonical writes with a fenced Run lease', async () => {
+    const target = await fixture({ coordinated: true });
+    const seedLease = await target.runLeases.acquire({
+      userId: 'user.fenced',
+      runId: 'run.fenced',
+      partitionKey: 'runtime:run.fenced',
+      requestedLeaseId: 'lease.seed',
+      ownerId: 'worker.seed',
+      ttlMs: 30_000,
+      acquiredAt: target.nextTimestamp(),
+      idempotencyKey: 'lease.seed.acquire',
+    });
+    expect(seedLease).not.toBeNull();
+    await target.events.append({
+      scope: { userId: 'user.fenced', runId: 'run.fenced' },
+      events: [
+        {
+          ...frameworkEvent('event.fenced.1', 'run.fenced', 'user.fenced'),
+          version: '1.0.0',
+          userId: 'user.fenced',
+        },
+      ],
+      expectedLastSequence: 0,
+      expectedRunRevision: 0,
+      fencingToken: seedLease!.fencingToken,
+      idempotencyKey: 'event.fenced.1',
+    });
+    await target.runLeases.release({
+      scope: {
+        userId: 'user.fenced',
+        runId: 'run.fenced',
+        partitionKey: 'runtime:run.fenced',
+      },
+      guard: {
+        leaseId: seedLease!.id,
+        ownerId: seedLease!.ownerId,
+        fencingToken: seedLease!.fencingToken,
+      },
+      releasedAt: target.nextTimestamp(),
+    });
+    await target.bridge.append(frameworkEvent('event.fenced.2', 'run.fenced', 'user.fenced'));
+
+    await expect(
+      target.events.getStreamHead({
+        userId: 'user.fenced',
+        runId: 'run.fenced',
+      })
+    ).resolves.toMatchObject({ lastSequence: 2, runRevision: 2, fencingToken: 2 });
+    await expect(
+      target.runLeases.get({
+        userId: 'user.fenced',
+        runId: 'run.fenced',
+        partitionKey: 'runtime:run.fenced',
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('fails closed when another owner holds the Run lease', async () => {
+    const target = await fixture({ coordinated: true });
+    const competing = await target.runLeases.acquire({
+      userId: 'user.busy',
+      runId: 'run.busy',
+      partitionKey: 'runtime:run.busy',
+      requestedLeaseId: 'lease.competing',
+      ownerId: 'worker.competing',
+      ttlMs: 30_000,
+      acquiredAt: target.nextTimestamp(),
+      idempotencyKey: 'lease.competing.acquire',
+    });
+    expect(competing).not.toBeNull();
+    await target.events.append({
+      scope: { userId: 'user.busy', runId: 'run.busy' },
+      events: [
+        {
+          ...frameworkEvent('event.busy.seed', 'run.busy', 'user.busy'),
+          version: '1.0.0',
+          userId: 'user.busy',
+        },
+      ],
+      expectedLastSequence: 0,
+      expectedRunRevision: 0,
+      fencingToken: competing!.fencingToken,
+      idempotencyKey: 'event.busy.seed',
+    });
+
+    await expect(
+      target.bridge.append(frameworkEvent('event.busy', 'run.busy', 'user.busy'))
+    ).rejects.toMatchObject({ code: 'RUNTIME_LEASE_CONFLICT' });
+    await expect(
+      target.events.read({ scope: { userId: 'user.busy', runId: 'run.busy' } })
+    ).resolves.toHaveLength(1);
+  });
 });
 
-async function fixture(options: { streamHeadPageSize?: number } = {}) {
+async function fixture(options: { streamHeadPageSize?: number; coordinated?: boolean } = {}) {
   const schemas = new InMemoryEventSchemaRegistry();
   await schemas.register({
     eventType: 'run.created',
@@ -125,9 +219,29 @@ async function fixture(options: { streamHeadPageSize?: number } = {}) {
   const now = () => new Date(Date.UTC(2026, 6, 21, 10, 0, 0, milliseconds++)).toISOString();
   const store = new InMemoryDurableEventStore({ schemaRegistry: schemas, now });
   const events = new DurableEventRuntime({ store, now });
+  const runLeases = new InMemoryRunLeaseStore({ now });
+  let leaseId = 0;
   return {
     events,
-    bridge: new DurableEventStoreBridge({ events, ...options }),
+    runLeases,
+    nextTimestamp: now,
+    bridge: new DurableEventStoreBridge({
+      events,
+      ...(options.streamHeadPageSize === undefined
+        ? {}
+        : { streamHeadPageSize: options.streamHeadPageSize }),
+      ...(options.coordinated
+        ? {
+            coordination: {
+              runLeases,
+              ownerId: 'run-manager.test',
+              leaseTtlMs: 30_000,
+              nextId: (namespace: string) => `${namespace}:${++leaseId}`,
+              now,
+            },
+          }
+        : {}),
+    }),
   };
 }
 

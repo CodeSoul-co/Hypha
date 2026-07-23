@@ -2,7 +2,9 @@ import { z, type ZodType } from 'zod';
 import { defineSpecSchema, exportSpecJsonSchemas } from '../schemas';
 import type { JsonSchema } from '../specs';
 import {
+  DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
   SESSION_COMMAND_STATUSES,
+  SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
   type SessionCommandRecord,
   type SessionQueueScope,
@@ -35,6 +37,8 @@ export const sessionCommandRecordSchema = z
     targetRunId: nonEmptyStringSchema.optional(),
     enqueueSequence: z.number().int().positive(),
     priority: z.number().int().min(0).max(100),
+    attempts: z.number().int().min(0),
+    maxAttempts: z.number().int().min(1).max(SESSION_COMMAND_MAX_ATTEMPTS_LIMIT),
     payloadRef: nonEmptyStringSchema.optional(),
     payloadHash: hashSchema,
     status: sessionCommandStatusSchema,
@@ -51,6 +55,13 @@ export const sessionCommandRecordSchema = z
   .strict()
   .superRefine((record, context) => {
     if (record.status === 'claimed') {
+      if (record.attempts < 1) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempts'],
+          message: 'attempts must be positive for claimed commands',
+        });
+      }
       if (!record.claimedBy) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -65,6 +76,13 @@ export const sessionCommandRecordSchema = z
           message: 'leaseExpiresAt is required for claimed commands',
         });
       }
+    }
+    if (record.attempts > record.maxAttempts) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['attempts'],
+        message: 'attempts must not exceed maxAttempts',
+      });
     }
     if (
       ['applied', 'rejected', 'expired', 'failed', 'dead_letter'].includes(record.status) &&
@@ -98,6 +116,8 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     'sessionId',
     'enqueueSequence',
     'priority',
+    'attempts',
+    'maxAttempts',
     'payloadHash',
     'status',
     'createdAt',
@@ -114,6 +134,8 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     targetRunId: stringProperty,
     enqueueSequence: { type: 'integer', minimum: 1 },
     priority: { type: 'integer', minimum: 0, maximum: 100 },
+    attempts: { type: 'integer', minimum: 0 },
+    maxAttempts: { type: 'integer', minimum: 1, maximum: SESSION_COMMAND_MAX_ATTEMPTS_LIMIT },
     payloadRef: stringProperty,
     payloadHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
     status: { type: 'string', enum: [...SESSION_COMMAND_STATUSES] },
@@ -163,6 +185,8 @@ export const sessionCommandRecordExample: SessionCommandRecord = {
   sessionId: 'session.example',
   enqueueSequence: 1,
   priority: 50,
+  attempts: 0,
+  maxAttempts: DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
   payloadRef: 'artifact://input/request.001',
   payloadHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
   status: 'queued',

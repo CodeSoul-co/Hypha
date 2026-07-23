@@ -1,13 +1,223 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { adminOnly, authMiddleware } from '../middleware/auth';
-import { getEventRuntime } from '../services/EventRuntime';
+import { getEventRuntime, type StartRunInput } from '../services/EventRuntime';
 import { HTTP_STATUS } from '../constants';
 import { agentPromptSpecSchema } from '@hypha/inference';
+import {
+  sessionCommandStatusSchema,
+  type RuntimeJsonValue,
+  type SessionCommandRecord,
+  type SessionCommandStatus,
+} from '@hypha/core';
+import { z } from 'zod';
 
 const router = Router();
 
 router.use(authMiddleware(true));
+
+const startRunCommandBodySchema = z
+  .object({
+    input: z.unknown().optional(),
+    agentId: z.string().trim().min(1).optional(),
+    parentRunId: z.string().trim().min(1).optional(),
+    workflowRef: z
+      .object({
+        id: z.string().trim().min(1),
+        version: z.string().trim().min(1).optional(),
+        revision: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    domainPack: z.unknown().optional(),
+    fsm: z.unknown().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+const cancelRunCommandBodySchema = z
+  .object({
+    runId: z.string().trim().min(1),
+    reason: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const resumeRunCommandBodySchema = z
+  .object({
+    runId: z.string().trim().min(1),
+    key: z.string().trim().min(1).optional(),
+    payload: z.unknown().optional(),
+  })
+  .strict();
+
+const signalRunCommandBodySchema = z
+  .object({
+    runId: z.string().trim().min(1),
+    key: z.string().trim().min(1),
+    payload: z.unknown(),
+  })
+  .strict()
+  .refine((value) => Object.prototype.hasOwnProperty.call(value, 'payload'), {
+    message: 'payload is required',
+    path: ['payload'],
+  });
+
+const sessionCommandListQuerySchema = z
+  .object({
+    status: z.string().trim().min(1).optional(),
+    fromSequence: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().min(1).max(1000).optional(),
+  })
+  .strict();
+
+router.post(
+  '/sessions/:sessionId/commands/start-run',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = authenticatedUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const idempotencyKey = requireIdempotencyKey(req, res);
+    if (!idempotencyKey) return;
+
+    const parsed = startRunCommandBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(
+        res,
+        'start_run command body is invalid',
+        parsed.error.flatten()
+      );
+    }
+
+    const payload = parsed.data as Omit<StartRunInput, 'userId' | 'sessionId'>;
+    const command = await getEventRuntime().enqueueStartRun(
+      {
+        ...payload,
+        userId,
+        sessionId: req.params.sessionId,
+      },
+      idempotencyKey
+    );
+    res.status(HTTP_STATUS.ACCEPTED).json({ success: true, data: publicSessionCommand(command) });
+  })
+);
+
+router.post(
+  '/sessions/:sessionId/commands/cancel-run',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = authenticatedUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const idempotencyKey = requireIdempotencyKey(req, res);
+    if (!idempotencyKey) return;
+    const parsed = cancelRunCommandBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(res, 'cancel command body is invalid', parsed.error.flatten());
+    }
+
+    const runtime = getEventRuntime();
+    const run = await runtime.findOwnedRunScope(parsed.data.runId, userId);
+    if (!run || run.clientSessionId !== req.params.sessionId) return runNotFound(res);
+    const command = await runtime.enqueueCancelRun(
+      {
+        userId,
+        sessionId: req.params.sessionId,
+        runId: parsed.data.runId,
+        reason: parsed.data.reason,
+      },
+      idempotencyKey
+    );
+    res.status(HTTP_STATUS.ACCEPTED).json({ success: true, data: publicSessionCommand(command) });
+  })
+);
+
+router.post(
+  '/sessions/:sessionId/commands/resume-run',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = authenticatedUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const idempotencyKey = requireIdempotencyKey(req, res);
+    if (!idempotencyKey) return;
+    const parsed = resumeRunCommandBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(res, 'resume command body is invalid', parsed.error.flatten());
+    }
+
+    const runtime = getEventRuntime();
+    const run = await runtime.findOwnedRunScope(parsed.data.runId, userId);
+    if (!run || run.clientSessionId !== req.params.sessionId) return runNotFound(res);
+    const command = await runtime.enqueueResumeRun(
+      {
+        userId,
+        sessionId: req.params.sessionId,
+        runId: parsed.data.runId,
+        key: parsed.data.key,
+        payload: parsed.data.payload as RuntimeJsonValue | undefined,
+      },
+      idempotencyKey
+    );
+    res.status(HTTP_STATUS.ACCEPTED).json({ success: true, data: publicSessionCommand(command) });
+  })
+);
+
+router.post(
+  '/sessions/:sessionId/commands/signal-run',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = authenticatedUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const idempotencyKey = requireIdempotencyKey(req, res);
+    if (!idempotencyKey) return;
+    const parsed = signalRunCommandBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(res, 'signal command body is invalid', parsed.error.flatten());
+    }
+
+    const runtime = getEventRuntime();
+    const run = await runtime.findOwnedRunScope(parsed.data.runId, userId);
+    if (!run || run.clientSessionId !== req.params.sessionId) return runNotFound(res);
+    const command = await runtime.enqueueSignalRun(
+      {
+        userId,
+        sessionId: req.params.sessionId,
+        runId: parsed.data.runId,
+        key: parsed.data.key,
+        payload: parsed.data.payload as RuntimeJsonValue,
+      },
+      idempotencyKey
+    );
+    res.status(HTTP_STATUS.ACCEPTED).json({ success: true, data: publicSessionCommand(command) });
+  })
+);
+
+router.get(
+  '/sessions/:sessionId/commands',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = authenticatedUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const parsed = sessionCommandListQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return invalidSessionCommand(res, 'Session Command query is invalid', parsed.error.flatten());
+    }
+
+    const statuses = parseSessionCommandStatuses(parsed.data.status);
+    if (statuses === null) {
+      return invalidSessionCommand(res, 'status contains an unsupported Session Command status');
+    }
+    const commands = await getEventRuntime().listSessionCommands(
+      { userId, sessionId: req.params.sessionId },
+      {
+        ...(statuses === undefined ? {} : { statuses }),
+        ...(parsed.data.fromSequence === undefined
+          ? {}
+          : { fromSequence: parsed.data.fromSequence }),
+        ...(parsed.data.limit === undefined ? {} : { limit: parsed.data.limit }),
+      }
+    );
+    res.json({ success: true, data: commands.map(publicSessionCommand) });
+  })
+);
 
 router.get('/reasoning/strategies', (_req: Request, res: Response) => {
   res.json({
@@ -233,12 +443,9 @@ router.get(
 );
 
 async function findOwnedRun(req: Request, res: Response) {
-  const userId = req.user?.userId ?? req.apiKey?.userId;
+  const userId = authenticatedUserId(req);
   if (!userId) {
-    res.status(HTTP_STATUS.UNAUTHORIZED).json({
-      success: false,
-      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
-    });
+    unauthorized(res);
     return null;
   }
 
@@ -252,6 +459,62 @@ async function findOwnedRun(req: Request, res: Response) {
     return null;
   }
   return { runtime, run };
+}
+
+function authenticatedUserId(req: Request): string | undefined {
+  return req.user?.userId ?? req.apiKey?.userId;
+}
+
+function unauthorized(res: Response): Response {
+  return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+    success: false,
+    error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+  });
+}
+
+function invalidSessionCommand(res: Response, message: string, details?: unknown): Response {
+  return res.status(HTTP_STATUS.BAD_REQUEST).json({
+    success: false,
+    error: {
+      code: 'INVALID_SESSION_COMMAND',
+      message,
+      ...(details === undefined ? {} : { details }),
+    },
+  });
+}
+
+function requireIdempotencyKey(req: Request, res: Response): string | undefined {
+  const idempotencyKey = req.get('Idempotency-Key')?.trim();
+  if (!idempotencyKey || idempotencyKey.length > 256) {
+    invalidSessionCommand(res, 'Idempotency-Key header must contain between 1 and 256 characters');
+    return undefined;
+  }
+  return idempotencyKey;
+}
+
+function runNotFound(res: Response): Response {
+  return res.status(HTTP_STATUS.NOT_FOUND).json({
+    success: false,
+    error: { code: 'RUN_NOT_FOUND', message: 'Run not found' },
+  });
+}
+
+function parseSessionCommandStatuses(value?: string): SessionCommandStatus[] | undefined | null {
+  if (value === undefined) return undefined;
+  const statuses = value.split(',').map((status) => status.trim());
+  const parsed = z.array(sessionCommandStatusSchema).min(1).safeParse(statuses);
+  return parsed.success ? parsed.data : null;
+}
+
+function publicSessionCommand(command: SessionCommandRecord) {
+  const {
+    payloadRef: _payloadRef,
+    payloadHash: _payloadHash,
+    claimedBy: _claimedBy,
+    leaseExpiresAt: _leaseExpiresAt,
+    ...publicRecord
+  } = command;
+  return publicRecord;
 }
 
 export default router;

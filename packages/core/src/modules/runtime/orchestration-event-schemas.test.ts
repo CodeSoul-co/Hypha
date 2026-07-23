@@ -4,7 +4,12 @@ import { hashCanonicalJson } from './canonical-json';
 import { InMemoryEventSchemaRegistry } from './event-schema-registry';
 import {
   RUNTIME_ORCHESTRATION_EVENT_TYPES,
+  RUNTIME_CANONICAL_EVENT_TYPES,
+  RUNTIME_RUN_MANAGER_EVENT_TYPES,
+  RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+  assertRuntimeEventCatalogComplete,
   registerRuntimeOrchestrationEventSchemas,
+  runtimeEventSchemaDefinitions,
   runtimeOrchestrationEventSchemaDefinitions,
 } from './orchestration-event-schemas';
 
@@ -21,6 +26,24 @@ describe('Runtime orchestration Event schemas', () => {
     }
   });
 
+  it('publishes exactly one versioned schema for every canonical Runtime Event', () => {
+    expect(runtimeEventSchemaDefinitions).toHaveLength(RUNTIME_CANONICAL_EVENT_TYPES.length);
+    expect(RUNTIME_CANONICAL_EVENT_TYPES).toEqual(
+      expect.arrayContaining([
+        ...RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+        ...RUNTIME_RUN_MANAGER_EVENT_TYPES,
+      ])
+    );
+    expect(() => assertRuntimeEventCatalogComplete()).not.toThrow();
+
+    const withoutRecoveryOpened = runtimeEventSchemaDefinitions.filter(
+      (definition) => definition.eventType !== 'recovery.case.opened'
+    );
+    expect(() => assertRuntimeEventCatalogComplete(withoutRecoveryOpened)).toThrow(
+      'missing=recovery.case.opened'
+    );
+  });
+
   it('registers idempotently and validates concrete lifecycle payloads', async () => {
     const registry = new InMemoryEventSchemaRegistry();
     await registerRuntimeOrchestrationEventSchemas(registry);
@@ -31,12 +54,63 @@ describe('Runtime orchestration Event schemas', () => {
     );
     await expect(
       registry.validate(
+        event('session.created', {
+          id: 'session.schema',
+          userId: 'user.schema',
+          metadata: {},
+          status: 'active',
+          createdAt: '2026-07-21T09:00:00.000Z',
+          updatedAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('context.build.completed', {
+          tokenCount: 42,
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
         event('runtime.wait.created', {
           waitId: 'wait.schema',
           stateId: 'HumanReview',
           stateAttempt: 1,
           wait: { type: 'human', reason: 'approval required' },
           createdAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('recovery.case.resolved', {
+          caseId: 'recovery.run.schema',
+          rootFingerprint: 'sha256:root',
+          status: 'recovered',
+          cycles: 1,
+          candidateId: 'candidate.schema',
+          candidateHash: 'sha256:candidate',
+          reason: 'PROJECTION_BEHIND',
+          safeAction: 'rebuild_projection',
+          disposition: 'recovered',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('human.review.requested', {
+          taskId: 'human-task.schema',
+          subjectRef: 'tool-invocation.schema',
+          subjectHash: 'sha256:subject',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('runtime.checkpoint.failed', {
+          checkpointId: 'checkpoint.schema',
+          error: 'projection unavailable',
         })
       )
     ).resolves.toEqual(expect.objectContaining({ valid: true }));

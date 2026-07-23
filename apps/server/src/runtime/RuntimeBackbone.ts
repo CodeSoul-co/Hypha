@@ -3,6 +3,7 @@ import {
   SQLiteProjectionStore,
   SQLiteRunLeaseStore,
   SQLiteRuntimeCheckpointStore,
+  SQLiteSessionQueue,
   SQLiteStateExecutionClaimStore,
 } from '@hypha/adapters-local';
 import {
@@ -22,6 +23,7 @@ export interface RuntimeBackbone extends RuntimeCompositionDependencies {
   checkpoints: SQLiteRuntimeCheckpointStore;
   runLeases: SQLiteRunLeaseStore;
   stateClaims: SQLiteStateExecutionClaimStore;
+  sessionQueue: SQLiteSessionQueue;
   close(): void;
 }
 
@@ -70,6 +72,7 @@ export function createRuntimeBackbone(options: RuntimeBackboneOptions): RuntimeB
       }),
       closeables
     );
+    const sessionQueue = opened(new SQLiteSessionQueue({ filename, now: options.now }), closeables);
     let closed = false;
 
     return Object.freeze({
@@ -81,6 +84,7 @@ export function createRuntimeBackbone(options: RuntimeBackboneOptions): RuntimeB
       checkpoints,
       runLeases,
       stateClaims,
+      sessionQueue,
       close: () => {
         if (closed) return;
         closed = true;

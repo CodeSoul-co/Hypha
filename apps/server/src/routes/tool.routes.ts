@@ -182,6 +182,7 @@ router.post(
         });
         await runtime.waitForHumanReview(runId, {
           tool: name,
+          invocationId: result.invocationId,
           reason,
           status: result.status,
         });

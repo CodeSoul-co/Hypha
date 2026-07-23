@@ -7,6 +7,7 @@ import {
   businessRuleSpecDefinition,
   compileWorkflowToFSM,
   compileDomainPackToHarnessedSystem,
+  createWorkflowDependencySnapshot,
   DomainPackRegistry,
   domainPackSpecDefinition,
   domainSpecJsonSchemas,
@@ -15,6 +16,7 @@ import {
   LocalDomainPackLoader,
   parseDomainPackDocument,
   reasoningSpecDefinition,
+  resolveWorkflowToolExecutionScope,
   validateDomainPackSpec,
   validateWorkflowSpec,
   WorkflowCompiler,
@@ -67,12 +69,34 @@ describe('@hypha/domain workflow compiler', () => {
     const fsm = compileWorkflowToFSM(domainPack);
 
     expect(fsm.id).toBe('minimal.intake-reason-finalize.fsm');
-    expect(fsm.states.map((state) => state.id)).toEqual(['Intake', 'ReasonAct', 'Finalize']);
+    expect(fsm.states.map((state) => state.id)).toEqual(
+      expect.arrayContaining([
+        'Intake',
+        'ReasonAct',
+        'Finalize',
+        'Recovering',
+        'Compensating',
+        'Quarantined',
+        'HumanReview',
+        'Failed',
+        'Cancelled',
+      ])
+    );
     expect(fsm.states[1]).toMatchObject({
       timeoutPolicy: { timeoutMs: 1000, onTimeout: 'retry' },
       retryPolicy: { maxAttempts: 2 },
     });
     expect(fsm.transitions[1]).toMatchObject({ from: 'ReasonAct', to: 'Finalize' });
+    expect(fsm.transitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from: 'ReasonAct', to: 'Recovering' }),
+        expect.objectContaining({ from: 'Recovering', to: 'ReasonAct' }),
+        expect.objectContaining({ from: 'Recovering', to: 'HumanReview' }),
+        expect.objectContaining({ from: 'Quarantined', to: 'Failed' }),
+      ])
+    );
+    expect(fsm.recoveryPolicy).toBeDefined();
+    expect(fsm.terminalStates).toEqual(expect.arrayContaining(['Finalize', 'Failed', 'Cancelled']));
     expect(new WorkflowCompiler().compile(domainPack).id).toBe(
       'minimal.intake-reason-finalize.fsm'
     );
@@ -135,6 +159,7 @@ describe('@hypha/domain workflow compiler', () => {
       defaultSkills: { type: 'array' },
       skillPolicies: { type: 'array' },
       tools: { type: 'array' },
+      toolProfiles: { type: 'array' },
       mcpProfiles: { type: 'array' },
       memoryProfiles: { type: 'array' },
       contextProfiles: { type: 'array' },
@@ -144,6 +169,98 @@ describe('@hypha/domain workflow compiler', () => {
       regressionCases: { type: 'array' },
       deploymentProfile: { type: 'object' },
     });
+  });
+
+  it('validates Tool profiles and state-level versioned Tool bindings', () => {
+    const example = domainPackSpecDefinition.example;
+    expect(validateDomainPackSpec(example).toolProfiles?.[0]).toMatchObject({
+      id: 'tools.default',
+      contractSnapshotMode: 'run',
+      lazyLoad: true,
+    });
+    expect(() =>
+      validateDomainPackSpec({
+        ...example,
+        toolProfiles: [
+          {
+            ...example.toolProfiles![0],
+            toolRefs: [{ id: 'tool.missing', version: '1.0.0' }],
+          },
+        ],
+      })
+    ).toThrow(/Tool profile Tool not found/);
+  });
+
+  it('rejects invalid versioned Tool, profile, approval, and permission bindings', () => {
+    const example = domainPackSpecDefinition.example;
+    expect(() =>
+      validateDomainPackSpec({
+        ...example,
+        toolProfiles: [
+          {
+            ...example.toolProfiles![0],
+            toolRefs: [{ id: 'tool.search', version: '9.9.9' }],
+          },
+        ],
+      })
+    ).toThrow(/Tool profile Tool version mismatch/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...example,
+        workflows: example.workflows.map((workflow) => ({
+          ...workflow,
+          states: workflow.states.map((state) =>
+            state.id === 'Reasoning'
+              ? { ...state, toolProfileRefs: [{ id: 'tools.missing', version: '1.0.0' }] }
+              : state
+          ),
+        })),
+      })
+    ).toThrow(/Workflow state Tool profile not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...example,
+        workflows: example.workflows.map((workflow) => ({
+          ...workflow,
+          states: workflow.states.map((state) =>
+            state.id === 'Reasoning'
+              ? {
+                  ...state,
+                  humanApprovalPolicyRef: { id: 'policy.missing', version: '1.0.0' },
+                }
+              : state
+          ),
+        })),
+      })
+    ).toThrow(/Workflow state human approval policy not found/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...example,
+        tools: example.tools!.map((tool) =>
+          tool.id === 'tool.search'
+            ? {
+                ...tool,
+                permissionScope: ['search.execute'],
+              }
+            : tool
+        ),
+        workflows: example.workflows.map((workflow) => ({
+          ...workflow,
+          states: workflow.states.map((state) =>
+            state.id === 'Reasoning'
+              ? {
+                  ...state,
+                  allowedToolRefs: [{ id: 'tool.search', version: '0.0.0' }],
+                  permissionScopes: [],
+                }
+              : state
+          ),
+        })),
+      })
+    ).toThrow(/Tool scope exceeds declared permissionScopes/);
   });
 
   it('rejects a DomainPack whose default workflow is not declared', () => {
@@ -302,8 +419,23 @@ describe('@hypha/domain workflow compiler', () => {
     expect(compiled.fsmProcess).toMatchObject({
       id: 'domain.default.workflow.default.fsm',
       initialState: 'Intake',
-      terminalStates: ['Completed', 'Failed'],
+      terminalStates: ['Completed', 'Failed', 'Cancelled'],
     });
+    expect(compiled).toMatchObject({
+      workflowRef: { id: 'workflow.default', version: '0.0.0' },
+      compilerVersion: '1.0.0',
+      dependencySnapshot: {
+        agentRefs: [{ id: 'agent.default', version: '0.0.0' }],
+        toolProfileRefs: [{ id: 'tools.default', version: '1.0.0' }],
+        memoryProfileRefs: [{ id: 'memory.default', version: '0.0.0' }],
+        contextProfileRefs: [{ id: 'context.default', version: '0.0.0' }],
+        workspaceProfileRefs: [],
+        policyRefs: [{ id: 'policy.default', version: '0.0.0' }],
+        evaluationRefs: [{ id: 'eval.output-schema', version: '0.0.0' }],
+      },
+    });
+    expect(compiled.processHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(compiled.dependencySnapshot.dependencyHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(compiled.harnessedSystem).toMatchObject({
       id: 'domain.default.workflow.default.system',
       agentRef: { id: 'agent.default', version: '0.0.0' },
@@ -365,6 +497,185 @@ describe('@hypha/domain workflow compiler', () => {
       policyRefs: ['policy.default'],
       evaluationRefs: ['eval.output-schema'],
     });
+    expect(
+      resolveWorkflowToolExecutionScope(compiled.bindings.workflowStates, 'Reasoning')
+    ).toEqual({
+      fsmState: 'Reasoning',
+      allowedToolIds: ['tool.search'],
+      policyRefs: ['policy.default'],
+    });
+    expect(() =>
+      resolveWorkflowToolExecutionScope(compiled.bindings.workflowStates, 'Unknown')
+    ).toThrow('Workflow state binding not found: Unknown');
+
+    const repeated = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      metadata: { requestSource: 'test' },
+    });
+    expect(repeated.processHash).toBe(compiled.processHash);
+    expect(repeated.dependencySnapshot.dependencyHash).toBe(
+      compiled.dependencySnapshot.dependencyHash
+    );
+
+    const changedDependency = structuredClone(domainPackSpecDefinition.example);
+    changedDependency.toolProfiles![0].version = '1.0.1';
+    const changed = compileDomainPackToHarnessedSystem(changedDependency, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      metadata: { requestSource: 'test' },
+    });
+    expect(changed.dependencySnapshot.dependencyHash).not.toBe(
+      compiled.dependencySnapshot.dependencyHash
+    );
+    expect(changed.processHash).not.toBe(compiled.processHash);
+  });
+
+  it('compiles only profile-selected tools and gives state denies precedence', () => {
+    const example = domainPackSpecDefinition.example;
+    const compiled = compileDomainPackToHarnessedSystem(
+      {
+        ...example,
+        tools: [
+          ...example.tools!,
+          {
+            ...example.tools![0],
+            id: 'tool.write',
+            version: '1.0.0',
+            description: 'Write a governed document.',
+            sideEffectLevel: 'write',
+            permissionScope: ['document:write'],
+          },
+          {
+            ...example.tools![0],
+            id: 'tool.unused',
+            version: '1.0.0',
+            description: 'Declared but not selected.',
+          },
+        ],
+        toolProfiles: [
+          ...example.toolProfiles!,
+          {
+            id: 'tools.reasoning',
+            version: '1.0.0',
+            toolRefs: [
+              { id: 'tool.search', version: '0.0.0' },
+              { id: 'tool.write', version: '1.0.0' },
+            ],
+            mcpProfileRefs: [{ id: 'mcp.default', version: '0.0.0' }],
+            policyRefs: [{ id: 'policy.default', version: '0.0.0' }],
+            defaultPermissionScopes: ['document:write'],
+            lazyLoad: true,
+          },
+        ],
+        workflows: example.workflows.map((workflow) => ({
+          ...workflow,
+          states: workflow.states.map((state) =>
+            state.id === 'Reasoning'
+              ? {
+                  ...state,
+                  allowedTools: [],
+                  toolProfileRefs: [{ id: 'tools.reasoning', version: '1.0.0' }],
+                  deniedToolRefs: [{ id: 'tool.search', version: '0.0.0' }],
+                }
+              : state
+          ),
+        })),
+      },
+      { agentRef: { id: 'agent.default', version: '0.0.0' } }
+    );
+
+    expect(compiled.agentPatch.toolRefs).toEqual(['tool.search', 'tool.write']);
+    expect(compiled.agentPatch.toolRefs).not.toContain('tool.unused');
+    expect(compiled.bindings.toolProfiles.map((profile) => profile.id)).toEqual([
+      'tools.default',
+      'tools.reasoning',
+    ]);
+    expect(
+      compiled.bindings.workflowStates.find((state) => state.stateId === 'Reasoning')
+    ).toMatchObject({
+      allowedTools: ['tool.write'],
+      allowedToolRefs: [{ id: 'tool.write', version: '1.0.0' }],
+      allowedMCPProfiles: ['mcp.default'],
+      allowedMCPProfileRefs: [{ id: 'mcp.default', version: '0.0.0' }],
+      policyRefs: ['policy.default'],
+      permissionScopes: ['document:write'],
+      capabilityLoadPolicy: 'lazy',
+    });
+    expect(
+      resolveWorkflowToolExecutionScope(compiled.bindings.workflowStates, 'Reasoning')
+    ).toEqual({
+      fsmState: 'Reasoning',
+      allowedToolIds: ['tool.write'],
+      policyRefs: ['policy.default'],
+    });
+  });
+
+  it('hashes equivalent dependency sets independently of reference order', () => {
+    const first = createWorkflowDependencySnapshot({
+      domainPackRefs: [{ id: 'domain.default', version: '1.0.0' }],
+      taskSchemaRefs: [],
+      outputContractRefs: [],
+      sessionProfileRefs: [],
+      agentRefs: [
+        { id: 'agent.z', version: '1.0.0' },
+        { id: 'agent.a', version: '1.0.0' },
+      ],
+      skillRefs: [],
+      skillPolicyRefs: [],
+      toolRefs: [],
+      toolProfileRefs: [{ id: 'tools.default', version: '1.0.0' }],
+      mcpProfileRefs: [],
+      memoryProfileRefs: [],
+      contextProfileRefs: [],
+      reasoningProfileRefs: [],
+      workspaceProfileRefs: [],
+      businessRuleRefs: [],
+      policyRefs: [],
+      evaluationRefs: [],
+      traceRefs: [],
+      modelProfileRefs: [],
+      replayRefs: [],
+      regressionRefs: [],
+      deploymentRefs: [],
+    });
+    const reversed = createWorkflowDependencySnapshot({
+      ...first,
+      agentRefs: [...first.agentRefs].reverse(),
+    });
+
+    expect(reversed.agentRefs).toEqual(first.agentRefs);
+    expect(reversed.dependencyHash).toBe(first.dependencyHash);
+  });
+
+  it('invalidates the process hash when any runtime dependency family changes', () => {
+    const base = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.0' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+    const changedPack = structuredClone(domainPackSpecDefinition.example);
+    changedPack.mcpProfiles![0].version = '0.0.1';
+    changedPack.toolProfiles![0].mcpProfileRefs![0].version = '0.0.1';
+    const changedMcp = compileDomainPackToHarnessedSystem(changedPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.0' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+    const changedModel = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      modelProfileRef: { id: 'model.default', version: '1.0.1' },
+      replayRef: { id: 'replay.default', version: '1.0.0' },
+    });
+
+    expect(base.dependencySnapshot).toMatchObject({
+      toolRefs: [{ id: 'tool.search', version: '0.0.0' }],
+      skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+      mcpProfileRefs: [{ id: 'mcp.default', version: '0.0.0' }],
+      reasoningProfileRefs: [{ id: 'reasoning.default', version: '0.0.0' }],
+      modelProfileRefs: [{ id: 'model.default', version: '1.0.0' }],
+      replayRefs: [{ id: 'replay.default', version: '1.0.0' }],
+    });
+    expect(changedMcp.processHash).not.toBe(base.processHash);
+    expect(changedModel.processHash).not.toBe(base.processHash);
   });
 
   it('projects state-scoped MCP and reasoning profiles into compiled system refs', () => {

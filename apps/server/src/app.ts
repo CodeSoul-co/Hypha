@@ -195,6 +195,9 @@ class Application {
 
     // Open and health-check the canonical durable Runtime before recovery or readiness.
     this.eventRuntime = getEventRuntime();
+    this.eventRuntime.setRuntimeFailureReporter((error) =>
+      getHealthService().setRuntimeFailure(error)
+    );
     await this.eventRuntime.initializeCanonicalRuntime();
     const restoredRuns = await this.eventRuntime.restoreRunContexts();
     logger.info('Validated recoverable Runtime Run/FSM contexts from durable Events', {
@@ -203,6 +206,13 @@ class Application {
 
     // Recover persisted Tool invocations after their adapters are available.
     await this.eventRuntime.recoverToolInvocations();
+
+    // Rebuild safe Runtime state before accepting new Timer and Session command work.
+    await this.eventRuntime.startRuntimeRecoveryScheduler();
+
+    // Resume persisted Timer Waits and Session commands only after side effects are reconciled.
+    await this.eventRuntime.startRuntimeTimerScheduler();
+    await this.eventRuntime.startSessionCommandScheduler();
 
     // Initialize Workflow Engine
     await initializeWorkflowEngine();

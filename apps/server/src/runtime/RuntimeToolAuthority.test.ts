@@ -45,6 +45,25 @@ describe('resolveRuntimeToolAuthority', () => {
     expect(authority.missingPermissionScopes).toEqual(['filesystem:write']);
   });
 
+  it('expands an authenticated all-permissions grant only to exact required scopes', () => {
+    const authority = resolveRuntimeToolAuthority({
+      runId: 'run-1',
+      runRevision: 7,
+      requestedToolId: 'tool.filesystem',
+      principal: {
+        id: 'admin-1',
+        type: 'user',
+        permissionScopes: [],
+      },
+      principalHasAllPermissions: true,
+      requiredPermissionScopes: ['filesystem:write', 'filesystem:read'],
+    });
+
+    expect(authority.principal.permissionScopes).toEqual(['filesystem:read', 'filesystem:write']);
+    expect(authority.principal.permissionScopes).not.toContain('*');
+    expect(authority.missingPermissionScopes).toEqual([]);
+  });
+
   it('changes the policy revision when the bound Run revision changes', () => {
     const common = {
       runId: 'run-1',
