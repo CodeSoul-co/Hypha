@@ -589,10 +589,12 @@ export class MCPCapabilityCatalog {
         new MCPToolAdapter(`mcp:${record.serverId}`, record.serverId, record.remoteName, {
           invoke: async (request) => {
             await this.assertInvocationAuthorized(record, request.context);
-            return this.options.gateway.call({
+            const result = await this.options.gateway.call({
               ...request,
               context: { ...context, ...request.context },
             });
+            await this.assertInvocationAuthorized(record, request.context);
+            return result;
           },
           health: async () => ({ status: 'unknown', checkedAt: this.now() }),
         }),

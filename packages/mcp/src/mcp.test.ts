@@ -497,6 +497,18 @@ describe('@hypha/mcp normalization', () => {
       })
     ).resolves.toMatchObject({ output: { input: { query: 'allowed' } } });
 
+    gateway.registerToolHandler('strict-server', 'search', ({ input }) => {
+      now = '2026-07-24T00:00:00.000Z';
+      return { input };
+    });
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'expired-during-call' },
+        context: capabilityContext,
+      })
+    ).rejects.toMatchObject({ code: 'MCP_APPROVAL_EXPIRED' });
+
     now = '2026-07-24T00:00:00.000Z';
     await expect(catalog.snapshot('run.expired', [ref])).rejects.toMatchObject({
       code: 'MCP_APPROVAL_EXPIRED',
@@ -798,6 +810,136 @@ describe('@hypha/mcp normalization', () => {
     await manager.closeAll();
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(createCount).toBe(2);
+  });
+
+  it('bounds reconnect supervision by jittered backoff and elapsed-time budget', async () => {
+    let createCount = 0;
+    let elapsedMs = 0;
+    const sleeps: number[] = [];
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        createCount += 1;
+        return {
+          async connect() {
+            throw new Error('transport unavailable');
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      monotonicNow: () => elapsedMs,
+      random: () => 1,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        elapsedMs += ms;
+      },
+    });
+    manager.register({
+      id: 'bounded-reconnect',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      reconnectPolicy: {
+        maxAttempts: 5,
+        backoffMs: 100,
+        maxBackoffMs: 200,
+        jitterRatio: 0.25,
+        maxElapsedMs: 300,
+      },
+    });
+
+    await expect(manager.reconnect('bounded-reconnect')).rejects.toMatchObject({
+      code: 'MCP_CONNECTION_FAILED',
+    });
+    expect(createCount).toBe(2);
+    expect(sleeps).toEqual([125]);
+    await expect(manager.get('bounded-reconnect')).resolves.toMatchObject({
+      state: 'failed',
+      reconnectAttempts: 2,
+    });
+  });
+
+  it('rejects Resource and Prompt results cancelled or expired while awaiting the server', async () => {
+    let now = '2026-07-23T00:00:00.000Z';
+    let resolveResource:
+      ((value: { contents: Array<{ uri: string; text: string }> }) => void) | undefined;
+    let resolvePrompt:
+      ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return {};
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          readResource: async () =>
+            new Promise((resolve) => {
+              resolveResource = resolve;
+            }),
+          getPrompt: async () =>
+            new Promise((resolve) => {
+              resolvePrompt = resolve;
+            }),
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      now: () => now,
+    });
+    manager.register({
+      id: 'post-await-guards',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+    });
+    await manager.connect('post-await-guards');
+
+    const resource = manager.readResource({
+      serverId: 'post-await-guards',
+      uri: 'fixture://slow',
+      context: {
+        invocationId: 'resource-slow',
+        deadlineAt: '2026-07-23T00:01:00.000Z',
+      },
+    });
+    for (let attempt = 0; attempt < 20 && !resolveResource; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(resolveResource).toBeTypeOf('function');
+    await manager.cancelRequest('post-await-guards:resource-slow');
+    resolveResource?.({ contents: [{ uri: 'fixture://slow', text: 'late' }] });
+    await expect(resource).rejects.toMatchObject({ code: 'MCP_REQUEST_CANCELLED' });
+
+    const prompt = manager.getPrompt({
+      serverId: 'post-await-guards',
+      name: 'slow-prompt',
+      context: {
+        invocationId: 'prompt-slow',
+        deadlineAt: '2026-07-23T00:01:00.000Z',
+      },
+    });
+    for (let attempt = 0; attempt < 20 && !resolvePrompt; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(resolvePrompt).toBeTypeOf('function');
+    now = '2026-07-23T00:02:00.000Z';
+    resolvePrompt?.({ messages: [{ role: 'user', content: 'late' }] });
+    await expect(prompt).rejects.toMatchObject({ code: 'MCP_REQUEST_TIMEOUT' });
   });
 
   it('connects to and cleans up a real stdio MCP server through the stable SDK adapter', async () => {

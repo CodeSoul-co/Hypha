@@ -65,6 +65,7 @@ export * from './media';
 export * from './workspace';
 export * from './adapter-factory';
 export * from './execution-adapter';
+export * from './secrets';
 
 class ToolTimeoutError extends Error {
   readonly code = 'TOOL_TIMEOUT';
@@ -1154,6 +1155,7 @@ export class MockToolAdapter<TInput = unknown, TOutput = unknown> extends LocalF
 export interface HttpToolAdapterOptions {
   endpoint: string;
   headers?: Record<string, string>;
+  resolveHeaders?: () => Promise<Record<string, string>>;
   fetch?: typeof fetch;
 }
 
@@ -1173,9 +1175,14 @@ export class HttpToolAdapter implements ToolAdapter {
   }
 
   async execute(request: AdapterExecutionRequest): Promise<ToolExecutionEnvelope> {
+    const resolvedHeaders = await this.options.resolveHeaders?.();
     const response = await this.fetchImpl(this.options.endpoint, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...this.options.headers },
+      headers: {
+        'content-type': 'application/json',
+        ...this.options.headers,
+        ...resolvedHeaders,
+      },
       body: JSON.stringify({ toolId: request.toolId, input: request.input }),
       signal: request.context.signal ?? request.context.abortSignal,
     });
@@ -1394,7 +1401,8 @@ export function validateEffectiveCapabilityAccess(input: {
   }
   if (
     effective.expiresAt &&
-    (!Number.isFinite(Date.parse(effective.expiresAt)) || Date.parse(effective.expiresAt) <= Date.now())
+    (!Number.isFinite(Date.parse(effective.expiresAt)) ||
+      Date.parse(effective.expiresAt) <= Date.now())
   ) {
     return 'Effective capability snapshot is expired.';
   }
@@ -1402,8 +1410,7 @@ export function validateEffectiveCapabilityAccess(input: {
   if (effective.agentId !== contextAgentId) {
     return 'Effective capability snapshot belongs to a different Agent.';
   }
-  const principalId =
-    input.context.principal?.principalId ?? input.context.principal?.id;
+  const principalId = input.context.principal?.principalId ?? input.context.principal?.id;
   if (effective.principalId !== principalId) {
     return 'Effective capability snapshot belongs to a different principal.';
   }
@@ -2538,8 +2545,7 @@ export class GovernedToolRunner implements ToolRunner {
         scopeHash: toolInvocationScopeHash(request),
         policyRevision: resolvePolicyRevision(decision, request),
         contractSnapshotHash: snapshot?.snapshotHash,
-        capabilityHash:
-          spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
+        capabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
         externalStateVersion,
       };
       const key = createToolCacheValidityKey(validityInput);
@@ -2902,9 +2908,7 @@ export class GovernedToolRunner implements ToolRunner {
             ...basePayload,
             serverId: spec.sourceRef?.serverId ?? spec.sourceRef?.mcpServerId,
             capabilityId:
-              spec.sourceRef?.capabilityId ??
-              spec.sourceRef?.mcpCapabilityId ??
-              request.toolId,
+              spec.sourceRef?.capabilityId ?? spec.sourceRef?.mcpCapabilityId ?? request.toolId,
             ...(auditedInput.included ? { input: auditedInput.value } : {}),
             ...(auditedOutput.included ? { output: auditedOutput.value } : {}),
             attempts: attempt,
@@ -3073,9 +3077,7 @@ export class GovernedToolRunner implements ToolRunner {
             ...basePayload,
             serverId: spec.sourceRef?.serverId ?? spec.sourceRef?.mcpServerId,
             capabilityId:
-              spec.sourceRef?.capabilityId ??
-              spec.sourceRef?.mcpCapabilityId ??
-              request.toolId,
+              spec.sourceRef?.capabilityId ?? spec.sourceRef?.mcpCapabilityId ?? request.toolId,
             error: message,
             attempts: attempt,
           });

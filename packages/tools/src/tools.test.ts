@@ -1243,6 +1243,66 @@ describe('@hypha/tools governed runner', () => {
     );
   });
 
+  it('bounds a hung cache write after execution without replaying the Tool side effect', async () => {
+    const registry = new ToolRegistry();
+    const trace = new InMemoryEventStore();
+    let calls = 0;
+    registry.register(
+      {
+        id: 'tool.cache-write-timeout',
+        version: '1.0.0',
+        revision: 'cache-write-timeout-v1',
+        description: 'Cache write timeout fixture',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        cache: {
+          mode: 'result',
+          scope: 'run',
+          includeToolRevision: true,
+          includePolicyRevision: true,
+        },
+      },
+      async () => ({ calls: ++calls })
+    );
+    const runner = new GovernedToolRunner(registry, trace, undefined, {
+      resultCache: {
+        async get() {
+          return null;
+        },
+        async set() {
+          return new Promise<void>(() => undefined);
+        },
+      },
+      resultCacheTimeoutMs: 5,
+      resultCacheFailureMode: 'bypass',
+    });
+
+    await expect(
+      runner.run({
+        toolId: 'tool.cache-write-timeout',
+        input: {},
+        context: {
+          runId: 'run_cache_write_timeout',
+          stepId: 'read',
+          invocationId: 'cache-write-timeout-one',
+          metadata: { externalStateVersion: 'state-v1' },
+        },
+      })
+    ).resolves.toMatchObject({ status: 'completed', output: { calls: 1 } });
+    expect(calls).toBe(1);
+    await expect(trace.list({ runId: 'run_cache_write_timeout' })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.cache.bypass',
+          payload: expect.objectContaining({
+            cacheOperation: 'set',
+            code: 'TOOL_RESULT_CACHE_TIMEOUT',
+          }),
+        }),
+      ])
+    );
+  });
+
   it('bounds result-cache memory and never reuses invocation or receipt fields', async () => {
     const registry = new ToolRegistry();
     const resultCache = new InMemoryToolResultCache({ maxEntries: 2 });

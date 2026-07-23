@@ -7,6 +7,9 @@ import type {
   ToolHandler,
   ToolSpec,
 } from './index';
+import type { CredentialLease, SecretResolver as ToolSecretResolver } from './secrets';
+
+export type { SecretResolver as ToolSecretResolver } from './secrets';
 
 export const toolAdapterKinds = [
   'local_function',
@@ -137,14 +140,11 @@ export function parseToolAdapterProfilesDocument(input: unknown): ToolAdapterPro
   return parsed.data as ToolAdapterProfilesDocument;
 }
 
-export interface ToolSecretResolver {
-  resolve(reference: string): Promise<string | null>;
-}
-
 export interface ToolAdapterFactoryInput {
   profile: ToolAdapterProfile;
   toolSpec: ToolSpec;
   resolveCredential(): Promise<string | null>;
+  acquireCredential(): Promise<CredentialLease | null>;
 }
 
 export interface ToolAdapterFactory {
@@ -208,9 +208,7 @@ export class ToolAdapterFactoryRegistry {
     }
     this.assertPinnedSpec(profile, toolSpec);
 
-    let credentialResolved = false;
-    let credential: string | null = null;
-    const resolveCredential = async (): Promise<string | null> => {
+    const acquireCredential = async (): Promise<CredentialLease | null> => {
       if (!profile.credentialRef) return null;
       if (!this.options.secretResolver) {
         throw factoryError(
@@ -218,20 +216,33 @@ export class ToolAdapterFactoryRegistry {
           `Profile ${profile.id} requires a credential resolver.`
         );
       }
-      if (!credentialResolved) {
-        credential = await this.options.secretResolver.resolve(profile.credentialRef);
-        credentialResolved = true;
-      }
-      if (credential === null) {
+      const lease = await this.options.secretResolver.acquire(profile.credentialRef, {
+        purpose: 'tool',
+      });
+      if (lease === null) {
         throw factoryError('TOOL_SECRET_NOT_FOUND', `Credential reference could not be resolved.`, {
           profileId: profile.id,
           credentialRef: profile.credentialRef,
         });
       }
-      return credential;
+      return lease;
+    };
+    const resolveCredential = async (): Promise<string | null> => {
+      const lease = await acquireCredential();
+      if (!lease) return null;
+      try {
+        return lease.read();
+      } finally {
+        await lease.release?.();
+      }
     };
 
-    const adapter = await factory.create({ profile, toolSpec, resolveCredential });
+    const adapter = await factory.create({
+      profile,
+      toolSpec,
+      resolveCredential,
+      acquireCredential,
+    });
     const capabilities = await adapter.capabilities();
     if (!capabilities.execute) {
       throw factoryError('TOOL_ADAPTER_CAPABILITY_MISSING', 'Every adapter must support execute.', {
@@ -314,11 +325,15 @@ export function registerConcreteToolAdapterFactories(
           profileId: input.profile.id,
         });
       }
-      const credential = await input.resolveCredential();
       const { HttpToolAdapter } = await import('./index');
       return new HttpToolAdapter(`profile:${input.profile.id}`, {
         endpoint: input.profile.endpoint,
-        ...(credential ? { headers: { authorization: `Bearer ${credential}` } } : {}),
+        resolveHeaders: async () => {
+          const credential = await input.resolveCredential();
+          const headers: Record<string, string> = {};
+          if (credential) headers.authorization = `Bearer ${credential}`;
+          return headers;
+        },
         fetch: dependencies.fetch,
       });
     },

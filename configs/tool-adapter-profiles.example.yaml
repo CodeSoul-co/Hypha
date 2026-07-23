@@ -27,6 +27,15 @@ profiles:
     credentialRef: env:HYPHA_SEARCH_TOKEN
     requiredCapabilities: [execute, cancel, health]
 
+  - id: plugin.hash
+    kind: plugin
+    toolSpecRef:
+      id: utility.hash
+      version: 1.0.0
+    binding:
+      pluginId: trusted.hash
+    requiredCapabilities: [execute, health]
+
   - id: cloud.mcp
     kind: mcp_streamable_http
     toolSpecRef:

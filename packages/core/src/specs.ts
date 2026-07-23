@@ -40,6 +40,9 @@ export interface TimeoutPolicySpec {
 export interface RetryPolicySpec {
   maxAttempts: number;
   backoffMs?: number;
+  maxBackoffMs?: number;
+  jitterRatio?: number;
+  maxElapsedMs?: number;
   retryableCodes?: string[];
 }
 

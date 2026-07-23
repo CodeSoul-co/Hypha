@@ -666,6 +666,7 @@ tools:
       name: "Classic MCP Fixture"
       mode: "fixture"
       autoConnect: true
+      required: true
 
 workflows:
   configPath: "./configs/workflows"

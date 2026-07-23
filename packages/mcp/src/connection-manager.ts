@@ -211,6 +211,9 @@ export interface MCPConnectionManagerOptions {
   trace?: TraceRecorder;
   traceContext?: { runId: string; stepId?: string; sessionId?: string };
   now?: () => string;
+  monotonicNow?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
   onListChanged?: (serverId: string) => Promise<void> | void;
   telemetry?: TelemetryRecorder;
 }
@@ -229,10 +232,16 @@ export class MCPConnectionManager implements MCPGateway {
   private readonly connectPromises = new Map<string, Promise<MCPConnectionRecord>>();
   private readonly requests = new Map<string, AbortController>();
   private readonly now: () => string;
+  private readonly monotonicNow: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly listChangedListeners = new Set<(serverId: string) => Promise<void> | void>();
 
   constructor(private readonly options: MCPConnectionManagerOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.monotonicNow = options.monotonicNow ?? (() => Date.now());
+    this.sleep = options.sleep ?? delay;
+    this.random = options.random ?? Math.random;
     if (options.onListChanged) this.listChangedListeners.add(options.onListChanged);
   }
 
@@ -341,19 +350,44 @@ export class MCPConnectionManager implements MCPGateway {
     await this.transition(managed, 'reconnecting');
     await this.disconnect(serverId, 'reconnect');
     const policy = managed.profile.reconnectPolicy ?? { maxAttempts: 3, backoffMs: 250 };
+    const startedAt = this.monotonicNow();
     let lastError: unknown;
     for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+      if (
+        attempt > 1 &&
+        policy.maxElapsedMs !== undefined &&
+        this.monotonicNow() - startedAt >= policy.maxElapsedMs
+      ) {
+        break;
+      }
       this.patchRecord(managed, { reconnectAttempts: attempt });
       try {
         return await this.connect(serverId);
       } catch (error) {
         lastError = error;
         if (attempt < policy.maxAttempts) {
-          await delay((policy.backoffMs ?? 250) * 2 ** (attempt - 1));
+          const exponentialDelay = (policy.backoffMs ?? 250) * 2 ** (attempt - 1);
+          const jitterRatio = policy.jitterRatio ?? 0;
+          const jitteredDelay = exponentialDelay * (1 + (this.random() * 2 - 1) * jitterRatio);
+          const reconnectDelay = Math.max(
+            0,
+            Math.round(Math.min(jitteredDelay, policy.maxBackoffMs ?? Number.POSITIVE_INFINITY))
+          );
+          if (policy.maxElapsedMs !== undefined) {
+            const remaining = policy.maxElapsedMs - (this.monotonicNow() - startedAt);
+            if (reconnectDelay > remaining) break;
+          }
+          await this.sleep(reconnectDelay);
         }
       }
     }
-    throw lastError;
+    throw (
+      lastError ??
+      Object.assign(new Error('MCP reconnect budget exhausted.'), {
+        code: 'MCP_CONNECTION_FAILED',
+        serverId,
+      })
+    );
   }
 
   async cancelRequest(requestId: string): Promise<void> {
@@ -458,9 +492,11 @@ export class MCPConnectionManager implements MCPGateway {
       capabilityId: request.capabilityId,
     });
     try {
+      this.assertRequestActive(controller.signal, request.context.deadlineAt, 'dispatch');
+      const timeoutMs = this.requestTimeoutMs(managed, request.context.deadlineAt);
       const output = await managed.session!.callTool(request.capabilityId, request.input, {
         signal: controller.signal,
-        timeoutMs: managed.profile.requestTimeoutMs ?? 30_000,
+        timeoutMs,
         onProgress: (progress) => {
           void request.context.reportProgress?.({
             stage: 'mcp',
@@ -468,6 +504,7 @@ export class MCPConnectionManager implements MCPGateway {
           });
         },
       });
+      this.assertRequestActive(controller.signal, request.context.deadlineAt, 'completion');
       await this.record('mcp.request.completed', {
         requestId,
         serverId: request.serverId,
@@ -558,11 +595,10 @@ export class MCPConnectionManager implements MCPGateway {
     });
     await this.record('mcp.request.started', { requestId, serverId, capabilityId, kind });
     try {
-      const result = await execute(
-        managed.session!,
-        controller.signal,
-        managed.profile.requestTimeoutMs ?? 30_000
-      );
+      this.assertRequestActive(controller.signal, context?.deadlineAt, 'dispatch');
+      const timeoutMs = this.requestTimeoutMs(managed, context?.deadlineAt);
+      const result = await execute(managed.session!, controller.signal, timeoutMs);
+      this.assertRequestActive(controller.signal, context?.deadlineAt, 'completion');
       this.recordRequestSuccess(managed);
       await this.record('mcp.request.completed', { requestId, serverId, capabilityId, kind });
       return result;
@@ -587,6 +623,37 @@ export class MCPConnectionManager implements MCPGateway {
         server_id: serverId,
       });
     }
+  }
+
+  private assertRequestActive(
+    signal: AbortSignal,
+    deadlineAt: string | undefined,
+    phase: 'dispatch' | 'completion'
+  ): void {
+    if (signal.aborted) {
+      throw guardedRequestError(
+        'MCP_REQUEST_CANCELLED',
+        `MCP request was cancelled before ${phase}.`,
+        false
+      );
+    }
+    if (deadlineAt !== undefined) {
+      const deadline = Date.parse(deadlineAt);
+      if (!Number.isFinite(deadline) || deadline <= Date.parse(this.now())) {
+        throw guardedRequestError(
+          'MCP_REQUEST_TIMEOUT',
+          `MCP request deadline expired before ${phase}.`,
+          true
+        );
+      }
+    }
+  }
+
+  private requestTimeoutMs(managed: ManagedConnection, deadlineAt: string | undefined): number {
+    const configured = managed.profile.requestTimeoutMs ?? 30_000;
+    if (deadlineAt === undefined) return configured;
+    const remaining = Date.parse(deadlineAt) - Date.parse(this.now());
+    return Math.max(1, Math.min(configured, remaining));
   }
 
   private enterRequestGuard(managed: ManagedConnection): void {
@@ -854,8 +921,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
           : undefined,
       serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
       serverCapabilities: this.client.getServerCapabilities() as
-        | Record<string, unknown>
-        | undefined,
+        Record<string, unknown> | undefined,
     };
   }
 

@@ -25,9 +25,13 @@ const spec: ToolSpec = {
 describe('ToolAdapterFactoryRegistry', () => {
   it('resolves a pinned ToolSpec and a credential only inside the factory', async () => {
     const resolve = vi.fn(async () => 'secret-value');
+    const acquire = vi.fn(async () => ({
+      renewable: false,
+      read: () => 'secret-value',
+    }));
     const registry = new ToolAdapterFactoryRegistry({
       resolveToolSpec: async () => spec,
-      secretResolver: { resolve },
+      secretResolver: { resolve, acquire },
     });
     const factory: ToolAdapterFactory = {
       kind: 'http',
@@ -48,7 +52,63 @@ describe('ToolAdapterFactoryRegistry', () => {
     });
 
     expect(created.toolSpec).toBe(spec);
-    expect(resolve).toHaveBeenCalledWith('env:HYPHA_ECHO_TOKEN');
+    expect(acquire).toHaveBeenCalledWith('env:HYPHA_ECHO_TOKEN', { purpose: 'tool' });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('resolves a fresh credential lease for every HTTP invocation', async () => {
+    const credentials = ['first-token', 'renewed-token'];
+    const acquire = vi.fn(async () => {
+      const value = credentials.shift();
+      return value
+        ? {
+            renewable: true,
+            read: () => value,
+            renew: async () => ({
+              renewable: false,
+              read: () => 'unused-renewal',
+            }),
+          }
+        : null;
+    });
+    const requests: Array<Record<string, string>> = [];
+    const registry = new ToolAdapterFactoryRegistry({
+      resolveToolSpec: async () => spec,
+      secretResolver: {
+        acquire,
+        resolve: async () => null,
+      },
+    });
+    registerConcreteToolAdapterFactories(registry, {
+      fetch: vi.fn(async (_url, init) => {
+        requests.push(Object.fromEntries(new Headers(init?.headers).entries()));
+        return new Response(JSON.stringify({ ok: true }));
+      }),
+    });
+    const created = await registry.create({
+      id: 'profile.renewable-http',
+      kind: 'http',
+      toolSpecRef: { id: spec.id, revision: spec.revision },
+      endpoint: 'https://tools.example.test/renewable',
+      credentialRef: 'vault:secret/data/hypha',
+    });
+
+    await created.adapter.execute({
+      toolId: spec.id,
+      input: {},
+      context: { runId: 'run-one', stepId: 'step-one' },
+    });
+    await created.adapter.execute({
+      toolId: spec.id,
+      input: {},
+      context: { runId: 'run-two', stepId: 'step-two' },
+    });
+
+    expect(requests.map((headers) => headers.authorization)).toEqual([
+      'Bearer first-token',
+      'Bearer renewed-token',
+    ]);
+    expect(acquire).toHaveBeenCalledTimes(2);
   });
 
   it('rejects an unpinned resolution and a missing capability', async () => {
@@ -153,18 +213,25 @@ describe('ToolAdapterFactoryRegistry', () => {
     );
     const cancelled: string[] = [];
     const closed: string[] = [];
-    const fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ provider: 'http' }), {
-        headers: { 'content-type': 'application/json' },
-      })
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ provider: 'http' }), {
+          headers: { 'content-type': 'application/json' },
+        })
     );
     const registry = new ToolAdapterFactoryRegistry({
       resolveToolSpec: async (reference) => resolveCommonToolSpec(reference.id),
-      secretResolver: { resolve: async () => 'secret' },
+      secretResolver: {
+        acquire: async () => ({ renewable: false, read: () => 'secret' }),
+        resolve: async () => 'secret',
+      },
     });
     registerConcreteToolAdapterFactories(registry, {
       localFunctions: {
         'utility.text': async (input) => ({ provider: 'local', input }),
+      },
+      plugins: {
+        'trusted.hash': async (input) => ({ provider: 'plugin', input }),
       },
       fetch,
       createExecutionAdapter: async ({ profile }) => ({
@@ -203,7 +270,7 @@ describe('ToolAdapterFactoryRegistry', () => {
     });
 
     const loaded = await loadToolAdapterProfiles(document, registry);
-    expect(loaded.list()).toHaveLength(4);
+    expect(loaded.list()).toHaveLength(5);
     expect(loaded.list().every((entry) => entry.status === 'ready')).toBe(true);
     const context: ToolCallContext = {
       runId: 'run-profile',
@@ -226,13 +293,12 @@ describe('ToolAdapterFactoryRegistry', () => {
       'local.text-normalize': expect.objectContaining({ status: 'healthy' }),
       'local.command': expect.objectContaining({ status: 'healthy' }),
       'cloud.search': expect.objectContaining({ status: 'healthy' }),
+      'plugin.hash': expect.objectContaining({ status: 'healthy' }),
       'cloud.mcp': expect.objectContaining({ status: 'healthy' }),
     });
     await loaded.close();
     expect(closed.sort()).toEqual(['cloud.mcp', 'local.command']);
-    expect(cancelled).toEqual(
-      expect.arrayContaining(['cancel:local.command', 'cancel:cloud.mcp'])
-    );
+    expect(cancelled).toEqual(expect.arrayContaining(['cancel:local.command', 'cancel:cloud.mcp']));
     expect(fetch).toHaveBeenCalledOnce();
   });
 });
