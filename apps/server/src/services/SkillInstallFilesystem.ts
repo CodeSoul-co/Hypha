@@ -12,7 +12,7 @@ interface FileIdentity {
   dev: bigint;
   ino: bigint;
   size: bigint;
-  birthtimeMs: bigint;
+  birthtimeNs: bigint;
 }
 
 interface DirectoryIdentity extends FileIdentity {
@@ -74,7 +74,7 @@ export async function readTrustedLocalSkill(
       throw invalidLocalSource();
     }
     const pathStat = await fs.stat(canonicalPath, { bigint: true });
-    if (!pathStat.isFile() || !sameIdentity(before, identity(pathStat))) {
+    if (!pathStat.isFile() || !sameFileIdentity(before, identity(pathStat))) {
       throw invalidLocalSource();
     }
     const raw = (await handle.readFile({ encoding: 'utf8' })) as string;
@@ -82,7 +82,7 @@ export async function readTrustedLocalSkill(
 
     const canonicalAfter = await canonicalExistingPath(requestedPath);
     const after = identity(await fs.stat(canonicalAfter, { bigint: true }));
-    if (canonicalAfter !== canonicalPath || !sameIdentity(before, after)) {
+    if (canonicalAfter !== canonicalPath || !sameFileIdentity(before, after)) {
       throw new AppError(
         'SKILL_SOURCE_IDENTITY_CHANGED',
         'Skill source identity changed while it was being read.',
@@ -147,7 +147,7 @@ export async function installVerifiedSkillFile(input: {
       throw pathEscape();
     }
     const finalIdentity = identity(await fs.stat(canonicalTarget, { bigint: true }));
-    if (!sameIdentity(stagedIdentity, finalIdentity)) {
+    if (!sameFileIdentity(stagedIdentity, finalIdentity)) {
       throw new AppError(
         'SKILL_TARGET_IDENTITY_CHANGED',
         'Skill target identity changed during installation.',
@@ -193,7 +193,7 @@ export async function readExistingGovernedFile(
     const after = identity(await fs.stat(canonicalAfter, { bigint: true }));
     if (
       canonicalAfter !== canonicalPath ||
-      !sameIdentity(before, after) ||
+      !sameFileIdentity(before, after) ||
       !isPathWithin(directory.canonicalPath, canonicalAfter)
     ) {
       throw new AppError(
@@ -292,7 +292,7 @@ async function readAndVerifyIdentity(
   const handle = await openReadNoFollow(filePath);
   try {
     const actual = identity(await handle.stat({ bigint: true }));
-    if (!sameIdentity(expected, actual)) {
+    if (!sameFileIdentity(expected, actual)) {
       throw new AppError(
         'SKILL_TARGET_IDENTITY_CHANGED',
         'Skill file identity changed while it was being verified.',
@@ -322,7 +322,7 @@ async function assertMissing(target: string): Promise<void> {
 async function unlinkIfIdentityMatches(target: string, expected: FileIdentity): Promise<void> {
   try {
     const actual = identity(await fs.stat(target, { bigint: true }));
-    if (sameIdentity(expected, actual)) await fs.unlink(target);
+    if (sameFileIdentity(expected, actual)) await fs.unlink(target);
   } catch (error) {
     ignoreMissing(error as NodeJS.ErrnoException);
   }
@@ -332,13 +332,13 @@ function identity(stat: {
   dev: bigint;
   ino: bigint;
   size: bigint;
-  birthtimeMs: bigint;
+  birthtimeNs: bigint;
 }): FileIdentity {
   return {
     dev: stat.dev,
     ino: stat.ino,
     size: stat.size,
-    birthtimeMs: stat.birthtimeMs,
+    birthtimeNs: stat.birthtimeNs,
   };
 }
 
@@ -346,10 +346,14 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   if (left.ino !== 0n && right.ino !== 0n) {
     return left.dev === right.dev && left.ino === right.ino;
   }
+  return left.dev === right.dev && left.birthtimeNs === right.birthtimeNs;
+}
+
+function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return (
-    left.dev === right.dev &&
+    sameIdentity(left, right) &&
     left.size === right.size &&
-    left.birthtimeMs === right.birthtimeMs
+    left.birthtimeNs === right.birthtimeNs
   );
 }
 
