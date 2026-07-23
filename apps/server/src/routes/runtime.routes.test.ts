@@ -148,13 +148,14 @@ describe('runtime authorization', () => {
       .post('/runtime/sessions/session-1/commands/start-run')
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', ' request-1 ')
-      .send({ input: { task: 'test' }, agentId: 'agent-1' })
+      .send({ input: { task: 'test' }, agentId: 'agent-1', parentRunId: 'run-parent' })
       .expect(202);
 
     expect(runtime.enqueueStartRun).toHaveBeenCalledWith(
       {
         input: { task: 'test' },
         agentId: 'agent-1',
+        parentRunId: 'run-parent',
         userId: ownerId,
         sessionId: 'session-1',
       },

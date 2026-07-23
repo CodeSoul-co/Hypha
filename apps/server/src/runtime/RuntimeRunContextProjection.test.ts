@@ -142,6 +142,27 @@ describe('projectRuntimeRunContexts', () => {
     expect(projectRuntimeRunContext([created], 'missing-run')).toBeNull();
   });
 
+  it('rebuilds an optional parent Run relation from run.created metadata', () => {
+    const child: RuntimeRunContext = {
+      ...context,
+      runId: 'run-child',
+      parentRunId: 'run-parent',
+      snapshot: { ...initial, runId: 'run-child' },
+    };
+    const created = createFrameworkEvent({
+      id: 'run-child:created',
+      type: 'run.created',
+      runId: child.runId,
+      sessionId: child.sessionId,
+      userId: child.userId,
+      timestamp: initial.updatedAt,
+      payload: { runId: child.runId },
+      metadata: runtimeRunContextMetadata(child),
+    });
+
+    expect(projectRuntimeRunContext([created], child.runId)).toEqual(child);
+  });
+
   it('fails closed when a persisted snapshot does not belong to the Run', () => {
     const corrupted = {
       ...context,

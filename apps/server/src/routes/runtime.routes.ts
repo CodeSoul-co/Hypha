@@ -20,6 +20,7 @@ const startRunCommandBodySchema = z
   .object({
     input: z.unknown().optional(),
     agentId: z.string().trim().min(1).optional(),
+    parentRunId: z.string().trim().min(1).optional(),
     workflowRef: z
       .object({
         id: z.string().trim().min(1),

@@ -14,6 +14,7 @@ export interface RuntimeRunContext {
   sessionId: string;
   clientSessionId: string;
   domainPackId: string;
+  parentRunId?: string;
   fsm: FSMProcessSpec;
   snapshot: FSMSnapshot;
 }
@@ -71,6 +72,9 @@ function parseContext(value: unknown, created: FrameworkEvent): RuntimeRunContex
     sessionId: requiredString(candidate?.sessionId, 'sessionId', created.id),
     clientSessionId: requiredString(candidate?.clientSessionId, 'clientSessionId', created.id),
     domainPackId: requiredString(candidate?.domainPackId, 'domainPackId', created.id),
+    ...(optionalString(candidate?.parentRunId) === undefined
+      ? {}
+      : { parentRunId: optionalString(candidate?.parentRunId) }),
     fsm: requiredObject(fsm, 'fsm', created.id),
     snapshot: requiredObject(snapshot, 'snapshot', created.id),
   };
@@ -116,6 +120,10 @@ function isSnapshotEvent(type: FrameworkEvent['type']): boolean {
 function requiredString(value: unknown, field: string, eventId: string): string {
   if (typeof value === 'string' && value.trim()) return value;
   return invalidContext(eventId, `Run context ${field} must be a non-empty string`);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function requiredObject<T extends object>(value: T | undefined, field: string, eventId: string): T {

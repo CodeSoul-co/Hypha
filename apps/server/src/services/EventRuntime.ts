@@ -239,6 +239,7 @@ type SkillResolvingManager = {
 export interface StartRunInput {
   userId: string;
   sessionId: string;
+  parentRunId?: string;
   input?: unknown;
   agentId?: string;
   workflowRef?: SpecRef;
@@ -1370,6 +1371,7 @@ class EventRuntimeService {
 
   private async startRunWithId(input: StartRunInput, runId: string): Promise<EventRunHandle> {
     if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const parent = await this.resolveParentRun(input, runId);
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
@@ -1387,6 +1389,7 @@ class EventRuntimeService {
       sessionId: runtimeSessionId,
       clientSessionId: input.sessionId,
       domainPackId: domainPack.id,
+      ...(parent === undefined ? {} : { parentRunId: parent.runId }),
       fsm,
       snapshot,
     };
@@ -1397,7 +1400,8 @@ class EventRuntimeService {
       if (
         existingContext.userId !== input.userId ||
         existingContext.clientSessionId !== input.sessionId ||
-        existingContext.sessionId !== runtimeSessionId
+        existingContext.sessionId !== runtimeSessionId ||
+        existingContext.parentRunId !== parent?.runId
       ) {
         throw new FrameworkError({
           code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
@@ -1435,6 +1439,24 @@ class EventRuntimeService {
       );
     }
     return { runId, sessionId: input.sessionId, runtimeSessionId };
+  }
+
+  private async resolveParentRun(
+    input: StartRunInput,
+    runId: string
+  ): Promise<RuntimeRunContext | undefined> {
+    const parentRunId = input.parentRunId?.trim();
+    if (!parentRunId) return undefined;
+    if (parentRunId === runId) invalidRuntimeInput('A Run cannot be its own parent');
+    const parent = await this.findRun(parentRunId);
+    if (!parent || parent.userId !== input.userId || parent.clientSessionId !== input.sessionId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Parent Run was not found for the authenticated Session scope.',
+        context: { parentRunId },
+      });
+    }
+    return parent;
   }
 
   async transition(
@@ -4070,12 +4092,81 @@ class EventRuntimeService {
         },
       },
       children: {
-        listChildren: async () => [],
-        cancel: async (request) => ({
-          targetType: 'child_run',
-          targetId: request.childRunId,
-          status: 'not_found',
-        }),
+        listChildren: async (request) => {
+          const created = await this.canonicalEventStore().list({ type: 'run.created' });
+          return projectRuntimeRunContexts(created)
+            .filter(
+              (candidate) =>
+                candidate.parentRunId === request.scope.runId &&
+                candidate.userId === request.scope.userId &&
+                candidate.sessionId === request.scope.sessionId
+            )
+            .map((candidate) => ({ runId: candidate.runId }));
+        },
+        cancel: async (request) => {
+          const child = await this.findRun(request.childRunId);
+          if (
+            !child ||
+            child.parentRunId !== request.parentScope.runId ||
+            child.userId !== request.parentScope.userId ||
+            child.sessionId !== request.parentScope.sessionId
+          ) {
+            return {
+              targetType: 'child_run',
+              targetId: request.childRunId,
+              status: 'not_found',
+            };
+          }
+          const projected = await this.canonicalRuntimeComposition().runManager.projectRun(
+            child.runId
+          );
+          if (
+            projected &&
+            ['completed', 'failed', 'cancelled', 'timed_out'].includes(projected.status)
+          ) {
+            return {
+              targetType: 'child_run',
+              targetId: child.runId,
+              status: 'already_terminal',
+            };
+          }
+          await this.runtimeCancellationService().cancel({
+            commandId: request.idempotencyKey,
+            scope: {
+              userId: child.userId,
+              sessionId: child.sessionId,
+              runId: child.runId,
+            },
+            principal: {
+              principalId: child.userId,
+              type: 'user',
+              userId: child.userId,
+              permissionScopes: ['runtime.run.cancel'],
+            },
+            ownerId: 'server.runtime-cancellation',
+            leaseTtlMs: 30_000,
+            reason: request.reason,
+            policy: {
+              propagation: request.propagation === 'all_descendants' ? 'all_descendants' : 'none',
+              cancelRunningActivities: true,
+              ...(request.deadlineAt === undefined
+                ? {}
+                : {
+                    waitGraceMs: Math.max(
+                      0,
+                      Date.parse(request.deadlineAt) - Date.parse(request.requestedAt)
+                    ),
+                  }),
+            },
+            requestedAt: request.requestedAt,
+            idempotencyKey: request.idempotencyKey,
+          });
+          return {
+            targetType: 'child_run',
+            targetId: child.runId,
+            status: 'cancelled',
+          };
+        },
       },
       nextId: (namespace) => `${namespace}:${generateId()}`,
     });

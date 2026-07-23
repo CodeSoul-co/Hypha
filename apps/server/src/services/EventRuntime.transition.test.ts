@@ -325,6 +325,71 @@ describe('EventRuntime canonical transitions', () => {
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'cancelled' });
   });
 
+  it('rebuilds the child Run graph from Events and cancels every descendant', async () => {
+    const input = {
+      userId: 'user.cancel-descendants',
+      sessionId: 'session.cancel-descendants',
+    };
+    const parent = await runtime.startRun({ ...input, input: { task: 'parent' } });
+    const child = await runtime.startRun({
+      ...input,
+      parentRunId: parent.runId,
+      input: { task: 'child' },
+    });
+    const grandchild = await runtime.startRun({
+      ...input,
+      parentRunId: child.runId,
+      input: { task: 'grandchild' },
+    });
+
+    await runtime.enqueueCancelRun(
+      { ...input, runId: parent.runId, reason: 'Cancel the complete Run tree' },
+      'request.cancel.descendants.1'
+    );
+    await runtime.drainSessionCommands(input);
+
+    await expect(runtime.projectRun(parent.runId)).resolves.toMatchObject({ status: 'cancelled' });
+    await expect(runtime.projectRun(child.runId)).resolves.toMatchObject({ status: 'cancelled' });
+    await expect(runtime.projectRun(grandchild.runId)).resolves.toMatchObject({
+      status: 'cancelled',
+    });
+    const parentPropagation = (await runtime.listEvents(parent.runId)).filter(
+      (event) => event.type === 'runtime.cancellation.propagated'
+    );
+    const childPropagation = (await runtime.listEvents(child.runId)).filter(
+      (event) => event.type === 'runtime.cancellation.propagated'
+    );
+    expect(parentPropagation).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          result: expect.objectContaining({ targetType: 'child_run', targetId: child.runId }),
+        }),
+      }),
+    ]);
+    expect(childPropagation).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          result: expect.objectContaining({ targetType: 'child_run', targetId: grandchild.runId }),
+        }),
+      }),
+    ]);
+  });
+
+  it('rejects parent Run links outside the authenticated Session scope', async () => {
+    const parent = await runtime.startRun({
+      userId: 'user.parent-scope',
+      sessionId: 'session.parent-scope',
+    });
+
+    await expect(
+      runtime.startRun({
+        userId: 'user.parent-scope',
+        sessionId: 'session.other-scope',
+        parentRunId: parent.runId,
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_RUN_NOT_FOUND' });
+  });
+
   it('resumes a paused Run through a durable Session command exactly once', async () => {
     const input = {
       userId: 'user.resume-command',
@@ -440,5 +505,4 @@ describe('EventRuntime canonical transitions', () => {
     expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
   });
-
 });
