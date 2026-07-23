@@ -55,6 +55,7 @@ export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
 export * from './runtime-event-store';
 export * from './runtime-checkpoint-store';
+export * from './react-continuation-checkpoint-store';
 export * from './run-lease-store';
 export * from './state-execution-claim-store';
 export * from './session-queue';

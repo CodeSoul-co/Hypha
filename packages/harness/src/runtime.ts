@@ -1,6 +1,7 @@
 import {
   createFrameworkEvent,
   FrameworkError,
+  hashCanonicalJson,
   InMemoryEventStore,
   type EventStore,
   type FrameworkEvent,
@@ -9,7 +10,9 @@ import {
 import {
   defaultReActFSMProcessSpec,
   FSMRuntime,
+  validateFSMSnapshot,
   type FSMProcessSpec,
+  type FSMSnapshot,
   type FSMStateEnteredRecord,
   type StateTransition,
 } from '@hypha/fsm';
@@ -26,6 +29,10 @@ import {
   type ContextBuilder,
   type AgenticReasoner,
   type ReActAgentRuntime,
+  type ReActContinuationCheckpoint,
+  type ReActContinuationCheckpointStore,
+  type ReActExecutionBudget,
+  type ReActRunControl,
   type ReActRunResult,
   type ReActStep,
   type ReasoningConfig,
@@ -40,6 +47,7 @@ import {
   SkillSelector,
 } from '@hypha/skills';
 import type { ToolExecutionScope, ToolRunner } from '@hypha/tools';
+import { randomUUID } from 'node:crypto';
 
 export interface RuntimeSession {
   id: string;
@@ -172,6 +180,9 @@ export interface HarnessedReActFSMRunnerOptions {
   verifier?: Verifier;
   reactRuntime?: ReActAgentRuntime;
   maxIterations?: number;
+  executionBudget?: Partial<ReActExecutionBudget>;
+  reactCheckpointStore?: ReActContinuationCheckpointStore;
+  continueAfterTool?: boolean;
   resolveToolExecutionScope?: (input: {
     fsmState: string;
     context: BuiltAgentContext;
@@ -186,6 +197,7 @@ export interface HarnessedReActFSMRunInput<TInput = unknown> extends ContextBuil
   domainPackRef?: SpecRef;
   workflowRef?: SpecRef;
   createSession?: boolean;
+  resumeFromCheckpoint?: boolean;
 }
 
 export interface HarnessedReActFSMRunResult {
@@ -320,7 +332,6 @@ export class EventFirstRuntime {
 
 export class RunManager {
   private readonly runtime: EventFirstRuntime;
-  private readonly eventCounts = new Map<string, number>();
 
   constructor(options: RunManagerOptions = {}) {
     this.runtime = options.runtime ?? new EventFirstRuntime();
@@ -563,6 +574,78 @@ export class RunManager {
     });
   }
 
+  async recordReactContinuationCheckpoint(
+    context: RunExecutionContext,
+    checkpoint: ReActContinuationCheckpoint
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'react.continuation.checkpointed'),
+      type: 'react.continuation.checkpointed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      stepId: checkpoint.stepId,
+      agentId: context.agentId,
+      timestamp: checkpoint.updatedAt,
+      payload: reactCheckpointReceipt(checkpoint),
+    });
+  }
+
+  async recordReactContinuationResumed(
+    context: RunExecutionContext,
+    checkpoint: ReActContinuationCheckpoint,
+    resumedAt: string
+  ): Promise<FrameworkEvent> {
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'react.continuation.resumed'),
+      type: 'react.continuation.resumed',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      stepId: checkpoint.stepId,
+      agentId: context.agentId,
+      timestamp: resumedAt,
+      payload: {
+        stepId: checkpoint.stepId,
+        scopeHash: checkpoint.scopeHash,
+        checkpointStepSequence: checkpoint.stepSequence,
+        checkpointHash: hashCanonicalJson(checkpoint),
+        resumedAt,
+      },
+    });
+  }
+
+  async recordReactContinuationSuspended(
+    context: RunExecutionContext,
+    result: ReActRunResult
+  ): Promise<FrameworkEvent> {
+    if (result.status !== 'suspended' || !result.checkpoint || !result.suspension) {
+      throw new FrameworkError({
+        code: 'RUNTIME_INVALID_INPUT',
+        message: 'ReAct suspension receipt requires a suspended result and checkpoint',
+      });
+    }
+    return this.runtime.appendRunEvent({
+      id: this.nextEventId(context.runId, 'react.continuation.suspended'),
+      type: 'react.continuation.suspended',
+      runId: context.runId,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      stepId: result.checkpoint.stepId,
+      agentId: context.agentId,
+      timestamp: result.checkpoint.updatedAt,
+      payload: {
+        stepId: result.checkpoint.stepId,
+        scopeHash: result.checkpoint.scopeHash,
+        stepSequence: result.checkpoint.stepSequence,
+        reason: result.suspension.reason,
+        retryable: result.suspension.retryable,
+        requiresHumanReview: result.suspension.requiresHumanReview,
+        checkpointHash: hashCanonicalJson(result.checkpoint),
+      },
+    });
+  }
+
   async completeRun(
     context: RunExecutionContext,
     output: unknown,
@@ -731,9 +814,7 @@ export class RunManager {
   }
 
   private nextEventId(runId: string, label: string): string {
-    const next = (this.eventCounts.get(runId) ?? 0) + 1;
-    this.eventCounts.set(runId, next);
-    return `${runId}:${label}:${next}`;
+    return `${runId}:${label}:${randomUUID()}`;
   }
 }
 
@@ -788,7 +869,14 @@ export class HarnessedReActFSMRunner {
       agentId: input.agent.id,
     };
 
-    if (input.createSession !== false) {
+    if (input.resumeFromCheckpoint && !this.options.reactCheckpointStore) {
+      throw new FrameworkError({
+        code: 'RUNTIME_INVALID_INPUT',
+        message: 'resumeFromCheckpoint requires reactCheckpointStore',
+      });
+    }
+
+    if (!input.resumeFromCheckpoint && input.createSession !== false) {
       await this.runManager.createSession({
         id: input.sessionId,
         userId: input.userId,
@@ -798,30 +886,38 @@ export class HarnessedReActFSMRunner {
       });
     }
 
-    const run = await this.runManager.createRun({
-      id: input.runId,
-      sessionId: input.sessionId,
-      userId: input.userId,
-      domainPackRef: input.domainPackRef,
-      workflowRef: input.workflowRef,
-      agentRef: { id: input.agent.id, version: input.agent.version },
-      input: input.input,
-      timestamp: this.now(),
-    });
-    await this.runManager.startRun(run, this.now());
+    const run = input.resumeFromCheckpoint
+      ? await this.requireResumableRun(input)
+      : await this.runManager.createRun({
+          id: input.runId,
+          sessionId: input.sessionId,
+          userId: input.userId,
+          domainPackRef: input.domainPackRef,
+          workflowRef: input.workflowRef,
+          agentRef: { id: input.agent.id, version: input.agent.version },
+          input: input.input,
+          timestamp: this.now(),
+        });
+    if (!input.resumeFromCheckpoint) await this.runManager.startRun(run, this.now());
 
-    const fsm = new FSMRuntime(this.fsmSpec, input.runId, {
+    const fsmOptions = {
       now: this.now,
-      onTransition: async (transition) => {
+      onTransition: async (transition: StateTransition) => {
         await this.runManager.recordTransitionAccepted(runContext, transition);
       },
-      onStateEntered: async (record) => {
+      onStateEntered: async (record: FSMStateEnteredRecord) => {
         await this.runManager.recordStateEntered(runContext, record);
       },
-    });
+    };
+    const resumedSnapshot = input.resumeFromCheckpoint
+      ? await this.latestFSMSnapshot(input.runId)
+      : undefined;
+    const fsm = new FSMRuntime(this.fsmSpec, input.runId, fsmOptions, resumedSnapshot);
     try {
-      await fsm.start({ phase: 'idle' });
-      await this.transitionIfNeeded(fsm, 'RunInitialized', { phase: 'run_initialized' });
+      if (!input.resumeFromCheckpoint) {
+        await fsm.start({ phase: 'idle' });
+        await this.transitionIfNeeded(fsm, 'RunInitialized', { phase: 'run_initialized' });
+      }
 
       await this.runManager.recordContextBuildStarted(runContext);
       const context = await this.contextBuilder.build(input);
@@ -839,7 +935,9 @@ export class HarnessedReActFSMRunner {
       });
       await this.recordSkillEvents(runContext, context);
       await this.recordReasoningEvents(runContext, context);
-      await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
+      if (!input.resumeFromCheckpoint) {
+        await this.transitionIfNeeded(fsm, 'ContextBuilt', { phase: 'context_built' });
+      }
 
       const reactRuntime =
         this.reactRuntime ?? new BasicReActAgentRuntime({ verifier: this.verifier });
@@ -847,6 +945,9 @@ export class HarnessedReActFSMRunner {
         inference: this.options.inference,
         toolRunner: this.toolRunner,
         maxIterations: this.maxIterations,
+        executionBudget: this.options.executionBudget,
+        checkpointStore: this.options.reactCheckpointStore,
+        continueAfterTool: this.options.continueAfterTool,
         resolveToolExecutionScope: (reactContext, action) =>
           this.options.resolveToolExecutionScope?.({
             fsmState: fsm.getSnapshot().currentState,
@@ -863,9 +964,18 @@ export class HarnessedReActFSMRunner {
             });
           }
         },
+        onCheckpoint: async (checkpoint) => {
+          await this.runManager.recordReactContinuationCheckpoint(runContext, checkpoint);
+        },
+        onResume: async (checkpoint) => {
+          await this.runManager.recordReactContinuationResumed(runContext, checkpoint, this.now());
+        },
       });
 
-      const react = await reactRunner.run(context);
+      const control: ReActRunControl = input.resumeFromCheckpoint
+        ? { resumeFromCheckpointStore: true }
+        : {};
+      const react = await reactRunner.run(context, control);
       if (react.status === 'completed') {
         await this.transitionIfNeeded(fsm, 'Completed', { phase: 'complete' });
         await this.runManager.completeRun(runContext, react.output, this.now());
@@ -876,6 +986,27 @@ export class HarnessedReActFSMRunner {
           { finalAction: react.finalAction },
           this.now()
         );
+      } else if (react.status === 'suspended') {
+        await this.runManager.recordReactContinuationSuspended(runContext, react);
+        if (react.suspension?.requiresHumanReview) {
+          await this.transitionIfNeeded(fsm, 'HumanReview', {
+            phase: 'human_review',
+            reason: react.suspension.reason,
+          });
+          await this.runManager.waitForHumanReview(
+            runContext,
+            {
+              reason: react.suspension.reason,
+              ...(react.checkpoint === undefined
+                ? {}
+                : { checkpointRef: reactCheckpointRef(react.checkpoint) }),
+            },
+            this.now()
+          );
+        }
+      } else if (react.status === 'cancelled') {
+        await this.transitionIfNeeded(fsm, 'Cancelled', { phase: 'cancel' });
+        await this.runManager.cancelRun(runContext, 'ReAct execution was cancelled.', this.now());
       } else {
         await this.transitionIfNeeded(fsm, 'Failed', { phase: 'fail' });
         await this.runManager.failRun(runContext, react.error, this.now());
@@ -903,6 +1034,41 @@ export class HarnessedReActFSMRunner {
         events: await this.runManager.listEvents(input.runId),
       };
     }
+  }
+
+  private async requireResumableRun(input: HarnessedReActFSMRunInput): Promise<RuntimeRun> {
+    const run = await this.runManager.projectRun(input.runId);
+    if (!run || run.sessionId !== input.sessionId || run.userId !== input.userId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'ReAct continuation Run was not found in the requested scope',
+      });
+    }
+    if (run.status !== 'running') {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: `ReAct continuation requires a running Run; current status is ${run.status}`,
+      });
+    }
+    return run;
+  }
+
+  private async latestFSMSnapshot(runId: string): Promise<ReturnType<FSMRuntime['getSnapshot']>> {
+    const events = await this.runManager.listEvents(runId);
+    for (const event of [...events].reverse()) {
+      if (event.type !== 'fsm.state.entered') continue;
+      const payload = event.payload as Record<string, unknown>;
+      const snapshot = payload.snapshot;
+      if (isFSMSnapshotCandidate(snapshot)) {
+        const candidate = structuredClone(snapshot) as FSMSnapshot;
+        validateFSMSnapshot(this.fsmSpec, candidate, runId);
+        return candidate;
+      }
+    }
+    throw new FrameworkError({
+      code: 'RUNTIME_CHECKPOINT_FAILED',
+      message: `ReAct continuation has no FSM snapshot: ${runId}`,
+    });
   }
 
   private async transitionIfNeeded(
@@ -992,6 +1158,23 @@ export class HarnessedReActFSMRunner {
   }
 }
 
+function isFSMSnapshotCandidate(value: unknown): value is FSMSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<FSMSnapshot>;
+  return (
+    typeof candidate.processId === 'string' &&
+    typeof candidate.runId === 'string' &&
+    typeof candidate.currentState === 'string' &&
+    Array.isArray(candidate.statePath) &&
+    candidate.statePath.every((state) => typeof state === 'string') &&
+    (candidate.status === 'running' ||
+      candidate.status === 'completed' ||
+      candidate.status === 'failed' ||
+      candidate.status === 'cancelled') &&
+    typeof candidate.updatedAt === 'string'
+  );
+}
+
 function stateForReActStep(step: ReActStep): string | null {
   switch (step.phase) {
     case 'reason':
@@ -1014,9 +1197,34 @@ function stateForReActStep(step: ReActStep): string | null {
       return 'HumanReview';
     case 'memory_sync':
       return 'MemorySync';
+    case 'suspend':
+    case 'cancel':
     case 'observe':
       return null;
   }
+}
+
+function reactCheckpointReceipt(checkpoint: ReActContinuationCheckpoint): Record<string, unknown> {
+  return {
+    checkpointVersion: checkpoint.version,
+    stepId: checkpoint.stepId,
+    scopeHash: checkpoint.scopeHash,
+    stepSequence: checkpoint.stepSequence,
+    nextPhase: checkpoint.nextPhase,
+    iterations: checkpoint.iterations,
+    modelCalls: checkpoint.modelCalls,
+    toolCalls: checkpoint.toolCalls,
+    totalTokens: checkpoint.totalTokens,
+    consecutiveNoProgress: checkpoint.consecutiveNoProgress,
+    checkpointHash: hashCanonicalJson(checkpoint),
+    updatedAt: checkpoint.updatedAt,
+  };
+}
+
+function reactCheckpointRef(checkpoint: ReActContinuationCheckpoint): string {
+  return `react-checkpoint://${encodeURIComponent(checkpoint.runId)}/${encodeURIComponent(
+    checkpoint.stepId
+  )}/${checkpoint.stepSequence}`;
 }
 
 export function projectSession(events: FrameworkEvent[]): RuntimeSession | null {

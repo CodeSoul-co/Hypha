@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '@hypha/core';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
-import type { ContextBuilder } from '@hypha/kernel';
+import {
+  InMemoryReActContinuationCheckpointStore,
+  reActContinuationScopeHash,
+  type ContextBuilder,
+  type ReActAgentRuntime,
+} from '@hypha/kernel';
 import { SkillRegistry } from '@hypha/skills';
 import { GovernedToolRunner, MockToolRunner, ToolRegistry } from '@hypha/tools';
 import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
@@ -532,6 +537,139 @@ describe('@hypha/harness contracts', () => {
     });
   });
 
+  it('resumes bounded ReAct quanta from durable checkpoints without recreating the Run', async () => {
+    const checkpointStore = new InMemoryReActContinuationCheckpointStore();
+    const actions = [
+      { action: 'tool', toolId: 'tool.mock', input: { page: 1 } },
+      { action: 'tool', toolId: 'tool.mock', input: { page: 2 } },
+      { action: 'finish', output: { answer: 'complete' } },
+    ];
+    let modelCalls = 0;
+    const inference: InferenceProvider = {
+      id: 'long-horizon-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        const output = actions[modelCalls++];
+        if (!output) throw new Error('Unexpected Model call');
+        return { id: `${request.runId}:response:${modelCalls}`, output };
+      },
+    };
+    const reactRuntime: ReActAgentRuntime = {
+      async reason(context) {
+        return {
+          runId: context.runId,
+          stepId: context.stepId,
+          agentId: context.agent.id,
+          modelAlias: context.agent.modelAlias,
+          input: { messages: context.messages },
+        };
+      },
+      async selectAction(response) {
+        const output = response.output as Record<string, unknown>;
+        return output.action === 'tool'
+          ? {
+              type: 'tool',
+              target: output.toolId as string,
+              input: output.input,
+            }
+          : { type: 'finish', input: output.output };
+      },
+      async verify(_context, observation) {
+        return observation.source === 'tool'
+          ? { type: 'model', reason: 'continue' }
+          : { type: 'finish', input: observation.value };
+      },
+    };
+    const invocationIds: string[] = [];
+    const toolRunner = new MockToolRunner();
+    toolRunner.registerHandler('tool.mock', async (request) => {
+      if (!request.context.invocationId) throw new Error('Expected deterministic invocationId');
+      invocationIds.push(request.context.invocationId);
+      return {
+        toolId: request.toolId,
+        status: 'completed',
+        output: request.input,
+      };
+    });
+    const eventRuntime = new EventFirstRuntime();
+    const runnerOptions = {
+      inference,
+      toolRunner,
+      reactRuntime,
+      reactCheckpointStore: checkpointStore,
+      continueAfterTool: true,
+      executionBudget: {
+        maxIterations: 4,
+        maxModelCalls: 5,
+        maxToolCalls: 4,
+        maxConsecutiveNoProgress: 2,
+        quantumIterations: 1,
+      },
+      now: () => '2026-07-23T12:00:00.000Z',
+    };
+    const input = {
+      runId: 'run_react_continuation',
+      stepId: 'react',
+      sessionId: 'session_react_continuation',
+      userId: 'owner',
+      agent: {
+        id: 'agent.continuation',
+        version: '1.0.0',
+        name: 'Continuation Agent',
+        modelAlias: 'default-chat',
+      },
+      input: 'collect every page',
+    };
+
+    const first = await new HarnessedReActFSMRunner({
+      ...runnerOptions,
+      runManager: new RunManager({ runtime: eventRuntime }),
+    }).run(input);
+    expect(first.react).toMatchObject({
+      status: 'suspended',
+      suspension: { reason: 'quantum_exhausted', retryable: true },
+    });
+    expect(first.run.status).toBe('running');
+
+    const resumed = await new HarnessedReActFSMRunner({
+      ...runnerOptions,
+      runManager: new RunManager({ runtime: eventRuntime }),
+    }).run({ ...input, resumeFromCheckpoint: true });
+
+    expect(resumed.react).toMatchObject({
+      status: 'completed',
+      output: { answer: 'complete' },
+    });
+    expect(resumed.run.status).toBe('completed');
+    expect(invocationIds).toEqual([
+      'run_react_continuation:react:tool:tool.mock:1',
+      'run_react_continuation:react:tool:tool.mock:2',
+    ]);
+    const eventTypes = resumed.events.map((event) => event.type);
+    expect(eventTypes.filter((type) => type === 'run.created')).toHaveLength(1);
+    expect(eventTypes.filter((type) => type === 'run.started')).toHaveLength(1);
+    expect(eventTypes).toEqual(
+      expect.arrayContaining([
+        'react.continuation.checkpointed',
+        'react.continuation.suspended',
+        'react.continuation.resumed',
+        'run.completed',
+      ])
+    );
+    await expect(
+      checkpointStore.get(
+        input.runId,
+        input.stepId,
+        reActContinuationScopeHash({
+          runId: input.runId,
+          stepId: input.stepId,
+          agent: input.agent,
+          messages: [],
+          memoryScope: { userId: input.userId, sessionId: input.sessionId },
+        })
+      )
+    ).resolves.toBeNull();
+  });
+
   it('records thinking and agentic deliberation before ReAct execution when reasoning is enabled', async () => {
     let capturedRequest: InferenceRequest | undefined;
     const inference: InferenceProvider = {
@@ -841,7 +979,7 @@ describe('@hypha/harness contracts', () => {
       status: 'completed',
       output: {
         toolId: 'tool.scoped',
-        invocationId: 'call_scoped_1',
+        invocationId: 'run_scoped_tool:react:tool:tool.scoped:1',
         status: 'denied',
         error: { code: 'TOOL_NOT_ALLOWED_IN_SCOPE' },
       },
