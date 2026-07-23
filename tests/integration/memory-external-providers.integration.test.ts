@@ -175,6 +175,7 @@ describe('external memory real integration entry points', () => {
       );
       const client = new Mem0PlatformClient({
         apiToken: process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN!,
+        mappingProfile: 'test',
       });
       try {
         const capabilitySnapshot = await client.capabilities();
@@ -212,6 +213,7 @@ describe('external memory real integration entry points', () => {
       location: process.env.HYPHA_TEST_MEMORYBANK_LOCATION!,
       reasoningEngineId: process.env.HYPHA_TEST_MEMORYBANK_ENGINE!,
       accessToken: process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN!,
+      mappingProfile: 'test',
     });
     try {
       const capabilitySnapshot = await client.capabilities();
