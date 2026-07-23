@@ -692,6 +692,11 @@ export class RunCapabilitySnapshotRepository {
 
   constructor(private readonly store: ToolContractSnapshotStore) {}
 
+  clear(): void {
+    this.cache.clear();
+    this.pins.clear();
+  }
+
   async pin(
     candidate: Readonly<EffectiveAgentCapabilitySnapshot>
   ): Promise<Readonly<EffectiveAgentCapabilitySnapshot>> {
@@ -1336,7 +1341,7 @@ class EventRuntimeService {
     this.legacyHumanWaitMigrationReport = undefined;
     this.canonicalEventFamilyMigrationReport = undefined;
     this.knownSessions.clear();
-    this.runCapabilitySnapshots.clear();
+    this.capabilitySnapshots.clear();
     if (failures.length > 0) throw failures[0];
   }
 
