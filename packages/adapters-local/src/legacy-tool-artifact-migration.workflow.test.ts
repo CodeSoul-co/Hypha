@@ -61,7 +61,10 @@ describe('legacy Tool Artifact migration workflow', () => {
       legacyToolPathSegment: 'tool_legacy_report',
       legacyInvocationPathSegment: 'invocation_legacy_one',
     });
+    expect(plan.planHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(first).toEqual(retry);
+    expect(first.planHash).toBe(plan.planHash);
+    expect(first.reportId).toMatch(/^legacy-migration-execution:[a-f0-9]{64}$/u);
     expect(first.summary).toEqual({ planned: 1, dryRun: 0, imported: 1, failed: 0, skipped: 0 });
     const migrated = first.items[0];
     expect(migrated).toMatchObject({
@@ -111,19 +114,19 @@ describe('legacy Tool Artifact migration workflow', () => {
     });
     const tampered = structuredClone(first);
     tampered.items[0].revision = (tampered.items[0].revision ?? 0) + 1;
-    await expect(rollback.rollback({ plan, execution: tampered })).resolves.toMatchObject({
-      items: [
-        {
-          status: 'failed',
-          failure: { code: 'LEGACY_MIGRATION_ROLLBACK_TARGET_MISMATCH' },
-        },
-      ],
-      summary: { failed: 1, rolledBack: 0 },
+    await expect(rollback.rollback({ plan, execution: tampered })).rejects.toMatchObject({
+      code: 'LEGACY_MIGRATION_ROLLBACK_INVALID_REPORT',
+      message: expect.stringContaining('report ID'),
     });
     await expect(
       fixture.manager.get({ principal, artifactId: migrated.artifactId ?? '' })
     ).resolves.toMatchObject({ revision: migrated.revision });
     const dryRun = await rollback.rollback({ plan, execution: first, dryRun: true });
+    expect(dryRun).toMatchObject({
+      planHash: plan.planHash,
+      executionReportId: first.reportId,
+      reportId: expect.stringMatching(/^legacy-migration-rollback:[a-f0-9]{64}$/u),
+    });
     expect(dryRun.summary).toEqual({
       candidates: 1,
       dryRun: 1,
@@ -136,6 +139,8 @@ describe('legacy Tool Artifact migration workflow', () => {
     ).resolves.toMatchObject({ revision: migrated.revision });
 
     const rolledBack = await rollback.rollback({ plan, execution: first });
+    expect(rolledBack.reportId).toMatch(/^legacy-migration-rollback:[a-f0-9]{64}$/u);
+    expect(rolledBack.reportId).not.toBe(dryRun.reportId);
     expect(rolledBack.items).toMatchObject([{ status: 'rolled_back' }]);
     expect(rolledBack.summary).toEqual({
       candidates: 1,
@@ -149,6 +154,8 @@ describe('legacy Tool Artifact migration workflow', () => {
     ).resolves.toBeNull();
 
     const retriedRollback = await rollback.rollback({ plan, execution: first });
+    expect(retriedRollback.reportId).toMatch(/^legacy-migration-rollback:[a-f0-9]{64}$/u);
+    expect(retriedRollback.reportId).not.toBe(rolledBack.reportId);
     expect(retriedRollback.items).toMatchObject([{ status: 'already_absent' }]);
     expect(retriedRollback.summary).toEqual({
       candidates: 1,

@@ -9,6 +9,13 @@ import type {
   LegacyToolArtifactMigrationImportPlanItem,
   LegacyToolArtifactMigrationPlan,
 } from './legacy-tool-artifact-migration-planner';
+import {
+  isLegacyToolArtifactMigrationExecutionReportId,
+  isLegacyToolArtifactMigrationPlanHash,
+  legacyToolArtifactMigrationExecutionReportId,
+  legacyToolArtifactMigrationPlanHash,
+  legacyToolArtifactMigrationRollbackReportId,
+} from './legacy-tool-artifact-migration-report';
 
 export type LegacyToolArtifactMigrationRollbackErrorCode =
   | 'LEGACY_MIGRATION_ROLLBACK_INVALID_REPORT'
@@ -55,6 +62,9 @@ export interface LegacyToolArtifactMigrationRollbackSummary {
 }
 
 export interface LegacyToolArtifactMigrationRollbackResult {
+  planHash: string;
+  executionReportId: string;
+  reportId: string;
   mode: 'dry_run' | 'rollback';
   items: LegacyToolArtifactMigrationRollbackItem[];
   summary: LegacyToolArtifactMigrationRollbackSummary;
@@ -131,7 +141,9 @@ export class LegacyToolArtifactMigrationRollbackExecutor {
       }
     }
 
-    return {
+    const report: Omit<LegacyToolArtifactMigrationRollbackResult, 'reportId'> = {
+      planHash: request.plan.planHash,
+      executionReportId: request.execution.reportId,
       mode: dryRun ? 'dry_run' : 'rollback',
       items,
       summary: {
@@ -142,6 +154,10 @@ export class LegacyToolArtifactMigrationRollbackExecutor {
         failed: countStatus(items, 'failed'),
       },
     };
+    return {
+      reportId: legacyToolArtifactMigrationRollbackReportId(report),
+      ...report,
+    };
   }
 }
 
@@ -149,6 +165,7 @@ function bindRollbackCandidates(
   plan: LegacyToolArtifactMigrationPlan,
   execution: LegacyToolArtifactMigrationExecutionResult
 ): BoundRollbackCandidate[] {
+  assertReportIntegrity(plan, execution);
   if (
     execution.mode !== 'execute' ||
     !Array.isArray(plan.imports) ||
@@ -223,6 +240,36 @@ function bindRollbackCandidates(
     throw invalidReport('Legacy Artifact rollback summary does not match the execution evidence.');
   }
   return candidates;
+}
+
+function assertReportIntegrity(
+  plan: LegacyToolArtifactMigrationPlan,
+  execution: LegacyToolArtifactMigrationExecutionResult
+): void {
+  try {
+    if (
+      !isLegacyToolArtifactMigrationPlanHash(plan.planHash) ||
+      legacyToolArtifactMigrationPlanHash(plan) !== plan.planHash
+    ) {
+      throw invalidReport('Legacy Artifact rollback plan hash does not match its evidence.');
+    }
+    if (execution.planHash !== plan.planHash) {
+      throw invalidReport('Legacy Artifact execution report is bound to a different plan.');
+    }
+    if (
+      !isLegacyToolArtifactMigrationExecutionReportId(execution.reportId) ||
+      legacyToolArtifactMigrationExecutionReportId(execution) !== execution.reportId
+    ) {
+      throw invalidReport('Legacy Artifact execution report ID does not match its evidence.');
+    }
+  } catch (error) {
+    if (error instanceof LegacyToolArtifactMigrationRollbackError) throw error;
+    throw invalidReport(
+      `Legacy Artifact rollback evidence is not canonical: ${
+        error instanceof Error ? error.message : 'unknown error'
+      }`
+    );
+  }
 }
 
 function assertPlanAndExecutionBinding(

@@ -8,6 +8,11 @@ import type {
   LegacyToolArtifactMigrationPlan,
   LegacyToolArtifactMigrationSkipPlanItem,
 } from './legacy-tool-artifact-migration-planner';
+import {
+  isLegacyToolArtifactMigrationPlanHash,
+  legacyToolArtifactMigrationExecutionReportId,
+  legacyToolArtifactMigrationPlanHash,
+} from './legacy-tool-artifact-migration-report';
 
 export type LegacyToolArtifactMigrationExecutionErrorCode =
   | 'LEGACY_MIGRATION_EXECUTION_INVALID_PLAN'
@@ -70,6 +75,8 @@ export interface LegacyToolArtifactMigrationExecutionSummary {
 }
 
 export interface LegacyToolArtifactMigrationExecutionResult {
+  planHash: string;
+  reportId: string;
   mode: 'dry_run' | 'execute';
   items: LegacyToolArtifactMigrationExecutionItem[];
   skipped: LegacyToolArtifactMigrationSkipPlanItem[];
@@ -119,7 +126,8 @@ export class LegacyToolArtifactMigrationExecutor {
       }
     }
 
-    return {
+    const report: Omit<LegacyToolArtifactMigrationExecutionResult, 'reportId'> = {
+      planHash: plan.planHash,
       mode: dryRun ? 'dry_run' : 'execute',
       items,
       skipped: plan.skipped,
@@ -130,6 +138,10 @@ export class LegacyToolArtifactMigrationExecutor {
         failed: items.filter((item) => item.status === 'failed').length,
         skipped: plan.skipped.length,
       },
+    };
+    return {
+      reportId: legacyToolArtifactMigrationExecutionReportId(report),
+      ...report,
     };
   }
 }
@@ -158,6 +170,19 @@ function validateAndSnapshotPlan(
   if (!Number.isSafeInteger(plan.totalBytes) || plan.totalBytes < 0) {
     throw invalidPlan('Legacy Artifact migration plan byte total is invalid.');
   }
+  try {
+    if (
+      !isLegacyToolArtifactMigrationPlanHash(plan.planHash) ||
+      legacyToolArtifactMigrationPlanHash(plan) !== plan.planHash
+    ) {
+      throw invalidPlan('Legacy Artifact migration plan hash does not match its evidence.');
+    }
+  } catch (error) {
+    if (error instanceof LegacyToolArtifactMigrationExecutionError) throw error;
+    throw invalidPlan('Legacy Artifact migration plan evidence is not canonical.', {
+      cause: error instanceof Error ? error.message : 'Unknown canonicalization error.',
+    });
+  }
 
   const relativePaths = new Set<string>();
   const legacyArtifactIds = new Set<string>();
@@ -180,7 +205,13 @@ function validateAndSnapshotPlan(
       actualTotalBytes: totalBytes,
     });
   }
-  return { imports, skipped, totalEntries: plan.totalEntries, totalBytes: plan.totalBytes };
+  return {
+    planHash: plan.planHash,
+    imports,
+    skipped,
+    totalEntries: plan.totalEntries,
+    totalBytes: plan.totalBytes,
+  };
 }
 
 function validateRequestBinding(item: LegacyToolArtifactMigrationImportPlanItem): void {

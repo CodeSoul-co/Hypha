@@ -10,6 +10,7 @@ import {
   LegacyToolArtifactMigrationPlanError,
   LegacyToolArtifactMigrationPlanner,
 } from './legacy-tool-artifact-migration-planner';
+import { legacyToolArtifactMigrationPlanHash } from './legacy-tool-artifact-migration-report';
 
 const principal: ExecutionPrincipal = {
   principalId: 'agent.legacy-plan',
@@ -82,6 +83,8 @@ describe('LegacyToolArtifactMigrationPlanner', () => {
     });
     expect(item.source.legacyToolPathSegment).toBe('tool_report');
     expect(item.source.legacyInvocationPathSegment).toBe('invocation_one');
+    expect(plan.planHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(plan.planHash).toBe(legacyToolArtifactMigrationPlanHash(plan));
     expect(resolve.mock.calls.map(([entry]) => entry.relativePath)).toEqual([
       'tool-results/tool_report/invocation_one.txt',
       'tool-results/tool_report/invocation_two.json',

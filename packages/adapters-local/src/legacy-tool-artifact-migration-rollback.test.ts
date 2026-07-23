@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LegacyToolArtifactMigrationExecutionResult } from './legacy-tool-artifact-migration-executor';
 import type { LegacyToolArtifactMigrationPlan } from './legacy-tool-artifact-migration-planner';
 import {
+  legacyToolArtifactMigrationExecutionReportId,
+  legacyToolArtifactMigrationPlanHash,
+} from './legacy-tool-artifact-migration-report';
+import {
   LegacyToolArtifactMigrationRollbackError,
   LegacyToolArtifactMigrationRollbackExecutor,
 } from './legacy-tool-artifact-migration-rollback';
@@ -108,39 +112,49 @@ function rollbackFixture(count: number): {
       },
     };
   });
-  return {
-    plan: {
-      imports,
-      skipped: [],
-      totalEntries: count,
-      totalBytes: imports.reduce((total, item) => total + item.source.sizeBytes, 0),
-    },
-    execution: {
-      mode: 'execute',
-      items: imports.map((item, index) => ({
-        relativePath: item.source.relativePath,
-        legacyArtifactId: item.source.legacyArtifactId,
-        target: {
-          principalId: principal.principalId,
-          workspaceId: item.request.context.workspaceId,
-          toolId: item.request.toolId,
-          invocationId: item.request.invocationId,
-        },
-        status: 'imported',
-        artifactId: `artifact.rollback.${index + 1}`,
-        versionId: `version.rollback.${index + 1}`,
-        revision: 0,
-        contentHash: item.source.contentHash,
-        sizeBytes: item.source.sizeBytes,
-      })),
-      skipped: [],
-      summary: {
-        planned: count,
-        dryRun: 0,
-        imported: count,
-        failed: 0,
-        skipped: 0,
+  const planEvidence = {
+    imports,
+    skipped: [],
+    totalEntries: count,
+    totalBytes: imports.reduce((total, item) => total + item.source.sizeBytes, 0),
+  };
+  const plan: LegacyToolArtifactMigrationPlan = {
+    planHash: legacyToolArtifactMigrationPlanHash(planEvidence),
+    ...planEvidence,
+  };
+  const executionEvidence: Omit<LegacyToolArtifactMigrationExecutionResult, 'reportId'> = {
+    planHash: plan.planHash,
+    mode: 'execute',
+    items: imports.map((item, index) => ({
+      relativePath: item.source.relativePath,
+      legacyArtifactId: item.source.legacyArtifactId,
+      target: {
+        principalId: principal.principalId,
+        workspaceId: item.request.context.workspaceId,
+        toolId: item.request.toolId,
+        invocationId: item.request.invocationId,
       },
+      status: 'imported',
+      artifactId: `artifact.rollback.${index + 1}`,
+      versionId: `version.rollback.${index + 1}`,
+      revision: 0,
+      contentHash: item.source.contentHash,
+      sizeBytes: item.source.sizeBytes,
+    })),
+    skipped: [],
+    summary: {
+      planned: count,
+      dryRun: 0,
+      imported: count,
+      failed: 0,
+      skipped: 0,
+    },
+  };
+  return {
+    plan,
+    execution: {
+      reportId: legacyToolArtifactMigrationExecutionReportId(executionEvidence),
+      ...executionEvidence,
     },
   };
 }
@@ -169,8 +183,6 @@ function importedRecord(
     storageRef: {
       storeId: 'artifact-store.rollback',
       objectKey: artifactId,
-      contentHash: `sha256:${String(index).repeat(64)}`,
-      sizeBytes: index,
     },
     logicalArtifactId: artifactId,
     provenance: {

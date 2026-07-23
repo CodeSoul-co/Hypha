@@ -7,6 +7,7 @@ import {
   legacyArtifactReference,
   type LegacyToolArtifactImportRequest,
 } from './legacy-tool-artifact-importer';
+import { legacyToolArtifactMigrationPlanHash } from './legacy-tool-artifact-migration-report';
 
 export type LegacyToolArtifactMigrationPlanErrorCode =
   | 'LEGACY_MIGRATION_INVALID_INVENTORY'
@@ -60,6 +61,7 @@ export interface LegacyToolArtifactMigrationSkipPlanItem {
 }
 
 export interface LegacyToolArtifactMigrationPlan {
+  planHash: string;
   imports: LegacyToolArtifactMigrationImportPlanItem[];
   skipped: LegacyToolArtifactMigrationSkipPlanItem[];
   totalEntries: number;
@@ -118,12 +120,21 @@ export class LegacyToolArtifactMigrationPlanner {
       });
     }
 
-    return {
+    const plan = {
       imports,
       skipped,
       totalEntries: entries.length,
       totalBytes: request.inventory.totalBytes,
     };
+    try {
+      return { planHash: legacyToolArtifactMigrationPlanHash(plan), ...plan };
+    } catch (error) {
+      throw new LegacyToolArtifactMigrationPlanError(
+        'LEGACY_MIGRATION_INVALID_RESOLUTION',
+        'Legacy Artifact migration resolution contains non-canonical evidence.',
+        { cause: error instanceof Error ? error.message : 'Unknown canonicalization error.' }
+      );
+    }
   }
 }
 

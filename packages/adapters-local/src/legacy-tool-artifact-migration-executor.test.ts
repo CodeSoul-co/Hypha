@@ -10,10 +10,7 @@ import type {
   LegacyToolArtifactImportResult,
 } from './legacy-tool-artifact-importer';
 import { LegacyToolArtifactInventory } from './legacy-tool-artifact-inventory';
-import {
-  LegacyToolArtifactMigrationExecutionError,
-  LegacyToolArtifactMigrationExecutor,
-} from './legacy-tool-artifact-migration-executor';
+import { LegacyToolArtifactMigrationExecutor } from './legacy-tool-artifact-migration-executor';
 import {
   type LegacyToolArtifactMigrationPlan,
   LegacyToolArtifactMigrationPlanner,
@@ -70,6 +67,8 @@ describe('LegacyToolArtifactMigrationExecutor', () => {
     const retry = await executor.execute({ plan: fixture.plan });
 
     expect(first).toEqual(retry);
+    expect(first.planHash).toBe(fixture.plan.planHash);
+    expect(first.reportId).toMatch(/^legacy-migration-execution:[a-f0-9]{64}$/u);
     expect(first.summary).toEqual({ planned: 2, dryRun: 0, imported: 1, failed: 1, skipped: 0 });
     expect(first.items).toMatchObject([
       {
@@ -135,11 +134,14 @@ describe('LegacyToolArtifactMigrationExecutor', () => {
     const fixture = await createPlan(false);
     const importer = { import: vi.fn() };
     const tampered = structuredClone(fixture.plan);
-    tampered.imports[0].request.expectedContentHash = `sha256:${'0'.repeat(64)}`;
+    tampered.imports[0].request.metadata = { migrationBatch: 'tampered-after-planning' };
 
     await expect(
       new LegacyToolArtifactMigrationExecutor({ importer }).execute({ plan: tampered })
-    ).rejects.toBeInstanceOf(LegacyToolArtifactMigrationExecutionError);
+    ).rejects.toMatchObject({
+      code: 'LEGACY_MIGRATION_EXECUTION_INVALID_PLAN',
+      message: expect.stringContaining('hash'),
+    });
     await expect(
       new LegacyToolArtifactMigrationExecutor({ importer, maxImports: 1 }).execute({
         plan: fixture.plan,
