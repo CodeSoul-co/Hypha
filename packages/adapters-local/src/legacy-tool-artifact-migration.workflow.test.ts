@@ -11,13 +11,14 @@ import { LegacyToolArtifactImporter } from './legacy-tool-artifact-importer';
 import { LegacyToolArtifactInventory } from './legacy-tool-artifact-inventory';
 import { LegacyToolArtifactMigrationExecutor } from './legacy-tool-artifact-migration-executor';
 import { LegacyToolArtifactMigrationPlanner } from './legacy-tool-artifact-migration-planner';
+import { LegacyToolArtifactMigrationRollbackExecutor } from './legacy-tool-artifact-migration-rollback';
 
 const principal: ExecutionPrincipal = {
   principalId: 'agent.legacy-workflow',
   type: 'agent',
   agentId: 'agent.legacy-workflow',
   userId: 'user.legacy-workflow',
-  permissionScopes: ['artifact:read', 'artifact:write'],
+  permissionScopes: ['artifact:read', 'artifact:write', 'artifact:delete'],
 };
 
 describe('legacy Tool Artifact migration workflow', () => {
@@ -105,6 +106,57 @@ describe('legacy Tool Artifact migration workflow', () => {
     });
     await expect(readText(read.content.stream)).resolves.toBe(legacyContent);
     await expect(fixture.repository.list()).resolves.toHaveLength(1);
+    const rollback = new LegacyToolArtifactMigrationRollbackExecutor({
+      manager: fixture.manager,
+    });
+    const tampered = structuredClone(first);
+    tampered.items[0].revision = (tampered.items[0].revision ?? 0) + 1;
+    await expect(rollback.rollback({ plan, execution: tampered })).resolves.toMatchObject({
+      items: [
+        {
+          status: 'failed',
+          failure: { code: 'LEGACY_MIGRATION_ROLLBACK_TARGET_MISMATCH' },
+        },
+      ],
+      summary: { failed: 1, rolledBack: 0 },
+    });
+    await expect(
+      fixture.manager.get({ principal, artifactId: migrated.artifactId ?? '' })
+    ).resolves.toMatchObject({ revision: migrated.revision });
+    const dryRun = await rollback.rollback({ plan, execution: first, dryRun: true });
+    expect(dryRun.summary).toEqual({
+      candidates: 1,
+      dryRun: 1,
+      rolledBack: 0,
+      alreadyAbsent: 0,
+      failed: 0,
+    });
+    await expect(
+      fixture.manager.get({ principal, artifactId: migrated.artifactId ?? '' })
+    ).resolves.toMatchObject({ revision: migrated.revision });
+
+    const rolledBack = await rollback.rollback({ plan, execution: first });
+    expect(rolledBack.items).toMatchObject([{ status: 'rolled_back' }]);
+    expect(rolledBack.summary).toEqual({
+      candidates: 1,
+      dryRun: 0,
+      rolledBack: 1,
+      alreadyAbsent: 0,
+      failed: 0,
+    });
+    await expect(
+      fixture.manager.get({ principal, artifactId: migrated.artifactId ?? '' })
+    ).resolves.toBeNull();
+
+    const retriedRollback = await rollback.rollback({ plan, execution: first });
+    expect(retriedRollback.items).toMatchObject([{ status: 'already_absent' }]);
+    expect(retriedRollback.summary).toEqual({
+      candidates: 1,
+      dryRun: 0,
+      rolledBack: 0,
+      alreadyAbsent: 1,
+      failed: 0,
+    });
     await expect(
       fs.readFile(
         path.join(legacyRoot, 'tool-results', 'tool_legacy_report', 'invocation_legacy_one.txt'),
@@ -127,6 +179,7 @@ function createFixture() {
       defaultVisibility: 'workspace',
       requiredReadScopes: ['artifact:read'],
       requiredWriteScopes: ['artifact:write'],
+      requiredDeleteScopes: ['artifact:delete'],
     },
     retention: { garbageCollectUnreferenced: true },
     validation: { checksumRequired: true },

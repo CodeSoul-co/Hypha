@@ -59,6 +59,7 @@ export * from './legacy-tool-artifact-importer';
 export * from './legacy-tool-artifact-inventory';
 export * from './legacy-tool-artifact-migration-planner';
 export * from './legacy-tool-artifact-migration-executor';
+export * from './legacy-tool-artifact-migration-rollback';
 export * from './sqlite-execution-store';
 export * from './sqlite-execution-store-factory';
 export * from './artifact-store-adapter-error';
