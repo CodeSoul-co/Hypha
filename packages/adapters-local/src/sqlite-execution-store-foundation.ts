@@ -109,7 +109,7 @@ export class SQLiteExecutionStoreFoundation {
     const root = prepareStoreRoot(options.rootPath);
     const basename = storeFilename(options.filename ?? 'executions.sqlite');
     this.filename = path.join(root, basename);
-    rejectAliasedDatabaseFile(this.filename);
+    secureSQLiteRuntimeFiles(this.filename);
     const existingDatabaseHasContent =
       fs.existsSync(this.filename) && fs.statSync(this.filename).size > 0;
     this.now = options.now ?? (() => new Date().toISOString());
@@ -117,15 +117,16 @@ export class SQLiteExecutionStoreFoundation {
     let database: SQLiteDatabase | undefined;
     try {
       database = openSQLiteDatabase(this.filename);
-      rejectAliasedDatabaseFile(this.filename);
+      secureSQLiteRuntimeFiles(this.filename);
       database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
       database.exec('PRAGMA journal_mode = WAL');
+      secureSQLiteRuntimeFiles(this.filename);
       database.exec('PRAGMA foreign_keys = ON');
       backupBeforeMigration(database, this.filename, existingDatabaseHasContent);
       migrateSQLiteExecutionStore(database);
       this.database = database;
       this.quarantineCorruptRecords();
-      if (process.platform !== 'win32') fs.chmodSync(this.filename, 0o600);
+      secureSQLiteRuntimeFiles(this.filename);
     } catch (error) {
       try {
         database?.close();
@@ -1094,7 +1095,9 @@ function prepareStoreRoot(rootPath: string): string {
   if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) {
     throw new TypeError('SQLite Execution store root must be a safe directory.');
   }
-  return fs.realpathSync(requested);
+  const canonicalRoot = fs.realpathSync(requested);
+  if (process.platform !== 'win32') fs.chmodSync(canonicalRoot, 0o700);
+  return canonicalRoot;
 }
 
 function storeFilename(value: string): string {
@@ -1109,6 +1112,16 @@ function rejectAliasedDatabaseFile(filename: string): void {
   const stat = fs.lstatSync(filename);
   if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
     throw new TypeError('SQLite Execution store file must be a non-aliased regular file.');
+  }
+}
+
+function secureSQLiteRuntimeFiles(filename: string): void {
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    const runtimeFilename = `${filename}${suffix}`;
+    rejectAliasedDatabaseFile(runtimeFilename);
+    if (process.platform !== 'win32' && fs.existsSync(runtimeFilename)) {
+      fs.chmodSync(runtimeFilename, 0o600);
+    }
   }
 }
 
@@ -1131,6 +1144,7 @@ function backupBeforeMigration(
   if (!fs.existsSync(backupFilename)) {
     database.exec(`VACUUM INTO ${sqliteStringLiteral(backupFilename)}`);
   }
+  rejectAliasedDatabaseFile(backupFilename);
   if (process.platform !== 'win32') fs.chmodSync(backupFilename, 0o600);
   validateMigrationBackup(backupFilename, currentVersion);
 }

@@ -973,6 +973,48 @@ describe('SQLiteExecutionStoreFoundation', () => {
     }
   });
 
+  it('keeps the store root, database, migration backup, and WAL sidecars private', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const backupFilename = `${filename}.backup-v1.sqlite`;
+    const database = openTestDatabase(filename);
+    createVersionOneDatabase(database);
+    insertLegacyRecord(database, structuredClone(executionRecordCreateRequestExample.record));
+    database.close();
+    if (process.platform !== 'win32') {
+      await fs.chmod(root, 0o777);
+      await fs.chmod(filename, 0o666);
+    }
+
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await store.create(queuedCreateRequest('execution.permissions'));
+
+    const rootStat = await fs.lstat(root);
+    expect(rootStat.isDirectory()).toBe(true);
+    expect(rootStat.isSymbolicLink()).toBe(false);
+    const protectedFiles = [filename, backupFilename];
+    const sidecars = [`${filename}-wal`, `${filename}-shm`, `${filename}-journal`];
+    for (const sidecar of sidecars) {
+      try {
+        await fs.access(sidecar);
+        protectedFiles.push(sidecar);
+      } catch {
+        // SQLite creates only the sidecars required by the active journal mode.
+      }
+    }
+    expect(protectedFiles.some((candidate) => candidate.endsWith('-wal'))).toBe(true);
+    for (const protectedFile of protectedFiles) {
+      const stat = await fs.lstat(protectedFile);
+      expect(stat.isFile()).toBe(true);
+      expect(stat.isSymbolicLink()).toBe(false);
+      expect(stat.nlink).toBe(1);
+      if (process.platform !== 'win32') expect(stat.mode & 0o777).toBe(0o600);
+    }
+    if (process.platform !== 'win32') expect(rootStat.mode & 0o777).toBe(0o700);
+
+    await store.close();
+  });
+
   it('rejects unsafe filenames and database schemas newer than this adapter', async () => {
     const root = await temporaryRoot();
     expect(
@@ -1020,6 +1062,28 @@ describe('SQLiteExecutionStoreFoundation', () => {
       await unexpectedStore?.close();
     }
     expect(hardLinkError).toBeInstanceOf(TypeError);
+  });
+
+  it('rejects hard-linked SQLite sidecars before opening the database', async () => {
+    const container = await temporaryRoot();
+    const storeRoot = path.join(container, 'store-root');
+    const outsideFilename = path.join(container, 'outside-wal');
+    const sidecarFilename = path.join(storeRoot, 'executions.sqlite-wal');
+    await fs.mkdir(storeRoot);
+    await fs.writeFile(outsideFilename, 'untrusted SQLite sidecar');
+    await fs.link(outsideFilename, sidecarFilename);
+
+    let unexpectedStore: SQLiteExecutionStoreFoundation | undefined;
+    let hardLinkError: unknown;
+    try {
+      unexpectedStore = new SQLiteExecutionStoreFoundation({ rootPath: storeRoot });
+    } catch (error) {
+      hardLinkError = error;
+    } finally {
+      await unexpectedStore?.close();
+    }
+    expect(hardLinkError).toBeInstanceOf(TypeError);
+    await expect(fs.readFile(outsideFilename, 'utf8')).resolves.toBe('untrusted SQLite sidecar');
   });
 });
 
