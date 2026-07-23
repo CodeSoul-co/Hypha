@@ -50,7 +50,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
       status: 'healthy',
       checkedAt: now(),
       message: 'SQLite Execution store is available.',
-      details: { schemaVersion: 6 },
+      details: { schemaVersion: 7, quarantinedRecords: 0 },
     });
     await store.close();
     await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
@@ -335,6 +335,75 @@ describe('SQLiteExecutionStoreFoundation', () => {
       code: 'EXECUTION_STORE_CORRUPT',
     });
     await reopened.close();
+  });
+
+  it('quarantines corrupt records on restart without hiding healthy records', async () => {
+    const root = await temporaryRoot();
+    const detectedAt = '2026-07-23T01:00:00.000Z';
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const corrupt = await store.create(queuedCreateRequest('execution.corrupt'));
+    const healthy = await store.create(queuedCreateRequest('execution.healthy'));
+    const replayableMutation = compareAndSetRequest(
+      corrupt.revision,
+      'starting',
+      'cas:quarantine-replay',
+      corrupt
+    );
+    await store.compareAndSet(replayableMutation);
+    const filename = store.filename;
+    await store.close();
+
+    const database = openTestDatabase(filename);
+    database
+      .prepare('UPDATE execution_records SET provider_id = ? WHERE execution_id = ?')
+      .run('provider.tampered', corrupt.id);
+    database.close();
+
+    const reopened = new SQLiteExecutionStoreFoundation({
+      rootPath: root,
+      now: () => detectedAt,
+    });
+    await expect(reopened.get(corrupt.id)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      details: {
+        executionId: corrupt.id,
+        quarantined: true,
+        detectedAt,
+      },
+    });
+    await expect(reopened.get(healthy.id)).resolves.toEqual(healthy);
+    await expect(reopened.list()).resolves.toEqual({ records: [healthy] });
+    await expect(reopened.resolveIdempotency(idempotencyQueryFor(corrupt))).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      details: { executionId: corrupt.id, quarantined: true },
+    });
+    await expect(reopened.compareAndSet(replayableMutation)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      details: { executionId: corrupt.id, quarantined: true },
+    });
+    await expect(reopened.health()).resolves.toEqual({
+      status: 'degraded',
+      checkedAt: detectedAt,
+      message: 'SQLite Execution store contains quarantined records.',
+      details: { schemaVersion: 7, quarantinedRecords: 1 },
+    });
+    await reopened.close();
+
+    const evidenceDatabase = openTestDatabase(filename);
+    expect(
+      evidenceDatabase
+        .prepare(
+          'SELECT execution_id, detected_at, reason_code, record_hash ' +
+            'FROM execution_record_quarantine WHERE execution_id = ?'
+        )
+        .get(corrupt.id)
+    ).toMatchObject({
+      execution_id: corrupt.id,
+      detected_at: detectedAt,
+      reason_code: 'invalid_execution_record',
+      record_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+    evidenceDatabase.close();
   });
 
   it('atomically advances revisions and replays the original mutation result', async () => {
@@ -820,7 +889,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await expect(migrated.get(created.id)).resolves.toEqual(created);
     await expect(migrated.health()).resolves.toMatchObject({
       status: 'healthy',
-      details: { schemaVersion: 6 },
+      details: { schemaVersion: 7, quarantinedRecords: 0 },
     });
     await expect(migrated.resolveIdempotency(idempotencyQueryFor(created))).resolves.toMatchObject({
       status: 'match',
@@ -843,7 +912,7 @@ describe('SQLiteExecutionStoreFoundation', () => {
 
     const filename = path.join(root, 'newer.sqlite');
     const database = openTestDatabase(filename);
-    database.exec('PRAGMA user_version = 7');
+    database.exec('PRAGMA user_version = 8');
     database.close();
     expect(
       () => new SQLiteExecutionStoreFoundation({ rootPath: root, filename: 'newer.sqlite' })

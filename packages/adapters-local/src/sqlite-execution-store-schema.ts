@@ -5,7 +5,7 @@ export interface SQLiteExecutionStoreSchemaDatabase {
   };
 }
 
-export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 6;
+export const SQLITE_EXECUTION_STORE_SCHEMA_VERSION = 7;
 
 export class SQLiteExecutionStoreSchemaVersionError extends Error {
   constructor(
@@ -39,6 +39,7 @@ export function migrateSQLiteExecutionStore(database: SQLiteExecutionStoreSchema
     if (current <= 3) database.exec(SCHEMA_V4_SQL);
     if (current <= 4) database.exec(SCHEMA_V5_SQL);
     if (current <= 5) database.exec(SCHEMA_V6_SQL);
+    if (current <= 6) database.exec(SCHEMA_V7_SQL);
     database.exec(`PRAGMA user_version = ${SQLITE_EXECUTION_STORE_SCHEMA_VERSION}`);
     database.exec('COMMIT');
   } catch (error) {
@@ -131,4 +132,13 @@ CREATE UNIQUE INDEX execution_records_scoped_idempotency
     COALESCE(tenant_id, ''), user_id, workspace_id, execution_idempotency_key
   )
   WHERE execution_idempotency_key IS NOT NULL AND idempotency_fingerprint IS NOT NULL;
+`;
+
+const SCHEMA_V7_SQL = `
+CREATE TABLE execution_record_quarantine (
+  execution_id TEXT PRIMARY KEY,
+  detected_at TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  record_hash TEXT NOT NULL
+);
 `;

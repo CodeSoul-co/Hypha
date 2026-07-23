@@ -35,7 +35,12 @@ export function planSQLiteExecutionList(query: ExecutionRecordQuery): SQLiteExec
       'Execution list cursor does not belong to this query.'
     );
   }
-  const conditions: string[] = [];
+  const conditions: string[] = [
+    'NOT EXISTS (' +
+      'SELECT 1 FROM execution_record_quarantine quarantined ' +
+      'WHERE quarantined.execution_id = execution_records.execution_id' +
+      ')',
+  ];
   const parameters: unknown[] = [];
   addFilter(conditions, parameters, 'tenant_id', query.tenantId);
   addFilter(conditions, parameters, 'user_id', query.userId);

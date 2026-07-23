@@ -120,6 +120,7 @@ export class SQLiteExecutionStoreFoundation {
       database.exec('PRAGMA foreign_keys = ON');
       migrateSQLiteExecutionStore(database);
       this.database = database;
+      this.quarantineCorruptRecords();
       if (process.platform !== 'win32') fs.chmodSync(this.filename, 0o600);
     } catch (error) {
       try {
@@ -166,7 +167,7 @@ export class SQLiteExecutionStoreFoundation {
               'Execution create idempotency record points to a missing Execution.'
             );
           }
-          return parseRecordRow(row);
+          return this.parseStoredRecord(row);
         }
       }
 
@@ -187,7 +188,7 @@ export class SQLiteExecutionStoreFoundation {
         const existing = uniqueIdempotencyRow(existingRows);
         if (existing) {
           if (String(existing.idempotency_fingerprint) === semanticFingerprint) {
-            return parseRecordRow(existing);
+            return this.parseStoredRecord(existing);
           }
           throw storeError(
             'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
@@ -237,7 +238,7 @@ export class SQLiteExecutionStoreFoundation {
     if (!executionId.trim()) throw new TypeError('executionId is required.');
     return this.readOperation(() => {
       const row = this.selectRecord(executionId);
-      return row ? parseRecordRow(row) : null;
+      return row ? this.parseStoredRecord(row) : null;
     });
   }
 
@@ -256,7 +257,7 @@ export class SQLiteExecutionStoreFoundation {
 
     return this.readOperation(() => {
       const rows = this.database.prepare(plan.sql).all(...plan.parameters);
-      const records = rows.slice(0, plan.limit).map(parseRecordRow);
+      const records = rows.slice(0, plan.limit).map((row) => this.parseStoredRecord(row));
       if (rows.length <= plan.limit) return { records };
       const last = records.at(-1);
       if (!last) return { records };
@@ -275,7 +276,7 @@ export class SQLiteExecutionStoreFoundation {
     return this.readOperation(() => {
       const row = uniqueIdempotencyRow(this.selectScopedIdempotencyRows(query));
       if (!row) return validateExecutionIdempotencyResolution({ status: 'miss' });
-      const record = parseRecordRow(row);
+      const record = this.parseStoredRecord(row);
       const existingFingerprint = String(row.idempotency_fingerprint);
       return existingFingerprint === query.fingerprint
         ? validateExecutionIdempotencyResolution({ status: 'match', record })
@@ -292,6 +293,7 @@ export class SQLiteExecutionStoreFoundation {
     const request = validateExecutionRecordCompareAndSetRequest(input);
     const requestHash = hash(JSON.stringify(request));
     return this.writeOperation(() => {
+      this.assertNotQuarantined(request.executionId);
       if (request.idempotencyKey) {
         const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
         if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
@@ -303,7 +305,7 @@ export class SQLiteExecutionStoreFoundation {
           executionId: request.executionId,
         });
       }
-      const current = parseRecordRow(row);
+      const current = this.parseStoredRecord(row);
       if (current.revision !== request.expectedRevision) {
         throw storeError(
           'EXECUTION_STORE_REVISION_CONFLICT',
@@ -342,6 +344,7 @@ export class SQLiteExecutionStoreFoundation {
     const request = validateExecutionLeaseAcquireRequest(input);
     const requestHash = hash(JSON.stringify(request));
     return this.writeOperation(() => {
+      this.assertNotQuarantined(request.executionId);
       if (request.idempotencyKey) {
         const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
         if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
@@ -353,7 +356,7 @@ export class SQLiteExecutionStoreFoundation {
           executionId: request.executionId,
         });
       }
-      const current = parseRecordRow(row);
+      const current = this.parseStoredRecord(row);
       if (current.revision !== request.expectedRevision) {
         throw storeError(
           'EXECUTION_STORE_REVISION_CONFLICT',
@@ -456,6 +459,7 @@ export class SQLiteExecutionStoreFoundation {
     const request = validateExecutionLeaseRenewRequest(input);
     const requestHash = hash(JSON.stringify(request));
     return this.writeOperation(() => {
+      this.assertNotQuarantined(request.executionId);
       if (request.idempotencyKey) {
         const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
         if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
@@ -467,7 +471,7 @@ export class SQLiteExecutionStoreFoundation {
           executionId: request.executionId,
         });
       }
-      const current = parseRecordRow(row);
+      const current = this.parseStoredRecord(row);
       if (current.revision !== request.expectedRevision) {
         throw storeError(
           'EXECUTION_STORE_REVISION_CONFLICT',
@@ -552,6 +556,7 @@ export class SQLiteExecutionStoreFoundation {
     const request = validateExecutionLeaseReleaseRequest(input);
     const requestHash = hash(JSON.stringify(request));
     return this.writeOperation(() => {
+      this.assertNotQuarantined(request.executionId);
       if (request.idempotencyKey) {
         const replay = this.findMutationIdempotency(request.operationId, request.idempotencyKey);
         if (replay) return parseMutationReplay(replay, requestHash, request.executionId);
@@ -563,7 +568,7 @@ export class SQLiteExecutionStoreFoundation {
           executionId: request.executionId,
         });
       }
-      const current = parseRecordRow(row);
+      const current = this.parseStoredRecord(row);
       if (current.revision !== request.expectedRevision) {
         throw storeError(
           'EXECUTION_STORE_REVISION_CONFLICT',
@@ -625,14 +630,21 @@ export class SQLiteExecutionStoreFoundation {
     try {
       const row = this.database.prepare('PRAGMA user_version').get();
       const version = Number(row?.user_version);
+      const quarantinedRecords = Number(
+        this.database.prepare('SELECT COUNT(*) AS count FROM execution_record_quarantine').get()
+          ?.count ?? 0
+      );
+      const schemaSupported = version === SQLiteExecutionStoreFoundation.schemaVersion;
+      const hasQuarantinedRecords = quarantinedRecords > 0;
       return {
-        status: version === SQLiteExecutionStoreFoundation.schemaVersion ? 'healthy' : 'unhealthy',
+        status: !schemaSupported ? 'unhealthy' : hasQuarantinedRecords ? 'degraded' : 'healthy',
         checkedAt: this.now(),
-        message:
-          version === SQLiteExecutionStoreFoundation.schemaVersion
-            ? 'SQLite Execution store is available.'
-            : `SQLite Execution store schema version is ${version}.`,
-        details: { schemaVersion: version },
+        message: !schemaSupported
+          ? `SQLite Execution store schema version is ${version}.`
+          : hasQuarantinedRecords
+            ? 'SQLite Execution store contains quarantined records.'
+            : 'SQLite Execution store is available.',
+        details: { schemaVersion: version, quarantinedRecords },
       };
     } catch {
       return {
@@ -650,6 +662,7 @@ export class SQLiteExecutionStoreFoundation {
   }
 
   private selectRecord(executionId: string): Record<string, unknown> | undefined {
+    this.assertNotQuarantined(executionId);
     return this.database
       .prepare(
         `SELECT ${SQLITE_EXECUTION_RECORD_COLUMNS} FROM execution_records WHERE execution_id = ?`
@@ -687,6 +700,81 @@ export class SQLiteExecutionStoreFoundation {
           'AND execution_idempotency_key = ? AND idempotency_fingerprint IS NOT NULL LIMIT 2'
       )
       .all(...parameters);
+  }
+
+  private quarantineCorruptRecords(): void {
+    const corruptRows = this.database
+      .prepare(`SELECT ${SQLITE_EXECUTION_RECORD_COLUMNS} FROM execution_records`)
+      .all()
+      .filter((row) => {
+        try {
+          parseRecordRow(row);
+          return false;
+        } catch (error) {
+          if (
+            error instanceof SQLiteExecutionStoreFoundationError &&
+            error.code === 'EXECUTION_STORE_CORRUPT'
+          ) {
+            return true;
+          }
+          throw error;
+        }
+      });
+    if (corruptRows.length === 0) return;
+
+    let transactionStarted = false;
+    try {
+      this.database.exec('BEGIN IMMEDIATE');
+      transactionStarted = true;
+      for (const row of corruptRows) {
+        this.database
+          .prepare(
+            'INSERT INTO execution_record_quarantine ' +
+              '(execution_id, detected_at, reason_code, record_hash) VALUES (?, ?, ?, ?) ' +
+              'ON CONFLICT(execution_id) DO NOTHING'
+          )
+          .run(
+            String(row.execution_id),
+            this.now(),
+            'invalid_execution_record',
+            hash(String(row.record_json))
+          );
+      }
+      this.database.exec('COMMIT');
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          this.database.exec('ROLLBACK');
+        } catch {
+          // Preserve the original quarantine error.
+        }
+      }
+      throw error;
+    }
+  }
+
+  private parseStoredRecord(row: Record<string, unknown>): ExecutionRecord {
+    this.assertNotQuarantined(String(row.execution_id));
+    return parseRecordRow(row);
+  }
+
+  private assertNotQuarantined(executionId: string): void {
+    const quarantine = this.database
+      .prepare(
+        'SELECT detected_at, reason_code FROM execution_record_quarantine WHERE execution_id = ?'
+      )
+      .get(executionId);
+    if (!quarantine) return;
+    throw storeError(
+      'EXECUTION_STORE_CORRUPT',
+      'Execution record has been quarantined and cannot be used.',
+      {
+        executionId,
+        quarantined: true,
+        detectedAt: String(quarantine.detected_at),
+        reasonCode: String(quarantine.reason_code),
+      }
+    );
   }
 
   private findMutationIdempotency(
