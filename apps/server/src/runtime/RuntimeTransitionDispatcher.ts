@@ -20,7 +20,7 @@ export interface RuntimeTransitionCommand {
   failure?: NormalizedRuntimeError;
 }
 
-/** Holds only the command currently executing for a Run; durable scheduling replaces this in R1. */
+/** Holds only the command currently executing for a Run; the Session Queue owns durable scheduling. */
 export class RuntimeTransitionDispatcher {
   private readonly pending = new Map<string, Readonly<RuntimeTransitionCommand>>();
 

@@ -190,9 +190,78 @@ describe('EventRuntime canonical transitions', () => {
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'failed' });
   });
 
-  it('recovers a durable start_run command through the Server scheduler exactly once', async () => {
-    expect(runtime.isSessionCommandSchedulerRunning()).toBe(false);
+  it('rebuilds a lagging Run projection with schema-backed recovery facts', async () => {
+    const run = await runtime.startRun({
+      userId: 'user.projection-recovery',
+      sessionId: 'session.projection-recovery',
+      input: { task: 'recover-projection' },
+    });
+    const sweep = await runtime.sweepRuntimeRecovery(new Date().toISOString());
+    expect(sweep.failed).toBe(0);
+    expect(sweep.results).toEqual(
+      expect.arrayContaining([expect.objectContaining({ disposition: 'recovered' })])
+    );
+
+    const events = await runtime.listEvents(run.runId);
+    expect(events.filter((event) => event.type === 'recovery.case.opened')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'recovery.case.resolved')).toHaveLength(1);
+  });
+
+  it('reclaims and executes an interrupted durable FSM transition exactly once', async () => {
+    const input = {
+      userId: 'user.recovery-command',
+      sessionId: 'session.recovery-command',
+    };
+    const run = await runtime.startRun({ ...input, input: { task: 'recover-transition' } });
+    const queued = await runtime.enqueueTransitionRun(
+      run.runId,
+      'ContextBuilt',
+      { reason: 'recover interrupted transition' },
+      'request.transition.interrupted'
+    );
+    const scope = { userId: input.userId, sessionId: input.sessionId };
+    const claimed = await runtime.canonicalRuntime().sessionQueue.claim({
+      scope,
+      workerId: 'worker.interrupted',
+      now: new Date().toISOString(),
+      leaseMs: 1,
+    });
+    expect(claimed).toMatchObject({ id: queued.id, status: 'claimed', attempts: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
     await runtime.startSessionCommandScheduler();
+    await runtime.drainSessionCommands(scope);
+    await expect(runtime.listSessionCommands(scope)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: queued.id,
+          commandType: 'transition',
+          status: 'applied',
+          attempts: 2,
+          resultRunId: run.runId,
+        }),
+      ])
+    );
+    const events = await runtime.listEvents(run.runId);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'fsm.transition.requested' &&
+          (event.payload as { commandId?: string }).commandId === queued.id
+      )
+    ).toHaveLength(1);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'fsm.transition.accepted' &&
+          (event.payload as { commandId?: string }).commandId === queued.id
+      )
+    ).toHaveLength(1);
+    await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('recovers a durable start_run command through the Server scheduler exactly once', async () => {
+    if (!runtime.isSessionCommandSchedulerRunning()) await runtime.startSessionCommandScheduler();
     expect(runtime.isSessionCommandSchedulerRunning()).toBe(true);
 
     const input = {
@@ -371,4 +440,5 @@ describe('EventRuntime canonical transitions', () => {
     expect(events.filter((event) => event.type === 'run.resumed')).toHaveLength(1);
     await expect(runtime.projectRun(run.runId)).resolves.toMatchObject({ status: 'running' });
   });
+
 });

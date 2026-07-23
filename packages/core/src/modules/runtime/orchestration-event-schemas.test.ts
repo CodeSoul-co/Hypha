@@ -40,6 +40,21 @@ describe('Runtime orchestration Event schemas', () => {
         })
       )
     ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('recovery.case.resolved', {
+          caseId: 'recovery.run.schema',
+          rootFingerprint: 'sha256:root',
+          status: 'recovered',
+          cycles: 1,
+          candidateId: 'candidate.schema',
+          candidateHash: 'sha256:candidate',
+          reason: 'PROJECTION_BEHIND',
+          safeAction: 'rebuild_projection',
+          disposition: 'recovered',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
   });
 
   it('rejects missing orchestration evidence and unregistered Event types', async () => {

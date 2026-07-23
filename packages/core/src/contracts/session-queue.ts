@@ -4,6 +4,7 @@ export const SESSION_COMMAND_TYPES = [
   'resume',
   'signal',
   'cancel',
+  'transition',
   'close_session',
 ] as const;
 

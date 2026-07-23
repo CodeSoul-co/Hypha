@@ -278,11 +278,18 @@ export interface SignalRunCommandInput {
 
 type SignalRunCommandPayload = Pick<SignalRunCommandInput, 'key' | 'payload'>;
 
+interface TransitionRunCommandPayload {
+  from: string;
+  to: string;
+  payload: Record<string, RuntimeJsonValue>;
+}
+
 interface RuntimeSessionCommandPayloads extends ServerSessionCommandPayloads {
   start_run: StartRunCommandPayload;
   cancel: CancelRunCommandPayload;
   resume: ResumeRunCommandPayload;
   signal: SignalRunCommandPayload;
+  transition: TransitionRunCommandPayload;
 }
 
 export interface ChatInferenceInput {
@@ -1100,6 +1107,10 @@ class EventRuntimeService {
             decode: decodeSignalRunCommandPayload,
             handle: ({ command, payload }) => this.handleSignalRunCommand(command, payload),
           },
+          transition: {
+            decode: decodeTransitionRunCommandPayload,
+            handle: ({ command, payload }) => this.handleTransitionRunCommand(command, payload),
+          },
         },
         classifyFailure: classifySessionCommandFailure,
         onError: (error) => logger.error('Session Command Scheduler polling failed', error),
@@ -1188,6 +1199,67 @@ class EventRuntimeService {
       ...payload,
       sentAt: command.createdAt,
     });
+  }
+
+  private async handleTransitionRunCommand(
+    command: Readonly<SessionCommandRecord>,
+    payload: TransitionRunCommandPayload
+  ): Promise<SessionCommandHandlerResult> {
+    if (!command.targetRunId) invalidRuntimeInput('transition command requires targetRunId');
+    const context = await this.requireRun(command.targetRunId);
+    if (context.userId !== command.userId || context.clientSessionId !== command.sessionId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'Runtime run was not found for the transition Session scope.',
+        context: { runId: command.targetRunId },
+      });
+    }
+    if (context.snapshot.currentState === payload.to) {
+      const accepted = (await this.listEvents(command.targetRunId)).some(
+        (event) =>
+          event.type === 'fsm.transition.accepted' &&
+          stringValue(asRecord(event.payload)?.commandId) === command.id
+      );
+      if (accepted) return { disposition: 'applied', resultRunId: command.targetRunId };
+    }
+    if (context.snapshot.currentState !== payload.from) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_COMMAND_MISMATCH',
+        message: 'Durable Runtime transition no longer matches the current State.',
+        context: {
+          runId: command.targetRunId,
+          commandId: command.id,
+          expectedState: payload.from,
+          actualState: context.snapshot.currentState,
+          targetState: payload.to,
+        },
+      });
+    }
+    const transition = this.createTransitionCommand(
+      context,
+      payload.to,
+      payload.payload,
+      command.id
+    );
+    await this.append(
+      command.targetRunId,
+      'fsm.transition.requested',
+      {
+        ...payload.payload,
+        commandId: command.id,
+        from: payload.from,
+        to: payload.to,
+        stepId: transition.stepId,
+      },
+      command.createdAt,
+      { eventId: `${command.id}:requested`, fsmState: payload.from }
+    );
+    await this.executeTransitionCommand(context, transition);
+    return {
+      disposition: 'applied',
+      resultRunId: command.targetRunId,
+      resultEventIds: [`${command.id}:requested`],
+    };
   }
 
   private async handleRunControlCommand(
@@ -1372,15 +1444,95 @@ class EventRuntimeService {
   ): Promise<void> {
     const context = await this.requireRun(runId);
     if (context.snapshot.currentState === to) return;
-    const from = context.snapshot.currentState;
-    const command = this.createTransitionCommand(context, to, payload);
-    await this.append(
+    const command = await this.enqueueTransitionRun(runId, to, payload);
+    await this.awaitSessionCommand(command, {
+      userId: context.userId,
+      sessionId: context.clientSessionId,
+    });
+  }
+
+  async enqueueTransitionRun(
+    runId: string,
+    to: string,
+    payload: Record<string, unknown> = {},
+    idempotencyKey = `transition:${runId}:${generateId()}`
+  ): Promise<SessionCommandRecord> {
+    if (!this.isCanonicalRuntimeInitialized()) await this.initializeCanonicalRuntime();
+    const context = await this.requireRun(runId);
+    const normalizedPayload = runtimeJsonValue(payload, 'transition payload');
+    if (
+      normalizedPayload === null ||
+      Array.isArray(normalizedPayload) ||
+      typeof normalizedPayload !== 'object'
+    ) {
+      invalidRuntimeInput('transition payload must be a JSON object');
+    }
+    const digest = hashCanonicalJson({
+      commandType: 'transition',
       runId,
-      'fsm.transition.requested',
-      { commandId: command.id, from, to, ...payload },
-      undefined,
-      { fsmState: from }
-    );
+      idempotencyKey,
+    }).slice('sha256:'.length);
+    return this.requireSessionCommands().enqueue({
+      id: `session-command:${digest}`,
+      commandType: 'transition',
+      idempotencyKey,
+      userId: context.userId,
+      sessionId: context.clientSessionId,
+      targetRunId: runId,
+      payload: {
+        from: context.snapshot.currentState,
+        to,
+        payload: normalizedPayload as Record<string, RuntimeJsonValue>,
+      },
+    });
+  }
+
+  private async awaitSessionCommand(
+    command: SessionCommandRecord,
+    scope: SessionQueueScope
+  ): Promise<void> {
+    const queue = this.canonicalRuntime().sessionQueue;
+    if (this.isSessionCommandSchedulerRunning()) {
+      await queue.drain(scope);
+    } else {
+      for (let remaining = 100; remaining > 0; remaining -= 1) {
+        const current = await this.findSessionCommand(scope, command);
+        if (!current || !['queued', 'claimed'].includes(current.status)) break;
+        const processed = await this.requireSessionCommands().processNext(scope);
+        if (processed.disposition === 'idle') break;
+      }
+    }
+    const completed = await this.findSessionCommand(scope, command);
+    if (completed?.status === 'applied') return;
+    throw new FrameworkError({
+      code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+      message: `Durable Runtime transition was not applied: ${command.id}`,
+      context: {
+        commandId: command.id,
+        runId: command.targetRunId,
+        status: completed?.status ?? 'missing',
+        rejectionCode: completed?.rejectionCode,
+      },
+    });
+  }
+
+  private async findSessionCommand(
+    scope: SessionQueueScope,
+    command: SessionCommandRecord
+  ): Promise<SessionCommandRecord | undefined> {
+    const records = await this.canonicalRuntime().sessionQueue.list({
+      scope,
+      fromSequence: command.enqueueSequence,
+      limit: 1,
+    });
+    return records.find((record) => record.id === command.id);
+  }
+
+  private async executeTransitionCommand(
+    context: RuntimeRunContext,
+    command: RuntimeTransitionCommand
+  ): Promise<void> {
+    const { runId, from, to } = command;
     try {
       const result = await this.transitionDispatcher.dispatch(command, () =>
         this.canonicalRuntimeComposition().fsmDriver.run({
@@ -1391,6 +1543,7 @@ class EventRuntimeService {
           },
           process: context.fsm,
           ownerId: this.runtimeWorkerId,
+          commandId: command.id,
           maxSteps: 1,
           leaseTtlMs: 30_000,
           stateClaimTtlMs: 30_000,
@@ -1425,7 +1578,8 @@ class EventRuntimeService {
   private createTransitionCommand(
     context: RuntimeRunContext,
     to: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    commandId = `runtime-transition:${context.runId}:${generateId()}`
   ): RuntimeTransitionCommand {
     const target = context.fsm.states.find((state) => state.id === to);
     const reason = stringValue(payload.reason);
@@ -1440,7 +1594,7 @@ class EventRuntimeService {
         : undefined;
     const output = failure ? undefined : toRuntimeJsonValue(payload.output);
     return {
-      id: `runtime-transition:${context.runId}:${generateId()}`,
+      id: commandId,
       runId: context.runId,
       userId: context.userId,
       from: context.snapshot.currentState,
@@ -4588,6 +4742,24 @@ function decodeSignalRunCommandPayload(payload: unknown): SignalRunCommandPayloa
   if (!key) invalidRuntimeInput('signal key must be a non-empty string');
   if (!('payload' in record)) invalidRuntimeInput('signal payload is required');
   return { key, payload: runtimeJsonValue(record.payload, 'signal payload') };
+}
+
+function decodeTransitionRunCommandPayload(payload: unknown): TransitionRunCommandPayload {
+  const record = strictCommandPayload(payload, 'transition', ['from', 'to', 'payload']);
+  const from = stringValue(record.from);
+  const to = stringValue(record.to);
+  const transitionPayload = asRecord(record.payload);
+  if (!from) invalidRuntimeInput('transition from must be a non-empty string');
+  if (!to) invalidRuntimeInput('transition to must be a non-empty string');
+  if (!transitionPayload) invalidRuntimeInput('transition payload must be a JSON object');
+  return {
+    from,
+    to,
+    payload: runtimeJsonValue(transitionPayload, 'transition payload') as Record<
+      string,
+      RuntimeJsonValue
+    >,
+  };
 }
 
 function strictCommandPayload(

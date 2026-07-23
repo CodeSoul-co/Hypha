@@ -31,6 +31,9 @@ export const RUNTIME_ORCHESTRATION_EVENT_TYPES = [
   'runtime.activity.failed',
   'runtime.activity.waiting',
   'runtime.activity.cancelled',
+  'recovery.case.opened',
+  'recovery.case.resolved',
+  'recovery.case.escalated',
   'fsm.state.entered',
   'fsm.state.exited',
   'fsm.transition.accepted',
@@ -150,6 +153,9 @@ const payloadSchemas: Record<RuntimeOrchestrationEventType, JsonSchema> = {
   'runtime.activity.failed': activityPayload(),
   'runtime.activity.waiting': activityPayload(),
   'runtime.activity.cancelled': activityPayload(),
+  'recovery.case.opened': recoveryCasePayload(),
+  'recovery.case.resolved': recoveryCasePayload(),
+  'recovery.case.escalated': recoveryCasePayload(),
   'fsm.state.entered': payload(['stateId'], {
     commandId: stringSchema,
     commandHash: stringSchema,
@@ -160,6 +166,7 @@ const payloadSchemas: Record<RuntimeOrchestrationEventType, JsonSchema> = {
   }),
   'fsm.state.exited': payload(['stateId'], { stateId: stringSchema }),
   'fsm.transition.accepted': payload(['from', 'to'], {
+    commandId: stringSchema,
     from: stringSchema,
     to: stringSchema,
     guard: jsonValueSchema,
@@ -234,4 +241,36 @@ function activityPayload(): JsonSchema {
     result: jsonValueSchema,
     error: jsonValueSchema,
   });
+}
+
+function recoveryCasePayload(): JsonSchema {
+  return payload(
+    [
+      'caseId',
+      'rootFingerprint',
+      'status',
+      'cycles',
+      'candidateId',
+      'candidateHash',
+      'reason',
+      'safeAction',
+    ],
+    {
+      caseId: stringSchema,
+      rootFingerprint: stringSchema,
+      status: { type: 'string', enum: ['active', 'recovered', 'suspended'] },
+      cycles: integerSchema,
+      candidateId: stringSchema,
+      candidateHash: stringSchema,
+      reason: stringSchema,
+      safeAction: stringSchema,
+      disposition: {
+        type: 'string',
+        enum: ['recovered', 'requeued', 'requires_review'],
+      },
+      activityStatus: stringSchema,
+      providerRevision: stringSchema,
+      receiptId: stringSchema,
+    }
+  );
 }

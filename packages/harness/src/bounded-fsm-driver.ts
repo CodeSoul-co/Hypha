@@ -57,6 +57,7 @@ export interface BoundedFSMDriverRunInput {
   scope: RuntimeScope;
   process: FSMProcessSpec;
   ownerId: string;
+  commandId?: string;
   maxSteps: number;
   leaseTtlMs: number;
   stateClaimTtlMs: number;
@@ -472,6 +473,7 @@ export class FencedBoundedFSMDriver {
         input.scope,
         'fsm.transition.accepted',
         {
+          ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
           from: transition.from,
           to: transition.to,
           ...(transition.guard === undefined ? {} : { guard: transition.guard }),
@@ -780,6 +782,7 @@ function validateRunInput(input: BoundedFSMDriverRunInput): void {
   required(input.scope.sessionId, 'scope.sessionId');
   required(input.scope.runId, 'scope.runId');
   required(input.ownerId, 'ownerId');
+  if (input.commandId !== undefined) required(input.commandId, 'commandId');
   positive(input.maxSteps, 'maxSteps');
   positive(input.leaseTtlMs, 'leaseTtlMs');
   positive(input.stateClaimTtlMs, 'stateClaimTtlMs');
