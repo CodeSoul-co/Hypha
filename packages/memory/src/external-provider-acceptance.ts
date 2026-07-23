@@ -40,8 +40,10 @@ export interface ExternalProviderFailureProbe {
 
 export interface ExternalProviderAcceptanceHooks {
   settleAdd?(result: ManagedMemoryWriteResult, signal?: AbortSignal): Promise<void>;
+  preparePagination?(signal?: AbortSignal): Promise<void>;
   verifyRestart?(memoryId: string, signal?: AbortSignal): Promise<void>;
   failureProbes?: readonly ExternalProviderFailureProbe[];
+  cleanup?(signal?: AbortSignal): Promise<void>;
 }
 export interface ExternalProviderAcceptanceEvidenceInput {
   commitSha: string;
@@ -116,6 +118,7 @@ export async function runExternalProviderAcceptance(
       }
       await hooks.settleAdd(added, signal);
     }
+    await hooks.preparePagination?.(signal);
     const searched = await client.search(fixture.search, signal);
     const listedRecords: ManagedMemoryRecord[] = [];
     let listRequest = fixture.list;
@@ -269,7 +272,11 @@ export async function runExternalProviderAcceptance(
         // Preserve the original acceptance failure while still attempting cleanup.
       }
     }
-    await client.close?.();
+    try {
+      await hooks.cleanup?.(signal);
+    } finally {
+      await client.close?.();
+    }
   }
 }
 export function assertContractShape(client: ExternalMemoryClient): void {

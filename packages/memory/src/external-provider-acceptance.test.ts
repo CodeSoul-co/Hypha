@@ -43,6 +43,8 @@ const profileRef = { id: 'memory.acceptance', version: '1.0.0' };
 describe('external provider acceptance harness', () => {
   it('runs the same management lifecycle without provider-specific branches', async () => {
     let closed = false;
+    let paginationPrepared = false;
+    let cleaned = false;
     let listCalls = 0;
     const client: ExternalMemoryClient = {
       capabilities: async () => ({
@@ -146,6 +148,9 @@ describe('external provider acceptance harness', () => {
       },
       {
         settleAdd: async () => undefined,
+        preparePagination: async () => {
+          paginationPrepared = true;
+        },
         verifyRestart: async (memoryId) => {
           expect(memoryId).toBe(record.id);
         },
@@ -162,6 +167,9 @@ describe('external provider acceptance harness', () => {
             },
           },
         ],
+        cleanup: async () => {
+          cleaned = true;
+        },
       }
     );
     expect(report).toMatchObject({
@@ -184,6 +192,8 @@ describe('external provider acceptance harness', () => {
         capabilitySnapshot: expect.objectContaining({ add: true, search: true }),
       },
     });
+    expect(paginationPrepared).toBe(true);
+    expect(cleaned).toBe(true);
     expect(closed).toBe(true);
   });
 
