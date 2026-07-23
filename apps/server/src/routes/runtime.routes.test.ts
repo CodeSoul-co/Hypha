@@ -368,14 +368,21 @@ describe('runtime authorization', () => {
     await request(app)
       .post(`/runtime/runs/${run.id}/human-reviews/skills/skill-review-1/decision`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ decision: 'approved' })
+      .send({
+        decision: 'approved',
+        expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'a'.repeat(64)}`,
+      })
       .expect(200);
     expect(runtime.decideSkillHumanReview).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: run.id,
         taskId: 'skill-review-1',
+        expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'a'.repeat(64)}`,
         decision: 'approved',
         decidedBy: 'runtime-admin',
+        permissionScopes: ['runtime.human-task.decide'],
       })
     );
   });
@@ -395,12 +402,20 @@ describe('runtime authorization', () => {
     await request(app)
       .post(`/runtime/runs/${run.id}/human-reviews/human-review-1/decision`)
       .set('Authorization', `Bearer ${ownerToken}`)
-      .send({ decision: 'approved', expectedRevision: 1 })
+      .send({
+        decision: 'approved',
+        expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'a'.repeat(64)}`,
+      })
       .expect(403);
     await request(app)
       .post(`/runtime/runs/${run.id}/human-reviews/human-review-1/decision`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ decision: 'approved', expectedRevision: 1 })
+      .send({
+        decision: 'approved',
+        expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'a'.repeat(64)}`,
+      })
       .expect(200);
 
     expect(runtime.decideHumanReview).toHaveBeenCalledWith(
@@ -408,8 +423,10 @@ describe('runtime authorization', () => {
         runId: run.id,
         taskId: 'human-review-1',
         expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'a'.repeat(64)}`,
         decision: 'approved',
         decidedBy: 'runtime-admin',
+        permissionScopes: ['runtime.human-task.decide'],
       })
     );
   });

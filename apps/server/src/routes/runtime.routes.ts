@@ -349,6 +349,17 @@ router.post(
         },
       });
     }
+    const expectedSubjectHash =
+      typeof req.body?.expectedSubjectHash === 'string' ? req.body.expectedSubjectHash : undefined;
+    if (!expectedSubjectHash || !/^(?:sha256:)?[a-f0-9]{64}$/u.test(expectedSubjectHash)) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_SUBJECT_HASH',
+          message: 'expectedSubjectHash must be a SHA-256 hash',
+        },
+      });
+    }
     const decidedBy = req.user?.userId ?? req.apiKey?.userId;
     if (!decidedBy) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
@@ -360,8 +371,10 @@ router.post(
       runId: req.params.runId,
       taskId: req.params.taskId,
       expectedRevision,
+      expectedSubjectHash,
       decision,
       decidedBy,
+      permissionScopes: ['runtime.human-task.decide'],
       reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
     });
     res.json({ success: true, data: task });
@@ -394,6 +407,27 @@ router.post(
         },
       });
     }
+    const expectedRevision = Number(req.body?.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_REVISION',
+          message: 'expectedRevision must be a positive integer',
+        },
+      });
+    }
+    const expectedSubjectHash =
+      typeof req.body?.expectedSubjectHash === 'string' ? req.body.expectedSubjectHash : undefined;
+    if (!expectedSubjectHash || !/^(?:sha256:)?[a-f0-9]{64}$/u.test(expectedSubjectHash)) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: {
+          code: 'INVALID_HUMAN_REVIEW_SUBJECT_HASH',
+          message: 'expectedSubjectHash must be a SHA-256 hash',
+        },
+      });
+    }
     const decidedBy = req.user?.userId ?? req.apiKey?.userId;
     if (!decidedBy) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
@@ -404,8 +438,11 @@ router.post(
     const task = await getEventRuntime().decideSkillHumanReview({
       runId: req.params.runId,
       taskId: req.params.taskId,
+      expectedRevision,
+      expectedSubjectHash,
       decision,
       decidedBy,
+      permissionScopes: ['runtime.human-task.decide'],
       reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
     });
     res.json({ success: true, data: task });

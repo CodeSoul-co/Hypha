@@ -6,12 +6,15 @@ import type {
 } from '../../contracts/runtime-coordination';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type { RuntimeScope } from '../../contracts/runtime';
+import type { RuntimeHumanTaskRequest } from '../../contracts/runtime-human-task';
+import { validateRuntimeHumanTaskRequest } from '../../contracts/runtime-human-task-schemas';
 import { FrameworkError, isFrameworkError } from '../../errors';
 import { hashCanonicalJson } from './canonical-json';
 import type { EventRuntime } from './event-runtime';
 import type { EventStreamScope } from './event-store';
 import { createRuntimeOrchestrationProjectionDefinition } from './orchestration-projection';
 import type { ProjectionEngine, ProjectionStore } from './projection';
+import { projectRuntimeHumanTasks } from './runtime-human-task';
 
 export interface RuntimeHumanWaitCreateCommand {
   commandId: string;
@@ -22,6 +25,7 @@ export interface RuntimeHumanWaitCreateCommand {
   pendingActionRef: string;
   reason: string;
   requestedAt: string;
+  humanTasks?: RuntimeHumanTaskRequest[];
   idempotencyKey?: string;
 }
 
@@ -93,9 +97,17 @@ export class RuntimeHumanWaitService {
       if (raced) return raced;
 
       const projection = await this.project(command.scope);
+      const streamEvents = await this.options.events.read({
+        scope: streamScope(command.scope),
+      });
       const events =
         operation === 'create'
-          ? this.createEvents(command as RuntimeHumanWaitCreateCommand, projection, commandHash)
+          ? this.createEvents(
+              command as RuntimeHumanWaitCreateCommand,
+              projection,
+              commandHash,
+              streamEvents
+            )
           : this.resolveEvents(command as RuntimeHumanWaitResolveCommand, projection, commandHash);
       const scope = streamScope(command.scope);
       const head = await this.options.events.getStreamHead(scope);
@@ -125,7 +137,8 @@ export class RuntimeHumanWaitService {
   private createEvents(
     command: RuntimeHumanWaitCreateCommand,
     projection: RuntimeOrchestrationProjection,
-    commandHash: string
+    commandHash: string,
+    streamEvents: PersistedFrameworkEvent[]
   ): EventCreateInput[] {
     if (
       projection.runStatus !== 'running' ||
@@ -144,7 +157,30 @@ export class RuntimeHumanWaitService {
       pendingActionRef: command.pendingActionRef,
       reason: command.reason,
     };
+    const existingTaskIds = new Set(
+      projectRuntimeHumanTasks(streamEvents).map((task) => task.taskId)
+    );
+    const humanTaskEvents = (command.humanTasks ?? [])
+      .filter((task) => !existingTaskIds.has(task.taskId))
+      .map((task) =>
+        this.event(
+          command,
+          'create',
+          'human.review.requested',
+          {
+            ...task,
+            runId: command.scope.runId,
+            stateId: projection.currentState,
+            stateAttempt: projection.stateAttempt,
+            status: 'pending',
+            revision: 1,
+          },
+          projection,
+          task.requestedAt
+        )
+      );
     return [
+      ...humanTaskEvents,
       this.event(
         command,
         'create',
@@ -396,6 +432,7 @@ function validateCreate(command: RuntimeHumanWaitCreateCommand): void {
   required(command.pendingActionRef, 'pendingActionRef');
   required(command.reason, 'reason');
   validTimestamp(command.requestedAt, 'requestedAt');
+  for (const task of command.humanTasks ?? []) validateRuntimeHumanTaskRequest(task);
 }
 
 function validateResolve(command: RuntimeHumanWaitResolveCommand): void {

@@ -21,6 +21,7 @@ export * from './runtime-activity-helper';
 export * from './run-control';
 export * from './runtime-timer-worker';
 export * from './runtime-human-wait-service';
+export * from './runtime-human-task';
 export * from './runtime-cancellation-service';
 export * from './runtime-recovery-service';
 export * from './runtime-checkpoint-store';

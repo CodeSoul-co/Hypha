@@ -414,16 +414,38 @@ function transitionPayload(): JsonSchema {
 function humanReviewPayload(): JsonSchema {
   return payload([], {
     taskId: stringSchema,
+    runId: stringSchema,
+    stateId: stringSchema,
+    stateAttempt: integerSchema,
     invocationId: stringSchema,
     requestId: stringSchema,
     taskKind: stringSchema,
+    kind: {
+      type: 'string',
+      enum: ['tool', 'skill', 'prompt', 'memory', 'execution', 'mcp', 'policy'],
+    },
     subjectRef: stringSchema,
     subjectHash: stringSchema,
+    requestedBy: stringSchema,
+    allowedDecisionScopes: {
+      type: 'array',
+      minItems: 1,
+      items: stringSchema,
+    },
     status: stringSchema,
+    revision: integerSchema,
+    expectedRevision: integerSchema,
+    expectedSubjectHash: stringSchema,
+    resolutionOperationId: stringSchema,
+    checkpointRef: stringSchema,
+    policyRef: stringSchema,
+    providerRevision: stringSchema,
+    requestedAt: timestampSchema,
     decidedBy: stringSchema,
     decidedAt: timestampSchema,
     expiresAt: timestampSchema,
     reason: stringSchema,
+    metadata: metadataSchema,
   });
 }
 
