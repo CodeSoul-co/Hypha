@@ -3,11 +3,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
+  ExecutionLeaseAcquireRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionStore,
 } from '@hypha/core';
 import {
+  commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionRecordCreateRequestExample,
 } from '@hypha/core';
@@ -170,13 +172,79 @@ describe('SQLiteExecutionStore public adapter', () => {
     },
     20_000
   );
+
+  it(
+    'takes over an expired lease after its worker crashes and rejects the late result',
+    async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-lease-'));
+      const store = new SQLiteExecutionStore({ rootPath: root });
+      await store.create(structuredClone(executionRecordCreateRequestExample));
+      await store.close();
+
+      await runStoreCrashInChild(
+        root,
+        'crashAfterAcquireLease',
+        structuredClone(executionLeaseAcquireRequestExample),
+        CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE
+      );
+
+      const recovered = new SQLiteExecutionStore({ rootPath: root });
+      try {
+        const crashedWorkerRecord = await recovered.get(
+          executionLeaseAcquireRequestExample.executionId
+        );
+        expect(crashedWorkerRecord).toMatchObject({
+          revision: 1,
+          status: 'starting',
+          lease: {
+            id: executionLeaseAcquireRequestExample.requestedLeaseId,
+            ownerId: executionLeaseAcquireRequestExample.ownerId,
+            fencingToken: 1,
+          },
+        });
+
+        const takeover = await recovered.acquireLease({
+          ...structuredClone(executionLeaseAcquireRequestExample),
+          operationId: 'operation.lease.acquire.after-crash',
+          expectedRevision: crashedWorkerRecord!.revision,
+          requestedLeaseId: 'lease.execution.example.after-crash',
+          ownerId: 'runtime-worker.after-crash',
+          acquiredAt: crashedWorkerRecord!.lease!.expiresAt,
+          idempotencyKey: 'lease-acquire:after-crash',
+        });
+        expect(takeover.lease).toMatchObject({
+          id: 'lease.execution.example.after-crash',
+          ownerId: 'runtime-worker.after-crash',
+          fencingToken: 2,
+        });
+
+        const lateResult = terminalMutation(
+          takeover,
+          crashedWorkerRecord!.lease!,
+          'operation.execution.complete.stale-worker',
+          'execution-complete:stale-worker'
+        );
+        await expect(recovered.compareAndSet(lateResult)).rejects.toMatchObject({
+          code: 'EXECUTION_STORE_FENCING_REJECTED',
+        });
+        await expect(recovered.get(takeover.id)).resolves.toEqual(takeover);
+      } finally {
+        await recovered.close();
+      }
+    },
+    20_000
+  );
 });
 
 type ChildStoreOperation = 'acquireLease' | 'compareAndSet';
-type ChildStoreCrashOperation = 'crashAfterCompareAndSet' | 'crashBeforeCompareAndSet';
+type ChildStoreCrashOperation =
+  | 'crashAfterAcquireLease'
+  | 'crashAfterCompareAndSet'
+  | 'crashBeforeCompareAndSet';
 
 const CRASH_BEFORE_CAS_EXIT_CODE = 71;
 const CRASH_AFTER_CAS_EXIT_CODE = 72;
+const CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE = 73;
 
 interface ChildStoreResponse<T> {
   ready?: boolean;
@@ -240,7 +308,7 @@ async function runStoreOperationInChild<T>(
 async function runStoreCrashInChild(
   rootPath: string,
   operation: ChildStoreCrashOperation,
-  request: ExecutionRecordCompareAndSetRequest,
+  request: ExecutionLeaseAcquireRequest | ExecutionRecordCompareAndSetRequest,
   expectedExitCode: number
 ): Promise<void> {
   const repoRoot = process.cwd();
@@ -316,6 +384,39 @@ function startingMutation(
   };
 }
 
+function terminalMutation(
+  current: ExecutionRecord,
+  staleLease: NonNullable<ExecutionRecord['lease']>,
+  operationId: string,
+  idempotencyKey: string
+): ExecutionRecordCompareAndSetRequest {
+  const revision = current.revision + 1;
+  return {
+    operationId,
+    executionId: current.id,
+    expectedRevision: current.revision,
+    leaseGuard: {
+      leaseId: staleLease.id,
+      ownerId: staleLease.ownerId,
+      fencingToken: staleLease.fencingToken,
+    },
+    next: {
+      ...structuredClone(current),
+      revision,
+      status: 'completed',
+      sandboxId: commandExecutionResultExample.sandboxId,
+      lease: structuredClone(staleLease),
+      result: {
+        ...structuredClone(commandExecutionResultExample),
+        executionId: current.id,
+        revision,
+      },
+      updatedAt: '2026-07-16T00:00:31.000Z',
+    },
+    idempotencyKey,
+  };
+}
+
 const SQLITE_STORE_CHILD_SOURCE = String.raw`
 const Module = require('node:module');
 const path = require('node:path');
@@ -341,6 +442,10 @@ process.on('message', async ({ rootPath, operation, request }) => {
     if (operation === 'crashAfterCompareAndSet') {
       await store.compareAndSet(request);
       process.exit(${CRASH_AFTER_CAS_EXIT_CODE});
+    }
+    if (operation === 'crashAfterAcquireLease') {
+      await store.acquireLease(request);
+      process.exit(${CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE});
     }
     const result = await store[operation](request);
     process.send({ ok: true, result });
