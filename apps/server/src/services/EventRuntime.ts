@@ -931,7 +931,6 @@ class EventRuntimeService {
     options: { filename?: string; schemaRegistry?: EventSchemaRegistry } = {}
   ): Promise<RuntimeBackbone> {
     assertRuntimeEventCatalogComplete();
-    this.legacyEvents.reopen();
     await this.validateLegacyHumanWaits();
     if (!this.canonicalLifecycle) {
       const sqliteStorage = storageConfig().relational.sqlite;
@@ -1000,7 +999,6 @@ class EventRuntimeService {
         autoRecoverReasons: [
           'PROJECTION_BEHIND',
           'ACTIVITY_RESULT_UNAPPLIED',
-          'LEASE_EXPIRED',
           'STATE_CLAIM_EXPIRED',
           'CANCELLATION_INCOMPLETE',
         ],
@@ -1328,11 +1326,6 @@ class EventRuntimeService {
     } catch (error) {
       failures.push(error);
     }
-    try {
-      await this.legacyEvents.close();
-    } catch (error) {
-      failures.push(error);
-    }
     this.sessionCommands = undefined;
     this.runtimeRecoveryScheduler = undefined;
     this.runtimeTimerScheduler = undefined;
@@ -1347,7 +1340,6 @@ class EventRuntimeService {
     this.migratedLegacyEvents = undefined;
     this.legacyHumanWaitMigrationReport = undefined;
     this.canonicalEventFamilyMigrationReport = undefined;
-    this.humanWaitService = undefined;
     this.knownSessions.clear();
     this.capabilitySnapshots.clear();
     if (failures.length > 0) throw failures[0];
@@ -1590,7 +1582,6 @@ class EventRuntimeService {
             deadLetter: true,
           };
         }
-        return this.resolveApprovedHumanTaskWait(command, run, humanTaskResume);
       }
     }
     const result = await this.runtimeRunControlService().execute({
@@ -1620,65 +1611,6 @@ class EventRuntimeService {
     return {
       disposition: 'applied',
       resultRunId: command.targetRunId,
-      resultEventIds: result.eventIds,
-    };
-  }
-
-  private async resolveApprovedHumanTaskWait(
-    command: Readonly<SessionCommandRecord>,
-    run: OwnedRunScope,
-    resume: HumanTaskResumePayload
-  ): Promise<SessionCommandHandlerResult> {
-    const runtime = this.canonicalRuntime();
-    const projection = (
-      await runtime.projections.update(
-        createRuntimeOrchestrationProjectionDefinition(run.runId),
-        runtime.projectionStore,
-        { userId: run.userId, runId: run.runId }
-      )
-    ).state;
-    const pendingWait = projection.pendingWait;
-    if (
-      projection.runStatus !== 'waiting_human' ||
-      pendingWait?.type !== 'human' ||
-      !pendingWait.pendingActionRef
-    ) {
-      throw new FrameworkError({
-        code: 'RUNTIME_RUN_CONFLICT',
-        message: 'Approved HumanTask no longer matches a pending Human Wait.',
-        context: {
-          runId: run.runId,
-          taskId: resume.taskId,
-          runStatus: projection.runStatus,
-          pendingWaitType: pendingWait?.type,
-        },
-      });
-    }
-    const result = await this.runtimeHumanWaitService().resolve({
-      commandId: command.id,
-      scope: {
-        userId: run.userId,
-        sessionId: run.sessionId,
-        runId: run.runId,
-      },
-      ownerId: `${this.runtimeWorkerId}:human-task-resume`,
-      leaseTtlMs: 30_000,
-      waitId: pendingWait.waitId,
-      pendingActionRef: pendingWait.pendingActionRef,
-      principalId: resume.decidedBy,
-      decision: 'approved',
-      resolvedAt: command.createdAt,
-      idempotencyKey: command.idempotencyKey,
-    });
-    if (result.disposition === 'lease_unavailable') {
-      return {
-        disposition: 'retry',
-        availableAt: new Date(Date.now() + 250).toISOString(),
-      };
-    }
-    return {
-      disposition: 'applied',
-      resultRunId: run.runId,
       resultEventIds: result.eventIds,
     };
   }
