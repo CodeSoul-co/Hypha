@@ -1,8 +1,10 @@
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import yaml from 'js-yaml';
 import {
   AgentPromptRegistry,
+  type AgentPromptResolutionContext,
   type AgentPromptRef,
   type AgentPromptResolution,
   type AgentPromptSpec,
@@ -33,18 +35,22 @@ export interface PromptVariable {
 export class PromptManager {
   private templates: Map<string, PromptTemplate> = new Map();
   private readonly agentPrompts = new AgentPromptRegistry();
+  private readonly dynamicAgentPromptKeys = new Set<string>();
   private templateDir: string;
+  private registryPath: string;
   private cacheEnabled: boolean;
   private cache: Map<string, string> = new Map();
   private initialized = false;
 
-  constructor(templateDir?: string, cacheEnabled?: boolean) {
+  constructor(templateDir?: string, cacheEnabled?: boolean, registryPath?: string) {
     this.templateDir = templateDir || path.resolve(process.cwd(), 'apps/server/src/prompts');
     this.cacheEnabled = cacheEnabled ?? true;
+    this.registryPath = registryPath || path.resolve(process.cwd(), 'data/prompts/registry.json');
   }
 
   async initialize(): Promise<void> {
     await this.loadTemplatesFromDir();
+    await this.loadPersistentAgentPrompts();
     this.initialized = true;
     logger.info('PromptManager initialized', { templateCount: this.templates.size });
   }
@@ -60,6 +66,7 @@ export class PromptManager {
       this.agentPrompts.unregister(prompt.id, prompt.version);
     }
     this.cache.clear();
+    this.dynamicAgentPromptKeys.clear();
     this.initialized = false;
     logger.info('PromptManager destroyed');
   }
@@ -100,12 +107,30 @@ export class PromptManager {
     return templates;
   }
 
-  registerAgentPrompt(spec: AgentPromptSpec): void {
-    this.agentPrompts.register(spec);
+  async registerAgentPrompt(
+    spec: AgentPromptSpec,
+    options: { expectedRevision?: number } = {}
+  ): Promise<AgentPromptSpec> {
+    const stored = this.agentPrompts.register(spec, {
+      replace: options.expectedRevision !== undefined,
+      expectedRevision: options.expectedRevision,
+    });
+    this.dynamicAgentPromptKeys.add(this.agentPromptKey(stored));
+    await this.persistAgentPrompts();
+    return stored;
   }
 
-  unregisterAgentPrompt(id: string, version?: string): boolean {
-    return this.agentPrompts.unregister(id, version);
+  async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
+    const removed = this.agentPrompts.unregister(id, version);
+    if (!removed) return false;
+    if (version) this.dynamicAgentPromptKeys.delete(`${id}@${version}`);
+    else {
+      for (const key of this.dynamicAgentPromptKeys) {
+        if (key.startsWith(`${id}@`)) this.dynamicAgentPromptKeys.delete(key);
+      }
+    }
+    await this.persistAgentPrompts();
+    return true;
   }
 
   listAgentPrompts(): AgentPromptSpec[] {
@@ -114,9 +139,9 @@ export class PromptManager {
 
   resolveAgentPrompts(
     refs: AgentPromptRef[],
-    variables: Record<string, unknown>
+    context: AgentPromptResolutionContext
   ): AgentPromptResolution {
-    return this.agentPrompts.resolve(refs, variables);
+    return this.agentPrompts.resolve(refs, context);
   }
 
   render(id: string, variables: Record<string, any>, category?: string): string {
@@ -310,7 +335,44 @@ export class PromptManager {
       this.agentPrompts.unregister(prompt.id, prompt.version);
     }
     await this.loadTemplatesFromDir();
+    await this.loadPersistentAgentPrompts();
     logger.info('Prompt templates reloaded');
+  }
+
+  private agentPromptKey(spec: Pick<AgentPromptSpec, 'id' | 'version'>): string {
+    return `${spec.id}@${spec.version}`;
+  }
+
+  private async loadPersistentAgentPrompts(): Promise<void> {
+    let raw: string;
+    try {
+      raw = await fsp.readFile(this.registryPath, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed))
+      throw new Error('Persisted agent prompt registry must be an array.');
+    for (const candidate of parsed) {
+      const stored = this.agentPrompts.register(candidate as AgentPromptSpec, { replace: true });
+      this.dynamicAgentPromptKeys.add(this.agentPromptKey(stored));
+    }
+  }
+
+  private async persistAgentPrompts(): Promise<void> {
+    const prompts = this.agentPrompts
+      .list()
+      .filter((prompt) => this.dynamicAgentPromptKeys.has(this.agentPromptKey(prompt)));
+    const directory = path.dirname(this.registryPath);
+    await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    const temporary = `${this.registryPath}.${process.pid}.${Date.now()}.tmp`;
+    await fsp.writeFile(temporary, `${JSON.stringify(prompts, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await fsp.rename(temporary, this.registryPath);
   }
 }
 
@@ -345,7 +407,8 @@ export function getPromptManager(): PromptManager {
     const config = getConfig();
     promptManagerInstance = new PromptManager(
       config.prompts.templatesPath,
-      config.prompts.cacheEnabled
+      config.prompts.cacheEnabled,
+      config.prompts.registryPath
     );
   }
   return promptManagerInstance;

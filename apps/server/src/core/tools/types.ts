@@ -71,6 +71,10 @@ export abstract class BaseTool implements ITool {
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
+        metadata:
+          error && typeof error === 'object' && 'code' in error
+            ? { errorCode: String((error as { code: unknown }).code) }
+            : undefined,
       };
     }
   }
@@ -89,7 +93,7 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   endpoint?: string;
-  authToken?: string;
+  credentialRef?: string;
   autoStart?: boolean;
   autoConnect?: boolean;
 }

@@ -9,9 +9,15 @@ import {
   specMetadataSchema,
   versionedSpecSchema,
   type JsonSchema,
+  type SideEffectLevel,
   type SpecMetadata,
   type VersionedSpec,
 } from '@hypha/core';
+import {
+  effectiveAgentCapabilitySnapshotSchema,
+  hashToolContract,
+  type EffectiveAgentCapabilitySnapshot,
+} from '@hypha/tools';
 
 export interface SkillRef {
   id: string;
@@ -123,6 +129,9 @@ export interface LoadedSkillContext {
   references: LoadedSkillAsset[];
   allowedTools: string[];
   requiredTools: string[];
+  requiredMCPServers: string[];
+  memoryAccessPolicy?: string;
+  sideEffectPolicy?: string;
   trustLevel?: SkillSpec['trustLevel'];
   provenance?: Record<string, unknown>;
   policyDecision: SkillPolicyDecision;
@@ -131,6 +140,28 @@ export interface LoadedSkillContext {
     matchedPatterns: string[];
   };
   metadata?: Record<string, unknown>;
+}
+
+export interface AgentCapabilityConstraint {
+  allowedToolIds?: string[];
+  allowedMCPServerIds?: string[];
+  memoryAccess?: EffectiveAgentCapabilitySnapshot['memoryAccess'];
+  allowedExecutionProfiles?: string[];
+  maximumSideEffectLevel?: SideEffectLevel;
+  policyRefs?: string[];
+}
+
+export interface EffectiveAgentCapabilitySnapshotInput {
+  runId: string;
+  agentId: string;
+  principalId: string;
+  tenantId?: string;
+  domainId?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  agent: AgentCapabilityConstraint;
+  domain: AgentCapabilityConstraint;
+  activeSkills: LoadedSkillContext[];
 }
 
 export interface SkillContextLoadInput {
@@ -343,7 +374,14 @@ export class DefaultSkillPolicy implements SkillPolicy {
 }
 
 export class SkillContextLoader {
-  constructor(private readonly options: { defaultMaxChars?: number } = {}) {}
+  constructor(
+    private readonly options: {
+      defaultMaxChars?: number;
+      maxReferences?: number;
+      maxFileBytes?: number;
+      readTimeoutMs?: number;
+    } = {}
+  ) {}
 
   async load(input: SkillContextLoadInput): Promise<LoadedSkillContext> {
     const maxChars = Math.max(
@@ -364,6 +402,9 @@ export class SkillContextLoader {
       references,
       allowedTools: input.policyDecision.allowedTools,
       requiredTools: input.selection.spec.requiredTools ?? [],
+      requiredMCPServers: input.selection.spec.requiredMCPServers ?? [],
+      memoryAccessPolicy: input.selection.spec.memoryAccessPolicy,
+      sideEffectPolicy: input.selection.spec.sideEffectPolicy,
       trustLevel: input.selection.spec.trustLevel,
       provenance: input.selection.spec.provenance,
       policyDecision: input.policyDecision,
@@ -387,31 +428,269 @@ export class SkillContextLoader {
       ...(skill.scripts ?? []),
       ...(skill.assets ?? []),
     ].filter((asset) => asset.loadPolicy === 'on_activation');
+    const maxReferences = this.options.maxReferences ?? 32;
+    if (refs.length > maxReferences) {
+      throw new Error(`Skill ${skill.id} exceeds the ${maxReferences} activation asset limit.`);
+    }
     const filePath =
       typeof skill.provenance?.filePath === 'string' ? skill.provenance.filePath : undefined;
-    const baseDir = filePath ? path.dirname(filePath) : undefined;
+    const baseDir = filePath ? await fs.realpath(path.dirname(filePath)) : undefined;
     const loaded: LoadedSkillAsset[] = [];
     let remaining = remainingChars;
 
     for (const ref of refs) {
       const asset: LoadedSkillAsset = { ...ref };
       if (remaining > 0 && ref.type === 'reference' && baseDir) {
-        const absolutePath = path.resolve(baseDir, ref.path);
-        asset.absolutePath = absolutePath;
-        try {
-          const content = await fs.readFile(absolutePath, 'utf-8');
-          const truncated = truncateToBudget(content, remaining) ?? '';
-          asset.content = truncated;
-          asset.truncated = truncated.length < content.length;
-          remaining -= truncated.length;
-        } catch {
-          asset.truncated = true;
+        if (!isSafeRelativeSkillPath(ref.path)) {
+          throw new Error(`Skill ${skill.id} contains an invalid reference path.`);
         }
+        const requestedPath = path.resolve(baseDir, ref.path);
+        const absolutePath = await fs.realpath(requestedPath);
+        if (
+          !isPathInside(baseDir, absolutePath) ||
+          normalizeFilesystemPath(requestedPath) !== normalizeFilesystemPath(absolutePath)
+        ) {
+          throw new Error(`Skill ${skill.id} reference escapes its root or traverses a symlink.`);
+        }
+        const stat = await fs.stat(absolutePath);
+        const maxFileBytes = this.options.maxFileBytes ?? 256 * 1024;
+        if (!stat.isFile() || stat.size > maxFileBytes) {
+          throw new Error(
+            `Skill ${skill.id} reference is not a regular file within the size budget.`
+          );
+        }
+        const content = await readTextWithTimeout(
+          absolutePath,
+          this.options.readTimeoutMs ?? 2_000
+        );
+        const truncated = truncateToBudget(content, remaining) ?? '';
+        asset.content = truncated;
+        asset.truncated = truncated.length < content.length;
+        remaining -= truncated.length;
       }
       loaded.push(asset);
     }
     return loaded;
   }
+}
+
+function isSafeRelativeSkillPath(value: string): boolean {
+  if (
+    !value ||
+    value.includes('\0') ||
+    path.isAbsolute(value) ||
+    /^[a-zA-Z]:/.test(value) ||
+    value.startsWith('\\\\')
+  ) {
+    return false;
+  }
+  const normalized = value.replace(/\\/g, '/');
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(normalized);
+  } catch {
+    return false;
+  }
+  return !decoded.split('/').some((segment) => segment === '..' || segment === '');
+}
+
+function normalizeFilesystemPath(value: string): string {
+  const normalized = path.normalize(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function readTextWithTimeout(filePath: string, timeoutMs: number): Promise<string> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      fs.readFile(filePath, 'utf8'),
+      new Promise<string>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Skill reference read timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+export function createEffectiveAgentCapabilitySnapshot(
+  input: EffectiveAgentCapabilitySnapshotInput
+): Readonly<EffectiveAgentCapabilitySnapshot> {
+  const allowedToolIds = intersectConstraints([
+    input.agent.allowedToolIds,
+    input.domain.allowedToolIds,
+    ...input.activeSkills.map((skill) => skill.allowedTools),
+  ]);
+  const baseMCPServers = intersectConstraints([
+    input.agent.allowedMCPServerIds,
+    input.domain.allowedMCPServerIds,
+  ]);
+  const requiredMCPServers = uniqueSorted(
+    input.activeSkills.flatMap((skill) => skill.requiredMCPServers)
+  );
+  const allowedMCPServerIds =
+    baseMCPServers.length > 0 ? baseMCPServers : requiredMCPServers;
+  const missingMCPServers = requiredMCPServers.filter(
+    (serverId) => !allowedMCPServerIds.includes(serverId)
+  );
+  if (missingMCPServers.length > 0) {
+    throw new Error(
+      `Effective capability snapshot is missing required MCP servers: ${missingMCPServers.join(', ')}.`
+    );
+  }
+  const memoryAccess = intersectMemoryAccess([
+    input.agent.memoryAccess,
+    input.domain.memoryAccess,
+    ...input.activeSkills.map((skill) => parseMemoryAccess(skill.memoryAccessPolicy)),
+  ]);
+  const maximumSideEffectLevel = minimumSideEffectLevel([
+    input.agent.maximumSideEffectLevel,
+    input.domain.maximumSideEffectLevel,
+    ...input.activeSkills.map((skill) => parseMaximumSideEffect(skill.sideEffectPolicy)),
+  ]);
+  const allowedExecutionProfiles = intersectConstraints([
+    input.agent.allowedExecutionProfiles,
+    input.domain.allowedExecutionProfiles,
+  ]);
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const skillRevisions = input.activeSkills
+    .map((skill) => ({
+      id: skill.id,
+      version: skill.version,
+      contentHash: skillContentHash(skill),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const body = {
+    runId: input.runId,
+    agentId: input.agentId,
+    principalId: input.principalId,
+    tenantId: input.tenantId,
+    domainId: input.domainId,
+    createdAt,
+    expiresAt: input.expiresAt,
+    skillRevisions,
+    allowedToolIds,
+    allowedMCPServerIds,
+    memoryAccess,
+    allowedExecutionProfiles,
+    maximumSideEffectLevel,
+    requiresHumanReview: input.activeSkills.some(
+      (skill) => skill.policyDecision.requiresHumanReview === true
+    ),
+    policyRefs: uniqueSorted([
+      ...(input.agent.policyRefs ?? []),
+      ...(input.domain.policyRefs ?? []),
+      ...input.activeSkills
+        .map((skill) => skill.policyDecision.policyId)
+        .filter((value): value is string => Boolean(value)),
+    ]),
+  };
+  const snapshot = effectiveAgentCapabilitySnapshotSchema.parse({
+    id: `agent-capability:${input.runId}:${input.agentId}`,
+    ...body,
+    snapshotHash: hashToolContract(body),
+  });
+  return deepFreeze(snapshot);
+}
+
+function intersectConstraints(constraints: Array<string[] | undefined>): string[] {
+  const defined = constraints.filter((value): value is string[] => Array.isArray(value));
+  if (defined.length === 0) return [];
+  let result = new Set(defined[0]);
+  for (const constraint of defined.slice(1)) {
+    const allowed = new Set(constraint);
+    result = new Set(Array.from(result).filter((value) => allowed.has(value)));
+  }
+  return uniqueSorted(Array.from(result));
+}
+
+function intersectMemoryAccess(
+  constraints: Array<EffectiveAgentCapabilitySnapshot['memoryAccess'] | undefined>
+): EffectiveAgentCapabilitySnapshot['memoryAccess'] {
+  const masks = constraints
+    .filter(
+      (value): value is EffectiveAgentCapabilitySnapshot['memoryAccess'] => value !== undefined
+    )
+    .map(memoryMask);
+  if (masks.length === 0) return 'none';
+  return memoryAccessFromMask(masks.reduce((result, mask) => result & mask));
+}
+
+function parseMemoryAccess(
+  value: string | undefined
+): EffectiveAgentCapabilitySnapshot['memoryAccess'] | undefined {
+  if (!value || value === 'inherit') return undefined;
+  const normalized = value.toLowerCase().replace(/[-+]/g, '_');
+  if (normalized === 'none' || normalized === 'deny') return 'none';
+  if (normalized === 'read' || normalized === 'read_only') return 'read';
+  if (normalized === 'write' || normalized === 'write_only') return 'write';
+  if (normalized === 'read_write' || normalized === 'all') return 'read_write';
+  throw new Error(`Unsupported Skill memoryAccessPolicy: ${value}.`);
+}
+
+function memoryMask(value: EffectiveAgentCapabilitySnapshot['memoryAccess']): number {
+  return value === 'read_write' ? 3 : value === 'read' ? 1 : value === 'write' ? 2 : 0;
+}
+
+function memoryAccessFromMask(mask: number): EffectiveAgentCapabilitySnapshot['memoryAccess'] {
+  return mask === 3 ? 'read_write' : mask === 1 ? 'read' : mask === 2 ? 'write' : 'none';
+}
+
+const SIDE_EFFECT_RANK: Record<SideEffectLevel, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  external_effect: 3,
+  irreversible: 4,
+};
+
+function minimumSideEffectLevel(values: Array<SideEffectLevel | undefined>): SideEffectLevel {
+  const defined = values.filter((value): value is SideEffectLevel => value !== undefined);
+  if (defined.length === 0) return 'none';
+  return defined.reduce((minimum, value) =>
+    SIDE_EFFECT_RANK[value] < SIDE_EFFECT_RANK[minimum] ? value : minimum
+  );
+}
+
+function parseMaximumSideEffect(value: string | undefined): SideEffectLevel | undefined {
+  if (!value || value === 'inherit') return undefined;
+  if (value === 'human_review') return 'write';
+  if (value in SIDE_EFFECT_RANK) return value as SideEffectLevel;
+  throw new Error(`Unsupported Skill sideEffectPolicy: ${value}.`);
+}
+
+function skillContentHash(skill: LoadedSkillContext): string {
+  const install = recordField(skill.provenance ?? {}, 'install');
+  const installedHash = typeof install?.contentHash === 'string' ? install.contentHash : undefined;
+  return installedHash && /^[a-f0-9]{64}$/u.test(installedHash)
+    ? installedHash
+    : hashToolContract({
+        id: skill.id,
+        version: skill.version,
+        instructions: skill.instructions,
+        references: skill.references.map((reference) => ({
+          path: reference.path,
+          content: reference.content,
+        })),
+        provenance: skill.provenance,
+      });
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return Array.from(new Set(values)).sort();
+}
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
 }
 
 export class SkillResolver {

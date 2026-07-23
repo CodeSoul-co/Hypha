@@ -40,6 +40,31 @@ import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
 
 export * from './workspace-runtime';
+export * from './local-process-output-collector';
+export * from './execution-provider-error';
+export * from './local-process-policy';
+export * from './local-workspace-adapter';
+export * from './local-process-resource-accounting';
+export * from './execution-provider-values';
+export * from './local-sandbox-lifecycle';
+export * from './local-active-execution-registry';
+export * from './local-process-result';
+export * from './local-process-execution-provider';
+export * from './in-memory-execution-cache-store';
+export * from './redis-execution-cache-store';
+export * from './artifact-content-io';
+export * from './artifact-store-adapter-error';
+export * from './local-artifact-files';
+export * from './local-artifact-manifest';
+export * from './local-artifact-store-values';
+export * from './local-filesystem-execution-artifact-store';
+export * from './in-memory-artifact-record-repository';
+export * from './sqlite-artifact-record-repository';
+export {
+  InMemoryExecutionArtifactStore,
+  type InMemoryExecutionArtifactStoreOptions,
+  type InMemoryExecutionArtifactStoreStats,
+} from './in-memory-execution-artifact-store';
 
 interface SqliteDatabaseSync {
   exec(sql: string): void;
@@ -235,6 +260,10 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
 
   async update<T>(table: string, id: string, patch: Partial<T>): Promise<void> {
     await this.backend.update(table, id, patch);
+  }
+
+  async delete(table: string, id: string): Promise<void> {
+    await this.backend.delete(table, id);
   }
 
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
@@ -567,6 +596,11 @@ class NodeSQLiteStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    this.ensureTable(table);
+    this.db.prepare('DELETE FROM ' + quoteIdentifier(table) + ' WHERE id = ?').run(id);
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     this.ensureTable(table);
     const rows = this.db.prepare(`SELECT record FROM ${quoteIdentifier(table)}`).all();
@@ -627,6 +661,13 @@ class JsonStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    validateIdentifier(table);
+    if (!this.tables[table]) return;
+    delete this.tables[table][id];
+    this.flush();
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     validateIdentifier(table);
     const records = Object.values(this.tables[table] ?? {});
@@ -670,6 +711,10 @@ export class InMemoryStructuredStore implements StructuredStoreProvider {
     const existing = records?.get(id);
     if (!records || !existing) return;
     records.set(id, { ...existing, ...(patch as Record<string, unknown>) });
+  }
+
+  async delete(table: string, id: string): Promise<void> {
+    this.tables.get(table)?.delete(id);
   }
 
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
