@@ -165,4 +165,79 @@ describe('durable external provider operations', () => {
       attempts: 1,
     });
   });
+
+  it('does not commit a Mem0 event that crosses its durable deadline while polling', async () => {
+    const database = new Store();
+    const operations = new StructuredExternalProviderOperationStore({ store: database });
+    let nowMs = Date.parse('2026-07-23T00:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const first = new Mem0PlatformClient({
+      apiToken: 'token',
+      mappingProfile: 'test',
+      operationStore: operations,
+      operationDeadlineMs: 1_000,
+      now,
+      fetch: async () => response({ status: 'PENDING', event_id: 'event:deadline' }),
+    });
+    await first.add({
+      operationId: 'operation:mem0:deadline',
+      principal,
+      scope,
+      input: 'deadline',
+      source: { type: 'user_message', sourceId: 'message:deadline' },
+      profileRef: memoryProfileSpecExample,
+    });
+
+    const resumed = new Mem0PlatformClient({
+      apiToken: 'token',
+      mappingProfile: 'test',
+      operationStore: operations,
+      now,
+      fetch: async () => {
+        nowMs += 2_000;
+        return response({ id: 'event:deadline', status: 'SUCCEEDED', results: [] });
+      },
+    });
+    await expect(resumed.resumeEvent('operation:mem0:deadline')).resolves.toBeNull();
+    await expect(
+      operations.get('memory.provider.mem0.platform.v3', 'operation:mem0:deadline')
+    ).resolves.toMatchObject({ state: 'dead_letter' });
+  });
+
+  it('does not commit a Vertex LRO that crosses its durable deadline while polling', async () => {
+    const database = new Store();
+    const operations = new StructuredExternalProviderOperationStore({ store: database });
+    let nowMs = Date.parse('2026-07-23T00:00:00.000Z');
+    const now = () => new Date(nowMs);
+    let calls = 0;
+    const client = new MemoryBankManagedClient({
+      projectId: 'p',
+      location: 'l',
+      reasoningEngineId: 'e',
+      accessToken: 'token',
+      mappingProfile: 'test',
+      operationStore: operations,
+      operationDeadlineMs: 1_000,
+      now,
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) return response({ name: 'operations/deadline', done: false });
+        nowMs += 2_000;
+        return response({ name: 'operations/deadline', done: true, response: {} });
+      },
+    });
+    await client.add({
+      operationId: 'operation:vertex:deadline',
+      principal,
+      scope,
+      input: 'deadline',
+      source: { type: 'user_message', sourceId: 'message:deadline' },
+      profileRef: memoryProfileSpecExample,
+    });
+
+    await expect(client.reconcileOperation('operation:vertex:deadline')).resolves.toBeNull();
+    await expect(
+      operations.get('memory.provider.memorybank.vertex-ai', 'operation:vertex:deadline')
+    ).resolves.toMatchObject({ state: 'dead_letter' });
+  });
 });

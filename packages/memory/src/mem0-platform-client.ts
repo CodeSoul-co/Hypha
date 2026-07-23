@@ -266,6 +266,15 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
     }
     try {
       const event = await this.getEvent(operation.externalOperationId, signal);
+      const settledAt = this.now().toISOString();
+      if (operation.cancellationRequestedAt || signal?.aborted) {
+        await this.operationStore.set({ ...operation, state: 'cancelled', updatedAt: settledAt });
+        return null;
+      }
+      if (operation.deadlineAt && operation.deadlineAt <= settledAt) {
+        await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: settledAt });
+        return null;
+      }
       const attempts = operation.attempts + 1;
       const state =
         event.status === 'SUCCEEDED'
@@ -275,7 +284,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
             : event.status === 'RUNNING'
               ? 'running'
               : 'pending';
-      await this.operationStore.set({ ...operation, state, attempts, updatedAt: now });
+      await this.operationStore.set({ ...operation, state, attempts, updatedAt: settledAt });
       return event;
     } catch (error) {
       const attempts = operation.attempts + 1;

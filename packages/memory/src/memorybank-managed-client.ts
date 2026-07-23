@@ -220,12 +220,21 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
       const response = asObject(
         await this.request('/' + operation.externalOperationId, { signal })
       );
+      const settledAt = this.now().toISOString();
+      if (operation.cancellationRequestedAt || signal?.aborted) {
+        await this.operationStore.set({ ...operation, state: 'cancelled', updatedAt: settledAt });
+        return null;
+      }
+      if (operation.deadlineAt && operation.deadlineAt <= settledAt) {
+        await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: settledAt });
+        return null;
+      }
       if (response.done !== true) {
         await this.operationStore.set({
           ...operation,
           state: 'running',
           attempts: operation.attempts + 1,
-          updatedAt: now,
+          updatedAt: settledAt,
         });
         return {
           operationId,
@@ -248,7 +257,7 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         ...operation,
         state: 'succeeded',
         attempts: operation.attempts + 1,
-        updatedAt: now,
+        updatedAt: settledAt,
       });
       return { operationId, status: 'committed', records, events: [operation.externalOperationId] };
     } catch (error) {

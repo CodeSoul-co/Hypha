@@ -545,7 +545,7 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
     try {
       if (parentSignal?.aborted) controller.abort(parentSignal.reason);
       else parentSignal?.addEventListener('abort', onAbort, { once: true });
-      return await Promise.race([
+      const value = await Promise.race([
         call(controller.signal),
         new Promise<T>((_resolve, reject) => {
           controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
@@ -562,6 +562,13 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
           }, timeoutMs);
         }),
       ]);
+      if (controller.signal.aborted) {
+        throw (
+          controller.signal.reason ??
+          memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Memory provider request was cancelled.')
+        );
+      }
+      return value;
     } finally {
       if (timer) clearTimeout(timer);
       parentSignal?.removeEventListener('abort', onAbort);
