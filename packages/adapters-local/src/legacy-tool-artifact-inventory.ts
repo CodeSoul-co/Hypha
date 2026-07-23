@@ -131,8 +131,10 @@ export class LegacyToolArtifactInventory {
 
   private async readStableFile(filename: string, relativePath: string): Promise<Uint8Array> {
     const linkStat = await fs.lstat(filename);
-    if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
-      throw invalidLayout('Legacy Tool output must be a regular file.', { relativePath });
+    if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.nlink !== 1) {
+      throw invalidLayout('Legacy Tool output must be a non-aliased regular file.', {
+        relativePath,
+      });
     }
     if (linkStat.size > this.maxFileBytes) {
       throw limitExceeded('Legacy Artifact exceeds the configured per-file limit.', {
@@ -145,6 +147,11 @@ export class LegacyToolArtifactInventory {
     const handle = await fs.open(filename, 'r');
     try {
       const before = await handle.stat();
+      if (before.nlink !== 1 || !sameFileIdentity(linkStat, before)) {
+        throw invalidLayout('Legacy Tool output identity changed before it was read.', {
+          relativePath,
+        });
+      }
       const content = new Uint8Array(await handle.readFile());
       const after = await handle.stat();
       if (!sameStat(before, after) || content.byteLength !== before.size) {
@@ -236,9 +243,19 @@ function sameStat(
   after: Awaited<ReturnType<typeof fs.lstat>>
 ): boolean {
   return (
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs
+  );
+}
+
+function sameFileIdentity(
+  before: Awaited<ReturnType<typeof fs.lstat>>,
+  after: Awaited<ReturnType<typeof fs.lstat>>
+): boolean {
+  return (
+    before.dev === after.dev && before.ino === after.ino && before.nlink === 1 && after.nlink === 1
   );
 }
 

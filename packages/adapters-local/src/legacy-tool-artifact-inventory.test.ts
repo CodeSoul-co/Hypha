@@ -98,6 +98,23 @@ describe('LegacyToolArtifactInventory', () => {
       new LegacyToolArtifactInventory({ legacyRootPath: root }).scan()
     ).rejects.toMatchObject({ code: 'LEGACY_INVENTORY_INVALID_LAYOUT' });
   });
+
+  it('rejects hard-linked legacy files that alias content outside the migration root', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-legacy-inventory-hardlink-'));
+    const outsideRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'hypha-legacy-inventory-hardlink-outside-')
+    );
+    const outside = path.join(outsideRoot, 'outside.txt');
+    const linked = path.join(root, 'tool-results', 'tool.link', 'invocation.txt');
+    await fs.writeFile(outside, 'outside content');
+    await fs.mkdir(path.dirname(linked), { recursive: true });
+    await fs.link(outside, linked);
+
+    await expect(
+      new LegacyToolArtifactInventory({ legacyRootPath: root }).scan()
+    ).rejects.toMatchObject({ code: 'LEGACY_INVENTORY_INVALID_LAYOUT' });
+    await expect(fs.readFile(outside, 'utf8')).resolves.toBe('outside content');
+  });
 });
 
 function sha256(value: string): string {

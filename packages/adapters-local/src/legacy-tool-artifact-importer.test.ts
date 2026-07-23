@@ -144,6 +144,31 @@ describe('LegacyToolArtifactImporter', () => {
     await expect(fixture.repository.list()).resolves.toHaveLength(0);
   });
 
+  it('rejects hard-linked legacy files before importing external content', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-legacy-artifact-hardlink-'));
+    const relativePath = 'tool-results/tool.link/invocation-link.txt';
+    const outsideRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'hypha-legacy-artifact-hardlink-outside-')
+    );
+    const outside = path.join(outsideRoot, 'outside.txt');
+    const linked = path.join(root, ...relativePath.split('/'));
+    await fs.writeFile(outside, 'outside content');
+    await fs.mkdir(path.dirname(linked), { recursive: true });
+    await fs.link(outside, linked);
+    const fixture = createFixture(root);
+
+    await expect(
+      fixture.importer.import({
+        relativePath,
+        context: fixture.context,
+        toolId: 'tool.link',
+        invocationId: 'invocation-link',
+      })
+    ).rejects.toMatchObject({ code: 'LEGACY_ARTIFACT_INVALID_PATH' });
+    await expect(fixture.repository.list()).resolves.toHaveLength(0);
+    await expect(fs.readFile(outside, 'utf8')).resolves.toBe('outside content');
+  });
+
   it('rejects inventory size or content evidence that no longer matches the source', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-legacy-artifact-evidence-'));
     const relativePath = 'tool-results/tool.report/invocation-evidence.txt';

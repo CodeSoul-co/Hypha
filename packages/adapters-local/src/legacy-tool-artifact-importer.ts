@@ -191,10 +191,10 @@ export class LegacyToolArtifactImporter {
     const realFile = await fs.realpath(current);
     assertWithinRoot(realFile, realRoot);
     const fileStat = await fs.stat(realFile);
-    if (!fileStat.isFile()) {
+    if (!fileStat.isFile() || fileStat.nlink !== 1) {
       throw new LegacyToolArtifactImportError(
         'LEGACY_ARTIFACT_INVALID_PATH',
-        'Legacy Artifact source must be a regular file.'
+        'Legacy Artifact source must be a non-aliased regular file.'
       );
     }
     return realFile;
@@ -204,6 +204,12 @@ export class LegacyToolArtifactImporter {
     const handle = await fs.open(filename, 'r');
     try {
       const before = await handle.stat();
+      if (!before.isFile() || before.nlink !== 1) {
+        throw new LegacyToolArtifactImportError(
+          'LEGACY_ARTIFACT_INVALID_PATH',
+          'Legacy Artifact source must remain a non-aliased regular file.'
+        );
+      }
       if (before.size > this.maxArtifactBytes) {
         throw new LegacyToolArtifactImportError(
           'LEGACY_ARTIFACT_TOO_LARGE',
@@ -213,7 +219,15 @@ export class LegacyToolArtifactImporter {
       }
       const content = new Uint8Array(await handle.readFile());
       const after = await handle.stat();
-      if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+      if (
+        before.dev !== after.dev ||
+        before.ino !== after.ino ||
+        before.nlink !== after.nlink ||
+        after.nlink !== 1 ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.ctimeMs !== after.ctimeMs
+      ) {
         throw new LegacyToolArtifactImportError(
           'LEGACY_ARTIFACT_INVALID_PATH',
           'Legacy Artifact changed while it was being imported.'
