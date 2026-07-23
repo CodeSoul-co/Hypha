@@ -44,6 +44,7 @@ import {
   ToolRegistry,
   registerConcreteToolAdapterFactories,
   resolveCommonToolSpec,
+  hashToolContract,
   type ToolAdapter,
   type ToolAdapterProfile,
   type ToolSpec as HyphaToolSpec,
@@ -56,6 +57,16 @@ type MCPToolResolution = {
   tool: ToolDefinition;
   spec: HyphaToolSpec;
 };
+
+export interface MCPContextRunAccess {
+  runId: string;
+  principalId: string;
+  userId: string;
+  tenantId?: string;
+  agentId?: string;
+  permissionScopes: readonly string[];
+  deadlineAt: string;
+}
 
 type MCPToolMetadata = {
   sourceRef?: {
@@ -802,15 +813,35 @@ export class ToolManager {
     });
   }
 
-  async readMCPResource(serverId: string, uri: string, runId: string): Promise<unknown> {
-    await this.requireApprovedMCPContextCapability(serverId, uri, 'resource');
+  async readMCPResource(
+    serverId: string,
+    uri: string,
+    access: MCPContextRunAccess | string
+  ): Promise<unknown> {
+    if (typeof access === 'string') throw unverifiedMCPRunAccess(serverId, uri, 'resource');
+    const binding = await this.bindMCPContextCapability(serverId, uri, 'resource', access);
     return this.connectionManager.readResource({
       serverId,
       uri,
       context: {
-        runId,
+        runId: access.runId,
         stepId: `mcp:resource:${serverId}`,
         invocationId: `mcp-resource:${serverId}:${Date.now()}`,
+        contractSnapshotRef: binding.snapshotId,
+        deadlineAt: access.deadlineAt,
+        userId: access.userId,
+        tenantId: access.tenantId,
+        agentId: access.agentId,
+        principal: {
+          id: access.principalId,
+          principalId: access.principalId,
+          type: 'user',
+          userId: access.userId,
+          tenantId: access.tenantId,
+          agentId: access.agentId,
+          permissionScopes: access.permissionScopes,
+        },
+        metadata: binding,
       },
     });
   }
@@ -819,17 +850,33 @@ export class ToolManager {
     serverId: string,
     name: string,
     args: Record<string, string>,
-    runId: string
+    access: MCPContextRunAccess | string
   ): Promise<unknown> {
-    await this.requireApprovedMCPContextCapability(serverId, name, 'prompt');
+    if (typeof access === 'string') throw unverifiedMCPRunAccess(serverId, name, 'prompt');
+    const binding = await this.bindMCPContextCapability(serverId, name, 'prompt', access);
     return this.connectionManager.getPrompt({
       serverId,
       name,
       arguments: args,
       context: {
-        runId,
+        runId: access.runId,
         stepId: `mcp:prompt:${serverId}`,
         invocationId: `mcp-prompt:${serverId}:${Date.now()}`,
+        contractSnapshotRef: binding.snapshotId,
+        deadlineAt: access.deadlineAt,
+        userId: access.userId,
+        tenantId: access.tenantId,
+        agentId: access.agentId,
+        principal: {
+          id: access.principalId,
+          principalId: access.principalId,
+          type: 'user',
+          userId: access.userId,
+          tenantId: access.tenantId,
+          agentId: access.agentId,
+          permissionScopes: access.permissionScopes,
+        },
+        metadata: binding,
       },
     });
   }
@@ -838,7 +885,7 @@ export class ToolManager {
     serverId: string,
     capabilityId: string,
     kind: 'resource' | 'prompt'
-  ): Promise<void> {
+  ): Promise<MCPCapabilityRecord> {
     const catalog = this.mcpCatalogs.get(serverId);
     if (!catalog) throw new Error(`MCP server not found: ${serverId}`);
     const capability = await catalog.getCapability({ serverId, capabilityId, kind });
@@ -850,6 +897,109 @@ export class ToolManager {
         code: 'MCP_CAPABILITY_QUARANTINED',
       });
     }
+    return capability;
+  }
+
+  private async bindMCPContextCapability(
+    serverId: string,
+    capabilityId: string,
+    kind: 'resource' | 'prompt',
+    access: MCPContextRunAccess
+  ): Promise<Record<string, string>> {
+    const requiredScope = kind === 'resource' ? 'mcp.resource.read' : 'mcp.prompt.render';
+    const now = Date.now();
+    const deadline = Date.parse(access.deadlineAt);
+    if (
+      !access.runId ||
+      access.principalId !== access.userId ||
+      !access.permissionScopes.includes(requiredScope) ||
+      !Number.isFinite(deadline) ||
+      deadline <= now ||
+      deadline > now + 60_000
+    ) {
+      throw Object.assign(new Error('MCP context access is outside its verified Run scope.'), {
+        code: 'MCP_CAPABILITY_SCOPE_DENIED',
+        serverId,
+        capabilityId,
+        kind,
+      });
+    }
+    const capability = await this.requireApprovedMCPContextCapability(
+      serverId,
+      capabilityId,
+      kind
+    );
+    const serverIdentityHash = hashToolContract(
+      (capability.descriptor as { serverIdentity?: unknown }).serverIdentity ?? {
+        serverId,
+        protocolVersion: capability.protocolVersion,
+      }
+    );
+    const syntheticToolId = `mcp-context.${kind}.${serverId}.${capabilityId}`;
+    const scopeHash = hashToolContract({
+      runId: access.runId,
+      principalId: access.principalId,
+      userId: access.userId,
+      tenantId: access.tenantId,
+      agentId: access.agentId,
+      permissionScopes: [...access.permissionScopes].sort(),
+    });
+    const body = {
+      runId: access.runId,
+      createdAt: new Date(now).toISOString(),
+      toolContracts: [
+        {
+          toolId: syntheticToolId,
+          toolVersion: capability.capabilityVersion ?? capability.protocolVersion ?? '1.0.0',
+          toolRevision: capability.capabilityHash,
+          inputSchemaHash: capability.descriptorHash,
+          sourceCapabilityHash: capability.capabilityHash,
+          sideEffectLevel: 'read' as const,
+          adapterRef: `mcp:${serverId}:${serverIdentityHash}`,
+        },
+      ],
+      catalogRevision: capability.capabilityHash,
+      policyRevision: scopeHash,
+    };
+    const snapshotId = `mcp-context-snapshot:${hashToolContract(body)}`;
+    await this.mcpSnapshotStore.save({
+      id: snapshotId,
+      ...body,
+      snapshotHash: hashToolContract(body),
+    });
+    const persisted = await this.mcpSnapshotStore.get(snapshotId);
+    const pinned = persisted?.toolContracts[0];
+    const current = await this.requireApprovedMCPContextCapability(serverId, capabilityId, kind);
+    const currentServerIdentityHash = hashToolContract(
+      (current.descriptor as { serverIdentity?: unknown }).serverIdentity ?? {
+        serverId,
+        protocolVersion: current.protocolVersion,
+      }
+    );
+    if (
+      !persisted ||
+      persisted.runId !== access.runId ||
+      persisted.policyRevision !== scopeHash ||
+      pinned?.toolId !== syntheticToolId ||
+      pinned.sourceCapabilityHash !== current.capabilityHash ||
+      pinned.adapterRef !== `mcp:${serverId}:${currentServerIdentityHash}`
+    ) {
+      throw Object.assign(new Error('MCP context Run snapshot no longer matches the capability.'), {
+        code: 'MCP_CAPABILITY_SNAPSHOT_MISMATCH',
+        serverId,
+        capabilityId,
+        kind,
+        snapshotId,
+      });
+    }
+    return {
+      snapshotId,
+      snapshotHash: persisted.snapshotHash,
+      capabilityHash: current.capabilityHash,
+      serverIdentityHash: currentServerIdentityHash,
+      scopeHash,
+      deadlineAt: access.deadlineAt,
+    };
   }
 
   async listMCPDrifts(): Promise<MCPCapabilityRecord[]> {
@@ -1174,6 +1324,22 @@ function mcpServerId(spec: HyphaToolSpec): string | undefined {
 
 function mcpCapabilityId(spec: HyphaToolSpec): string | undefined {
   return spec.sourceRef?.capabilityId ?? spec.sourceRef?.mcpCapabilityId;
+}
+
+function unverifiedMCPRunAccess(
+  serverId: string,
+  capabilityId: string,
+  kind: 'resource' | 'prompt'
+): Error {
+  return Object.assign(
+    new Error('MCP context access requires a Runtime-verified ownership scope.'),
+    {
+      code: 'MCP_CAPABILITY_SCOPE_DENIED',
+      serverId,
+      capabilityId,
+      kind,
+    }
+  );
 }
 
 export default ToolManager;

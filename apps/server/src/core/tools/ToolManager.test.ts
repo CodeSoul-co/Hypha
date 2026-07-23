@@ -110,7 +110,7 @@ describe('ToolManager MCP governance boundary', () => {
       id: 'plugin.missing',
       kind: 'plugin',
       toolSpecRef: { id: 'utility.text', version: '1.0.0' },
-      config: { pluginId: 'missing' },
+      binding: { pluginId: 'missing' },
     };
     await expect(load([{ ...profile, required: false }])).resolves.toBeUndefined();
     expect(manager.profileReadiness()).toMatchObject({
@@ -119,5 +119,15 @@ describe('ToolManager MCP governance boundary', () => {
     await expect(load([{ ...profile, id: 'plugin.required', required: true }])).rejects.toMatchObject(
       { code: 'TOOL_ADAPTER_BINDING_UNAVAILABLE' }
     );
+  });
+
+  it('rejects caller-asserted Run ids for MCP Resource and Prompt access', async () => {
+    const manager = new ToolManager();
+    await expect(manager.readMCPResource('server-a', 'docs://one', 'run-forged')).rejects.toMatchObject(
+      { code: 'MCP_CAPABILITY_SCOPE_DENIED' }
+    );
+    await expect(
+      manager.renderMCPPrompt('server-a', 'prompt-a', {}, 'run-forged')
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SCOPE_DENIED' });
   });
 });
