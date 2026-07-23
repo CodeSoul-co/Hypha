@@ -121,6 +121,80 @@ describe('ToolManager MCP governance boundary', () => {
     );
   });
 
+  it('fails readiness for required MCP auto-connect and supervises optional failures', async () => {
+    const requiredManager = new ToolManager();
+    const requiredConnection = (
+      requiredManager as unknown as {
+        connectionManager: {
+          connect(serverId: string): Promise<unknown>;
+        };
+      }
+    ).connectionManager;
+    jest
+      .spyOn(requiredConnection, 'connect')
+      .mockRejectedValue(new Error('required server unavailable'));
+
+    await expect(
+      requiredManager.registerMCPServer({
+        id: 'required-remote',
+        name: 'Required remote',
+        mode: 'remote',
+        endpoint: 'https://example.com/mcp',
+        autoConnect: true,
+        required: true,
+      })
+    ).rejects.toMatchObject({
+      code: 'MCP_REQUIRED_SERVER_UNAVAILABLE',
+      serverId: 'required-remote',
+    });
+    expect(requiredManager.mcpServerReadiness()).toMatchObject({
+      'required-remote': {
+        status: 'failed',
+        required: true,
+        error: 'required server unavailable',
+      },
+    });
+
+    const optionalManager = new ToolManager();
+    const optionalConnection = (
+      optionalManager as unknown as {
+        connectionManager: {
+          connect(serverId: string): Promise<unknown>;
+          reconnect(serverId: string): Promise<unknown>;
+        };
+      }
+    ).connectionManager;
+    jest
+      .spyOn(optionalConnection, 'connect')
+      .mockRejectedValue(new Error('optional server unavailable'));
+    const reconnect = jest
+      .spyOn(optionalConnection, 'reconnect')
+      .mockRejectedValue(new Error('reconnect budget exhausted'));
+
+    await expect(
+      optionalManager.registerMCPServer({
+        id: 'optional-remote',
+        name: 'Optional remote',
+        mode: 'remote',
+        endpoint: 'https://example.com/mcp',
+        autoConnect: true,
+        required: false,
+      })
+    ).resolves.toBeUndefined();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(optionalManager.mcpServerReadiness()).toMatchObject({
+      'optional-remote': {
+        status: 'degraded',
+        required: false,
+        error: 'reconnect budget exhausted',
+        reconnecting: false,
+      },
+    });
+  });
+
   it('rejects caller-asserted Run ids for MCP Resource and Prompt access', async () => {
     const manager = new ToolManager();
     await expect(manager.readMCPResource('server-a', 'docs://one', 'run-forged')).rejects.toMatchObject(

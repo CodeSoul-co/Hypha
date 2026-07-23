@@ -800,6 +800,61 @@ describe('@hypha/mcp normalization', () => {
     expect(createCount).toBe(2);
   });
 
+  it('bounds reconnect supervision by jittered backoff and elapsed-time budget', async () => {
+    let createCount = 0;
+    let elapsedMs = 0;
+    const sleeps: number[] = [];
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        createCount += 1;
+        return {
+          async connect() {
+            throw new Error('transport unavailable');
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      monotonicNow: () => elapsedMs,
+      random: () => 1,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        elapsedMs += ms;
+      },
+    });
+    manager.register({
+      id: 'bounded-reconnect',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      reconnectPolicy: {
+        maxAttempts: 5,
+        backoffMs: 100,
+        maxBackoffMs: 200,
+        jitterRatio: 0.25,
+        maxElapsedMs: 300,
+      },
+    });
+
+    await expect(manager.reconnect('bounded-reconnect')).rejects.toMatchObject({
+      code: 'MCP_CONNECTION_FAILED',
+    });
+    expect(createCount).toBe(2);
+    expect(sleeps).toEqual([125]);
+    await expect(manager.get('bounded-reconnect')).resolves.toMatchObject({
+      state: 'failed',
+      reconnectAttempts: 2,
+    });
+  });
+
   it('connects to and cleans up a real stdio MCP server through the stable SDK adapter', async () => {
     const manager = new MCPConnectionManager({
       sessionFactory: new SDKMCPConnectionSessionFactory(),

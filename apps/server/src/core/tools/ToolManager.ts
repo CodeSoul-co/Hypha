@@ -341,6 +341,16 @@ export class ToolManager {
     string,
     { status: 'ready' | 'degraded'; required: boolean; error?: string }
   >();
+  private readonly mcpServerStates = new Map<
+    string,
+    {
+      status: 'ready' | 'degraded' | 'failed';
+      required: boolean;
+      error?: string;
+      reconnecting?: boolean;
+    }
+  >();
+  private readonly mcpReconnectSupervisors = new Map<string, Promise<void>>();
   private mcpCatalogStore: MCPCapabilityCatalogStore = new FileMCPCapabilityCatalogStore(
     process.env.HYPHA_MCP_CATALOG_STORE ??
       path.resolve(process.cwd(), 'data/runtime/mcp-capability-catalog.json')
@@ -689,6 +699,7 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
+    const required = config.required !== false;
     this.mcpServerModes.set(config.id, config.mode);
     if (config.mode !== 'fixture') {
       this.connectionManager.register({
@@ -714,7 +725,13 @@ export class ToolManager {
         initializationTimeoutMs: 10_000,
         requestTimeoutMs: 30_000,
         shutdownTimeoutMs: 5_000,
-        reconnectPolicy: { maxAttempts: 3, backoffMs: 250 },
+        reconnectPolicy: config.reconnectPolicy ?? {
+          maxAttempts: 3,
+          backoffMs: 250,
+          maxBackoffMs: 5_000,
+          jitterRatio: 0.2,
+          maxElapsedMs: 15_000,
+        },
         egressPolicy:
           config.mode === 'remote' ? { requireTls: true, denyPrivateNetworks: true } : undefined,
         requestGuardPolicy: {
@@ -760,14 +777,33 @@ export class ToolManager {
         : new ManagedMCPClient(config.id, config.name, this.connectionManager);
 
     this.mcpClients.set(config.id, client);
+    this.mcpServerStates.set(config.id, { status: 'ready', required });
 
     if (config.autoStart || config.autoConnect) {
       try {
         await client.connect();
         await this.mcpCatalogs.get(config.id)?.refresh(config.id, 'server-auto-connect');
         await this.syncApprovedMCPTools(config.id);
+        this.mcpServerStates.set(config.id, { status: 'ready', required });
       } catch (error) {
         logger.error(`Failed to auto-connect MCP server ${config.id}:`, error);
+        const message = error instanceof Error ? error.message : String(error);
+        this.mcpServerStates.set(config.id, {
+          status: required ? 'failed' : 'degraded',
+          required,
+          error: message,
+        });
+        if (required) {
+          throw Object.assign(
+            new Error(`Required MCP server failed to auto-connect: ${config.id}`),
+            {
+              code: 'MCP_REQUIRED_SERVER_UNAVAILABLE',
+              serverId: config.id,
+              cause: error,
+            }
+          );
+        }
+        void this.superviseMCPReconnect(config.id);
       }
     }
 
@@ -785,9 +821,20 @@ export class ToolManager {
   async connectMCPServer(serverId: string): Promise<void> {
     const client = this.mcpClients.get(serverId);
     if (!client) throw new Error(`MCP server not found: ${serverId}`);
-    await client.connect();
-    await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-connect-command');
-    await this.syncApprovedMCPTools(serverId);
+    const required = this.mcpServerStates.get(serverId)?.required ?? true;
+    try {
+      await client.connect();
+      await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-connect-command');
+      await this.syncApprovedMCPTools(serverId);
+      this.mcpServerStates.set(serverId, { status: 'ready', required });
+    } catch (error) {
+      this.mcpServerStates.set(serverId, {
+        status: required ? 'failed' : 'degraded',
+        required,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   async listMCPCapabilities(): Promise<MCPCapabilityRecord[]> {
@@ -1102,6 +1149,53 @@ export class ToolManager {
     { status: 'ready' | 'degraded'; required: boolean; error?: string }
   > {
     return Object.fromEntries(this.profileStates);
+  }
+
+  mcpServerReadiness(): Record<
+    string,
+    {
+      status: 'ready' | 'degraded' | 'failed';
+      required: boolean;
+      error?: string;
+      reconnecting?: boolean;
+    }
+  > {
+    return Object.fromEntries(this.mcpServerStates);
+  }
+
+  private superviseMCPReconnect(serverId: string): Promise<void> {
+    const active = this.mcpReconnectSupervisors.get(serverId);
+    if (active) return active;
+    const client = this.mcpClients.get(serverId);
+    if (!client) return Promise.resolve();
+    const required = this.mcpServerStates.get(serverId)?.required ?? false;
+    this.mcpServerStates.set(serverId, {
+      ...this.mcpServerStates.get(serverId),
+      status: 'degraded',
+      required,
+      reconnecting: true,
+    });
+    const supervisor = (async () => {
+      try {
+        await this.connectionManager.reconnect(serverId);
+        await client.connect();
+        await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-supervisor-reconnect');
+        await this.syncApprovedMCPTools(serverId);
+        this.mcpServerStates.set(serverId, { status: 'ready', required });
+      } catch (error) {
+        this.mcpServerStates.set(serverId, {
+          status: 'degraded',
+          required,
+          error: error instanceof Error ? error.message : String(error),
+          reconnecting: false,
+        });
+        logger.error(`MCP reconnect supervisor exhausted for ${serverId}:`, error);
+      } finally {
+        this.mcpReconnectSupervisors.delete(serverId);
+      }
+    })();
+    this.mcpReconnectSupervisors.set(serverId, supervisor);
+    return supervisor;
   }
 
   private async loadAdapterProfiles(profiles: ToolAdapterProfile[]): Promise<void> {

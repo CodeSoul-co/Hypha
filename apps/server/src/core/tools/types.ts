@@ -96,6 +96,14 @@ export interface MCPServerConfig {
   credentialRef?: string;
   autoStart?: boolean;
   autoConnect?: boolean;
+  required?: boolean;
+  reconnectPolicy?: {
+    maxAttempts: number;
+    backoffMs?: number;
+    maxBackoffMs?: number;
+    jitterRatio?: number;
+    maxElapsedMs?: number;
+  };
 }
 
 export interface MCPCapabilities {

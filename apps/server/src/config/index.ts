@@ -487,6 +487,16 @@ const configSchema = z.object({
               .optional(),
             autoStart: z.boolean().optional(),
             autoConnect: z.boolean().optional(),
+            required: z.boolean().default(true),
+            reconnectPolicy: z
+              .object({
+                maxAttempts: z.number().int().positive().default(3),
+                backoffMs: z.number().int().nonnegative().default(250),
+                maxBackoffMs: z.number().int().nonnegative().optional(),
+                jitterRatio: z.number().min(0).max(1).optional(),
+                maxElapsedMs: z.number().int().positive().optional(),
+              })
+              .optional(),
           })
           .superRefine((server, context) => {
             if (server.mode === 'remote') {

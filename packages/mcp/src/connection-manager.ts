@@ -211,6 +211,9 @@ export interface MCPConnectionManagerOptions {
   trace?: TraceRecorder;
   traceContext?: { runId: string; stepId?: string; sessionId?: string };
   now?: () => string;
+  monotonicNow?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
   onListChanged?: (serverId: string) => Promise<void> | void;
   telemetry?: TelemetryRecorder;
 }
@@ -229,10 +232,16 @@ export class MCPConnectionManager implements MCPGateway {
   private readonly connectPromises = new Map<string, Promise<MCPConnectionRecord>>();
   private readonly requests = new Map<string, AbortController>();
   private readonly now: () => string;
+  private readonly monotonicNow: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly listChangedListeners = new Set<(serverId: string) => Promise<void> | void>();
 
   constructor(private readonly options: MCPConnectionManagerOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.monotonicNow = options.monotonicNow ?? (() => Date.now());
+    this.sleep = options.sleep ?? delay;
+    this.random = options.random ?? Math.random;
     if (options.onListChanged) this.listChangedListeners.add(options.onListChanged);
   }
 
@@ -341,19 +350,47 @@ export class MCPConnectionManager implements MCPGateway {
     await this.transition(managed, 'reconnecting');
     await this.disconnect(serverId, 'reconnect');
     const policy = managed.profile.reconnectPolicy ?? { maxAttempts: 3, backoffMs: 250 };
+    const startedAt = this.monotonicNow();
     let lastError: unknown;
     for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+      if (
+        attempt > 1 &&
+        policy.maxElapsedMs !== undefined &&
+        this.monotonicNow() - startedAt >= policy.maxElapsedMs
+      ) {
+        break;
+      }
       this.patchRecord(managed, { reconnectAttempts: attempt });
       try {
         return await this.connect(serverId);
       } catch (error) {
         lastError = error;
         if (attempt < policy.maxAttempts) {
-          await delay((policy.backoffMs ?? 250) * 2 ** (attempt - 1));
+          const exponentialDelay = (policy.backoffMs ?? 250) * 2 ** (attempt - 1);
+          const jitterRatio = policy.jitterRatio ?? 0;
+          const jitteredDelay =
+            exponentialDelay * (1 + (this.random() * 2 - 1) * jitterRatio);
+          const reconnectDelay = Math.max(
+            0,
+            Math.round(
+              Math.min(jitteredDelay, policy.maxBackoffMs ?? Number.POSITIVE_INFINITY)
+            )
+          );
+          if (policy.maxElapsedMs !== undefined) {
+            const remaining = policy.maxElapsedMs - (this.monotonicNow() - startedAt);
+            if (reconnectDelay > remaining) break;
+          }
+          await this.sleep(reconnectDelay);
         }
       }
     }
-    throw lastError;
+    throw (
+      lastError ??
+      Object.assign(new Error('MCP reconnect budget exhausted.'), {
+        code: 'MCP_CONNECTION_FAILED',
+        serverId,
+      })
+    );
   }
 
   async cancelRequest(requestId: string): Promise<void> {
