@@ -1,13 +1,21 @@
 import {
   Mem0OssClient,
   Mem0PlatformClient,
-  MemoryBankLocalClient,
   MemoryBankManagedClient,
   memoryProfileSpecExample,
   runExternalProviderAcceptance,
-  type ExternalMemoryClient,
+  sha256,
+  type ExternalProviderAcceptanceEvidenceInput,
   type ExternalProviderAcceptanceFixture,
 } from '../../packages/memory/src';
+
+const acceptanceMode = process.env.HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_MODE ?? 'development';
+const explicitlyRequired = new Set(
+  (process.env.HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_REQUIRED_PROVIDERS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 
 function liveFixture(prefix: string): ExternalProviderAcceptanceFixture {
   const suffix = Date.now().toString(36);
@@ -42,7 +50,7 @@ function liveFixture(prefix: string): ExternalProviderAcceptanceFixture {
       operationId: prefix + ':list:' + suffix,
       principal,
       scope,
-      pagination: { limit: 10 },
+      pagination: { limit: 10, maxPages: 20, maxCalls: 20 },
     },
     get: (memoryId) => ({
       operationId: prefix + ':get:' + suffix,
@@ -77,72 +85,149 @@ function liveFixture(prefix: string): ExternalProviderAcceptanceFixture {
   };
 }
 
+function isRequired(provider: string): boolean {
+  return acceptanceMode === 'required' || explicitlyRequired.has(provider);
+}
+
+function registerExternalCase(name: string, ready: boolean, run: () => Promise<void>): void {
+  if (ready) {
+    it(name, run);
+    return;
+  }
+  if (isRequired(name)) {
+    it(name + ' has all required live configuration', () => {
+      throw new Error(
+        `Required external Provider ${name} is not configured; acceptance cannot be recorded as passed.`
+      );
+    });
+    return;
+  }
+  it.skip(name + ' not run because its external service is not configured', run);
+}
+
+function evidence(
+  providerId: string,
+  versionVariable: string
+): ExternalProviderAcceptanceEvidenceInput {
+  const commitSha = process.env.HYPHA_ACCEPTANCE_COMMIT_SHA ?? process.env.GITHUB_SHA;
+  const providerVersion = process.env[versionVariable];
+  if (!commitSha || !providerVersion) {
+    throw new Error(
+      `Live acceptance requires HYPHA_ACCEPTANCE_COMMIT_SHA and ${versionVariable} for auditable evidence.`
+    );
+  }
+  return {
+    commitSha,
+    providerId,
+    providerVersion,
+    profileHash: sha256(memoryProfileSpecExample),
+    environmentHash: sha256({
+      nodeVersion: process.version,
+      platform: process.platform,
+      architecture: process.arch,
+      acceptanceMode,
+    }),
+  };
+}
+
+function emitEvidence(report: unknown): void {
+  console.info('HYPHA_MEMORY_EXTERNAL_ACCEPTANCE ' + JSON.stringify(report));
+}
+
 describe('external memory real integration entry points', () => {
-  const lifecycleCases: Array<[string, string | undefined, () => ExternalMemoryClient]> = [
-    [
-      'mem0-oss',
-      process.env.HYPHA_TEST_MEM0_OSS_URL,
-      () =>
-        new Mem0OssClient({
-          baseUrl: process.env.HYPHA_TEST_MEM0_OSS_URL!,
-          apiKey: process.env.HYPHA_TEST_MEM0_OSS_API_KEY,
-        }),
-    ],
-    [
-      'memorybank-local',
-      process.env.HYPHA_TEST_MEMORYBANK_LOCAL_URL,
-      () =>
-        new MemoryBankLocalClient({
-          baseUrl: process.env.HYPHA_TEST_MEMORYBANK_LOCAL_URL!,
-          apiKey: process.env.HYPHA_TEST_MEMORYBANK_LOCAL_API_KEY,
-        }),
-    ],
-  ];
+  registerExternalCase('mem0-oss', Boolean(process.env.HYPHA_TEST_MEM0_OSS_URL), async () => {
+    const report = await runExternalProviderAcceptance(
+      new Mem0OssClient({
+        baseUrl: process.env.HYPHA_TEST_MEM0_OSS_URL!,
+        apiKey: process.env.HYPHA_TEST_MEM0_OSS_API_KEY,
+      }),
+      liveFixture('mem0-oss'),
+      undefined,
+      evidence('memory.provider.mem0.rest', 'HYPHA_TEST_MEM0_OSS_VERSION')
+    );
+    expect(report).toMatchObject({
+      status: 'passed',
+      searchCount: expect.any(Number),
+      listCount: expect.any(Number),
+      deleteStatus: 'completed',
+      healthStatus: 'healthy',
+      evidence: {
+        commitSha: expect.any(String),
+        providerVersion: expect.any(String),
+        profileHash: expect.stringMatching(/^sha256:/u),
+        capabilitySnapshot: expect.any(Object),
+        environmentHash: expect.stringMatching(/^sha256:/u),
+      },
+    });
+    expect(report.searchCount).toBeGreaterThan(0);
+    expect(report.listCount).toBeGreaterThan(0);
+    emitEvidence(report);
+  });
 
-  for (const [name, enabled, create] of lifecycleCases) {
-    const testCase = enabled ? it : it.skip;
-    testCase(name + ' completes the shared management lifecycle', async () => {
-      const report = await runExternalProviderAcceptance(create(), liveFixture(name));
-      expect(report).toMatchObject({
-        searchCount: expect.any(Number),
-        listCount: expect.any(Number),
-        deleteStatus: 'completed',
-        healthStatus: 'healthy',
+  registerExternalCase(
+    'mem0-platform-v3',
+    Boolean(process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN),
+    async () => {
+      const startedAt = new Date().toISOString();
+      const metadata = evidence(
+        'memory.provider.mem0.platform.v3',
+        'HYPHA_TEST_MEM0_PLATFORM_VERSION'
+      );
+      const client = new Mem0PlatformClient({
+        apiToken: process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN!,
       });
-      expect(report.searchCount).toBeGreaterThan(0);
-      expect(report.listCount).toBeGreaterThan(0);
-    });
-  }
+      try {
+        const capabilitySnapshot = await client.capabilities();
+        const health = await client.health();
+        expect(capabilitySnapshot).toBeTruthy();
+        expect(health).toHaveProperty('status');
+        emitEvidence({
+          status: 'passed',
+          ...metadata,
+          capabilitySnapshot,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          healthStatus: health.status,
+        });
+      } finally {
+        await client.close();
+      }
+    }
+  );
 
-  const controlledCases: Array<[string, string | undefined, () => ExternalMemoryClient]> = [
-    [
-      'mem0-platform-v3',
-      process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN,
-      () =>
-        new Mem0PlatformClient({
-          apiToken: process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN!,
-        }),
-    ],
-    [
-      'memorybank-managed',
-      process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN,
-      () =>
-        new MemoryBankManagedClient({
-          projectId: process.env.HYPHA_TEST_MEMORYBANK_PROJECT!,
-          location: process.env.HYPHA_TEST_MEMORYBANK_LOCATION!,
-          reasoningEngineId: process.env.HYPHA_TEST_MEMORYBANK_ENGINE!,
-          accessToken: process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN!,
-        }),
-    ],
-  ];
-
-  for (const [name, enabled, create] of controlledCases) {
-    const testCase = enabled ? it : it.skip;
-    testCase(name + ' exposes controlled-cloud health and capabilities', async () => {
-      const client = create();
-      await expect(client.capabilities()).resolves.toBeTruthy();
-      await expect(client.health()).resolves.toHaveProperty('status');
-      await client.close?.();
+  const vertexReady = Boolean(
+    process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN &&
+    process.env.HYPHA_TEST_MEMORYBANK_PROJECT &&
+    process.env.HYPHA_TEST_MEMORYBANK_LOCATION &&
+    process.env.HYPHA_TEST_MEMORYBANK_ENGINE
+  );
+  registerExternalCase('memorybank-managed', vertexReady, async () => {
+    const startedAt = new Date().toISOString();
+    const metadata = evidence(
+      'memory.provider.memorybank.vertex-ai',
+      'HYPHA_TEST_MEMORYBANK_MANAGED_VERSION'
+    );
+    const client = new MemoryBankManagedClient({
+      projectId: process.env.HYPHA_TEST_MEMORYBANK_PROJECT!,
+      location: process.env.HYPHA_TEST_MEMORYBANK_LOCATION!,
+      reasoningEngineId: process.env.HYPHA_TEST_MEMORYBANK_ENGINE!,
+      accessToken: process.env.HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN!,
     });
-  }
+    try {
+      const capabilitySnapshot = await client.capabilities();
+      const health = await client.health();
+      expect(capabilitySnapshot).toBeTruthy();
+      expect(health).toHaveProperty('status');
+      emitEvidence({
+        status: 'passed',
+        ...metadata,
+        capabilitySnapshot,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        healthStatus: health.status,
+      });
+    } finally {
+      await client.close();
+    }
+  });
 });

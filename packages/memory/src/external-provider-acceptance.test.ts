@@ -43,6 +43,7 @@ const profileRef = { id: 'memory.acceptance', version: '1.0.0' };
 describe('external provider acceptance harness', () => {
   it('runs the same management lifecycle without provider-specific branches', async () => {
     let closed = false;
+    let listCalls = 0;
     const client: ExternalMemoryClient = {
       capabilities: async () => ({
         add: true,
@@ -60,7 +61,14 @@ describe('external provider acceptance harness', () => {
       }),
       search: async () => [{ record, score: 1 }],
       get: async () => record,
-      list: async () => ({ records: [record], hasMore: false }),
+      list: async () => {
+        listCalls += 1;
+        return {
+          records: [record],
+          hasMore: listCalls === 1,
+          nextCursor: listCalls === 1 ? 'next-page' : undefined,
+        };
+      },
       update: async (request) => ({
         operationId: request.operationId,
         status: 'committed',
@@ -79,43 +87,64 @@ describe('external provider acceptance harness', () => {
         closed = true;
       },
     };
-    const report = await runExternalProviderAcceptance(client, {
-      add: {
-        operationId: 'add',
-        principal,
-        scope,
-        input: 'blue',
-        source: record.source,
-        profileRef,
+    const report = await runExternalProviderAcceptance(
+      client,
+      {
+        add: {
+          operationId: 'add',
+          principal,
+          scope,
+          input: 'blue',
+          source: record.source,
+          profileRef,
+        },
+        search: { operationId: 'search', principal, scope, profileRef, query: 'blue' },
+        list: { operationId: 'list', principal, scope, pagination: { limit: 10 } },
+        get: (memoryId) => ({ operationId: 'get', principal, scope, memoryId }),
+        update: (memoryId) => ({
+          operationId: 'update',
+          principal,
+          scope,
+          memoryId,
+          patch: { canonicalText: 'navy' },
+          reason: 'acceptance',
+        }),
+        history: (memoryId) => ({ operationId: 'history', principal, scope, memoryId }),
+        delete: (memoryId) => ({
+          operationId: 'delete',
+          principal,
+          scope,
+          memoryIds: [memoryId],
+          mode: 'hard',
+          reason: 'acceptance',
+        }),
+        resolveMemoryId: ({ addedIds }) => addedIds[0],
       },
-      search: { operationId: 'search', principal, scope, profileRef, query: 'blue' },
-      list: { operationId: 'list', principal, scope, pagination: { limit: 10 } },
-      get: (memoryId) => ({ operationId: 'get', principal, scope, memoryId }),
-      update: (memoryId) => ({
-        operationId: 'update',
-        principal,
-        scope,
-        memoryId,
-        patch: { canonicalText: 'navy' },
-        reason: 'acceptance',
-      }),
-      history: (memoryId) => ({ operationId: 'history', principal, scope, memoryId }),
-      delete: (memoryId) => ({
-        operationId: 'delete',
-        principal,
-        scope,
-        memoryIds: [memoryId],
-        mode: 'hard',
-        reason: 'acceptance',
-      }),
-      resolveMemoryId: ({ addedIds }) => addedIds[0],
-    });
+      undefined,
+      {
+        commitSha: 'commit:acceptance',
+        providerId: 'test-provider',
+        providerVersion: '1.2.3',
+        profileHash: 'sha256:profile',
+        environmentHash: 'sha256:environment',
+        now: () => '2026-07-21T00:00:00.000Z',
+      }
+    );
     expect(report).toMatchObject({
       memoryId: record.id,
       addStatus: 'committed',
       updateStatus: 'committed',
       deleteStatus: 'completed',
       healthStatus: 'healthy',
+      listCount: 2,
+      evidence: {
+        commitSha: 'commit:acceptance',
+        providerId: 'test-provider',
+        providerVersion: '1.2.3',
+        profileHash: 'sha256:profile',
+        environmentHash: 'sha256:environment',
+        capabilitySnapshot: expect.objectContaining({ add: true, search: true }),
+      },
     });
     expect(closed).toBe(true);
   });
