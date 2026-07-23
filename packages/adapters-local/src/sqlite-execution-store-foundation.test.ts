@@ -923,6 +923,35 @@ describe('SQLiteExecutionStoreFoundation', () => {
       expect(error).toMatchObject({ code: 'EXECUTION_STORE_UNSUPPORTED_SCHEMA' });
     }
   });
+
+  it('rejects aliased store roots and hard-linked database files', async () => {
+    const container = await temporaryRoot();
+    const canonicalRoot = path.join(container, 'canonical-root');
+    const aliasedRoot = path.join(container, 'aliased-root');
+    await fs.mkdir(canonicalRoot);
+    await fs.symlink(canonicalRoot, aliasedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+    expect(() => new SQLiteExecutionStoreFoundation({ rootPath: aliasedRoot })).toThrow(TypeError);
+
+    const storeRoot = path.join(container, 'store-root');
+    const outsideFilename = path.join(container, 'outside.sqlite');
+    await fs.mkdir(storeRoot);
+    const outsideDatabase = openTestDatabase(outsideFilename);
+    outsideDatabase.exec(`PRAGMA user_version = ${SQLiteExecutionStoreFoundation.schemaVersion}`);
+    outsideDatabase.close();
+    await fs.link(outsideFilename, path.join(storeRoot, 'executions.sqlite'));
+
+    let unexpectedStore: SQLiteExecutionStoreFoundation | undefined;
+    let hardLinkError: unknown;
+    try {
+      unexpectedStore = new SQLiteExecutionStoreFoundation({ rootPath: storeRoot });
+    } catch (error) {
+      hardLinkError = error;
+    } finally {
+      await unexpectedStore?.close();
+    }
+    expect(hardLinkError).toBeInstanceOf(TypeError);
+  });
 });
 
 function createRequest(): ExecutionRecordCreateRequest {

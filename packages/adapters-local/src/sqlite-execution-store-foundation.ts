@@ -109,12 +109,13 @@ export class SQLiteExecutionStoreFoundation {
     const root = prepareStoreRoot(options.rootPath);
     const basename = storeFilename(options.filename ?? 'executions.sqlite');
     this.filename = path.join(root, basename);
-    rejectSymbolicLink(this.filename);
+    rejectAliasedDatabaseFile(this.filename);
     this.now = options.now ?? (() => new Date().toISOString());
     const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, 'busyTimeoutMs');
     let database: SQLiteDatabase | undefined;
     try {
       database = openSQLiteDatabase(this.filename);
+      rejectAliasedDatabaseFile(this.filename);
       database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
       database.exec('PRAGMA journal_mode = WAL');
       database.exec('PRAGMA foreign_keys = ON');
@@ -1100,11 +1101,11 @@ function storeFilename(value: string): string {
   return value;
 }
 
-function rejectSymbolicLink(filename: string): void {
+function rejectAliasedDatabaseFile(filename: string): void {
   if (!fs.existsSync(filename)) return;
   const stat = fs.lstatSync(filename);
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new TypeError('SQLite Execution store file must be a regular file.');
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
+    throw new TypeError('SQLite Execution store file must be a non-aliased regular file.');
   }
 }
 
