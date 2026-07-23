@@ -267,90 +267,128 @@ export class MemoryRuntimeFactory {
     const provider: MemoryManagementProvider = installation
       ? installation.provider
       : (created as MemoryManagementProvider);
-    let capabilities: MemoryManagementCapabilities;
     try {
-      capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
+      const capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
+      const errors = [
+        ...validateDeclaredCapabilities(selected.management.capabilities, capabilities),
+        ...validateMemoryProfileCapabilities(selected.profile, capabilities),
+      ];
+      if (errors.length > 0) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          `Memory provider ${provider.id} does not satisfy the selected profile.`,
+          false,
+          { errors }
+        );
+      }
+      const health = await provider.health();
+      if (health.status === 'unhealthy') {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          `Memory provider ${provider.id} is unhealthy during runtime composition.`,
+          false,
+          { health }
+        );
+      }
+
+      const activities = new DefaultMemoryActivityPort(this.options.activities);
+      registerMemoryManagementProviderHandlers(activities, provider);
+      if (this.options.contextBuilder && this.options.contextGateway) {
+        activities.register(
+          'build_context',
+          createContextBuildActivityHandler(
+            this.options.contextBuilder,
+            this.options.contextGateway
+          )
+        );
+      }
+      const profileRef = {
+        id: selected.profile.id,
+        version: selected.profile.version,
+        revision: selected.profile.revision,
+      };
+      const manager = new GovernedMemoryManager({
+        activities,
+        profileRef,
+        eventContext: (request) => this.options.eventContext(request),
+        timeoutMs: selected.management.timeoutPolicy?.timeoutMs,
+        reconciliationStore: this.options.reconciliationStore ?? installation?.reconciliationStore,
+        now: this.options.now,
+      });
+      const service = new DefaultMemoryApplicationService({
+        manager,
+        activities,
+        provider,
+        contextBuilder: this.options.contextBuilder,
+        eventContext: (request) => this.options.eventContext(request),
+        contextTimeoutMs: selected.management.timeoutPolicy?.timeoutMs,
+      });
+      const profileHash = sha256({ profile: selected.profile, management: selected.management });
+      const createdAt = this.now();
+      this.sequence += 1;
+      const compositionReceipt: MemoryRuntimeCompositionReceipt = {
+        runtimeId: `memory-runtime:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
+        serviceInstanceId: `memory-service:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
+        serviceContract: '@hypha/memory.MemoryApplicationService',
+        activeProfileId: config.activeProfile,
+        providerId: provider.id,
+        providerSpecId: selected.management.id,
+        configHash: sha256(config),
+        profileHash,
+        resolvedDependencyRefs: [...references.keys()].sort(),
+        createdAt,
+      };
+      let closePromise: Promise<void> | undefined;
+      return {
+        service,
+        provider,
+        profile: selected.profile,
+        providerSpec: selected.management,
+        profileHash,
+        capabilities,
+        compositionReceipt,
+        resources: installation?.resources,
+        close: () => {
+          closePromise ??= closeMemoryRuntimeResources(service, provider, installation);
+          return closePromise;
+        },
+      };
     } catch (error) {
-      await provider.close?.();
-      await installation?.close?.();
+      try {
+        await closeMemoryRuntimeResources(undefined, provider, installation);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [
+            error,
+            ...(cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError]),
+          ],
+          'Memory runtime composition and rollback both failed.'
+        );
+      }
       throw error;
     }
-    const errors = [
-      ...validateDeclaredCapabilities(selected.management.capabilities, capabilities),
-      ...validateMemoryProfileCapabilities(selected.profile, capabilities),
-    ];
-    if (errors.length > 0) {
-      await provider.close?.();
-      await installation?.close?.();
-      throw memoryError(
-        'MEMORY_PROVIDER_UNAVAILABLE',
-        `Memory provider ${provider.id} does not satisfy the selected profile.`,
-        false,
-        { errors }
-      );
-    }
+  }
+}
 
-    const activities = new DefaultMemoryActivityPort(this.options.activities);
-    registerMemoryManagementProviderHandlers(activities, provider);
-    if (this.options.contextBuilder && this.options.contextGateway) {
-      activities.register(
-        'build_context',
-        createContextBuildActivityHandler(this.options.contextBuilder, this.options.contextGateway)
-      );
+async function closeMemoryRuntimeResources(
+  service: MemoryApplicationService | undefined,
+  provider: MemoryManagementProvider,
+  installation: MemoryManagementProviderInstallation | undefined
+): Promise<void> {
+  const failures: unknown[] = [];
+  const actions: Array<() => Promise<void>> = [];
+  if (service) actions.push(() => service.close());
+  else if (provider.close) actions.push(() => provider.close!());
+  if (installation?.close) actions.push(() => installation.close!());
+  for (const close of actions) {
+    try {
+      await close();
+    } catch (error) {
+      failures.push(error);
     }
-    const profileRef = {
-      id: selected.profile.id,
-      version: selected.profile.version,
-      revision: selected.profile.revision,
-    };
-    const manager = new GovernedMemoryManager({
-      activities,
-      profileRef,
-      eventContext: (request) => this.options.eventContext(request),
-      timeoutMs: selected.management.timeoutPolicy?.timeoutMs,
-      reconciliationStore: this.options.reconciliationStore ?? installation?.reconciliationStore,
-      now: this.options.now,
-    });
-    const service = new DefaultMemoryApplicationService({
-      manager,
-      activities,
-      provider,
-      contextBuilder: this.options.contextBuilder,
-      eventContext: (request) => this.options.eventContext(request),
-      contextTimeoutMs: selected.management.timeoutPolicy?.timeoutMs,
-    });
-    const profileHash = sha256({ profile: selected.profile, management: selected.management });
-    const createdAt = this.now();
-    this.sequence += 1;
-    const compositionReceipt: MemoryRuntimeCompositionReceipt = {
-      runtimeId: `memory-runtime:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
-      serviceInstanceId: `memory-service:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
-      serviceContract: '@hypha/memory.MemoryApplicationService',
-      activeProfileId: config.activeProfile,
-      providerId: provider.id,
-      providerSpecId: selected.management.id,
-      configHash: sha256(config),
-      profileHash,
-      resolvedDependencyRefs: [...references.keys()].sort(),
-      createdAt,
-    };
-    return {
-      service,
-      provider,
-      profile: selected.profile,
-      providerSpec: selected.management,
-      profileHash,
-      capabilities,
-      compositionReceipt,
-      resources: installation?.resources,
-      close: async () => {
-        try {
-          await service.close();
-        } finally {
-          await installation?.close?.();
-        }
-      },
-    };
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Memory runtime resource cleanup failed.');
   }
 }
 

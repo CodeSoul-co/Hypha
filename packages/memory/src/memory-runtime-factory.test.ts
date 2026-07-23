@@ -33,7 +33,7 @@ function config(): MemoryRuntimeConfig {
   };
 }
 
-function runtimeFactory(registry: MemoryManagementProviderRegistry) {
+function runtimeFactory(registry: MemoryManagementProviderRegistry, now?: () => string) {
   return new MemoryRuntimeFactory({
     registry,
     activities: {
@@ -42,6 +42,7 @@ function runtimeFactory(registry: MemoryManagementProviderRegistry) {
       harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
     },
     eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+    now,
   });
 }
 
@@ -193,5 +194,86 @@ describe('MemoryRuntimeFactory', () => {
     expect(() => validateMemoryRuntimeConfig(inlineSecret)).toThrow(
       'Provider credentials must be resolved by connectionRef'
     );
+  });
+
+  it('closes runtime resources once across repeated and concurrent close calls', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const providerClose = vi.spyOn(provider, 'close');
+    const installationClose = vi.fn(async () => undefined);
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'native-installation',
+      supports: () => true,
+      create: async () => ({ provider, close: installationClose }),
+    });
+    const runtime = await runtimeFactory(registry).create(config());
+
+    await Promise.all([runtime.close(), runtime.close()]);
+    await runtime.close();
+
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(installationClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back provider and installation resources when capability or health checks fail', async () => {
+    for (const failure of ['capabilities', 'health'] as const) {
+      const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+      if (failure === 'capabilities') {
+        vi.spyOn(provider, 'capabilities').mockRejectedValue(new Error('capability failure'));
+      } else {
+        vi.spyOn(provider, 'health').mockResolvedValue({
+          status: 'unhealthy',
+          checkedAt: '2026-07-23T00:00:00.000Z',
+        });
+      }
+      const providerClose = vi.spyOn(provider, 'close');
+      const installationClose = vi.fn(async () => undefined);
+      const registry = new MemoryManagementProviderRegistry().register({
+        id: 'failing-' + failure,
+        supports: () => true,
+        create: async () => ({ provider, close: installationClose }),
+      });
+
+      await expect(runtimeFactory(registry).create(config())).rejects.toBeTruthy();
+      expect(providerClose).toHaveBeenCalledTimes(1);
+      expect(installationClose).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('rolls back after activity registration when late composition fails', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const providerClose = vi.spyOn(provider, 'close');
+    const installationClose = vi.fn(async () => undefined);
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'late-composition-failure',
+      supports: () => true,
+      create: async () => ({ provider, close: installationClose }),
+    });
+
+    await expect(
+      runtimeFactory(registry, () => {
+        throw new Error('receipt clock failure');
+      }).create(config())
+    ).rejects.toThrow('receipt clock failure');
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(installationClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues reverse-order release when provider close fails', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const providerClose = vi.spyOn(provider, 'close');
+    const installationClose = vi.fn(async () => undefined);
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'close-failure',
+      supports: () => true,
+      create: async () => ({ provider, close: installationClose }),
+    });
+    const runtime = await runtimeFactory(registry).create(config());
+    providerClose.mockRejectedValue(new Error('provider close failure'));
+
+    const closing = runtime.close();
+    await expect(closing).rejects.toBeInstanceOf(AggregateError);
+    await expect(runtime.close()).rejects.toBeInstanceOf(AggregateError);
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(installationClose).toHaveBeenCalledTimes(1);
   });
 });
