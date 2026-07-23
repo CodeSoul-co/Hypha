@@ -4,14 +4,20 @@ import dns from 'dns/promises';
 import fs from 'fs/promises';
 import net from 'net';
 import https from 'https';
-import os from 'os';
-import path from 'path';
 import axios from 'axios';
 import { logger } from '../utils/logger';
 import { getSkillManager, type RegisteredSkill } from '../core/skills/SkillManager';
 import { loadSkillFile, parseSkillMarkdown } from '../core/skills/parser';
 import { HTTP_STATUS } from '../constants';
 import { AppError } from '../middleware/errorHandler';
+import {
+  governedChildPath,
+  installVerifiedSkillFile,
+  readExistingGovernedFile,
+  readTrustedLocalSkill,
+  resolveExistingGovernedFile,
+  resolveGovernedSkillRoots,
+} from './SkillInstallFilesystem';
 
 const MAX_SKILL_BYTES = 512 * 1024;
 const SKILL_ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
@@ -69,29 +75,6 @@ function configuredList(name: string): string[] {
     .filter(Boolean);
 }
 
-function getInstallDir(): string {
-  const home = os.homedir();
-  const resolved = path.resolve(
-    (process.env.HYPHA_SKILL_DATA_ROOT ?? path.join(home, '.hypha', 'skills')).replace(/^~/, home)
-  );
-  if (isPathWithin(process.cwd(), resolved)) {
-    throw new AppError(
-      'SKILL_DATA_ROOT_IN_SOURCE_TREE',
-      'Skill installation data root must be outside the repository source tree.',
-      HTTP_STATUS.INTERNAL_SERVER_ERROR
-    );
-  }
-  return resolved;
-}
-
-function getQuarantineDir(): string {
-  return path.join(getInstallDir(), '.quarantine');
-}
-
-async function ensureDir(directory: string): Promise<void> {
-  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-}
-
 function validateSkillId(id: string): string {
   if (!SKILL_ID_RE.test(id)) {
     throw new AppError(
@@ -101,25 +84,6 @@ function validateSkillId(id: string): string {
     );
   }
   return id;
-}
-
-function isPathWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-async function confinedTarget(directory: string, filename: string): Promise<string> {
-  await ensureDir(directory);
-  const realDirectory = await fs.realpath(directory);
-  const target = path.resolve(realDirectory, filename);
-  if (!isPathWithin(realDirectory, target) || path.dirname(target) !== realDirectory) {
-    throw new AppError(
-      'SKILL_PATH_ESCAPE',
-      'Skill target escapes the governed directory.',
-      HTTP_STATUS.BAD_REQUEST
-    );
-  }
-  return target;
 }
 
 function validateMarkdown(raw: string, originLabel: string): ReturnType<typeof parseSkillMarkdown> {
@@ -231,24 +195,7 @@ async function readLocalSource(value: string): Promise<string> {
       HTTP_STATUS.FORBIDDEN
     );
   }
-  const source = await fs.realpath(value);
-  const realRoots = await Promise.all(roots.map((root) => fs.realpath(root)));
-  if (!realRoots.some((root) => isPathWithin(root, source))) {
-    throw new AppError(
-      'SKILL_PATH_NOT_ALLOWED',
-      'Skill path is outside configured trusted roots.',
-      HTTP_STATUS.FORBIDDEN
-    );
-  }
-  const stat = await fs.stat(source);
-  if (!stat.isFile() || stat.size > MAX_SKILL_BYTES) {
-    throw new AppError(
-      'SKILL_PATH_INVALID',
-      'Skill source must be a regular file up to 512 KiB.',
-      HTTP_STATUS.BAD_REQUEST
-    );
-  }
-  return fs.readFile(source, 'utf8');
+  return (await readTrustedLocalSkill(value, roots)).raw;
 }
 
 async function readRemoteSource(value: string): Promise<string> {
@@ -459,7 +406,8 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
   const manifestHash = validateManifest(input.manifest, id, contentHash);
   const signatureVerified = verifySignature(input, raw);
 
-  const activeTarget = await confinedTarget(getInstallDir(), `${id}.md`);
+  const roots = await resolveGovernedSkillRoots();
+  const activeTarget = governedChildPath(roots.data.canonicalPath, `${id}.md`);
   await assertNotInstalled(activeTarget, id);
   const externalSource = input.source !== 'inline';
   const canActivate =
@@ -468,12 +416,25 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
       (Boolean(input.expectedSha256) && (signatureVerified || Boolean(input.reviewedBy))));
   const activeInline = input.source === 'inline' && input.activate !== false;
   const status = canActivate || activeInline ? 'active' : 'quarantined';
-  const target =
-    status === 'active'
-      ? activeTarget
-      : await confinedTarget(getQuarantineDir(), `${id}.${contentHash}.md`);
-
-  await fs.writeFile(target, raw, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  const target = await installVerifiedSkillFile({
+    roots,
+    destination: status === 'active' ? 'active' : 'quarantine',
+    filename: status === 'active' ? `${id}.md` : `${id}.${contentHash}.md`,
+    raw,
+    verify: (written) => {
+      verifyExpectedHash(sha256(written), contentHash);
+      validateManifest(input.manifest, id, contentHash);
+      verifySignature(input, written);
+      const reparsed = validateMarkdown(written, '<installed>');
+      if (reparsed.config.id !== id) {
+        throw new AppError(
+          'SKILL_ID_MISMATCH',
+          'Installed Skill id changed during verification.',
+          HTTP_STATUS.CONFLICT
+        );
+      }
+    },
+  });
   const timestamp = new Date().toISOString();
   const record: SkillInstallRecord = {
     id,
@@ -488,6 +449,13 @@ export async function installSkill(input: InstallInput): Promise<InstallResult> 
     updatedAt: timestamp,
   };
   await writeInstallRecord(target, record);
+  const persisted = await readExistingGovernedFile(
+    status === 'active' ? roots.data : roots.quarantine,
+    status === 'active' ? `${id}.md` : `${id}.${contentHash}.md`
+  );
+  verifyExpectedHash(sha256(persisted.raw), contentHash);
+  validateManifest(input.manifest, id, contentHash);
+  verifySignature(input, persisted.raw);
   logger.info('Skill installation recorded', {
     event: 'skill.lifecycle',
     action: 'install',
@@ -522,8 +490,11 @@ export async function activateQuarantinedSkill(
       HTTP_STATUS.BAD_REQUEST
     );
   }
-  const source = await confinedTarget(getQuarantineDir(), `${id}.${contentHash}.md`);
-  const raw = await fs.readFile(source, 'utf8');
+  const roots = await resolveGovernedSkillRoots();
+  const quarantineFilename = `${id}.${contentHash}.md`;
+  const quarantined = await readExistingGovernedFile(roots.quarantine, quarantineFilename);
+  const source = quarantined.canonicalPath;
+  const raw = quarantined.raw;
   verifyExpectedHash(sha256(raw), contentHash);
   const parsed = validateMarkdown(raw, '<quarantine>');
   if (parsed.config.id !== id) {
@@ -533,10 +504,26 @@ export async function activateQuarantinedSkill(
       HTTP_STATUS.BAD_REQUEST
     );
   }
-  const target = await confinedTarget(getInstallDir(), `${id}.md`);
+  const target = governedChildPath(roots.data.canonicalPath, `${id}.md`);
   await assertNotInstalled(target, id);
   const priorRecord = await readInstallRecord(source);
-  await fs.writeFile(target, raw, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  const installedTarget = await installVerifiedSkillFile({
+    roots,
+    destination: 'active',
+    filename: `${id}.md`,
+    raw,
+    verify: (written) => {
+      verifyExpectedHash(sha256(written), contentHash);
+      const reparsed = validateMarkdown(written, '<activated>');
+      if (reparsed.config.id !== id) {
+        throw new AppError(
+          'SKILL_ID_MISMATCH',
+          'Activated Skill id changed during verification.',
+          HTTP_STATUS.CONFLICT
+        );
+      }
+    },
+  });
   const timestamp = new Date().toISOString();
   const record: SkillInstallRecord = {
     id,
@@ -550,7 +537,17 @@ export async function activateQuarantinedSkill(
     installedAt: priorRecord?.installedAt ?? timestamp,
     updatedAt: timestamp,
   };
-  await writeInstallRecord(target, record);
+  await writeInstallRecord(installedTarget, record);
+  const persisted = await readExistingGovernedFile(roots.data, `${id}.md`);
+  verifyExpectedHash(sha256(persisted.raw), contentHash);
+  const persistedSkill = validateMarkdown(persisted.raw, '<activated>');
+  if (persistedSkill.config.id !== id) {
+    throw new AppError(
+      'SKILL_ID_MISMATCH',
+      'Activated Skill id changed after installation.',
+      HTTP_STATUS.CONFLICT
+    );
+  }
   await fs.unlink(source);
   await fs.unlink(`${source}.install.json`).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT') throw error;
@@ -562,12 +559,20 @@ export async function activateQuarantinedSkill(
     contentHash,
     reviewedBy,
   });
-  return { id, filePath: target, skill: parsed.config, contentHash, status: 'active', record };
+  return {
+    id,
+    filePath: installedTarget,
+    skill: parsed.config,
+    contentHash,
+    status: 'active',
+    record,
+  };
 }
 
 export async function uninstallSkill(idInput: string): Promise<boolean> {
   const id = validateSkillId(idInput);
-  const target = await confinedTarget(getInstallDir(), `${id}.md`);
+  const roots = await resolveGovernedSkillRoots();
+  const target = governedChildPath(roots.data.canonicalPath, `${id}.md`);
   try {
     const priorRecord = await readInstallRecord(target);
     await fs.unlink(target);
@@ -589,7 +594,8 @@ export async function uninstallSkill(idInput: string): Promise<boolean> {
 export async function listInstalledSkills(): Promise<
   Array<{ id: string; filePath: string; name: string; record?: SkillInstallRecord }>
 > {
-  const directory = getInstallDir();
+  const roots = await resolveGovernedSkillRoots();
+  const directory = roots.data.canonicalPath;
   let entries: string[];
   try {
     entries = await fs.readdir(directory);
@@ -605,7 +611,7 @@ export async function listInstalledSkills(): Promise<
   }> = [];
   for (const filename of entries) {
     if (!filename.endsWith('.md')) continue;
-    const filePath = await confinedTarget(directory, filename);
+    const filePath = await resolveExistingGovernedFile(roots.data, filename);
     try {
       const parsed = await loadSkillFile(filePath);
       installed.push({

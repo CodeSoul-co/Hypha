@@ -46,7 +46,9 @@ describe('Skill installation governance', () => {
       activate: true,
     });
 
-    expect(result.filePath.startsWith(process.env.HYPHA_SKILL_DATA_ROOT!)).toBe(true);
+    const canonicalRoot = await fs.realpath(process.env.HYPHA_SKILL_DATA_ROOT!);
+    expect(path.dirname(result.filePath)).toBe(canonicalRoot);
+    await expect(fs.realpath(result.filePath)).resolves.toBe(result.filePath);
     expect(result.record).toMatchObject({
       id: 'installed-skill',
       source: 'inline',
