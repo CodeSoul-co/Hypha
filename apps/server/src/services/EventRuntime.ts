@@ -10,6 +10,8 @@ import {
 } from '@hypha/adapters-local';
 import {
   ArtifactSessionCommandPayloadStore,
+  assertRuntimeHumanTaskDecision,
+  assertRuntimeHumanTaskResume,
   createRuntimeOrchestrationProjectionDefinition,
   createFrameworkEvent,
   hashCanonicalJson,
@@ -39,6 +41,8 @@ import {
   type RuntimeActivityObservation,
   type RuntimeActivityReconciliationResult,
   type RuntimeActivityReconciliationPort,
+  type RuntimeHumanTaskKind,
+  type RuntimeHumanTaskRequest,
   type RuntimeRecoveryRequeuePort,
   type RuntimeJsonValue,
   type ListSessionCommandsRequest,
@@ -181,7 +185,6 @@ import {
 } from '../runtime/RuntimeTransitionDispatcher';
 import { resolveRuntimeToolAuthority } from '../runtime/RuntimeToolAuthority';
 import {
-  assertHumanTaskCAS,
   humanTaskResolutionEventId,
   projectHumanTasks,
   type HumanTask,
@@ -254,7 +257,6 @@ export interface OwnedRunScope {
   domainPackId: string;
 }
 
-
 export interface StartRunInput {
   userId: string;
   sessionId: string;
@@ -287,6 +289,20 @@ export interface ResumeRunCommandInput {
 }
 
 type ResumeRunCommandPayload = Pick<ResumeRunCommandInput, 'key' | 'payload'>;
+
+interface HumanTaskResumePayload {
+  taskId: string;
+  kind: RuntimeHumanTaskKind;
+  subjectRef: string;
+  subjectHash: string;
+  revision: number;
+  requestedBy: string;
+  checkpointRef?: string;
+  policyRef?: string;
+  providerRevision?: string;
+  decision: 'approved';
+  decidedBy: string;
+}
 
 export interface SignalRunCommandInput {
   userId: string;
@@ -1389,6 +1405,23 @@ class EventRuntimeService {
         context: { runId: command.targetRunId },
       });
     }
+    if (control.kind === 'resume') {
+      const humanTaskResume = decodeHumanTaskResume(control.payload);
+      if (humanTaskResume) {
+        const revalidated = await this.revalidateHumanTaskResume(
+          command.targetRunId,
+          command.id,
+          humanTaskResume
+        );
+        if (!revalidated) {
+          return {
+            disposition: 'failed',
+            rejectionCode: 'human_task_resume_revalidation_failed',
+            deadLetter: true,
+          };
+        }
+      }
+    }
     const result = await this.runtimeRunControlService().execute({
       commandId: command.id,
       scope: {
@@ -1418,6 +1451,66 @@ class EventRuntimeService {
       resultRunId: command.targetRunId,
       resultEventIds: result.eventIds,
     };
+  }
+
+  private async revalidateHumanTaskResume(
+    runId: string,
+    commandId: string,
+    resume: HumanTaskResumePayload
+  ): Promise<boolean> {
+    const now = new Date().toISOString();
+    await this.append(runId, 'human.review.resume.started', {
+      taskId: resume.taskId,
+      kind: resume.kind,
+      subjectRef: resume.subjectRef,
+      subjectHash: resume.subjectHash,
+      expectedRevision: resume.revision,
+      commandId,
+      decidedBy: resume.decidedBy,
+      decidedAt: now,
+    });
+    const task = projectHumanTasks(await this.listEvents(runId)).find(
+      (candidate) => candidate.taskId === resume.taskId
+    );
+    let valid = false;
+    try {
+      assertRuntimeHumanTaskResume(task, {
+        taskId: resume.taskId,
+        kind: resume.kind,
+        subjectRef: resume.subjectRef,
+        subjectHash: resume.subjectHash,
+        revision: resume.revision,
+        requestedBy: resume.requestedBy,
+        resumedAt: now,
+        checkpointRef: resume.checkpointRef,
+        policyRef: resume.policyRef,
+        providerRevision: resume.providerRevision,
+      });
+      valid = true;
+    } catch (error) {
+      if (!(error instanceof FrameworkError)) throw error;
+    }
+    await this.append(
+      runId,
+      valid ? 'human.review.resume.revalidated' : 'human.review.resume.failed',
+      {
+        taskId: resume.taskId,
+        kind: resume.kind,
+        subjectRef: resume.subjectRef,
+        subjectHash: resume.subjectHash,
+        expectedRevision: resume.revision,
+        commandId,
+        decidedBy: resume.decidedBy,
+        decidedAt: now,
+        ...(!valid
+          ? {
+              reason:
+                'HumanTask authorization, checkpoint, policy, provider, subject, revision, status, or expiry changed.',
+            }
+          : {}),
+      }
+    );
+    return valid;
   }
 
   private async requireCommandRunScope(
@@ -1939,8 +2032,7 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
-    const availableToolIds =
-      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
@@ -2738,16 +2830,8 @@ class EventRuntimeService {
   ): Promise<void> {
     const run = await this.requireRun(runId);
     if (reason === 'skill-human-review') {
-      try {
+      if (run.snapshot.currentState !== 'HumanReview') {
         await this.transition(runId, 'HumanReview', { reason });
-      } catch (error) {
-        logger.warn(
-          'Custom FSM has no direct Skill HumanReview transition; Run wait remains durable',
-          {
-            runId,
-            error: error instanceof Error ? error.message : String(error),
-          }
-        );
       }
       return;
     }
@@ -2842,8 +2926,7 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash:
-        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
+      sourceCapabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -3415,14 +3498,15 @@ class EventRuntimeService {
     for (const ref of input.promptRefs) {
       const spec = specs.find(
         (candidate) =>
-          candidate.id === ref.id && (ref.version === undefined || candidate.version === ref.version)
+          candidate.id === ref.id &&
+          (ref.version === undefined || candidate.version === ref.version)
       );
       if (!spec || (spec.trustLevel ?? 'reviewed') !== 'untrusted') continue;
       const subjectHash = agentPromptSubjectHash(spec);
       const matching = tasks.filter(
         (task) =>
           task.taskKind === 'agent_prompt' &&
-          task.subjectHash === subjectHash &&
+          task.subjectHash === canonicalHumanTaskHash(subjectHash) &&
           task.subjectId === spec.id &&
           task.principalId === input.run.userId &&
           task.agentId === input.agentId &&
@@ -3432,7 +3516,7 @@ class EventRuntimeService {
         (task) =>
           task.status === 'approved' &&
           Boolean(task.decidedBy && task.decidedAt) &&
-          Date.parse(task.expiresAt) > Date.now()
+          isHumanTaskUnexpired(task)
       );
       if (approved) {
         approvals.push({
@@ -3454,7 +3538,7 @@ class EventRuntimeService {
         continue;
       }
       const active = matching.find(
-        (task) => task.status === 'requested' && Date.parse(task.expiresAt) > Date.now()
+        (task) => task.status === 'pending' && isHumanTaskUnexpired(task)
       );
       if (active) {
         pending.push(active);
@@ -3469,6 +3553,8 @@ class EventRuntimeService {
         subjectHash,
         agentId: input.agentId,
         tenantId: input.tenantId,
+        policyRef: `agent-prompt:${spec.id}@${spec.version}`,
+        providerRevision: String(spec.revision ?? spec.version),
         reason: `Untrusted Prompt ${spec.id}@${spec.version} requires review.`,
         ordinal: matching.length + 1,
       });
@@ -3492,21 +3578,15 @@ class EventRuntimeService {
     const matching = tasks.filter(
       (task) =>
         task.taskKind === 'effective_capability_snapshot' &&
-        task.subjectHash === effective.snapshotHash &&
+        task.subjectHash === canonicalHumanTaskHash(effective.snapshotHash) &&
         task.subjectId === effective.id &&
         task.principalId === effective.principalId &&
         task.agentId === effective.agentId
     );
-    if (
-      matching.some(
-        (task) => task.status === 'approved' && Date.parse(task.expiresAt) > Date.now()
-      )
-    ) {
+    if (matching.some((task) => task.status === 'approved' && isHumanTaskUnexpired(task))) {
       return [];
     }
-    const active = matching.find(
-      (task) => task.status === 'requested' && Date.parse(task.expiresAt) > Date.now()
-    );
+    const active = matching.find((task) => task.status === 'pending' && isHumanTaskUnexpired(task));
     if (active) return [active];
     return [
       await this.requestHumanTask({
@@ -3518,6 +3598,8 @@ class EventRuntimeService {
         subjectHash: effective.snapshotHash,
         agentId: effective.agentId,
         tenantId: effective.tenantId,
+        policyRef: `effective-capability:${effective.id}`,
+        providerRevision: effective.snapshotHash,
         reason: 'One or more active Skills require human review.',
         ordinal: matching.length + 1,
       }),
@@ -3533,29 +3615,50 @@ class EventRuntimeService {
     subjectHash: string;
     agentId?: string;
     tenantId?: string;
+    policyRef?: string;
+    providerRevision?: string;
     reason?: string;
     ordinal: number;
   }): Promise<HumanTask> {
     const requestedAt = new Date().toISOString();
+    const runtime = await this.requireRun(input.run.runId);
+    const kind = runtimeHumanTaskKindForServer(input.taskKind);
+    const subjectHash = canonicalHumanTaskHash(input.subjectHash);
     const task: HumanTask = {
       taskId: `human-review:${input.run.runId}:${input.taskKind}:${input.subjectHash.slice(0, 16)}:${input.ordinal}`,
       taskKind: input.taskKind,
       runId: input.run.runId,
+      stateId: runtime.snapshot.currentState,
+      stateAttempt: Math.max(
+        1,
+        runtime.snapshot.statePath.filter((stateId) => stateId === runtime.snapshot.currentState)
+          .length
+      ),
+      kind,
       subjectType: input.subjectType,
       subjectId: input.subjectId,
       subjectRevision: input.subjectRevision,
-      subjectHash: input.subjectHash,
+      subjectRef: `${input.subjectType}:${input.subjectId}@${input.subjectRevision}`,
+      subjectHash,
       principalId: input.run.userId,
+      requestedBy: input.run.userId,
+      allowedDecisionScopes: ['runtime.human-task.decide'],
       agentId: input.agentId,
       tenantId: input.tenantId,
       domainId: input.run.domainPackId,
       requestedAt,
       expiresAt: new Date(Date.parse(requestedAt) + 24 * 60 * 60 * 1_000).toISOString(),
-      status: 'requested',
+      status: 'pending',
       revision: 1,
+      checkpointRef: `run:${input.run.runId}:state:${runtime.snapshot.currentState}:attempt:${Math.max(
+        1,
+        runtime.snapshot.statePath.filter((stateId) => stateId === runtime.snapshot.currentState)
+          .length
+      )}`,
+      policyRef: input.policyRef,
+      providerRevision: input.providerRevision,
       reason: input.reason,
     };
-    await this.append(input.run.runId, 'human.review.requested', task);
     return task;
   }
 
@@ -3568,8 +3671,10 @@ class EventRuntimeService {
     runId: string;
     taskId: string;
     expectedRevision: number;
+    expectedSubjectHash: string;
     decision: 'approved' | 'rejected' | 'cancelled';
     decidedBy: string;
+    permissionScopes: string[];
     reason?: string;
   }): Promise<HumanTask> {
     const run = await this.requireRun(input.runId);
@@ -3577,10 +3682,19 @@ class EventRuntimeService {
     const now = new Date().toISOString();
     let task: HumanTask;
     try {
-      task = assertHumanTaskCAS(
+      task = assertRuntimeHumanTaskDecision(
         tasks.find((candidate) => candidate.taskId === input.taskId),
-        input.expectedRevision,
-        now
+        {
+          expectedRevision: input.expectedRevision,
+          expectedSubjectHash: canonicalHumanTaskHash(input.expectedSubjectHash),
+          principal: {
+            principalId: input.decidedBy,
+            type: 'user',
+            userId: input.decidedBy,
+            permissionScopes: input.permissionScopes,
+          },
+          decidedAt: now,
+        }
       );
     } catch (error) {
       if (error instanceof FrameworkError && error.code === 'HUMAN_TASK_EXPIRED') {
@@ -3590,6 +3704,7 @@ class EventRuntimeService {
           {
             taskId: input.taskId,
             expectedRevision: input.expectedRevision,
+            expectedSubjectHash: canonicalHumanTaskHash(input.expectedSubjectHash),
             resolutionOperationId: generateId(),
             decidedAt: now,
           },
@@ -3619,6 +3734,7 @@ class EventRuntimeService {
           taskId: task.taskId,
           taskKind: task.taskKind,
           expectedRevision: task.revision,
+          expectedSubjectHash: task.subjectHash,
           resolutionOperationId: generateId(),
           decision: input.decision,
           decidedBy: input.decidedBy,
@@ -3648,7 +3764,11 @@ class EventRuntimeService {
     const resolved = projectHumanTasks(await this.listEvents(input.runId)).find(
       (candidate) => candidate.taskId === task.taskId
     );
-    if (!resolved || resolved.revision !== task.revision + 1 || resolved.status !== input.decision) {
+    if (
+      !resolved ||
+      resolved.revision !== task.revision + 1 ||
+      resolved.status !== input.decision
+    ) {
       throw new FrameworkError({
         code: 'HUMAN_TASK_REVISION_CONFLICT',
         message: 'Human task was concurrently resolved.',
@@ -3658,27 +3778,40 @@ class EventRuntimeService {
     await this.append(input.runId, 'human.review.resolved', {
       taskId: task.taskId,
       taskKind: task.taskKind,
+      expectedRevision: task.revision,
+      expectedSubjectHash: task.subjectHash,
       decision: input.decision,
       decidedBy: input.decidedBy,
       decidedAt: now,
     });
     if (input.decision === 'approved') {
-      await this.append(input.runId, 'run.resume.requested', {
-        taskId: task.taskId,
-        taskKind: task.taskKind,
-        requestedBy: input.decidedBy,
-      });
-      if (run.snapshot.currentState === 'HumanReview') {
-        await this.transition(input.runId, 'Reasoning', {
-          taskId: task.taskId,
-          reason: `${task.taskKind}-approved`,
-        }).catch(() => undefined);
-      }
-      await this.append(input.runId, 'run.resumed', {
-        taskId: task.taskId,
-        taskKind: task.taskKind,
-        resumedBy: input.decidedBy,
-      });
+      const resumeKey = `human-task-resume:${task.taskId}:revision:${resolved.revision}`;
+      await this.enqueueResumeRun(
+        {
+          userId: run.userId,
+          sessionId: run.clientSessionId,
+          runId: input.runId,
+          key: `human-task:${task.taskId}`,
+          payload: {
+            humanTask: {
+              taskId: task.taskId,
+              kind: task.kind,
+              subjectRef: task.subjectRef,
+              subjectHash: task.subjectHash,
+              revision: resolved.revision,
+              requestedBy: task.requestedBy,
+              ...(task.checkpointRef === undefined ? {} : { checkpointRef: task.checkpointRef }),
+              ...(task.policyRef === undefined ? {} : { policyRef: task.policyRef }),
+              ...(task.providerRevision === undefined
+                ? {}
+                : { providerRevision: task.providerRevision }),
+              decision: input.decision,
+              decidedBy: input.decidedBy,
+            },
+          },
+        },
+        resumeKey
+      );
     } else {
       await this.failRun(
         input.runId,
@@ -3695,13 +3828,19 @@ class EventRuntimeService {
     if (!effective) return [];
     return projectHumanTasks(await this.listEvents(runId))
       .filter(
-        (task) =>
+        (
+          task
+        ): task is HumanTask & {
+          decidedBy: string;
+          decidedAt: string;
+          expiresAt: string;
+        } =>
           task.taskKind === 'effective_capability_snapshot' &&
-          task.subjectHash === effective.snapshotHash &&
+          task.subjectHash === canonicalHumanTaskHash(effective.snapshotHash) &&
           task.subjectId === effective.id &&
           task.status === 'approved' &&
-          Boolean(task.decidedBy && task.decidedAt) &&
-          Date.parse(task.expiresAt) > Date.now()
+          Boolean(task.decidedBy && task.decidedAt && task.expiresAt) &&
+          isHumanTaskUnexpired(task)
       )
       .map((task) => ({
         taskId: task.taskId,
@@ -3711,8 +3850,8 @@ class EventRuntimeService {
         runId,
         agentId: effective.agentId,
         principalId: effective.principalId,
-        approvedBy: task.decidedBy!,
-        approvedAt: task.decidedAt!,
+        approvedBy: task.decidedBy,
+        approvedAt: task.decidedAt,
         expiresAt: task.expiresAt,
         status: 'approved' as const,
       }));
@@ -3723,77 +3862,6 @@ class EventRuntimeService {
     return events[0]?.timestamp ?? new Date().toISOString();
   }
 
-  private async requireSkillReviewApprovals(input: {
-    run: OwnedRunScope;
-    agentId: string;
-    skills: LoadedSkillContext[];
-  }): Promise<SkillHumanReviewTask[]> {
-    const requiringReview = input.skills.filter(
-      (skill) => skill.policyDecision.requiresHumanReview === true
-    );
-    if (requiringReview.length === 0) return [];
-    const events = await this.listEvents(input.run.runId);
-    const existing = projectSkillHumanReviewTasks(events);
-    const pending: SkillHumanReviewTask[] = [];
-    for (const skill of requiringReview) {
-      const contentHash = skillContentHash(skill);
-      const revision = `${skill.version}:${contentHash}`;
-      const exact = existing.find(
-        (task) =>
-          task.skillId === skill.id &&
-          task.skillVersion === skill.version &&
-          task.skillRevision === revision &&
-          task.contentHash === contentHash &&
-          task.userId === input.run.userId &&
-          task.agentId === input.agentId &&
-          task.domainId === input.run.domainPackId &&
-          task.status === 'approved' &&
-          Date.parse(task.expiresAt) > Date.now()
-      );
-      if (exact) continue;
-      const priorPending = existing.find(
-        (task) =>
-          task.skillId === skill.id &&
-          task.skillRevision === revision &&
-          task.userId === input.run.userId &&
-          task.agentId === input.agentId &&
-          task.domainId === input.run.domainPackId &&
-          task.status === 'pending' &&
-          Date.parse(task.expiresAt) > Date.now()
-      );
-      if (priorPending) {
-        pending.push(priorPending);
-        continue;
-      }
-      const requestedAt = new Date().toISOString();
-      const task: SkillHumanReviewTask = {
-        taskId: `skill-review:${input.run.runId}:${skill.id}:${contentHash.slice(0, 16)}`,
-        runId: input.run.runId,
-        skillId: skill.id,
-        skillVersion: skill.version,
-        skillRevision: revision,
-        contentHash,
-        userId: input.run.userId,
-        agentId: input.agentId,
-        domainId: input.run.domainPackId,
-        requestedAt,
-        expiresAt: new Date(Date.parse(requestedAt) + 24 * 60 * 60 * 1_000).toISOString(),
-        status: 'pending',
-      };
-      await this.append(input.run.runId, 'human.review.requested', {
-        ...task,
-        taskKind: 'skill_activation',
-        policyId: skill.policyDecision.policyId,
-        reason: skill.policyDecision.reason,
-      });
-      pending.push(task);
-    }
-    if (pending.length > 0) {
-      await this.advanceToHumanReview(input.run.runId, 'skill-human-review');
-    }
-    return pending;
-  }
-
   async listSkillHumanReviews(runId: string, userId: string): Promise<SkillHumanReviewTask[]> {
     await this.requireOwnedRunScope(runId, userId);
     return projectSkillHumanReviewTasks(await this.listEvents(runId));
@@ -3802,89 +3870,45 @@ class EventRuntimeService {
   async decideSkillHumanReview(input: {
     runId: string;
     taskId: string;
+    expectedRevision: number;
+    expectedSubjectHash: string;
     decision: 'approved' | 'rejected';
     decidedBy: string;
+    permissionScopes: string[];
     reason?: string;
   }): Promise<SkillHumanReviewTask> {
-    const run = await this.requireRun(input.runId);
     const tasks = projectSkillHumanReviewTasks(await this.listEvents(input.runId));
     const task = tasks.find((candidate) => candidate.taskId === input.taskId);
-    if (!task || task.status !== 'pending') {
+    if (!task) {
       throw new FrameworkError({
         code: 'RUNTIME_INVALID_INPUT',
-        message: 'Skill human-review task is missing or already resolved.',
+        message: 'Skill human-review task is missing.',
         context: { runId: input.runId, taskId: input.taskId },
       });
     }
-    const decidedAt = new Date().toISOString();
-    if (Date.parse(task.expiresAt) <= Date.parse(decidedAt)) {
-      await this.append(input.runId, 'human.review.expired', {
-        ...task,
-        taskKind: 'skill_activation',
-        decidedAt,
-      });
-      await this.append(input.runId, 'human.review.resolved', {
-        taskId: task.taskId,
-        taskKind: 'skill_activation',
-        decision: 'expired',
-      });
-      return { ...task, status: 'expired', decidedAt };
-    }
-    const eventType =
-      input.decision === 'approved' ? 'human.review.approved' : 'human.review.rejected';
-    await this.append(input.runId, eventType, {
-      ...task,
-      taskKind: 'skill_activation',
+
+    await this.decideHumanReview({
+      runId: input.runId,
+      taskId: input.taskId,
+      expectedRevision: input.expectedRevision,
+      expectedSubjectHash: input.expectedSubjectHash,
       decision: input.decision,
       decidedBy: input.decidedBy,
-      decidedAt,
+      permissionScopes: input.permissionScopes,
       reason: input.reason,
     });
-    await this.append(input.runId, 'human.review.resolved', {
-      taskId: task.taskId,
-      taskKind: 'skill_activation',
-      decision: input.decision,
-      decidedBy: input.decidedBy,
-      decidedAt,
-    });
-    if (input.decision === 'rejected') {
-      await this.resolveHumanReview(
-        input.runId,
-        task.taskId,
-        'rejected',
-        input.decidedBy,
-        decidedAt
-      );
-      await this.failRun(input.runId, input.reason ?? `Skill ${task.skillId} was rejected.`);
-    } else {
-      await this.resolveHumanReview(
-        input.runId,
-        task.taskId,
-        'approved',
-        input.decidedBy,
-        decidedAt
-      );
-      if (run.snapshot.currentState === 'HumanReview') {
-        try {
-          await this.transition(input.runId, 'Reasoning', {
-            taskId: task.taskId,
-            reason: 'skill-review-approved',
-          });
-        } catch (error) {
-          logger.warn('Skill review approval could not transition the custom FSM to Reasoning', {
-            runId: input.runId,
-            taskId: task.taskId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
+
+    const resolved = projectSkillHumanReviewTasks(await this.listEvents(input.runId)).find(
+      (candidate) => candidate.taskId === input.taskId
+    );
+    if (!resolved) {
+      throw new FrameworkError({
+        code: 'RUNTIME_REPLAY_DIVERGENCE',
+        message: 'Skill human-review decision was not visible after replay.',
+        context: { runId: input.runId, taskId: input.taskId },
+      });
     }
-    return {
-      ...task,
-      status: input.decision,
-      decidedBy: input.decidedBy,
-      decidedAt,
-    };
+    return resolved;
   }
 
   async requireOwnedRunScope(runId: string, userId: string): Promise<OwnedRunScope> {
@@ -3924,6 +3948,7 @@ class EventRuntimeService {
       stringValue(payload.requestedAt) ??
       new Date().toISOString();
     const context = await this.requireRun(runId);
+    const humanTasks = humanTaskRequests(payload);
     const result = await this.runtimeHumanWaitService().create({
       commandId: `human-wait-create:${waitId}`,
       scope: {
@@ -3940,6 +3965,7 @@ class EventRuntimeService {
         stringValue(payload.reason) ??
         'Human review requires an operator decision',
       requestedAt,
+      ...(humanTasks.length === 0 ? {} : { humanTasks }),
       idempotencyKey: `human-wait-create:${waitId}`,
     });
     if (result.disposition === 'lease_unavailable') {
@@ -4948,24 +4974,6 @@ class EventRuntimeService {
   }
 }
 
-function skillContentHash(skill: LoadedSkillContext): string {
-  const install = asRecord(asRecord(skill.provenance)?.install);
-  const installedHash = stringValue(install?.contentHash);
-  if (installedHash && /^[a-f0-9]{64}$/u.test(installedHash)) return installedHash;
-  return hashContent(
-    JSON.stringify({
-      id: skill.id,
-      version: skill.version,
-      instructions: skill.instructions,
-      references: skill.references.map((reference) => ({
-        path: reference.path,
-        content: reference.content,
-      })),
-      provenance: skill.provenance,
-    })
-  );
-}
-
 export function projectSkillHumanReviewTasks(events: FrameworkEvent[]): SkillHumanReviewTask[] {
   const tasks = new Map<string, SkillHumanReviewTask>();
   for (const event of events) {
@@ -5530,6 +5538,149 @@ function humanReviewActionRef(payload: Record<string, unknown>): string | undefi
     stringValue(finalAction.toolId) ??
     stringValue(finalAction.tool);
   return toolId ? `tool:${toolId}` : undefined;
+}
+
+function humanTaskRequests(payload: Record<string, unknown>): RuntimeHumanTaskRequest[] {
+  if (!Array.isArray(payload.tasks)) return [];
+  const requests: RuntimeHumanTaskRequest[] = [];
+  for (const candidate of payload.tasks) {
+    const task = asRecord(candidate);
+    if (!task) continue;
+    const taskId = stringValue(task.taskId);
+    const kindValue = stringValue(task.kind) ?? stringValue(task.taskKind);
+    const subjectType = stringValue(task.subjectType);
+    const subjectId = stringValue(task.subjectId);
+    const subjectRevision = stringValue(task.subjectRevision);
+    const subjectRef =
+      stringValue(task.subjectRef) ??
+      (subjectType && subjectId
+        ? `${subjectType}:${subjectId}${subjectRevision ? `@${subjectRevision}` : ''}`
+        : undefined);
+    const subjectHash = stringValue(task.subjectHash);
+    const requestedBy = stringValue(task.requestedBy) ?? stringValue(task.principalId);
+    const requestedAt = stringValue(task.requestedAt);
+    if (!taskId || !kindValue || !subjectRef || !subjectHash || !requestedBy || !requestedAt) {
+      continue;
+    }
+    const metadata = asRecord(task.metadata);
+    requests.push({
+      taskId,
+      kind: runtimeHumanTaskKindForServer(kindValue),
+      subjectRef,
+      subjectHash: canonicalHumanTaskHash(subjectHash),
+      requestedBy,
+      allowedDecisionScopes: stringArray(task.allowedDecisionScopes) ?? [
+        'runtime.human-task.decide',
+      ],
+      requestedAt,
+      ...(stringValue(task.expiresAt) === undefined
+        ? {}
+        : { expiresAt: stringValue(task.expiresAt) }),
+      ...(stringValue(task.checkpointRef) === undefined
+        ? {}
+        : { checkpointRef: stringValue(task.checkpointRef) }),
+      ...(stringValue(task.policyRef) === undefined
+        ? {}
+        : { policyRef: stringValue(task.policyRef) }),
+      ...(stringValue(task.providerRevision) === undefined
+        ? {}
+        : { providerRevision: stringValue(task.providerRevision) }),
+      ...(stringValue(task.reason) === undefined ? {} : { reason: stringValue(task.reason) }),
+      ...(metadata === undefined ? {} : { metadata }),
+    });
+  }
+  return requests;
+}
+
+function runtimeHumanTaskKindForServer(value: string): RuntimeHumanTaskKind {
+  switch (value) {
+    case 'tool':
+    case 'tool_approval':
+      return 'tool';
+    case 'skill':
+    case 'skill_activation':
+      return 'skill';
+    case 'prompt':
+    case 'agent_prompt':
+      return 'prompt';
+    case 'memory':
+      return 'memory';
+    case 'execution':
+      return 'execution';
+    case 'mcp':
+      return 'mcp';
+    case 'policy':
+    case 'effective_capability_snapshot':
+      return 'policy';
+    default:
+      throw new FrameworkError({
+        code: 'RUNTIME_INVALID_INPUT',
+        message: `Unsupported HumanTask kind: ${value}`,
+      });
+  }
+}
+
+function canonicalHumanTaskHash(value: string): string {
+  if (/^sha256:[a-f0-9]{64}$/u.test(value)) return value;
+  if (/^[a-f0-9]{64}$/u.test(value)) return `sha256:${value}`;
+  throw new FrameworkError({
+    code: 'RUNTIME_INVALID_INPUT',
+    message: 'HumanTask subjectHash must be a SHA-256 hash.',
+  });
+}
+
+function isHumanTaskUnexpired(task: HumanTask, now = Date.now()): boolean {
+  return task.expiresAt === undefined || Date.parse(task.expiresAt) > now;
+}
+
+function decodeHumanTaskResume(
+  payload: RuntimeJsonValue | undefined
+): HumanTaskResumePayload | null {
+  const humanTask = asRecord(asRecord(payload)?.humanTask);
+  if (!humanTask) return null;
+  const taskId = stringValue(humanTask.taskId);
+  const kindValue = stringValue(humanTask.kind);
+  const subjectRef = stringValue(humanTask.subjectRef);
+  const subjectHash = stringValue(humanTask.subjectHash);
+  const revision = numberValue(humanTask.revision);
+  const decision = stringValue(humanTask.decision);
+  const decidedBy = stringValue(humanTask.decidedBy);
+  const requestedBy = stringValue(humanTask.requestedBy);
+  if (
+    !taskId ||
+    !kindValue ||
+    !subjectRef ||
+    !subjectHash ||
+    !revision ||
+    !Number.isInteger(revision) ||
+    decision !== 'approved' ||
+    !decidedBy ||
+    !requestedBy
+  ) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: 'HumanTask resume payload is invalid.',
+    });
+  }
+  return {
+    taskId,
+    kind: runtimeHumanTaskKindForServer(kindValue),
+    subjectRef,
+    subjectHash: canonicalHumanTaskHash(subjectHash),
+    revision,
+    requestedBy,
+    ...(stringValue(humanTask.checkpointRef) === undefined
+      ? {}
+      : { checkpointRef: stringValue(humanTask.checkpointRef) }),
+    ...(stringValue(humanTask.policyRef) === undefined
+      ? {}
+      : { policyRef: stringValue(humanTask.policyRef) }),
+    ...(stringValue(humanTask.providerRevision) === undefined
+      ? {}
+      : { providerRevision: stringValue(humanTask.providerRevision) }),
+    decision: 'approved',
+    decidedBy,
+  };
 }
 
 function toRuntimeJsonValue(input: unknown): RuntimeJsonValue | undefined {

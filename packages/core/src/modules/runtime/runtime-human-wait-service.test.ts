@@ -27,6 +27,7 @@ const eventTypes: FrameworkEventType[] = [
   'runtime.wait.created',
   'runtime.wait.resolved',
   'fsm.state.entered',
+  'human.review.requested',
 ];
 
 async function fixture() {
@@ -104,6 +105,44 @@ describe('RuntimeHumanWaitService', () => {
       'runtime.wait.created',
       'run.waiting_human',
     ]);
+  });
+
+  it('atomically appends Generic HumanTasks with the durable Human Wait', async () => {
+    const target = await fixture();
+    const command = {
+      ...createCommand(),
+      commandId: 'create.tool-with-task',
+      idempotencyKey: 'create.tool-with-task',
+      humanTasks: [
+        {
+          taskId: 'human-task.tool-1',
+          kind: 'tool' as const,
+          subjectRef: 'tool:filesystem.write@1.0.0',
+          subjectHash: `sha256:${'a'.repeat(64)}`,
+          requestedBy: scope.userId,
+          allowedDecisionScopes: ['runtime.human-task.decide'],
+          requestedAt: '2026-07-23T08:00:30.000Z',
+          expiresAt: '2026-07-24T08:00:30.000Z',
+        },
+      ],
+    };
+
+    const created = await target.service.create(command);
+    expect(created.eventIds).toHaveLength(3);
+    const written = await target.events.read({ scope: streamScope() });
+    expect(written.slice(-3).map((candidate) => candidate.type)).toEqual([
+      'human.review.requested',
+      'runtime.wait.created',
+      'run.waiting_human',
+    ]);
+    expect(written.at(-3)?.payload).toMatchObject({
+      taskId: 'human-task.tool-1',
+      runId: scope.runId,
+      stateId: 'HumanReview',
+      stateAttempt: 1,
+      status: 'pending',
+      revision: 1,
+    });
   });
 
   it('resolves only the matching Human action and advances the State attempt', async () => {
