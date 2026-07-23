@@ -29,8 +29,9 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-env-'));
     const executableRoot = path.join(root, 'bin');
     await fs.mkdir(executableRoot, { recursive: true });
+    const executablePath = path.join(executableRoot, 'environment.js');
     await fs.writeFile(
-      path.join(executableRoot, 'environment.js'),
+      executablePath,
       `process.stdout.write(JSON.stringify({
         path: process.env.PATH ?? null,
         home: process.env.HOME || null,
@@ -42,6 +43,7 @@ describe('LocalWorkspaceRuntime execution environment', () => {
       }));\n`,
       'utf8'
     );
+    if (process.platform !== 'win32') await fs.chmod(executablePath, 0o700);
     const runtime = new LocalWorkspaceRuntime({
       workingDirectory: root,
       readPaths: [root],
@@ -66,6 +68,24 @@ describe('LocalWorkspaceRuntime execution environment', () => {
       privateToken: null,
     });
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'requires execute permission before interpreting a JavaScript file with Node',
+    async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-x-ok-'));
+      const executableRoot = path.join(root, 'bin');
+      const executablePath = path.join(executableRoot, 'command.js');
+      await fs.mkdir(executableRoot, { recursive: true });
+      await fs.writeFile(executablePath, 'process.stdout.write("run");\n', { mode: 0o600 });
+      await fs.chmod(executablePath, 0o600);
+      const runtime = createRuntime(root, executableRoot, true);
+      await runtime.initialize();
+
+      await expect(
+        runtime.execute({ operation: 'execute', path: 'bin/command.js' })
+      ).rejects.toThrow(/EACCES|permission denied/u);
+    }
+  );
 
   it('reports the trusted-only boundary and keeps command execution disabled', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-health-'));
