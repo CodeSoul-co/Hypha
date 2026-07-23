@@ -18,6 +18,7 @@ import {
   RuntimeCancellationService,
   RuntimeHumanWaitService,
   RuntimeRunControlService,
+  RUNTIME_RUN_MANAGER_MIGRATION_EVENT_TYPES,
   assertRuntimeEventCatalogComplete,
   migrateLegacyHumanWaitEvents,
   registerRuntimeOrchestrationEventSchemas,
@@ -155,7 +156,12 @@ import {
   ServerSessionCommandRuntime,
   type ServerSessionCommandPayloads,
 } from '../runtime/ServerSessionCommandRuntime';
-import { OrchestrationEventStore } from '../runtime/OrchestrationEventStore';
+import {
+  OrchestrationEventStore,
+  isCanonicalRuntimeEvent,
+  migrateCanonicalEventFamilies,
+  type CanonicalEventFamilyMigrationReport,
+} from '../runtime/OrchestrationEventStore';
 import {
   RuntimeTransitionDispatcher,
   type RuntimeTransitionCommand,
@@ -677,6 +683,8 @@ class EventRuntimeService {
   private runtimeTimerScheduler?: ServerRuntimeTimerScheduler;
   private runtimeRecoveryScheduler?: ServerRuntimeRecoveryScheduler;
   private legacyHumanWaitMigrationReport?: LegacyHumanWaitMigrationReport;
+  private canonicalEventFamilyMigrationReport?: CanonicalEventFamilyMigrationReport;
+  private migratedLegacyEvents?: FrameworkEvent[];
   private runtimeFailureReporter: (error: unknown) => void = () => undefined;
 
   constructor() {
@@ -778,10 +786,11 @@ class EventRuntimeService {
       });
     }
     const backbone = await this.canonicalLifecycle.initialize();
+    await this.migrateCanonicalRuntimeEvents();
     if (!this.canonicalComposition) {
       this.canonicalComposition = createServerRuntimeComposition({
         backbone,
-        compatibilityEvents: this.events,
+        mergedEvents: this.events,
         inference: this.reasoning,
         toolRunner: this.toolRunner,
         fsmSpec: this.defaultFsm,
@@ -890,15 +899,47 @@ class EventRuntimeService {
       : undefined;
   }
 
+  getCanonicalEventFamilyMigrationReport(): CanonicalEventFamilyMigrationReport | undefined {
+    return this.canonicalEventFamilyMigrationReport
+      ? structuredClone(this.canonicalEventFamilyMigrationReport)
+      : undefined;
+  }
+
   private async validateLegacyHumanWaits(): Promise<void> {
     const migration = migrateLegacyHumanWaitEvents(await this.legacyEvents.list());
     this.legacyHumanWaitMigrationReport = migration.report;
+    this.migratedLegacyEvents = migration.events;
     if (migration.report.quarantinedEvents === 0) return;
 
     const error = new FrameworkError({
       code: 'RUNTIME_REPLAY_DIVERGENCE',
       message: 'Legacy Human Wait migration found Runs that require operator repair.',
       context: { migrationReport: migration.report },
+    });
+    this.reportRuntimeFailure(error);
+    throw error;
+  }
+
+  private async migrateCanonicalRuntimeEvents(): Promise<void> {
+    if (this.canonicalEventFamilyMigrationReport?.quarantinedEvents === 0) return;
+    const report = await migrateCanonicalEventFamilies({
+      sourceEvents: this.migratedLegacyEvents ?? (await this.legacyEvents.list()),
+      canonical: this.canonicalEventStore(),
+      eventTypes: RUNTIME_RUN_MANAGER_MIGRATION_EVENT_TYPES,
+    });
+    this.canonicalEventFamilyMigrationReport = report;
+    if (report.quarantinedEvents === 0) return;
+
+    const error = new FrameworkError({
+      code: 'RUNTIME_REPLAY_DIVERGENCE',
+      message:
+        'Canonical Runtime Event migration found Events that require operator repair: ' +
+        report.entries
+          .filter((entry) => entry.status === 'quarantined')
+          .slice(0, 3)
+          .map((entry) => `${entry.eventType}/${entry.eventId}: ${entry.reason ?? 'unknown error'}`)
+          .join('; '),
+      context: { migrationReport: report },
     });
     this.reportRuntimeFailure(error);
     throw error;
@@ -1379,6 +1420,12 @@ class EventRuntimeService {
     if (!this.canonicalEvents) {
       this.canonicalEvents = new DurableEventStoreBridge({
         events: this.canonicalRuntime().events,
+        coordination: {
+          runLeases: this.canonicalRuntime().runLeases,
+          ownerId: `${this.runtimeWorkerId}:event-bridge`,
+          leaseTtlMs: 30_000,
+          nextId: (namespace) => `${namespace}:${generateId()}`,
+        },
       });
     }
     return this.canonicalEvents;
@@ -4162,6 +4209,18 @@ class EventRuntimeService {
   ): Promise<void> {
     const runtimeSessionId = this.runtimeSessionId(userId, clientSessionId);
     if (this.knownSessions.has(runtimeSessionId)) return;
+    const existing =
+      await this.canonicalRuntimeComposition().runManager.projectSession(runtimeSessionId);
+    if (existing) {
+      if (existing.userId !== userId) {
+        throw new FrameworkError({
+          code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+          message: `Runtime Session is already owned by another user: ${runtimeSessionId}`,
+        });
+      }
+      this.knownSessions.add(runtimeSessionId);
+      return;
+    }
     await this.canonicalRuntimeComposition().runManager.createSession({
       id: runtimeSessionId,
       userId,
@@ -4182,7 +4241,7 @@ class EventRuntimeService {
     options: { eventId?: string; stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = await this.requireRun(runId);
-    await this.canonicalRuntimeComposition().runManager.appendRunEvent({
+    const event = {
       id: options.eventId ?? `${runId}:${type}:${generateId()}`,
       type,
       runId,
@@ -4198,7 +4257,12 @@ class EventRuntimeService {
         ...(options.stepId ? { stepId: options.stepId } : {}),
         ...(options.fsmState ? { fsmState: options.fsmState } : {}),
       },
-    });
+    };
+    if (isCanonicalRuntimeEvent(type)) {
+      await this.canonicalRuntimeComposition().runManager.appendRunEvent(event);
+      return;
+    }
+    await this.events.append(createFrameworkEvent(event));
   }
 
   private async findRun(runId: string): Promise<RuntimeRunContext | null> {

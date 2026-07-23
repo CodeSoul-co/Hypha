@@ -4,6 +4,8 @@ import { hashCanonicalJson } from './canonical-json';
 import { InMemoryEventSchemaRegistry } from './event-schema-registry';
 import {
   RUNTIME_ORCHESTRATION_EVENT_TYPES,
+  RUNTIME_CANONICAL_EVENT_TYPES,
+  RUNTIME_RUN_MANAGER_EVENT_TYPES,
   RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
   assertRuntimeEventCatalogComplete,
   registerRuntimeOrchestrationEventSchemas,
@@ -24,9 +26,13 @@ describe('Runtime orchestration Event schemas', () => {
     }
   });
 
-  it('publishes exactly one versioned schema for every Runtime service-emittable Event', () => {
-    expect(runtimeEventSchemaDefinitions).toHaveLength(
-      RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES.length
+  it('publishes exactly one versioned schema for every canonical Runtime Event', () => {
+    expect(runtimeEventSchemaDefinitions).toHaveLength(RUNTIME_CANONICAL_EVENT_TYPES.length);
+    expect(RUNTIME_CANONICAL_EVENT_TYPES).toEqual(
+      expect.arrayContaining([
+        ...RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+        ...RUNTIME_RUN_MANAGER_EVENT_TYPES,
+      ])
     );
     expect(() => assertRuntimeEventCatalogComplete()).not.toThrow();
 
@@ -46,6 +52,25 @@ describe('Runtime orchestration Event schemas', () => {
     await expect(registry.validate(event('run.created', { runId: 'run.schema' }))).resolves.toEqual(
       expect.objectContaining({ valid: true })
     );
+    await expect(
+      registry.validate(
+        event('session.created', {
+          id: 'session.schema',
+          userId: 'user.schema',
+          metadata: {},
+          status: 'active',
+          createdAt: '2026-07-21T09:00:00.000Z',
+          updatedAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('context.build.completed', {
+          tokenCount: 42,
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
     await expect(
       registry.validate(
         event('runtime.wait.created', {

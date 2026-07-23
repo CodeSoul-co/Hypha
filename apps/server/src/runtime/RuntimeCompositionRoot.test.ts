@@ -77,7 +77,7 @@ describe('RuntimeCompositionRoot', () => {
       recoveryFSMs,
     });
     expect(createRunManager).toHaveBeenCalledTimes(1);
-    expect(createRunManager).toHaveBeenCalledWith({ events: durable.events });
+    expect(createRunManager).toHaveBeenCalledWith(durable);
     expect(createTimerWorker).toHaveBeenCalledTimes(1);
     expect(createTimerWorker).toHaveBeenCalledWith(durable);
     expect(createRecoveryService).toHaveBeenCalledTimes(1);

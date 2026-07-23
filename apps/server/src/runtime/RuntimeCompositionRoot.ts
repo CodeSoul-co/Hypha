@@ -48,7 +48,7 @@ export interface RuntimeComposition extends RuntimeCompositionDependencies {
 }
 
 export interface RuntimeCompositionFactories {
-  createRunManager(input: { events: EventRuntime }): RunManager;
+  createRunManager(input: RuntimeCompositionDependencies): RunManager;
   createTimerWorker(input: RuntimeCompositionDependencies): DurableRuntimeTimerWorker;
   createRecoveryService(input: RuntimeCompositionDependencies): RuntimeRecoveryService;
   createFSMDriver(
@@ -114,7 +114,7 @@ export class RuntimeCompositionRoot {
       stateClaims,
       sessionQueue,
     };
-    const runManager = requiredComponent('RunManager', factories.createRunManager({ events }));
+    const runManager = requiredComponent('RunManager', factories.createRunManager(dependencies));
     const timerWorker = requiredComponent(
       'DurableRuntimeTimerWorker',
       factories.createTimerWorker(dependencies)

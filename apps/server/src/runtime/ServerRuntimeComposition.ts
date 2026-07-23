@@ -8,6 +8,7 @@ import {
 } from '@hypha/core';
 import { FSMRuntime, type FSMProcessSpec } from '@hypha/fsm';
 import {
+  DurableEventStoreBridge,
   EventFirstRuntime,
   FencedBoundedFSMDriver,
   HarnessedReActFSMRunner,
@@ -19,10 +20,11 @@ import { ReActRunner } from '@hypha/kernel';
 import type { ToolRunner } from '@hypha/tools';
 import type { RuntimeBackbone } from './RuntimeBackbone';
 import { RuntimeCompositionRoot, type RuntimeComposition } from './RuntimeCompositionRoot';
+import { CanonicalRunManagerEventStore } from './OrchestrationEventStore';
 
 export interface ServerRuntimeCompositionOptions {
   backbone: RuntimeBackbone;
-  compatibilityEvents: EventStore;
+  mergedEvents: EventStore;
   inference: InferenceProvider;
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
@@ -36,8 +38,8 @@ export interface ServerRuntimeCompositionOptions {
 /**
  * Binds the Server process to one canonical runtime graph.
  *
- * The compatibility EventStore remains behind RunManager until every legacy
- * Framework event family has a canonical schema and projection.
+ * RunManager writes only schema-backed canonical Runtime families. Merged
+ * reads retain module-owned observations during their independent migrations.
  */
 export function createServerRuntimeComposition(
   options: ServerRuntimeCompositionOptions
@@ -46,10 +48,21 @@ export function createServerRuntimeComposition(
   return new RuntimeCompositionRoot({
     ...backbone,
     factories: {
-      createRunManager: ({ events }) => {
+      createRunManager: ({ events, runLeases }) => {
         assertCanonicalEvents(events, backbone.events);
+        const canonicalEvents = new DurableEventStoreBridge({
+          events,
+          coordination: {
+            runLeases,
+            ownerId: 'server.run-manager',
+            leaseTtlMs: 30_000,
+            nextId: options.nextId ?? nextCompositionId,
+          },
+        });
         return new RunManager({
-          runtime: new EventFirstRuntime(options.compatibilityEvents),
+          runtime: new EventFirstRuntime(
+            new CanonicalRunManagerEventStore(canonicalEvents, options.mergedEvents)
+          ),
         });
       },
       createTimerWorker: ({ events, projections, projectionStore, runLeases }) =>
@@ -97,6 +110,13 @@ export function createServerRuntimeComposition(
       }),
     },
   }).compose();
+}
+
+let compositionId = 0;
+
+function nextCompositionId(namespace: string): string {
+  compositionId += 1;
+  return `${namespace}:${process.pid}:${compositionId}`;
 }
 
 function assertCanonicalEvents(actual: unknown, expected: unknown): void {

@@ -61,6 +61,58 @@ export const RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES = [
 export type RuntimeServiceEmittableEventType =
   (typeof RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES)[number];
 
+/**
+ * Event families emitted directly by the Harness RunManager.
+ *
+ * This list is the migration boundary for the canonical Server RunManager.
+ * Module-owned events such as Tool, Model, and Memory observations are not
+ * included and must be written through their owning event ports.
+ */
+export const RUNTIME_RUN_MANAGER_EVENT_TYPES = [
+  'session.created',
+  'run.created',
+  'run.started',
+  'run.waiting_human',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+  'fsm.transition.accepted',
+  'fsm.state.entered',
+  'human.review.requested',
+  'human.review.approved',
+  'human.review.rejected',
+  'context.build.started',
+  'context.build.completed',
+  'context.compacted',
+  'skill.selected',
+  'skill.loaded',
+  'skill.completed',
+  'thinking.started',
+  'thinking.completed',
+  'agent.deliberation.started',
+  'agent.deliberation.completed',
+  'reasoning.decision.recorded',
+  'react.step.completed',
+] as const satisfies readonly FrameworkEventType[];
+
+export type RuntimeRunManagerEventType = (typeof RUNTIME_RUN_MANAGER_EVENT_TYPES)[number];
+
+export type RuntimeCanonicalEventType =
+  | RuntimeServiceEmittableEventType
+  | RuntimeRunManagerEventType;
+
+export const RUNTIME_RUN_MANAGER_MIGRATION_EVENT_TYPES = RUNTIME_RUN_MANAGER_EVENT_TYPES.filter(
+  (eventType) =>
+    !RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES.includes(eventType as RuntimeServiceEmittableEventType)
+) as readonly RuntimeRunManagerEventType[];
+
+export const RUNTIME_CANONICAL_EVENT_TYPES = Array.from(
+  new Set<FrameworkEventType>([
+    ...RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+    ...RUNTIME_RUN_MANAGER_EVENT_TYPES,
+  ])
+) as readonly RuntimeCanonicalEventType[];
+
 const stringSchema: JsonSchema = { type: 'string', minLength: 1 };
 const timestampSchema: JsonSchema = { type: 'string', format: 'date-time' };
 const integerSchema: JsonSchema = { type: 'integer', minimum: 1 };
@@ -96,7 +148,17 @@ const resumeSchema: JsonSchema = {
   additionalProperties: false,
 };
 
-const payloadSchemas: Record<RuntimeServiceEmittableEventType, JsonSchema> = {
+const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
+  'session.created': payload(['id', 'userId', 'metadata', 'status', 'createdAt', 'updatedAt'], {
+    id: stringSchema,
+    userId: stringSchema,
+    domainPackRef: jsonValueSchema,
+    sessionProfileRef: jsonValueSchema,
+    metadata: metadataSchema,
+    status: { type: 'string', enum: ['active', 'closed'] },
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+  }),
   'run.created': payload(['runId'], { runId: stringSchema }),
   'run.started': payload(['runId'], { runId: stringSchema, input: jsonValueSchema }),
   'run.resume.requested': payload(['commandId', 'waitId'], {
@@ -206,10 +268,22 @@ const payloadSchemas: Record<RuntimeServiceEmittableEventType, JsonSchema> = {
   'human.review.resume.revalidated': humanReviewPayload(),
   'human.review.resume.failed': humanReviewPayload(),
   'human.review.resolved': humanReviewPayload(),
+  'context.build.started': openPayload(),
+  'context.build.completed': openPayload(),
+  'context.compacted': openPayload(),
+  'skill.selected': openPayload(),
+  'skill.loaded': openPayload(),
+  'skill.completed': openPayload(),
+  'thinking.started': openPayload(),
+  'thinking.completed': openPayload(),
+  'agent.deliberation.started': openPayload(),
+  'agent.deliberation.completed': openPayload(),
+  'reasoning.decision.recorded': openPayload(),
+  'react.step.completed': openPayload(),
 };
 
 export const runtimeEventSchemaDefinitions: readonly EventSchemaDefinition[] = Object.freeze(
-  RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES.map((eventType) => {
+  RUNTIME_CANONICAL_EVENT_TYPES.map((eventType) => {
     const schema = payloadSchemas[eventType];
     return Object.freeze({
       eventType,
@@ -240,7 +314,7 @@ export async function registerRuntimeOrchestrationEventSchemas(
 
 export function assertRuntimeEventCatalogComplete(
   definitions: readonly EventSchemaDefinition[] = runtimeEventSchemaDefinitions,
-  requiredEventTypes: readonly RuntimeServiceEmittableEventType[] = RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES
+  requiredEventTypes: readonly RuntimeCanonicalEventType[] = RUNTIME_CANONICAL_EVENT_TYPES
 ): void {
   const definitionsByType = new Map<string, EventSchemaDefinition[]>();
   for (const definition of definitions) {
@@ -262,6 +336,10 @@ export function assertRuntimeEventCatalogComplete(
 
 function payload(required: string[], properties: Record<string, JsonSchema>): JsonSchema {
   return { type: 'object', required, properties, additionalProperties: true };
+}
+
+function openPayload(): JsonSchema {
+  return payload([], {});
 }
 
 function waitingRunPayload(): JsonSchema {

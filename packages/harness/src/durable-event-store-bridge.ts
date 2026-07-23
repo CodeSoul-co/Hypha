@@ -1,18 +1,30 @@
 import {
   FrameworkError,
   canonicalizeJson,
+  isFrameworkError,
   type EventCreateInput,
   type EventFilter,
   type EventRuntime,
   type EventStore,
   type EventStreamScope,
   type FrameworkEvent,
+  type FencedRunLease,
   type PersistedFrameworkEvent,
+  type RunLeaseStore,
   type TraceRecorder,
 } from '@hypha/core';
 
+export interface DurableEventStoreBridgeCoordination {
+  runLeases: RunLeaseStore;
+  ownerId: string;
+  leaseTtlMs: number;
+  nextId(namespace: string): string;
+  now?: () => string;
+}
+
 export interface DurableEventStoreBridgeOptions {
   events: EventRuntime;
+  coordination?: DurableEventStoreBridgeCoordination;
   maxAppendAttempts?: number;
   streamHeadPageSize?: number;
 }
@@ -28,33 +40,57 @@ export class DurableEventStoreBridge implements EventStore, TraceRecorder {
   constructor(private readonly options: DurableEventStoreBridgeOptions) {
     this.maxAppendAttempts = positiveInteger(options.maxAppendAttempts ?? 16, 'maxAppendAttempts');
     this.streamHeadPageSize = boundedPageSize(options.streamHeadPageSize ?? 250);
+    if (options.coordination) {
+      requiredString(options.coordination.ownerId, 'coordination.ownerId');
+      positiveInteger(options.coordination.leaseTtlMs, 'coordination.leaseTtlMs');
+    }
   }
 
   async append(event: FrameworkEvent): Promise<void> {
     const input = normalizeEvent(event);
     const scope = scopeFor(input);
+    const existing = (await this.options.events.read({ scope })).find(
+      (candidate) => candidate.id === input.id
+    );
+    if (existing) {
+      assertSameEvent(existing, input);
+      return;
+    }
 
-    for (let attempt = 1; attempt <= this.maxAppendAttempts; attempt += 1) {
-      const existing = (await this.options.events.read({ scope })).find(
-        (candidate) => candidate.id === input.id
-      );
-      if (existing) {
-        assertSameEvent(existing, input);
-        return;
-      }
+    const initialHead = await this.options.events.getStreamHead(scope);
+    const lease =
+      initialHead?.fencingToken === undefined ? undefined : await this.acquireLease(input);
+    try {
+      for (let attempt = 1; attempt <= this.maxAppendAttempts; attempt += 1) {
+        const raced = (await this.options.events.read({ scope })).find(
+          (candidate) => candidate.id === input.id
+        );
+        if (raced) {
+          assertSameEvent(raced, input);
+          return;
+        }
 
-      const expectedLastSequence = await this.options.events.latestSequence(scope);
-      try {
-        await this.options.events.append({
-          scope,
-          events: [input],
-          expectedLastSequence,
-          idempotencyKey: input.idempotencyKey!,
-        });
-        return;
-      } catch (error) {
-        if (!isExpectedSequenceConflict(error) || attempt === this.maxAppendAttempts) throw error;
+        const head = await this.options.events.getStreamHead(scope);
+        try {
+          await this.options.events.append({
+            scope,
+            events: [input],
+            expectedLastSequence: head?.lastSequence ?? 0,
+            ...(lease === undefined
+              ? {}
+              : {
+                  expectedRunRevision: head?.runRevision ?? 0,
+                  fencingToken: lease.fencingToken,
+                }),
+            idempotencyKey: input.idempotencyKey!,
+          });
+          return;
+        } catch (error) {
+          if (!isExpectedSequenceConflict(error) || attempt === this.maxAppendAttempts) throw error;
+        }
       }
+    } finally {
+      if (lease) await this.releaseLease(lease);
     }
   }
 
@@ -91,6 +127,53 @@ export class DurableEventStoreBridge implements EventStore, TraceRecorder {
       cursor = page.nextCursor;
     } while (cursor !== undefined);
     return heads;
+  }
+
+  private async acquireLease(event: EventCreateInput): Promise<FencedRunLease | undefined> {
+    const coordination = this.options.coordination;
+    if (!coordination) return undefined;
+    const acquiredAt = timestamp(coordination.now);
+    const requestedLeaseId = coordination.nextId('run-manager-event-lease');
+    const lease = await coordination.runLeases.acquire({
+      ...(event.tenantId === undefined ? {} : { tenantId: event.tenantId }),
+      userId: event.userId!,
+      runId: event.runId,
+      partitionKey: `runtime:${event.runId}`,
+      requestedLeaseId,
+      ownerId: coordination.ownerId,
+      ttlMs: coordination.leaseTtlMs,
+      acquiredAt,
+      idempotencyKey: `run-manager-event:${event.id}:lease:${requestedLeaseId}`,
+    });
+    if (lease) return lease;
+    throw new FrameworkError({
+      code: 'RUNTIME_LEASE_CONFLICT',
+      message: `RunManager could not acquire the write lease for Run ${event.runId}`,
+      context: { eventId: event.id, runId: event.runId },
+    });
+  }
+
+  private async releaseLease(lease: FencedRunLease): Promise<void> {
+    const coordination = this.options.coordination;
+    if (!coordination) return;
+    try {
+      await coordination.runLeases.release({
+        scope: {
+          ...(lease.tenantId === undefined ? {} : { tenantId: lease.tenantId }),
+          userId: lease.userId,
+          runId: lease.runId,
+          partitionKey: lease.partitionKey,
+        },
+        guard: {
+          leaseId: lease.id,
+          ownerId: lease.ownerId,
+          fencingToken: lease.fencingToken,
+        },
+        releasedAt: timestamp(coordination.now),
+      });
+    } catch (error) {
+      if (!isFrameworkError(error) || error.code !== 'RUNTIME_FENCING_REJECTED') throw error;
+    }
   }
 }
 
@@ -234,6 +317,26 @@ function positiveInteger(value: number, label: string): number {
     throw new FrameworkError({
       code: 'RUNTIME_INVALID_INPUT',
       message: `${label} must be a positive integer`,
+    });
+  }
+  return value;
+}
+
+function requiredString(value: string, label: string): void {
+  if (!value.trim()) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: `${label} must be non-empty`,
+    });
+  }
+}
+
+function timestamp(now: (() => string) | undefined): string {
+  const value = (now ?? (() => new Date().toISOString()))();
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: 'coordination.now must return a valid date-time',
     });
   }
   return value;

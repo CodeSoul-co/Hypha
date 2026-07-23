@@ -1,31 +1,59 @@
 import {
+  DurableEventRuntime,
   DurableRuntimeTimerWorker,
   InMemoryEventStore,
+  InMemoryDurableEventStore,
+  InMemoryEventSchemaRegistry,
+  InMemoryRunLeaseStore,
   RuntimeRecoveryService,
-  type EventRuntime,
+  registerRuntimeOrchestrationEventSchemas,
   type RuntimeCancelResult,
 } from '@hypha/core';
 import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
-import { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@hypha/harness';
+import {
+  DurableEventStoreBridge,
+  FencedBoundedFSMDriver,
+  HarnessedReActFSMRunner,
+  RunManager,
+} from '@hypha/harness';
 import type { InferenceProvider } from '@hypha/inference';
 import { ReActRunner, type ReActAgentRuntime } from '@hypha/kernel';
 import type { ToolRunner } from '@hypha/tools';
 import type { RuntimeBackbone } from './RuntimeBackbone';
+import { OrchestrationEventStore } from './OrchestrationEventStore';
 import { createServerRuntimeComposition } from './ServerRuntimeComposition';
 
 describe('createServerRuntimeComposition', () => {
-  it('constructs the canonical Server graph and keeps legacy events behind RunManager', async () => {
-    const canonicalEvents = {} as EventRuntime;
-    const compatibilityEvents = new InMemoryEventStore();
+  it('keeps compatibility EventStore wiring out of the RunManager composition', () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), 'apps/server/src/runtime/ServerRuntimeComposition.ts'),
+      'utf8'
+    );
+    expect(source).not.toContain('compatibilityEvents');
+    expect(source).toContain('CanonicalRunManagerEventStore');
+  });
+
+  it('constructs the canonical graph and prevents RunManager writes to legacy storage', async () => {
+    const schemas = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(schemas);
+    const canonicalStore = new InMemoryDurableEventStore({ schemaRegistry: schemas });
+    const canonicalEvents = new DurableEventRuntime({ store: canonicalStore });
+    const runLeases = new InMemoryRunLeaseStore();
+    const legacyEvents = new InMemoryEventStore();
+    const canonicalBridge = new DurableEventStoreBridge({ events: canonicalEvents });
+    const mergedEvents = new OrchestrationEventStore({
+      legacy: legacyEvents,
+      canonical: () => canonicalBridge,
+    });
     const backbone = {
       events: canonicalEvents,
       projections: {},
       projectionStore: {},
       checkpoints: {},
-      runLeases: {},
+      runLeases,
       stateClaims: {},
       sessionQueue: {},
-    } as RuntimeBackbone;
+    } as unknown as RuntimeBackbone;
     const inference = {
       id: 'inference.test',
       infer: jest.fn(),
@@ -33,7 +61,7 @@ describe('createServerRuntimeComposition', () => {
 
     const composition = createServerRuntimeComposition({
       backbone,
-      compatibilityEvents,
+      mergedEvents,
       inference,
       toolRunner: {} as ToolRunner,
       fsmSpec: defaultReActFSMProcessSpec,
@@ -75,7 +103,8 @@ describe('createServerRuntimeComposition', () => {
       id: 'session.test',
       userId: 'user.test',
     });
-    await expect(compatibilityEvents.list({ runId: 'session-bootstrap' })).resolves.toHaveLength(1);
+    await expect(legacyEvents.list({ runId: 'session-bootstrap' })).resolves.toHaveLength(0);
+    await expect(canonicalBridge.list({ runId: 'session-bootstrap' })).resolves.toHaveLength(1);
 
     await composition.runManager.createRun({
       id: 'run.test',
@@ -94,5 +123,18 @@ describe('createServerRuntimeComposition', () => {
       id: 'run.test',
       status: 'running',
     });
+    await expect(
+      composition.runManager.appendRunEvent({
+        id: 'run.test:model',
+        type: 'model.call.completed',
+        runId: 'run.test',
+        sessionId: 'session.test',
+        userId: 'user.test',
+        payload: { output: 'legacy-owner-event' },
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_EVENT_FAMILY_NOT_MIGRATED' });
+    await expect(legacyEvents.list()).resolves.toHaveLength(0);
   });
 });
+import { readFileSync } from 'fs';
+import path from 'path';
