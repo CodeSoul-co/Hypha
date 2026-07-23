@@ -1,37 +1,41 @@
-# Declarative examples only. Credentials are opaque refs and are resolved at invocation time.
+# Loadable development profile set. Credentials and provider bindings remain opaque references.
 profiles:
-  local:
-    - id: local.text-normalize
-      kind: local_function
-      toolSpecRef:
-        id: utility.text
-        version: 1.0.0
-      requiredCapabilities: [execute, health]
+  - id: local.text-normalize
+    kind: local_function
+    toolSpecRef:
+      id: utility.text
+      version: 1.0.0
+    binding:
+      localFunctionId: utility.text
+    requiredCapabilities: [execute, health]
 
-    - id: local.command
-      kind: execution
-      toolSpecRef:
-        id: common.command
-        version: 1.0.0
-      requiredCapabilities: [execute, cancel, health]
-      config:
-        executionPortRef: execution.default
+  - id: local.command
+    kind: execution
+    toolSpecRef:
+      id: common.command
+      version: 1.0.0
+    binding:
+      executionPortRef: execution.default
+    requiredCapabilities: [execute, cancel, health, close]
 
-  cloud:
-    - id: cloud.search
-      kind: http
-      toolSpecRef:
-        id: common.search
-        version: 1.0.0
-      endpoint: https://tools.example.com/v1/search
-      credentialRef: env:HYPHA_SEARCH_TOKEN
-      requiredCapabilities: [execute, cancel, health]
+  - id: cloud.search
+    kind: http
+    toolSpecRef:
+      id: common.search
+      version: 1.0.0
+    endpoint: https://tools.example.com/v1/search
+    credentialRef: env:HYPHA_SEARCH_TOKEN
+    requiredCapabilities: [execute, cancel, health]
 
-    - id: cloud.mcp
-      kind: mcp_streamable_http
-      toolSpecRef:
-        id: common.mcp_resource
-        version: 1.0.0
-      endpoint: https://mcp.example.com/mcp
-      credentialRef: env:HYPHA_MCP_TOKEN
-      requiredCapabilities: [execute, cancel, health]
+  - id: cloud.mcp
+    kind: mcp_streamable_http
+    toolSpecRef:
+      id: common.mcp_resource
+      version: 1.0.0
+    endpoint: https://mcp.example.com/mcp
+    credentialRef: env:HYPHA_MCP_TOKEN
+    binding:
+      mcpConnectionProfileRef: mcp.cloud
+      mcpServerId: cloud
+      mcpCapabilityId: resources.read
+    requiredCapabilities: [execute, cancel, health, close]

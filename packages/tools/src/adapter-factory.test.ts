@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
 import {
   LocalFunctionToolAdapter,
   ToolAdapterFactoryRegistry,
+  loadToolAdapterProfiles,
   registerConcreteToolAdapterFactories,
+  resolveCommonToolSpec,
   type ToolAdapterFactory,
+  type ToolCallContext,
   type ToolSpec,
 } from './index';
 
@@ -88,21 +94,39 @@ describe('ToolAdapterFactoryRegistry', () => {
     const profiles = [
       { ...base, id: 'local', kind: 'local_function' as const },
       { ...base, id: 'http', kind: 'http' as const, endpoint: 'https://tools.test/echo' },
-      { ...base, id: 'plugin', kind: 'plugin' as const, config: { pluginId: 'trusted' } },
+      {
+        ...base,
+        id: 'plugin',
+        kind: 'plugin' as const,
+        binding: { pluginId: 'trusted' },
+      },
       {
         ...base,
         id: 'stdio',
         kind: 'mcp_stdio' as const,
-        config: { serverId: 'mcp-a', capabilityId: 'echo' },
+        binding: {
+          mcpServerId: 'mcp-a',
+          mcpCapabilityId: 'echo',
+          mcpConnectionProfileRef: 'mcp.test',
+        },
       },
       {
         ...base,
         id: 'streamable',
         kind: 'mcp_streamable_http' as const,
         endpoint: 'https://mcp.test/rpc',
-        config: { serverId: 'mcp-a', capabilityId: 'echo' },
+        binding: {
+          mcpServerId: 'mcp-a',
+          mcpCapabilityId: 'echo',
+          mcpConnectionProfileRef: 'mcp.test',
+        },
       },
-      { ...base, id: 'execution', kind: 'execution' as const },
+      {
+        ...base,
+        id: 'execution',
+        kind: 'execution' as const,
+        binding: { executionPortRef: 'execution.test' },
+      },
     ];
     for (const profile of profiles) {
       await expect(registry.create(profile)).resolves.toMatchObject({
@@ -118,5 +142,97 @@ describe('ToolAdapterFactoryRegistry', () => {
         factory: () => undefined,
       } as never)
     ).rejects.toMatchObject({ code: 'TOOL_ADAPTER_PROFILE_INVALID' });
+  });
+
+  it('loads the shipped profile document and runs startup, invoke, cancel, health, and close', async () => {
+    const document = yaml.load(
+      fs.readFileSync(
+        path.resolve(process.cwd(), 'configs/tool-adapter-profiles.example.yaml'),
+        'utf8'
+      )
+    );
+    const cancelled: string[] = [];
+    const closed: string[] = [];
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ provider: 'http' }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    const registry = new ToolAdapterFactoryRegistry({
+      resolveToolSpec: async (reference) => resolveCommonToolSpec(reference.id),
+      secretResolver: { resolve: async () => 'secret' },
+    });
+    registerConcreteToolAdapterFactories(registry, {
+      localFunctions: {
+        'utility.text': async (input) => ({ provider: 'local', input }),
+      },
+      fetch,
+      createExecutionAdapter: async ({ profile }) => ({
+        id: `execution:${profile.id}`,
+        source: 'execution',
+        capabilities: async () => ({
+          execute: true,
+          cancel: true,
+          health: true,
+          close: true,
+        }),
+        execute: async ({ input }) => ({
+          kind: 'tool_execution_envelope',
+          output: { provider: 'execution', input },
+        }),
+        cancel: async ({ invocationId }) => {
+          cancelled.push(invocationId);
+        },
+        health: async () => ({ status: 'healthy', checkedAt: new Date(0).toISOString() }),
+        close: async () => {
+          closed.push(profile.id);
+        },
+      }),
+      prepareMCPConnection: async ({ profile }) => ({
+        port: {
+          invoke: async ({ input }) => ({ provider: 'mcp', input }),
+          cancel: async (requestId) => {
+            cancelled.push(requestId);
+          },
+          health: async () => ({ status: 'healthy', checkedAt: new Date(0).toISOString() }),
+        },
+        close: async () => {
+          closed.push(profile.id);
+        },
+      }),
+    });
+
+    const loaded = await loadToolAdapterProfiles(document, registry);
+    expect(loaded.list()).toHaveLength(4);
+    expect(loaded.list().every((entry) => entry.status === 'ready')).toBe(true);
+    const context: ToolCallContext = {
+      runId: 'run-profile',
+      stepId: 'invoke',
+      invocationId: 'invocation-profile',
+    };
+    for (const entry of loaded.list()) {
+      const adapter = entry.adapter!;
+      await expect(
+        adapter.execute({ toolId: entry.toolSpec!.id, input: { value: entry.profile.id }, context })
+      ).resolves.toMatchObject({ kind: 'tool_execution_envelope' });
+      if ((await adapter.capabilities()).cancel) {
+        await adapter.cancel?.({
+          toolId: entry.toolSpec!.id,
+          invocationId: `cancel:${entry.profile.id}`,
+        });
+      }
+    }
+    expect(await loaded.health()).toEqual({
+      'local.text-normalize': expect.objectContaining({ status: 'healthy' }),
+      'local.command': expect.objectContaining({ status: 'healthy' }),
+      'cloud.search': expect.objectContaining({ status: 'healthy' }),
+      'cloud.mcp': expect.objectContaining({ status: 'healthy' }),
+    });
+    await loaded.close();
+    expect(closed.sort()).toEqual(['cloud.mcp', 'local.command']);
+    expect(cancelled).toEqual(
+      expect.arrayContaining(['cancel:local.command', 'cancel:cloud.mcp'])
+    );
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });

@@ -33,9 +33,9 @@ describe('canonical Common Tool catalog', () => {
         'utf8'
       )
     ) as {
-      profiles: Record<string, Array<{ toolSpecRef: { id: string; version?: string } }>>;
+      profiles: Array<{ toolSpecRef: { id: string; version?: string } }>;
     };
-    const profiles = Object.values(document.profiles).flat();
+    const profiles = document.profiles;
     expect(profiles).toHaveLength(4);
     for (const profile of profiles) {
       expect(resolveCommonToolSpec(profile.toolSpecRef.id)).toMatchObject({

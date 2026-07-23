@@ -33,25 +33,109 @@ export interface ToolAdapterProfile {
   endpoint?: string;
   credentialRef?: string;
   requiredCapabilities?: Array<keyof ToolAdapterCapabilities>;
+  binding?: {
+    localFunctionId?: string;
+    pluginId?: string;
+    executionPortRef?: string;
+    mcpServerId?: string;
+    mcpCapabilityId?: string;
+    mcpConnectionProfileRef?: string;
+  };
+  /** @deprecated Use the typed binding object. */
   config?: Record<string, unknown>;
 }
 
-export const toolAdapterProfileSchema = z.object({
-  id: z.string().min(1),
-  kind: z.enum(toolAdapterKinds),
-  required: z.boolean().default(true),
-  toolSpecRef: z.object({
+export const toolAdapterProfileSchema = z
+  .object({
     id: z.string().min(1),
-    version: z.string().min(1).optional(),
-    revision: z.string().min(1).optional(),
-  }),
-  endpoint: z.string().url().optional(),
-  credentialRef: z.string().min(1).optional(),
-  requiredCapabilities: z
-    .array(z.enum(['execute', 'cancel', 'health', 'close', 'streaming']))
-    .optional(),
-  config: z.record(z.unknown()).optional(),
-}).strict();
+    kind: z.enum(toolAdapterKinds),
+    required: z.boolean().default(true),
+    toolSpecRef: z
+      .object({
+        id: z.string().min(1),
+        version: z.string().min(1).optional(),
+        revision: z.string().min(1).optional(),
+      })
+      .strict(),
+    endpoint: z.string().url().optional(),
+    credentialRef: z.string().min(1).optional(),
+    requiredCapabilities: z
+      .array(z.enum(['execute', 'cancel', 'health', 'close', 'streaming']))
+      .optional(),
+    binding: z
+      .object({
+        localFunctionId: z.string().min(1).optional(),
+        pluginId: z.string().min(1).optional(),
+        executionPortRef: z.string().min(1).optional(),
+        mcpServerId: z.string().min(1).optional(),
+        mcpCapabilityId: z.string().min(1).optional(),
+        mcpConnectionProfileRef: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    config: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((profile, context) => {
+    const requireBinding = (key: keyof NonNullable<ToolAdapterProfile['binding']>) => {
+      if (!profile.binding?.[key]) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['binding', key],
+          message: `${profile.kind} profiles require binding.${key}.`,
+        });
+      }
+    };
+    if (profile.kind === 'http' && !profile.endpoint) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endpoint'],
+        message: 'HTTP profiles require endpoint.',
+      });
+    }
+    if (profile.kind === 'plugin') requireBinding('pluginId');
+    if (profile.kind === 'execution') requireBinding('executionPortRef');
+    if (profile.kind === 'mcp_stdio' || profile.kind === 'mcp_streamable_http') {
+      requireBinding('mcpServerId');
+      requireBinding('mcpCapabilityId');
+      requireBinding('mcpConnectionProfileRef');
+    }
+    if (profile.kind === 'mcp_streamable_http' && !profile.endpoint) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endpoint'],
+        message: 'Streamable HTTP MCP profiles require endpoint.',
+      });
+    }
+  });
+
+export const toolAdapterProfilesDocumentSchema = z
+  .object({ profiles: z.array(toolAdapterProfileSchema) })
+  .strict();
+
+export interface ToolAdapterProfilesDocument {
+  profiles: ToolAdapterProfile[];
+}
+
+export function parseToolAdapterProfilesDocument(input: unknown): ToolAdapterProfilesDocument {
+  const parsed = toolAdapterProfilesDocumentSchema.safeParse(input);
+  if (!parsed.success) {
+    throw factoryError(
+      'TOOL_ADAPTER_PROFILE_DOCUMENT_INVALID',
+      'Tool adapter profile document is invalid.',
+      { issues: parsed.error.issues }
+    );
+  }
+  const duplicate = firstDuplicate(parsed.data.profiles.map((profile) => profile.id));
+  if (duplicate) {
+    throw factoryError(
+      'TOOL_ADAPTER_PROFILE_DUPLICATE',
+      `Tool adapter profile id is duplicated: ${duplicate}.`,
+      { profileId: duplicate }
+    );
+  }
+  return parsed.data as ToolAdapterProfilesDocument;
+}
 
 export interface ToolSecretResolver {
   resolve(reference: string): Promise<string | null>;
@@ -199,6 +283,10 @@ export interface ConcreteToolAdapterFactoryDependencies {
   localFunctions?: Readonly<Record<string, ToolHandler>>;
   plugins?: Readonly<Record<string, ToolHandler>>;
   mcpPort?: MCPToolInvocationPort;
+  prepareMCPConnection?(input: ToolAdapterFactoryInput): Promise<{
+    port: MCPToolInvocationPort;
+    close?(): Promise<void>;
+  }>;
   createExecutionAdapter?(input: ToolAdapterFactoryInput): Promise<ToolAdapter>;
   fetch?: typeof fetch;
 }
@@ -211,7 +299,8 @@ export function registerConcreteToolAdapterFactories(
   registry.register({
     kind: 'local_function',
     create: async (input) => {
-      const handler = dependencies.localFunctions?.[input.toolSpec.id];
+      const handlerId = input.profile.binding?.localFunctionId ?? input.toolSpec.id;
+      const handler = dependencies.localFunctions?.[handlerId];
       if (!handler) throw bindingUnavailable(input.profile, 'local function');
       const { LocalFunctionToolAdapter } = await import('./index');
       return new LocalFunctionToolAdapter(`profile:${input.profile.id}`, handler);
@@ -237,7 +326,10 @@ export function registerConcreteToolAdapterFactories(
   registry.register({
     kind: 'plugin',
     create: async (input) => {
-      const pluginId = stringConfig(input.profile, 'pluginId') ?? input.toolSpec.sourceRef?.pluginId;
+      const pluginId =
+        input.profile.binding?.pluginId ??
+        stringConfig(input.profile, 'pluginId') ??
+        input.toolSpec.sourceRef?.pluginId;
       const handler = pluginId ? dependencies.plugins?.[pluginId] : undefined;
       if (!handler) throw bindingUnavailable(input.profile, 'plugin');
       const { PluginToolAdapter } = await import('./index');
@@ -248,10 +340,18 @@ export function registerConcreteToolAdapterFactories(
     registry.register({
       kind,
       create: async (input) => {
-        if (!dependencies.mcpPort) throw bindingUnavailable(input.profile, 'MCP gateway');
+        const prepared = dependencies.prepareMCPConnection
+          ? await dependencies.prepareMCPConnection(input)
+          : dependencies.mcpPort
+            ? { port: dependencies.mcpPort }
+            : undefined;
+        if (!prepared) throw bindingUnavailable(input.profile, 'MCP gateway');
         const serverId =
-          stringConfig(input.profile, 'serverId') ?? input.toolSpec.sourceRef?.mcpServerId;
+          input.profile.binding?.mcpServerId ??
+          stringConfig(input.profile, 'serverId') ??
+          input.toolSpec.sourceRef?.mcpServerId;
         const capabilityId =
+          input.profile.binding?.mcpCapabilityId ??
           stringConfig(input.profile, 'capabilityId') ??
           input.toolSpec.sourceRef?.mcpCapabilityId;
         if (!serverId || !capabilityId) {
@@ -262,12 +362,13 @@ export function registerConcreteToolAdapterFactories(
           );
         }
         const { MCPToolAdapter } = await import('./index');
-        return new MCPToolAdapter(
+        const adapter = new MCPToolAdapter(
           `profile:${input.profile.id}`,
           serverId,
           capabilityId,
-          dependencies.mcpPort
+          prepared.port
         );
+        return prepared.close ? lifecycleAdapter(adapter, prepared.close) : adapter;
       },
     });
   }
@@ -280,6 +381,99 @@ export function registerConcreteToolAdapterFactories(
       return dependencies.createExecutionAdapter(input);
     },
   });
+}
+
+export interface LoadedToolAdapterProfile {
+  profile: ToolAdapterProfile;
+  toolSpec?: ToolSpec;
+  adapter?: ToolAdapter;
+  status: 'ready' | 'degraded';
+  error?: string;
+}
+
+export class LoadedToolAdapterProfiles {
+  constructor(private readonly entries: Map<string, LoadedToolAdapterProfile>) {}
+
+  list(): LoadedToolAdapterProfile[] {
+    return Array.from(this.entries.values());
+  }
+
+  get(profileId: string): LoadedToolAdapterProfile | undefined {
+    return this.entries.get(profileId);
+  }
+
+  async health(): Promise<Record<string, Awaited<ReturnType<ToolAdapter['health']>>>> {
+    const health: Record<string, Awaited<ReturnType<ToolAdapter['health']>>> = {};
+    for (const [id, entry] of this.entries) {
+      if (entry.adapter) health[id] = await entry.adapter.health();
+    }
+    return health;
+  }
+
+  async close(): Promise<void> {
+    const errors: unknown[] = [];
+    for (const entry of Array.from(this.entries.values()).reverse()) {
+      try {
+        await entry.adapter?.close?.();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) {
+      throw factoryError(
+        'TOOL_ADAPTER_PROFILE_CLOSE_FAILED',
+        `${errors.length} Tool adapter profile(s) failed to close.`
+      );
+    }
+  }
+}
+
+export async function loadToolAdapterProfiles(
+  input: unknown,
+  registry: ToolAdapterFactoryRegistry
+): Promise<LoadedToolAdapterProfiles> {
+  const document = parseToolAdapterProfilesDocument(input);
+  const entries = new Map<string, LoadedToolAdapterProfile>();
+  const loaded = new LoadedToolAdapterProfiles(entries);
+  try {
+    for (const profile of document.profiles) {
+      try {
+        const created = await registry.create(profile);
+        entries.set(profile.id, { ...created, status: 'ready' });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        entries.set(profile.id, { profile, status: 'degraded', error: message });
+        if (profile.required !== false) throw error;
+      }
+    }
+    return loaded;
+  } catch (error) {
+    await loaded.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function lifecycleAdapter(adapter: ToolAdapter, closeConnection: () => Promise<void>): ToolAdapter {
+  return {
+    id: adapter.id,
+    source: adapter.source,
+    capabilities: async () => ({
+      ...(await adapter.capabilities()),
+      close: true,
+    }),
+    execute: (request) => adapter.execute(request),
+    cancel: adapter.cancel ? (request) => adapter.cancel!(request) : undefined,
+    health: () => adapter.health(),
+    close: async () => {
+      await adapter.close?.();
+      await closeConnection();
+    },
+  };
+}
+
+function firstDuplicate(values: string[]): string | undefined {
+  const seen = new Set<string>();
+  return values.find((value) => (seen.has(value) ? true : !seen.add(value)));
 }
 
 function stringConfig(profile: ToolAdapterProfile, key: string): string | undefined {
