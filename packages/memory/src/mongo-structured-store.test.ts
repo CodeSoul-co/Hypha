@@ -52,6 +52,46 @@ describe('MongoStructuredStoreProvider', () => {
       transactions: false,
     });
   });
+  it('normalizes provider failures without leaking Mongo diagnostics', async () => {
+    const failingCollection: MongoCollectionLike = {
+      ...mongoCollection(),
+      findOne: async <T>() =>
+        Promise.reject({
+          code: 18,
+          message: 'mongo diagnostic credential-marker customer content',
+        }) as Promise<T | null>,
+      find: <T>(): MongoCursorLike<T> => ({
+        toArray: async () => Promise.reject({ code: 'MONGO_CURSOR_INTERRUPTED' }),
+      }),
+    };
+    const provider = new MongoStructuredStoreProvider({
+      database: { collection: () => failingCollection },
+      transactionMode: 'disabled',
+    });
+
+    await expect(provider.get('managed_memory_current', 'memory:1')).rejects.toMatchObject({
+      code: 'MEMORY_PERMISSION_DENIED',
+      retryable: false,
+      providerCode: 'MONGO_CODE_18',
+      details: { operation: 'get', provider: 'mongodb' },
+    });
+    await expect(provider.query('managed_memory_current', {})).rejects.toMatchObject({
+      code: 'MEMORY_STORE_UNAVAILABLE',
+      retryable: true,
+      details: { operation: 'query', providerCode: 'MONGO_CURSOR_INTERRUPTED' },
+    });
+    let thrown: unknown;
+    try {
+      await provider.get('managed_memory_current', 'memory:1');
+    } catch (error) {
+      thrown = error;
+    }
+    const serialized = JSON.stringify(thrown).toLowerCase();
+    expect(serialized).not.toContain('mongo diagnostic');
+    expect(serialized).not.toContain('credential-marker');
+    expect(serialized).not.toContain('customer content');
+    expect(serialized).toContain('causeref');
+  });
 });
 
 function mongoCollection(): MongoCollectionLike {

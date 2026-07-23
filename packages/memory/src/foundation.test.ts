@@ -572,6 +572,25 @@ describe('@hypha/memory foundational runtime', () => {
     await expect(redis.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
+  it('fails closed when Redis working-memory SCAN repeats a cursor', async () => {
+    const redisClient: RedisLikeWorkingMemoryClient = {
+      get: async () => null,
+      set: async () => 'OK',
+      del: async () => 0,
+      scan: async () => ['1', []],
+    };
+    const redis = new RedisWorkingMemoryStore({
+      client: redisClient,
+      namespace: 'test:working:repeated-cursor',
+      scanBudget: { maxCalls: 3, maxItems: 10, maxDurationMs: 100 },
+      nowMs: () => 0,
+    });
+
+    await expect(redis.list(scope)).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      details: { redisScanRejected: true, repeatedCursor: '1' },
+    });
+  });
   it('removes sensitive memory bodies and credentials from event payloads', () => {
     const sanitized = sanitizeMemoryEventPayload({
       operationId: 'operation:event:1',
