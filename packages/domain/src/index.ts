@@ -57,6 +57,8 @@ import {
   type ToolSpec,
 } from '@hypha/tools';
 
+export * from './research-evidence-example';
+
 export interface DomainPackSpec extends VersionedSpec, SpecMetadata {
   name: string;
   taskSchemas: TaskSchemaSpec[];
