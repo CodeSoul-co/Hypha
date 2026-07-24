@@ -31,6 +31,7 @@ export const RUNTIME_ORCHESTRATION_EVENT_TYPES = [
   'runtime.activity.failed',
   'runtime.activity.waiting',
   'runtime.activity.cancelled',
+  'activity.redispatch.requested',
   'recovery.case.opened',
   'recovery.case.resolved',
   'recovery.case.escalated',
@@ -238,6 +239,7 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'runtime.activity.failed': activityPayload(),
   'runtime.activity.waiting': activityPayload(),
   'runtime.activity.cancelled': activityPayload(),
+  'activity.redispatch.requested': activityRedispatchPayload(),
   'runtime.checkpoint.created': checkpointPayload(),
   'runtime.checkpoint.failed': checkpointPayload(),
   'recovery.case.opened': recoveryCasePayload(),
@@ -475,6 +477,34 @@ function activityPayload(): JsonSchema {
   });
 }
 
+function activityRedispatchPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'commandId',
+      'taskId',
+      'activityId',
+      'activityKind',
+      'activityDescriptorRef',
+      'activityDescriptorHash',
+      'idempotencyKey',
+      'requestedAt',
+    ],
+    {
+      commandId: stringSchema,
+      taskId: stringSchema,
+      activityId: stringSchema,
+      activityKind: {
+        type: 'string',
+        enum: ['react_quantum', 'tool', 'memory', 'execution', 'mcp', 'policy'],
+      },
+      activityDescriptorRef: stringSchema,
+      activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      idempotencyKey: stringSchema,
+      requestedAt: timestampSchema,
+    }
+  );
+}
+
 function checkpointPayload(): JsonSchema {
   return payload(['checkpointId'], {
     checkpointId: stringSchema,
@@ -530,6 +560,8 @@ function humanReviewPayload(): JsonSchema {
     checkpointRef: stringSchema,
     policyRef: stringSchema,
     providerRevision: stringSchema,
+    activityDescriptorRef: stringSchema,
+    activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
     requestedAt: timestampSchema,
     decidedBy: stringSchema,
     decidedAt: timestampSchema,

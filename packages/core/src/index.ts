@@ -31,6 +31,7 @@ export * from './contracts/runtime-coordination-schemas';
 export * from './contracts/runtime-helpers';
 export * from './contracts/runtime-helper-schemas';
 export * from './contracts/runtime-activities';
+export * from './contracts/runtime-activity';
 export * from './contracts/runtime-activity-schemas';
 export * from './contracts/runtime-projection';
 export * from './contracts/runtime-projection-schemas';
