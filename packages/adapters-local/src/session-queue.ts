@@ -28,7 +28,10 @@ export interface SQLiteSessionQueueOptions {
   now?: () => string;
   duplicatePolicy?: 'reuse' | 'reject';
   maxPendingPerSession?: number;
+  maxPendingPerUser?: number;
+  maxPendingGlobal?: number;
   maxConcurrentSessions?: number;
+  maxConcurrentSessionsPerUser?: number;
   priorityAgingMs?: number;
   drainPollMs?: number;
 }
@@ -38,7 +41,10 @@ export class SQLiteSessionQueue implements SessionQueue {
   private readonly now: () => string;
   private readonly duplicatePolicy: 'reuse' | 'reject';
   private readonly maxPendingPerSession: number;
+  private readonly maxPendingPerUser: number;
+  private readonly maxPendingGlobal: number;
   private readonly maxConcurrentSessions: number;
+  private readonly maxConcurrentSessionsPerUser: number;
   private readonly priorityAgingMs: number;
   private readonly drainPollMs: number;
   private closed = false;
@@ -54,9 +60,21 @@ export class SQLiteSessionQueue implements SessionQueue {
       options.maxPendingPerSession ?? 100,
       'maxPendingPerSession'
     );
+    this.maxPendingPerUser = positiveInteger(
+      options.maxPendingPerUser ?? Number.MAX_SAFE_INTEGER,
+      'maxPendingPerUser'
+    );
+    this.maxPendingGlobal = positiveInteger(
+      options.maxPendingGlobal ?? Number.MAX_SAFE_INTEGER,
+      'maxPendingGlobal'
+    );
     this.maxConcurrentSessions = positiveInteger(
       options.maxConcurrentSessions ?? Number.MAX_SAFE_INTEGER,
       'maxConcurrentSessions'
+    );
+    this.maxConcurrentSessionsPerUser = positiveInteger(
+      options.maxConcurrentSessionsPerUser ?? Number.MAX_SAFE_INTEGER,
+      'maxConcurrentSessionsPerUser'
     );
     this.priorityAgingMs = positiveInteger(options.priorityAgingMs ?? 30_000, 'priorityAgingMs');
     this.drainPollMs = positiveInteger(options.drainPollMs ?? 50, 'drainPollMs');
@@ -90,17 +108,24 @@ export class SQLiteSessionQueue implements SessionQueue {
       if (this.readRecord(request.id)) {
         conflict('RUNTIME_IDEMPOTENCY_CONFLICT', `Session command id exists: ${request.id}`);
       }
-      const pending = Number(
-        this.db
-          .prepare(
-            "SELECT COUNT(*) AS count FROM runtime_session_commands WHERE scope_key = ? AND status IN ('queued', 'claimed')"
-          )
-          .get(scopeKey)?.count ?? 0
-      );
-      if (pending >= this.maxPendingPerSession) {
+      const pendingForSession = this.pendingCount('scope_key = ?', scopeKey);
+      if (pendingForSession >= this.maxPendingPerSession) {
         conflict('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Session queue depth limit reached', {
           sessionId: request.sessionId,
           maxPendingPerSession: this.maxPendingPerSession,
+        });
+      }
+      const owner = userKey(scope);
+      const pendingForUser = this.pendingCount('user_key = ?', owner);
+      if (pendingForUser >= this.maxPendingPerUser) {
+        conflict('RUNTIME_SESSION_QUEUE_OVERFLOW', 'User queue depth limit reached', {
+          userId: request.userId,
+          maxPendingPerUser: this.maxPendingPerUser,
+        });
+      }
+      if (this.pendingCount('1 = 1') >= this.maxPendingGlobal) {
+        conflict('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Global queue depth limit reached', {
+          maxPendingGlobal: this.maxPendingGlobal,
         });
       }
       const createdAt = request.createdAt ?? this.timestamp('enqueue.createdAt');
@@ -149,12 +174,14 @@ export class SQLiteSessionQueue implements SessionQueue {
     return this.transaction('claim', () => {
       this.recover(request.now);
       const pending = this.pendingRecords(request.scope);
-      const activeSessions = new Set(
-        this.pendingRecords()
-          .filter((record) => record.status === 'claimed')
-          .map((record) => sessionKey(scopeFromCommand(record)))
-      );
+      const active = this.pendingRecords().filter((record) => record.status === 'claimed');
+      const activeSessions = new Set(active.map((record) => sessionKey(scopeFromCommand(record))));
       if (activeSessions.size >= this.maxConcurrentSessions) return null;
+      const activeSessionsByUser = active.reduce((counts, record) => {
+        const owner = userKey(scopeFromCommand(record));
+        counts.set(owner, (counts.get(owner) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>());
       const heads = new Map<string, SessionCommandRecord>();
       for (const record of pending) {
         const key = sessionKey(scopeFromCommand(record));
@@ -164,7 +191,10 @@ export class SQLiteSessionQueue implements SessionQueue {
       const candidate = [...heads.values()]
         .filter(
           (record) =>
-            record.status === 'queued' && Date.parse(record.availableAt) <= Date.parse(request.now)
+            record.status === 'queued' &&
+            Date.parse(record.availableAt) <= Date.parse(request.now) &&
+            (activeSessionsByUser.get(userKey(scopeFromCommand(record))) ?? 0) <
+              this.maxConcurrentSessionsPerUser
         )
         .sort((left, right) =>
           compareCandidates(left, right, request.now, this.priorityAgingMs)
@@ -331,7 +361,7 @@ export class SQLiteSessionQueue implements SessionQueue {
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000');
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS runtime_session_commands (' +
-        'id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, enqueue_sequence INTEGER NOT NULL, ' +
+        'id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, user_key TEXT, enqueue_sequence INTEGER NOT NULL, ' +
         'priority INTEGER NOT NULL, status TEXT NOT NULL, available_at TEXT NOT NULL, ' +
         'expires_at TEXT, claimed_by TEXT, claim_token TEXT, lease_epoch INTEGER NOT NULL DEFAULT 0, ' +
         'lease_expires_at TEXT, record_json TEXT NOT NULL, record_hash TEXT NOT NULL, ' +
@@ -339,9 +369,15 @@ export class SQLiteSessionQueue implements SessionQueue {
     );
     this.ensureColumn('claim_token', 'TEXT');
     this.ensureColumn('lease_epoch', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('user_key', 'TEXT');
+    this.backfillUserKeys();
     this.db.exec(
       'CREATE INDEX IF NOT EXISTS runtime_session_commands_claim_idx ON runtime_session_commands ' +
         '(status, available_at, priority, enqueue_sequence)'
+    );
+    this.db.exec(
+      'CREATE INDEX IF NOT EXISTS runtime_session_commands_user_pending_idx ' +
+        'ON runtime_session_commands (user_key, status)'
     );
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS runtime_session_command_sequences (' +
@@ -401,6 +437,17 @@ export class SQLiteSessionQueue implements SessionQueue {
     return rows.map((row) => parseRecord(row));
   }
 
+  private pendingCount(predicate: string, ...params: unknown[]): number {
+    return Number(
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM runtime_session_commands WHERE status IN ('queued', 'claimed') AND " +
+            predicate
+        )
+        .get(...params)?.count ?? 0
+    );
+  }
+
   private rowsForScope(scopeKey: string): Array<Record<string, unknown>> {
     return this.db
       .prepare('SELECT record_json, record_hash FROM runtime_session_commands WHERE scope_key = ?')
@@ -428,13 +475,14 @@ export class SQLiteSessionQueue implements SessionQueue {
     this.db
       .prepare(
         'INSERT INTO runtime_session_commands ' +
-          '(id, scope_key, enqueue_sequence, priority, status, available_at, expires_at, ' +
+          '(id, scope_key, user_key, enqueue_sequence, priority, status, available_at, expires_at, ' +
           'claimed_by, claim_token, lease_epoch, lease_expires_at, record_json, record_hash) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         record.id,
         scopeKey,
+        userKey(scopeFromCommand(record)),
         record.enqueueSequence,
         record.priority,
         record.status,
@@ -453,11 +501,12 @@ export class SQLiteSessionQueue implements SessionQueue {
     const json = JSON.stringify(record);
     this.db
       .prepare(
-        'UPDATE runtime_session_commands SET priority = ?, status = ?, available_at = ?, ' +
+        'UPDATE runtime_session_commands SET user_key = ?, priority = ?, status = ?, available_at = ?, ' +
           'expires_at = ?, claimed_by = ?, claim_token = ?, lease_epoch = ?, lease_expires_at = ?, ' +
           'record_json = ?, record_hash = ? WHERE id = ?'
       )
       .run(
+        userKey(scopeFromCommand(record)),
         record.priority,
         record.status,
         record.availableAt,
@@ -470,6 +519,19 @@ export class SQLiteSessionQueue implements SessionQueue {
         hashCanonicalJson(record),
         record.id
       );
+  }
+
+  private backfillUserKeys(): void {
+    const rows = this.db
+      .prepare(
+        'SELECT id, record_json, record_hash FROM runtime_session_commands WHERE user_key IS NULL'
+      )
+      .all();
+    const update = this.db.prepare('UPDATE runtime_session_commands SET user_key = ? WHERE id = ?');
+    for (const row of rows) {
+      const record = parseRecord(row);
+      update.run(userKey(scopeFromCommand(record)), record.id);
+    }
   }
 
   private readRecord(id: string): SessionCommandRecord | null {
@@ -669,6 +731,10 @@ function validateScope(scope: SessionQueueScope): void {
 function sessionKey(scope: SessionQueueScope): string {
   validateScope(scope);
   return `${scope.tenantId ?? ''}\u0000${scope.userId}\u0000${scope.sessionId}`;
+}
+
+function userKey(scope: Pick<SessionQueueScope, 'tenantId' | 'userId'>): string {
+  return `${scope.tenantId ?? ''}\u0000${scope.userId}`;
 }
 
 function withoutClaim(record: SessionCommandRecord): SessionCommandRecord {

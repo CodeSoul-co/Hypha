@@ -35,7 +35,10 @@ export interface InMemorySessionQueueOptions {
   now?: () => string;
   duplicatePolicy?: 'reuse' | 'reject';
   maxPendingPerSession?: number;
+  maxPendingPerUser?: number;
+  maxPendingGlobal?: number;
   maxConcurrentSessions?: number;
+  maxConcurrentSessionsPerUser?: number;
   priorityAgingMs?: number;
 }
 
@@ -54,7 +57,10 @@ export class InMemorySessionQueue implements SessionQueue {
   private readonly now: () => string;
   private readonly duplicatePolicy: 'reuse' | 'reject';
   private readonly maxPendingPerSession: number;
+  private readonly maxPendingPerUser: number;
+  private readonly maxPendingGlobal: number;
   private readonly maxConcurrentSessions: number;
+  private readonly maxConcurrentSessionsPerUser: number;
   private readonly priorityAgingMs: number;
 
   constructor(options: InMemorySessionQueueOptions = {}) {
@@ -64,14 +70,29 @@ export class InMemorySessionQueue implements SessionQueue {
       options.maxPendingPerSession ?? 100,
       'maxPendingPerSession'
     );
+    this.maxPendingPerUser = positive(
+      options.maxPendingPerUser ?? Number.MAX_SAFE_INTEGER,
+      'maxPendingPerUser'
+    );
+    this.maxPendingGlobal = positive(
+      options.maxPendingGlobal ?? Number.MAX_SAFE_INTEGER,
+      'maxPendingGlobal'
+    );
     this.maxConcurrentSessions = positive(
       options.maxConcurrentSessions ?? Number.MAX_SAFE_INTEGER,
       'maxConcurrentSessions'
     );
+    this.maxConcurrentSessionsPerUser = positive(
+      options.maxConcurrentSessionsPerUser ?? Number.MAX_SAFE_INTEGER,
+      'maxConcurrentSessionsPerUser'
+    );
     this.priorityAgingMs = positive(options.priorityAgingMs ?? 30_000, 'priorityAgingMs');
     if (
       !Number.isInteger(this.maxPendingPerSession) ||
+      !Number.isInteger(this.maxPendingPerUser) ||
+      !Number.isInteger(this.maxPendingGlobal) ||
       !Number.isInteger(this.maxConcurrentSessions) ||
+      !Number.isInteger(this.maxConcurrentSessionsPerUser) ||
       !Number.isInteger(this.priorityAgingMs)
     ) {
       throw busError('RUNTIME_INVALID_INPUT', 'Session queue limits must be integers');
@@ -99,13 +120,29 @@ export class InMemorySessionQueue implements SessionQueue {
     if (this.records.has(request.id)) {
       throw busError('RUNTIME_IDEMPOTENCY_CONFLICT', `Session command id exists: ${request.id}`);
     }
-    const pending = [...this.records.values()].filter(
-      (record) => sessionKey(scopeFromCommand(record)) === key && isPending(record)
+    const pending = [...this.records.values()].filter(isPending);
+    const pendingForSession = pending.filter(
+      (record) => sessionKey(scopeFromCommand(record)) === key
     ).length;
-    if (pending >= this.maxPendingPerSession) {
+    if (pendingForSession >= this.maxPendingPerSession) {
       throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Session queue depth limit reached', {
         sessionId: request.sessionId,
         maxPendingPerSession: this.maxPendingPerSession,
+      });
+    }
+    const owner = userKey(scope);
+    const pendingForUser = pending.filter(
+      (record) => userKey(scopeFromCommand(record)) === owner
+    ).length;
+    if (pendingForUser >= this.maxPendingPerUser) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'User queue depth limit reached', {
+        userId: request.userId,
+        maxPendingPerUser: this.maxPendingPerUser,
+      });
+    }
+    if (pending.length >= this.maxPendingGlobal) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Global queue depth limit reached', {
+        maxPendingGlobal: this.maxPendingGlobal,
       });
     }
 
@@ -149,12 +186,14 @@ export class InMemorySessionQueue implements SessionQueue {
     if (request.scope) validateScope(request.scope);
     this.recover(request.now);
 
-    const activeSessions = new Set(
-      [...this.records.values()]
-        .filter((record) => record.status === 'claimed')
-        .map((record) => sessionKey(scopeFromCommand(record)))
-    );
+    const active = [...this.records.values()].filter((record) => record.status === 'claimed');
+    const activeSessions = new Set(active.map((record) => sessionKey(scopeFromCommand(record))));
     if (activeSessions.size >= this.maxConcurrentSessions) return null;
+    const activeSessionsByUser = active.reduce((counts, record) => {
+      const owner = userKey(scopeFromCommand(record));
+      counts.set(owner, (counts.get(owner) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>());
 
     const heads = new Map<string, SessionCommandRecord>();
     for (const record of this.records.values()) {
@@ -166,7 +205,11 @@ export class InMemorySessionQueue implements SessionQueue {
     }
     const candidate = [...heads.values()]
       .filter(
-        (record) => record.status === 'queued' && isAtOrBefore(record.availableAt, request.now)
+        (record) =>
+          record.status === 'queued' &&
+          isAtOrBefore(record.availableAt, request.now) &&
+          (activeSessionsByUser.get(userKey(scopeFromCommand(record))) ?? 0) <
+            this.maxConcurrentSessionsPerUser
       )
       .sort((left, right) =>
         compareClaimCandidates(left, right, request.now, this.priorityAgingMs)
@@ -478,6 +521,10 @@ function validateScope(scope: SessionQueueScope): void {
 function sessionKey(scope: SessionQueueScope): string {
   validateScope(scope);
   return `${scope.tenantId ?? ''}\u0000${scope.userId}\u0000${scope.sessionId}`;
+}
+
+function userKey(scope: Pick<SessionQueueScope, 'tenantId' | 'userId'>): string {
+  return `${scope.tenantId ?? ''}\u0000${scope.userId}`;
 }
 
 function sameScope(left: SessionQueueScope, right: SessionQueueScope): boolean {

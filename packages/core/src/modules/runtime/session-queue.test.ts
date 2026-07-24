@@ -156,6 +156,56 @@ describe('InMemorySessionQueue', () => {
     ).resolves.toBeNull();
   });
 
+  it('enforces per-user and global queue backpressure across Sessions', async () => {
+    const perUser = new InMemorySessionQueue({ maxPendingPerUser: 1 });
+    await perUser.enqueue(command('command.user.1'));
+    await expect(
+      perUser.enqueue(command('command.user.2', { sessionId: 'session.2' }))
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_SESSION_QUEUE_OVERFLOW',
+      context: { userId: scope.userId, maxPendingPerUser: 1 },
+    });
+    await expect(
+      perUser.enqueue(command('command.other-user', { userId: 'user.2', sessionId: 'session.2' }))
+    ).resolves.toMatchObject({ status: 'queued' });
+
+    const global = new InMemorySessionQueue({ maxPendingGlobal: 2 });
+    await global.enqueue(command('command.global.1'));
+    await global.enqueue(command('command.global.2', { userId: 'user.2', sessionId: 'session.2' }));
+    await expect(
+      global.enqueue(command('command.global.3', { userId: 'user.3', sessionId: 'session.3' }))
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_SESSION_QUEUE_OVERFLOW',
+      context: { maxPendingGlobal: 2 },
+    });
+  });
+
+  it('isolates per-user concurrency without blocking another user', async () => {
+    const queue = new InMemorySessionQueue({
+      maxConcurrentSessions: 3,
+      maxConcurrentSessionsPerUser: 1,
+    });
+    await queue.enqueue(command('command.user.1', { priority: 100 }));
+    await queue.enqueue(command('command.user.2', { sessionId: 'session.2', priority: 90 }));
+    await queue.enqueue(
+      command('command.other-user', {
+        userId: 'user.2',
+        sessionId: 'session.3',
+        priority: 10,
+      })
+    );
+
+    await expect(
+      queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 })
+    ).resolves.toMatchObject({ id: 'command.user.1' });
+    await expect(
+      queue.claim({ workerId: 'worker.2', now: initialTime, leaseMs: 1_000 })
+    ).resolves.toMatchObject({ id: 'command.other-user' });
+    await expect(
+      queue.claim({ workerId: 'worker.3', now: initialTime, leaseMs: 1_000 })
+    ).resolves.toBeNull();
+  });
+
   it('recovers an expired claim and rejects the stale worker', async () => {
     const queue = new InMemorySessionQueue();
     await queue.enqueue(command('command.recover'));

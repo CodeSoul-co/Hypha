@@ -135,6 +135,61 @@ describe('SQLiteSessionQueue', () => {
     expect(claims.find(Boolean)).toMatchObject({ attempts: 1 });
   });
 
+  it('enforces durable per-user and global queue backpressure', async () => {
+    const perUser = openQueue(temporaryDatabase(), { maxPendingPerUser: 1 });
+    await perUser.enqueue(command('command.user.1'));
+    await expect(
+      perUser.enqueue(command('command.user.2', { sessionId: 'session.2' }))
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_SESSION_QUEUE_OVERFLOW',
+      context: { userId: scope.userId, maxPendingPerUser: 1 },
+    });
+    await expect(
+      perUser.enqueue(command('command.other-user', { userId: 'user.2', sessionId: 'session.2' }))
+    ).resolves.toMatchObject({ status: 'queued' });
+
+    const global = openQueue(temporaryDatabase(), { maxPendingGlobal: 2 });
+    await global.enqueue(command('command.global.1'));
+    await global.enqueue(command('command.global.2', { userId: 'user.2', sessionId: 'session.2' }));
+    await expect(
+      global.enqueue(command('command.global.3', { userId: 'user.3', sessionId: 'session.3' }))
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_SESSION_QUEUE_OVERFLOW',
+      context: { maxPendingGlobal: 2 },
+    });
+  });
+
+  it('enforces per-user concurrency consistently across SQLite workers', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename, {
+      maxConcurrentSessions: 3,
+      maxConcurrentSessionsPerUser: 1,
+    });
+    const second = openQueue(filename, {
+      maxConcurrentSessions: 3,
+      maxConcurrentSessionsPerUser: 1,
+    });
+    await first.enqueue(command('command.user.1', { priority: 100 }));
+    await first.enqueue(command('command.user.2', { sessionId: 'session.2', priority: 90 }));
+    await first.enqueue(
+      command('command.other-user', {
+        userId: 'user.2',
+        sessionId: 'session.3',
+        priority: 10,
+      })
+    );
+
+    await expect(
+      first.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 })
+    ).resolves.toMatchObject({ id: 'command.user.1' });
+    await expect(
+      second.claim({ workerId: 'worker.2', now: initialTime, leaseMs: 1_000 })
+    ).resolves.toMatchObject({ id: 'command.other-user' });
+    await expect(
+      first.claim({ workerId: 'worker.3', now: initialTime, leaseMs: 1_000 })
+    ).resolves.toBeNull();
+  });
+
   it('recovers an expired claim after restart and rejects the stale worker', async () => {
     const filename = temporaryDatabase();
     const first = openQueue(filename);
@@ -376,8 +431,16 @@ describe('SQLiteSessionQueue', () => {
     ).resolves.toBeUndefined();
   });
 
-  function openQueue(filename: string): SQLiteSessionQueue {
-    const queue = new SQLiteSessionQueue({ filename, now: () => initialTime, drainPollMs: 1 });
+  function openQueue(
+    filename: string,
+    options: Partial<ConstructorParameters<typeof SQLiteSessionQueue>[0]> = {}
+  ): SQLiteSessionQueue {
+    const queue = new SQLiteSessionQueue({
+      ...options,
+      filename,
+      now: options.now ?? (() => initialTime),
+      drainPollMs: options.drainPollMs ?? 1,
+    });
     queues.push(queue);
     return queue;
   }
