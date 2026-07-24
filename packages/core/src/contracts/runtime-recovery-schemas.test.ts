@@ -60,7 +60,7 @@ describe('Runtime Recovery contracts', () => {
       expect(zod.parse(example)).toEqual(example);
       expect(ajv.validate(jsonSchema, example), ajv.errorsText()).toBe(true);
     }
-    expect(runtimeRecoveryContractDefinitions).toHaveLength(6);
+    expect(runtimeRecoveryContractDefinitions).toHaveLength(7);
   });
 
   it('requires Activity candidates to identify their target', () => {
@@ -70,6 +70,17 @@ describe('Runtime Recovery contracts', () => {
         activityId: undefined,
       })
     ).toThrow(/activityId/u);
+  });
+
+  it('requires expired State Claim candidates to identify the State attempt', () => {
+    expect(() =>
+      runtimeRecoveryCandidateSchema.parse({
+        ...runtimeRecoveryCandidateExample,
+        reason: 'STATE_CLAIM_EXPIRED',
+        safeAction: 'requeue',
+        activityId: undefined,
+      })
+    ).toThrow(/stateId/u);
   });
 
   it('requires stable observations for known provider outcomes', () => {
