@@ -175,20 +175,31 @@ describe('DefaultRuntimeActivityHelper', () => {
     expect(fixture.invocations).toHaveLength(0);
   });
 
-  it('leaves durable requested evidence when dispatch crashes before returning', async () => {
-    const fixture = createFixture({
-      async dispatch() {
-        throw new Error('simulated dispatch crash');
-      },
-    });
+  it.each([
+    ['tool', 'tool.search', { query: 'runtime' }],
+    ['memory', 'memory.write', { value: 'durable' }],
+    ['model', 'model.chat', { prompt: 'continue' }],
+    ['execution', 'execution.python', { code: 'print(1)' }],
+  ] as const)(
+    'leaves durable requested evidence when the %s provider crashes before returning',
+    async (method, target, input) => {
+      const fixture = createFixture({
+        async dispatch() {
+          throw new Error(`simulated ${method} provider crash`);
+        },
+      });
 
-    await expect(
-      fixture.helper.execution({ target: 'execution.python', input: { code: 'print(1)' } })
-    ).rejects.toThrow('simulated dispatch crash');
-    expect(fixture.lifecycle.requests.map((request) => request.event.type)).toEqual([
-      'runtime.activity.requested',
-    ]);
-  });
+      await expect(fixture.helper[method]({ target, input })).rejects.toThrow(
+        `simulated ${method} provider crash`
+      );
+      expect(fixture.lifecycle.requests.map((request) => request.event.type)).toEqual([
+        'runtime.activity.requested',
+      ]);
+      expect(fixture.lifecycle.requests[0]?.event.metadata).toMatchObject({
+        activityType: method,
+      });
+    }
+  );
 
   it('leaves durable requested evidence when the provider returns before result commit', async () => {
     const lifecycle = new RecordingLifecyclePort();
