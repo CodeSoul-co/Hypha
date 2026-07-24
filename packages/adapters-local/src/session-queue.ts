@@ -5,19 +5,24 @@ import {
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
   hashCanonicalJson,
+  validateListStuckSessionCommandsRequest,
+  validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
   type ClaimSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
   type ListSessionCommandsRequest,
+  type ListStuckSessionCommandsRequest,
   type ProviderHealth,
+  type RedriveDeadLetterSessionCommandRequest,
   type ReleaseSessionCommandRequest,
   type RenewSessionCommandRequest,
   type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueue,
   type SessionQueueScope,
+  type StuckSessionCommand,
 } from '@hypha/core';
 import fs from 'fs';
 import path from 'path';
@@ -320,6 +325,111 @@ export class SQLiteSessionQueue implements SessionQueue {
     });
   }
 
+  async redriveDeadLetter(
+    request: RedriveDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateRedriveDeadLetterSessionCommandRequest(request);
+    const scopeKey = sessionKey(validated.scope);
+    const fingerprint = hashCanonicalJson(validated);
+    return this.transaction('redrive dead letter', () => {
+      const prior = this.db
+        .prepare(
+          'SELECT command_id, fingerprint FROM runtime_session_command_idempotency ' +
+            'WHERE scope_key = ? AND idempotency_key = ?'
+        )
+        .get(scopeKey, validated.idempotencyKey);
+      if (prior) {
+        if (String(prior.fingerprint) !== fingerprint || this.duplicatePolicy === 'reject') {
+          conflict(
+            'RUNTIME_IDEMPOTENCY_CONFLICT',
+            'Session command idempotency key is already used',
+            { idempotencyKey: validated.idempotencyKey }
+          );
+        }
+        return { ...this.requireRecord(String(prior.command_id)), status: 'reused' };
+      }
+      if (this.readRecord(validated.id)) {
+        conflict('RUNTIME_IDEMPOTENCY_CONFLICT', `Session command id exists: ${validated.id}`);
+      }
+      const source = this.readRecord(validated.sourceCommandId);
+      if (
+        !source ||
+        sessionKey(scopeFromCommand(source)) !== scopeKey ||
+        source.status !== 'dead_letter'
+      ) {
+        conflict(
+          'RUNTIME_SESSION_QUEUE_CONFLICT',
+          'Only a dead-letter command in the requested scope can be redriven',
+          { sourceCommandId: validated.sourceCommandId }
+        );
+      }
+      this.assertCapacity(validated.scope, scopeKey);
+      const requestedAt = validated.requestedAt ?? this.timestamp('redrive.requestedAt');
+      const availableAt = validated.availableAt ?? requestedAt;
+      const record = validateSessionCommandRecord({
+        id: validated.id,
+        commandType: source.commandType,
+        idempotencyKey: validated.idempotencyKey,
+        ...(source.tenantId === undefined ? {} : { tenantId: source.tenantId }),
+        userId: source.userId,
+        ...(source.workspaceId === undefined ? {} : { workspaceId: source.workspaceId }),
+        sessionId: source.sessionId,
+        ...(source.targetRunId === undefined ? {} : { targetRunId: source.targetRunId }),
+        enqueueSequence: this.nextSequence(scopeKey),
+        priority: validated.priority ?? source.priority,
+        attempts: 0,
+        maxAttempts: validated.maxAttempts ?? source.maxAttempts,
+        leaseEpoch: 0,
+        ...(source.payloadRef === undefined ? {} : { payloadRef: source.payloadRef }),
+        payloadHash: source.payloadHash,
+        status: 'queued',
+        createdAt: requestedAt,
+        availableAt,
+        ...(validated.expiresAt === undefined ? {} : { expiresAt: validated.expiresAt }),
+        redrive: {
+          version: '1.0.0',
+          sourceCommandId: source.id,
+          operatorId: validated.operatorId,
+          reason: validated.reason,
+          requestedAt,
+        },
+      });
+      this.insertRecord(scopeKey, record);
+      this.db
+        .prepare(
+          'INSERT INTO runtime_session_command_idempotency ' +
+            '(scope_key, idempotency_key, command_id, fingerprint) VALUES (?, ?, ?, ?)'
+        )
+        .run(scopeKey, validated.idempotencyKey, validated.id, fingerprint);
+      return structuredClone(record);
+    });
+  }
+
+  async listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]> {
+    const validated = validateListStuckSessionCommandsRequest(request);
+    const checkedAtMs = Date.parse(validated.checkedAt);
+    const graceMs = validated.graceMs ?? 0;
+    const limit = validated.limit ?? 100;
+    const rows = this.db
+      .prepare(
+        'SELECT record_json, record_hash FROM runtime_session_commands ' +
+          "WHERE scope_key = ? AND status = 'claimed' ORDER BY lease_expires_at ASC LIMIT ?"
+      )
+      .all(sessionKey(validated.scope), limit);
+    return rows
+      .map((row) => parseRecord(row))
+      .filter(
+        (command) =>
+          command.leaseExpiresAt !== undefined &&
+          Date.parse(command.leaseExpiresAt) + graceMs <= checkedAtMs
+      )
+      .map((command) => ({
+        command: structuredClone(command),
+        detectedAt: validated.checkedAt,
+        overdueMs: checkedAtMs - Date.parse(command.leaseExpiresAt!),
+      }));
+  }
+
   async drain(scope: SessionQueueScope): Promise<void> {
     validateScope(scope);
     while (!this.closed) {
@@ -446,6 +556,28 @@ export class SQLiteSessionQueue implements SessionQueue {
         )
         .get(...params)?.count ?? 0
     );
+  }
+
+  private assertCapacity(scope: SessionQueueScope, scopeKey = sessionKey(scope)): void {
+    const pendingForSession = this.pendingCount('scope_key = ?', scopeKey);
+    if (pendingForSession >= this.maxPendingPerSession) {
+      conflict('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Session queue depth limit reached', {
+        sessionId: scope.sessionId,
+        maxPendingPerSession: this.maxPendingPerSession,
+      });
+    }
+    const pendingForUser = this.pendingCount('user_key = ?', userKey(scope));
+    if (pendingForUser >= this.maxPendingPerUser) {
+      conflict('RUNTIME_SESSION_QUEUE_OVERFLOW', 'User queue depth limit reached', {
+        userId: scope.userId,
+        maxPendingPerUser: this.maxPendingPerUser,
+      });
+    }
+    if (this.pendingCount('1 = 1') >= this.maxPendingGlobal) {
+      conflict('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Global queue depth limit reached', {
+        maxPendingGlobal: this.maxPendingGlobal,
+      });
+    }
   }
 
   private rowsForScope(scopeKey: string): Array<Record<string, unknown>> {

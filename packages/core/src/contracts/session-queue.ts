@@ -32,6 +32,14 @@ export interface SessionQueueScope {
   sessionId: string;
 }
 
+export interface SessionCommandRedrive {
+  version: '1.0.0';
+  sourceCommandId: string;
+  operatorId: string;
+  reason: string;
+  requestedAt: string;
+}
+
 export interface SessionCommandRecord {
   id: string;
   commandType: SessionCommandType;
@@ -59,6 +67,7 @@ export interface SessionCommandRecord {
   availableAt: string;
   expiresAt?: string;
   completedAt?: string;
+  redrive?: SessionCommandRedrive;
 }
 
 export interface EnqueueSessionCommandRequest {
@@ -137,4 +146,32 @@ export interface ListSessionCommandsRequest {
   statuses?: SessionCommandStatus[];
   fromSequence?: number;
   limit?: number;
+}
+
+export interface RedriveDeadLetterSessionCommandRequest {
+  version: '1.0.0';
+  scope: SessionQueueScope;
+  sourceCommandId: string;
+  id: string;
+  idempotencyKey: string;
+  operatorId: string;
+  reason: string;
+  requestedAt?: string;
+  availableAt?: string;
+  expiresAt?: string;
+  priority?: number;
+  maxAttempts?: number;
+}
+
+export interface ListStuckSessionCommandsRequest {
+  scope: SessionQueueScope;
+  checkedAt: string;
+  graceMs?: number;
+  limit?: number;
+}
+
+export interface StuckSessionCommand {
+  command: SessionCommandRecord;
+  detectedAt: string;
+  overdueMs: number;
 }
