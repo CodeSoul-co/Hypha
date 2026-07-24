@@ -158,7 +158,7 @@ describe('HindsightLocalMemoryBankClient', () => {
               id: 'memory-123',
               text: 'Alice works on the Hypha memory subsystem.',
               type: 'world',
-              date: '2026-07-24T00:00:00.000Z',
+              date: '2026-07-24T00:00:00.123456+00:00',
               metadata: { _hypha_scope_hash: expect.anything },
             },
           ],
@@ -215,6 +215,8 @@ describe('HindsightLocalMemoryBankClient', () => {
     expect(reconciled?.records).toHaveLength(1);
     expect(reconciled?.records[0]).toMatchObject({
       canonicalText: 'Alice works on the Hypha memory subsystem.',
+      createdAt: '2026-07-24T00:00:00.123Z',
+      updatedAt: '2026-07-24T00:00:00.123Z',
       scope,
       metadata: { providerExternalId: 'memory-123' },
     });

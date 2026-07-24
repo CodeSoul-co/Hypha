@@ -806,9 +806,11 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
     }
     const text = readString(item, 'text') ?? readString(item, 'content') ?? '';
     const id = createExternalMemoryId(this.providerId, externalId);
-    const createdAt =
-      readString(item, 'created_at') ?? readString(item, 'date') ?? this.now().toISOString();
-    const updatedAt = readString(item, 'updated_at') ?? createdAt;
+    const createdAt = normalizeHindsightTimestamp(
+      readString(item, 'created_at') ?? readString(item, 'date'),
+      this.now().toISOString()
+    );
+    const updatedAt = normalizeHindsightTimestamp(readString(item, 'updated_at'), createdAt);
     const metadata = asObject(item.metadata);
     const declaredScopeHash = readString(metadata, '_hypha_scope_hash');
     if (declaredScopeHash && declaredScopeHash !== hashMemoryScope(scope)) {
@@ -969,6 +971,19 @@ function scopeTags(scope: ManagedMemoryScope, additional: string[] = []): string
       ...additional,
     ]),
   ].sort();
+}
+
+function normalizeHindsightTimestamp(value: string | undefined, fallback: string): string {
+  const parsed = new Date(value ?? fallback);
+  if (Number.isNaN(parsed.getTime())) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Hindsight returned an invalid timestamp.',
+      false,
+      { schemaDrift: true }
+    );
+  }
+  return parsed.toISOString();
 }
 
 function hindsightMetadata(
