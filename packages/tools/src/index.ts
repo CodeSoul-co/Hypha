@@ -66,6 +66,7 @@ export * from './workspace';
 export * from './adapter-factory';
 export * from './execution-adapter';
 export * from './secrets';
+export * from './tool-families';
 
 class ToolTimeoutError extends Error {
   readonly code = 'TOOL_TIMEOUT';

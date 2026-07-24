@@ -4,10 +4,21 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { getToolManager } from '../core/tools/ToolManager';
 import { HTTP_STATUS } from '../constants';
 import { getEventRuntime } from '../services/EventRuntime';
+import { commonToolCatalogSpecs, governedToolFamilySpecs } from '@hypha/tools';
 
 const router = Router();
 
 router.use(authMiddleware(true));
+
+router.get(
+  '/catalog',
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: [...commonToolCatalogSpecs, ...governedToolFamilySpecs],
+    });
+  })
+);
 
 // List all tools
 router.get(
