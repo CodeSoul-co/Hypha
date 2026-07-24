@@ -1,25 +1,39 @@
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/adapters-local';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
 import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@hypha/memory';
 import { SkillRegistry } from '@hypha/skills';
-import { MockToolRunner, type ToolCallRequest, type ToolRunner } from '@hypha/tools';
+import {
+  MockToolRunner,
+  type ToolCallRequest,
+  type ToolCallResult,
+  type ToolRunner,
+} from '@hypha/tools';
 import {
   BasicReActAgentRuntime,
   createEpisodicMemorySync,
   createReActStep,
   DefaultContextBuilder,
+  InMemoryReActContinuationCheckpointStore,
   kernelSpecJsonSchemas,
   MemoryContextBuilder,
   ReasoningContextBuilder,
   ReActAgentRunner,
+  reActContinuationCheckpointJsonSchema,
+  reActContinuationScopeHash,
+  reActExecutionBudgetJsonSchema,
   ReActRunner,
   reactAgentSpecDefinition,
   REACT_PHASE_ORDER,
   SkillContextBuilder,
   ToolRunnerActivityAdapter,
   validateReActAgentSpec,
+  validateReActContinuationCheckpoint,
+  validateReActExecutionBudget,
   validateReasoningConfig,
+  type ReActContinuationCheckpoint,
   type ReActAgentRuntime,
   type ReActAgentSpec,
 } from './index';
@@ -229,7 +243,7 @@ describe('@hypha/kernel ReAct contracts', () => {
     expect(capturedRequest).toMatchObject({
       toolId: 'tool.search',
       context: {
-        invocationId: 'call_search_1',
+        invocationId: 'run_2:react:tool:tool.search:1',
         userId: 'owner',
         sessionId: 'session_1',
         agentId: reactAgentSpecDefinition.example.id,
@@ -307,6 +321,485 @@ describe('@hypha/kernel ReAct contracts', () => {
         expect.objectContaining({ role: 'tool', content: '{"result":"evidence"}' }),
       ])
     );
+  });
+
+  it('continues multiple Tool calls across serialized worker checkpoints without duplicate ids', async () => {
+    const inferenceInputs: unknown[] = [];
+    const invocationIds: string[] = [];
+    const checkpoints: ReActContinuationCheckpoint[] = [];
+    const provider: InferenceProvider = {
+      id: 'long-horizon-provider',
+      async infer(request): Promise<InferenceResponse> {
+        inferenceInputs.push(request.input);
+        const messages =
+          request.input &&
+          typeof request.input === 'object' &&
+          Array.isArray((request.input as { messages?: unknown }).messages)
+            ? (request.input as { messages: unknown[] }).messages
+            : [];
+        const observedTools = messages.filter(
+          (message) =>
+            Boolean(message) &&
+            typeof message === 'object' &&
+            (message as { role?: unknown }).role === 'tool'
+        ).length;
+        return observedTools < 3
+          ? {
+              id: `response-tool-${observedTools + 1}`,
+              output: {
+                action: 'tool',
+                toolId: 'tool.long-work',
+                toolCallId: 'model-reused-call-id',
+                input: { part: observedTools + 1 },
+              },
+              usage: { totalTokens: 10 },
+            }
+          : {
+              id: 'response-final',
+              output: { action: 'finish', output: 'all parts completed' },
+              usage: { totalTokens: 5 },
+            };
+      },
+    };
+    const toolRunner: ToolRunner = {
+      async run(request) {
+        invocationIds.push(request.context.invocationId ?? '');
+        return {
+          toolId: request.toolId,
+          invocationId: request.context.invocationId,
+          status: 'completed',
+          output: { completed: request.input },
+        };
+      },
+    };
+    const runtime = new BasicReActAgentRuntime({
+      verifier: {
+        async verify(_context, observation) {
+          return observation.source === 'tool'
+            ? { type: 'model', reason: 'continue-long-work' }
+            : { type: 'finish', input: observation.value };
+        },
+      },
+    });
+    const executionBudget = {
+      maxIterations: 6,
+      maxModelCalls: 7,
+      maxToolCalls: 6,
+      maxTotalTokens: 100,
+      maxConsecutiveNoProgress: 3,
+      quantumIterations: 1,
+    };
+    const checkpointStore = new InMemoryReActContinuationCheckpointStore();
+    const context = () => ({
+      runId: 'run_long_horizon',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user' as const, content: 'complete three parts' }],
+    });
+    const createRunner = () =>
+      new ReActRunner(runtime, {
+        inference: provider,
+        toolRunner,
+        continueAfterTool: true,
+        executionBudget,
+        checkpointStore,
+        now: () => '2026-07-23T10:00:00.000Z',
+        onCheckpoint: (checkpoint) => {
+          checkpoints.push(checkpoint);
+        },
+      });
+
+    const first = await createRunner().run(context());
+    expect(first.error).toBeUndefined();
+    expect(first).toMatchObject({
+      status: 'suspended',
+      suspension: { reason: 'quantum_exhausted', requiresHumanReview: false },
+      checkpoint: {
+        nextPhase: 'act',
+        iterations: 1,
+        modelCalls: 2,
+        toolCalls: 1,
+        totalTokens: 20,
+        pendingAction: { type: 'tool', target: 'tool.long-work', input: { part: 2 } },
+      },
+    });
+
+    const second = await createRunner().run(context(), { resumeFromCheckpointStore: true });
+    expect(second).toMatchObject({
+      status: 'suspended',
+      suspension: { reason: 'quantum_exhausted' },
+      checkpoint: {
+        nextPhase: 'act',
+        iterations: 2,
+        modelCalls: 3,
+        toolCalls: 2,
+        pendingAction: { input: { part: 3 } },
+      },
+    });
+
+    const third = await createRunner().run(context(), { resumeFromCheckpointStore: true });
+    expect(third).toMatchObject({
+      status: 'completed',
+      output: 'all parts completed',
+    });
+    expect(invocationIds).toEqual([
+      'run_long_horizon:react:tool:tool.long-work:1',
+      'run_long_horizon:react:tool:tool.long-work:2',
+      'run_long_horizon:react:tool:tool.long-work:3',
+    ]);
+    expect(new Set(invocationIds).size).toBe(3);
+    expect(inferenceInputs).toHaveLength(4);
+    expect(checkpoints.at(-1)).toMatchObject({
+      iterations: 3,
+      toolCalls: 3,
+      nextPhase: 'reason',
+    });
+    await expect(
+      checkpointStore.get('run_long_horizon', 'react', reActContinuationScopeHash(context()))
+    ).resolves.toBeNull();
+  });
+
+  it('reuses the prepared Tool invocation after a worker crash without repeating the side effect', async () => {
+    const checkpointStore = new InMemoryReActContinuationCheckpointStore();
+    const durableReceipts = new Map<string, ToolCallResult>();
+    let toolAttempts = 0;
+    let sideEffects = 0;
+    let failWorkerAfterTool = true;
+    const context = () => ({
+      runId: 'run_crash_safe_tool',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user' as const, content: 'perform one durable operation' }],
+    });
+    const provider: InferenceProvider = {
+      id: 'crash-safe-provider',
+      async infer(request) {
+        const messages =
+          request.input &&
+          typeof request.input === 'object' &&
+          Array.isArray((request.input as { messages?: unknown }).messages)
+            ? (request.input as { messages: unknown[] }).messages
+            : [];
+        return messages.some(
+          (message) =>
+            Boolean(message) &&
+            typeof message === 'object' &&
+            (message as { role?: unknown }).role === 'tool'
+        )
+          ? { id: 'finish-after-recovery', output: { action: 'finish', output: 'done' } }
+          : {
+              id: 'prepare-side-effect',
+              output: {
+                action: 'tool',
+                toolId: 'tool.side-effect',
+                input: { operation: 'write-once' },
+              },
+            };
+      },
+    };
+    const toolRunner: ToolRunner = {
+      async run(request) {
+        toolAttempts += 1;
+        const invocationId = request.context.invocationId;
+        if (!invocationId) throw new Error('Expected prepared Tool invocation id.');
+        const prior = durableReceipts.get(invocationId);
+        if (prior) return structuredClone(prior);
+        sideEffects += 1;
+        const result: ToolCallResult = {
+          toolId: request.toolId,
+          invocationId,
+          status: 'completed',
+          output: { writeCount: sideEffects },
+        };
+        durableReceipts.set(invocationId, result);
+        return structuredClone(result);
+      },
+    };
+    const runtime = new BasicReActAgentRuntime({
+      verifier: {
+        async verify(_context, observation) {
+          return observation.source === 'tool'
+            ? { type: 'model', reason: 'continue-after-write' }
+            : { type: 'finish', input: observation.value };
+        },
+      },
+    });
+    const createRunner = () =>
+      new ReActRunner(runtime, {
+        inference: provider,
+        toolRunner,
+        checkpointStore,
+        continueAfterTool: true,
+        executionBudget: {
+          maxIterations: 3,
+          maxModelCalls: 4,
+          maxToolCalls: 3,
+          maxConsecutiveNoProgress: 2,
+          quantumIterations: 3,
+        },
+        now: () => '2026-07-23T10:00:00.000Z',
+        onStep(step) {
+          if (failWorkerAfterTool && step.phase === 'act') {
+            failWorkerAfterTool = false;
+            throw new Error('simulated worker crash after Tool receipt');
+          }
+        },
+      });
+
+    await expect(createRunner().run(context())).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({
+        message: 'simulated worker crash after Tool receipt',
+      }),
+    });
+    const prepared = await checkpointStore.get(
+      'run_crash_safe_tool',
+      'react',
+      reActContinuationScopeHash(context())
+    );
+    expect(prepared).toMatchObject({
+      nextPhase: 'act',
+      toolCalls: 0,
+      toolInvocationSequence: 1,
+      pendingToolInvocationId: 'run_crash_safe_tool:react:tool:tool.side-effect:1',
+      pendingAction: { type: 'tool', target: 'tool.side-effect' },
+    });
+
+    await expect(
+      createRunner().run(context(), { resumeFromCheckpointStore: true })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: 'done',
+    });
+    expect(toolAttempts).toBe(2);
+    expect(sideEffects).toBe(1);
+    expect([...durableReceipts]).toHaveLength(1);
+  });
+
+  it('resumes a prepared Tool decision without repeating the completed Model call', async () => {
+    const checkpointStore = new InMemoryReActContinuationCheckpointStore();
+    let modelCalls = 0;
+    let toolCalls = 0;
+    let failAfterPreparingAction = true;
+    const context = () => ({
+      runId: 'run_crash_after_model',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user' as const, content: 'prepare and execute' }],
+    });
+    const runner = () =>
+      new ReActRunner(
+        new BasicReActAgentRuntime({
+          verifier: {
+            async verify(_context, observation) {
+              return observation.source === 'tool'
+                ? { type: 'model', reason: 'continue-after-prepared-tool' }
+                : { type: 'finish', input: observation.value };
+            },
+          },
+        }),
+        {
+          inference: {
+            id: 'model-receipt-provider',
+            async infer(request) {
+              modelCalls += 1;
+              const messages = (request.input as { messages?: Array<{ role?: string }> }).messages;
+              return messages?.some((message) => message.role === 'tool')
+                ? { id: 'model-final', output: { action: 'finish', output: 'complete' } }
+                : {
+                    id: 'model-tool',
+                    output: {
+                      action: 'tool',
+                      toolId: 'tool.prepared',
+                      toolCallId: 'untrusted-model-call-id',
+                      input: { part: 1 },
+                    },
+                  };
+            },
+          },
+          toolRunner: {
+            async run(request) {
+              toolCalls += 1;
+              return {
+                toolId: request.toolId,
+                invocationId: request.context.invocationId,
+                status: 'completed',
+                output: { ok: true },
+              };
+            },
+          },
+          checkpointStore,
+          continueAfterTool: true,
+          onCheckpoint(checkpoint) {
+            if (failAfterPreparingAction && checkpoint.nextPhase === 'act') {
+              failAfterPreparingAction = false;
+              throw new Error('simulated crash after durable Model decision');
+            }
+          },
+        }
+      );
+
+    await expect(runner().run(context())).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({
+        message: 'simulated crash after durable Model decision',
+      }),
+    });
+    expect(modelCalls).toBe(1);
+    expect(toolCalls).toBe(0);
+
+    await expect(
+      runner().run(context(), { resumeFromCheckpointStore: true })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      output: 'complete',
+    });
+    expect(modelCalls).toBe(2);
+    expect(toolCalls).toBe(1);
+  });
+
+  it('suspends repeated Action/Observation fingerprints instead of looping forever', async () => {
+    let toolCalls = 0;
+    const runner = new ReActRunner(
+      new BasicReActAgentRuntime({
+        verifier: {
+          async verify() {
+            return { type: 'model', reason: 'try-again' };
+          },
+        },
+      }),
+      {
+        inference: {
+          id: 'non-progress-provider',
+          async infer() {
+            return {
+              id: 'same-response',
+              output: { action: 'tool', toolId: 'tool.same', input: { query: 'same' } },
+            };
+          },
+        },
+        toolRunner: {
+          async run() {
+            toolCalls += 1;
+            return { toolId: 'tool.same', status: 'completed', output: { result: 'same' } };
+          },
+        },
+        continueAfterTool: true,
+        executionBudget: {
+          maxIterations: 20,
+          maxModelCalls: 21,
+          maxToolCalls: 20,
+          maxConsecutiveNoProgress: 2,
+          quantumIterations: 20,
+        },
+        now: () => '2026-07-23T10:00:00.000Z',
+      }
+    );
+
+    await expect(
+      runner.run({
+        runId: 'run_non_progress',
+        stepId: 'react',
+        agent: reactAgentSpecDefinition.example,
+        messages: [{ role: 'user', content: 'do not loop' }],
+      })
+    ).resolves.toMatchObject({
+      status: 'suspended',
+      suspension: {
+        reason: 'non_progress',
+        retryable: false,
+        requiresHumanReview: true,
+      },
+      checkpoint: {
+        iterations: 3,
+        toolCalls: 3,
+        consecutiveNoProgress: 2,
+      },
+    });
+    expect(toolCalls).toBe(3);
+  });
+
+  it('validates long-horizon budgets and checkpoints across Zod and JSON Schema', async () => {
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    const budget = validateReActExecutionBudget({
+      maxIterations: 12,
+      maxModelCalls: 13,
+      maxToolCalls: 12,
+      maxTotalTokens: 20_000,
+      maxConsecutiveNoProgress: 3,
+      quantumIterations: 2,
+      deadlineAt: '2026-07-24T00:00:00.000Z',
+    });
+    const checkpoint = validateReActContinuationCheckpoint({
+      version: '1.0.0',
+      runId: 'run.contract',
+      stepId: 'react',
+      scopeHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      nextPhase: 'reason',
+      messages: [{ role: 'user', content: 'continue' }],
+      iterations: 2,
+      modelCalls: 3,
+      toolCalls: 2,
+      totalTokens: 100,
+      toolInvocationSequence: 2,
+      stepSequence: 17,
+      consecutiveNoProgress: 0,
+      createdAt: '2026-07-23T10:00:00.000Z',
+      updatedAt: '2026-07-23T10:01:00.000Z',
+    });
+
+    expect(ajv.validate(reActExecutionBudgetJsonSchema, budget)).toBe(true);
+    expect(ajv.validate(reActContinuationCheckpointJsonSchema, checkpoint)).toBe(true);
+    expect(validateReActExecutionBudget({ ...budget, quantumIterations: 13 })).toMatchObject({
+      maxIterations: 12,
+      quantumIterations: 13,
+    });
+    expect(() =>
+      validateReActContinuationCheckpoint({
+        ...checkpoint,
+        nextPhase: 'act',
+        pendingAction: undefined,
+      })
+    ).toThrow();
+    expect(() =>
+      validateReActContinuationCheckpoint({ ...checkpoint, untrustedField: true })
+    ).toThrow();
+    const boundedStore = new InMemoryReActContinuationCheckpointStore({
+      maxCheckpointBytes: 128,
+    });
+    await expect(boundedStore.put(checkpoint, 'checkpoint:oversized')).rejects.toMatchObject({
+      code: 'RUNTIME_RESOURCE_EXHAUSTED',
+    });
+  });
+
+  it('cancels before the next Provider call', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let modelCalls = 0;
+    const runner = new ReActRunner(new BasicReActAgentRuntime(), {
+      inference: {
+        id: 'must-not-run',
+        async infer() {
+          modelCalls += 1;
+          return { id: 'unexpected', output: 'unexpected' };
+        },
+      },
+    });
+
+    await expect(
+      runner.run(
+        {
+          runId: 'run_cancelled',
+          stepId: 'react',
+          agent: reactAgentSpecDefinition.example,
+          messages: [{ role: 'user', content: 'cancel' }],
+        },
+        { abortSignal: controller.signal }
+      )
+    ).resolves.toMatchObject({ status: 'cancelled' });
+    expect(modelCalls).toBe(0);
   });
 
   it('stops the ReAct loop when a tool action requires human review', async () => {
@@ -908,15 +1401,15 @@ describe('@hypha/kernel ReAct contracts', () => {
       }),
     });
 
-    await expect(
-      runner.run({
-        runId: 'run_memory_sync',
-        stepId: 'react',
-        agent: reactAgentSpecDefinition.example,
-        messages: [{ role: 'user', content: 'remember this' }],
-        memoryScope: { userId: 'owner', sessionId: 'session_memory_sync' },
-      })
-    ).resolves.toMatchObject({ status: 'completed' });
+    const memorySyncContext = () => ({
+      runId: 'run_memory_sync',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user' as const, content: 'remember this' }],
+      memoryScope: { userId: 'owner', sessionId: 'session_memory_sync' },
+    });
+    await expect(runner.run(memorySyncContext())).resolves.toMatchObject({ status: 'completed' });
+    await expect(runner.run(memorySyncContext())).resolves.toMatchObject({ status: 'completed' });
 
     await expect(
       manager.read(
@@ -925,9 +1418,12 @@ describe('@hypha/kernel ReAct contracts', () => {
       )
     ).resolves.toEqual([
       expect.objectContaining({
-        id: 'episodic:run_memory_sync:1',
+        id: expect.stringMatching(/^episodic:run_memory_sync:[a-f0-9]{64}$/u),
         type: 'episodic',
-        provenance: expect.objectContaining({ runId: 'run_memory_sync' }),
+        provenance: expect.objectContaining({
+          runId: 'run_memory_sync',
+          memorySyncId: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        }),
       }),
     ]);
   });
