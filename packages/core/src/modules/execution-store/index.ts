@@ -863,3 +863,5 @@ export function validateExecutionIdempotencyResolution(
 export function validateExecutionRecoveryAssessment(input: unknown): ExecutionRecoveryAssessment {
   return executionRecoveryAssessmentSchema.parse(input);
 }
+
+export * from './durable-execution-worker';
