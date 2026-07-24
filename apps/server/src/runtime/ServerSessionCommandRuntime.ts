@@ -4,6 +4,7 @@ import {
   FrameworkError,
   SESSION_COMMAND_TYPES,
   type ArtifactSessionCommandPayloadStore,
+  type ContinueReActCommandPayloadV1,
   type EnqueueSessionCommandRequest,
   type SessionCommandHandlerResult,
   type SessionCommandHandlerContext,
@@ -15,6 +16,10 @@ import {
   type SessionQueue,
   type SessionQueueScope,
 } from '@hypha/core';
+import type {
+  EnqueueReActContinuationCommandRequest,
+  ReActContinuationCommandIngress,
+} from '@hypha/harness';
 
 export type ServerSessionCommandPayloads = Record<SessionCommandType, unknown>;
 
@@ -218,6 +223,16 @@ export class ServerSessionCommandRuntime<TPayloads extends ServerSessionCommandP
   private assertOpen(): void {
     if (this.closed) conflict('Server Session Command Runtime is closed');
   }
+}
+
+export function createServerReActContinuationCommandIngress<
+  TPayloads extends ServerSessionCommandPayloads & {
+    continue_react: ContinueReActCommandPayloadV1;
+  },
+>(runtime: ServerSessionCommandRuntime<TPayloads>): ReActContinuationCommandIngress {
+  return {
+    enqueue: (request: EnqueueReActContinuationCommandRequest) => runtime.enqueue(request),
+  };
 }
 
 function defaultFailure(error: unknown): SessionCommandHandlerResult {

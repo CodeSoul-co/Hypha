@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { hashCanonicalJson, InMemorySessionQueue } from '@hypha/core';
+import { hashCanonicalJson, type ContinueReActCommandPayloadV1 } from '@hypha/core';
 import type { ReActContinuationCheckpoint, ReActRunContext, ReActRunResult } from '@hypha/kernel';
 import {
   LongHorizonReActSupervisor,
-  SessionQueueReActContinuationScheduler,
+  ServerIngressReActContinuationScheduler,
+  type EnqueueReActContinuationCommandRequest,
 } from './long-horizon-react-supervisor';
 
 const now = '2026-07-23T13:00:00.000Z';
@@ -59,11 +60,45 @@ function suspended(reason: 'quantum_exhausted' | 'iteration_budget_exhausted'): 
   };
 }
 
+function payload(value: ReActContinuationCheckpoint): ContinueReActCommandPayloadV1 {
+  return {
+    version: '1.0.0',
+    runId: value.runId,
+    sessionId: 'session.long-horizon',
+    userId: 'user.long-horizon',
+    stepId: value.stepId,
+    checkpointRef: `react-checkpoint:${value.runId}:${value.stepId}:${value.stepSequence}`,
+    checkpointHash: hashCanonicalJson(value),
+    checkpointSequence: value.stepSequence,
+    scopeHash: value.scopeHash,
+    agentRef: value.agentRef,
+    domainPackRef: { id: 'domain.long-horizon', version: '1.0.0' },
+    promptSnapshotRef: 'prompt-snapshot:long-horizon',
+    promptSnapshotHash: `sha256:${'1'.repeat(64)}`,
+    capabilitySnapshotRef: 'capability-snapshot:long-horizon',
+    capabilitySnapshotHash: `sha256:${'2'.repeat(64)}`,
+    globalBudget: {
+      iterations: 20,
+      modelCalls: 20,
+      toolCalls: 10,
+      totalTokens: 100_000,
+    },
+    cancellationRevision: 0,
+    createdAt: now,
+  };
+}
+
 describe('LongHorizonReActSupervisor', () => {
-  it('schedules a retryable quantum exactly once through the durable Session queue', async () => {
-    const queue = new InMemorySessionQueue({ now: () => now });
-    const scheduler = new SessionQueueReActContinuationScheduler({
-      queue,
+  it('schedules a retryable quantum through the Server payload ingress', async () => {
+    const enqueued: EnqueueReActContinuationCommandRequest[] = [];
+    const scheduler = new ServerIngressReActContinuationScheduler({
+      ingress: {
+        async enqueue(request) {
+          const reused = enqueued.some((candidate) => candidate.id === request.id);
+          if (!reused) enqueued.push(request);
+          return { id: request.id, status: reused ? 'reused' : 'queued' };
+        },
+      },
       now: () => now,
     });
     const supervisor = new LongHorizonReActSupervisor({
@@ -74,12 +109,7 @@ describe('LongHorizonReActSupervisor', () => {
     const input = {
       context: context(),
       continuation: {
-        userId: 'user.long-horizon',
-        sessionId: 'session.long-horizon',
-        context: {
-          ref: 'artifact://react/context/run.long-horizon',
-          hash: hashCanonicalJson({ runId: 'run.long-horizon', revision: 1 }),
-        },
+        buildPayload: payload,
       },
     };
 
@@ -91,19 +121,14 @@ describe('LongHorizonReActSupervisor', () => {
       disposition: 'continuation_scheduled',
       scheduleReused: true,
     });
-    await expect(
-      queue.list({
-        scope: {
-          userId: 'user.long-horizon',
-          sessionId: 'session.long-horizon',
-        },
-      })
-    ).resolves.toMatchObject([
+    expect(enqueued).toMatchObject([
       {
         commandType: 'continue_react',
         targetRunId: 'run.long-horizon',
-        payloadRef: 'artifact://react/context/run.long-horizon',
-        status: 'queued',
+        payload: {
+          checkpointSequence: 10,
+          checkpointHash: hashCanonicalJson(checkpoint()),
+        },
       },
     ]);
   });
@@ -124,12 +149,7 @@ describe('LongHorizonReActSupervisor', () => {
       exhausted.runQuantum({
         context: context(),
         continuation: {
-          userId: 'user.long-horizon',
-          sessionId: 'session.long-horizon',
-          context: {
-            ref: 'artifact://react/context/run.long-horizon',
-            hash: hashCanonicalJson({ revision: 1 }),
-          },
+          buildPayload: payload,
         },
       })
     ).resolves.toMatchObject({ disposition: 'waiting_human' });

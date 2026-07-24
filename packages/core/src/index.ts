@@ -24,6 +24,8 @@ export * from './contracts/runtime-messages';
 export * from './contracts/runtime-message-schemas';
 export * from './contracts/session-queue';
 export * from './contracts/session-queue-schemas';
+export * from './contracts/react-continuation';
+export * from './contracts/react-continuation-schemas';
 export * from './contracts/runtime-coordination';
 export * from './contracts/runtime-coordination-schemas';
 export * from './contracts/runtime-helpers';

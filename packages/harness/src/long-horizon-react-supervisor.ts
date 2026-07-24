@@ -1,22 +1,23 @@
-import { FrameworkError, hashCanonicalJson, type SessionQueue } from '@hypha/core';
-import type { ReActRunContext, ReActRunControl, ReActRunResult, ReActRunner } from '@hypha/kernel';
-
-export interface ReActContinuationContextReference {
-  ref: string;
-  hash: string;
-}
+import {
+  FrameworkError,
+  hashCanonicalJson,
+  validateContinueReActCommandPayload,
+  type ContinueReActCommandPayloadV1,
+  type SessionCommandRecord,
+} from '@hypha/core';
+import type {
+  ReActContinuationCheckpoint,
+  ReActRunContext,
+  ReActRunControl,
+  ReActRunResult,
+  ReActRunner,
+} from '@hypha/kernel';
 
 export interface ReActContinuationScheduleRequest {
   version: '1.0.0';
   tenantId?: string;
-  userId: string;
   workspaceId?: string;
-  sessionId: string;
-  runId: string;
-  stepId: string;
-  checkpointStepSequence: number;
-  checkpointHash: string;
-  context: ReActContinuationContextReference;
+  payload: ContinueReActCommandPayloadV1;
   availableAt: string;
   priority?: number;
   maxAttempts?: number;
@@ -31,19 +32,41 @@ export interface ReActContinuationScheduler {
   schedule(request: ReActContinuationScheduleRequest): Promise<ReActContinuationScheduleResult>;
 }
 
-export interface SessionQueueReActContinuationSchedulerOptions {
-  queue: SessionQueue;
+export interface EnqueueReActContinuationCommandRequest {
+  id: string;
+  commandType: 'continue_react';
+  idempotencyKey: string;
+  tenantId?: string;
+  userId: string;
+  workspaceId?: string;
+  sessionId: string;
+  targetRunId: string;
+  priority?: number;
+  maxAttempts?: number;
+  payload: ContinueReActCommandPayloadV1;
+  createdAt: string;
+  availableAt: string;
+}
+
+export interface ReActContinuationCommandIngress {
+  enqueue(
+    request: EnqueueReActContinuationCommandRequest
+  ): Promise<Pick<SessionCommandRecord, 'id' | 'status'>>;
+}
+
+export interface ServerIngressReActContinuationSchedulerOptions {
+  ingress: ReActContinuationCommandIngress;
   now?: () => string;
 }
 
 /**
- * Maps a ReAct quantum continuation onto the durable, per-Session command queue.
- * The queue stores only a bounded Artifact reference and its integrity hash.
+ * Sends a complete continuation envelope through the Server command ingress.
+ * The ingress owns payload persistence and Queue reference/hash generation.
  */
-export class SessionQueueReActContinuationScheduler implements ReActContinuationScheduler {
+export class ServerIngressReActContinuationScheduler implements ReActContinuationScheduler {
   private readonly now: () => string;
 
-  constructor(private readonly options: SessionQueueReActContinuationSchedulerOptions) {
+  constructor(private readonly options: ServerIngressReActContinuationSchedulerOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -53,25 +76,24 @@ export class SessionQueueReActContinuationScheduler implements ReActContinuation
     const request = validateScheduleRequest(input);
     const idempotencyKey = hashCanonicalJson({
       version: request.version,
-      runId: request.runId,
-      stepId: request.stepId,
-      checkpointStepSequence: request.checkpointStepSequence,
-      checkpointHash: request.checkpointHash,
-      contextHash: request.context.hash,
+      runId: request.payload.runId,
+      stepId: request.payload.stepId,
+      checkpointSequence: request.payload.checkpointSequence,
+      checkpointHash: request.payload.checkpointHash,
+      scopeHash: request.payload.scopeHash,
     });
-    const record = await this.options.queue.enqueue({
+    const record = await this.options.ingress.enqueue({
       id: `react-continuation:${idempotencyKey.slice('sha256:'.length)}`,
       commandType: 'continue_react',
       idempotencyKey,
       ...(request.tenantId === undefined ? {} : { tenantId: request.tenantId }),
-      userId: request.userId,
+      userId: request.payload.userId,
       ...(request.workspaceId === undefined ? {} : { workspaceId: request.workspaceId }),
-      sessionId: request.sessionId,
-      targetRunId: request.runId,
+      sessionId: request.payload.sessionId,
+      targetRunId: request.payload.runId,
       priority: request.priority,
       maxAttempts: request.maxAttempts,
-      payloadRef: request.context.ref,
-      payloadHash: request.context.hash,
+      payload: request.payload,
       createdAt: this.timestamp(),
       availableAt: request.availableAt,
     });
@@ -101,13 +123,13 @@ export interface LongHorizonReActQuantumInput {
   control?: ReActRunControl;
   continuation?: {
     tenantId?: string;
-    userId: string;
     workspaceId?: string;
-    sessionId: string;
-    context: ReActContinuationContextReference;
     availableAt?: string;
     priority?: number;
     maxAttempts?: number;
+    buildPayload(
+      checkpoint: Readonly<ReActContinuationCheckpoint>
+    ): ContinueReActCommandPayloadV1 | Promise<ContinueReActCommandPayloadV1>;
   };
 }
 
@@ -162,21 +184,19 @@ export class LongHorizonReActSupervisor {
         message: 'Retryable ReAct suspension does not contain a checkpoint',
       });
     }
+    const payload = validateContinueReActCommandPayload(
+      await input.continuation.buildPayload(react.checkpoint)
+    );
+    assertPayloadMatchesCheckpoint(payload, react.checkpoint);
     const scheduled = await this.options.scheduler.schedule({
       version: '1.0.0',
       ...(input.continuation.tenantId === undefined
         ? {}
         : { tenantId: input.continuation.tenantId }),
-      userId: input.continuation.userId,
       ...(input.continuation.workspaceId === undefined
         ? {}
         : { workspaceId: input.continuation.workspaceId }),
-      sessionId: input.continuation.sessionId,
-      runId: react.runId,
-      stepId: react.checkpoint.stepId,
-      checkpointStepSequence: react.checkpoint.stepSequence,
-      checkpointHash: hashCanonicalJson(react.checkpoint),
-      context: input.continuation.context,
+      payload,
       availableAt: input.continuation.availableAt ?? this.timestamp(),
       ...(input.continuation.priority === undefined
         ? {}
@@ -204,28 +224,27 @@ function validateScheduleRequest(
   request: ReActContinuationScheduleRequest
 ): ReActContinuationScheduleRequest {
   if (request.version !== '1.0.0') invalid('Unsupported ReAct continuation schedule version');
-  for (const [label, value] of [
-    ['userId', request.userId],
-    ['sessionId', request.sessionId],
-    ['runId', request.runId],
-    ['stepId', request.stepId],
-    ['checkpointHash', request.checkpointHash],
-    ['context.ref', request.context.ref],
-    ['context.hash', request.context.hash],
-  ] as const) {
-    if (!value.trim()) invalid(`${label} must be non-empty`);
-  }
-  if (!/^sha256:[a-f0-9]{64}$/u.test(request.checkpointHash)) {
-    invalid('checkpointHash must be a sha256 digest');
-  }
-  if (!/^sha256:[a-f0-9]{64}$/u.test(request.context.hash)) {
-    invalid('context.hash must be a sha256 digest');
-  }
-  if (!Number.isInteger(request.checkpointStepSequence) || request.checkpointStepSequence < 0) {
-    invalid('checkpointStepSequence must be a non-negative integer');
-  }
+  validateContinueReActCommandPayload(request.payload);
   assertTimestamp(request.availableAt, 'availableAt');
   return structuredClone(request);
+}
+
+function assertPayloadMatchesCheckpoint(
+  payload: ContinueReActCommandPayloadV1,
+  checkpoint: ReActContinuationCheckpoint
+): void {
+  if (
+    payload.runId !== checkpoint.runId ||
+    payload.stepId !== checkpoint.stepId ||
+    payload.scopeHash !== checkpoint.scopeHash ||
+    payload.checkpointSequence !== checkpoint.stepSequence ||
+    payload.checkpointHash !== hashCanonicalJson(checkpoint)
+  ) {
+    throw new FrameworkError({
+      code: 'RUNTIME_CHECKPOINT_FAILED',
+      message: 'Continuation envelope does not match the suspended checkpoint',
+    });
+  }
 }
 
 function assertTimestamp(value: string, label: string): void {
