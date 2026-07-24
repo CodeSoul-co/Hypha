@@ -229,7 +229,7 @@ profiles:
       connectionRef: memory.connection.mem0-platform
       config:
         baseUrl: https://api.mem0.ai
-        apiTokenEnv: HYPHA_MEM0_PLATFORM_TOKEN
+        credentialRef: credential:mem0-platform
         protocol: mem0-platform-v3
         mappingStoreRef: memory.mapping.durable
         operationStoreRef: memory.operation.durable
