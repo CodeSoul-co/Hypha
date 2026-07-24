@@ -17,7 +17,7 @@ export interface ExternalProviderOperation {
   providerId: string;
   operationId: string;
   externalOperationId?: string;
-  kind: 'mem0_event' | 'vertex_lro' | 'unknown_write';
+  kind: 'mem0_event' | 'vertex_lro' | 'hindsight_operation' | 'unknown_write';
   state: ExternalProviderOperationState;
   scope: ManagedMemoryScope;
   scopeHash: string;
@@ -31,6 +31,7 @@ export interface ExternalProviderOperation {
   failureFingerprint?: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 const specRefSchema = z
@@ -67,7 +68,7 @@ export const externalProviderOperationSchema: ZodType<ExternalProviderOperation>
     providerId: z.string().min(1),
     operationId: z.string().min(1),
     externalOperationId: z.string().min(1).optional(),
-    kind: z.enum(['mem0_event', 'vertex_lro', 'unknown_write']),
+    kind: z.enum(['mem0_event', 'vertex_lro', 'hindsight_operation', 'unknown_write']),
     state: z.enum([
       'pending',
       'running',
@@ -94,6 +95,7 @@ export const externalProviderOperationSchema: ZodType<ExternalProviderOperation>
     failureFingerprint: z.string().min(1).optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    metadata: z.record(z.unknown()).optional(),
   })
   .strict()
   .superRefine((operation, context) => {
@@ -109,6 +111,9 @@ export const externalProviderOperationSchema: ZodType<ExternalProviderOperation>
 export interface ExternalProviderOperationStore {
   readonly durability: 'ephemeral' | 'durable';
   get(providerId: string, operationId: string): Promise<ExternalProviderOperation | null>;
+  claim(
+    operation: ExternalProviderOperation
+  ): Promise<{ operation: ExternalProviderOperation; created: boolean }>;
   set(operation: ExternalProviderOperation): Promise<void>;
   listRecoverable(providerId?: string, now?: string): Promise<ExternalProviderOperation[]>;
 }
@@ -120,6 +125,16 @@ export class InMemoryExternalProviderOperationStore implements ExternalProviderO
   async get(providerId: string, operationId: string): Promise<ExternalProviderOperation | null> {
     const value = this.values.get(externalProviderOperationId(providerId, operationId));
     return value ? structuredClone(value) : null;
+  }
+
+  async claim(
+    operation: ExternalProviderOperation
+  ): Promise<{ operation: ExternalProviderOperation; created: boolean }> {
+    const value = externalProviderOperationSchema.parse(operation);
+    const current = this.values.get(value.id);
+    if (current) return { operation: structuredClone(current), created: false };
+    this.values.set(value.id, structuredClone(value));
+    return { operation: structuredClone(value), created: true };
   }
 
   async set(operation: ExternalProviderOperation): Promise<void> {
@@ -155,13 +170,29 @@ export class StructuredExternalProviderOperationStore implements ExternalProvide
     return value ? externalProviderOperationSchema.parse(value) : null;
   }
 
+  async claim(
+    operation: ExternalProviderOperation
+  ): Promise<{ operation: ExternalProviderOperation; created: boolean }> {
+    const value = externalProviderOperationSchema.parse(operation);
+    return this.options.store.transaction(async (transaction) => {
+      const current = await transaction.get<ExternalProviderOperation>(this.table, value.id);
+      if (current) {
+        return {
+          operation: externalProviderOperationSchema.parse(current),
+          created: false,
+        };
+      }
+      await transaction.insert(this.table, value);
+      return { operation: value, created: true };
+    });
+  }
+
   async set(operation: ExternalProviderOperation): Promise<void> {
     const value = externalProviderOperationSchema.parse(operation);
     const current = await this.options.store.get<ExternalProviderOperation>(this.table, value.id);
     if (current) await this.options.store.update(this.table, value.id, value);
     else await this.options.store.insert(this.table, value);
   }
-
   async listRecoverable(
     providerId?: string,
     now = new Date().toISOString()

@@ -44,7 +44,10 @@ export interface MemoryBankLocalClientOptions {
   now?: () => Date;
 }
 
-/** Concrete HTTP client for a local service implementing hypha.memorybank.v1. */
+/**
+ * @deprecated Protocol-development fixture only. It has no deployable upstream and
+ * must not be registered by product composition. Use HindsightLocalMemoryBankClient.
+ */
 export class MemoryBankLocalClient implements MemoryBankClient {
   readonly protocol = MEMORYBANK_LOCAL_PROTOCOL;
   private readonly delegate: Mem0OssClient;

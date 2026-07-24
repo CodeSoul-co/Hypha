@@ -904,6 +904,8 @@ export * from './structured-external-mapping-store';
 export * from './mem0-rest-client';
 export * from './mem0-platform-client';
 export * from './memorybank-local-client';
+export * from './hindsight-local-client';
+export * from './hindsight-local-factory';
 export * from './memorybank-managed-client';
 export * from './memory-events';
 export * from './context-contracts';
