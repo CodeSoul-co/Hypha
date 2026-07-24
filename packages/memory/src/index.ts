@@ -114,6 +114,12 @@ export interface StructuredStoreProvider {
   get<T>(table: string, id: string): Promise<T | null>;
   insert<T extends { id: string }>(table: string, record: T): Promise<void>;
   update<T>(table: string, id: string, patch: Partial<T>): Promise<void>;
+  compareAndSet?<T>(
+    table: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>
+  ): Promise<boolean>;
   delete(table: string, id: string): Promise<void>;
   query<T>(table: string, query: StructuredQuery): Promise<T[]>;
   transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T>;

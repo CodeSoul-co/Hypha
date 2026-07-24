@@ -52,6 +52,35 @@ describe('MongoStructuredStoreProvider', () => {
       transactions: false,
     });
   });
+  it('compares and updates a record atomically for distributed lease fencing', async () => {
+    const collection = mongoCollection();
+    const provider = new MongoStructuredStoreProvider({
+      database: { collection: () => collection },
+      transactionMode: 'disabled',
+    });
+    await provider.insert('memory_lifecycle_tasks', {
+      id: 'task:1',
+      state: 'pending',
+      attempts: 0,
+    });
+
+    await expect(
+      provider.compareAndSet(
+        'memory_lifecycle_tasks',
+        'task:1',
+        { state: 'pending', attempts: 0 },
+        { state: 'processing', attempts: 1 }
+      )
+    ).resolves.toBe(true);
+    await expect(
+      provider.compareAndSet(
+        'memory_lifecycle_tasks',
+        'task:1',
+        { state: 'pending', attempts: 0 },
+        { state: 'processing', attempts: 1 }
+      )
+    ).resolves.toBe(false);
+  });
   it('normalizes provider failures without leaking Mongo diagnostics', async () => {
     const failingCollection: MongoCollectionLike = {
       ...mongoCollection(),

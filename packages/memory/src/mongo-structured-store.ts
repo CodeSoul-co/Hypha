@@ -97,6 +97,22 @@ export class MongoStructuredStoreProvider implements StructuredStoreProvider {
     }
   }
 
+  async compareAndSet<T>(
+    table: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>
+  ): Promise<boolean> {
+    const result = await this.execute('compare_and_set', () =>
+      this.collection(table).updateOne(
+        { id, ...(structuredClone(expected) as Record<string, unknown>) },
+        { $set: structuredClone(patch) as Record<string, unknown> },
+        this.operationOptions()
+      )
+    );
+    return result.matchedCount === 1;
+  }
+
   async delete(table: string, id: string): Promise<void> {
     await this.execute('delete', () =>
       this.collection(table).deleteOne({ id }, this.operationOptions())
