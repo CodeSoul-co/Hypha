@@ -140,6 +140,71 @@ describe('Mem0 REST client', () => {
     await expect(client.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
+  it('normalizes provider timestamps before storing durable mappings', async () => {
+    const scopeHash = hashMemoryScope(scope);
+    const mappingStore = new InMemoryExternalMemoryMappingStore();
+    const client = new Mem0OssClient({
+      baseUrl: 'http://mem0.local',
+      mappingStore,
+      now: () => new Date('2026-07-18T00:00:00.000Z'),
+      fetch: async () =>
+        jsonResponse({
+          results: [
+            {
+              id: 'offset',
+              memory: 'offset timestamp',
+              metadata: { _hypha_scope_hash: scopeHash },
+              created_at: '2026-07-17T08:00:00.123456+08:00',
+              updated_at: 'not-a-date',
+            },
+            {
+              id: 'timezone-less',
+              memory: 'timezone-less timestamp',
+              metadata: { _hypha_scope_hash: scopeHash },
+              created_at: '2026-07-17 00:00:00.654321',
+            },
+            {
+              id: 'invalid',
+              memory: 'invalid timestamp',
+              metadata: { _hypha_scope_hash: scopeHash },
+              created_at: 'invalid',
+            },
+          ],
+        }),
+    });
+
+    const result = await client.list({
+      operationId: 'operation:mem0:list:timestamps',
+      principal,
+      scope,
+    });
+
+    expect(
+      result.records.map(({ createdAt, updatedAt, provenance }) => ({
+        createdAt,
+        updatedAt,
+        provenanceCreatedAt: provenance.createdAt,
+      }))
+    ).toEqual([
+      {
+        createdAt: '2026-07-17T00:00:00.123Z',
+        updatedAt: '2026-07-17T00:00:00.123Z',
+        provenanceCreatedAt: '2026-07-17T00:00:00.123Z',
+      },
+      {
+        createdAt: '2026-07-17T00:00:00.654Z',
+        updatedAt: '2026-07-17T00:00:00.654Z',
+        provenanceCreatedAt: '2026-07-17T00:00:00.654Z',
+      },
+      {
+        createdAt: '2026-07-18T00:00:00.000Z',
+        updatedAt: '2026-07-18T00:00:00.000Z',
+        provenanceCreatedAt: '2026-07-18T00:00:00.000Z',
+      },
+    ]);
+    await expect(mappingStore.list('memory.provider.mem0.rest')).resolves.toHaveLength(3);
+  });
+
   it('normalizes authorization and transient provider failures without leaking credentials', async () => {
     const memoryId = createExternalMemoryId('memory.provider.mem0.rest', 'mem0:1');
     const forbiddenMappings = new InMemoryExternalMemoryMappingStore();

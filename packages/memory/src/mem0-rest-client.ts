@@ -501,9 +501,15 @@ export class Mem0OssClient implements ExternalMemoryClient {
     if (defaults.requireScopeMetadata && metadata._hypha_scope_hash !== scopeHash) return null;
     const content = item.memory ?? item.text ?? item.content ?? item.data ?? '';
     const revision = defaults.revision ?? readNumber(metadata, '_hypha_revision') ?? 1;
-    const createdAt =
-      readString(item, 'created_at') ?? readString(item, 'createdAt') ?? this.now().toISOString();
-    const updatedAt = readString(item, 'updated_at') ?? readString(item, 'updatedAt') ?? createdAt;
+    const observedAt = this.now().toISOString();
+    const createdAt = normalizeProviderDateTime(
+      readString(item, 'created_at') ?? readString(item, 'createdAt'),
+      observedAt
+    );
+    const updatedAt = normalizeProviderDateTime(
+      readString(item, 'updated_at') ?? readString(item, 'updatedAt'),
+      createdAt
+    );
     const memoryId = createExternalMemoryId(this.providerId, externalId);
     return {
       id: memoryId,
@@ -619,6 +625,16 @@ function readString(value: Record<string, unknown>, key: string): string | undef
 
 function readNumber(value: Record<string, unknown>, key: string): number | undefined {
   return typeof value[key] === 'number' ? (value[key] as number) : undefined;
+}
+
+function normalizeProviderDateTime(value: string | undefined, fallback: string): string {
+  const raw = value?.trim();
+  if (!raw) return fallback;
+  const hasTimezone = /(Z|[+-]\d{2}:?\d{2})$/iu.test(raw);
+  const isTimezoneLessDateTime = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/u.test(raw);
+  const candidate = isTimezoneLessDateTime && !hasTimezone ? raw.replace(' ', 'T') + 'Z' : raw;
+  const timestamp = Date.parse(candidate);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
 
 function readRevision(record: ManagedMemoryRecord, fallback: number): number {
