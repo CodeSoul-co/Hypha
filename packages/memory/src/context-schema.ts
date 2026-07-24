@@ -23,6 +23,21 @@ const contextSourceTypeSchema = z.enum([
   'custom',
 ]);
 
+export const contextArtifactRefSchema = z
+  .object({
+    id: z.string().min(1),
+    path: z.string().min(1),
+    contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+    sizeBytes: z.number().int().min(0),
+    contentType: z.literal('text/plain; charset=utf-8'),
+    scopeHash: z.string().min(1),
+    profileRevision: z.string().min(1),
+    sourceItemId: z.string().min(1),
+    createdAt: z.string().min(1),
+    expiresAt: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const contextSourceSpecSchema: ZodType<ContextSourceSpec> = z
   .object({
     id: z.string().min(1),
@@ -32,6 +47,9 @@ export const contextSourceSpecSchema: ZodType<ContextSourceSpec> = z
     priority: z.number(),
     maxItems: z.number().int().positive().optional(),
     maxTokens: z.number().int().positive().optional(),
+    overflowPolicy: z
+      .enum(['drop', 'truncate', 'summarize', 'spill_to_artifact', 'fail'])
+      .optional(),
     filters: metadataSchema.optional(),
   })
   .strict();
@@ -46,6 +64,7 @@ export const contextProfileSpecSchema: ZodType<ContextProfileSpec> = z
     sources: z.array(contextSourceSpecSchema).min(1),
     maxItems: z.number().int().positive().optional(),
     maxCharacters: z.number().int().positive().optional(),
+    maxSerializedBytes: z.number().int().positive().optional(),
     maxTokens: z.number().int().positive(),
     reservedOutputTokens: z.number().int().min(0).optional(),
     reservedSystemTokens: z.number().int().min(0).optional(),
@@ -119,6 +138,7 @@ export const contextItemSchema = z
     provenance: metadataSchema.optional(),
     conflictGroupId: z.string().optional(),
     metadata: metadataSchema.optional(),
+    artifactRef: contextArtifactRefSchema.optional(),
   })
   .refine((item) => Object.prototype.hasOwnProperty.call(item, 'content'), {
     message: 'Context item content is required.',
@@ -189,6 +209,9 @@ const contextSourceSpecJsonSchema: JsonSchema = {
     priority: { type: 'number' },
     maxItems: { type: 'integer', minimum: 1 },
     maxTokens: { type: 'integer', minimum: 1 },
+    overflowPolicy: {
+      enum: ['drop', 'truncate', 'summarize', 'spill_to_artifact', 'fail'],
+    },
     filters: { type: 'object', additionalProperties: true },
   },
   additionalProperties: false,
@@ -276,6 +299,7 @@ export const contextProfileSpecJsonSchema: JsonSchema = {
     sources: { type: 'array', items: contextSourceSpecJsonSchema, minItems: 1 },
     maxItems: { type: 'integer', minimum: 1 },
     maxCharacters: { type: 'integer', minimum: 1 },
+    maxSerializedBytes: { type: 'integer', minimum: 1 },
     maxTokens: { type: 'integer', minimum: 1 },
     reservedOutputTokens: { type: 'integer', minimum: 0 },
     reservedSystemTokens: { type: 'integer', minimum: 0 },
@@ -335,6 +359,7 @@ export const promptSegmentSchema = z.object({
   trustLevel: z.enum(['trusted_instruction', 'trusted_data', 'untrusted_data']),
   sourceRefs: z.array(z.string()),
   required: z.boolean().optional(),
+  artifactRefs: z.array(contextArtifactRefSchema).optional(),
 });
 
 export const contextProvenanceLabelSchema = z.object({
@@ -353,7 +378,7 @@ export const contextTruncationRecordSchema = z.object({
   itemId: z.string().min(1),
   originalTokens: z.number().int().min(0),
   retainedTokens: z.number().int().min(0),
-  method: z.enum(['drop', 'truncate', 'summarize']),
+  method: z.enum(['drop', 'truncate', 'summarize', 'spill_to_artifact']),
   reason: z.string().min(1),
 });
 
@@ -381,6 +406,7 @@ export const contextEnvelopeSchema: ZodType<ContextEnvelope> = z
     conflicts: z.array(contextConflictSchema),
     totalTokens: z.number().int().min(0),
     createdAt: z.string().min(1),
+    artifactRefs: z.array(contextArtifactRefSchema).optional(),
   })
   .superRefine((envelope, context) => {
     if (envelope.systemSegments.some((segment) => segment.role !== 'system')) {

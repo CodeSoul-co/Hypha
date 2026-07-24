@@ -909,6 +909,7 @@ export * from './hindsight-local-client';
 export * from './hindsight-local-factory';
 export * from './memorybank-managed-client';
 export * from './memory-events';
+export * from './context-artifacts';
 export * from './context-contracts';
 export * from './context-schema';
 export * from './context-builder';
