@@ -858,6 +858,7 @@ export * from './lifecycle-schema';
 export * from './governed-memory-manager';
 export * from './memory-application-service';
 export * from './memory-runtime-factory';
+export * from './memory-runtime-coordinator';
 export * from './native-memory-runtime';
 export * from './memory-worker-supervisor';
 export * from './memory-data-migration';
