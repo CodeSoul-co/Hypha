@@ -1,16 +1,21 @@
 import {
   ArtifactSessionCommandPayloadStore,
+  continueReActCommandPayloadV1Example,
   InMemorySessionQueue,
+  validateContinueReActCommandPayload,
+  type ContinueReActCommandPayloadV1,
   type SessionCommandHandlerResult,
 } from '@hypha/core';
 import { InMemoryExecutionArtifactStore } from '@hypha/adapters-local';
 import {
+  createServerReActContinuationCommandIngress,
   ServerSessionCommandRuntime,
   type ServerSessionCommandPayloads,
 } from './ServerSessionCommandRuntime';
 
 interface TestPayloads extends ServerSessionCommandPayloads {
   start_run: { topic: string };
+  continue_react: ContinueReActCommandPayloadV1;
 }
 
 describe('ServerSessionCommandRuntime', () => {
@@ -96,6 +101,70 @@ describe('ServerSessionCommandRuntime', () => {
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_INVALID_INPUT' });
     expect(artifacts.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+    await runtime.close();
+  });
+
+  it('persists continuation envelopes through the same Server payload chain', async () => {
+    const continuationTime = '2026-07-24T04:00:00.000Z';
+    const queue = new InMemorySessionQueue({ now: () => continuationTime });
+    const handle = jest.fn(
+      async (): Promise<SessionCommandHandlerResult> => ({ disposition: 'applied' })
+    );
+    const runtime = new ServerSessionCommandRuntime<TestPayloads>({
+      queue,
+      payloads: new ArtifactSessionCommandPayloadStore({
+        artifacts: new InMemoryExecutionArtifactStore(),
+      }),
+      workerId: 'server.continuation',
+      leaseMs: 1_000,
+      now: () => continuationTime,
+      definitions: {
+        continue_react: {
+          decode: validateContinueReActCommandPayload,
+          handle,
+        },
+      },
+    });
+    const ingress = createServerReActContinuationCommandIngress(runtime);
+    const payload: ContinueReActCommandPayloadV1 = {
+      ...continueReActCommandPayloadV1Example,
+      runId: 'run.continuation',
+      sessionId: 'session.continuation',
+      userId: 'user.continuation',
+    };
+
+    const queued = await ingress.enqueue({
+      id: 'command.continuation',
+      commandType: 'continue_react',
+      idempotencyKey: 'request.continuation',
+      userId: payload.userId,
+      sessionId: payload.sessionId,
+      targetRunId: payload.runId,
+      payload,
+      createdAt: payload.createdAt,
+      availableAt: payload.createdAt,
+    });
+
+    expect(queued).toMatchObject({
+      id: 'command.continuation',
+      status: 'queued',
+    });
+    await expect(
+      queue.list({
+        scope: { userId: payload.userId, sessionId: payload.sessionId },
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        payloadRef: expect.stringMatching(/^artifact-ref:/u),
+      }),
+    ]);
+    await expect(runtime.processNext()).resolves.toMatchObject({ disposition: 'applied' });
+    expect(handle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ commandType: 'continue_react' }),
+        payload,
+      })
+    );
     await runtime.close();
   });
 
