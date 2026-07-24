@@ -5,6 +5,7 @@ import {
   type EventRuntime,
   type EventStreamHead,
   type PersistedFrameworkEvent,
+  type RuntimeOperationalTelemetry,
   type SessionCommandRecord,
   type SessionQueue,
 } from '@hypha/core';
@@ -51,6 +52,7 @@ export interface ServerReActContinuationReconcilerOptions {
   scheduler: ReActContinuationScheduler;
   payloadFactory: ReActContinuationPayloadFactory;
   quarantine: ReActContinuationQuarantinePort;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
   maxCommandsPerSession?: number;
 }
 
@@ -110,14 +112,13 @@ export class ServerReActContinuationReconciler {
       );
       const invalidReason = checkpointProblem(evidence, checkpoint);
       if (invalidReason) {
-        await this.options.quarantine.quarantine({
+        await this.quarantine(
           evidence,
-          reason:
-            commands.length > 0 && invalidReason === 'checkpoint_missing'
-              ? 'command_without_valid_checkpoint'
-              : invalidReason,
-          commandIds: commands.map((command) => command.id),
-        });
+          commands.length > 0 && invalidReason === 'checkpoint_missing'
+            ? 'command_without_valid_checkpoint'
+            : invalidReason,
+          commands.map((command) => command.id)
+        );
         result.quarantined += 1;
         continue;
       }
@@ -137,11 +138,7 @@ export class ServerReActContinuationReconciler {
           matching.status === 'rejected' ||
           matching.status === 'expired'
         ) {
-          await this.options.quarantine.quarantine({
-            evidence,
-            reason: 'command_without_valid_checkpoint',
-            commandIds: [matching.id],
-          });
+          await this.quarantine(evidence, 'command_without_valid_checkpoint', [matching.id]);
           result.quarantined += 1;
         } else {
           result.reused += 1;
@@ -149,11 +146,11 @@ export class ServerReActContinuationReconciler {
         continue;
       }
       if (commands.some((command) => command.status === 'queued' || command.status === 'claimed')) {
-        await this.options.quarantine.quarantine({
+        await this.quarantine(
           evidence,
-          reason: 'command_without_valid_checkpoint',
-          commandIds: commands.map((command) => command.id),
-        });
+          'command_without_valid_checkpoint',
+          commands.map((command) => command.id)
+        );
         result.quarantined += 1;
         continue;
       }
@@ -167,6 +164,17 @@ export class ServerReActContinuationReconciler {
       result[scheduled.reused ? 'reused' : 'scheduled'] += 1;
     }
     return result;
+  }
+
+  private async quarantine(
+    evidence: Readonly<ReActContinuationSuspensionEvidence>,
+    reason: Parameters<ReActContinuationQuarantinePort['quarantine']>[0]['reason'],
+    commandIds: readonly string[]
+  ): Promise<void> {
+    await this.options.quarantine.quarantine({ evidence, reason, commandIds });
+    await this.options.operationalTelemetry
+      ?.recordQuarantine({ source: 'continuation_reconciler', reason })
+      .catch(() => undefined);
   }
 
   private async latestOpenSuspension(

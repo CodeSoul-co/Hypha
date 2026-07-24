@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createFrameworkEvent } from '@hypha/core';
+import {
+  createFrameworkEvent,
+  InMemoryTelemetryRecorder,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
+} from '@hypha/core';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
 import {
   InMemoryReActContinuationCheckpointStore,
@@ -453,6 +458,50 @@ describe('@hypha/harness contracts', () => {
     expect(events.find((event) => event.type === 'run.cancelled')?.payload).toMatchObject({
       terminalState: 'Cancelled',
     });
+  });
+
+  it('records continuation latency and repeated progress fingerprints without identity labels', async () => {
+    const recorder = new InMemoryTelemetryRecorder();
+    const runs = new RunManager({
+      operationalTelemetry: new RuntimeOperationalTelemetry({
+        recorder,
+        now: () => '2026-07-24T06:00:02.000Z',
+      }),
+    });
+    const checkpoint = {
+      version: '1.0.0' as const,
+      runId: 'run.telemetry',
+      stepId: 'react',
+      scopeHash: `sha256:${'1'.repeat(64)}`,
+      agentRef: { id: 'agent.telemetry', version: '1.0.0' },
+      nextPhase: 'reason' as const,
+      messages: [{ role: 'user' as const, content: 'continue' }],
+      iterations: 2,
+      modelCalls: 2,
+      toolCalls: 1,
+      totalTokens: 100,
+      toolInvocationSequence: 1,
+      stepSequence: 5,
+      consecutiveNoProgress: 2,
+      lastProgressFingerprint: `sha256:${'2'.repeat(64)}`,
+      createdAt: '2026-07-24T06:00:00.000Z',
+      updatedAt: '2026-07-24T06:00:00.000Z',
+    };
+    const context = {
+      runId: checkpoint.runId,
+      sessionId: 'session.telemetry',
+      userId: 'user.telemetry',
+    };
+
+    await runs.recordReactContinuationCheckpoint(context, checkpoint);
+    await runs.recordReactContinuationResumed(context, checkpoint, '2026-07-24T06:00:02.000Z');
+
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.continuationLatencyMs)[0]?.value).toBe(
+      2_000
+    );
+    expect(recorder.sum(RUNTIME_OPERATIONAL_METRIC_NAMES.noProgressFingerprintTotal)).toBe(1);
+    expect(JSON.stringify(recorder.list())).not.toContain(checkpoint.runId);
+    expect(JSON.stringify(recorder.list())).not.toContain(checkpoint.lastProgressFingerprint);
   });
 
   it('runs the minimal ReAct + FSM runtime closure with trace events for each state', async () => {

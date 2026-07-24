@@ -7,6 +7,7 @@ import {
   type RuntimeIntegrityRepairPort,
   type RuntimeIntegrityStore,
   type RuntimeIntegrityWatermark,
+  type RuntimeOperationalTelemetry,
 } from '@hypha/core';
 import {
   auditCanonicalRuntimeStreams,
@@ -43,6 +44,7 @@ export interface BoundedCanonicalRuntimeAuditOptions {
   now?: () => string;
   monotonicNow?: () => number;
   onProgress?: (progress: CanonicalRuntimeAuditProgress) => void | Promise<void>;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
 }
 
 /**
@@ -111,6 +113,12 @@ export class BoundedCanonicalRuntimeAudit {
 
     const report = auditCanonicalRuntimeStreams(events);
     if (report.quarantinedStreams > 0) {
+      await this.options.operationalTelemetry
+        ?.recordQuarantine({
+          source: 'startup_integrity_audit',
+          reason: 'canonical_stream_corrupt',
+        })
+        .catch(() => undefined);
       throw failure(
         'RUNTIME_EVENT_STREAM_CORRUPT',
         'Canonical Runtime integrity audit rejected one or more streams',
