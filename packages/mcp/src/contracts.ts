@@ -59,6 +59,8 @@ export interface MCPServerProfile {
     allowedHosts?: string[];
     denyPrivateNetworks?: boolean;
     requireTls?: boolean;
+    maxRedirects?: number;
+    allowCrossOriginRedirects?: boolean;
   };
   requestGuardPolicy?: {
     maxConcurrentRequests?: number;
@@ -241,6 +243,8 @@ export const mcpServerProfileSchema = z.object({
       allowedHosts: z.array(z.string().min(1)).optional(),
       denyPrivateNetworks: z.boolean().optional(),
       requireTls: z.boolean().optional(),
+      maxRedirects: z.number().int().min(0).max(10).optional(),
+      allowCrossOriginRedirects: z.boolean().optional(),
     })
     .optional(),
   requestGuardPolicy: z

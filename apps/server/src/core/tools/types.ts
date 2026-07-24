@@ -94,6 +94,7 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   endpoint?: string;
+  sessionMode?: 'protocol_default' | 'stateless';
   credentialRef?: string;
   autoStart?: boolean;
   autoConnect?: boolean;
@@ -104,6 +105,17 @@ export interface MCPServerConfig {
     maxBackoffMs?: number;
     jitterRatio?: number;
     maxElapsedMs?: number;
+  };
+  protocolVersionPolicy?: {
+    allowedVersions: string[];
+    rejectUnknown?: boolean;
+  };
+  egressPolicy?: {
+    allowedHosts?: string[];
+    denyPrivateNetworks?: boolean;
+    requireTls?: boolean;
+    maxRedirects?: number;
+    allowCrossOriginRedirects?: boolean;
   };
 }
 

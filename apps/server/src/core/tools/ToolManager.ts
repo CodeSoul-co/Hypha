@@ -749,7 +749,7 @@ export class ToolManager {
                 type: 'streamable_http',
                 endpoint: config.endpoint ?? '',
                 authorizationRef: config.credentialRef,
-                sessionMode: 'protocol_default',
+                sessionMode: config.sessionMode ?? 'protocol_default',
               },
         singleStart: true,
         initializationTimeoutMs: 10_000,
@@ -762,8 +762,17 @@ export class ToolManager {
           jitterRatio: 0.2,
           maxElapsedMs: 15_000,
         },
+        protocolVersionPolicy: config.protocolVersionPolicy,
         egressPolicy:
-          config.mode === 'remote' ? { requireTls: true, denyPrivateNetworks: true } : undefined,
+          config.mode === 'remote'
+            ? {
+                requireTls: true,
+                denyPrivateNetworks: true,
+                maxRedirects: 0,
+                allowCrossOriginRedirects: false,
+                ...config.egressPolicy,
+              }
+            : undefined,
         requestGuardPolicy: {
           maxConcurrentRequests: 8,
           rateLimit: { maxRequests: 120, windowMs: 60_000 },

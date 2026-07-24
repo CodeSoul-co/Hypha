@@ -669,15 +669,26 @@ tools:
       enabled: "${HYPHA_FILESYSTEM_EXECUTION_ENABLED:false}"
       timeoutMs: "${HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS:30000}"
       maxOutputBytes: "${HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES:1048576}"
-  # The fixture gateway keeps MCP calls locally verifiable without requiring
-  # external MCP binaries. Replace or extend this list with local/remote MCP
-  # servers for deployment.
+  # The local stdio example is a real child-process MCP server and is the
+  # default product-development path. The classic in-process fixture remains
+  # optional for deterministic compatibility tests only.
   mcpServers:
+    - id: "local-example"
+      name: "Hypha Local MCP Example"
+      mode: "local"
+      connectionProfileRef: "mcp.local"
+      command: "node"
+      args: ["./examples/mcp/local-stdio-server.cjs"]
+      autoConnect: true
+      required: true
+      protocolVersionPolicy:
+        allowedVersions: ["2025-11-25"]
+        rejectUnknown: true
     - id: "classic"
       name: "Classic MCP Fixture"
       mode: "fixture"
       autoConnect: true
-      required: true
+      required: false
 
 workflows:
   configPath: "./configs/workflows"

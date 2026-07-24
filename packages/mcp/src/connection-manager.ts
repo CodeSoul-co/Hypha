@@ -218,6 +218,15 @@ export interface MCPConnectionManagerOptions {
   telemetry?: TelemetryRecorder;
 }
 
+type MCPFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+export interface GuardedMCPFetchOptions {
+  policy?: MCPServerProfile['egressPolicy'];
+  fetch?: MCPFetch;
+  resolveHeaders?: () => Promise<Record<string, string>> | Record<string, string>;
+  resolveAuthorization?: () => Promise<string | undefined> | string | undefined;
+}
+
 interface ManagedConnection {
   profile: MCPServerProfile;
   record: MCPConnectionRecord;
@@ -758,6 +767,14 @@ export class MCPConnectionManager implements MCPGateway {
       );
       const allowedVersions = managed.profile.protocolVersionPolicy?.allowedVersions;
       if (
+        managed.profile.protocolVersionPolicy?.rejectUnknown &&
+        !initialized.negotiatedProtocolVersion
+      ) {
+        throw Object.assign(new Error('MCP server did not negotiate a protocol version.'), {
+          code: 'MCP_PROTOCOL_MISMATCH',
+        });
+      }
+      if (
         initialized.negotiatedProtocolVersion &&
         allowedVersions?.length &&
         !allowedVersions.includes(initialized.negotiatedProtocolVersion)
@@ -890,6 +907,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
   onListChanged?: () => void;
   private client?: Client;
   private transport?: StdioClientTransport | StreamableHTTPClientTransport;
+  private negotiatedProtocolVersion?: string;
 
   constructor(
     private readonly profile: MCPServerProfile,
@@ -902,6 +920,14 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     serverCapabilities?: Record<string, unknown>;
   }> {
     this.transport = await this.createTransport();
+    const versionedTransport = this.transport as typeof this.transport & {
+      setProtocolVersion?: (version: string) => void;
+    };
+    const setProtocolVersion = versionedTransport.setProtocolVersion?.bind(versionedTransport);
+    versionedTransport.setProtocolVersion = (version: string) => {
+      this.negotiatedProtocolVersion = version;
+      setProtocolVersion?.(version);
+    };
     this.client = new Client(this.options.clientInfo ?? { name: 'hypha', version: '1.0.0' }, {
       capabilities: {},
       enforceStrictCapabilities: true,
@@ -915,10 +941,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     this.client.onerror = (error) => this.onClose?.(error);
     await this.client.connect(this.transport);
     return {
-      negotiatedProtocolVersion:
-        this.transport instanceof StreamableHTTPClientTransport
-          ? this.transport.protocolVersion
-          : undefined,
+      negotiatedProtocolVersion: this.negotiatedProtocolVersion,
       serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
       serverCapabilities: this.client.getServerCapabilities() as
         Record<string, unknown> | undefined,
@@ -930,10 +953,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     const capabilities: MCPCapabilityDescriptor[] = [];
     const serverInfo = client.getServerVersion();
     const serverCapabilities = client.getServerCapabilities();
-    const protocolVersion =
-      this.transport instanceof StreamableHTTPClientTransport
-        ? this.transport.protocolVersion
-        : undefined;
+    const protocolVersion = this.negotiatedProtocolVersion;
     const common = {
       version: serverInfo?.version ?? this.profile.version ?? '0.0.0',
       serverId: this.profile.id,
@@ -1108,6 +1128,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     this.client = undefined;
     if (client) await client.close();
     this.transport = undefined;
+    this.negotiatedProtocolVersion = undefined;
   }
 
   private async createTransport(): Promise<StdioClientTransport | StreamableHTTPClientTransport> {
@@ -1138,21 +1159,18 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     }
     if (transport.type === 'streamable_http') {
       await assertRemoteEgressAllowed(transport.endpoint, this.profile.egressPolicy);
-      const referencedHeaders =
-        transport.headersRef && this.options.resolveHeadersRef
-          ? await this.options.resolveHeadersRef(transport.headersRef)
-          : {};
-      const authorization =
-        transport.authorizationRef && this.options.resolveAuthorizationRef
-          ? await this.options.resolveAuthorizationRef(transport.authorizationRef)
-          : undefined;
       return new StreamableHTTPClientTransport(new URL(transport.endpoint), {
-        requestInit: {
-          headers: {
-            ...referencedHeaders,
-            ...(authorization ? { Authorization: authorization } : {}),
-          },
-        },
+        fetch: createGuardedMCPFetch({
+          policy: this.profile.egressPolicy,
+          resolveHeaders:
+            transport.headersRef && this.options.resolveHeadersRef
+              ? () => this.options.resolveHeadersRef!(transport.headersRef!)
+              : undefined,
+          resolveAuthorization:
+            transport.authorizationRef && this.options.resolveAuthorizationRef
+              ? () => this.options.resolveAuthorizationRef!(transport.authorizationRef!)
+              : undefined,
+        }),
         reconnectionOptions: {
           initialReconnectionDelay: this.profile.reconnectPolicy?.backoffMs ?? 250,
           maxReconnectionDelay: 30_000,
@@ -1265,22 +1283,21 @@ function guardedRequestError(
   return Object.assign(new Error(message), { code, retryable, details });
 }
 
-async function assertRemoteEgressAllowed(
+export async function assertRemoteEgressAllowed(
   endpoint: string,
   policy: MCPServerProfile['egressPolicy']
 ): Promise<void> {
-  if (!policy) return;
   const url = new URL(endpoint);
-  if ((policy.requireTls ?? true) && url.protocol !== 'https:') {
+  if ((policy?.requireTls ?? true) && url.protocol !== 'https:') {
     throw guardedRequestError('MCP_EGRESS_DENIED', 'Remote MCP endpoint must use TLS.', false);
   }
   if (
-    policy.allowedHosts?.length &&
+    policy?.allowedHosts?.length &&
     !policy.allowedHosts.some((candidate) => hostMatches(url.hostname, candidate))
   ) {
     throw guardedRequestError('MCP_EGRESS_DENIED', 'Remote MCP host is not allow-listed.', false);
   }
-  if (!(policy.denyPrivateNetworks ?? true)) return;
+  if (!(policy?.denyPrivateNetworks ?? true)) return;
   const addresses = isIP(url.hostname)
     ? [{ address: url.hostname }]
     : await lookup(url.hostname, { all: true, verbatim: true });
@@ -1291,6 +1308,95 @@ async function assertRemoteEgressAllowed(
       false
     );
   }
+}
+
+/**
+ * Applies the remote MCP egress policy to every request and redirect hop.
+ * Credentials are resolved immediately before each request so rotations take
+ * effect without rebuilding declarative profiles.
+ */
+export function createGuardedMCPFetch(options: GuardedMCPFetchOptions = {}): MCPFetch {
+  const baseFetch: MCPFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const maxRedirects = options.policy?.maxRedirects ?? 0;
+  const allowCrossOriginRedirects = options.policy?.allowCrossOriginRedirects ?? false;
+
+  return async (input, init) => {
+    const initial = new Request(input, { ...init, redirect: 'manual' });
+    const dynamicHeaders = options.resolveHeaders ? await options.resolveHeaders() : {};
+    const authorization = options.resolveAuthorization
+      ? await options.resolveAuthorization()
+      : undefined;
+    const headers = new Headers(initial.headers);
+    for (const [name, value] of Object.entries(dynamicHeaders)) headers.set(name, value);
+    if (authorization) headers.set('authorization', authorization);
+    let request = new Request(initial, { headers, redirect: 'manual' });
+    let redirects = 0;
+
+    for (;;) {
+      await assertRemoteEgressAllowed(request.url, options.policy);
+      const replay = request.clone();
+      const response = await baseFetch(request, { redirect: 'manual' });
+      if (!isRedirectStatus(response.status)) return response;
+
+      const location = response.headers.get('location');
+      if (!location) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          'Remote MCP redirect did not include a Location header.',
+          false
+        );
+      }
+      if (redirects >= maxRedirects) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          `Remote MCP redirect budget exhausted after ${redirects} hops.`,
+          false,
+          { maxRedirects }
+        );
+      }
+
+      const next = new URL(location, request.url);
+      await assertRemoteEgressAllowed(next.toString(), options.policy);
+      const crossesOrigin = next.origin !== new URL(request.url).origin;
+      if (crossesOrigin && !allowCrossOriginRedirects) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          'Remote MCP cross-origin redirect is not allowed.',
+          false,
+          { from: new URL(request.url).origin, to: next.origin }
+        );
+      }
+      if (!['GET', 'HEAD'].includes(request.method) && ![307, 308].includes(response.status)) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          'Remote MCP refused a redirect that could rewrite a request with side effects.',
+          false,
+          { method: request.method, status: response.status }
+        );
+      }
+
+      await response.body?.cancel().catch(() => undefined);
+      const redirectedHeaders = new Headers(replay.headers);
+      if (crossesOrigin) {
+        redirectedHeaders.delete('authorization');
+        redirectedHeaders.delete('cookie');
+        redirectedHeaders.delete('proxy-authorization');
+      }
+      request = new Request(next, {
+        method: replay.method,
+        headers: redirectedHeaders,
+        body: ['GET', 'HEAD'].includes(replay.method) ? undefined : replay.body,
+        redirect: 'manual',
+        signal: replay.signal,
+        ...(replay.body ? { duplex: 'half' } : {}),
+      } as RequestInit);
+      redirects += 1;
+    }
+  };
+}
+
+function isRedirectStatus(status: number): boolean {
+  return [301, 302, 303, 307, 308].includes(status);
 }
 
 function hostMatches(hostname: string, candidate: string): boolean {

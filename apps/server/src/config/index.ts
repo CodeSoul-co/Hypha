@@ -482,6 +482,7 @@ const configSchema = z.object({
             command: z.string().optional(),
             args: z.array(z.string()).optional(),
             endpoint: z.string().url().optional(),
+            sessionMode: z.enum(['protocol_default', 'stateless']).optional(),
             credentialRef: z
               .string()
               .regex(/^[a-z][a-z0-9+.-]*:[^\s]+$/)
@@ -496,6 +497,21 @@ const configSchema = z.object({
                 maxBackoffMs: z.number().int().nonnegative().optional(),
                 jitterRatio: z.number().min(0).max(1).optional(),
                 maxElapsedMs: z.number().int().positive().optional(),
+              })
+              .optional(),
+            protocolVersionPolicy: z
+              .object({
+                allowedVersions: z.array(z.string().min(1)).min(1),
+                rejectUnknown: z.boolean().default(true),
+              })
+              .optional(),
+            egressPolicy: z
+              .object({
+                allowedHosts: z.array(z.string().min(1)).optional(),
+                denyPrivateNetworks: z.boolean().default(true),
+                requireTls: z.boolean().default(true),
+                maxRedirects: z.number().int().min(0).max(10).default(0),
+                allowCrossOriginRedirects: z.boolean().default(false),
               })
               .optional(),
           })

@@ -1132,6 +1132,12 @@ describe('@hypha/mcp normalization', () => {
       initializationTimeoutMs: 10_000,
       requestTimeoutMs: 5000,
       shutdownTimeoutMs: 5000,
+      egressPolicy: {
+        requireTls: false,
+        denyPrivateNetworks: false,
+        allowedHosts: ['127.0.0.1'],
+        maxRedirects: 0,
+      },
     });
 
     try {
