@@ -66,6 +66,27 @@ describe('RuntimeBackboneLifecycle', () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it('runs integrity audit before readiness and closes a rejected candidate', async () => {
+    const close = jest.fn();
+    const candidate: TestBackbone = {
+      id: 'runtime.corrupt',
+      eventStore: {
+        health: async () => ({
+          status: 'healthy',
+          checkedAt: '2026-07-21T08:00:00.000Z',
+        }),
+      },
+      close,
+    };
+    const audit = jest.fn().mockRejectedValue(new Error('integrity audit failed'));
+    const lifecycle = new RuntimeBackboneLifecycle(async () => candidate, { audit });
+
+    await expect(lifecycle.initialize()).rejects.toThrow('integrity audit failed');
+    expect(audit).toHaveBeenCalledWith(candidate, undefined);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(lifecycle.isInitialized()).toBe(false);
+  });
+
   it('rejects access before startup and closes the accepted backbone once', async () => {
     const close = jest.fn();
     const lifecycle = new RuntimeBackboneLifecycle<TestBackbone>(async () => ({

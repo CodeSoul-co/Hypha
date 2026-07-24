@@ -64,6 +64,45 @@ describe('SQLiteDurableEventStore', () => {
     await expect(reopened.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
+  it('scans canonical Events with stable sequence and page byte bounds', async () => {
+    const registry = await eventRegistry('run.created', 'run.started');
+    const store = openStore(temporaryDatabase(), registry);
+    const firstScope = stream('user-a', 'run-a');
+    const secondScope = stream('user-b', 'run-b');
+    await store.append(
+      appendRequest(firstScope, [event('event-1', 'run.created', firstScope, 'created')], {
+        idempotencyKey: 'scan-1',
+      })
+    );
+    await store.append(
+      appendRequest(secondScope, [event('event-2', 'run.started', secondScope, 'started')], {
+        idempotencyKey: 'scan-2',
+      })
+    );
+
+    const first = await store.scanCanonicalEvents({
+      afterGlobalSequence: 0,
+      limit: 1,
+      maxBytes: 64_000,
+    });
+    expect(first).toMatchObject({
+      lastGlobalSequence: 1,
+      hasMore: true,
+      events: [{ id: 'event-1', globalSequence: 1 }],
+    });
+    const second = await store.scanCanonicalEvents({
+      afterGlobalSequence: first.lastGlobalSequence,
+      limit: 1,
+      maxBytes: 64_000,
+    });
+    expect(second).toMatchObject({
+      lastGlobalSequence: 2,
+      hasMore: false,
+      events: [{ id: 'event-2', globalSequence: 2 }],
+    });
+    expect(first.scannedBytes).toBeGreaterThan(0);
+  });
+
   it('reuses an identical idempotent append and rejects key reuse with different input', async () => {
     const registry = await eventRegistry('run.created');
     const store = openStore(temporaryDatabase(), registry);

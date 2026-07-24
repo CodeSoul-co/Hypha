@@ -11,6 +11,10 @@ export interface RuntimeBackboneResource {
 export type RuntimeBackboneFactory<TBackbone extends RuntimeBackboneResource = RuntimeBackbone> =
   () => TBackbone | Promise<TBackbone>;
 
+export interface RuntimeBackboneLifecycleOptions<TBackbone extends RuntimeBackboneResource> {
+  audit?: (backbone: TBackbone, signal?: AbortSignal) => Promise<void>;
+}
+
 /**
  * Owns startup readiness and shutdown for one canonical Runtime backbone.
  */
@@ -19,13 +23,16 @@ export class RuntimeBackboneLifecycle<TBackbone extends RuntimeBackboneResource 
   private initialization?: Promise<TBackbone>;
   private closed = false;
 
-  constructor(private readonly factory: RuntimeBackboneFactory<TBackbone>) {}
+  constructor(
+    private readonly factory: RuntimeBackboneFactory<TBackbone>,
+    private readonly options: RuntimeBackboneLifecycleOptions<TBackbone> = {}
+  ) {}
 
-  async initialize(): Promise<TBackbone> {
+  async initialize(signal?: AbortSignal): Promise<TBackbone> {
     if (this.closed) throw new Error('Canonical Runtime lifecycle is closed');
     if (this.backbone) return this.backbone;
 
-    const pending = this.initialization ?? this.openHealthyBackbone();
+    const pending = this.initialization ?? this.openHealthyBackbone(signal);
     this.initialization = pending;
     try {
       return await pending;
@@ -55,7 +62,7 @@ export class RuntimeBackboneLifecycle<TBackbone extends RuntimeBackboneResource 
     backbone?.close();
   }
 
-  private async openHealthyBackbone(): Promise<TBackbone> {
+  private async openHealthyBackbone(signal?: AbortSignal): Promise<TBackbone> {
     let candidate: TBackbone | undefined;
     try {
       candidate = await this.factory();
@@ -65,6 +72,7 @@ export class RuntimeBackboneLifecycle<TBackbone extends RuntimeBackboneResource 
           `Canonical Runtime event store is ${health.status}${health.message ? `: ${health.message}` : ''}`
         );
       }
+      await this.options.audit?.(candidate, signal);
       if (this.closed) throw new Error('Canonical Runtime lifecycle closed during initialization');
       this.backbone = candidate;
       return candidate;

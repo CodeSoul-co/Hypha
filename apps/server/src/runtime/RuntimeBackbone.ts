@@ -3,6 +3,7 @@ import {
   SQLiteProjectionStore,
   SQLiteRunLeaseStore,
   SQLiteReActContinuationCheckpointStore,
+  SQLiteRuntimeIntegrityStore,
   SQLiteRuntimeCheckpointStore,
   SQLiteSessionQueue,
   SQLiteStateExecutionClaimStore,
@@ -26,6 +27,7 @@ export interface RuntimeBackbone extends RuntimeCompositionDependencies {
   stateClaims: SQLiteStateExecutionClaimStore;
   sessionQueue: SQLiteSessionQueue;
   reactCheckpoints: SQLiteReActContinuationCheckpointStore;
+  integrityStore: SQLiteRuntimeIntegrityStore;
   close(): void;
 }
 
@@ -79,6 +81,7 @@ export function createRuntimeBackbone(options: RuntimeBackboneOptions): RuntimeB
       new SQLiteReActContinuationCheckpointStore({ filename }),
       closeables
     );
+    const integrityStore = opened(new SQLiteRuntimeIntegrityStore({ filename }), closeables);
     let closed = false;
 
     return Object.freeze({
@@ -92,6 +95,7 @@ export function createRuntimeBackbone(options: RuntimeBackboneOptions): RuntimeB
       stateClaims,
       sessionQueue,
       reactCheckpoints,
+      integrityStore,
       close: () => {
         if (closed) return;
         closed = true;
