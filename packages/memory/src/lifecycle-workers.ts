@@ -1,4 +1,5 @@
 import type { NormalizedMemoryError } from './contracts';
+import { runWithLeaseHeartbeat } from './lease-heartbeat';
 import { normalizeMemoryError } from './memory-utils';
 
 export type MemoryLifecycleWorkerType =
@@ -19,7 +20,9 @@ export interface MemoryLifecycleTask<TPayload = unknown> {
   attempts: number;
   availableAt: string;
   leaseOwner?: string;
+  leaseToken?: string;
   leaseExpiresAt?: string;
+  fencingToken?: number;
   lastError?: NormalizedMemoryError;
   createdAt: string;
   updatedAt: string;
@@ -34,13 +37,23 @@ export interface MemoryLifecycleTaskStore {
     leaseUntil: string,
     limit: number
   ): Promise<MemoryLifecycleTask[]>;
-  complete(taskId: string, now: string): Promise<void>;
+  renew(
+    taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string,
+    leaseUntil: string
+  ): Promise<boolean>;
+  complete(taskId: string, ownerId: string, leaseToken: string, now: string): Promise<boolean>;
   fail(
     taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string,
     error: NormalizedMemoryError,
     retryAt: string,
     deadLetter: boolean
-  ): Promise<void>;
+  ): Promise<boolean>;
   list(type?: MemoryLifecycleWorkerType): Promise<MemoryLifecycleTask[]>;
 }
 
@@ -73,38 +86,67 @@ export class InMemoryMemoryLifecycleTaskStore implements MemoryLifecycleTaskStor
       )
       .slice(0, limit);
     for (const task of tasks) {
+      const fencingToken = (task.fencingToken ?? 0) + 1;
       task.state = 'processing';
       task.attempts += 1;
       task.leaseOwner = ownerId;
+      task.leaseToken = lifecycleLeaseToken(ownerId, task.id, fencingToken);
       task.leaseExpiresAt = leaseUntil;
+      task.fencingToken = fencingToken;
       task.updatedAt = now;
     }
     return tasks.map((task) => structuredClone(task));
   }
 
-  async complete(taskId: string, now: string): Promise<void> {
+  async renew(
+    taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string,
+    leaseUntil: string
+  ): Promise<boolean> {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!hasLifecycleLease(task, ownerId, leaseToken, now) || leaseUntil <= now) return false;
+    task.leaseExpiresAt = leaseUntil;
+    task.updatedAt = now;
+    return true;
+  }
+
+  async complete(
+    taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string
+  ): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!hasLifecycleLease(task, ownerId, leaseToken, now)) return false;
     task.state = 'completed';
     task.updatedAt = now;
     task.leaseOwner = undefined;
+    task.leaseToken = undefined;
     task.leaseExpiresAt = undefined;
+    return true;
   }
 
   async fail(
     taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string,
     error: NormalizedMemoryError,
     retryAt: string,
     deadLetter: boolean
-  ): Promise<void> {
+  ): Promise<boolean> {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!hasLifecycleLease(task, ownerId, leaseToken, now)) return false;
     task.state = deadLetter ? 'dead_letter' : 'failed';
     task.lastError = error;
     task.availableAt = retryAt;
     task.updatedAt = retryAt;
     task.leaseOwner = undefined;
+    task.leaseToken = undefined;
     task.leaseExpiresAt = undefined;
+    return true;
   }
 
   async list(type?: MemoryLifecycleWorkerType): Promise<MemoryLifecycleTask[]> {
@@ -138,6 +180,7 @@ export interface MemoryLifecycleWorkerOptions {
   handler: MemoryLifecycleTaskHandler;
   batchSize?: number;
   leaseMs?: number;
+  renewalMs?: number;
   retryDelayMs?: number;
   maxAttempts?: number;
   pollIntervalMs?: number;
@@ -156,6 +199,7 @@ export class LeasedMemoryLifecycleWorker {
   private running = false;
   private timer?: ReturnType<typeof setTimeout>;
   private controller?: AbortController;
+  private activeRun?: Promise<MemoryLifecycleWorkerRunResult>;
   private readonly now: () => Date;
 
   constructor(protected readonly options: MemoryLifecycleWorkerOptions) {
@@ -181,21 +225,60 @@ export class LeasedMemoryLifecycleWorker {
     for (const task of tasks) {
       const controller = new AbortController();
       this.controller = controller;
+      const leaseToken = requiredLeaseToken(task);
       try {
-        await this.options.handler(task, controller.signal);
-        await this.options.store.complete(task.id, this.now().toISOString());
-        result.completed += 1;
+        await runWithLeaseHeartbeat((signal) => this.options.handler(task, signal), {
+          leaseMs: this.options.leaseMs ?? 30_000,
+          renewalMs: this.options.renewalMs,
+          now: this.now,
+          controller,
+          description: `Memory lifecycle task ${task.id}`,
+          renew: (renewedAt, renewedUntil) =>
+            this.options.store.renew(
+              task.id,
+              this.options.ownerId,
+              leaseToken,
+              renewedAt,
+              renewedUntil
+            ),
+        });
+        const completed = await this.options.store.complete(
+          task.id,
+          this.options.ownerId,
+          leaseToken,
+          this.now().toISOString()
+        );
+        if (completed) result.completed += 1;
+        else {
+          result.failed += 1;
+          await this.options.onEvent?.({
+            type: 'memory.worker.failed',
+            workerType: this.options.type,
+            taskId: task.id,
+            operationId: task.operationId,
+            error: normalizeMemoryError(new Error('Memory lifecycle lease was lost.')),
+          });
+        }
       } catch (error) {
         const normalized = normalizeMemoryError(error);
         const deadLetter = task.attempts >= (this.options.maxAttempts ?? 5);
+        const failedAt = this.now();
         const retryAt = new Date(
-          this.now().getTime() + (this.options.retryDelayMs ?? 1_000) * task.attempts
+          failedAt.getTime() + (this.options.retryDelayMs ?? 1_000) * task.attempts
         ).toISOString();
-        await this.options.store.fail(task.id, normalized, retryAt, deadLetter);
-        if (deadLetter) result.deadLettered += 1;
+        const failed = await this.options.store.fail(
+          task.id,
+          this.options.ownerId,
+          leaseToken,
+          failedAt.toISOString(),
+          normalized,
+          retryAt,
+          deadLetter
+        );
+        if (failed && deadLetter) result.deadLettered += 1;
         else result.failed += 1;
         await this.options.onEvent?.({
-          type: deadLetter ? 'memory.worker.dead_lettered' : 'memory.worker.failed',
+          type: failed && deadLetter ? 'memory.worker.dead_lettered' : 'memory.worker.failed',
           workerType: this.options.type,
           taskId: task.id,
           operationId: task.operationId,
@@ -218,8 +301,16 @@ export class LeasedMemoryLifecycleWorker {
     const poll = async (): Promise<void> => {
       if (!this.running) return;
       try {
-        await this.runOnce();
+        this.activeRun = this.runOnce();
+        await this.activeRun;
+      } catch (error) {
+        await this.options.onEvent?.({
+          type: 'memory.worker.failed',
+          workerType: this.options.type,
+          error: normalizeMemoryError(error),
+        });
       } finally {
+        this.activeRun = undefined;
         if (this.running) {
           this.timer = setTimeout(poll, this.options.pollIntervalMs ?? 1_000);
         }
@@ -237,6 +328,15 @@ export class LeasedMemoryLifecycleWorker {
       type: 'memory.worker.stopped',
       workerType: this.options.type,
     });
+  }
+
+  async drain(): Promise<void> {
+    await this.activeRun;
+  }
+
+  async stopAndDrain(): Promise<void> {
+    this.stop();
+    await this.drain();
   }
 }
 
@@ -274,4 +374,27 @@ export class ProviderReconciliationWorker extends LeasedMemoryLifecycleWorker {
   constructor(options: Omit<MemoryLifecycleWorkerOptions, 'type'>) {
     super({ ...options, type: 'provider_reconciliation' });
   }
+}
+
+function lifecycleLeaseToken(ownerId: string, taskId: string, fencingToken: number): string {
+  return ownerId + ':' + taskId + ':' + fencingToken;
+}
+
+function hasLifecycleLease(
+  task: MemoryLifecycleTask | undefined,
+  ownerId: string,
+  leaseToken: string,
+  now: string
+): task is MemoryLifecycleTask {
+  return (
+    task?.state === 'processing' &&
+    task.leaseOwner === ownerId &&
+    task.leaseToken === leaseToken &&
+    (task.leaseExpiresAt ?? '') > now
+  );
+}
+
+function requiredLeaseToken(task: MemoryLifecycleTask): string {
+  if (!task.leaseToken) throw new Error('Leased Memory lifecycle task is missing its lease token.');
+  return task.leaseToken;
 }

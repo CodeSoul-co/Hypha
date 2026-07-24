@@ -1,6 +1,7 @@
 import type { ManagedMemoryScope } from './contracts';
 import type { ProviderHealth } from './operations';
 import { hashMemoryScope } from './memory-utils';
+import { scanRedisWorkingMemoryKeys, type RedisScanBudget } from './memory-server-redis-migration';
 
 export interface WorkingMemoryEntry<TValue = unknown> {
   id: string;
@@ -115,7 +116,9 @@ export interface RedisWorkingMemoryStoreOptions {
   namespace?: string;
   defaultTtlSeconds?: number;
   scanCount?: number;
+  scanBudget?: Partial<Omit<RedisScanBudget, 'count'>>;
   now?: () => Date;
+  nowMs?: () => number;
 }
 
 export class RedisWorkingMemoryStore implements WorkingMemoryStore {
@@ -217,20 +220,18 @@ export class RedisWorkingMemoryStore implements WorkingMemoryStore {
   }
 
   private async scanKeys(pattern: string): Promise<string[]> {
-    const keys: string[] = [];
-    let cursor = '0';
-    do {
-      const [next, batch] = await this.options.client.scan(
-        cursor,
-        'MATCH',
-        pattern,
-        'COUNT',
-        this.options.scanCount ?? 100
-      );
-      cursor = next;
-      keys.push(...batch);
-    } while (cursor !== '0');
-    return Array.from(new Set(keys)).sort();
+    const report = await scanRedisWorkingMemoryKeys(
+      this.options.client,
+      pattern,
+      {
+        maxCalls: this.options.scanBudget?.maxCalls ?? 100,
+        maxItems: this.options.scanBudget?.maxItems ?? 10_000,
+        maxDurationMs: this.options.scanBudget?.maxDurationMs ?? 60_000,
+        count: this.options.scanCount ?? 100,
+      },
+      this.options.nowMs
+    );
+    return report.keys;
   }
 }
 

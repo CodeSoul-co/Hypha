@@ -16,6 +16,8 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [Tool/MCP Architecture](architecture/tool-mcp.md): governed execution, Invocation lifecycle, MCP trust, drift, and Run snapshots.
 - [Execution Contracts](architecture/execution.md): provider-neutral Workspace, Sandbox, Command, Store, Event, and cache-fingerprint boundaries.
 - [Governed Memory](architecture/memory.md): scoped records, atomic persistence and index outbox, deterministic retrieval, bounded context, external adapters, and replay/cache bindings.
+- [Managed Memory Migration](guides/memory-managed-migration.md): move legacy memory consumers to the policy, harness, event, timeout, and recovery boundary.
+- [External Memory Provider Runtime](guides/memory-external-provider-runtime.md): stable provider ID mapping, restart-safe persistence, cancellation, and deployment boundaries.
 - [Execution Threat Model](architecture/execution-threat-model.md): trust boundaries, audited runtime surfaces, required controls, and residual limitations.
 - [Execution Provider Matrix](reference/execution-provider-capability-matrix.md): provider guarantees and fail-closed capability negotiation.
 - [ADRs](adr/README.md): accepted architecture decisions.
