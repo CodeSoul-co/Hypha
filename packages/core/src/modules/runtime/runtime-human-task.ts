@@ -100,6 +100,8 @@ export function assertRuntimeHumanTaskResume<TTask extends RuntimeHumanTask>(
     checkpointRef?: string;
     policyRef?: string;
     providerRevision?: string;
+    activityDescriptorRef?: string;
+    activityDescriptorHash?: string;
   }
 ): TTask {
   if (!task) humanTaskError('HUMAN_TASK_NOT_FOUND', 'Human task was not found.');
@@ -114,7 +116,10 @@ export function assertRuntimeHumanTaskResume<TTask extends RuntimeHumanTask>(
     task.checkpointRef === expected.checkpointRef &&
     task.policyRef === expected.policyRef &&
     task.providerRevision === expected.providerRevision;
-  if (!matches) {
+  const activityMatches =
+    task.activityDescriptorRef === expected.activityDescriptorRef &&
+    task.activityDescriptorHash === expected.activityDescriptorHash;
+  if (!matches || !activityMatches) {
     humanTaskError(
       'HUMAN_TASK_RESUME_REVALIDATION_FAILED',
       'Human task resume evidence changed after approval.',
@@ -209,6 +214,8 @@ function parseRequestedTask(
     checkpointRef: text(payload.checkpointRef),
     policyRef: text(payload.policyRef),
     providerRevision: text(payload.providerRevision),
+    activityDescriptorRef: text(payload.activityDescriptorRef),
+    activityDescriptorHash: text(payload.activityDescriptorHash),
     reason: text(payload.reason),
     metadata,
   };

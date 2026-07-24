@@ -41,6 +41,8 @@ export interface RuntimeHumanTask {
   checkpointRef?: string;
   policyRef?: string;
   providerRevision?: string;
+  activityDescriptorRef?: string;
+  activityDescriptorHash?: string;
   decidedBy?: string;
   decidedAt?: string;
   reason?: string;
@@ -59,6 +61,8 @@ export interface RuntimeHumanTaskRequest {
   checkpointRef?: string;
   policyRef?: string;
   providerRevision?: string;
+  activityDescriptorRef?: string;
+  activityDescriptorHash?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
 }

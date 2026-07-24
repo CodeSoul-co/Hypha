@@ -5,7 +5,8 @@ export type RuntimeActivityEventType =
   | 'runtime.activity.completed'
   | 'runtime.activity.failed'
   | 'runtime.activity.waiting'
-  | 'runtime.activity.cancelled';
+  | 'runtime.activity.cancelled'
+  | 'activity.redispatch.requested';
 
 export type FrameworkEventType =
   | 'session.created'

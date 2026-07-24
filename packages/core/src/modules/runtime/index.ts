@@ -18,6 +18,8 @@ export * from './resource-coordinator';
 export * from './runtime-helper-sdk';
 export * from './runtime-io-helpers';
 export * from './runtime-activity-helper';
+export * from './runtime-activity-descriptor-store';
+export * from './runtime-activity-redispatch-service';
 export * from './run-control';
 export * from './runtime-timer-worker';
 export * from './runtime-human-wait-service';

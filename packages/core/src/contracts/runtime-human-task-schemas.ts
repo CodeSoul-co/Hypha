@@ -21,26 +21,32 @@ const hashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const timestampSchema = z.string().datetime({ offset: true });
 const metadataSchema = z.record(z.string(), z.unknown());
 
-export const runtimeHumanTaskRequestSchema = z
-  .object({
-    taskId: nonEmptyStringSchema,
-    kind: z.enum(RUNTIME_HUMAN_TASK_KINDS),
-    subjectRef: nonEmptyStringSchema,
-    subjectHash: hashSchema,
-    requestedBy: nonEmptyStringSchema,
-    allowedDecisionScopes: z.array(nonEmptyStringSchema).min(1),
-    requestedAt: timestampSchema,
-    expiresAt: timestampSchema.optional(),
-    checkpointRef: nonEmptyStringSchema.optional(),
-    policyRef: nonEmptyStringSchema.optional(),
-    providerRevision: nonEmptyStringSchema.optional(),
-    reason: nonEmptyStringSchema.optional(),
-    metadata: metadataSchema.optional(),
-  })
-  .strict() satisfies ZodType<RuntimeHumanTaskRequest>;
+const runtimeHumanTaskRequestShape = {
+  taskId: nonEmptyStringSchema,
+  kind: z.enum(RUNTIME_HUMAN_TASK_KINDS),
+  subjectRef: nonEmptyStringSchema,
+  subjectHash: hashSchema,
+  requestedBy: nonEmptyStringSchema,
+  allowedDecisionScopes: z.array(nonEmptyStringSchema).min(1),
+  requestedAt: timestampSchema,
+  expiresAt: timestampSchema.optional(),
+  checkpointRef: nonEmptyStringSchema.optional(),
+  policyRef: nonEmptyStringSchema.optional(),
+  providerRevision: nonEmptyStringSchema.optional(),
+  activityDescriptorRef: nonEmptyStringSchema.optional(),
+  activityDescriptorHash: hashSchema.optional(),
+  reason: nonEmptyStringSchema.optional(),
+  metadata: metadataSchema.optional(),
+};
 
-export const runtimeHumanTaskSchema = runtimeHumanTaskRequestSchema
-  .extend({
+export const runtimeHumanTaskRequestSchema = z
+  .object(runtimeHumanTaskRequestShape)
+  .strict()
+  .superRefine(validateActivityDescriptorReference) satisfies ZodType<RuntimeHumanTaskRequest>;
+
+export const runtimeHumanTaskSchema = z
+  .object({
+    ...runtimeHumanTaskRequestShape,
     runId: nonEmptyStringSchema,
     stateId: nonEmptyStringSchema,
     stateAttempt: z.number().int().positive(),
@@ -49,7 +55,8 @@ export const runtimeHumanTaskSchema = runtimeHumanTaskRequestSchema
     decidedBy: nonEmptyStringSchema.optional(),
     decidedAt: timestampSchema.optional(),
   })
-  .strict() satisfies ZodType<RuntimeHumanTask>;
+  .strict()
+  .superRefine(validateActivityDescriptorReference) satisfies ZodType<RuntimeHumanTask>;
 
 export const runtimeHumanTaskDecisionCommandSchema = z
   .object({
@@ -101,6 +108,8 @@ export const runtimeHumanTaskRequestJsonSchema: JsonSchema = {
     checkpointRef: nonEmptyStringJsonSchema,
     policyRef: nonEmptyStringJsonSchema,
     providerRevision: nonEmptyStringJsonSchema,
+    activityDescriptorRef: nonEmptyStringJsonSchema,
+    activityDescriptorHash: hashJsonSchema,
     reason: nonEmptyStringJsonSchema,
     metadata: metadataJsonSchema,
   },
@@ -229,4 +238,22 @@ export function validateRuntimeHumanTaskDecisionCommand(
   input: unknown
 ): RuntimeHumanTaskDecisionCommand {
   return runtimeHumanTaskDecisionCommandDefinition.parse(input);
+}
+
+function validateActivityDescriptorReference(
+  value: {
+    activityDescriptorRef?: string;
+    activityDescriptorHash?: string;
+  },
+  context: z.RefinementCtx
+): void {
+  if (
+    (value.activityDescriptorRef === undefined) !==
+    (value.activityDescriptorHash === undefined)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: 'activityDescriptorRef and activityDescriptorHash must be provided together',
+    });
+  }
 }

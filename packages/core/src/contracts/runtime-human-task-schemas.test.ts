@@ -46,5 +46,11 @@ describe('Runtime HumanTask contracts', () => {
         allowedDecisionScopes: [],
       })
     ).toThrow();
+    expect(() =>
+      runtimeHumanTaskSchema.parse({
+        ...runtimeHumanTaskExample,
+        activityDescriptorRef: 'artifact-ref:missing-hash',
+      })
+    ).toThrow(/provided together/u);
   });
 });
