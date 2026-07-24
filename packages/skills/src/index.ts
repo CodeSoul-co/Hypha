@@ -19,6 +19,8 @@ import {
   type EffectiveAgentCapabilitySnapshot,
 } from '@hypha/tools';
 
+export * from './remote-registry';
+
 export interface SkillRef {
   id: string;
   version?: string;
