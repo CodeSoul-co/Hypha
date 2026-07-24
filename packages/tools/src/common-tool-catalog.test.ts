@@ -36,7 +36,7 @@ describe('canonical Common Tool catalog', () => {
       profiles: Array<{ toolSpecRef: { id: string; version?: string } }>;
     };
     const profiles = document.profiles;
-    expect(profiles).toHaveLength(5);
+    expect(profiles).toHaveLength(6);
     for (const profile of profiles) {
       expect(resolveCommonToolSpec(profile.toolSpecRef.id)).toMatchObject({
         id: profile.toolSpecRef.id,

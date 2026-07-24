@@ -36,6 +36,17 @@ profiles:
       pluginId: trusted.hash
     requiredCapabilities: [execute, health]
 
+  - id: local.mcp
+    kind: mcp_stdio
+    toolSpecRef:
+      id: common.hash_reference
+      version: 1.0.0
+    binding:
+      mcpConnectionProfileRef: mcp.local
+      mcpServerId: local
+      mcpCapabilityId: hash.sha256
+    requiredCapabilities: [execute, cancel, health, close]
+
   - id: cloud.mcp
     kind: mcp_streamable_http
     toolSpecRef:

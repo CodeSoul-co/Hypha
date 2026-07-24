@@ -31,6 +31,7 @@ describe('ToolProfileBindingRegistry', () => {
           sideEffectLevel: 'irreversible',
         },
         resolveCredential: async () => null,
+        acquireCredential: async () => null,
       })
     ).rejects.toMatchObject({ code: 'TOOL_ADAPTER_BINDING_UNAVAILABLE' });
   });

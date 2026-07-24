@@ -270,7 +270,17 @@ describe('ToolAdapterFactoryRegistry', () => {
     });
 
     const loaded = await loadToolAdapterProfiles(document, registry);
-    expect(loaded.list()).toHaveLength(5);
+    expect(loaded.list()).toHaveLength(6);
+    expect(loaded.list().map(({ profile }) => profile.kind).sort()).toEqual(
+      [
+        'execution',
+        'http',
+        'local_function',
+        'mcp_stdio',
+        'mcp_streamable_http',
+        'plugin',
+      ].sort()
+    );
     expect(loaded.list().every((entry) => entry.status === 'ready')).toBe(true);
     const context: ToolCallContext = {
       runId: 'run-profile',
@@ -294,11 +304,14 @@ describe('ToolAdapterFactoryRegistry', () => {
       'local.command': expect.objectContaining({ status: 'healthy' }),
       'cloud.search': expect.objectContaining({ status: 'healthy' }),
       'plugin.hash': expect.objectContaining({ status: 'healthy' }),
+      'local.mcp': expect.objectContaining({ status: 'healthy' }),
       'cloud.mcp': expect.objectContaining({ status: 'healthy' }),
     });
     await loaded.close();
-    expect(closed.sort()).toEqual(['cloud.mcp', 'local.command']);
-    expect(cancelled).toEqual(expect.arrayContaining(['cancel:local.command', 'cancel:cloud.mcp']));
+    expect(closed.sort()).toEqual(['cloud.mcp', 'local.command', 'local.mcp']);
+    expect(cancelled).toEqual(
+      expect.arrayContaining(['cancel:local.command', 'cancel:local.mcp', 'cancel:cloud.mcp'])
+    );
     expect(fetch).toHaveBeenCalledOnce();
   });
 });
