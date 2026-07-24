@@ -74,14 +74,7 @@ export class ServerIngressReActContinuationScheduler implements ReActContinuatio
     input: ReActContinuationScheduleRequest
   ): Promise<ReActContinuationScheduleResult> {
     const request = validateScheduleRequest(input);
-    const idempotencyKey = hashCanonicalJson({
-      version: request.version,
-      runId: request.payload.runId,
-      stepId: request.payload.stepId,
-      checkpointSequence: request.payload.checkpointSequence,
-      checkpointHash: request.payload.checkpointHash,
-      scopeHash: request.payload.scopeHash,
-    });
+    const idempotencyKey = reActContinuationIdempotencyKey(request.payload);
     const record = await this.options.ingress.enqueue({
       id: `react-continuation:${idempotencyKey.slice('sha256:'.length)}`,
       commandType: 'continue_react',
@@ -110,6 +103,18 @@ export class ServerIngressReActContinuationScheduler implements ReActContinuatio
   }
 }
 
+export function reActContinuationIdempotencyKey(input: ContinueReActCommandPayloadV1): string {
+  const payload = validateContinueReActCommandPayload(input);
+  return hashCanonicalJson({
+    version: payload.version,
+    runId: payload.runId,
+    stepId: payload.stepId,
+    checkpointSequence: payload.checkpointSequence,
+    checkpointHash: payload.checkpointHash,
+    scopeHash: payload.scopeHash,
+  });
+}
+
 export type LongHorizonReActDisposition =
   | 'completed'
   | 'continuation_scheduled'
@@ -121,16 +126,23 @@ export type LongHorizonReActDisposition =
 export interface LongHorizonReActQuantumInput {
   context: ReActRunContext;
   control?: ReActRunControl;
-  continuation?: {
-    tenantId?: string;
-    workspaceId?: string;
-    availableAt?: string;
-    priority?: number;
-    maxAttempts?: number;
-    buildPayload(
-      checkpoint: Readonly<ReActContinuationCheckpoint>
-    ): ContinueReActCommandPayloadV1 | Promise<ContinueReActCommandPayloadV1>;
-  };
+  continuation?: ReActContinuationIntent;
+}
+
+export interface ReActContinuationIntent {
+  tenantId?: string;
+  workspaceId?: string;
+  availableAt?: string;
+  priority?: number;
+  maxAttempts?: number;
+  buildPayload(
+    checkpoint: Readonly<ReActContinuationCheckpoint>
+  ): ContinueReActCommandPayloadV1 | Promise<ContinueReActCommandPayloadV1>;
+}
+
+export interface CoordinateReActQuantumResultInput {
+  react: ReActRunResult;
+  continuation?: ReActContinuationIntent;
 }
 
 export interface LongHorizonReActQuantumResult {
@@ -162,6 +174,16 @@ export class LongHorizonReActSupervisor {
 
   async runQuantum(input: LongHorizonReActQuantumInput): Promise<LongHorizonReActQuantumResult> {
     const react = await this.options.runner.run(input.context, input.control);
+    return this.coordinateResult({
+      react,
+      ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
+    });
+  }
+
+  async coordinateResult(
+    input: CoordinateReActQuantumResultInput
+  ): Promise<LongHorizonReActQuantumResult> {
+    const { react } = input;
     if (react.status === 'completed') return { disposition: 'completed', react };
     if (react.status === 'cancelled') return { disposition: 'cancelled', react };
     if (react.status === 'failed') return { disposition: 'failed', react };
