@@ -9,6 +9,7 @@ import type {
 } from '../../contracts/runtime-recovery';
 import type { RuntimeScope } from '../../contracts/runtime';
 import type { EventCreateInput, FrameworkEventType } from '../../events';
+import { FrameworkError } from '../../errors';
 import type { JsonSchema } from '../../specs';
 import { hashCanonicalJson } from './canonical-json';
 import { InMemoryEventSchemaRegistry } from './event-schema-registry';
@@ -19,6 +20,7 @@ import { InMemoryProjectionStore, ProjectionEngine } from './projection';
 import { InMemoryRunLeaseStore } from './run-lease-store';
 import { RuntimeCancellationService } from './runtime-cancellation-service';
 import { RuntimeRecoveryService } from './runtime-recovery-service';
+import { InMemoryStateExecutionClaimStore } from './state-execution-claim-store';
 
 const scope: RuntimeScope = {
   tenantId: 'tenant.recovery',
@@ -74,6 +76,7 @@ async function fixture(
   const projectionStore = new InMemoryProjectionStore<RuntimeOrchestrationProjection>();
   const projections = new ProjectionEngine({ events, now });
   const runLeases = new InMemoryRunLeaseStore({ now });
+  const stateClaims = new InMemoryStateExecutionClaimStore({ runLeaseStore: runLeases, now });
   const activityCalls = { reconcile: 0, retry: 0 };
   const requeueCalls: string[] = [];
   const activities: RuntimeActivityReconciliationPort =
@@ -139,6 +142,7 @@ async function fixture(
     projections,
     projectionStore,
     runLeases,
+    stateClaims,
     activities,
     cancellations,
     requeue,
@@ -162,6 +166,7 @@ async function fixture(
     projections,
     projectionStore,
     runLeases,
+    stateClaims,
     activityCalls,
     requeueCalls,
     now,
@@ -250,6 +255,47 @@ async function scan(target: Awaited<ReturnType<typeof fixture>>) {
   return target.recovery.scan({ checkedAt: '2026-07-18T12:01:00.000Z', limit: 100 });
 }
 
+async function seedExpiredStateClaim(target: Awaited<ReturnType<typeof fixture>>) {
+  const lease = await target.runLeases.acquire({
+    tenantId: scope.tenantId,
+    userId: scope.userId,
+    runId: scope.runId,
+    partitionKey: `runtime:${scope.runId}`,
+    requestedLeaseId: 'lease.stale-worker',
+    ownerId: 'worker.stale',
+    ttlMs: 1_000,
+    acquiredAt: '2026-07-18T12:00:00.000Z',
+    idempotencyKey: 'lease.stale-worker',
+  });
+  await target.stateClaims.acquire({
+    tenantId: scope.tenantId,
+    userId: scope.userId,
+    runId: scope.runId,
+    stateId: 'Acting',
+    stateAttempt: 1,
+    requestedClaimId: 'claim.stale-worker',
+    processRevision: 'process.recovery@1.0.0',
+    expectedRunRevision: 3,
+    runLease: {
+      scope: {
+        tenantId: scope.tenantId,
+        userId: scope.userId,
+        runId: scope.runId,
+        partitionKey: `runtime:${scope.runId}`,
+      },
+      guard: {
+        leaseId: lease!.id,
+        ownerId: lease!.ownerId,
+        fencingToken: lease!.fencingToken,
+      },
+    },
+    ttlMs: 1_000,
+    acquiredAt: '2026-07-18T12:00:00.000Z',
+    idempotencyKey: 'claim.stale-worker',
+  });
+  return lease!;
+}
+
 describe('RuntimeRecoveryService', () => {
   it('detects projection lag, rebuilds from Events, and reuses the recovery receipt', async () => {
     const target = await fixture();
@@ -322,6 +368,67 @@ describe('RuntimeRecoveryService', () => {
         (item) => item.type === 'recovery.case.escalated'
       )
     ).toHaveLength(1);
+    await project(target);
+    expect(
+      (await scan(target)).candidates.some(
+        (item) =>
+          item.reason === 'ACTIVITY_RESULT_UNAPPLIED' && item.candidateId === candidate.candidateId
+      )
+    ).toBe(false);
+  });
+
+  it('escalates when a provider cannot safely retry an unresolved Activity', async () => {
+    const activities: RuntimeActivityReconciliationPort = {
+      reconcile: async (request) => ({
+        activityId: request.invocation.activityId,
+        status: 'unknown',
+      }),
+      retry: async () => {
+        throw new FrameworkError({
+          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+          message: 'Provider retry is unavailable',
+        });
+      },
+    };
+    const target = await fixture({ activities });
+    await appendActivity(target, 'idempotent');
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_RESULT_UNAPPLIED'
+    )!;
+
+    await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'requires_review',
+      projection: { pendingActivityIds: ['activity.recovery'] },
+    });
+  });
+
+  it('leaves a waiting Activity for its external or human decision path', async () => {
+    const activities: RuntimeActivityReconciliationPort = {
+      reconcile: async (request) => ({
+        activityId: request.invocation.activityId,
+        status: 'waiting',
+        observation: {
+          activityId: request.invocation.activityId,
+          status: 'waiting',
+          eventIds: ['human.review.requested'],
+        },
+      }),
+      retry: async () => {
+        throw new Error('retry is not expected');
+      },
+    };
+    const target = await fixture({ activities });
+    await appendActivity(target, 'external_effect');
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_RESULT_UNAPPLIED'
+    )!;
+
+    await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'requires_review',
+      projection: { pendingActivityIds: ['activity.recovery'] },
+    });
   });
 
   it('retries an explicitly unknown idempotent Activity through the owner Port', async () => {
@@ -352,6 +459,23 @@ describe('RuntimeRecoveryService', () => {
       projection: { pendingActivityIds: [] },
     });
     expect(retries).toBe(1);
+  });
+
+  it('keeps Activity candidate identity stable across repeated scans', async () => {
+    const target = await fixture();
+    await appendActivity(target);
+    await project(target);
+    const first = (
+      await target.recovery.scan({ checkedAt: '2026-07-18T12:01:00.000Z', limit: 100 })
+    ).candidates.find((item) => item.reason === 'ACTIVITY_RESULT_UNAPPLIED')!;
+    const second = (
+      await target.recovery.scan({ checkedAt: '2026-07-18T12:02:00.000Z', limit: 100 })
+    ).candidates.find((item) => item.reason === 'ACTIVITY_RESULT_UNAPPLIED')!;
+
+    expect(second.candidateId).toBe(first.candidateId);
+    await expect(target.recovery.recover(recoveryCommand(second))).resolves.toMatchObject({
+      disposition: 'recovered',
+    });
   });
 
   it('continues an opened recovery case after a process interruption', async () => {
@@ -465,35 +589,48 @@ describe('RuntimeRecoveryService', () => {
     ).toHaveLength(1);
   });
 
-  it('requeues an unleased active Run through the injected queue port', async () => {
+  it('does not treat an idle active Run without a Lease as interrupted execution', async () => {
     const target = await fixture();
     await project(target);
+    const detected = await scan(target);
+
+    expect(detected.candidates).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: 'LEASE_EXPIRED' }),
+        expect.objectContaining({ reason: 'STATE_CLAIM_EXPIRED' }),
+      ])
+    );
+    expect(target.requeueCalls).toEqual([]);
+  });
+
+  it('requeues an expired State Claim through the injected durable queue port', async () => {
+    const target = await fixture();
+    await project(target);
+    await seedExpiredStateClaim(target);
     const candidate = (await scan(target)).candidates.find(
-      (item) => item.reason === 'LEASE_EXPIRED'
+      (item) => item.reason === 'STATE_CLAIM_EXPIRED'
     )!;
 
+    expect(candidate).toMatchObject({ stateId: 'Acting', stateAttempt: 1 });
     await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
       disposition: 'requeued',
     });
     expect(target.requeueCalls).toEqual([scope.runId]);
+    await project(target);
+    expect(
+      (await scan(target)).candidates.some(
+        (item) =>
+          item.reason === 'STATE_CLAIM_EXPIRED' && item.candidateId === candidate.candidateId
+      )
+    ).toBe(false);
   });
 
   it('takes over an expired Lease and fences the stale worker during requeue', async () => {
     const target = await fixture();
     await project(target);
-    const staleLease = await target.runLeases.acquire({
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      runId: scope.runId,
-      partitionKey: `runtime:${scope.runId}`,
-      requestedLeaseId: 'lease.stale-worker',
-      ownerId: 'worker.stale',
-      ttlMs: 1_000,
-      acquiredAt: '2026-07-18T12:00:00.000Z',
-      idempotencyKey: 'lease.stale-worker',
-    });
+    const staleLease = await seedExpiredStateClaim(target);
     const candidate = (await scan(target)).candidates.find(
-      (item) => item.reason === 'LEASE_EXPIRED'
+      (item) => item.reason === 'STATE_CLAIM_EXPIRED'
     )!;
 
     await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({

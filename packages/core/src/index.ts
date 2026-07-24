@@ -38,6 +38,8 @@ export * from './contracts/runtime-timer';
 export * from './contracts/runtime-timer-schemas';
 export * from './contracts/runtime-cancellation';
 export * from './contracts/runtime-cancellation-schemas';
+export * from './contracts/runtime-human-task';
+export * from './contracts/runtime-human-task-schemas';
 export * from './contracts/runtime-recovery';
 export * from './contracts/runtime-recovery-schemas';
 export * from './contracts/runtime-checkpoint';

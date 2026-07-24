@@ -57,6 +57,7 @@ describe('InMemorySessionQueue', () => {
 
     const first = await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
     expect(first?.id).toBe('command.first');
+    expect(first?.attempts).toBe(1);
     await expect(
       queue.claim({ workerId: 'worker.2', now: initialTime, leaseMs: 1_000 })
     ).resolves.toBeNull();
@@ -152,6 +153,7 @@ describe('InMemorySessionQueue', () => {
       leaseMs: 1_000,
     });
     expect(recovered).toMatchObject({ id: 'command.recover', claimedBy: 'worker.recovery' });
+    expect(recovered?.attempts).toBe(2);
     await expect(
       queue.complete({
         commandId: 'command.recover',
@@ -244,5 +246,46 @@ describe('InMemorySessionQueue', () => {
     await expect(
       queue.list({ scope: { userId: 'user.2', sessionId: scope.sessionId } })
     ).resolves.toMatchObject([{ id: 'command.user.2' }]);
+  });
+
+  it('dead-letters a command when its final claim lease expires', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.exhausted', { maxAttempts: 1 }));
+    await queue.claim({ workerId: 'worker.stale', now: initialTime, leaseMs: 1_000 });
+
+    await expect(
+      queue.claim({
+        workerId: 'worker.next',
+        now: '2026-07-18T06:00:02.000Z',
+        leaseMs: 1_000,
+      })
+    ).resolves.toBeNull();
+    await expect(queue.list({ scope, statuses: ['dead_letter'] })).resolves.toMatchObject([
+      {
+        id: 'command.exhausted',
+        attempts: 1,
+        maxAttempts: 1,
+        rejectionCode: 'claim_lease_expired_after_attempt_budget',
+      },
+    ]);
+  });
+
+  it('dead-letters a released final attempt instead of requeueing it', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.released-exhausted', { maxAttempts: 1 }));
+    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    await queue.release({
+      commandId: 'command.released-exhausted',
+      workerId: 'worker.1',
+      releasedAt: '2026-07-18T06:00:00.500Z',
+    });
+
+    await expect(queue.list({ scope, statuses: ['dead_letter'] })).resolves.toMatchObject([
+      {
+        id: 'command.released-exhausted',
+        attempts: 1,
+        rejectionCode: 'attempt_budget_exhausted',
+      },
+    ]);
   });
 });
