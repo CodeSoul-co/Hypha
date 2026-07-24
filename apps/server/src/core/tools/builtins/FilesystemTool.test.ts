@@ -85,9 +85,15 @@ describe('FilesystemTool', () => {
   it('rejects symlinks that escape configured read paths', async () => {
     const outsideFile = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(outsideFile, 'secret', 'utf-8');
-    await fs.symlink(outsideFile, path.join(root, 'escape.txt'));
+    const linkPath = path.join(root, process.platform === 'win32' ? 'escape' : 'escape.txt');
+    const requestedPath = process.platform === 'win32' ? 'escape/secret.txt' : 'escape.txt';
+    if (process.platform === 'win32') {
+      await fs.symlink(outsideRoot, linkPath, 'junction');
+    } else {
+      await fs.symlink(outsideFile, linkPath);
+    }
 
-    const result = await tool.execute({ operation: 'read', path: 'escape.txt' });
+    const result = await tool.execute({ operation: 'read', path: requestedPath });
 
     expect(result).toMatchObject({ success: false });
     expect(result.error).toContain('outside configured read paths');
