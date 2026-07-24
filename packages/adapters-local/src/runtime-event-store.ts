@@ -10,6 +10,7 @@ import {
   validateEventAppendRequest,
   validateEventAppendSchemas,
   type DurableEventStore,
+  type CanonicalEventScanPort,
   type EventAppendRequest,
   type EventAppendResult,
   type EventSchemaRegistry,
@@ -19,6 +20,8 @@ import {
   type ListEventStreamHeadsResult,
   type PersistedFrameworkEvent,
   type ProviderHealth,
+  type ScanCanonicalEventsRequest,
+  type ScanCanonicalEventsResult,
 } from '@hypha/core';
 import fs from 'fs';
 import path from 'path';
@@ -30,7 +33,7 @@ export interface SQLiteDurableEventStoreOptions {
   now?: () => string;
 }
 
-export class SQLiteDurableEventStore implements DurableEventStore {
+export class SQLiteDurableEventStore implements DurableEventStore, CanonicalEventScanPort {
   private readonly db: SqliteDatabaseSync;
   private readonly now: () => string;
 
@@ -263,6 +266,66 @@ export class SQLiteDurableEventStore implements DurableEventStore {
         message: error instanceof Error ? error.message : 'SQLite health check failed',
       };
     }
+  }
+
+  async scanCanonicalEvents(
+    request: ScanCanonicalEventsRequest
+  ): Promise<ScanCanonicalEventsResult> {
+    if (!Number.isSafeInteger(request.afterGlobalSequence) || request.afterGlobalSequence < 0) {
+      invalid('afterGlobalSequence must be a non-negative integer');
+    }
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 10_000) {
+      invalid('scan limit must be between 1 and 10000');
+    }
+    if (!Number.isSafeInteger(request.maxBytes) || request.maxBytes < 1) {
+      invalid('scan maxBytes must be a positive integer');
+    }
+    const rows = this.db
+      .prepare(
+        'SELECT event_json, tenant_id, user_id, run_id, global_sequence FROM runtime_events ' +
+          'WHERE global_sequence > ? ORDER BY global_sequence ASC LIMIT ?'
+      )
+      .all(request.afterGlobalSequence, request.limit + 1);
+    const events: PersistedFrameworkEvent[] = [];
+    let scannedBytes = 0;
+    let stoppedForBytes = false;
+    for (const row of rows.slice(0, request.limit)) {
+      const eventJson = String(row.event_json);
+      const eventBytes = Buffer.byteLength(eventJson, 'utf8');
+      if (scannedBytes + eventBytes > request.maxBytes) {
+        if (events.length === 0) {
+          throw new FrameworkError({
+            code: 'RUNTIME_RESOURCE_EXHAUSTED',
+            message: 'One canonical Event exceeds the audit page byte limit',
+          });
+        }
+        stoppedForBytes = true;
+        break;
+      }
+      const expectedGlobalSequence = request.afterGlobalSequence + events.length + 1;
+      if (Number(row.global_sequence) !== expectedGlobalSequence) {
+        throw new FrameworkError({
+          code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+          message: 'Canonical global Event sequence contains a gap',
+        });
+      }
+      events.push(
+        parseEvent(eventJson, {
+          ...(row.tenant_id === null || row.tenant_id === undefined
+            ? {}
+            : { tenantId: String(row.tenant_id) }),
+          userId: String(row.user_id),
+          runId: String(row.run_id),
+        })
+      );
+      scannedBytes += eventBytes;
+    }
+    return {
+      events,
+      scannedBytes,
+      lastGlobalSequence: events.at(-1)?.globalSequence ?? request.afterGlobalSequence,
+      hasMore: stoppedForBytes || rows.length > events.length,
+    };
   }
 
   close(): void {

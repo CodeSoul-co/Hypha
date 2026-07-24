@@ -49,6 +49,7 @@ export * from './contracts/runtime-checkpoint';
 export * from './contracts/runtime-checkpoint-schemas';
 export * from './contracts/runtime-replay';
 export * from './contracts/runtime-replay-schemas';
+export * from './contracts/runtime-integrity-audit';
 export * from './contracts/runtime-query';
 export * from './contracts/runtime-query-schemas';
 export * from './contracts/artifact';

@@ -36,6 +36,7 @@ describe('RuntimeBackbone', () => {
     expect(backbone.stateClaims).toBeDefined();
     expect(backbone.sessionQueue).toBeDefined();
     expect(backbone.reactCheckpoints).toBeDefined();
+    expect(backbone.integrityStore).toBeDefined();
     expect(Object.isFrozen(backbone)).toBe(true);
   });
 

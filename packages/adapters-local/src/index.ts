@@ -54,6 +54,7 @@ export * from './local-process-execution-provider';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
 export * from './runtime-event-store';
+export * from './runtime-integrity-store';
 export * from './runtime-checkpoint-store';
 export * from './react-continuation-checkpoint-store';
 export * from './run-lease-store';
