@@ -61,6 +61,7 @@ export * from './react-continuation-checkpoint-store';
 export * from './run-lease-store';
 export * from './state-execution-claim-store';
 export * from './session-queue';
+export * from './runtime-capacity-semaphore';
 export * from './projection-store';
 export * from './sqlite-driver';
 export * from './artifact-content-io';

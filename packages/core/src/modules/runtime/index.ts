@@ -15,6 +15,7 @@ export * from './session-command-payload-store';
 export * from './run-lease-store';
 export * from './state-execution-claim-store';
 export * from './resource-coordinator';
+export * from './runtime-capacity-semaphore';
 export * from './runtime-helper-sdk';
 export * from './runtime-io-helpers';
 export * from './runtime-activity-helper';
