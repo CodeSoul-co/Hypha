@@ -3,6 +3,7 @@ import {
   DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
   hashCanonicalJson,
   type EnqueueSessionCommandRequest,
+  type SessionCommandRecord,
   type SessionQueueScope,
 } from '@hypha/core';
 import fs from 'fs';
@@ -29,6 +30,13 @@ function command(
     createdAt: initialTime,
     ...overrides,
   };
+}
+
+function claimIdentity(command: SessionCommandRecord): {
+  claimToken: string;
+  leaseEpoch: number;
+} {
+  return { claimToken: command.claimToken!, leaseEpoch: command.leaseEpoch };
 }
 
 describe('SQLiteSessionQueue', () => {
@@ -131,7 +139,11 @@ describe('SQLiteSessionQueue', () => {
     const filename = temporaryDatabase();
     const first = openQueue(filename);
     await first.enqueue(command('command.recover'));
-    await first.claim({ workerId: 'worker.stale', now: initialTime, leaseMs: 1_000 });
+    const stale = await first.claim({
+      workerId: 'worker.stale',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
     first.close();
     queues.splice(queues.indexOf(first), 1);
 
@@ -147,6 +159,7 @@ describe('SQLiteSessionQueue', () => {
       recoveredQueue.complete({
         commandId: 'command.recover',
         workerId: 'worker.stale',
+        ...claimIdentity(stale!),
         completedAt: '2026-07-22T06:00:02.100Z',
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
@@ -156,10 +169,15 @@ describe('SQLiteSessionQueue', () => {
     const queue = openQueue(temporaryDatabase());
     await queue.enqueue(command('command.retry'));
     await queue.enqueue(command('command.later'));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
     await queue.release({
       commandId: 'command.retry',
       workerId: 'worker.1',
+      ...claimIdentity(claimed!),
       releasedAt: '2026-07-22T06:00:00.500Z',
       availableAt: '2026-07-22T06:00:02.000Z',
     });
@@ -176,16 +194,21 @@ describe('SQLiteSessionQueue', () => {
     const filename = temporaryDatabase();
     const queue = openQueue(filename);
     await queue.enqueue(command('command.complete'));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 5_000 });
+    const completedClaim = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 5_000,
+    });
     await queue.complete({
       commandId: 'command.complete',
       workerId: 'worker.1',
+      ...claimIdentity(completedClaim!),
       completedAt: '2026-07-22T06:00:01.000Z',
       resultRunId: 'run.1',
       resultEventIds: ['event.1'],
     });
     await queue.enqueue(command('command.dead-letter', { createdAt: '2026-07-22T06:00:01.000Z' }));
-    await queue.claim({
+    const failedClaim = await queue.claim({
       workerId: 'worker.2',
       now: '2026-07-22T06:00:01.000Z',
       leaseMs: 5_000,
@@ -193,6 +216,7 @@ describe('SQLiteSessionQueue', () => {
     await queue.fail({
       commandId: 'command.dead-letter',
       workerId: 'worker.2',
+      ...claimIdentity(failedClaim!),
       failedAt: '2026-07-22T06:00:02.000Z',
       rejectionCode: 'attempts_exhausted',
       deadLetter: true,
@@ -211,12 +235,17 @@ describe('SQLiteSessionQueue', () => {
   it('does not partially update a claim when completion validation fails', async () => {
     const queue = openQueue(temporaryDatabase());
     await queue.enqueue(command('command.atomic'));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 5_000 });
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 5_000,
+    });
 
     await expect(
       queue.complete({
         commandId: 'command.atomic',
         workerId: 'worker.1',
+        ...claimIdentity(claimed!),
         completedAt: '2026-07-22T06:00:01.000Z',
         resultRunId: '',
       })
@@ -277,10 +306,15 @@ describe('SQLiteSessionQueue', () => {
   it('persists a released final attempt as dead-letter work', async () => {
     const queue = openQueue(temporaryDatabase());
     await queue.enqueue(command('command.released-exhausted', { maxAttempts: 1 }));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
     await queue.release({
       commandId: 'command.released-exhausted',
       workerId: 'worker.1',
+      ...claimIdentity(claimed!),
       releasedAt: '2026-07-22T06:00:00.500Z',
     });
 
@@ -291,6 +325,55 @@ describe('SQLiteSessionQueue', () => {
         rejectionCode: 'attempt_budget_exhausted',
       },
     ]);
+  });
+
+  it('persists lease renewal and fences an older same-worker claim after restart', async () => {
+    const filename = temporaryDatabase();
+    const firstQueue = openQueue(filename);
+    await firstQueue.enqueue(command('command.fenced'));
+    const firstClaim = await firstQueue.claim({
+      workerId: 'worker.same',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await expect(
+      firstQueue.renew({
+        commandId: firstClaim!.id,
+        workerId: 'worker.same',
+        ...claimIdentity(firstClaim!),
+        renewedAt: '2026-07-22T06:00:00.500Z',
+        leaseMs: 1_000,
+      })
+    ).resolves.toMatchObject({
+      leaseEpoch: 1,
+      leaseExpiresAt: '2026-07-22T06:00:01.500Z',
+    });
+    firstQueue.close();
+    queues.splice(queues.indexOf(firstQueue), 1);
+
+    const reopened = openQueue(filename);
+    const secondClaim = await reopened.claim({
+      workerId: 'worker.same',
+      now: '2026-07-22T06:00:02.000Z',
+      leaseMs: 1_000,
+    });
+    expect(secondClaim?.leaseEpoch).toBe(2);
+    await expect(
+      reopened.complete({
+        commandId: firstClaim!.id,
+        workerId: 'worker.same',
+        ...claimIdentity(firstClaim!),
+        completedAt: '2026-07-22T06:00:02.100Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(
+      reopened.complete({
+        commandId: secondClaim!.id,
+        workerId: 'worker.same',
+        ...claimIdentity(secondClaim!),
+        completedAt: '2026-07-22T06:00:02.500Z',
+      })
+    ).resolves.toBeUndefined();
   });
 
   function openQueue(filename: string): SQLiteSessionQueue {

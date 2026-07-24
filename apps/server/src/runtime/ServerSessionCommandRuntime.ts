@@ -6,6 +6,8 @@ import {
   type ArtifactSessionCommandPayloadStore,
   type EnqueueSessionCommandRequest,
   type SessionCommandHandlerResult,
+  type SessionCommandHandlerContext,
+  type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionCommandSchedulerResult,
   type SessionCommandType,
@@ -22,6 +24,9 @@ export interface ServerSessionCommandInput<
 > {
   command: Readonly<SessionCommandRecord & { commandType: TCommandType }>;
   payload: TPayload;
+  signal: AbortSignal;
+  claimToken: string;
+  leaseEpoch: number;
 }
 
 export interface ServerSessionCommandDefinition<
@@ -64,10 +69,14 @@ export interface ServerSessionCommandRuntimeOptions<
   leaseMs: number;
   pollIntervalMs?: number;
   errorBackoffMs?: number;
+  renewalIntervalMs?: number;
+  maxHandlerDurationMs?: number;
+  shutdownDrainMs?: number;
   now?: () => string;
   classifyFailure?: ServerSessionCommandFailureClassifier;
   onResult?: (result: SessionCommandWorkerResult) => void;
   onError?: (error: unknown) => void;
+  onLeaseRenewalFailure?: (error: unknown, claim: Readonly<SessionCommandClaim>) => void;
 }
 
 /** Owns durable command ingress and the single Server polling loop. */
@@ -87,11 +96,23 @@ export class ServerSessionCommandRuntime<TPayloads extends ServerSessionCommandP
       leaseMs: options.leaseMs,
       handlers: this.createHandlers(),
       ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.renewalIntervalMs === undefined
+        ? {}
+        : { renewalIntervalMs: options.renewalIntervalMs }),
+      ...(options.maxHandlerDurationMs === undefined
+        ? {}
+        : { maxHandlerDurationMs: options.maxHandlerDurationMs }),
+      ...(options.onLeaseRenewalFailure === undefined
+        ? {}
+        : { onLeaseRenewalFailure: options.onLeaseRenewalFailure }),
     });
     this.scheduler = new DurableSessionCommandScheduler({
       worker: this.worker,
       ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
       ...(options.errorBackoffMs === undefined ? {} : { errorBackoffMs: options.errorBackoffMs }),
+      ...(options.shutdownDrainMs === undefined
+        ? {}
+        : { shutdownDrainMs: options.shutdownDrainMs }),
       ...(options.onResult === undefined ? {} : { onResult: options.onResult }),
       ...(options.onError === undefined ? {} : { onError: options.onError }),
     });
@@ -108,9 +129,12 @@ export class ServerSessionCommandRuntime<TPayloads extends ServerSessionCommandP
     return this.options.queue.enqueue({ ...command, ...reference });
   }
 
-  processNext(scope?: SessionQueueScope): Promise<SessionCommandWorkerResult> {
+  processNext(
+    scope?: SessionQueueScope,
+    signal?: AbortSignal
+  ): Promise<SessionCommandWorkerResult> {
     this.assertOpen();
-    return this.worker.processNext(scope);
+    return this.worker.processNext(scope, signal);
   }
 
   start(scope?: SessionQueueScope): void {
@@ -149,16 +173,22 @@ export class ServerSessionCommandRuntime<TPayloads extends ServerSessionCommandP
       SESSION_COMMAND_TYPES.flatMap((commandType) => {
         const definition = this.definitions[commandType];
         return definition
-          ? [[commandType, (command: SessionCommandRecord) => this.dispatch(command, definition)]]
+          ? [
+              [
+                commandType,
+                (context: SessionCommandHandlerContext) => this.dispatch(context, definition),
+              ],
+            ]
           : [];
       })
     );
   }
 
   private async dispatch(
-    command: Readonly<SessionCommandRecord>,
+    context: Readonly<SessionCommandHandlerContext>,
     definition: ServerSessionCommandDefinition<unknown>
   ): Promise<SessionCommandHandlerResult> {
+    const { command, signal, claimToken, leaseEpoch } = context;
     try {
       if (!command.payloadRef) corrupt('Session Command does not contain a payloadRef');
       const stored = await this.options.payloads.get({
@@ -166,7 +196,7 @@ export class ServerSessionCommandRuntime<TPayloads extends ServerSessionCommandP
         payloadHash: command.payloadHash,
       });
       const payload = definition.decode(stored);
-      return await definition.handle({ command, payload });
+      return await definition.handle({ command, payload, signal, claimToken, leaseEpoch });
     } catch (error) {
       return (this.options.classifyFailure ?? defaultFailure)(error, command);
     }

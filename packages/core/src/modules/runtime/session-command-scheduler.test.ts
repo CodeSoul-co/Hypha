@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionCommandWorkerResult } from './session-command-worker';
 import {
   DurableSessionCommandScheduler,
@@ -14,6 +14,10 @@ const applied: SessionCommandWorkerResult = {
 const idle: SessionCommandWorkerResult = { disposition: 'idle' };
 
 describe('DurableSessionCommandScheduler', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('processes available work and stops from an abortable idle wait', async () => {
     const controller = new AbortController();
     const processNext = vi.fn().mockResolvedValueOnce(applied).mockResolvedValueOnce(idle);
@@ -124,5 +128,37 @@ describe('DurableSessionCommandScheduler', () => {
       idlePolls: 1,
       errors: 0,
     });
+  });
+
+  it('lets an in-flight handler drain until the shutdown deadline, then aborts it', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let workerSignal: AbortSignal | undefined;
+    const processNext = vi.fn(
+      async (_scope: unknown, signal?: AbortSignal): Promise<SessionCommandWorkerResult> => {
+        workerSignal = signal;
+        return new Promise((resolve) => {
+          signal?.addEventListener(
+            'abort',
+            () => resolve({ disposition: 'aborted', rejectionCode: 'shutdown' }),
+            { once: true }
+          );
+        });
+      }
+    );
+    const scheduler = new DurableSessionCommandScheduler({
+      worker: { processNext },
+      shutdownDrainMs: 1_000,
+    });
+    const running = scheduler.run({ signal: controller.signal });
+    await vi.waitFor(() => expect(processNext).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(workerSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(workerSignal?.aborted).toBe(true);
+    await expect(running).resolves.toEqual({ processed: 0, idlePolls: 0, errors: 0 });
   });
 });

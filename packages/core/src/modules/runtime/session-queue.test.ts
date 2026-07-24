@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   EnqueueSessionCommandRequest,
+  SessionCommandRecord,
   SessionQueueScope,
 } from '../../contracts/session-queue';
 import { InMemorySessionQueue } from './session-queue';
@@ -22,6 +23,16 @@ function command(
     payloadHash,
     createdAt: initialTime,
     ...overrides,
+  };
+}
+
+function claimIdentity(command: SessionCommandRecord): {
+  claimToken: string;
+  leaseEpoch: number;
+} {
+  return {
+    claimToken: command.claimToken!,
+    leaseEpoch: command.leaseEpoch,
   };
 }
 
@@ -64,6 +75,7 @@ describe('InMemorySessionQueue', () => {
     await queue.complete({
       commandId: 'command.first',
       workerId: 'worker.1',
+      ...claimIdentity(first!),
       completedAt: '2026-07-18T06:00:00.500Z',
       resultEventIds: ['event.first'],
     });
@@ -112,6 +124,7 @@ describe('InMemorySessionQueue', () => {
     await queue.complete({
       commandId: high!.id,
       workerId: 'worker.1',
+      ...claimIdentity(high!),
       completedAt: '2026-07-18T06:00:00.200Z',
     });
     await queue.enqueue(
@@ -146,7 +159,11 @@ describe('InMemorySessionQueue', () => {
   it('recovers an expired claim and rejects the stale worker', async () => {
     const queue = new InMemorySessionQueue();
     await queue.enqueue(command('command.recover'));
-    await queue.claim({ workerId: 'worker.stale', now: initialTime, leaseMs: 1_000 });
+    const stale = await queue.claim({
+      workerId: 'worker.stale',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
     const recovered = await queue.claim({
       workerId: 'worker.recovery',
       now: '2026-07-18T06:00:02.000Z',
@@ -158,6 +175,7 @@ describe('InMemorySessionQueue', () => {
       queue.complete({
         commandId: 'command.recover',
         workerId: 'worker.stale',
+        ...claimIdentity(stale!),
         completedAt: '2026-07-18T06:00:02.100Z',
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
@@ -165,6 +183,7 @@ describe('InMemorySessionQueue', () => {
       queue.complete({
         commandId: 'command.recover',
         workerId: 'worker.recovery',
+        ...claimIdentity(recovered!),
         completedAt: '2026-07-18T06:00:02.500Z',
       })
     ).resolves.toBeUndefined();
@@ -173,12 +192,17 @@ describe('InMemorySessionQueue', () => {
   it('does not partially mutate a claim when completion input is invalid', async () => {
     const queue = new InMemorySessionQueue({ now: () => initialTime });
     await queue.enqueue(command('command.atomic-complete'));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
 
     await expect(
       queue.complete({
         commandId: 'command.atomic-complete',
         workerId: 'worker.1',
+        ...claimIdentity(claimed!),
         completedAt: '2026-07-18T06:00:00.500Z',
         resultRunId: '',
       })
@@ -192,10 +216,15 @@ describe('InMemorySessionQueue', () => {
     const queue = new InMemorySessionQueue();
     await queue.enqueue(command('command.retry'));
     await queue.enqueue(command('command.later'));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
     await queue.release({
       commandId: 'command.retry',
       workerId: 'worker.1',
+      ...claimIdentity(claimed!),
       releasedAt: '2026-07-18T06:00:00.500Z',
       availableAt: '2026-07-18T06:00:02.000Z',
     });
@@ -226,6 +255,7 @@ describe('InMemorySessionQueue', () => {
     await queue.complete({
       commandId: 'command.after-expiry',
       workerId: 'worker.1',
+      ...claimIdentity(claimed!),
       completedAt: '2026-07-18T06:00:02.500Z',
     });
     await drain;
@@ -273,10 +303,15 @@ describe('InMemorySessionQueue', () => {
   it('dead-letters a released final attempt instead of requeueing it', async () => {
     const queue = new InMemorySessionQueue();
     await queue.enqueue(command('command.released-exhausted', { maxAttempts: 1 }));
-    await queue.claim({ workerId: 'worker.1', now: initialTime, leaseMs: 1_000 });
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
     await queue.release({
       commandId: 'command.released-exhausted',
       workerId: 'worker.1',
+      ...claimIdentity(claimed!),
       releasedAt: '2026-07-18T06:00:00.500Z',
     });
 
@@ -287,5 +322,64 @@ describe('InMemorySessionQueue', () => {
         rejectionCode: 'attempt_budget_exhausted',
       },
     ]);
+  });
+
+  it('renews an active claim without changing its token or epoch', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.renew'));
+    const claimed = await queue.claim({
+      workerId: 'worker.renew',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+
+    await expect(
+      queue.renew({
+        commandId: claimed!.id,
+        workerId: 'worker.renew',
+        ...claimIdentity(claimed!),
+        renewedAt: '2026-07-18T06:00:00.500Z',
+        leaseMs: 2_000,
+      })
+    ).resolves.toEqual({
+      commandId: claimed!.id,
+      workerId: 'worker.renew',
+      ...claimIdentity(claimed!),
+      leaseExpiresAt: '2026-07-18T06:00:02.500Z',
+    });
+  });
+
+  it('fences an older claim even when the same worker id reclaims the command', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.same-worker'));
+    const first = await queue.claim({
+      workerId: 'worker.same',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    const second = await queue.claim({
+      workerId: 'worker.same',
+      now: '2026-07-18T06:00:02.000Z',
+      leaseMs: 1_000,
+    });
+
+    expect(second?.leaseEpoch).toBe(2);
+    expect(second?.claimToken).not.toBe(first?.claimToken);
+    await expect(
+      queue.complete({
+        commandId: first!.id,
+        workerId: 'worker.same',
+        ...claimIdentity(first!),
+        completedAt: '2026-07-18T06:00:02.100Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(
+      queue.complete({
+        commandId: second!.id,
+        workerId: 'worker.same',
+        ...claimIdentity(second!),
+        completedAt: '2026-07-18T06:00:02.500Z',
+      })
+    ).resolves.toBeUndefined();
   });
 });

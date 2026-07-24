@@ -39,10 +39,12 @@ export const sessionCommandRecordSchema = z
     priority: z.number().int().min(0).max(100),
     attempts: z.number().int().min(0),
     maxAttempts: z.number().int().min(1).max(SESSION_COMMAND_MAX_ATTEMPTS_LIMIT),
+    leaseEpoch: z.number().int().min(0),
     payloadRef: nonEmptyStringSchema.optional(),
     payloadHash: hashSchema,
     status: sessionCommandStatusSchema,
     claimedBy: nonEmptyStringSchema.optional(),
+    claimToken: nonEmptyStringSchema.optional(),
     leaseExpiresAt: timestampSchema.optional(),
     resultRunId: nonEmptyStringSchema.optional(),
     resultEventIds: z.array(nonEmptyStringSchema).optional(),
@@ -69,6 +71,20 @@ export const sessionCommandRecordSchema = z
           message: 'claimedBy is required for claimed commands',
         });
       }
+      if (!record.claimToken) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['claimToken'],
+          message: 'claimToken is required for claimed commands',
+        });
+      }
+      if (record.leaseEpoch < 1) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['leaseEpoch'],
+          message: 'leaseEpoch must be positive for claimed commands',
+        });
+      }
       if (!record.leaseExpiresAt) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -76,6 +92,12 @@ export const sessionCommandRecordSchema = z
           message: 'leaseExpiresAt is required for claimed commands',
         });
       }
+    } else if (record.claimedBy || record.claimToken || record.leaseExpiresAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['status'],
+        message: 'claim fields are only valid for claimed commands',
+      });
     }
     if (record.attempts > record.maxAttempts) {
       context.addIssue({
@@ -118,6 +140,7 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     'priority',
     'attempts',
     'maxAttempts',
+    'leaseEpoch',
     'payloadHash',
     'status',
     'createdAt',
@@ -136,10 +159,12 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     priority: { type: 'integer', minimum: 0, maximum: 100 },
     attempts: { type: 'integer', minimum: 0 },
     maxAttempts: { type: 'integer', minimum: 1, maximum: SESSION_COMMAND_MAX_ATTEMPTS_LIMIT },
+    leaseEpoch: { type: 'integer', minimum: 0 },
     payloadRef: stringProperty,
     payloadHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
     status: { type: 'string', enum: [...SESSION_COMMAND_STATUSES] },
     claimedBy: stringProperty,
+    claimToken: stringProperty,
     leaseExpiresAt: timestampProperty,
     resultRunId: stringProperty,
     resultEventIds: { type: 'array', items: stringProperty },
@@ -154,8 +179,13 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     {
       if: { properties: { status: { const: 'claimed' } }, required: ['status'] },
       then: {
-        properties: { claimedBy: stringProperty, leaseExpiresAt: timestampProperty },
-        required: ['claimedBy', 'leaseExpiresAt'],
+        properties: {
+          claimedBy: stringProperty,
+          claimToken: stringProperty,
+          leaseEpoch: { type: 'integer', minimum: 1 },
+          leaseExpiresAt: timestampProperty,
+        },
+        required: ['claimedBy', 'claimToken', 'leaseEpoch', 'leaseExpiresAt'],
       },
     },
     {
@@ -187,6 +217,7 @@ export const sessionCommandRecordExample: SessionCommandRecord = {
   priority: 50,
   attempts: 0,
   maxAttempts: DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+  leaseEpoch: 0,
   payloadRef: 'artifact://input/request.001',
   payloadHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
   status: 'queued',

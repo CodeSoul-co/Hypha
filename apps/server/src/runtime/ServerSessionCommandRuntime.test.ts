@@ -53,10 +53,15 @@ describe('ServerSessionCommandRuntime', () => {
     });
 
     expect(queued.payloadRef).toMatch(/^artifact-ref:/u);
-    expect(handle).toHaveBeenCalledWith({
-      command: expect.objectContaining({ id: 'command.1', commandType: 'start_run' }),
-      payload: { topic: 'runtime' },
-    });
+    expect(handle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ id: 'command.1', commandType: 'start_run' }),
+        payload: { topic: 'runtime' },
+        signal: expect.any(AbortSignal),
+        claimToken: expect.stringMatching(/^sha256:/u),
+        leaseEpoch: 1,
+      })
+    );
     await expect(
       queue.list({ scope: { userId: 'user.1', sessionId: 'session.1' } })
     ).resolves.toEqual([
