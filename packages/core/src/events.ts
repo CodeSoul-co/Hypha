@@ -6,6 +6,9 @@ export type RuntimeActivityEventType =
   | 'runtime.activity.failed'
   | 'runtime.activity.waiting'
   | 'runtime.activity.cancelled'
+  | 'runtime.activity.compensation.requested'
+  | 'runtime.activity.compensation.completed'
+  | 'runtime.activity.compensation.failed'
   | 'activity.redispatch.requested';
 
 export type FrameworkEventType =

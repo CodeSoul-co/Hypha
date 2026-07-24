@@ -8,9 +8,11 @@ import {
 } from './runtime-projection-schemas';
 import {
   RUNTIME_ACTIVITY_RECONCILIATION_STATUSES,
+  RUNTIME_ACTIVITY_COMPENSATION_STATUSES,
   RUNTIME_RECOVERY_CANDIDATE_REASONS,
   RUNTIME_RECOVERY_DISPOSITIONS,
   RUNTIME_RECOVERY_SAFE_ACTIONS,
+  type RuntimeActivityCompensationResult,
   type RuntimeActivityReconciliationResult,
   type RuntimeRecoveryCandidate,
   type RuntimeRecoveryCommand,
@@ -49,7 +51,10 @@ export const runtimeRecoveryCandidateSchema = z
   })
   .strict()
   .superRefine((candidate, context) => {
-    if (candidate.reason === 'ACTIVITY_RESULT_UNAPPLIED' && !candidate.activityId) {
+    if (
+      ['ACTIVITY_RESULT_UNAPPLIED', 'ACTIVITY_COMPENSATION_REQUIRED'].includes(candidate.reason) &&
+      !candidate.activityId
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['activityId'],
@@ -131,6 +136,32 @@ export const runtimeActivityReconciliationResultSchema = z
     }
   }) satisfies ZodType<RuntimeActivityReconciliationResult>;
 
+export const runtimeActivityCompensationResultSchema = z
+  .object({
+    activityId: nonEmptyStringSchema,
+    status: z.enum(RUNTIME_ACTIVITY_COMPENSATION_STATUSES),
+    providerRevision: nonEmptyStringSchema.optional(),
+    receiptId: nonEmptyStringSchema.optional(),
+    errorCode: nonEmptyStringSchema.optional(),
+  })
+  .strict()
+  .superRefine((result, context) => {
+    if (result.status === 'completed' && !result.receiptId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['receiptId'],
+        message: 'Completed compensation requires receiptId',
+      });
+    }
+    if (result.status === 'failed' && !result.errorCode) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['errorCode'],
+        message: 'Failed compensation requires errorCode',
+      });
+    }
+  }) satisfies ZodType<RuntimeActivityCompensationResult>;
+
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const recoveryScopeJsonSchema: JsonSchema = {
   type: 'object',
@@ -161,7 +192,11 @@ export const runtimeRecoveryCandidateJsonSchema: JsonSchema = {
   allOf: [
     {
       if: {
-        properties: { reason: { const: 'ACTIVITY_RESULT_UNAPPLIED' } },
+        properties: {
+          reason: {
+            enum: ['ACTIVITY_RESULT_UNAPPLIED', 'ACTIVITY_COMPENSATION_REQUIRED'],
+          },
+        },
         required: ['reason'],
       },
       then: {
@@ -295,6 +330,12 @@ export const runtimeActivityReconciliationResultExample: RuntimeActivityReconcil
   providerRevision: 'provider-revision.default',
   receiptId: 'receipt.default',
 };
+export const runtimeActivityCompensationResultExample: RuntimeActivityCompensationResult = {
+  activityId: 'activity.default',
+  status: 'completed',
+  providerRevision: 'provider-revision.default',
+  receiptId: 'compensation-receipt.default',
+};
 
 export const runtimeRecoveryCandidateDefinition = defineSpecSchema<RuntimeRecoveryCandidate>({
   id: 'RuntimeRecoveryCandidate',
@@ -333,6 +374,24 @@ export const runtimeActivityReconciliationResultDefinition =
     jsonSchema: runtimeActivityReconciliationResultJsonSchema,
     example: runtimeActivityReconciliationResultExample,
   });
+export const runtimeActivityCompensationResultDefinition =
+  defineSpecSchema<RuntimeActivityCompensationResult>({
+    id: 'RuntimeActivityCompensationResult',
+    zod: runtimeActivityCompensationResultSchema,
+    jsonSchema: {
+      type: 'object',
+      required: ['activityId', 'status'],
+      properties: {
+        activityId: nonEmptyStringJsonSchema,
+        status: { type: 'string', enum: [...RUNTIME_ACTIVITY_COMPENSATION_STATUSES] },
+        providerRevision: nonEmptyStringJsonSchema,
+        receiptId: nonEmptyStringJsonSchema,
+        errorCode: nonEmptyStringJsonSchema,
+      },
+      additionalProperties: false,
+    },
+    example: runtimeActivityCompensationResultExample,
+  });
 export const runtimeRecoveryContractDefinitions = [
   runtimeRecoveryCandidateDefinition,
   runtimeRecoveryScanRequestDefinition,
@@ -340,6 +399,7 @@ export const runtimeRecoveryContractDefinitions = [
   runtimeRecoveryCommandDefinition,
   runtimeRecoveryResultDefinition,
   runtimeActivityReconciliationResultDefinition,
+  runtimeActivityCompensationResultDefinition,
 ] as const;
 export const runtimeRecoveryContractJsonSchemas = exportSpecJsonSchemas(
   runtimeRecoveryContractDefinitions
@@ -364,4 +424,10 @@ export function validateRuntimeActivityReconciliationResult(
   input: unknown
 ): RuntimeActivityReconciliationResult {
   return runtimeActivityReconciliationResultSchema.parse(input);
+}
+
+export function validateRuntimeActivityCompensationResult(
+  input: unknown
+): RuntimeActivityCompensationResult {
+  return runtimeActivityCompensationResultSchema.parse(input);
 }
