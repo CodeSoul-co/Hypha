@@ -3,6 +3,9 @@ import {
   InMemoryDurableEventStore,
   InMemoryEventSchemaRegistry,
   InMemorySessionQueue,
+  InMemoryTelemetryRecorder,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
   hashCanonicalJson,
   registerRuntimeOrchestrationEventSchemas,
   type ContinueReActCommandPayloadV1,
@@ -120,6 +123,7 @@ describe('ServerReActContinuationReconciler', () => {
     });
     const quarantine = jest.fn(async () => undefined);
     const schedule = jest.fn();
+    const telemetryRecorder = new InMemoryTelemetryRecorder();
     const reconciler = new ServerReActContinuationReconciler({
       events,
       queue,
@@ -129,6 +133,10 @@ describe('ServerReActContinuationReconciler', () => {
         build: async ({ evidence, checkpoint: stored }) => payload(evidence, stored),
       },
       quarantine: { quarantine },
+      operationalTelemetry: new RuntimeOperationalTelemetry({
+        recorder: telemetryRecorder,
+        now: () => now,
+      }),
     });
 
     await expect(reconciler.reconcile()).resolves.toMatchObject({
@@ -142,6 +150,7 @@ describe('ServerReActContinuationReconciler', () => {
       })
     );
     expect(schedule).not.toHaveBeenCalled();
+    expect(telemetryRecorder.sum(RUNTIME_OPERATIONAL_METRIC_NAMES.quarantineTotal)).toBe(1);
   });
 });
 

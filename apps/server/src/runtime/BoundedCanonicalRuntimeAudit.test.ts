@@ -1,6 +1,9 @@
 import {
   createFrameworkEvent,
   createPersistedEventBatch,
+  InMemoryTelemetryRecorder,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
   type CanonicalEventScanPort,
   type PersistedFrameworkEvent,
   type RuntimeIntegrityStore,
@@ -56,9 +59,16 @@ describe('BoundedCanonicalRuntimeAudit', () => {
       timestamp
     );
 
+    const recorder = new InMemoryTelemetryRecorder();
     await expect(
-      createAudit(scannerFor(corrupt), memoryIntegrityStore()).audit()
+      createAudit(
+        scannerFor(corrupt),
+        memoryIntegrityStore(),
+        undefined,
+        new RuntimeOperationalTelemetry({ recorder, now: () => timestamp })
+      ).audit()
     ).rejects.toMatchObject({ code: 'RUNTIME_EVENT_STREAM_CORRUPT' });
+    expect(recorder.sum(RUNTIME_OPERATIONAL_METRIC_NAMES.quarantineTotal)).toBe(1);
   });
 
   it('enforces event bounds and cancellation without writing a watermark', async () => {
@@ -148,7 +158,8 @@ describe('RuntimeIntegrityRepairService', () => {
 function createAudit(
   scanner: CanonicalEventScanPort,
   integrityStore: RuntimeIntegrityStore,
-  onProgress?: jest.Mock
+  onProgress?: jest.Mock,
+  operationalTelemetry?: RuntimeOperationalTelemetry
 ): BoundedCanonicalRuntimeAudit {
   return new BoundedCanonicalRuntimeAudit({
     scanner,
@@ -165,6 +176,7 @@ function createAudit(
     streamFingerprintRevision: 'stream-key@1',
     now: () => timestamp,
     ...(onProgress ? { onProgress } : {}),
+    ...(operationalTelemetry ? { operationalTelemetry } : {}),
   });
 }
 

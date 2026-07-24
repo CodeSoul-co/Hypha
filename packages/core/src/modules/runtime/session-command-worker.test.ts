@@ -3,6 +3,11 @@ import type {
   EnqueueSessionCommandRequest,
   SessionQueueScope,
 } from '../../contracts/session-queue';
+import { InMemoryTelemetryRecorder } from '../../telemetry';
+import {
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
+} from './runtime-operational-telemetry';
 import { InMemorySessionQueue } from './session-queue';
 import { DurableSessionCommandWorker } from './session-command-worker';
 
@@ -201,6 +206,7 @@ describe('DurableSessionCommandWorker', () => {
     );
     const onLeaseRenewalFailure = vi.fn();
     const handlerAborted = vi.fn();
+    const telemetryRecorder = new InMemoryTelemetryRecorder();
     const active = new DurableSessionCommandWorker({
       queue,
       workerId: 'worker.renewal-failure',
@@ -209,6 +215,11 @@ describe('DurableSessionCommandWorker', () => {
       maxHandlerDurationMs: 5_000,
       now,
       onLeaseRenewalFailure,
+      operationalTelemetry: new RuntimeOperationalTelemetry({
+        recorder: telemetryRecorder,
+        now,
+      }),
+      monotonicNow: () => Date.now(),
       handlers: {
         user_input: async ({ signal }) => {
           signal.addEventListener('abort', handlerAborted, { once: true });
@@ -227,6 +238,14 @@ describe('DurableSessionCommandWorker', () => {
     });
     expect(handlerAborted).toHaveBeenCalledTimes(1);
     expect(onLeaseRenewalFailure).toHaveBeenCalledTimes(1);
+    expect(
+      telemetryRecorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalTotal)
+    ).toMatchObject([
+      {
+        value: 1,
+        attributes: { resource: 'session_command', outcome: 'failed' },
+      },
+    ]);
     await expect(queue.list({ scope })).resolves.toMatchObject([{ status: 'claimed' }]);
   });
 

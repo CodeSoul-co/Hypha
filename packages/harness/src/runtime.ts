@@ -5,6 +5,7 @@ import {
   InMemoryEventStore,
   type EventStore,
   type FrameworkEvent,
+  type RuntimeOperationalTelemetry,
   type SpecRef,
 } from '@hypha/core';
 import {
@@ -160,6 +161,7 @@ export interface RunExecutionContext {
 
 export interface RunManagerOptions {
   runtime?: EventFirstRuntime;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
 }
 
 export interface HarnessedReActFSMRunnerOptions {
@@ -332,9 +334,11 @@ export class EventFirstRuntime {
 
 export class RunManager {
   private readonly runtime: EventFirstRuntime;
+  private readonly operationalTelemetry?: RuntimeOperationalTelemetry;
 
   constructor(options: RunManagerOptions = {}) {
     this.runtime = options.runtime ?? new EventFirstRuntime();
+    this.operationalTelemetry = options.operationalTelemetry;
   }
 
   eventRuntime(): EventFirstRuntime {
@@ -578,7 +582,7 @@ export class RunManager {
     context: RunExecutionContext,
     checkpoint: ReActContinuationCheckpoint
   ): Promise<FrameworkEvent> {
-    return this.runtime.appendRunEvent({
+    const event = await this.runtime.appendRunEvent({
       id: this.nextEventId(context.runId, 'react.continuation.checkpointed'),
       type: 'react.continuation.checkpointed',
       runId: context.runId,
@@ -589,6 +593,15 @@ export class RunManager {
       timestamp: checkpoint.updatedAt,
       payload: reactCheckpointReceipt(checkpoint),
     });
+    if (checkpoint.lastProgressFingerprint && checkpoint.consecutiveNoProgress > 0) {
+      await observe(
+        this.operationalTelemetry?.recordNoProgressFingerprint({
+          consecutiveNoProgress: checkpoint.consecutiveNoProgress,
+          source: 'react_checkpoint',
+        })
+      );
+    }
+    return event;
   }
 
   async recordReactContinuationResumed(
@@ -596,7 +609,7 @@ export class RunManager {
     checkpoint: ReActContinuationCheckpoint,
     resumedAt: string
   ): Promise<FrameworkEvent> {
-    return this.runtime.appendRunEvent({
+    const event = await this.runtime.appendRunEvent({
       id: this.nextEventId(context.runId, 'react.continuation.resumed'),
       type: 'react.continuation.resumed',
       runId: context.runId,
@@ -613,6 +626,14 @@ export class RunManager {
         resumedAt,
       },
     });
+    await observe(
+      this.operationalTelemetry?.recordContinuationLatency({
+        suspendedAt: checkpoint.updatedAt,
+        resumedAt,
+        outcome: 'resumed',
+      })
+    );
+    return event;
   }
 
   async recordReactContinuationSuspended(
@@ -1225,6 +1246,10 @@ function reactCheckpointRef(checkpoint: ReActContinuationCheckpoint): string {
   return `react-checkpoint://${encodeURIComponent(checkpoint.runId)}/${encodeURIComponent(
     checkpoint.stepId
   )}/${checkpoint.stepSequence}`;
+}
+
+async function observe(recording: Promise<void> | undefined): Promise<void> {
+  if (recording) await recording.catch(() => undefined);
 }
 
 export function projectSession(events: FrameworkEvent[]): RuntimeSession | null {

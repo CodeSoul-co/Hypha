@@ -6,6 +6,7 @@ import type {
 } from '../../contracts/session-queue';
 import { FrameworkError } from '../../errors';
 import type { SessionQueue } from './session-queue';
+import type { RuntimeOperationalTelemetry } from './runtime-operational-telemetry';
 
 export type SessionCommandHandlerResult =
   | {
@@ -44,6 +45,8 @@ export interface DurableSessionCommandWorkerOptions {
   maxHandlerDurationMs?: number;
   wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   onLeaseRenewalFailure?: (error: unknown, claim: Readonly<SessionCommandClaim>) => void;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
 }
 
 export type SessionCommandWorkerDisposition =
@@ -73,6 +76,7 @@ export class DurableSessionCommandWorker {
   private readonly renewalIntervalMs: number;
   private readonly maxHandlerDurationMs: number;
   private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  private readonly monotonicNow: () => number;
 
   constructor(private readonly options: DurableSessionCommandWorkerOptions) {
     nonEmpty(options.workerId, 'workerId');
@@ -93,6 +97,7 @@ export class DurableSessionCommandWorker {
       'maxHandlerDurationMs'
     );
     this.wait = options.wait ?? abortableDelay;
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
   }
 
   async processNext(
@@ -257,7 +262,7 @@ export class DurableSessionCommandWorker {
       await this.wait(this.renewalIntervalMs, signal);
       if (signal.aborted) return;
       try {
-        const renewed = await this.options.queue.renew({
+        const renewed = await this.renewClaim({
           commandId: claim.commandId,
           workerId: claim.workerId,
           claimToken: claim.claimToken,
@@ -280,7 +285,7 @@ export class DurableSessionCommandWorker {
     handlerController: AbortController
   ): Promise<boolean> {
     try {
-      const renewed = await this.options.queue.renew({
+      const renewed = await this.renewClaim({
         commandId: claim.commandId,
         workerId: claim.workerId,
         claimToken: claim.claimToken,
@@ -294,6 +299,28 @@ export class DurableSessionCommandWorker {
       notify(() => this.options.onLeaseRenewalFailure?.(error, Object.freeze({ ...claim })));
       handlerController.abort('session_command_claim_lost');
       return false;
+    }
+  }
+
+  private async renewClaim(
+    request: Parameters<SessionQueue['renew']>[0]
+  ): Promise<Awaited<ReturnType<SessionQueue['renew']>>> {
+    const startedAt = this.monotonicNow();
+    try {
+      const renewed = await this.options.queue.renew(request);
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'session_command',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'succeeded',
+      });
+      return renewed;
+    } catch (error) {
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'session_command',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'failed',
+      });
+      throw error;
     }
   }
 
