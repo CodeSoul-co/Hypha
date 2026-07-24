@@ -46,7 +46,11 @@ function addRequest(operationId: string): MemoryAddRequest {
 
 describe('Mem0 REST client', () => {
   it('exposes a dedicated OSS client while retaining the transitional alias', async () => {
-    const fetcher: Mem0HttpFetch = async () => jsonResponse({ status: 'ok' });
+    const requests: string[] = [];
+    const fetcher: Mem0HttpFetch = async (url) => {
+      requests.push(url);
+      return jsonResponse({ status: 'ok' });
+    };
     const oss = new Mem0OssClient({ baseUrl: 'http://mem0.local', fetch: fetcher });
     const legacy = new Mem0RestClient({ baseUrl: 'http://mem0.local', fetch: fetcher });
 
@@ -54,6 +58,7 @@ describe('Mem0 REST client', () => {
       status: 'healthy',
       details: { deployment: 'self_hosted', protocol: 'mem0-oss-rest' },
     });
+    expect(requests[0]).toBe('http://mem0.local/auth/setup-status');
     await expect(legacy.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
@@ -114,6 +119,16 @@ describe('Mem0 REST client', () => {
     expect(storedMetadata._hypha_scope_hash).toBe(hashMemoryScope(scope));
     expect(storedMetadata._hypha_scope).toEqual(scope);
     expect(requests[0]?.headers['X-API-Key']).toBe('test-api-key');
+    const requestCountBeforeForbiddenGet = requests.length;
+    await expect(
+      client.get({
+        operationId: 'operation:mem0:get:forbidden',
+        principal,
+        scope: { ...scope, workspaceId: 'workspace:foreign' },
+        memoryId,
+      })
+    ).rejects.toMatchObject({ code: 'MEMORY_SCOPE_DENIED' });
+    expect(requests).toHaveLength(requestCountBeforeForbiddenGet);
 
     const results = await client.search({
       operationId: 'operation:mem0:search',

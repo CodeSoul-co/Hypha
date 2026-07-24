@@ -191,7 +191,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
   }
 
   async get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null> {
-    const externalId = await this.resolveExternalId(request.memoryId);
+    const externalId = await this.resolveExternalId(request.memoryId, request.scope);
     const body = await this.request('/memories/' + encodeURIComponent(externalId), {
       signal,
     });
@@ -249,7 +249,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
       _hypha_operation_id: request.operationId,
       _hypha_revision: revision,
     };
-    const externalId = await this.resolveExternalId(request.memoryId);
+    const externalId = await this.resolveExternalId(request.memoryId, request.scope);
     const body = await this.request('/memories/' + encodeURIComponent(externalId), {
       method: 'PUT',
       body: {
@@ -299,6 +299,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
         warnings.push(`No active Mem0 mapping exists for Hypha memory ${memoryId}.`);
         continue;
       }
+      this.assertScope(mapping.binding.scopeHash, request.scope);
       await this.mappingStore.set({
         ...mapping,
         syncState: 'pending',
@@ -334,7 +335,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
   }
 
   async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
-    const externalId = await this.resolveExternalId(request.memoryId);
+    const externalId = await this.resolveExternalId(request.memoryId, request.scope);
     const body = await this.request('/memories/' + encodeURIComponent(externalId) + '/history', {
       signal,
     });
@@ -365,7 +366,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
   async health(signal?: AbortSignal): Promise<ProviderHealth> {
     const startedAt = this.now().getTime();
     try {
-      await this.request(this.options.healthPath ?? '/', { signal });
+      await this.request(this.options.healthPath ?? '/auth/setup-status', { signal });
       return {
         status: 'healthy',
         checkedAt: this.now().toISOString(),
@@ -467,7 +468,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
     }
   }
 
-  private async resolveExternalId(memoryId: string): Promise<string> {
+  private async resolveExternalId(memoryId: string, scope: ManagedMemoryScope): Promise<string> {
     const mapping = await this.mappingStore.get(this.providerId, memoryId);
     if (!mapping || mapping.syncState === 'deleted') {
       throw memoryError(
@@ -475,7 +476,17 @@ export class Mem0OssClient implements ExternalMemoryClient {
         `No active Mem0 mapping exists for Hypha memory ${memoryId}.`
       );
     }
+    this.assertScope(mapping.binding.scopeHash, scope);
     return mapping.externalId;
+  }
+
+  private assertScope(boundScopeHash: string, scope: ManagedMemoryScope): void {
+    if (boundScopeHash !== hashMemoryScope(scope)) {
+      throw memoryError(
+        'MEMORY_SCOPE_DENIED',
+        'The requested Mem0 memory is bound to a different Hypha scope.'
+      );
+    }
   }
 
   private toRecords(

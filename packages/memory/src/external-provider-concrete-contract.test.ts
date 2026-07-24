@@ -125,7 +125,12 @@ function createMem0DialectFetch(dialect: 'oss' | 'platform' | 'memorybank-local'
       };
       return response(capabilities);
     }
-    if (path === '' || path === '/health' || path.startsWith('/events')) {
+    if (
+      path === '' ||
+      path === '/health' ||
+      path === '/auth/setup-status' ||
+      path.startsWith('/events')
+    ) {
       return response({ status: 'ok' });
     }
 
