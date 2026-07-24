@@ -565,40 +565,61 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
       request.pagination,
       this.now().getTime()
     );
-    const offset = page.providerCursor ? parseOffset(page.providerCursor) : 0;
+    let scanOffset = page.providerCursor ? parseOffset(page.providerCursor) : 0;
     const limit = request.pagination?.limit ?? 100;
-    const query = new URLSearchParams({
-      limit: String(limit),
-      offset: String(offset),
-      tags_match: 'all_strict',
-    });
-    for (const tag of scopeTags(request.scope, request.filter?.tagsAll)) query.append('tags', tag);
-    if (request.filter?.statuses?.length === 1) query.set('state', request.filter.statuses[0]);
-    const body = asObject(
-      await this.request(
-        `/v1/default/banks/${encodeURIComponent(bankIdForScope(request.scope))}/memories/list?${query}`,
-        { signal }
-      )
-    );
-    const values = asArray(body.items);
-    const records = values
-      .map(asObject)
-      .filter(isCuratableHindsightMemory)
-      .map((item) =>
-        this.toRecord(item, request.scope, {
-          type: 'derived',
-          sourceId: 'hindsight:list',
-        })
+    const batchSize = Math.max(25, Math.min(100, limit * 4));
+    const maxScanCalls = Math.max(1, request.pagination?.maxCalls ?? 100);
+    const records: ManagedMemoryRecord[] = [];
+    let total: number | undefined;
+    let scanCalls = 0;
+    while (records.length < limit && (total === undefined || scanOffset < total)) {
+      if (scanCalls >= maxScanCalls) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Hindsight list scan exhausted its upstream call budget.'
+        );
+      }
+      scanCalls += 1;
+      const query = new URLSearchParams({
+        limit: String(batchSize),
+        offset: String(scanOffset),
+        tags_match: 'all_strict',
+      });
+      for (const tag of scopeTags(request.scope, request.filter?.tagsAll)) {
+        query.append('tags', tag);
+      }
+      if (request.filter?.statuses?.length === 1) query.set('state', request.filter.statuses[0]);
+      const body = asObject(
+        await this.request(
+          `/v1/default/banks/${encodeURIComponent(bankIdForScope(request.scope))}/memories/list?${query}`,
+          { signal }
+        )
       );
+      const values = asArray(body.items);
+      total = readNumber(body, 'total') ?? scanOffset + values.length;
+      if (values.length === 0) break;
+      for (const value of values) {
+        scanOffset += 1;
+        const item = asObject(value);
+        if (isCuratableHindsightMemory(item)) {
+          records.push(
+            this.toRecord(item, request.scope, {
+              type: 'derived',
+              sourceId: 'hindsight:list',
+            })
+          );
+        }
+        if (records.length >= limit) break;
+      }
+    }
     await this.remember(records);
-    const total = readNumber(body, 'total') ?? values.length;
-    const nextOffset = offset + values.length;
+    const nextOffset = scanOffset;
     const pagination = finishProviderPage(
       page,
       this.providerId,
       request.scope,
       records,
-      nextOffset < total ? String(nextOffset) : undefined,
+      total !== undefined && nextOffset < total ? String(nextOffset) : undefined,
       this.now().getTime()
     );
     return { records, ...pagination };

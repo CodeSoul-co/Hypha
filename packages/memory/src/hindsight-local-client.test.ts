@@ -250,6 +250,62 @@ describe('HindsightLocalMemoryBankClient', () => {
     expect(calls.filter((call) => call.method === 'POST')).toHaveLength(1);
   });
 
+  it('fills Hypha pages while skipping non-curatable Hindsight observations', async () => {
+    const values = [
+      {
+        id: 'observation-1',
+        text: 'Derived observation.',
+        type: 'observation',
+        date: '2026-07-24T00:00:00.123456+00:00',
+      },
+      {
+        id: 'memory-1',
+        text: 'First curatable fact.',
+        type: 'world',
+        date: '2026-07-24T00:00:00.123456+00:00',
+      },
+      {
+        id: 'memory-2',
+        text: 'Second curatable fact.',
+        type: 'experience',
+        date: '2026-07-24T00:00:00.123456+00:00',
+      },
+    ];
+    const offsets: number[] = [];
+    const client = new HindsightLocalMemoryBankClient({
+      baseUrl: 'http://localhost:8888',
+      fetch: async (url) => {
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get('offset') ?? 0);
+        const limit = Number(parsed.searchParams.get('limit') ?? 100);
+        offsets.push(offset);
+        return response({ items: values.slice(offset, offset + limit), total: values.length });
+      },
+      now: () => new Date('2026-07-24T00:00:00.000Z'),
+    });
+    const request = {
+      operationId: 'list-operation',
+      principal,
+      scope,
+      pagination: { limit: 1, maxPages: 10, maxCalls: 10 },
+    };
+
+    const first = await client.list(request);
+    expect(first.records.map((record) => record.canonicalText)).toEqual(['First curatable fact.']);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toEqual(expect.any(String));
+
+    const second = await client.list({
+      ...request,
+      pagination: { ...request.pagination, cursor: first.nextCursor },
+    });
+    expect(second.records.map((record) => record.canonicalText)).toEqual([
+      'Second curatable fact.',
+    ]);
+    expect(second.hasMore).toBe(false);
+    expect(offsets).toEqual([0, 2]);
+  });
+
   it('dead-letters expired operations and normalizes cancellation without replaying writes', async () => {
     const mappingStore = new DurableMappingStore();
     const operationStore = new DurableOperationStore();
