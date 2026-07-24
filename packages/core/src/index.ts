@@ -28,6 +28,8 @@ export * from './contracts/react-continuation';
 export * from './contracts/react-continuation-schemas';
 export * from './contracts/runtime-coordination';
 export * from './contracts/runtime-coordination-schemas';
+export * from './contracts/runtime-capacity';
+export * from './contracts/runtime-capacity-schemas';
 export * from './contracts/runtime-helpers';
 export * from './contracts/runtime-helper-schemas';
 export * from './contracts/runtime-activities';
