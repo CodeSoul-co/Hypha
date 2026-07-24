@@ -57,6 +57,11 @@ function addRequest() {
     source: { type: 'user_message' as const, sourceId: 'message-1' },
     profileRef,
     tags: ['engineering'],
+    metadata: {
+      stringValue: 'kept',
+      structuredValue: { nested: true },
+      _hypha_operation_id: 'must-not-override-reserved-key',
+    },
   };
 }
 
@@ -194,6 +199,13 @@ describe('HindsightLocalMemoryBankClient', () => {
         expect.objectContaining({
           document_id: documentIdForOperation('operation-1'),
           content: 'Alice works on the Hypha memory subsystem.',
+          metadata: {
+            stringValue: 'kept',
+            structuredValue: '{"nested":true}',
+            _hypha_operation_id: 'operation-1',
+            _hypha_scope_hash: expect.any(String),
+            _hypha_source: '{"sourceId":"message-1","type":"user_message"}',
+          },
         }),
       ],
     });

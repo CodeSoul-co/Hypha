@@ -188,12 +188,11 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
                 }),
                 timestamp: now,
                 tags: scopeTags(request.scope, request.tags),
-                metadata: {
-                  ...request.metadata,
+                metadata: hindsightMetadata(request.metadata, {
                   _hypha_operation_id: request.operationId,
                   _hypha_scope_hash: hashMemoryScope(request.scope),
-                  _hypha_source: request.source,
-                },
+                  _hypha_source: stableStringify(request.source),
+                }),
               },
             ],
             async: true,
@@ -970,6 +969,19 @@ function scopeTags(scope: ManagedMemoryScope, additional: string[] = []): string
       ...additional,
     ]),
   ].sort();
+}
+
+function hindsightMetadata(
+  metadata: Record<string, unknown> | undefined,
+  reserved: Record<string, string>
+): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (value !== undefined) {
+      normalized[key] = typeof value === 'string' ? value : stableStringify(value);
+    }
+  }
+  return { ...normalized, ...reserved };
 }
 
 function assertPrincipalScope(
