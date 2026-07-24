@@ -33,6 +33,7 @@ import {
   SDKMCPConnectionSessionFactory,
   MCPCapabilityCatalog,
   RedisMCPCapabilityCatalogStore,
+  RedisMCPReconnectCoordinator,
   RedisToolContractSnapshotStore,
   type MCPCapabilityCatalogStore,
   type MCPCapabilityRecord,
@@ -347,6 +348,21 @@ export class ToolManager {
       resolveAuthorizationRef: (ref) => this.secretResolver.resolveAuthorization(ref),
     }),
     telemetry: this.mcpTelemetry,
+    reconnectOwnerId: `server-tool-manager:${process.pid}`,
+    reconnectCoordinator: {
+      acquire: async (input) => {
+        const redis = getRedisClient();
+        if (!redis) {
+          return {
+            ...input,
+            fencingToken: `local:${process.pid}`,
+            expiresAt: new Date(Date.now() + input.ttlMs).toISOString(),
+            release: async () => undefined,
+          };
+        }
+        return new RedisMCPReconnectCoordinator(redis).acquire(input);
+      },
+    },
     contentArtifacts: {
       store: async (input) => ({
         artifactRef: await this.mcpContentArtifacts.store({

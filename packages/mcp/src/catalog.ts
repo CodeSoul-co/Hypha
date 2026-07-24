@@ -221,7 +221,10 @@ export interface MCPCapabilityApprovalRequest extends MCPCapabilityRef {
 
 export interface MCPCapabilityCatalogStore {
   list(serverId?: string): Promise<MCPCapabilityRecord[]>;
-  save(record: MCPCapabilityRecord): Promise<void>;
+  save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean>;
 }
 
 export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
@@ -235,8 +238,16 @@ export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogSt
     );
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
+    if (options && 'expected' in options) {
+      const current = this.records.get(record.id);
+      if (JSON.stringify(current ?? null) !== JSON.stringify(options.expected ?? null)) return false;
+    }
     this.records.set(record.id, clone(record));
+    return true;
   }
 }
 
@@ -245,6 +256,11 @@ export interface RedisLikeMCPStoreClient {
   set(key: string, value: string): Promise<unknown>;
   sadd(key: string, ...members: string[]): Promise<number>;
   smembers(key: string): Promise<string[]>;
+  eval?(
+    script: string,
+    numberOfKeys: number,
+    ...args: Array<string | number>
+  ): Promise<number | string | null>;
 }
 
 /** Multi-worker catalog store. Redis key operations are idempotent per capability id. */
@@ -267,12 +283,46 @@ export class RedisMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore
       .filter((record) => !serverId || record.serverId === serverId);
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
+    if (options && 'expected' in options) {
+      if (!this.client.eval) {
+        throw catalogError(
+          'MCP_CATALOG_CAS_UNAVAILABLE',
+          'Shared MCP catalog requires Redis EVAL for compare-and-set writes.'
+        );
+      }
+      const result = await this.client.eval(
+        [
+          "local current = redis.call('GET', KEYS[1])",
+          "if ARGV[1] == '__NULL__' then",
+          '  if current then return 0 end',
+          'elseif current ~= ARGV[1] then',
+          '  return 0',
+          'end',
+          "redis.call('SET', KEYS[1], ARGV[2])",
+          "redis.call('SADD', KEYS[2], ARGV[3])",
+          "redis.call('SADD', KEYS[3], ARGV[3])",
+          'return 1',
+        ].join('\n'),
+        3,
+        this.recordKey(record.id),
+        this.indexKey(),
+        this.indexKey(record.serverId),
+        options.expected === null ? '__NULL__' : JSON.stringify(options.expected),
+        JSON.stringify(record),
+        record.id
+      );
+      return Number(result) === 1;
+    }
     await this.client.set(this.recordKey(record.id), JSON.stringify(record));
     await Promise.all([
       this.client.sadd(this.indexKey(), record.id),
       this.client.sadd(this.indexKey(record.serverId), record.id),
     ]);
+    return true;
   }
 
   private indexKey(serverId?: string): string {
@@ -533,14 +583,24 @@ export class MCPCapabilityCatalog {
 
   async quarantine(request: MCPCapabilityQuarantineRequest): Promise<void> {
     const record = await this.requireCapability(request);
-    await this.store.save({
-      ...record,
-      driftState: 'quarantined',
-      trust: {
-        ...record.trust,
-        restrictions: [...(record.trust.restrictions ?? []), request.reason],
+    const saved = await this.store.save(
+      {
+        ...record,
+        driftState: 'quarantined',
+        trust: {
+          ...record.trust,
+          restrictions: [...(record.trust.restrictions ?? []), request.reason],
+        },
       },
-    });
+      { expected: record }
+    );
+    if (!saved) {
+      throw catalogError(
+        'MCP_CATALOG_CONFLICT',
+        'MCP capability changed while it was being quarantined.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
   }
 
   async approveRevision(request: MCPCapabilityApprovalRequest): Promise<void> {
@@ -553,19 +613,29 @@ export class MCPCapabilityCatalog {
         { serverId: record.serverId, capabilityId: record.remoteName }
       );
     }
-    await this.store.save({
-      ...record,
-      driftState: 'approved',
-      approvedAt,
-      approvalExpiresAt: request.expiresAt,
-      trust: {
-        ...record.trust,
-        level: record.trust.level === 'untrusted' ? 'restricted' : record.trust.level,
-        approvedBy: request.approvedBy,
+    const saved = await this.store.save(
+      {
+        ...record,
+        driftState: 'approved',
         approvedAt,
-        restrictions: request.restrictions ?? record.trust.restrictions,
+        approvalExpiresAt: request.expiresAt,
+        trust: {
+          ...record.trust,
+          level: record.trust.level === 'untrusted' ? 'restricted' : record.trust.level,
+          approvedBy: request.approvedBy,
+          approvedAt,
+          restrictions: request.restrictions ?? record.trust.restrictions,
+        },
       },
-    });
+      { expected: record }
+    );
+    if (!saved) {
+      throw catalogError(
+        'MCP_CATALOG_CONFLICT',
+        'MCP capability changed while its revision was being approved.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
     await this.emit('mcp.capability.approved', {
       serverId: record.serverId,
       capabilityId: record.remoteName,

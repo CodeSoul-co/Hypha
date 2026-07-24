@@ -33,6 +33,7 @@ import {
   type NormalizedMCPError,
 } from './contracts';
 import { capabilityKey } from './governance';
+import type { MCPReconnectCoordinator } from './coordination';
 
 export type MCPConnectionState =
   | 'disconnected'
@@ -217,6 +218,8 @@ export interface MCPConnectionManagerOptions {
   onListChanged?: (serverId: string) => Promise<void> | void;
   telemetry?: TelemetryRecorder;
   contentArtifacts?: MCPRemoteContentArtifactPort;
+  reconnectCoordinator?: MCPReconnectCoordinator;
+  reconnectOwnerId?: string;
 }
 
 export interface MCPRemoteContentArtifact {
@@ -373,6 +376,29 @@ export class MCPConnectionManager implements MCPGateway {
   }
 
   async reconnect(serverId: string): Promise<MCPConnectionRecord> {
+    const coordinator = this.options.reconnectCoordinator;
+    const lease = coordinator
+      ? await coordinator.acquire({
+          serverId,
+          ownerId: this.options.reconnectOwnerId ?? 'mcp-worker',
+          ttlMs: this.reconnectLeaseTtl(serverId),
+        })
+      : undefined;
+    if (coordinator && !lease) {
+      throw Object.assign(new Error('Another worker owns the MCP reconnect lease.'), {
+        code: 'MCP_BULKHEAD_REJECTED',
+        retryable: true,
+        serverId,
+      });
+    }
+    try {
+      return await this.reconnectWithBudget(serverId);
+    } finally {
+      await lease?.release();
+    }
+  }
+
+  private async reconnectWithBudget(serverId: string): Promise<MCPConnectionRecord> {
     const managed = this.requireConnection(serverId);
     await this.metric('mcp_reconnect_total', 'counter', 1, { server_id: serverId });
     await this.transition(managed, 'reconnecting');
@@ -416,6 +442,19 @@ export class MCPConnectionManager implements MCPGateway {
         serverId,
       })
     );
+  }
+
+  private reconnectLeaseTtl(serverId: string): number {
+    const policy = this.requireConnection(serverId).profile.reconnectPolicy;
+    if (policy?.maxElapsedMs !== undefined) return Math.max(1_000, policy.maxElapsedMs + 5_000);
+    const attempts = policy?.maxAttempts ?? 3;
+    const backoff = policy?.backoffMs ?? 250;
+    const maxBackoff = policy?.maxBackoffMs ?? Number.POSITIVE_INFINITY;
+    let delayBudget = 0;
+    for (let attempt = 1; attempt < attempts; attempt += 1) {
+      delayBudget += Math.min(backoff * 2 ** (attempt - 1), maxBackoff);
+    }
+    return Math.max(10_000, Math.min(delayBudget + 30_000, 5 * 60_000));
   }
 
   async cancelRequest(requestId: string): Promise<void> {

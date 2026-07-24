@@ -33,6 +33,7 @@ import {
 export * from './governance';
 export * from './contracts';
 export * from './connection-manager';
+export * from './coordination';
 export * from './catalog';
 
 export interface MCPIntegrationSpec {
