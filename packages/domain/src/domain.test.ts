@@ -23,8 +23,42 @@ import {
   workflowSpecDefinition,
   type DomainPackSpec,
 } from './index';
+import { researchEvidenceDomainPackExample } from './research-evidence-example';
 
 describe('@hypha/domain workflow compiler', () => {
+  it('ships a read-bounded research Domain Pack with reviewed publication', () => {
+    const validated = validateDomainPackSpec(researchEvidenceDomainPackExample);
+    const compiled = compileDomainPackToHarnessedSystem(validated, {
+      agentRef: { id: 'agent.research', version: '1.0.0' },
+    });
+    const research = compiled.bindings.workflowStates.find(
+      (state) => state.stateId === 'Research'
+    );
+    const publish = compiled.bindings.workflowStates.find(
+      (state) => state.stateId === 'Publish'
+    );
+    const review = validated.workflows[0]?.states.find((state) => state.id === 'HumanReview');
+
+    expect(research).toMatchObject({
+      allowedTools: ['family.data.query', 'family.document.parse', 'family.git.inspect'],
+      permissionScopes: ['data.query', 'document.parse', 'git.read'],
+      capabilityLoadPolicy: 'lazy',
+    });
+    expect(publish).toMatchObject({
+      allowedTools: ['family.messaging.send'],
+      permissionScopes: ['messaging.send'],
+    });
+    expect(review?.humanReviewPolicy).toMatchObject({
+      required: true,
+      approverRole: 'research-publisher',
+    });
+    expect(validated.tools?.find((tool) => tool.id === 'family.messaging.send')).toMatchObject({
+      sideEffectLevel: 'external_effect',
+      humanApprovalPolicy: { required: true },
+      idempotencyPolicy: { mode: 'required' },
+    });
+  });
+
   it('compiles a DomainPack WorkflowSpec into an FSMProcessSpec', () => {
     const domainPack: DomainPackSpec = {
       id: 'minimal',
