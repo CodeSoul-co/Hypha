@@ -374,6 +374,116 @@ describe('InMemorySessionQueue', () => {
     ]);
   });
 
+  it('redrives dead-letter work as a new audited command without mutating its source', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(
+      command('command.dead', {
+        workspaceId: 'workspace.1',
+        targetRunId: 'run.1',
+        priority: 40,
+        maxAttempts: 2,
+        payloadRef: 'artifact-ref:payload.1',
+      })
+    );
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await queue.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-18T06:00:00.500Z',
+      rejectionCode: 'provider_outage',
+      deadLetter: true,
+    });
+
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      sourceCommandId: 'command.dead',
+      id: 'command.redrive',
+      idempotencyKey: 'redrive.command.dead.1',
+      operatorId: 'operator.1',
+      reason: 'Provider outage resolved',
+      requestedAt: '2026-07-18T06:01:00.000Z',
+      maxAttempts: 3,
+    };
+    await expect(queue.redriveDeadLetter(request)).resolves.toMatchObject({
+      id: 'command.redrive',
+      status: 'queued',
+      enqueueSequence: 2,
+      attempts: 0,
+      maxAttempts: 3,
+      payloadRef: 'artifact-ref:payload.1',
+      payloadHash,
+      redrive: {
+        version: '1.0.0',
+        sourceCommandId: 'command.dead',
+        operatorId: 'operator.1',
+        reason: 'Provider outage resolved',
+        requestedAt: '2026-07-18T06:01:00.000Z',
+      },
+    });
+    await expect(queue.redriveDeadLetter(request)).resolves.toMatchObject({
+      id: 'command.redrive',
+      status: 'reused',
+    });
+    await expect(
+      queue.redriveDeadLetter({ ...request, reason: 'Different operator decision' })
+    ).rejects.toMatchObject({ code: 'RUNTIME_IDEMPOTENCY_CONFLICT' });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { id: 'command.dead', status: 'dead_letter', rejectionCode: 'provider_outage' },
+      { id: 'command.redrive', status: 'queued' },
+    ]);
+  });
+
+  it('rejects operator redrive for a command that is not a dead letter', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.queued'));
+
+    await expect(
+      queue.redriveDeadLetter({
+        version: '1.0.0',
+        scope,
+        sourceCommandId: 'command.queued',
+        id: 'command.invalid-redrive',
+        idempotencyKey: 'redrive.invalid',
+        operatorId: 'operator.1',
+        reason: 'Invalid request',
+        requestedAt: initialTime,
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+  });
+
+  it('detects overdue claims without recovering or mutating them', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.stuck'));
+    await queue.claim({ workerId: 'worker.stuck', now: initialTime, leaseMs: 1_000 });
+
+    await expect(
+      queue.listStuck({
+        scope,
+        checkedAt: '2026-07-18T06:00:01.500Z',
+        graceMs: 400,
+      })
+    ).resolves.toMatchObject([
+      {
+        command: { id: 'command.stuck', status: 'claimed', claimedBy: 'worker.stuck' },
+        detectedAt: '2026-07-18T06:00:01.500Z',
+        overdueMs: 500,
+      },
+    ]);
+    await expect(
+      queue.listStuck({
+        scope,
+        checkedAt: '2026-07-18T06:00:01.500Z',
+        graceMs: 600,
+      })
+    ).resolves.toEqual([]);
+  });
+
   it('renews an active claim without changing its token or epoch', async () => {
     const queue = new InMemorySessionQueue();
     await queue.enqueue(command('command.renew'));

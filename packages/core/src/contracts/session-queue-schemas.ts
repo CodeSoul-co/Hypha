@@ -6,8 +6,12 @@ import {
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
+  type ListStuckSessionCommandsRequest,
+  type RedriveDeadLetterSessionCommandRequest,
+  type SessionCommandRedrive,
   type SessionCommandRecord,
   type SessionQueueScope,
+  type StuckSessionCommand,
 } from './session-queue';
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -24,6 +28,16 @@ export const sessionQueueScopeSchema = z
     sessionId: nonEmptyStringSchema,
   })
   .strict() satisfies ZodType<SessionQueueScope>;
+
+export const sessionCommandRedriveSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    sourceCommandId: nonEmptyStringSchema,
+    operatorId: nonEmptyStringSchema,
+    reason: nonEmptyStringSchema,
+    requestedAt: timestampSchema,
+  })
+  .strict() satisfies ZodType<SessionCommandRedrive>;
 
 export const sessionCommandRecordSchema = z
   .object({
@@ -53,6 +67,7 @@ export const sessionCommandRecordSchema = z
     availableAt: timestampSchema,
     expiresAt: timestampSchema.optional(),
     completedAt: timestampSchema.optional(),
+    redrive: sessionCommandRedriveSchema.optional(),
   })
   .strict()
   .superRefine((record, context) => {
@@ -127,6 +142,18 @@ export const sessionCommandRecordSchema = z
 
 const stringProperty: JsonSchema = { type: 'string', minLength: 1 };
 const timestampProperty: JsonSchema = { type: 'string', format: 'date-time' };
+const sessionCommandRedriveJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['version', 'sourceCommandId', 'operatorId', 'reason', 'requestedAt'],
+  properties: {
+    version: { const: '1.0.0' },
+    sourceCommandId: stringProperty,
+    operatorId: stringProperty,
+    reason: stringProperty,
+    requestedAt: timestampProperty,
+  },
+  additionalProperties: false,
+};
 
 export const sessionCommandRecordJsonSchema: JsonSchema = {
   type: 'object',
@@ -173,6 +200,7 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     availableAt: timestampProperty,
     expiresAt: timestampProperty,
     completedAt: timestampProperty,
+    redrive: sessionCommandRedriveJsonSchema,
   },
   additionalProperties: false,
   allOf: [
@@ -232,11 +260,120 @@ export const sessionCommandRecordDefinition = defineSpecSchema<SessionCommandRec
   example: sessionCommandRecordExample,
 });
 
-export const sessionQueueContractDefinitions = [sessionCommandRecordDefinition] as const;
+export const redriveDeadLetterSessionCommandRequestSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    scope: sessionQueueScopeSchema,
+    sourceCommandId: nonEmptyStringSchema,
+    id: nonEmptyStringSchema,
+    idempotencyKey: nonEmptyStringSchema,
+    operatorId: nonEmptyStringSchema,
+    reason: nonEmptyStringSchema,
+    requestedAt: timestampSchema.optional(),
+    availableAt: timestampSchema.optional(),
+    expiresAt: timestampSchema.optional(),
+    priority: z.number().int().min(0).max(100).optional(),
+    maxAttempts: z.number().int().min(1).max(SESSION_COMMAND_MAX_ATTEMPTS_LIMIT).optional(),
+  })
+  .strict() satisfies ZodType<RedriveDeadLetterSessionCommandRequest>;
+
+export const redriveDeadLetterSessionCommandRequestDefinition =
+  defineSpecSchema<RedriveDeadLetterSessionCommandRequest>({
+    id: 'RedriveDeadLetterSessionCommandRequest',
+    zod: redriveDeadLetterSessionCommandRequestSchema,
+    jsonSchema: {
+      type: 'object',
+      required: [
+        'version',
+        'scope',
+        'sourceCommandId',
+        'id',
+        'idempotencyKey',
+        'operatorId',
+        'reason',
+      ],
+      properties: {
+        version: { const: '1.0.0' },
+        scope: {
+          type: 'object',
+          required: ['userId', 'sessionId'],
+          properties: {
+            tenantId: stringProperty,
+            userId: stringProperty,
+            sessionId: stringProperty,
+          },
+          additionalProperties: false,
+        },
+        sourceCommandId: stringProperty,
+        id: stringProperty,
+        idempotencyKey: stringProperty,
+        operatorId: stringProperty,
+        reason: stringProperty,
+        requestedAt: timestampProperty,
+        availableAt: timestampProperty,
+        expiresAt: timestampProperty,
+        priority: { type: 'integer', minimum: 0, maximum: 100 },
+        maxAttempts: {
+          type: 'integer',
+          minimum: 1,
+          maximum: SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    example: {
+      version: '1.0.0',
+      scope: { userId: 'user.example', sessionId: 'session.example' },
+      sourceCommandId: 'command.session.failed',
+      id: 'command.session.redrive.001',
+      idempotencyKey: 'operator.redrive.001',
+      operatorId: 'operator.example',
+      reason: 'Provider outage has been resolved',
+      requestedAt: '2026-07-18T06:00:00.000Z',
+    },
+  });
+
+export const listStuckSessionCommandsRequestSchema = z
+  .object({
+    scope: sessionQueueScopeSchema,
+    checkedAt: timestampSchema,
+    graceMs: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(1000).optional(),
+  })
+  .strict() satisfies ZodType<ListStuckSessionCommandsRequest>;
+
+export const stuckSessionCommandSchema = z
+  .object({
+    command: sessionCommandRecordSchema,
+    detectedAt: timestampSchema,
+    overdueMs: z.number().int().min(0),
+  })
+  .strict() satisfies ZodType<StuckSessionCommand>;
+
+export const sessionQueueContractDefinitions = [
+  sessionCommandRecordDefinition,
+  redriveDeadLetterSessionCommandRequestDefinition,
+] as const;
 export const sessionQueueContractJsonSchemas = exportSpecJsonSchemas(
   sessionQueueContractDefinitions
 );
 
 export function validateSessionCommandRecord(input: unknown): SessionCommandRecord {
   return sessionCommandRecordDefinition.parse(input);
+}
+
+export function validateRedriveDeadLetterSessionCommandRequest(
+  input: unknown
+): RedriveDeadLetterSessionCommandRequest {
+  return redriveDeadLetterSessionCommandRequestDefinition.parse(input);
+}
+
+export function validateListStuckSessionCommandsRequest(
+  input: unknown
+): ListStuckSessionCommandsRequest {
+  return listStuckSessionCommandsRequestSchema.parse(input);
+}
+
+export function validateStuckSessionCommand(input: unknown): StuckSessionCommand {
+  return stuckSessionCommandSchema.parse(input);
 }

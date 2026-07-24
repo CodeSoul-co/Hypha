@@ -382,6 +382,131 @@ describe('SQLiteSessionQueue', () => {
     ]);
   });
 
+  it('persists audited dead-letter redrive and idempotency across restart', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    await first.enqueue(
+      command('command.dead', {
+        workspaceId: 'workspace.1',
+        targetRunId: 'run.1',
+        payloadRef: 'artifact-ref:payload.1',
+      })
+    );
+    const claimed = await first.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await first.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-22T06:00:00.500Z',
+      rejectionCode: 'provider_outage',
+      deadLetter: true,
+    });
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      sourceCommandId: 'command.dead',
+      id: 'command.redrive',
+      idempotencyKey: 'redrive.command.dead.1',
+      operatorId: 'operator.1',
+      reason: 'Provider outage resolved',
+      requestedAt: '2026-07-22T06:01:00.000Z',
+    };
+    await expect(first.redriveDeadLetter(request)).resolves.toMatchObject({
+      id: 'command.redrive',
+      status: 'queued',
+      enqueueSequence: 2,
+      payloadRef: 'artifact-ref:payload.1',
+      redrive: {
+        version: '1.0.0',
+        sourceCommandId: 'command.dead',
+        operatorId: 'operator.1',
+        reason: 'Provider outage resolved',
+      },
+    });
+    first.close();
+    queues.splice(queues.indexOf(first), 1);
+
+    const reopened = openQueue(filename);
+    await expect(reopened.redriveDeadLetter(request)).resolves.toMatchObject({
+      id: 'command.redrive',
+      status: 'reused',
+    });
+    await expect(
+      reopened.redriveDeadLetter({ ...request, reason: 'Different operator decision' })
+    ).rejects.toMatchObject({ code: 'RUNTIME_IDEMPOTENCY_CONFLICT' });
+    await expect(reopened.list({ scope })).resolves.toMatchObject([
+      { id: 'command.dead', status: 'dead_letter', rejectionCode: 'provider_outage' },
+      { id: 'command.redrive', status: 'queued' },
+    ]);
+  });
+
+  it('atomically converges concurrent redrive requests from separate connections', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    const second = openQueue(filename);
+    await first.enqueue(command('command.dead.concurrent'));
+    const claimed = await first.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await first.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-22T06:00:00.500Z',
+      rejectionCode: 'dependency_unavailable',
+      deadLetter: true,
+    });
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      sourceCommandId: 'command.dead.concurrent',
+      id: 'command.redrive.concurrent',
+      idempotencyKey: 'redrive.concurrent.1',
+      operatorId: 'operator.1',
+      reason: 'Dependency restored',
+      requestedAt: '2026-07-22T06:01:00.000Z',
+    };
+
+    const outcomes = await Promise.all([
+      first.redriveDeadLetter(request),
+      second.redriveDeadLetter(request),
+    ]);
+    expect(outcomes.map((record) => record.status).sort()).toEqual(['queued', 'reused']);
+    await expect(first.list({ scope })).resolves.toHaveLength(2);
+  });
+
+  it('detects overdue durable claims without changing their persisted status', async () => {
+    const queue = openQueue(temporaryDatabase());
+    await queue.enqueue(command('command.stuck'));
+    await queue.claim({ workerId: 'worker.stuck', now: initialTime, leaseMs: 1_000 });
+
+    await expect(
+      queue.listStuck({
+        scope,
+        checkedAt: '2026-07-22T06:00:01.500Z',
+        graceMs: 400,
+      })
+    ).resolves.toMatchObject([
+      {
+        command: { id: 'command.stuck', status: 'claimed', claimedBy: 'worker.stuck' },
+        overdueMs: 500,
+      },
+    ]);
+    await expect(
+      queue.listStuck({
+        scope,
+        checkedAt: '2026-07-22T06:00:01.500Z',
+        graceMs: 600,
+      })
+    ).resolves.toEqual([]);
+  });
+
   it('persists lease renewal and fences an older same-worker claim after restart', async () => {
     const filename = temporaryDatabase();
     const firstQueue = openQueue(filename);

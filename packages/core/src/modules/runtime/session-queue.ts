@@ -9,13 +9,21 @@ import {
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
   type ListSessionCommandsRequest,
+  type ListStuckSessionCommandsRequest,
+  type RedriveDeadLetterSessionCommandRequest,
   type ReleaseSessionCommandRequest,
   type RenewSessionCommandRequest,
   type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueueScope,
+  type StuckSessionCommand,
 } from '../../contracts/session-queue';
-import { validateSessionCommandRecord } from '../../contracts/session-queue-schemas';
+import {
+  validateListStuckSessionCommandsRequest,
+  validateRedriveDeadLetterSessionCommandRequest,
+  validateSessionCommandRecord,
+  validateStuckSessionCommand,
+} from '../../contracts/session-queue-schemas';
 import { hashCanonicalJson } from './canonical-json';
 import { addMilliseconds, busError, isAtOrBefore, nonEmpty, positive } from './message-bus';
 
@@ -27,6 +35,8 @@ export interface SessionQueue {
   fail(request: FailSessionCommandRequest): Promise<void>;
   release(request: ReleaseSessionCommandRequest): Promise<void>;
   list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]>;
+  redriveDeadLetter(request: RedriveDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
+  listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]>;
   drain(scope: SessionQueueScope): Promise<void>;
   health(): Promise<ProviderHealth>;
 }
@@ -316,6 +326,102 @@ export class InMemorySessionQueue implements SessionQueue {
       .map((record) => structuredClone(record));
   }
 
+  async redriveDeadLetter(
+    request: RedriveDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateRedriveDeadLetterSessionCommandRequest(request);
+    const key = sessionKey(validated.scope);
+    const idempotencyKey = `${key}\u0000${validated.idempotencyKey}`;
+    const fingerprint = hashCanonicalJson(validated);
+    const prior = this.idempotency.get(idempotencyKey);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint || this.duplicatePolicy === 'reject') {
+        throw busError(
+          'RUNTIME_IDEMPOTENCY_CONFLICT',
+          `Session command idempotency key is already used: ${validated.idempotencyKey}`
+        );
+      }
+      const existing = this.records.get(prior.commandId);
+      if (!existing) throw busError('RUNTIME_INTERNAL_ERROR', 'Session command index is corrupt');
+      return { ...structuredClone(existing), status: 'reused' };
+    }
+    if (this.records.has(validated.id)) {
+      throw busError('RUNTIME_IDEMPOTENCY_CONFLICT', `Session command id exists: ${validated.id}`);
+    }
+    const source = this.records.get(validated.sourceCommandId);
+    if (
+      !source ||
+      !sameScope(scopeFromCommand(source), validated.scope) ||
+      source.status !== 'dead_letter'
+    ) {
+      throw busError(
+        'RUNTIME_SESSION_QUEUE_CONFLICT',
+        'Only a dead-letter command in the requested scope can be redriven',
+        { sourceCommandId: validated.sourceCommandId }
+      );
+    }
+    this.assertCapacity(validated.scope);
+    const requestedAt = validated.requestedAt ?? this.now();
+    const availableAt = validated.availableAt ?? requestedAt;
+    const enqueueSequence = (this.sessionSequences.get(key) ?? 0) + 1;
+    const record = validateSessionCommandRecord({
+      id: validated.id,
+      commandType: source.commandType,
+      idempotencyKey: validated.idempotencyKey,
+      ...(source.tenantId === undefined ? {} : { tenantId: source.tenantId }),
+      userId: source.userId,
+      ...(source.workspaceId === undefined ? {} : { workspaceId: source.workspaceId }),
+      sessionId: source.sessionId,
+      ...(source.targetRunId === undefined ? {} : { targetRunId: source.targetRunId }),
+      enqueueSequence,
+      priority: validated.priority ?? source.priority,
+      attempts: 0,
+      maxAttempts: validated.maxAttempts ?? source.maxAttempts,
+      leaseEpoch: 0,
+      ...(source.payloadRef === undefined ? {} : { payloadRef: source.payloadRef }),
+      payloadHash: source.payloadHash,
+      status: 'queued',
+      createdAt: requestedAt,
+      availableAt,
+      ...(validated.expiresAt === undefined ? {} : { expiresAt: validated.expiresAt }),
+      redrive: {
+        version: '1.0.0',
+        sourceCommandId: source.id,
+        operatorId: validated.operatorId,
+        reason: validated.reason,
+        requestedAt,
+      },
+    });
+    this.records.set(record.id, record);
+    this.idempotency.set(idempotencyKey, { commandId: record.id, fingerprint });
+    this.sessionSequences.set(key, enqueueSequence);
+    return structuredClone(record);
+  }
+
+  async listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]> {
+    const validated = validateListStuckSessionCommandsRequest(request);
+    const graceMs = validated.graceMs ?? 0;
+    const limit = validated.limit ?? 100;
+    const checkedAtMs = Date.parse(validated.checkedAt);
+    return [...this.records.values()]
+      .filter(
+        (record) =>
+          sameScope(scopeFromCommand(record), validated.scope) &&
+          record.status === 'claimed' &&
+          record.leaseExpiresAt !== undefined &&
+          Date.parse(record.leaseExpiresAt) + graceMs <= checkedAtMs
+      )
+      .sort((left, right) => left.leaseExpiresAt!.localeCompare(right.leaseExpiresAt!))
+      .slice(0, limit)
+      .map((command) =>
+        validateStuckSessionCommand({
+          command: structuredClone(command),
+          detectedAt: validated.checkedAt,
+          overdueMs: checkedAtMs - Date.parse(command.leaseExpiresAt!),
+        })
+      );
+  }
+
   async drain(scope: SessionQueueScope): Promise<void> {
     validateScope(scope);
     this.recover(this.now());
@@ -372,6 +478,33 @@ export class InMemorySessionQueue implements SessionQueue {
       });
     }
     return record;
+  }
+
+  private assertCapacity(scope: SessionQueueScope): void {
+    const pending = [...this.records.values()].filter(isPending);
+    const pendingForSession = pending.filter(
+      (record) => sessionKey(scopeFromCommand(record)) === sessionKey(scope)
+    ).length;
+    if (pendingForSession >= this.maxPendingPerSession) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Session queue depth limit reached', {
+        sessionId: scope.sessionId,
+        maxPendingPerSession: this.maxPendingPerSession,
+      });
+    }
+    const pendingForUser = pending.filter(
+      (record) => userKey(scopeFromCommand(record)) === userKey(scope)
+    ).length;
+    if (pendingForUser >= this.maxPendingPerUser) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'User queue depth limit reached', {
+        userId: scope.userId,
+        maxPendingPerUser: this.maxPendingPerUser,
+      });
+    }
+    if (pending.length >= this.maxPendingGlobal) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Global queue depth limit reached', {
+        maxPendingGlobal: this.maxPendingGlobal,
+      });
+    }
   }
 
   private recover(now: string): void {
