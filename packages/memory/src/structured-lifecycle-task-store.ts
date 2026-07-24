@@ -45,19 +45,40 @@ export class StructuredMemoryLifecycleTaskStore implements MemoryLifecycleTaskSt
       for (const candidate of selected) {
         const current = await transaction.get<MemoryLifecycleTask>(this.table, candidate.id);
         if (!current || !isLeaseable(current, now)) continue;
+        const fencingToken = (current.fencingToken ?? 0) + 1;
         const next: MemoryLifecycleTask = {
           ...current,
           state: 'processing',
           attempts: current.attempts + 1,
           leaseOwner: ownerId,
-          leaseToken: lifecycleLeaseToken(ownerId, current.id, current.attempts + 1, leaseUntil),
+          leaseToken: lifecycleLeaseToken(ownerId, current.id, fencingToken),
           leaseExpiresAt: leaseUntil,
+          fencingToken,
           updatedAt: now,
         };
         await transaction.update(this.table, next.id, next);
         leased.push(next);
       }
       return leased.map((task) => structuredClone(task));
+    });
+  }
+
+  async renew(
+    taskId: string,
+    ownerId: string,
+    leaseToken: string,
+    now: string,
+    leaseUntil: string
+  ): Promise<boolean> {
+    return this.options.store.transaction(async (transaction) => {
+      const task = await transaction.get<MemoryLifecycleTask>(this.table, taskId);
+      if (!hasLifecycleLease(task, ownerId, leaseToken, now) || leaseUntil <= now) return false;
+      await transaction.update(this.table, taskId, {
+        ...task,
+        leaseExpiresAt: leaseUntil,
+        updatedAt: now,
+      });
+      return true;
     });
   }
 
@@ -69,7 +90,7 @@ export class StructuredMemoryLifecycleTaskStore implements MemoryLifecycleTaskSt
   ): Promise<boolean> {
     return this.options.store.transaction(async (transaction) => {
       const task = await transaction.get<MemoryLifecycleTask>(this.table, taskId);
-      if (!hasLifecycleLease(task, ownerId, leaseToken)) return false;
+      if (!hasLifecycleLease(task, ownerId, leaseToken, now)) return false;
       await transaction.update(this.table, taskId, {
         ...task,
         state: 'completed',
@@ -86,13 +107,14 @@ export class StructuredMemoryLifecycleTaskStore implements MemoryLifecycleTaskSt
     taskId: string,
     ownerId: string,
     leaseToken: string,
+    now: string,
     error: NormalizedMemoryError,
     retryAt: string,
     deadLetter: boolean
   ): Promise<boolean> {
     return this.options.store.transaction(async (transaction) => {
       const task = await transaction.get<MemoryLifecycleTask>(this.table, taskId);
-      if (!hasLifecycleLease(task, ownerId, leaseToken)) return false;
+      if (!hasLifecycleLease(task, ownerId, leaseToken, now)) return false;
       await transaction.update(this.table, taskId, {
         ...task,
         state: deadLetter ? 'dead_letter' : 'failed',
@@ -128,21 +150,20 @@ function compareLifecycleTasks(left: MemoryLifecycleTask, right: MemoryLifecycle
   return left.availableAt.localeCompare(right.availableAt) || left.id.localeCompare(right.id);
 }
 
-function lifecycleLeaseToken(
-  ownerId: string,
-  taskId: string,
-  attempt: number,
-  leaseUntil: string
-): string {
-  return ownerId + ':' + taskId + ':' + attempt + ':' + leaseUntil;
+function lifecycleLeaseToken(ownerId: string, taskId: string, fencingToken: number): string {
+  return ownerId + ':' + taskId + ':' + fencingToken;
 }
 
 function hasLifecycleLease(
   task: MemoryLifecycleTask | null,
   ownerId: string,
-  leaseToken: string
+  leaseToken: string,
+  now: string
 ): task is MemoryLifecycleTask {
   return (
-    task?.state === 'processing' && task.leaseOwner === ownerId && task.leaseToken === leaseToken
+    task?.state === 'processing' &&
+    task.leaseOwner === ownerId &&
+    task.leaseToken === leaseToken &&
+    (task.leaseExpiresAt ?? '') > now
   );
 }

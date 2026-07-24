@@ -56,6 +56,7 @@ export interface MemoryIndexOutboxRecord {
   leaseOwner?: string;
   leaseToken?: string;
   leaseExpiresAt?: string;
+  fencingToken?: number;
   lastError?: import('./contracts').NormalizedMemoryError;
   createdAt: string;
   updatedAt: string;
@@ -69,11 +70,19 @@ export interface MemoryIndexOutboxStore {
     leaseUntil: string,
     limit: number
   ): Promise<MemoryIndexOutboxRecord[]>;
+  renew(
+    id: string,
+    owner: string,
+    leaseToken: string,
+    now: string,
+    leaseUntil: string
+  ): Promise<boolean>;
   complete(id: string, owner: string, leaseToken: string, now: string): Promise<boolean>;
   fail(
     id: string,
     owner: string,
     leaseToken: string,
+    now: string,
     error: import('./contracts').NormalizedMemoryError,
     retryAt: string,
     deadLetter?: boolean
@@ -242,18 +251,33 @@ export class InMemoryMemoryIndexOutboxStore implements MemoryIndexOutboxStore {
       .filter((record) => record.availableAt <= now)
       .slice(0, limit);
     for (const record of leased) {
+      const fencingToken = (record.fencingToken ?? 0) + 1;
       record.state = 'processing';
       record.leaseOwner = owner;
-      record.leaseToken = createLeaseToken(owner, record.id, record.attempts + 1, leaseUntil);
+      record.leaseToken = createLeaseToken(owner, record.id, fencingToken);
       record.leaseExpiresAt = leaseUntil;
+      record.fencingToken = fencingToken;
       record.attempts += 1;
       record.updatedAt = now;
     }
     return leased.map((record) => ({ ...record }));
   }
+  async renew(
+    id: string,
+    owner: string,
+    leaseToken: string,
+    now: string,
+    leaseUntil: string
+  ): Promise<boolean> {
+    const record = this.records.get(id);
+    if (!hasOutboxLease(record, owner, leaseToken, now) || leaseUntil <= now) return false;
+    record.leaseExpiresAt = leaseUntil;
+    record.updatedAt = now;
+    return true;
+  }
   async complete(id: string, owner: string, leaseToken: string, now: string): Promise<boolean> {
     const record = this.records.get(id);
-    if (!hasOutboxLease(record, owner, leaseToken)) return false;
+    if (!hasOutboxLease(record, owner, leaseToken, now)) return false;
     record.state = 'completed';
     record.updatedAt = now;
     record.leaseOwner = undefined;
@@ -265,16 +289,17 @@ export class InMemoryMemoryIndexOutboxStore implements MemoryIndexOutboxStore {
     id: string,
     owner: string,
     leaseToken: string,
+    now: string,
     error: import('./contracts').NormalizedMemoryError,
     retryAt: string,
     deadLetter = false
   ): Promise<boolean> {
     const record = this.records.get(id);
-    if (!hasOutboxLease(record, owner, leaseToken)) return false;
+    if (!hasOutboxLease(record, owner, leaseToken, now)) return false;
     record.state = deadLetter ? 'dead_letter' : 'failed';
     record.lastError = error;
     record.availableAt = retryAt;
-    record.updatedAt = new Date().toISOString();
+    record.updatedAt = now;
     record.leaseOwner = undefined;
     record.leaseToken = undefined;
     record.leaseExpiresAt = undefined;
@@ -340,18 +365,20 @@ export function matchesFilter(record: ManagedMemoryRecord, filter?: MemorySearch
   return true;
 }
 
-function createLeaseToken(owner: string, id: string, attempt: number, leaseUntil: string): string {
-  return owner + ':' + id + ':' + attempt + ':' + leaseUntil;
+function createLeaseToken(owner: string, id: string, fencingToken: number): string {
+  return owner + ':' + id + ':' + fencingToken;
 }
 
 function hasOutboxLease(
   record: MemoryIndexOutboxRecord | undefined,
   owner: string,
-  leaseToken: string
+  leaseToken: string,
+  now: string
 ): record is MemoryIndexOutboxRecord {
   return (
     record?.state === 'processing' &&
     record.leaseOwner === owner &&
-    record.leaseToken === leaseToken
+    record.leaseToken === leaseToken &&
+    (record.leaseExpiresAt ?? '') > now
   );
 }
