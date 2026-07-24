@@ -14,10 +14,12 @@ import {
   type MemoryRuntime,
   type MemoryRuntimeCompositionReceipt,
   type MemoryServerConsumer,
+  type MongoTransactionMode,
   type MongoDatabaseLike,
   type RedisLikeWorkingMemoryClient,
 } from '@hypha/memory';
 import { getMongoConnection, getRedisClient } from './database';
+import { dbConfig } from '../config';
 import { logger } from '../utils/logger';
 
 export type ServerMemoryCompositionState =
@@ -200,6 +202,20 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     );
   }
   const client = mongo.connection.getClient();
+  const hello = (await database.command({ hello: 1 })) as {
+    setName?: string;
+    msg?: string;
+  };
+  const transactionMode = resolveMongoTransactionMode(
+    hello,
+    process.env.HYPHA_MEMORY_MONGO_TRANSACTION_MODE,
+    dbConfig().replicaSet
+  );
+  if (transactionMode === 'disabled') {
+    logger.warn(
+      'Canonical Memory is using standalone MongoDB without atomic record/outbox transactions.'
+    );
+  }
   const mongoDatabase: MongoDatabaseLike = {
     collection: (name) => database.collection(name) as never,
     startSession: () => client.startSession() as never,
@@ -208,7 +224,7 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
   const structuredStore = new MongoStructuredStoreProvider({
     database: mongoDatabase,
     collectionPrefix: 'canonical_memory_',
-    transactionMode: 'required',
+    transactionMode,
   });
   const registry = new MemoryManagementProviderRegistry().register(
     createNativeMemoryManagementProviderFactory({
@@ -269,6 +285,25 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
   return runtime;
 }
 
+export function resolveMongoTransactionMode(
+  hello: { setName?: string; msg?: string },
+  configured?: string,
+  configuredReplicaSet?: string
+): MongoTransactionMode {
+  const explicit = configured?.trim().toLowerCase();
+  if (explicit) {
+    if (explicit === 'required' || explicit === 'preferred' || explicit === 'disabled') {
+      return explicit;
+    }
+    throw memoryError(
+      'MEMORY_INVALID_INPUT',
+      'HYPHA_MEMORY_MONGO_TRANSACTION_MODE must be required, preferred, or disabled.'
+    );
+  }
+  const transactionCapable =
+    Boolean(hello.setName || configuredReplicaSet?.trim()) || hello.msg === 'isdbgrid';
+  return transactionCapable ? 'required' : 'disabled';
+}
 class LocalDeterministicEmbeddingProvider implements EmbeddingProvider {
   async embed(inputs: string[]): Promise<number[][]> {
     return inputs.map((input) => deterministicVector(input));

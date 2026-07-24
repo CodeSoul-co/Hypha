@@ -3,7 +3,7 @@ import type {
   MemoryRuntime,
   MemoryRuntimeCompositionReceipt,
 } from '@hypha/memory';
-import { ServerMemoryComposition } from './ServerMemoryComposition';
+import { resolveMongoTransactionMode, ServerMemoryComposition } from './ServerMemoryComposition';
 
 function runtime(close = jest.fn(async () => undefined)): MemoryRuntime {
   const receipt: MemoryRuntimeCompositionReceipt = {
@@ -94,5 +94,21 @@ describe('ServerMemoryComposition', () => {
       ready: false,
       message: 'profile reference is unresolved',
     });
+  });
+});
+
+describe('resolveMongoTransactionMode', () => {
+  it('requires transactions for replica sets and sharded clusters', () => {
+    expect(resolveMongoTransactionMode({ setName: 'rs0' })).toBe('required');
+    expect(resolveMongoTransactionMode({ msg: 'isdbgrid' })).toBe('required');
+    expect(resolveMongoTransactionMode({}, undefined, 'configured-rs')).toBe('required');
+  });
+
+  it('uses explicit standalone mode and rejects invalid configuration', () => {
+    expect(resolveMongoTransactionMode({})).toBe('disabled');
+    expect(resolveMongoTransactionMode({}, 'preferred')).toBe('preferred');
+    expect(() => resolveMongoTransactionMode({}, 'sometimes')).toThrow(
+      'must be required, preferred, or disabled'
+    );
   });
 });
