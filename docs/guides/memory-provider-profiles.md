@@ -6,84 +6,72 @@ through `CanonicalMemoryRuntimeLoader`; do not translate it into a second config
 
 The loader validates profile/provider identity and resolves connection, secret, Store, Vector,
 Artifact, Embedding, and other dependency references before creating a runtime. Server clients,
-containers, cloud accounts, and secret values remain deployment responsibilities. A Framework
-status is not a claim that the current Server default path uses the profile.
+containers, cloud accounts, and secret values remain deployment responsibilities.
 
-## Support matrix
+## Deployment profiles
 
-| Profile              | Framework status            | Store/deployment contract                                  | Live evidence                                                     |
-| -------------------- | --------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------- |
-| `native-lite`        | framework-validated         | bounded working state + SQLite records + local vector/file | package suite                                                     |
-| `native-default`     | framework-validated, non-HA | Redis working + Mongo records + local vector/file          | deterministic multi-instance recovery suite; real HA gate open    |
-| `mem0-oss`           | contract-validated          | self-hosted Mem0                                           | `HYPHA_TEST_MEM0_OSS_URL`; not run without endpoint               |
-| `mem0-platform`      | controlled-test             | Mem0 Platform v3                                           | `HYPHA_TEST_MEM0_PLATFORM_TOKEN`; not run without credential      |
-| `memorybank-managed` | controlled-test             | Vertex AI Agent Engine Memory Bank                         | `HYPHA_TEST_MEMORYBANK_MANAGED_TOKEN`; not run without credential |
-
-Status meanings:
-
-- **framework-validated**: public contracts, strict configuration, consumer composition, lifecycle,
-  and package tests pass. Server assembly and deployment dependencies are separate acceptance gates.
-- **contract-validated**: the concrete client runs the shared add/search/get/list/update/delete/history
-  lifecycle against its protocol transport fixture. It is not evidence that a live service passed.
-- **controlled-test**: the protocol client and credential-gated integration entry exist, but no live
-  cloud pass is claimed without an explicit release account.
-- **live-validated**: reserved for a recorded real-service lifecycle report. No external profile in
-  this document currently claims this status.
-
-Skipped credential-gated tests are recorded as **not run**, never as passed.
+| Profile                      | Intended use                     | Required dependencies                                         | Runtime boundary                          |
+| ---------------------------- | -------------------------------- | ------------------------------------------------------------- | ----------------------------------------- |
+| `native-lite`                | Offline or single-process Memory | bounded working store, SQLite, local vector and artifact      | single writer; not multi-instance         |
+| `native-default`             | Shared structured Memory         | Redis, MongoDB, configured vector and artifact adapters       | distributed stores; not HA by default     |
+| `mem0-oss`                   | Self-hosted external Memory      | Mem0 endpoint and optional API credential                     | Mem0 OSS REST dialect                     |
+| `mem0-platform`              | Mem0 managed service             | Platform token, durable mapping and operation stores          | Mem0 Platform v3 dialect                  |
+| `memorybank-managed`         | Vertex AI Memory Bank            | Google project/location/engine credentials and stores         | Vertex resource names remain in adapter   |
+| `memorybank-hindsight-local` | Self-hosted Hindsight candidate  | Hindsight 0.8.x endpoint and durable mapping/operation stores | disabled candidate; explicit factory only |
 
 ## Native topology
 
-`native-lite` is the offline/single-process profile:
+`native-lite` keeps working state and vector search inside one process. SQLite provides local
+structured-record durability, but the profile must not be used by multiple writer processes.
 
-```text
-working: bounded in-memory state
-record/history: SQLite
-vector: local in-memory
-artifact: local filesystem
-coordination: single process only
+`native-default` uses Redis for working state and MongoDB for records, history, outbox, and
+coordination. Its vector and artifact references must resolve to adapters appropriate for the
+selected deployment. The repository default uses a process-local vector adapter, so selecting the
+profile alone does not provide high availability. Multi-instance deployments require shared vector
+and artifact services in addition to Redis and MongoDB.
+
+Workers use fenced lease tokens. Completion and failure updates must match the current owner and
+attempt token, and shutdown must drain supervised workers before closing Store and Provider clients.
+Readiness must fail when a required dependency, transaction capability, Provider, or profile
+reference cannot be resolved.
+
+## External provider selection
+
+Mem0 OSS and Mem0 Platform are separate protocol dialects and must use their corresponding clients.
+Deployment type is never inferred from a URL.
+
+`memorybank-managed` targets Google Vertex AI Agent Engine Memory Bank. Vertex project, location,
+reasoning-engine, operation, and memory resource names stay inside the adapter.
+
+`memorybank-hindsight-local` targets the self-hosted Hindsight HTTP 0.8 dialect through
+`HindsightLocalMemoryBankClient`. Its candidate profile is stored separately at
+`configs/memory/hindsight-local/memory-profile.candidate.yaml` and remains disabled until the
+pinned image completes required live acceptance. `hypha.memorybank.v1` remains an internal protocol
+compatibility fixture and must not be used as deployment configuration.
+
+## Hindsight local deployment
+
+The repository pins both the Hindsight image tag and OCI digest. Copy the environment template,
+provide the selected LLM configuration, and start the service from the repository root:
+
+```powershell
+Copy-Item configs/memory/hindsight-local/.env.example configs/memory/hindsight-local/.env
+docker compose --env-file configs/memory/hindsight-local/.env `
+  -f configs/memory/hindsight-local/compose.yaml up -d
 ```
 
-Its structured records are locally durable; its working state and coordination are not
-multi-process services. It must not be described as a production distributed database.
+The API binds to `127.0.0.1:8888` and the UI to `127.0.0.1:9999` by default. The named Docker volume
+persists Hindsight data across container restarts. Do not commit `.env`, API keys, Provider data, or
+a third-party source checkout. Remote endpoints require HTTPS; cleartext HTTP is accepted only for
+loopback addresses.
 
-`native-default` is a distributed-store deployment contract, not a released HA profile:
+Runtime composition must register `createHindsightLocalMemoryProviderFactory` and resolve
+`memory.connection.hindsight-local`, `memory.mapping.durable`, and `memory.operation.durable`.
+Production composition fails when either store is ephemeral or the pinned API version drifts.
 
-```text
-working: Redis
-record/history: MongoDB
-vector: configured local or cloud adapter
-artifact: configured local or cloud adapter
-outbox: enabled
-coordination: distributed contract
-high availability: unpublished
-```
-
-The Memory Framework provides fenced leases, store/runtime contracts, and worker supervision. Its
-deterministic multi-instance suite covers exclusive claim, lease-expiry takeover, stale-owner rejection,
-restart recovery, and drain. It does not simulate a real network partition or shared vector service.
-Because the configured vector adapter is process-local, the profile remains non-HA. Server creation of
-Redis/Mongo clients, shared vector infrastructure, migrations, readiness, credentials, and shutdown
-drain belongs to `dev`. See [Native Memory deployment and operations](memory-native-multi-instance-validation.md).
-
-## External protocol evidence
-
-Mem0 Platform is an independent v3 dialect using versioned add/search endpoints, Token
-authentication, filters, asynchronous event receipts, and controlled-cloud reconciliation. It does
-not infer its dialect from the base URL.
-
-Managed MemoryBank targets the Google Vertex AI Agent Engine Memory Bank contract. The client keeps
-Vertex resource names inside the adapter and maps Hypha scope and stable IDs at the boundary.
-There is no released `memorybank-local` product profile. `hypha.memorybank.v1` is retained only as
-an unpublished protocol-development fixture and must not be selected in deployment configuration.
-Use `mem0-oss` for a supported self-hosted external service. See
-[RFC: MemoryBank Local product boundary](../rfc/2026-07-22-memorybank-local-product-boundary.md).
-
-The shared concrete-client test is
-`packages/memory/src/external-provider-concrete-contract.test.ts`. Credential-gated live entry
-points are in `tests/integration/memory-external-providers.integration.test.ts`. Local endpoints run
-the full shared lifecycle; managed-cloud entries remain health/capability smoke tests until a release
-account is explicitly enabled.
+Production external profiles require durable `StructuredExternalMemoryMappingStore` and
+`StructuredExternalProviderOperationStore` implementations. In-memory stores are permitted only
+when the runtime profile explicitly selects `test` or `ephemeral` behavior.
 
 ## Minimal selection
 

@@ -41,5 +41,5 @@ provided `StructuredStoreProvider` transaction.
 - Provider implementations should accept the optional `AbortSignal` and stop remote work when the
   signal is aborted.
 - Provider-specific SDK types must remain inside adapters.
-- Domain binding, Runtime orchestration, Cache runtime, EventStore, and Server handlers remain owned
-  by their corresponding branches; this migration changes no other Owner implementation.
+- Domain binding, Runtime orchestration, Cache runtime, EventStore, and Server handlers remain
+  separate integration surfaces and must continue to use the public Memory contracts.

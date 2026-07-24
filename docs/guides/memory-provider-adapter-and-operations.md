@@ -12,7 +12,7 @@ A provider adapter implements `ExternalMemoryClient` and is wrapped by
 5. Accept `AbortSignal`, cancel in-flight transport work on `close()`, and expose health.
 6. Negotiate capabilities; do not claim optional operations that the service did not advertise.
 7. Reconcile an unknown write by operation/idempotency metadata. Quarantine it if the result cannot be proven.
-8. Pass `runExternalProviderAcceptance` plus a controlled real-service test before changing a profile status.
+8. Validate the lifecycle with `runExternalProviderAcceptance` before enabling a deployment profile.
 
 Provider SDK response types remain inside the adapter. Framework routing selects a provider through
 a profile and registry; it must not branch on Mem0, MemoryBank, Native, local, or managed names.
@@ -71,6 +71,6 @@ different provider, reissue quarantined writes, or treat cached results as resto
 ## Known limitations
 
 - `native-lite` is non-durable and intended for tests or previews.
-- Mem0 Platform and Vertex AI Memory Bank live tests require explicit cloud credentials and remain controlled-test profiles until a release environment records acceptance.
-- `hypha.memorybank.v1` is a Hypha-defined local protocol because the MemoryBank research implementation does not publish a stable interoperable HTTP standard.
+- Mem0 Platform and Vertex AI Memory Bank require explicit cloud credentials plus durable mapping and operation stores for production use.
+- `hypha.memorybank.v1` remains a non-deployable compatibility fixture. Self-hosted Hindsight uses its explicit `hindsight.http.v0.8` dialect and disabled candidate profile.
 - Framework contracts do not start services, inject secrets, expose HTTP endpoints, or schedule deployment backup jobs.
