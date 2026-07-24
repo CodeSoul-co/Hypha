@@ -942,6 +942,159 @@ describe('@hypha/mcp normalization', () => {
     await expect(prompt).rejects.toMatchObject({ code: 'MCP_REQUEST_TIMEOUT' });
   });
 
+  it('marks remote Resource and Prompt content untrusted and externalizes oversized payloads', async () => {
+    const artifactWrites: Array<{
+      kind: 'resource' | 'prompt';
+      contentHash: string;
+      bytes: Uint8Array;
+    }> = [];
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return {
+              negotiatedProtocolVersion: '2025-11-25',
+              serverInfo: { name: 'remote-content', version: '2.0.0' },
+            };
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          async readResource(uri) {
+            return {
+              contents: [{ uri, text: uri.endsWith('/large') ? 'sensitive'.repeat(64) : 'safe' }],
+            };
+          },
+          async getPrompt(name) {
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: name === 'large' ? 'private'.repeat(64) : 'hello',
+                },
+              ],
+            };
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      contentArtifacts: {
+        async store(input) {
+          artifactWrites.push({
+            kind: input.kind,
+            contentHash: input.contentHash,
+            bytes: input.bytes,
+          });
+          return {
+            artifactRef: `artifact://${input.serverId}/${input.kind}`,
+            contentHash: input.contentHash,
+            sizeBytes: input.bytes.byteLength,
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'remote-content',
+      mode: 'remote',
+      version: '2.0.0',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: {
+        maxResourceBytes: 160,
+        maxPromptBytes: 160,
+        maxPromptTokens: 40,
+        oversizeAction: 'artifact',
+      },
+    });
+    await manager.connect('remote-content');
+
+    const inline = await manager.readResource({
+      serverId: 'remote-content',
+      uri: 'fixture://document/small',
+    });
+    expect(inline.metadata).toMatchObject({
+      trust: 'untrusted',
+      provenance: {
+        source: 'mcp',
+        serverId: 'remote-content',
+        kind: 'resource',
+      },
+    });
+    expect(inline.metadata?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+
+    const resource = await manager.readResource({
+      serverId: 'remote-content',
+      uri: 'fixture://document/large',
+    });
+    expect(resource.metadata).toMatchObject({
+      externalized: true,
+      artifactRef: 'artifact://remote-content/resource',
+      trust: 'untrusted',
+    });
+    expect(JSON.stringify(resource)).not.toContain('sensitive');
+
+    const prompt = await manager.getPrompt({
+      serverId: 'remote-content',
+      name: 'large',
+    });
+    expect(prompt.metadata).toMatchObject({
+      externalized: true,
+      artifactRef: 'artifact://remote-content/prompt',
+      trust: 'untrusted',
+    });
+    expect(JSON.stringify(prompt)).not.toContain('private');
+    expect(artifactWrites).toHaveLength(2);
+    expect(artifactWrites.every((write) => write.contentHash.length === 64)).toBe(true);
+  });
+
+  it('rejects oversized MCP content when artifact externalization is not enabled', async () => {
+    const manager = new MCPConnectionManager({
+      sessionFactory: {
+        create() {
+          return {
+            async connect() {
+              return {};
+            },
+            async listCapabilities() {
+              return [];
+            },
+            async callTool() {
+              return {};
+            },
+            async readResource(uri) {
+              return { contents: [{ uri, text: 'oversized-content' }] };
+            },
+            async ping() {},
+            async close() {},
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'reject-content',
+      mode: 'remote',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: { maxResourceBytes: 8, oversizeAction: 'reject' },
+    });
+    await manager.connect('reject-content');
+
+    await expect(
+      manager.readResource({
+        serverId: 'reject-content',
+        uri: 'fixture://document/large',
+      })
+    ).rejects.toMatchObject({
+      code: 'MCP_CONTENT_TOO_LARGE',
+      retryable: false,
+    });
+  });
+
   it('connects to and cleans up a real stdio MCP server through the stable SDK adapter', async () => {
     const manager = new MCPConnectionManager({
       sessionFactory: new SDKMCPConnectionSessionFactory(),

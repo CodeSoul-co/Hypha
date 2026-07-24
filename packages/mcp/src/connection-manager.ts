@@ -216,6 +216,25 @@ export interface MCPConnectionManagerOptions {
   random?: () => number;
   onListChanged?: (serverId: string) => Promise<void> | void;
   telemetry?: TelemetryRecorder;
+  contentArtifacts?: MCPRemoteContentArtifactPort;
+}
+
+export interface MCPRemoteContentArtifact {
+  artifactRef: string;
+  contentHash: string;
+  sizeBytes: number;
+}
+
+export interface MCPRemoteContentArtifactPort {
+  store(input: {
+    serverId: string;
+    kind: 'resource' | 'prompt';
+    capabilityId: string;
+    mediaType: string;
+    bytes: Uint8Array;
+    contentHash: string;
+    provenance: Record<string, unknown>;
+  }): Promise<MCPRemoteContentArtifact>;
 }
 
 type MCPFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -555,7 +574,12 @@ export class MCPConnectionManager implements MCPGateway {
             code: 'MCP_CAPABILITY_NOT_FOUND',
           });
         }
-        return session.readResource(request.uri, { signal, timeoutMs });
+        const result = await session.readResource(request.uri, { signal, timeoutMs });
+        return this.governResourceResult(
+          this.requireConnection(request.serverId),
+          request.uri,
+          result
+        );
       }
     );
   }
@@ -572,7 +596,15 @@ export class MCPConnectionManager implements MCPGateway {
             code: 'MCP_CAPABILITY_NOT_FOUND',
           });
         }
-        return session.getPrompt(request.name, request.arguments, { signal, timeoutMs });
+        const result = await session.getPrompt(request.name, request.arguments, {
+          signal,
+          timeoutMs,
+        });
+        return this.governPromptResult(
+          this.requireConnection(request.serverId),
+          request.name,
+          result
+        );
       }
     );
   }
@@ -632,6 +664,160 @@ export class MCPConnectionManager implements MCPGateway {
         server_id: serverId,
       });
     }
+  }
+
+  private async governResourceResult(
+    managed: ManagedConnection,
+    uri: string,
+    result: MCPResourceResult
+  ): Promise<MCPResourceResult> {
+    const encoded = encodeRemoteContent(result);
+    const provenance = remoteContentProvenance(managed, 'resource', uri, encoded);
+    const maxBytes = managed.profile.contentPolicy?.maxResourceBytes ?? 1024 * 1024;
+    if (encoded.bytes.byteLength > maxBytes) {
+      const artifact = await this.externalizeRemoteContent(
+        managed,
+        'resource',
+        uri,
+        'application/json',
+        encoded,
+        maxBytes
+      );
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'application/vnd.hypha.artifact-ref+json',
+            metadata: {
+              artifactRef: artifact.artifactRef,
+              contentHash: artifact.contentHash,
+              sizeBytes: artifact.sizeBytes,
+              provenance,
+              trust: 'untrusted',
+            },
+          },
+        ],
+        metadata: {
+          externalized: true,
+          artifactRef: artifact.artifactRef,
+          contentHash: artifact.contentHash,
+          sizeBytes: artifact.sizeBytes,
+          provenance,
+          trust: 'untrusted',
+        },
+      };
+    }
+    return {
+      ...result,
+      contents: result.contents.map((content) => ({
+        ...content,
+        metadata: {
+          ...content.metadata,
+          provenance,
+          trust: 'untrusted',
+          contentHash: encoded.contentHash,
+        },
+      })),
+      metadata: {
+        ...result.metadata,
+        provenance,
+        trust: 'untrusted',
+        contentHash: encoded.contentHash,
+        sizeBytes: encoded.bytes.byteLength,
+      },
+    };
+  }
+
+  private async governPromptResult(
+    managed: ManagedConnection,
+    name: string,
+    result: MCPPromptResult
+  ): Promise<MCPPromptResult> {
+    const encoded = encodeRemoteContent(result);
+    const provenance = remoteContentProvenance(managed, 'prompt', name, encoded);
+    const maxBytes = managed.profile.contentPolicy?.maxPromptBytes ?? 256 * 1024;
+    const maxTokens = managed.profile.contentPolicy?.maxPromptTokens ?? 32_768;
+    const estimatedTokens = Math.ceil(encoded.bytes.byteLength / 4);
+    if (encoded.bytes.byteLength > maxBytes || estimatedTokens > maxTokens) {
+      const artifact = await this.externalizeRemoteContent(
+        managed,
+        'prompt',
+        name,
+        'application/json',
+        encoded,
+        Math.min(maxBytes, maxTokens * 4)
+      );
+      return {
+        description: result.description,
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'resource',
+              artifactRef: artifact.artifactRef,
+              contentHash: artifact.contentHash,
+            },
+          },
+        ],
+        metadata: {
+          externalized: true,
+          artifactRef: artifact.artifactRef,
+          contentHash: artifact.contentHash,
+          sizeBytes: artifact.sizeBytes,
+          estimatedTokens,
+          provenance,
+          trust: 'untrusted',
+        },
+      };
+    }
+    return {
+      ...result,
+      metadata: {
+        ...result.metadata,
+        provenance,
+        trust: 'untrusted',
+        contentHash: encoded.contentHash,
+        sizeBytes: encoded.bytes.byteLength,
+        estimatedTokens,
+      },
+    };
+  }
+
+  private async externalizeRemoteContent(
+    managed: ManagedConnection,
+    kind: 'resource' | 'prompt',
+    capabilityId: string,
+    mediaType: string,
+    encoded: EncodedRemoteContent,
+    limit: number
+  ): Promise<MCPRemoteContentArtifact> {
+    if (
+      managed.profile.contentPolicy?.oversizeAction !== 'artifact' ||
+      !this.options.contentArtifacts
+    ) {
+      throw Object.assign(
+        new Error(`MCP ${kind} content exceeds its configured in-memory limit.`),
+        {
+          code: 'MCP_CONTENT_TOO_LARGE',
+          retryable: false,
+          details: {
+            kind,
+            limit,
+            actualBytes: encoded.bytes.byteLength,
+            contentHash: encoded.contentHash,
+          },
+        }
+      );
+    }
+    return this.options.contentArtifacts.store({
+      serverId: managed.profile.id,
+      kind,
+      capabilityId,
+      mediaType,
+      bytes: encoded.bytes,
+      contentHash: encoded.contentHash,
+      provenance: remoteContentProvenance(managed, kind, capabilityId, encoded),
+    });
   }
 
   private assertRequestActive(
@@ -1247,6 +1433,7 @@ function normalizeMCPError(
     'MCP_EGRESS_DENIED',
     'MCP_REMOTE_ERROR',
     'MCP_TRANSPORT_CLOSED',
+    'MCP_CONTENT_TOO_LARGE',
     'MCP_INTERNAL_ERROR',
   ]);
   const candidate = String(source?.code ?? '');
@@ -1425,6 +1612,38 @@ function isPrivateOrLocalAddress(address: string): boolean {
     (first === 100 && second >= 64 && second <= 127) ||
     first >= 224
   );
+}
+
+interface EncodedRemoteContent {
+  bytes: Uint8Array;
+  contentHash: string;
+}
+
+function encodeRemoteContent(value: unknown): EncodedRemoteContent {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  return {
+    bytes,
+    contentHash: createHash('sha256').update(bytes).digest('hex'),
+  };
+}
+
+function remoteContentProvenance(
+  managed: ManagedConnection,
+  kind: 'resource' | 'prompt',
+  capabilityId: string,
+  encoded: EncodedRemoteContent
+): Record<string, unknown> {
+  return {
+    source: 'mcp',
+    serverId: managed.profile.id,
+    serverVersion: managed.profile.version,
+    connectionRevision: managed.record.revision,
+    protocolVersion: managed.record.negotiatedProtocolVersion,
+    transportType: managed.record.transportType,
+    kind,
+    capabilityId,
+    contentHash: encoded.contentHash,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

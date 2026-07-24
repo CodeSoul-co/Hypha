@@ -19,7 +19,9 @@ import { EnvironmentSecretResolver } from '../../services/SecretResolver';
 import { InMemoryTelemetryRecorder } from '@hypha/core';
 import { filesystemToolConfig, getConfig, storageConfig } from '../../config';
 import {
+  ArtifactStoreToolPort,
   FileMCPCapabilityCatalogStore,
+  FileArtifactStore,
   FileToolContractSnapshotStore,
   LocalWorkspaceRuntime,
 } from '@hypha/adapters-local';
@@ -333,11 +335,31 @@ export class ToolManager {
   private mcpClients: Map<string, MCPClient> = new Map();
   private readonly secretResolver = new EnvironmentSecretResolver();
   private readonly mcpTelemetry = new InMemoryTelemetryRecorder();
+  private readonly mcpContentArtifacts = new ArtifactStoreToolPort(
+    new FileArtifactStore({
+      rootPath:
+        process.env.HYPHA_MCP_CONTENT_ARTIFACT_ROOT ??
+        path.resolve(process.cwd(), 'data/runtime/mcp-content-artifacts'),
+    })
+  );
   private readonly connectionManager = new MCPConnectionManager({
     sessionFactory: new SDKMCPConnectionSessionFactory({
       resolveAuthorizationRef: (ref) => this.secretResolver.resolveAuthorization(ref),
     }),
     telemetry: this.mcpTelemetry,
+    contentArtifacts: {
+      store: async (input) => ({
+        artifactRef: await this.mcpContentArtifacts.store({
+          invocationId: `${input.serverId}-${input.kind}-${input.capabilityId}`,
+          toolId: `mcp-${input.serverId}-${input.kind}`,
+          value: Buffer.from(input.bytes),
+          mimeType: input.mediaType,
+          metadata: input.provenance,
+        }),
+        contentHash: input.contentHash,
+        sizeBytes: input.bytes.byteLength,
+      }),
+    },
   });
   private readonly mcpCatalogs = new Map<string, MCPCapabilityCatalog>();
   private readonly mcpServerModes = new Map<string, MCPServerConfig['mode']>();
@@ -773,6 +795,7 @@ export class ToolManager {
                 ...config.egressPolicy,
               }
             : undefined,
+        contentPolicy: config.contentPolicy,
         requestGuardPolicy: {
           maxConcurrentRequests: 8,
           rateLimit: { maxRequests: 120, windowMs: 60_000 },

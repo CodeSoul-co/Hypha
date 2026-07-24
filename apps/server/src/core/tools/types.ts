@@ -117,6 +117,12 @@ export interface MCPServerConfig {
     maxRedirects?: number;
     allowCrossOriginRedirects?: boolean;
   };
+  contentPolicy?: {
+    maxResourceBytes?: number;
+    maxPromptBytes?: number;
+    maxPromptTokens?: number;
+    oversizeAction?: 'reject' | 'artifact';
+  };
 }
 
 export interface MCPCapabilities {

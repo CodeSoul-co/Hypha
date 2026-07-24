@@ -514,6 +514,14 @@ const configSchema = z.object({
                 allowCrossOriginRedirects: z.boolean().default(false),
               })
               .optional(),
+            contentPolicy: z
+              .object({
+                maxResourceBytes: z.number().int().positive().default(1048576),
+                maxPromptBytes: z.number().int().positive().default(262144),
+                maxPromptTokens: z.number().int().positive().default(32768),
+                oversizeAction: z.enum(['reject', 'artifact']).default('reject'),
+              })
+              .optional(),
           })
           .superRefine((server, context) => {
             if (server.mode === 'remote') {

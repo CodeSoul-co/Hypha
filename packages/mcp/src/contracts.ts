@@ -67,6 +67,12 @@ export interface MCPServerProfile {
     rateLimit?: { maxRequests: number; windowMs: number };
     circuitBreaker?: { failureThreshold: number; resetAfterMs: number };
   };
+  contentPolicy?: {
+    maxResourceBytes?: number;
+    maxPromptBytes?: number;
+    maxPromptTokens?: number;
+    oversizeAction?: 'reject' | 'artifact';
+  };
   metadata?: Record<string, unknown>;
 }
 
@@ -156,6 +162,7 @@ export const NORMALIZED_MCP_ERROR_CODES = [
   'MCP_RATE_LIMITED',
   'MCP_CIRCUIT_OPEN',
   'MCP_EGRESS_DENIED',
+  'MCP_CONTENT_TOO_LARGE',
   'MCP_REMOTE_ERROR',
   'MCP_TRANSPORT_CLOSED',
   'MCP_INTERNAL_ERROR',
@@ -262,6 +269,14 @@ export const mcpServerProfileSchema = z.object({
           resetAfterMs: z.number().int().positive(),
         })
         .optional(),
+    })
+    .optional(),
+  contentPolicy: z
+    .object({
+      maxResourceBytes: z.number().int().positive().optional(),
+      maxPromptBytes: z.number().int().positive().optional(),
+      maxPromptTokens: z.number().int().positive().optional(),
+      oversizeAction: z.enum(['reject', 'artifact']).optional(),
     })
     .optional(),
   metadata: z.record(z.unknown()).optional(),
