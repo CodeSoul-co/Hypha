@@ -5,7 +5,11 @@ export type RuntimeActivityEventType =
   | 'runtime.activity.completed'
   | 'runtime.activity.failed'
   | 'runtime.activity.waiting'
-  | 'runtime.activity.cancelled';
+  | 'runtime.activity.cancelled'
+  | 'runtime.activity.compensation.requested'
+  | 'runtime.activity.compensation.completed'
+  | 'runtime.activity.compensation.failed'
+  | 'activity.redispatch.requested';
 
 export type FrameworkEventType =
   | 'session.created'
@@ -55,6 +59,9 @@ export type FrameworkEventType =
   | 'agent.reasoning.completed'
   | 'agent.action.selected'
   | 'react.step.completed'
+  | 'react.continuation.checkpointed'
+  | 'react.continuation.suspended'
+  | 'react.continuation.resumed'
   | 'inference.requested'
   | 'inference.completed'
   | 'inference.failed'
