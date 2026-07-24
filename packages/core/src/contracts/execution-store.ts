@@ -2,6 +2,7 @@ import type {
   CommandExecutionRequest,
   CommandExecutionResult,
   CommandExecutionStatus,
+  ExecutionReceipt,
 } from './command-execution';
 import type { ProviderHealth } from './execution';
 
@@ -25,6 +26,11 @@ export interface ExecutionRecord {
   sandboxId?: string;
   attempt: number;
   idempotencyFingerprint?: string;
+  /**
+   * Immutable Provider terminal evidence persisted before Artifact finalization and terminal CAS.
+   * Once present, Store implementations must reject removal or replacement.
+   */
+  terminalReceipt?: ExecutionReceipt;
   result?: CommandExecutionResult;
   lease?: ExecutionLease;
   createdAt: string;

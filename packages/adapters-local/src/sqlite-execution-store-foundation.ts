@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
@@ -330,6 +331,7 @@ export class SQLiteExecutionStoreFoundation {
       }
       assertLeaseContinuity(current, request);
       assertRecordIdentityContinuity(current, request.next);
+      assertTerminalReceiptContinuity(current, request.next);
 
       const fencingToken = lastFencingToken(row);
       const nextJson = this.replaceRecord(
@@ -1005,6 +1007,19 @@ function assertRecordIdentityContinuity(current: ExecutionRecord, next: Executio
     throw storeError(
       'EXECUTION_STORE_CONFLICT',
       'Execution request identity and idempotency evidence are immutable.',
+      { executionId: current.id }
+    );
+  }
+}
+
+function assertTerminalReceiptContinuity(current: ExecutionRecord, next: ExecutionRecord): void {
+  if (
+    current.terminalReceipt &&
+    !isDeepStrictEqual(current.terminalReceipt, next.terminalReceipt)
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_CONFLICT',
+      'Provider terminal receipt checkpoint is immutable.',
       { executionId: current.id }
     );
   }

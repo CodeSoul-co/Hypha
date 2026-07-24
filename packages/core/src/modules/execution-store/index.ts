@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ExecutionIdempotencyQuery,
   ExecutionIdempotencyResolution,
@@ -19,6 +20,8 @@ import type { JsonSchema } from '../../specs';
 import {
   commandExecutionRequestJsonSchema,
   commandExecutionRequestSchema,
+  executionReceiptJsonSchema,
+  executionReceiptSchema,
   commandExecutionResultJsonSchema,
   commandExecutionResultSchema,
   commandExecutionStatusSchema,
@@ -83,6 +86,7 @@ export const executionRecordSchema = z
     sandboxId: nonEmptyString.optional(),
     attempt: nonNegativeInteger,
     idempotencyFingerprint: nonEmptyString.optional(),
+    terminalReceipt: executionReceiptSchema.optional(),
     result: commandExecutionResultSchema.optional(),
     lease: executionLeaseSchema.optional(),
     createdAt: timestampSchema,
@@ -124,6 +128,42 @@ export const executionRecordSchema = z
           code: z.ZodIssueCode.custom,
           path: ['result', 'sandboxId'],
           message: 'must match the record sandboxId',
+        });
+      }
+    }
+    if (value.terminalReceipt) {
+      if (value.terminalReceipt.executionId !== value.id) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['terminalReceipt', 'executionId'],
+          message: 'must match the record id',
+        });
+      }
+      if (value.terminalReceipt.providerId !== value.providerId) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['terminalReceipt', 'providerId'],
+          message: 'must match the record providerId',
+        });
+      }
+      if (
+        value.terminalReceipt.status !== 'completed' &&
+        value.terminalReceipt.status !== 'rejected'
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['terminalReceipt', 'status'],
+          message: 'must be completed or rejected',
+        });
+      }
+      if (
+        value.result?.externalReceipt &&
+        !sameExecutionReceipt(value.terminalReceipt, value.result.externalReceipt)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['result', 'externalReceipt'],
+          message: 'must match the durable terminalReceipt',
         });
       }
     }
@@ -190,11 +230,16 @@ export const executionRecordCreateRequestSchema = z
         message: 'must be zero before the first execution attempt',
       });
     }
-    if (value.record.lease || value.record.result || value.record.providerExecutionRef) {
+    if (
+      value.record.lease ||
+      value.record.result ||
+      value.record.providerExecutionRef ||
+      value.record.terminalReceipt
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['record'],
-        message: 'must not contain lease, result, or Provider execution state at creation',
+        message: 'must not contain lease, result, receipt, or Provider execution state at creation',
       });
     }
     if (value.record.createdAt !== value.record.updatedAt) {
@@ -437,6 +482,7 @@ export const executionRecordJsonSchema: JsonSchema = {
     sandboxId: nonEmptyStringJsonSchema,
     attempt: nonNegativeIntegerJsonSchema,
     idempotencyFingerprint: nonEmptyStringJsonSchema,
+    terminalReceipt: executionReceiptJsonSchema,
     result: commandExecutionResultJsonSchema,
     lease: executionLeaseJsonSchema,
     createdAt: timestampJsonSchema,
@@ -488,6 +534,7 @@ export const executionRecordCreateRequestJsonSchema: JsonSchema = {
         anyOf: [
           { required: ['lease'] },
           { required: ['result'] },
+          { required: ['terminalReceipt'] },
           { required: ['providerExecutionRef'] },
         ],
       },
@@ -865,3 +912,10 @@ export function validateExecutionRecoveryAssessment(input: unknown): ExecutionRe
 }
 
 export * from './durable-execution-worker';
+
+function sameExecutionReceipt(
+  left: import('../../contracts/command-execution').ExecutionReceipt,
+  right: import('../../contracts/command-execution').ExecutionReceipt
+): boolean {
+  return isDeepStrictEqual(left, right);
+}

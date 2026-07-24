@@ -92,6 +92,99 @@ describe('SQLite Execution Store durable worker integration', () => {
     await expect(store.get(secondClaim.id)).resolves.toEqual(committed);
   });
 
+  it('persists terminal Provider evidence before later commit and survives restart', async () => {
+    const first = worker('worker.one');
+    const claimed = requiredRecord(await first.claimNext());
+    const receipt = receiptFor(claimed);
+    now = '2026-07-16T00:00:01.500Z';
+
+    const checkpointed = await first.checkpointTerminalReceipt(claimed, receipt);
+
+    expect(checkpointed).toMatchObject({
+      revision: 2,
+      status: 'starting',
+      terminalReceipt: receipt,
+      lease: { ownerId: 'worker.one', fencingToken: 1 },
+    });
+
+    await store.close();
+    store = new SQLiteExecutionStore({ rootPath });
+    await expect(store.get(claimed.id)).resolves.toMatchObject({
+      revision: 2,
+      terminalReceipt: receipt,
+    });
+
+    now = '2026-07-16T00:00:03.000Z';
+    const recovery = worker('worker.recovery');
+    const recovered = requiredRecord(await recovery.claimNext());
+    expect(recovered).toMatchObject({
+      terminalReceipt: receipt,
+      lease: { ownerId: 'worker.recovery', fencingToken: 2 },
+    });
+
+    const committed = await recovery.commit(recovered, {
+      ...resultFor(recovered),
+      externalReceipt: receipt,
+    });
+    expect(committed).toMatchObject({
+      status: 'completed',
+      terminalReceipt: receipt,
+      result: { externalReceipt: receipt },
+      lease: undefined,
+    });
+  });
+
+  it('does not allow terminal commit to bypass a matching receipt checkpoint', async () => {
+    const candidate = worker('worker.one');
+    const claimed = requiredRecord(await candidate.claimNext());
+    const receipt = receiptFor(claimed);
+
+    await expect(
+      candidate.commit(claimed, {
+        ...resultFor(claimed),
+        externalReceipt: receipt,
+      })
+    ).rejects.toThrow(/durably checkpointed/u);
+  });
+
+  it('rejects receipt mutation and stale-worker checkpoint writes', async () => {
+    const first = worker('worker.one');
+    const second = worker('worker.two');
+    const firstClaim = requiredRecord(await first.claimNext());
+    const receipt = receiptFor(firstClaim);
+    now = '2026-07-16T00:00:03.000Z';
+    const secondClaim = requiredRecord(await second.claimNext());
+
+    await expect(first.checkpointTerminalReceipt(firstClaim, receipt)).rejects.toMatchObject({
+      code: expect.stringMatching(
+        /^(EXECUTION_STORE_REVISION_CONFLICT|EXECUTION_STORE_FENCING_REJECTED)$/u
+      ),
+    });
+
+    const checkpointed = await second.checkpointTerminalReceipt(secondClaim, receipt);
+    await expect(
+      store.compareAndSet({
+        operationId: 'operation.mutate-receipt',
+        executionId: checkpointed.id,
+        expectedRevision: checkpointed.revision,
+        leaseGuard: {
+          leaseId: checkpointed.lease?.id ?? '',
+          ownerId: checkpointed.lease?.ownerId ?? '',
+          fencingToken: checkpointed.lease?.fencingToken ?? 0,
+        },
+        next: {
+          ...checkpointed,
+          revision: checkpointed.revision + 1,
+          terminalReceipt: {
+            ...receipt,
+            receiptHash: 'sha256:mutated-provider-terminal-receipt',
+          },
+          updatedAt: '2026-07-16T00:00:03.500Z',
+        },
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+  });
+
   it('stops claiming new work during shutdown', async () => {
     const candidate = worker('worker.one');
     candidate.stopClaiming();
@@ -123,5 +216,17 @@ function resultFor(record: ExecutionRecord) {
     ...structuredClone(commandExecutionResultExample),
     executionId: record.id,
     revision: record.revision + 1,
+  };
+}
+
+function receiptFor(record: ExecutionRecord) {
+  return {
+    id: `receipt:${record.id}`,
+    providerId: record.providerId,
+    executionId: record.id,
+    providerExecutionRef: `provider-execution:${record.id}`,
+    status: 'completed' as const,
+    issuedAt: '2026-07-16T00:00:01.250Z',
+    receiptHash: 'sha256:provider-terminal-receipt',
   };
 }

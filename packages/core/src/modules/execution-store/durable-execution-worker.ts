@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type {
+  ExecutionReceipt,
   CommandExecutionResult,
   CommandExecutionStatus,
 } from '../../contracts/command-execution';
@@ -8,9 +10,7 @@ import type {
   ExecutionRecord,
   ExecutionStore,
 } from '../../contracts/execution-store';
-import {
-  validateCommandExecutionResult,
-} from '../command-execution';
+import { executionReceiptSchema, validateCommandExecutionResult } from '../command-execution';
 import { validateExecutionRecord } from './index';
 
 const terminalStatuses = new Set<CommandExecutionStatus>([
@@ -147,6 +147,18 @@ export class DurableExecutionWorker {
     if (result.executionId !== record.id) {
       throw new TypeError('Execution result identity does not match the claimed record.');
     }
+    if (result.externalReceipt) {
+      if (!record.terminalReceipt) {
+        throw new TypeError(
+          'Provider terminal receipt must be durably checkpointed before terminal commit.'
+        );
+      }
+      if (!sameReceipt(record.terminalReceipt, result.externalReceipt)) {
+        throw new TypeError(
+          'Execution result receipt does not match the durable terminal receipt checkpoint.'
+        );
+      }
+    }
 
     const updatedAt = timestampAfter(record.updatedAt, validTimestamp(this.now(), 'now'));
     const revision = record.revision + 1;
@@ -171,7 +183,52 @@ export class DurableExecutionWorker {
     return this.release(committed, 'terminal_committed');
   }
 
-  async release(recordValue: ExecutionRecord, reason = 'worker_released'): Promise<ExecutionRecord> {
+  async checkpointTerminalReceipt(
+    recordValue: ExecutionRecord,
+    receiptValue: ExecutionReceipt
+  ): Promise<ExecutionRecord> {
+    const record = validateExecutionRecord(recordValue);
+    const receipt = executionReceiptSchema.parse(receiptValue);
+    const guard = this.leaseGuard(record);
+    if (terminalStatuses.has(record.status)) {
+      throw new TypeError('Cannot checkpoint a receipt after Execution terminal commit.');
+    }
+    if (receipt.status !== 'completed' && receipt.status !== 'rejected') {
+      throw new TypeError('Worker can checkpoint only a terminal Provider receipt.');
+    }
+    if (receipt.executionId !== record.id || receipt.providerId !== record.providerId) {
+      throw new TypeError('Provider receipt identity does not match the claimed record.');
+    }
+    if (record.terminalReceipt) {
+      if (!sameReceipt(record.terminalReceipt, receipt)) {
+        throw new TypeError('Durable terminal receipt checkpoint is immutable.');
+      }
+      return record;
+    }
+
+    const updatedAt = timestampAfter(record.updatedAt, validTimestamp(this.now(), 'now'));
+    const checkpointed = validateExecutionRecord({
+      ...record,
+      revision: record.revision + 1,
+      terminalReceipt: receipt,
+      updatedAt,
+    });
+    return validateExecutionRecord(
+      await this.store.compareAndSet({
+        operationId: `worker.receipt:${this.workerId}:${record.id}:${receipt.id}`,
+        executionId: record.id,
+        expectedRevision: record.revision,
+        leaseGuard: guard,
+        next: checkpointed,
+        idempotencyKey: `worker.receipt:${guard.leaseId}:${receipt.id}:${receipt.receiptHash}`,
+      })
+    );
+  }
+
+  async release(
+    recordValue: ExecutionRecord,
+    reason = 'worker_released'
+  ): Promise<ExecutionRecord> {
     const record = validateExecutionRecord(recordValue);
     const guard = this.leaseGuard(record);
     const releasedAt = timestampAfter(record.updatedAt, validTimestamp(this.now(), 'now'));
@@ -250,4 +307,8 @@ function positiveInteger(value: number, name: string): number {
 function errorCode(error: unknown): string | undefined {
   if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
   return typeof error.code === 'string' ? error.code : undefined;
+}
+
+function sameReceipt(left: ExecutionReceipt, right: ExecutionReceipt): boolean {
+  return isDeepStrictEqual(left, right);
 }
