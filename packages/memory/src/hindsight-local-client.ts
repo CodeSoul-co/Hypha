@@ -580,15 +580,19 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         { signal }
       )
     );
-    const records = asArray(body.items).map((item) =>
-      this.toRecord(asObject(item), request.scope, {
-        type: 'derived',
-        sourceId: 'hindsight:list',
-      })
-    );
+    const values = asArray(body.items);
+    const records = values
+      .map(asObject)
+      .filter(isCuratableHindsightMemory)
+      .map((item) =>
+        this.toRecord(item, request.scope, {
+          type: 'derived',
+          sourceId: 'hindsight:list',
+        })
+      );
     await this.remember(records);
-    const total = readNumber(body, 'total') ?? records.length;
-    const nextOffset = offset + records.length;
+    const total = readNumber(body, 'total') ?? values.length;
+    const nextOffset = offset + values.length;
     const pagination = finishProviderPage(
       page,
       this.providerId,
@@ -782,12 +786,15 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         signal,
       })
     );
-    return asArray(body.items).map((item) =>
-      this.toRecord(asObject(item), scope, {
-        type: 'derived',
-        sourceId: 'hindsight:reconcile',
-      })
-    );
+    return asArray(body.items)
+      .map(asObject)
+      .filter(isCuratableHindsightMemory)
+      .map((item) =>
+        this.toRecord(item, scope, {
+          type: 'derived',
+          sourceId: 'hindsight:reconcile',
+        })
+      );
   }
 
   private toRecord(
@@ -971,6 +978,11 @@ function scopeTags(scope: ManagedMemoryScope, additional: string[] = []): string
       ...additional,
     ]),
   ].sort();
+}
+
+function isCuratableHindsightMemory(item: Record<string, unknown>): boolean {
+  const type = readString(item, 'type') ?? readString(item, 'fact_type');
+  return type !== 'observation';
 }
 
 function normalizeHindsightTimestamp(value: string | undefined, fallback: string): string {

@@ -155,6 +155,12 @@ describe('HindsightLocalMemoryBankClient', () => {
         return response({
           items: [
             {
+              id: 'observation-123',
+              text: 'Derived observation that Hindsight cannot curate directly.',
+              fact_type: 'observation',
+              date: '2026-07-24T00:00:00.123456+00:00',
+            },
+            {
               id: 'memory-123',
               text: 'Alice works on the Hypha memory subsystem.',
               type: 'world',
@@ -162,7 +168,7 @@ describe('HindsightLocalMemoryBankClient', () => {
               metadata: { _hypha_scope_hash: expect.anything },
             },
           ],
-          total: 1,
+          total: 2,
           limit: 100,
           offset: 0,
         });
