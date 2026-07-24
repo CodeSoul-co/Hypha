@@ -72,6 +72,17 @@ describe('Runtime Recovery contracts', () => {
     ).toThrow(/activityId/u);
   });
 
+  it('requires expired State Claim candidates to identify the State attempt', () => {
+    expect(() =>
+      runtimeRecoveryCandidateSchema.parse({
+        ...runtimeRecoveryCandidateExample,
+        reason: 'STATE_CLAIM_EXPIRED',
+        safeAction: 'requeue',
+        activityId: undefined,
+      })
+    ).toThrow(/stateId/u);
+  });
+
   it('requires stable observations for known provider outcomes', () => {
     expect(() =>
       runtimeActivityReconciliationResultSchema.parse({

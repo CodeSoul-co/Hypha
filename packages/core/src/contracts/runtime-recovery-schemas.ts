@@ -42,6 +42,8 @@ export const runtimeRecoveryCandidateSchema = z
     eventHeadSequence: z.number().int().nonnegative(),
     projectionSequence: z.number().int().nonnegative().optional(),
     activityId: nonEmptyStringSchema.optional(),
+    stateId: nonEmptyStringSchema.optional(),
+    stateAttempt: z.number().int().positive().optional(),
     currentLease: fencedRunLeaseSchema.optional(),
     detectedAt: timestampSchema,
   })
@@ -52,6 +54,16 @@ export const runtimeRecoveryCandidateSchema = z
         code: z.ZodIssueCode.custom,
         path: ['activityId'],
         message: 'Activity recovery candidates require activityId',
+      });
+    }
+    if (
+      candidate.reason === 'STATE_CLAIM_EXPIRED' &&
+      (!candidate.stateId || candidate.stateAttempt === undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: candidate.stateId ? ['stateAttempt'] : ['stateId'],
+        message: 'Expired State Claim candidates require stateId and stateAttempt',
       });
     }
   }) satisfies ZodType<RuntimeRecoveryCandidate>;
@@ -141,6 +153,8 @@ export const runtimeRecoveryCandidateJsonSchema: JsonSchema = {
     eventHeadSequence: { type: 'integer', minimum: 0 },
     projectionSequence: { type: 'integer', minimum: 0 },
     activityId: nonEmptyStringJsonSchema,
+    stateId: nonEmptyStringJsonSchema,
+    stateAttempt: { type: 'integer', minimum: 1 },
     currentLease: fencedRunLeaseJsonSchema,
     detectedAt: { type: 'string', format: 'date-time' },
   },
@@ -153,6 +167,19 @@ export const runtimeRecoveryCandidateJsonSchema: JsonSchema = {
       then: {
         required: ['activityId'],
         properties: { activityId: nonEmptyStringJsonSchema },
+      },
+    },
+    {
+      if: {
+        properties: { reason: { const: 'STATE_CLAIM_EXPIRED' } },
+        required: ['reason'],
+      },
+      then: {
+        required: ['stateId', 'stateAttempt'],
+        properties: {
+          stateId: nonEmptyStringJsonSchema,
+          stateAttempt: { type: 'integer', minimum: 1 },
+        },
       },
     },
   ],

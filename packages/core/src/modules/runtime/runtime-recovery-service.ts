@@ -7,7 +7,11 @@ import {
   validateRuntimeActivityObservation,
 } from '../../contracts/runtime-activity-schemas';
 import { validateRuntimeCancelCommand } from '../../contracts/runtime-cancellation-schemas';
-import type { RunLeaseAuthorization, RunLeaseStore } from '../../contracts/runtime-coordination';
+import type {
+  RunLeaseAuthorization,
+  RunLeaseStore,
+  StateExecutionClaimStore,
+} from '../../contracts/runtime-coordination';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type {
   RuntimeActivityReconciliationPort,
@@ -61,6 +65,7 @@ export interface RuntimeRecoveryServiceOptions {
   projections: ProjectionEngine;
   projectionStore: ProjectionStore<RuntimeOrchestrationProjection>;
   runLeases: RunLeaseStore;
+  stateClaims: StateExecutionClaimStore;
   activities: RuntimeActivityReconciliationPort;
   cancellations: RuntimeCancellationRecoveryPort;
   requeue: RuntimeRecoveryRequeuePort;
@@ -114,8 +119,14 @@ export class RuntimeRecoveryService {
       }
 
       const projection = record.state;
+      const completedCandidates = completedCandidateIds(
+        await this.options.events.read({ scope: head.scope })
+      );
+      const addCandidate = (input: RuntimeRecoveryCandidate): void => {
+        if (!completedCandidates.has(input.candidateId)) candidates.push(input);
+      };
       for (const activityId of projection.pendingActivityIds) {
-        candidates.push(
+        addCandidate(
           candidate({
             scope: head.scope,
             reason: 'ACTIVITY_RESULT_UNAPPLIED',
@@ -129,7 +140,7 @@ export class RuntimeRecoveryService {
         );
       }
       if (projection.runStatus === 'cancelling') {
-        candidates.push(
+        addCandidate(
           candidate({
             scope: head.scope,
             reason: 'CANCELLATION_INCOMPLETE',
@@ -140,17 +151,36 @@ export class RuntimeRecoveryService {
             detectedAt: request.checkedAt,
           })
         );
-      } else if (REQUEUE_STATUSES.has(projection.runStatus) && currentLease === null) {
-        candidates.push(
-          candidate({
-            scope: head.scope,
-            reason: 'LEASE_EXPIRED',
-            safeAction: 'requeue',
-            eventHeadSequence: head.lastSequence,
-            projectionSequence: record.lastSequence,
-            detectedAt: request.checkedAt,
-          })
+      } else if (
+        REQUEUE_STATUSES.has(projection.runStatus) &&
+        currentLease === null &&
+        projection.currentState &&
+        projection.stateAttempt > 0
+      ) {
+        const stateClaim = await this.options.stateClaims.get(
+          {
+            ...(head.scope.tenantId === undefined ? {} : { tenantId: head.scope.tenantId }),
+            userId: head.scope.userId,
+            runId: head.scope.runId,
+            stateId: projection.currentState,
+            stateAttempt: projection.stateAttempt,
+          },
+          request.checkedAt
         );
+        if (stateClaim?.status === 'expired') {
+          addCandidate(
+            candidate({
+              scope: head.scope,
+              reason: 'STATE_CLAIM_EXPIRED',
+              safeAction: 'requeue',
+              eventHeadSequence: head.lastSequence,
+              projectionSequence: record.lastSequence,
+              stateId: projection.currentState,
+              stateAttempt: projection.stateAttempt,
+              detectedAt: request.checkedAt,
+            })
+          );
+        }
       }
     }
     return validateRuntimeRecoveryScanResult({
@@ -194,7 +224,10 @@ export class RuntimeRecoveryService {
       if (command.candidate.reason === 'ACTIVITY_RESULT_UNAPPLIED') {
         return await this.reconcileActivity(command, authorization, operation);
       }
-      if (command.candidate.reason === 'LEASE_EXPIRED') {
+      if (
+        command.candidate.reason === 'LEASE_EXPIRED' ||
+        command.candidate.reason === 'STATE_CLAIM_EXPIRED'
+      ) {
         return await this.requeue(command, authorization, operation);
       }
       return await this.escalate(
@@ -274,9 +307,41 @@ export class RuntimeRecoveryService {
           'Side-effecting Activity state is unknown'
         );
       }
-      reconciliation = await this.retryActivity(command, authorization, invocation);
+      try {
+        reconciliation = await this.retryActivity(command, authorization, invocation);
+      } catch (error) {
+        if (!isFrameworkError(error) || error.code !== 'RUNTIME_STATE_EXECUTION_UNAVAILABLE') {
+          throw error;
+        }
+        return this.escalate(
+          command,
+          authorization,
+          operation,
+          'Activity provider cannot safely retry the unresolved invocation'
+        );
+      }
     } else if (reconciliation.status === 'not_started') {
-      reconciliation = await this.retryActivity(command, authorization, invocation);
+      try {
+        reconciliation = await this.retryActivity(command, authorization, invocation);
+      } catch (error) {
+        if (!isFrameworkError(error) || error.code !== 'RUNTIME_STATE_EXECUTION_UNAVAILABLE') {
+          throw error;
+        }
+        return this.escalate(
+          command,
+          authorization,
+          operation,
+          'Activity provider cannot safely start the unresolved invocation'
+        );
+      }
+    }
+    if (reconciliation.status === 'waiting') {
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Activity is waiting for an external or human decision'
+      );
     }
 
     const observation = reconciliation.observation;
@@ -332,13 +397,31 @@ export class RuntimeRecoveryService {
     authorization: RunLeaseAuthorization,
     operation: PersistedFrameworkEvent[]
   ): Promise<RuntimeRecoveryResult> {
-    await this.options.requeue.requeue({
-      scope: command.candidate.scope,
-      reason: command.candidate.reason,
-      requestedAt: command.requestedAt,
-      fencingToken: authorization.guard.fencingToken,
-      idempotencyKey: `${operationId(command)}:requeue`,
-    });
+    try {
+      await this.options.requeue.requeue({
+        scope: command.candidate.scope,
+        reason: command.candidate.reason,
+        requestedAt: command.requestedAt,
+        fencingToken: authorization.guard.fencingToken,
+        ...(command.candidate.stateId === undefined
+          ? {}
+          : { expectedStateId: command.candidate.stateId }),
+        ...(command.candidate.stateAttempt === undefined
+          ? {}
+          : { expectedStateAttempt: command.candidate.stateAttempt }),
+        idempotencyKey: `${operationId(command)}:requeue`,
+      });
+    } catch (error) {
+      if (!isFrameworkError(error) || error.code !== 'RUNTIME_STATE_EXECUTION_UNAVAILABLE') {
+        throw error;
+      }
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Runtime owner cannot safely requeue the interrupted State attempt'
+      );
+    }
     await this.heartbeat(command, authorization);
     const appended = await this.append(
       command,
@@ -530,17 +613,24 @@ export class RuntimeRecoveryService {
         : type === 'recovery.case.resolved'
           ? 'recovered'
           : 'suspended';
-    return this.event(command.candidate, type, {
-      caseId: command.candidate.candidateId,
-      rootFingerprint: candidateHash(command.candidate),
-      status,
-      cycles: 1,
-      candidateId: command.candidate.candidateId,
-      candidateHash: candidateHash(command.candidate),
-      reason: command.candidate.reason,
-      safeAction: command.candidate.safeAction,
-      ...withoutUndefined(details),
-    });
+    return this.event(
+      command.candidate,
+      type,
+      withoutUndefined({
+        caseId: command.candidate.candidateId,
+        rootFingerprint: candidateHash(command.candidate),
+        status,
+        cycles: 1,
+        candidateId: command.candidate.candidateId,
+        candidateHash: candidateHash(command.candidate),
+        reason: command.candidate.reason,
+        safeAction: command.candidate.safeAction,
+        activityId: command.candidate.activityId,
+        stateId: command.candidate.stateId,
+        stateAttempt: command.candidate.stateAttempt,
+        ...withoutUndefined(details),
+      })
+    );
   }
 
   private activityEvent(
@@ -645,15 +735,29 @@ export class RuntimeRecoveryService {
 }
 
 function candidate(input: Omit<RuntimeRecoveryCandidate, 'candidateId'>): RuntimeRecoveryCandidate {
-  const target = input.activityId ?? 'run';
+  const target =
+    input.activityId ??
+    (input.stateId === undefined || input.stateAttempt === undefined
+      ? `run:${input.eventHeadSequence}`
+      : `state:${input.stateId}:${input.stateAttempt}`);
   return validateRuntimeRecoveryCandidate({
     ...input,
-    candidateId: `recovery:${input.scope.runId}:${input.reason}:${target}:${input.eventHeadSequence}`,
+    candidateId: `recovery:${input.scope.runId}:${input.reason}:${target}`,
   });
 }
 
 function candidateHash(input: RuntimeRecoveryCandidate): string {
-  return hashCanonicalJson(input);
+  return hashCanonicalJson(
+    withoutUndefined({
+      candidateId: input.candidateId,
+      scope: input.scope,
+      reason: input.reason,
+      safeAction: input.safeAction,
+      activityId: input.activityId,
+      stateId: input.stateId,
+      stateAttempt: input.stateAttempt,
+    })
+  );
 }
 
 function operationId(command: RuntimeRecoveryCommand): string {
@@ -682,6 +786,18 @@ function leaseScope(scope: RuntimeRecoveryCandidate['scope']) {
 function completedRecovery(events: PersistedFrameworkEvent[]): PersistedFrameworkEvent | undefined {
   return events.find(
     (event) => event.type === 'recovery.case.resolved' || event.type === 'recovery.case.escalated'
+  );
+}
+
+function completedCandidateIds(events: PersistedFrameworkEvent[]): Set<string> {
+  return new Set(
+    events
+      .filter(
+        (event) =>
+          event.type === 'recovery.case.resolved' || event.type === 'recovery.case.escalated'
+      )
+      .map((event) => payloadString(event, 'candidateId') ?? payloadString(event, 'caseId'))
+      .filter((candidateId): candidateId is string => candidateId !== undefined)
   );
 }
 
