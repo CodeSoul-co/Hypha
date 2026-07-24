@@ -13,6 +13,8 @@ import {
   type ListSessionCommandsRequest,
   type ProviderHealth,
   type ReleaseSessionCommandRequest,
+  type RenewSessionCommandRequest,
+  type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueue,
   type SessionQueueScope,
@@ -120,6 +122,7 @@ export class SQLiteSessionQueue implements SessionQueue {
         priority: request.priority ?? 50,
         attempts: 0,
         maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+        leaseEpoch: 0,
         ...(request.payloadRef === undefined ? {} : { payloadRef: request.payloadRef }),
         payloadHash: request.payloadHash,
         status: 'queued',
@@ -171,11 +174,30 @@ export class SQLiteSessionQueue implements SessionQueue {
         ...candidate,
         status: 'claimed',
         attempts: candidate.attempts + 1,
+        leaseEpoch: candidate.leaseEpoch + 1,
         claimedBy: request.workerId,
+        claimToken: claimToken(
+          candidate.id,
+          request.workerId,
+          candidate.attempts + 1,
+          candidate.leaseEpoch + 1,
+          request.now
+        ),
         leaseExpiresAt: addMilliseconds(request.now, request.leaseMs),
       });
       this.updateRecord(claimed);
       return structuredClone(claimed);
+    });
+  }
+
+  async renew(request: RenewSessionCommandRequest): Promise<SessionCommandClaim> {
+    validTimestamp(request.renewedAt, 'renewedAt');
+    positiveInteger(request.leaseMs, 'leaseMs');
+    return this.transaction('renew', () => {
+      const record = this.requireOwnedClaim(request, request.renewedAt);
+      record.leaseExpiresAt = addMilliseconds(request.renewedAt, request.leaseMs);
+      this.updateRecord(validateSessionCommandRecord(record));
+      return claimFromRecord(record);
     });
   }
 
@@ -186,11 +208,7 @@ export class SQLiteSessionQueue implements SessionQueue {
       invalid('resultEventIds must not contain empty ids');
     }
     this.transaction('complete', () => {
-      const record = this.requireOwnedClaim(
-        request.commandId,
-        request.workerId,
-        request.completedAt
-      );
+      const record = this.requireOwnedClaim(request, request.completedAt);
       this.updateRecord(
         validateSessionCommandRecord({
           ...withoutClaim(record),
@@ -209,7 +227,7 @@ export class SQLiteSessionQueue implements SessionQueue {
     nonEmpty(request.rejectionCode, 'rejectionCode');
     validTimestamp(request.failedAt, 'failedAt');
     this.transaction('fail', () => {
-      const record = this.requireOwnedClaim(request.commandId, request.workerId, request.failedAt);
+      const record = this.requireOwnedClaim(request, request.failedAt);
       this.updateRecord(
         validateSessionCommandRecord({
           ...withoutClaim(record),
@@ -225,11 +243,7 @@ export class SQLiteSessionQueue implements SessionQueue {
     validTimestamp(request.releasedAt, 'releasedAt');
     if (request.availableAt) validTimestamp(request.availableAt, 'availableAt');
     this.transaction('release', () => {
-      const record = this.requireOwnedClaim(
-        request.commandId,
-        request.workerId,
-        request.releasedAt
-      );
+      const record = this.requireOwnedClaim(request, request.releasedAt);
       const exhausted = record.attempts >= record.maxAttempts;
       this.updateRecord(
         validateSessionCommandRecord({
@@ -319,9 +333,12 @@ export class SQLiteSessionQueue implements SessionQueue {
       'CREATE TABLE IF NOT EXISTS runtime_session_commands (' +
         'id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, enqueue_sequence INTEGER NOT NULL, ' +
         'priority INTEGER NOT NULL, status TEXT NOT NULL, available_at TEXT NOT NULL, ' +
-        'expires_at TEXT, claimed_by TEXT, lease_expires_at TEXT, record_json TEXT NOT NULL, ' +
-        'record_hash TEXT NOT NULL, UNIQUE(scope_key, enqueue_sequence))'
+        'expires_at TEXT, claimed_by TEXT, claim_token TEXT, lease_epoch INTEGER NOT NULL DEFAULT 0, ' +
+        'lease_expires_at TEXT, record_json TEXT NOT NULL, record_hash TEXT NOT NULL, ' +
+        'UNIQUE(scope_key, enqueue_sequence))'
     );
+    this.ensureColumn('claim_token', 'TEXT');
+    this.ensureColumn('lease_epoch', 'INTEGER NOT NULL DEFAULT 0');
     this.db.exec(
       'CREATE INDEX IF NOT EXISTS runtime_session_commands_claim_idx ON runtime_session_commands ' +
         '(status, available_at, priority, enqueue_sequence)'
@@ -352,6 +369,7 @@ export class SQLiteSessionQueue implements SessionQueue {
           record.completedAt = now;
         }
         delete record.claimedBy;
+        delete record.claimToken;
         delete record.leaseExpiresAt;
         changed = true;
       }
@@ -411,7 +429,8 @@ export class SQLiteSessionQueue implements SessionQueue {
       .prepare(
         'INSERT INTO runtime_session_commands ' +
           '(id, scope_key, enqueue_sequence, priority, status, available_at, expires_at, ' +
-          'claimed_by, lease_expires_at, record_json, record_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          'claimed_by, claim_token, lease_epoch, lease_expires_at, record_json, record_hash) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         record.id,
@@ -422,6 +441,8 @@ export class SQLiteSessionQueue implements SessionQueue {
         record.availableAt,
         record.expiresAt ?? null,
         record.claimedBy ?? null,
+        record.claimToken ?? null,
+        record.leaseEpoch,
         record.leaseExpiresAt ?? null,
         json,
         hashCanonicalJson(record)
@@ -433,7 +454,8 @@ export class SQLiteSessionQueue implements SessionQueue {
     this.db
       .prepare(
         'UPDATE runtime_session_commands SET priority = ?, status = ?, available_at = ?, ' +
-          'expires_at = ?, claimed_by = ?, lease_expires_at = ?, record_json = ?, record_hash = ? WHERE id = ?'
+          'expires_at = ?, claimed_by = ?, claim_token = ?, lease_epoch = ?, lease_expires_at = ?, ' +
+          'record_json = ?, record_hash = ? WHERE id = ?'
       )
       .run(
         record.priority,
@@ -441,6 +463,8 @@ export class SQLiteSessionQueue implements SessionQueue {
         record.availableAt,
         record.expiresAt ?? null,
         record.claimedBy ?? null,
+        record.claimToken ?? null,
+        record.leaseEpoch,
         record.leaseExpiresAt ?? null,
         json,
         hashCanonicalJson(record),
@@ -461,20 +485,36 @@ export class SQLiteSessionQueue implements SessionQueue {
     return record;
   }
 
-  private requireOwnedClaim(commandId: string, workerId: string, at: string): SessionCommandRecord {
-    const record = this.requireRecord(commandId);
+  private requireOwnedClaim(
+    claim: Pick<SessionCommandClaim, 'commandId' | 'workerId' | 'claimToken' | 'leaseEpoch'>,
+    at: string
+  ): SessionCommandRecord {
+    nonEmpty(claim.commandId, 'commandId');
+    nonEmpty(claim.workerId, 'workerId');
+    nonEmpty(claim.claimToken, 'claimToken');
+    positiveInteger(claim.leaseEpoch, 'leaseEpoch');
+    const record = this.requireRecord(claim.commandId);
     if (
       record.status !== 'claimed' ||
-      record.claimedBy !== workerId ||
+      record.claimedBy !== claim.workerId ||
+      record.claimToken !== claim.claimToken ||
+      record.leaseEpoch !== claim.leaseEpoch ||
       record.leaseExpiresAt === undefined ||
       Date.parse(record.leaseExpiresAt) <= Date.parse(at)
     ) {
       conflict('RUNTIME_SESSION_QUEUE_CONFLICT', 'Session command claim is not owned', {
-        commandId,
-        workerId,
+        commandId: claim.commandId,
+        workerId: claim.workerId,
+        leaseEpoch: claim.leaseEpoch,
       });
     }
     return record;
+  }
+
+  private ensureColumn(name: string, definition: string): void {
+    const columns = this.db.prepare('PRAGMA table_info(runtime_session_commands)').all();
+    if (columns.some((column) => String(column.name) === name)) return;
+    this.db.exec(`ALTER TABLE runtime_session_commands ADD COLUMN ${name} ${definition}`);
   }
 
   private transaction<T>(operation: string, action: () => T): T {
@@ -515,14 +555,30 @@ function parseRecord(row: Record<string, unknown>): SessionCommandRecord {
   }
 
   // R1b records predate durable attempt budgets. Verify their original hash before adding defaults.
-  const migrated = isRecord(persisted)
-    ? {
-        ...persisted,
-        attempts: persisted.attempts ?? (persisted.status === 'claimed' ? 1 : 0),
-        maxAttempts: persisted.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
-      }
-    : persisted;
+  const migrated = migrateRecord(persisted);
   return validateSessionCommandRecord(migrated);
+}
+
+function migrateRecord(persisted: unknown): unknown {
+  if (!isRecord(persisted)) return persisted;
+  const migrated: Record<string, unknown> = {
+    ...persisted,
+    attempts: persisted.attempts ?? (persisted.status === 'claimed' ? 1 : 0),
+    maxAttempts: persisted.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+    leaseEpoch: persisted.leaseEpoch ?? 0,
+  };
+  if (
+    migrated.status === 'claimed' &&
+    (typeof migrated.claimToken !== 'string' ||
+      typeof migrated.leaseEpoch !== 'number' ||
+      migrated.leaseEpoch < 1)
+  ) {
+    migrated.status = 'queued';
+    delete migrated.claimedBy;
+    delete migrated.claimToken;
+    delete migrated.leaseExpiresAt;
+  }
+  return migrated;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -618,8 +674,37 @@ function sessionKey(scope: SessionQueueScope): string {
 function withoutClaim(record: SessionCommandRecord): SessionCommandRecord {
   const clone = structuredClone(record);
   delete clone.claimedBy;
+  delete clone.claimToken;
   delete clone.leaseExpiresAt;
   return clone;
+}
+
+function claimToken(
+  commandId: string,
+  workerId: string,
+  attempts: number,
+  leaseEpoch: number,
+  claimedAt: string
+): string {
+  return hashCanonicalJson({ commandId, workerId, attempts, leaseEpoch, claimedAt });
+}
+
+function claimFromRecord(record: SessionCommandRecord): SessionCommandClaim {
+  if (
+    record.status !== 'claimed' ||
+    record.claimedBy === undefined ||
+    record.claimToken === undefined ||
+    record.leaseExpiresAt === undefined
+  ) {
+    invalid('claimed command is missing its claim identity');
+  }
+  return {
+    commandId: record.id,
+    workerId: record.claimedBy,
+    claimToken: record.claimToken,
+    leaseEpoch: record.leaseEpoch,
+    leaseExpiresAt: record.leaseExpiresAt,
+  };
 }
 
 function addMilliseconds(timestamp: string, milliseconds: number): string {

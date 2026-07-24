@@ -1,4 +1,5 @@
 import type {
+  SessionCommandClaim,
   SessionCommandRecord,
   SessionCommandType,
   SessionQueueScope,
@@ -23,8 +24,15 @@ export type SessionCommandHandlerResult =
     };
 
 export type SessionCommandHandler = (
-  command: Readonly<SessionCommandRecord>
+  context: Readonly<SessionCommandHandlerContext>
 ) => Promise<SessionCommandHandlerResult>;
+
+export interface SessionCommandHandlerContext {
+  command: Readonly<SessionCommandRecord>;
+  signal: AbortSignal;
+  claimToken: string;
+  leaseEpoch: number;
+}
 
 export interface DurableSessionCommandWorkerOptions {
   queue: SessionQueue;
@@ -32,6 +40,10 @@ export interface DurableSessionCommandWorkerOptions {
   leaseMs: number;
   handlers: Partial<Record<SessionCommandType, SessionCommandHandler>>;
   now?: () => string;
+  renewalIntervalMs?: number;
+  maxHandlerDurationMs?: number;
+  wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  onLeaseRenewalFailure?: (error: unknown, claim: Readonly<SessionCommandClaim>) => void;
 }
 
 export type SessionCommandWorkerDisposition =
@@ -39,7 +51,9 @@ export type SessionCommandWorkerDisposition =
   | 'applied'
   | 'retry_scheduled'
   | 'failed'
-  | 'dead_lettered';
+  | 'dead_lettered'
+  | 'lease_lost'
+  | 'aborted';
 
 export interface SessionCommandWorkerResult {
   disposition: SessionCommandWorkerDisposition;
@@ -56,6 +70,9 @@ export interface SessionCommandWorkerResult {
 export class DurableSessionCommandWorker {
   private readonly now: () => string;
   private readonly handlers: Partial<Record<SessionCommandType, SessionCommandHandler>>;
+  private readonly renewalIntervalMs: number;
+  private readonly maxHandlerDurationMs: number;
+  private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
 
   constructor(private readonly options: DurableSessionCommandWorkerOptions) {
     nonEmpty(options.workerId, 'workerId');
@@ -64,9 +81,25 @@ export class DurableSessionCommandWorker {
     }
     this.now = options.now ?? (() => new Date().toISOString());
     this.handlers = { ...options.handlers };
+    this.renewalIntervalMs = positiveInteger(
+      options.renewalIntervalMs ?? Math.max(1, Math.floor(options.leaseMs / 3)),
+      'renewalIntervalMs'
+    );
+    if (this.renewalIntervalMs >= options.leaseMs) {
+      invalid('renewalIntervalMs must be shorter than leaseMs');
+    }
+    this.maxHandlerDurationMs = positiveInteger(
+      options.maxHandlerDurationMs ?? Math.max(options.leaseMs, 300_000),
+      'maxHandlerDurationMs'
+    );
+    this.wait = options.wait ?? abortableDelay;
   }
 
-  async processNext(scope?: SessionQueueScope): Promise<SessionCommandWorkerResult> {
+  async processNext(
+    scope?: SessionQueueScope,
+    signal?: AbortSignal
+  ): Promise<SessionCommandWorkerResult> {
+    if (signal?.aborted) return { disposition: 'aborted' };
     const command = await this.options.queue.claim({
       workerId: this.options.workerId,
       now: this.timestamp('claim'),
@@ -80,18 +113,74 @@ export class DurableSessionCommandWorker {
       return this.deadLetter(command, 'session_command_handler_unavailable');
     }
 
-    let outcome: SessionCommandHandlerResult;
+    const claim = claimFromCommand(command);
+    const handlerController = new AbortController();
+    const heartbeatController = new AbortController();
+    const forwardAbort = () => handlerController.abort('session_command_worker_aborted');
+    signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (signal?.aborted) forwardAbort();
+    let leaseLost = false;
+    const heartbeat = this.maintainLease(
+      claim,
+      heartbeatController.signal,
+      handlerController,
+      () => {
+        leaseLost = true;
+      }
+    );
+    const timeout = setTimeout(
+      () => handlerController.abort('session_command_handler_timeout'),
+      this.maxHandlerDurationMs
+    );
+    const handlerPromise = Promise.resolve().then(() =>
+      handler(
+        Object.freeze({
+          command: Object.freeze(structuredClone(command)),
+          signal: handlerController.signal,
+          claimToken: claim.claimToken,
+          leaseEpoch: claim.leaseEpoch,
+        })
+      )
+    );
+    handlerPromise.catch(() => undefined);
+
     try {
-      outcome = await handler(Object.freeze(structuredClone(command)));
+      const outcome = await Promise.race([
+        handlerPromise,
+        rejectWhenAborted(handlerController.signal),
+      ]);
       validateHandlerResult(outcome);
+      heartbeatController.abort();
+      await heartbeat;
+      if (leaseLost) return result(command, 'lease_lost', 'session_command_claim_lost');
+      if (handlerController.signal.aborted) {
+        return result(command, 'aborted', abortCode(handlerController.signal));
+      }
+      if (!(await this.verifyClaim(claim, handlerController))) {
+        return result(command, 'lease_lost', 'session_command_claim_lost');
+      }
+      return this.applyOutcome(command, claim, outcome);
     } catch {
+      heartbeatController.abort();
+      await heartbeat;
+      if (leaseLost) return result(command, 'lease_lost', 'session_command_claim_lost');
+      if (handlerController.signal.aborted) {
+        return result(command, 'aborted', abortCode(handlerController.signal));
+      }
+      if (!(await this.verifyClaim(claim, handlerController))) {
+        return result(command, 'lease_lost', 'session_command_claim_lost');
+      }
       return this.deadLetter(command, 'session_command_handler_unexpected_error');
+    } finally {
+      clearTimeout(timeout);
+      heartbeatController.abort();
+      signal?.removeEventListener('abort', forwardAbort);
     }
-    return this.applyOutcome(command, outcome);
   }
 
   private async applyOutcome(
     command: SessionCommandRecord,
+    claim: SessionCommandClaim,
     outcome: SessionCommandHandlerResult
   ): Promise<SessionCommandWorkerResult> {
     const completedAt = this.timestamp('handler completion');
@@ -100,6 +189,8 @@ export class DurableSessionCommandWorker {
         await this.options.queue.complete({
           commandId: command.id,
           workerId: this.options.workerId,
+          claimToken: claim.claimToken,
+          leaseEpoch: claim.leaseEpoch,
           completedAt,
           ...(outcome.resultRunId === undefined ? {} : { resultRunId: outcome.resultRunId }),
           ...(outcome.resultEventIds === undefined
@@ -111,6 +202,8 @@ export class DurableSessionCommandWorker {
         await this.options.queue.release({
           commandId: command.id,
           workerId: this.options.workerId,
+          claimToken: claim.claimToken,
+          leaseEpoch: claim.leaseEpoch,
           releasedAt: completedAt,
           ...(outcome.availableAt === undefined ? {} : { availableAt: outcome.availableAt }),
         });
@@ -122,6 +215,8 @@ export class DurableSessionCommandWorker {
         await this.options.queue.fail({
           commandId: command.id,
           workerId: this.options.workerId,
+          claimToken: claim.claimToken,
+          leaseEpoch: claim.leaseEpoch,
           failedAt: completedAt,
           rejectionCode: outcome.rejectionCode,
           ...(outcome.deadLetter === undefined ? {} : { deadLetter: outcome.deadLetter }),
@@ -143,11 +238,63 @@ export class DurableSessionCommandWorker {
     await this.options.queue.fail({
       commandId: command.id,
       workerId: this.options.workerId,
+      claimToken: command.claimToken!,
+      leaseEpoch: command.leaseEpoch,
       failedAt: this.timestamp('handler failure'),
       rejectionCode,
       deadLetter: true,
     });
     return result(command, 'dead_lettered', rejectionCode);
+  }
+
+  private async maintainLease(
+    claim: SessionCommandClaim,
+    signal: AbortSignal,
+    handlerController: AbortController,
+    onLeaseLost: () => void
+  ): Promise<void> {
+    while (!signal.aborted) {
+      await this.wait(this.renewalIntervalMs, signal);
+      if (signal.aborted) return;
+      try {
+        const renewed = await this.options.queue.renew({
+          commandId: claim.commandId,
+          workerId: claim.workerId,
+          claimToken: claim.claimToken,
+          leaseEpoch: claim.leaseEpoch,
+          renewedAt: this.timestamp('lease renewal'),
+          leaseMs: this.options.leaseMs,
+        });
+        claim.leaseExpiresAt = renewed.leaseExpiresAt;
+      } catch (error) {
+        onLeaseLost();
+        notify(() => this.options.onLeaseRenewalFailure?.(error, Object.freeze({ ...claim })));
+        handlerController.abort('session_command_claim_lost');
+        return;
+      }
+    }
+  }
+
+  private async verifyClaim(
+    claim: SessionCommandClaim,
+    handlerController: AbortController
+  ): Promise<boolean> {
+    try {
+      const renewed = await this.options.queue.renew({
+        commandId: claim.commandId,
+        workerId: claim.workerId,
+        claimToken: claim.claimToken,
+        leaseEpoch: claim.leaseEpoch,
+        renewedAt: this.timestamp('post-handler fencing'),
+        leaseMs: this.options.leaseMs,
+      });
+      claim.leaseExpiresAt = renewed.leaseExpiresAt;
+      return true;
+    } catch (error) {
+      notify(() => this.options.onLeaseRenewalFailure?.(error, Object.freeze({ ...claim })));
+      handlerController.abort('session_command_claim_lost');
+      return false;
+    }
   }
 
   private timestamp(label: string): string {
@@ -198,6 +345,65 @@ function result(
     attempts: command.attempts,
     ...(rejectionCode === undefined ? {} : { rejectionCode }),
   };
+}
+
+function claimFromCommand(command: SessionCommandRecord): SessionCommandClaim {
+  if (
+    command.status !== 'claimed' ||
+    command.claimedBy === undefined ||
+    command.claimToken === undefined ||
+    command.leaseExpiresAt === undefined
+  ) {
+    return invalid('claimed command is missing its claim identity');
+  }
+  return {
+    commandId: command.id,
+    workerId: command.claimedBy,
+    claimToken: command.claimToken,
+    leaseEpoch: command.leaseEpoch,
+    leaseExpiresAt: command.leaseExpiresAt,
+  };
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 1) invalid(`${label} must be a positive integer`);
+  return value;
+}
+
+function rejectWhenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    const abort = () => reject(new Error(abortCode(signal)));
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
+function abortCode(signal: AbortSignal): string {
+  return signal.reason === 'session_command_handler_timeout'
+    ? 'session_command_handler_timeout'
+    : 'session_command_worker_aborted';
+}
+
+function notify(callback: () => void): void {
+  try {
+    callback();
+  } catch {
+    // Telemetry cannot take ownership of a durable command.
+  }
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    signal.addEventListener('abort', finish, { once: true });
+    if (signal.aborted) finish();
+  });
 }
 
 function nonEmpty(value: string, label: string): void {

@@ -10,6 +10,8 @@ import {
   type FailSessionCommandRequest,
   type ListSessionCommandsRequest,
   type ReleaseSessionCommandRequest,
+  type RenewSessionCommandRequest,
+  type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueueScope,
 } from '../../contracts/session-queue';
@@ -20,6 +22,7 @@ import { addMilliseconds, busError, isAtOrBefore, nonEmpty, positive } from './m
 export interface SessionQueue {
   enqueue(request: EnqueueSessionCommandRequest): Promise<SessionCommandRecord>;
   claim(request: ClaimSessionCommandRequest): Promise<SessionCommandRecord | null>;
+  renew(request: RenewSessionCommandRequest): Promise<SessionCommandClaim>;
   complete(request: CompleteSessionCommandRequest): Promise<void>;
   fail(request: FailSessionCommandRequest): Promise<void>;
   release(request: ReleaseSessionCommandRequest): Promise<void>;
@@ -125,6 +128,7 @@ export class InMemorySessionQueue implements SessionQueue {
       priority: request.priority ?? 50,
       attempts: 0,
       maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+      leaseEpoch: 0,
       ...(request.payloadRef === undefined ? {} : { payloadRef: request.payloadRef }),
       payloadHash: request.payloadHash,
       status: 'queued',
@@ -171,10 +175,21 @@ export class InMemorySessionQueue implements SessionQueue {
 
     candidate.status = 'claimed';
     candidate.attempts += 1;
+    candidate.leaseEpoch += 1;
     candidate.claimedBy = request.workerId;
+    candidate.claimToken = claimToken(candidate, request.workerId, request.now);
     candidate.leaseExpiresAt = addMilliseconds(request.now, request.leaseMs);
     validateSessionCommandRecord(candidate);
     return structuredClone(candidate);
+  }
+
+  async renew(request: RenewSessionCommandRequest): Promise<SessionCommandClaim> {
+    timestamp(request.renewedAt, 'renewedAt');
+    positiveInteger(request.leaseMs, 'leaseMs');
+    const record = this.requireOwnedClaim(request, request.renewedAt);
+    record.leaseExpiresAt = addMilliseconds(request.renewedAt, request.leaseMs);
+    validateSessionCommandRecord(record);
+    return claimFromRecord(record);
   }
 
   async complete(request: CompleteSessionCommandRequest): Promise<void> {
@@ -183,7 +198,7 @@ export class InMemorySessionQueue implements SessionQueue {
     if (request.resultEventIds?.some((eventId) => eventId.length === 0)) {
       throw busError('RUNTIME_INVALID_INPUT', 'resultEventIds must not contain empty ids');
     }
-    const record = this.requireOwnedClaim(request.commandId, request.workerId, request.completedAt);
+    const record = this.requireOwnedClaim(request, request.completedAt);
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
       status: 'applied',
@@ -200,7 +215,7 @@ export class InMemorySessionQueue implements SessionQueue {
   async fail(request: FailSessionCommandRequest): Promise<void> {
     nonEmpty(request.rejectionCode, 'rejectionCode');
     timestamp(request.failedAt, 'failedAt');
-    const record = this.requireOwnedClaim(request.commandId, request.workerId, request.failedAt);
+    const record = this.requireOwnedClaim(request, request.failedAt);
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
       status: request.deadLetter ? 'dead_letter' : 'failed',
@@ -214,7 +229,7 @@ export class InMemorySessionQueue implements SessionQueue {
   async release(request: ReleaseSessionCommandRequest): Promise<void> {
     timestamp(request.releasedAt, 'releasedAt');
     if (request.availableAt) timestamp(request.availableAt, 'availableAt');
-    const record = this.requireOwnedClaim(request.commandId, request.workerId, request.releasedAt);
+    const record = this.requireOwnedClaim(request, request.releasedAt);
     const exhausted = record.attempts >= record.maxAttempts;
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
@@ -284,20 +299,33 @@ export class InMemorySessionQueue implements SessionQueue {
     };
   }
 
-  private requireOwnedClaim(commandId: string, workerId: string, at: string): SessionCommandRecord {
-    const record = this.records.get(commandId);
+  private requireOwnedClaim(
+    claim: Pick<SessionCommandClaim, 'commandId' | 'workerId' | 'claimToken' | 'leaseEpoch'>,
+    at: string
+  ): SessionCommandRecord {
+    nonEmpty(claim.commandId, 'commandId');
+    nonEmpty(claim.workerId, 'workerId');
+    nonEmpty(claim.claimToken, 'claimToken');
+    positiveInteger(claim.leaseEpoch, 'leaseEpoch');
+    const record = this.records.get(claim.commandId);
     if (!record) {
-      throw busError('RUNTIME_SESSION_QUEUE_CONFLICT', `Session command not found: ${commandId}`);
+      throw busError(
+        'RUNTIME_SESSION_QUEUE_CONFLICT',
+        `Session command not found: ${claim.commandId}`
+      );
     }
     if (
       record.status !== 'claimed' ||
-      record.claimedBy !== workerId ||
+      record.claimedBy !== claim.workerId ||
+      record.claimToken !== claim.claimToken ||
+      record.leaseEpoch !== claim.leaseEpoch ||
       record.leaseExpiresAt === undefined ||
       isAtOrBefore(record.leaseExpiresAt, at)
     ) {
       throw busError('RUNTIME_SESSION_QUEUE_CONFLICT', 'Session command claim is not owned', {
-        commandId,
-        workerId,
+        commandId: claim.commandId,
+        workerId: claim.workerId,
+        leaseEpoch: claim.leaseEpoch,
       });
     }
     return record;
@@ -320,6 +348,7 @@ export class InMemorySessionQueue implements SessionQueue {
           affected.set(sessionKey(scopeFromCommand(record)), scopeFromCommand(record));
         }
         delete record.claimedBy;
+        delete record.claimToken;
         delete record.leaseExpiresAt;
       }
       if (
@@ -462,8 +491,48 @@ function isPending(record: SessionCommandRecord): boolean {
 function withoutClaim(record: SessionCommandRecord): SessionCommandRecord {
   const clone = structuredClone(record);
   delete clone.claimedBy;
+  delete clone.claimToken;
   delete clone.leaseExpiresAt;
   return clone;
+}
+
+function claimToken(
+  record: Pick<SessionCommandRecord, 'id' | 'attempts' | 'leaseEpoch'>,
+  workerId: string,
+  claimedAt: string
+): string {
+  return hashCanonicalJson({
+    commandId: record.id,
+    workerId,
+    attempts: record.attempts,
+    leaseEpoch: record.leaseEpoch,
+    claimedAt,
+  });
+}
+
+function claimFromRecord(record: SessionCommandRecord): SessionCommandClaim {
+  if (
+    record.status !== 'claimed' ||
+    record.claimedBy === undefined ||
+    record.claimToken === undefined ||
+    record.leaseExpiresAt === undefined
+  ) {
+    throw busError('RUNTIME_INTERNAL_ERROR', 'Session command claim is incomplete');
+  }
+  return {
+    commandId: record.id,
+    workerId: record.claimedBy,
+    claimToken: record.claimToken,
+    leaseEpoch: record.leaseEpoch,
+    leaseExpiresAt: record.leaseExpiresAt,
+  };
+}
+
+function positiveInteger(value: number, label: string): void {
+  positive(value, label);
+  if (!Number.isInteger(value)) {
+    throw busError('RUNTIME_INVALID_INPUT', `${label} must be a positive integer`);
+  }
 }
 
 function timestamp(value: string, label: string): void {

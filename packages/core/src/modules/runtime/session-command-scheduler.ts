@@ -3,13 +3,14 @@ import { FrameworkError } from '../../errors';
 import type { SessionCommandWorkerResult } from './session-command-worker';
 
 export interface SessionCommandProcessor {
-  processNext(scope?: SessionQueueScope): Promise<SessionCommandWorkerResult>;
+  processNext(scope?: SessionQueueScope, signal?: AbortSignal): Promise<SessionCommandWorkerResult>;
 }
 
 export interface DurableSessionCommandSchedulerOptions {
   worker: SessionCommandProcessor;
   pollIntervalMs?: number;
   errorBackoffMs?: number;
+  shutdownDrainMs?: number;
   wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   onResult?: (result: SessionCommandWorkerResult) => void;
   onError?: (error: unknown) => void;
@@ -33,12 +34,14 @@ export interface SessionCommandSchedulerResult {
 export class DurableSessionCommandScheduler {
   private readonly pollIntervalMs: number;
   private readonly errorBackoffMs: number;
+  private readonly shutdownDrainMs: number;
   private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
   private running = false;
 
   constructor(private readonly options: DurableSessionCommandSchedulerOptions) {
     this.pollIntervalMs = positiveInteger(options.pollIntervalMs ?? 100, 'pollIntervalMs');
     this.errorBackoffMs = positiveInteger(options.errorBackoffMs ?? 1_000, 'errorBackoffMs');
+    this.shutdownDrainMs = nonNegativeInteger(options.shutdownDrainMs ?? 30_000, 'shutdownDrainMs');
     this.wait = options.wait ?? abortableDelay;
   }
 
@@ -56,14 +59,14 @@ export class DurableSessionCommandScheduler {
     try {
       while (!request.signal.aborted) {
         try {
-          const result = await this.options.worker.processNext(request.scope);
+          const result = await this.processNextWithDrainDeadline(request);
           notify(() => this.options.onResult?.(result));
           if (result.disposition === 'idle') {
             summary.idlePolls += 1;
             if (!request.signal.aborted) {
               await this.wait(this.pollIntervalMs, request.signal);
             }
-          } else {
+          } else if (result.disposition !== 'aborted') {
             summary.processed += 1;
           }
         } catch (error) {
@@ -79,10 +82,36 @@ export class DurableSessionCommandScheduler {
       this.running = false;
     }
   }
+
+  private async processNextWithDrainDeadline(
+    request: RunSessionCommandSchedulerRequest
+  ): Promise<SessionCommandWorkerResult> {
+    const workerController = new AbortController();
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    const beginDrain = () => {
+      drainTimer = setTimeout(
+        () => workerController.abort('session_command_shutdown_drain_expired'),
+        this.shutdownDrainMs
+      );
+    };
+    request.signal.addEventListener('abort', beginDrain, { once: true });
+    if (request.signal.aborted) beginDrain();
+    try {
+      return await this.options.worker.processNext(request.scope, workerController.signal);
+    } finally {
+      request.signal.removeEventListener('abort', beginDrain);
+      if (drainTimer !== undefined) clearTimeout(drainTimer);
+    }
+  }
 }
 
 function positiveInteger(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 1) invalid(`${label} must be a positive integer`);
+  return value;
+}
+
+function nonNegativeInteger(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 0) invalid(`${label} must be a non-negative integer`);
   return value;
 }
 

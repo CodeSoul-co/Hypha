@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RuntimeMessageEnvelopeInput } from '../../contracts/runtime-messages';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type { RuntimeScope } from '../../contracts/runtime';
+import type { SessionCommandRecord } from '../../contracts/session-queue';
 import type { EventCreateInput, FrameworkEventType } from '../../events';
 import type { JsonSchema } from '../../specs';
 import { hashCanonicalJson } from './canonical-json';
@@ -39,6 +40,13 @@ const eventTypes: FrameworkEventType[] = [
   'fsm.state.exited',
 ];
 const eventPayloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
+
+function claimIdentity(command: SessionCommandRecord): {
+  claimToken: string;
+  leaseEpoch: number;
+} {
+  return { claimToken: command.claimToken!, leaseEpoch: command.leaseEpoch };
+}
 
 async function eventFixture(now: () => string) {
   const schemas = new InMemoryEventSchemaRegistry();
@@ -133,7 +141,11 @@ describe('Runtime restart and convergence', () => {
       payloadHash,
       createdAt: now,
     });
-    await queue.claim({ workerId: 'command.worker', now, leaseMs: 5_000 });
+    const commandClaim = await queue.claim({
+      workerId: 'command.worker',
+      now,
+      leaseMs: 5_000,
+    });
     await outbox.enqueue({
       id: 'outbox.start-run',
       envelope: createRuntimeMessageEnvelope(envelope()),
@@ -178,6 +190,7 @@ describe('Runtime restart and convergence', () => {
     await queue.complete({
       commandId: 'command.start-run',
       workerId: 'command.worker',
+      ...claimIdentity(commandClaim!),
       completedAt: '2026-07-18T16:00:00.500Z',
       resultRunId: scope.runId,
       resultEventIds: applied.appliedEventIds,
@@ -241,7 +254,11 @@ describe('Runtime restart and convergence', () => {
       payloadHash,
       createdAt: now,
     });
-    await queue.claim({ workerId: 'worker.stale', now, leaseMs: 1_000 });
+    const staleCommand = await queue.claim({
+      workerId: 'worker.stale',
+      now,
+      leaseMs: 1_000,
+    });
     const staleLease = await runLeases.acquire({
       ...streamScope(),
       partitionKey: `runtime:${scope.runId}`,
@@ -301,12 +318,14 @@ describe('Runtime restart and convergence', () => {
       queue.complete({
         commandId: 'command.resume-run',
         workerId: 'worker.stale',
+        ...claimIdentity(staleCommand!),
         completedAt: now,
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
     await queue.complete({
       commandId: recoveredCommand!.id,
       workerId: 'worker.recovery',
+      ...claimIdentity(recoveredCommand!),
       completedAt: '2026-07-18T16:00:02.500Z',
       resultEventIds: recoveredAppend.events.map((item) => item.id),
     });

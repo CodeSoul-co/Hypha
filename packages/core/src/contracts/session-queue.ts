@@ -45,10 +45,12 @@ export interface SessionCommandRecord {
   priority: number;
   attempts: number;
   maxAttempts: number;
+  leaseEpoch: number;
   payloadRef?: string;
   payloadHash: string;
   status: SessionCommandStatus;
   claimedBy?: string;
+  claimToken?: string;
   leaseExpiresAt?: string;
   resultRunId?: string;
   resultEventIds?: string[];
@@ -84,9 +86,28 @@ export interface ClaimSessionCommandRequest {
   scope?: SessionQueueScope;
 }
 
+export interface SessionCommandClaim {
+  commandId: string;
+  workerId: string;
+  claimToken: string;
+  leaseEpoch: number;
+  leaseExpiresAt: string;
+}
+
+export interface RenewSessionCommandRequest {
+  commandId: string;
+  workerId: string;
+  claimToken: string;
+  leaseEpoch: number;
+  renewedAt: string;
+  leaseMs: number;
+}
+
 export interface CompleteSessionCommandRequest {
   commandId: string;
   workerId: string;
+  claimToken: string;
+  leaseEpoch: number;
   completedAt: string;
   resultRunId?: string;
   resultEventIds?: string[];
@@ -95,6 +116,8 @@ export interface CompleteSessionCommandRequest {
 export interface FailSessionCommandRequest {
   commandId: string;
   workerId: string;
+  claimToken: string;
+  leaseEpoch: number;
   failedAt: string;
   rejectionCode: string;
   deadLetter?: boolean;
@@ -103,6 +126,8 @@ export interface FailSessionCommandRequest {
 export interface ReleaseSessionCommandRequest {
   commandId: string;
   workerId: string;
+  claimToken: string;
+  leaseEpoch: number;
   releasedAt: string;
   availableAt?: string;
 }
