@@ -7,6 +7,8 @@ import {
   MemoryManagementProviderRegistry,
   MemoryRuntimeFactory,
   MongoStructuredStoreProvider,
+  createMem0PlatformMemoryProviderFactory,
+  createMemoryBankManagedProviderFactory,
   createNativeMemoryManagementProviderFactory,
   memoryError,
   type EmbeddingProvider,
@@ -21,6 +23,7 @@ import {
 import { getMongoConnection, getRedisClient } from './database';
 import { dbConfig } from '../config';
 import { logger } from '../utils/logger';
+import { createServerMemoryReferenceResolver } from './ServerMemoryReferences';
 
 export type ServerMemoryCompositionState =
   | 'idle'
@@ -226,16 +229,23 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     collectionPrefix: 'canonical_memory_',
     transactionMode,
   });
-  const registry = new MemoryManagementProviderRegistry().register(
-    createNativeMemoryManagementProviderFactory({
-      structuredStore,
-      redisClient: redis as unknown as RedisLikeWorkingMemoryClient,
-      embeddingProvider: new LocalDeterministicEmbeddingProvider(),
-      vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
-      ownerId: `server:${process.pid}`,
-      workingMemoryNamespace: 'hypha:memory:working',
-    })
-  );
+  await structuredStore.initialize([
+    'memory_external_mappings',
+    'memory_external_provider_operations',
+  ]);
+  const registry = new MemoryManagementProviderRegistry()
+    .register(
+      createNativeMemoryManagementProviderFactory({
+        structuredStore,
+        redisClient: redis as unknown as RedisLikeWorkingMemoryClient,
+        embeddingProvider: new LocalDeterministicEmbeddingProvider(),
+        vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+        ownerId: `server:${process.pid}`,
+        workingMemoryNamespace: 'hypha:memory:working',
+      })
+    )
+    .register(createMem0PlatformMemoryProviderFactory())
+    .register(createMemoryBankManagedProviderFactory());
   let eventSequence = 0;
   const factory = new MemoryRuntimeFactory({
     registry,
@@ -271,9 +281,9 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     process.env.HYPHA_MEMORY_CONFIG_PATH?.trim() || 'configs/memory-profiles.yaml'
   );
   const document = YAML.parse(await fs.readFile(configPath, 'utf8')) as unknown;
-  const loader = new CanonicalMemoryRuntimeLoader({
-    resolve: async (reference, kind) => ({ reference, kind }),
-  });
+  const loader = new CanonicalMemoryRuntimeLoader(
+    createServerMemoryReferenceResolver({ structuredStore })
+  );
   const loaded = await loader.load(document);
   const runtime = await factory.create(loaded.config, loaded.references);
   logger.info('Canonical Server Memory composition ready', {
