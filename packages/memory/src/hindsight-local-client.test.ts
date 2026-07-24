@@ -272,10 +272,15 @@ describe('HindsightLocalMemoryBankClient', () => {
       },
     ];
     const offsets: number[] = [];
+    let recallBody: Record<string, unknown> | undefined;
     const client = new HindsightLocalMemoryBankClient({
       baseUrl: 'http://localhost:8888',
-      fetch: async (url) => {
+      fetch: async (url, init) => {
         const parsed = new URL(url);
+        if (parsed.pathname.endsWith('/memories/recall')) {
+          recallBody = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+          return response({ results: values });
+        }
         const offset = Number(parsed.searchParams.get('offset') ?? 0);
         const limit = Number(parsed.searchParams.get('limit') ?? 100);
         offsets.push(offset);
@@ -304,6 +309,19 @@ describe('HindsightLocalMemoryBankClient', () => {
     ]);
     expect(second.hasMore).toBe(false);
     expect(offsets).toEqual([0, 2]);
+
+    const searched = await client.search({
+      operationId: 'search-operation',
+      principal,
+      scope,
+      profileRef,
+      query: 'First curatable fact',
+      topK: 1,
+    });
+    expect(searched.map((result) => result.record.canonicalText)).toEqual([
+      'First curatable fact.',
+    ]);
+    expect(recallBody).toMatchObject({ types: ['world', 'experience'] });
   });
 
   it('dead-letters expired operations and normalizes cancellation without replaying writes', async () => {

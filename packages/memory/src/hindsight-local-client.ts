@@ -511,15 +511,21 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         signal,
         body: {
           query: request.query,
+          types: ['world', 'experience'],
           tags: scopeTags(request.scope, request.filters?.tagsAll),
           tags_match: 'all_strict',
         },
       })
     );
     const values = asArray(body.results ?? body.memories ?? body.items);
-    const results = values.slice(0, request.topK ?? values.length).map((entry) => {
-      const wrapper = asObject(entry);
-      const item = asObject(wrapper.memory ?? entry);
+    const candidates = values
+      .map((entry) => {
+        const wrapper = asObject(entry);
+        return { wrapper, item: asObject(wrapper.memory ?? entry) };
+      })
+      .filter(({ item }) => isCuratableHindsightMemory(item))
+      .slice(0, request.topK ?? values.length);
+    const results = candidates.map(({ wrapper, item }) => {
       const record = this.toRecord(item, request.scope, {
         type: 'derived',
         sourceId: 'hindsight:recall',
@@ -953,7 +959,13 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
         signal: controller.signal,
       });
-      if (!response.ok) throw normalizeHttpError(response);
+      if (!response.ok) {
+        throw normalizeHttpError(
+          response,
+          init.method ?? 'GET',
+          classifyHindsightRoute(path, init.body)
+        );
+      }
       if (response.status === 204) return {};
       const text = await response.text();
       if (!text) return {};
@@ -1050,7 +1062,28 @@ function isSecureOrLoopback(baseUrl: string): boolean {
   );
 }
 
-function normalizeHttpError(response: Mem0HttpResponse) {
+function classifyHindsightRoute(path: string, body?: unknown): string {
+  if (path === '/version') return 'version';
+  if (path === '/health') return 'health';
+  if (path.includes('/operations/')) return 'operation';
+  if (path.endsWith('/memories/recall')) return 'memory.recall';
+  if (path.includes('/memories/list')) return 'memory.list';
+  if (path.endsWith('/history')) return 'memory.history';
+  if (path.includes('/memories/')) {
+    const state = readString(asObject(body), 'state');
+    if (state === 'invalidated') return 'memory.invalidate';
+    if (state === 'valid') return 'memory.restore';
+    return 'memory.update';
+  }
+  if (path.endsWith('/memories')) return 'memory.retain';
+  return 'unknown';
+}
+
+function normalizeHttpError(
+  response: Mem0HttpResponse,
+  method: string,
+  route: string
+) {
   const code =
     response.status === 401 || response.status === 403
       ? 'MEMORY_PERMISSION_DENIED'
@@ -1063,9 +1096,9 @@ function normalizeHttpError(response: Mem0HttpResponse) {
             : 'MEMORY_PROVIDER_UNAVAILABLE';
   return memoryError(
     code,
-    `Hindsight HTTP ${response.status} ${response.statusText}`,
+    `Hindsight ${method} ${route} HTTP ${response.status} ${response.statusText}`,
     response.status === 408 || response.status === 429 || response.status >= 500,
-    { status: response.status }
+    { status: response.status, method, route }
   );
 }
 
