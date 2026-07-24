@@ -36,7 +36,8 @@ class RecordingLifecyclePort implements RuntimeActivityLifecycleCommitPort {
 
 function createFixture(
   dispatch?: RuntimeActivityDispatchPort,
-  abortSignal = new AbortController().signal
+  abortSignal = new AbortController().signal,
+  lifecycleOverride?: RuntimeActivityLifecycleCommitPort
 ) {
   let idSequence = 0;
   let clockSequence = 0;
@@ -75,7 +76,7 @@ function createFixture(
       ids: helpers.ids,
       clock: helpers.clock,
       dispatch: activityDispatch,
-      lifecycle,
+      lifecycle: lifecycleOverride ?? lifecycle,
       abortSignal,
     }),
   };
@@ -172,5 +173,52 @@ describe('DefaultRuntimeActivityHelper', () => {
     ).rejects.toMatchObject({ code: 'RUNTIME_CANCELLED' });
     expect(fixture.lifecycle.requests).toHaveLength(0);
     expect(fixture.invocations).toHaveLength(0);
+  });
+
+  it.each([
+    ['tool', 'tool.search', { query: 'runtime' }],
+    ['memory', 'memory.write', { value: 'durable' }],
+    ['model', 'model.chat', { prompt: 'continue' }],
+    ['execution', 'execution.python', { code: 'print(1)' }],
+  ] as const)(
+    'leaves durable requested evidence when the %s provider crashes before returning',
+    async (method, target, input) => {
+      const fixture = createFixture({
+        async dispatch() {
+          throw new Error(`simulated ${method} provider crash`);
+        },
+      });
+
+      await expect(fixture.helper[method]({ target, input })).rejects.toThrow(
+        `simulated ${method} provider crash`
+      );
+      expect(fixture.lifecycle.requests.map((request) => request.event.type)).toEqual([
+        'runtime.activity.requested',
+      ]);
+      expect(fixture.lifecycle.requests[0]?.event.metadata).toMatchObject({
+        activityType: method,
+      });
+    }
+  );
+
+  it('leaves durable requested evidence when the provider returns before result commit', async () => {
+    const lifecycle = new RecordingLifecyclePort();
+    const interruptedLifecycle: RuntimeActivityLifecycleCommitPort = {
+      append: async (request) => {
+        if (request.event.type !== 'runtime.activity.requested') {
+          throw new Error('simulated result commit crash');
+        }
+        return lifecycle.append(request);
+      },
+    };
+    const fixture = createFixture(undefined, new AbortController().signal, interruptedLifecycle);
+
+    await expect(
+      fixture.helper.memory({ target: 'memory.write', input: { value: 'durable' } })
+    ).rejects.toThrow('simulated result commit crash');
+    expect(fixture.invocations).toHaveLength(1);
+    expect(lifecycle.requests.map((request) => request.event.type)).toEqual([
+      'runtime.activity.requested',
+    ]);
   });
 });
