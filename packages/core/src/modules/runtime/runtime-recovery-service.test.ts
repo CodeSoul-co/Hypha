@@ -43,6 +43,9 @@ const recoveryEventTypes: FrameworkEventType[] = [
   'runtime.activity.failed',
   'runtime.activity.waiting',
   'runtime.activity.cancelled',
+  'runtime.activity.compensation.requested',
+  'runtime.activity.compensation.completed',
+  'runtime.activity.compensation.failed',
   'runtime.cancellation.propagated',
   'runtime.cancellation.failed',
   'recovery.case.opened',
@@ -77,7 +80,7 @@ async function fixture(
   const projections = new ProjectionEngine({ events, now });
   const runLeases = new InMemoryRunLeaseStore({ now });
   const stateClaims = new InMemoryStateExecutionClaimStore({ runLeaseStore: runLeases, now });
-  const activityCalls = { reconcile: 0, retry: 0 };
+  const activityCalls = { reconcile: 0, retry: 0, compensate: 0 };
   const requeueCalls: string[] = [];
   const activities: RuntimeActivityReconciliationPort =
     overrides.activities ??
@@ -104,6 +107,15 @@ async function fixture(
           status: 'completed',
           eventIds: ['provider.retried'],
           output: { retried: true },
+        };
+      },
+      compensate: async (request) => {
+        activityCalls.compensate += 1;
+        return {
+          activityId: request.invocation.activityId,
+          status: 'completed',
+          providerRevision: 'provider.3',
+          receiptId: 'receipt.compensated',
         };
       },
     } satisfies RuntimeActivityReconciliationPort);
@@ -211,7 +223,8 @@ async function project(target: Awaited<ReturnType<typeof fixture>>) {
 
 async function appendActivity(
   target: Awaited<ReturnType<typeof fixture>>,
-  effect: RuntimeActivityInvocation['effect'] = 'external_effect'
+  effect: RuntimeActivityInvocation['effect'] = 'external_effect',
+  metadata?: RuntimeActivityInvocation['metadata']
 ) {
   const invocation: RuntimeActivityInvocation = {
     activityId: 'activity.recovery',
@@ -227,6 +240,7 @@ async function appendActivity(
     idempotencyKey: 'activity.recovery',
     requestedAt: '2026-07-18T12:00:01.000Z',
     effect,
+    ...(metadata === undefined ? {} : { metadata }),
   };
   const head = await target.events.getStreamHead(streamScope());
   await target.events.append({
@@ -239,6 +253,32 @@ async function appendActivity(
     expectedLastSequence: head!.lastSequence,
     expectedRunRevision: head!.runRevision,
     idempotencyKey: 'seed.activity.requested',
+  });
+}
+
+async function appendActivityFailure(target: Awaited<ReturnType<typeof fixture>>) {
+  const head = await target.events.getStreamHead(streamScope());
+  await target.events.append({
+    scope: streamScope(),
+    events: [
+      event(
+        'seed.activity.failed',
+        'runtime.activity.failed',
+        {
+          activityId: 'activity.recovery',
+          status: 'failed',
+          error: {
+            code: 'external_effect_failed',
+            message: 'The provider reported a terminal failure',
+          },
+        },
+        target.now(),
+        { operationId: 'operation.recovery' }
+      ),
+    ],
+    expectedLastSequence: head!.lastSequence,
+    expectedRunRevision: head!.runRevision,
+    idempotencyKey: 'seed.activity.failed',
   });
 }
 
@@ -329,7 +369,7 @@ describe('RuntimeRecoveryService', () => {
       disposition: 'recovered',
       projection: { pendingActivityIds: [] },
     });
-    expect(target.activityCalls).toEqual({ reconcile: 1, retry: 0 });
+    expect(target.activityCalls).toEqual({ reconcile: 1, retry: 0, compensate: 0 });
     expect(
       (await target.events.read({ scope: streamScope() })).filter(
         (item) => item.type === 'runtime.activity.completed'
@@ -476,6 +516,101 @@ describe('RuntimeRecoveryService', () => {
     await expect(target.recovery.recover(recoveryCommand(second))).resolves.toMatchObject({
       disposition: 'recovered',
     });
+  });
+
+  it('compensates a failed external-effect Activity once through its owner Port', async () => {
+    const target = await fixture();
+    await appendActivity(target, 'external_effect', { compensationAvailable: true });
+    await appendActivityFailure(target);
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_COMPENSATION_REQUIRED'
+    )!;
+
+    const first = await target.recovery.recover(recoveryCommand(candidate));
+    const second = await target.recovery.recover(recoveryCommand(candidate));
+    const stored = await target.events.read({ scope: streamScope() });
+
+    expect(first).toMatchObject({ disposition: 'compensated' });
+    expect(second).toMatchObject({ disposition: 'reused' });
+    expect(target.activityCalls.compensate).toBe(1);
+    expect(stored.map((item) => item.type)).toEqual(
+      expect.arrayContaining([
+        'runtime.activity.compensation.requested',
+        'runtime.activity.compensation.completed',
+        'recovery.case.resolved',
+      ])
+    );
+    expect(
+      stored.filter((item) => item.type === 'runtime.activity.compensation.requested')
+    ).toHaveLength(1);
+    expect(
+      stored.filter((item) => item.type === 'runtime.activity.compensation.completed')
+    ).toHaveLength(1);
+  });
+
+  it('escalates a compensatable Activity when its owner exposes no compensation Port', async () => {
+    const target = await fixture({
+      activities: {
+        reconcile: async (request) => ({
+          activityId: request.invocation.activityId,
+          status: 'unknown',
+        }),
+        retry: async () => {
+          throw new Error('retry is not expected');
+        },
+      },
+    });
+    await appendActivity(target, 'external_effect', { compensationAvailable: true });
+    await appendActivityFailure(target);
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_COMPENSATION_REQUIRED'
+    )!;
+
+    await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'requires_review',
+    });
+    expect(
+      (await target.events.read({ scope: streamScope() })).map((item) => item.type)
+    ).not.toContain('runtime.activity.compensation.requested');
+  });
+
+  it('persists compensation failure and escalates provider errors for operator review', async () => {
+    let compensationCalls = 0;
+    const target = await fixture({
+      activities: {
+        reconcile: async (request) => ({
+          activityId: request.invocation.activityId,
+          status: 'unknown',
+        }),
+        retry: async () => {
+          throw new Error('retry is not expected');
+        },
+        compensate: async () => {
+          compensationCalls += 1;
+          throw new Error('provider unavailable');
+        },
+      },
+    });
+    await appendActivity(target, 'external_effect', { compensationAvailable: true });
+    await appendActivityFailure(target);
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_COMPENSATION_REQUIRED'
+    )!;
+
+    await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'requires_review',
+    });
+    expect(compensationCalls).toBe(1);
+    expect((await target.events.read({ scope: streamScope() })).map((item) => item.type)).toEqual(
+      expect.arrayContaining([
+        'runtime.activity.compensation.requested',
+        'runtime.activity.compensation.failed',
+        'recovery.case.escalated',
+      ])
+    );
   });
 
   it('continues an opened recovery case after a process interruption', async () => {
