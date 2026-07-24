@@ -78,15 +78,20 @@ describe('ServerMemoryOperations', () => {
     });
 
     expect(fixture.add).toHaveBeenCalledTimes(1);
-    expect(fixture.add.mock.calls[0][0]).toMatchObject({
-      principal: { principalId: 'user:user-1', userId: 'user-1' },
-      scope: { userId: 'user-1' },
-      profileRef,
-      memoryType: 'working',
-      source: { type: 'user_message' },
-      tags: ['hypha:chat-message', 'session:session-1', 'role:user'],
-    });
-    expect(fixture.add.mock.calls[0][0].metadata?.canonicalKey).toMatch(/^chat-message:/);
+    expect((fixture.add.mock.calls as unknown as Array<[Record<string, any>]>)[0][0]).toMatchObject(
+      {
+        principal: { principalId: 'user:user-1', userId: 'user-1' },
+        scope: { userId: 'user-1' },
+        profileRef,
+        memoryType: 'working',
+        source: { type: 'user_message' },
+        tags: ['hypha:chat-message', 'session:session-1', 'role:user'],
+      }
+    );
+    expect(
+      (fixture.add.mock.calls as unknown as Array<[Record<string, any>]>)[0][0].metadata
+        ?.canonicalKey
+    ).toMatch(/^chat-message:/);
   });
 
   it('maps session reads and deletes to tag-filtered canonical operations', async () => {
@@ -101,12 +106,16 @@ describe('ServerMemoryOperations', () => {
     ]);
     await operations.clearMessages('session-1', 'user-1');
 
-    expect(fixture.list.mock.calls[0][0]).toMatchObject({
+    expect(
+      (fixture.list.mock.calls as unknown as Array<[Record<string, any>]>)[0][0]
+    ).toMatchObject({
       principal: { userId: 'user-1' },
       scope: { userId: 'user-1' },
       filter: { tagsAll: ['hypha:chat-message', 'session:session-1'] },
     });
-    expect(fixture.delete.mock.calls[0][0]).toMatchObject({
+    expect(
+      (fixture.delete.mock.calls as unknown as Array<[Record<string, any>]>)[0][0]
+    ).toMatchObject({
       principal: { userId: 'user-1' },
       scope: { userId: 'user-1' },
       filter: { tagsAll: ['hypha:chat-message', 'session:session-1'] },

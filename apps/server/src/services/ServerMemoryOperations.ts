@@ -3,6 +3,7 @@ import type {
   ManagedMemoryRecord,
   ManagedMemoryScope,
   MemoryApplicationService,
+  MemoryContractSpecRef,
   MemoryPrincipal,
 } from '@hypha/memory';
 import type { TempMessage } from '../core/llm/types';
@@ -30,7 +31,8 @@ type ConversationInput = Omit<PermanentConversation, 'id' | 'createdAt' | 'updat
 export class ServerMemoryOperations {
   constructor(
     private readonly service: () => MemoryApplicationService = getMemoryApplicationService,
-    private readonly profileRef = () => getServerMemoryComposition().profileRef()
+    private readonly profileRef: () => MemoryContractSpecRef = () =>
+      getServerMemoryComposition().profileRef()
   ) {}
 
   async addMessage(sessionId: string, message: ChatMessageInput): Promise<TempMessage> {
@@ -354,11 +356,20 @@ export class ServerMemoryOperations {
   }
 }
 
-let operations: ServerMemoryOperations | null = null;
+type RouteMemoryConsumer = 'chat' | 'memory-routes';
 
-export function getServerMemoryOperations(): ServerMemoryOperations {
-  operations ??= new ServerMemoryOperations();
-  return operations;
+const operations = new Map<RouteMemoryConsumer, ServerMemoryOperations>();
+
+export function getServerMemoryOperations(consumer: RouteMemoryConsumer): ServerMemoryOperations {
+  let instance = operations.get(consumer);
+  if (!instance) {
+    instance = new ServerMemoryOperations(
+      () => getMemoryApplicationService(consumer),
+      () => getServerMemoryComposition().profileRef()
+    );
+    operations.set(consumer, instance);
+  }
+  return instance;
 }
 
 function principal(userId: string): MemoryPrincipal {

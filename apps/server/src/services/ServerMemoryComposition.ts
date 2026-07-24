@@ -13,6 +13,7 @@ import {
   type MemoryApplicationService,
   type MemoryRuntime,
   type MemoryRuntimeCompositionReceipt,
+  type MemoryServerConsumer,
   type MongoDatabaseLike,
   type RedisLikeWorkingMemoryClient,
 } from '@hypha/memory';
@@ -46,6 +47,7 @@ export class ServerMemoryComposition {
   private startPromise: Promise<MemoryRuntime> | null = null;
   private stopPromise: Promise<void> | null = null;
   private failureMessage: string | undefined;
+  private readonly consumerBindings = new Map<MemoryServerConsumer, string>();
 
   constructor(private readonly options: ServerMemoryCompositionOptions) {}
 
@@ -90,6 +92,15 @@ export class ServerMemoryComposition {
       );
     }
     return this.runtime.service;
+  }
+  bindConsumer(consumer: MemoryServerConsumer): MemoryApplicationService {
+    const service = this.service();
+    this.consumerBindings.set(consumer, this.runtime!.compositionReceipt.serviceInstanceId);
+    return service;
+  }
+
+  bindings(): Partial<Record<MemoryServerConsumer, string>> {
+    return Object.fromEntries(this.consumerBindings);
   }
 
   profileRef() {
@@ -143,6 +154,7 @@ export class ServerMemoryComposition {
     }
     const runtime = this.runtime;
     this.runtime = null;
+    this.consumerBindings.clear();
     try {
       await runtime?.close();
     } finally {
@@ -162,8 +174,11 @@ export function getServerMemoryComposition(): ServerMemoryComposition {
   return productionComposition;
 }
 
-export function getMemoryApplicationService(): MemoryApplicationService {
-  return getServerMemoryComposition().service();
+export function getMemoryApplicationService(
+  consumer?: MemoryServerConsumer
+): MemoryApplicationService {
+  const composition = getServerMemoryComposition();
+  return consumer ? composition.bindConsumer(consumer) : composition.service();
 }
 
 export async function initializeServerMemoryComposition(): Promise<MemoryRuntimeCompositionReceipt> {

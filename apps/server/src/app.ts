@@ -15,6 +15,7 @@ import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow
 import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
 import {
   closeServerMemoryComposition,
+  getMemoryApplicationService,
   getServerMemoryComposition,
   initializeServerMemoryComposition,
 } from './services/ServerMemoryComposition';
@@ -144,6 +145,11 @@ class Application {
     // Initialize the unique canonical Memory application service after its
     // MongoDB and Redis dependencies are ready.
     await initializeServerMemoryComposition();
+
+    // Bind every Memory-capable Server subsystem to that same service instance.
+    getMemoryApplicationService('tool');
+    getMemoryApplicationService('workflow');
+    getMemoryApplicationService('harness');
 
     // Initialize Skill Manager
     await initializeSkillManager();

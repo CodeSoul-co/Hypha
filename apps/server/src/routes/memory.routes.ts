@@ -31,7 +31,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const messages = await memory.getMessages(
       sessionId,
       limit ? parseInt(limit as string) : undefined,
@@ -65,7 +65,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const sessions = await memory.getAllSessions(userId);
 
     res.json({
@@ -89,7 +89,7 @@ router.delete(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     await memory.clearMessages(sessionId, userId);
 
     res.json({
@@ -115,7 +115,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const conversations = await memory.listConversations(userId, {
       page: page ? parseInt(page as string) : 1,
       pageSize: pageSize ? parseInt(pageSize as string) : 20,
@@ -146,7 +146,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const conversation = await memory.getConversation(id, userId);
 
     if (!conversation || conversation.userId !== userId) {
@@ -178,7 +178,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const conversation = await memory.getConversation(id, userId);
     if (!conversation || conversation.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -214,7 +214,7 @@ router.post(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const conversation = await memory.createConversation({
       userId,
       sessionId,
@@ -248,7 +248,7 @@ router.put(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const existing = await memory.getConversation(id, userId);
     if (!existing || existing.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -291,7 +291,7 @@ router.delete(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const existing = await memory.getConversation(id, userId);
     if (!existing || existing.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -340,7 +340,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const results = await memory.searchConversations(userId, q as string, {
       page: page ? parseInt(page as string) : 1,
       pageSize: pageSize ? parseInt(pageSize as string) : 20,
@@ -377,7 +377,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const results = await memory.searchMessages(userId, q as string, {
       page: page ? parseInt(page as string) : 1,
       pageSize: pageSize ? parseInt(pageSize as string) : 20,
@@ -403,7 +403,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('memory-routes');
     const stats = await memory.stats(userId);
 
     res.json({

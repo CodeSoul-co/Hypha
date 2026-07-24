@@ -45,7 +45,19 @@ describe('ServerMemoryComposition', () => {
     expect(left.serviceInstanceId).toBe('memory-service:test');
     expect(right).toEqual(left);
     expect(bootstrap).toHaveBeenCalledTimes(1);
-    expect(composition.service()).toBeDefined();
+    const service = composition.service();
+    expect(composition.bindConsumer('chat')).toBe(service);
+    expect(composition.bindConsumer('memory-routes')).toBe(service);
+    expect(composition.bindConsumer('tool')).toBe(service);
+    expect(composition.bindConsumer('workflow')).toBe(service);
+    expect(composition.bindConsumer('harness')).toBe(service);
+    expect(composition.bindings()).toEqual({
+      chat: 'memory-service:test',
+      'memory-routes': 'memory-service:test',
+      tool: 'memory-service:test',
+      workflow: 'memory-service:test',
+      harness: 'memory-service:test',
+    });
     await expect(composition.readiness()).resolves.toMatchObject({
       state: 'ready',
       ready: true,

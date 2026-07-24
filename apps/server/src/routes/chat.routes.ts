@@ -128,7 +128,7 @@ router.post(
       runId = runtimeRun.runId;
       const messageId = generateMessageId();
       const startTime = Date.now();
-      const memory = getServerMemoryOperations();
+      const memory = getServerMemoryOperations('chat');
       const resolvedChatModel = runtime.resolveChatModel(model);
 
       logger.debug(`[Chat] Request started`, {
@@ -455,7 +455,7 @@ router.post('/stream', async (req: Request, res: Response) => {
   const lock = acquireSessionLock(session, userId);
   await lock.wait(); // Wait for any previous request on this session to finish
 
-  const memory = getServerMemoryOperations();
+  const memory = getServerMemoryOperations('chat');
   const startTime = Date.now();
   const runtime = getEventRuntime();
   let runId: string | undefined;
@@ -713,7 +713,7 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('chat');
     const messages = await memory.getMessages(
       sessionId,
       limit ? parseInt(limit as string) : undefined,
@@ -741,7 +741,7 @@ router.post(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('chat');
     await memory.clearMessages(sessionId, userId);
 
     res.json({
@@ -765,7 +765,7 @@ router.delete(
       });
     }
 
-    const memory = getServerMemoryOperations();
+    const memory = getServerMemoryOperations('chat');
 
     // Clear temporary memory
     await memory.clearMessages(sessionId, userId);
