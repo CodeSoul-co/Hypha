@@ -187,19 +187,18 @@ mcpProfiles:
 memoryProfiles:
   - id: memory.local
     version: 0.0.0
+    description: Hypha native durable Memory using Redis working state and MongoDB records.
     providers:
-      - id: structured
-        type: structured
-        providerRef: storage.sqlite.local
-      - id: vector
-        type: vector
-        providerRef: vector.local
+      - id: hypha-native-default
+        type: hybrid
+        providerRef: memory.provider.native-default
     memoryTypes:
       - working
       - episodic
       - semantic
-    structuredStoreRef: storage.sqlite.local
-    vectorIndexRef: vector.local
+    structuredStoreRef: memory.store.record.mongodb
+    vectorIndexRef: memory.vector.local
+    artifactStoreRef: memory.artifact.local
     provenancePolicy: required
     retrievalPolicy:
       defaultTopK: 5
@@ -207,6 +206,58 @@ memoryProfiles:
     writePolicyConfig:
       allowLongTerm: false
       requireProvenance: true
+  - id: memory.mem0.oss
+    version: 1.0.0
+    description: Self-hosted Mem0 OSS selected through the Server Memory runtime profile.
+    providers:
+      - id: memory.provider.mem0.oss
+        type: hybrid
+        providerRef: memory.provider.mem0.oss
+    memoryTypes: &external-memory-types
+      - working
+      - episodic
+      - semantic
+      - procedural
+    provenancePolicy: required
+    retrievalPolicy: &external-memory-retrieval
+      defaultTopK: 10
+      requireScope: true
+    writePolicyConfig: &external-memory-write
+      allowLongTerm: true
+      requireProvenance: true
+  - id: memory.mem0.platform
+    version: 1.0.0
+    description: Managed Mem0 Platform v3 selected through the Server Memory runtime profile.
+    providers:
+      - id: memory.provider.mem0.platform-v3
+        type: hybrid
+        providerRef: memory.provider.mem0.platform-v3
+    memoryTypes: *external-memory-types
+    provenancePolicy: required
+    retrievalPolicy: *external-memory-retrieval
+    writePolicyConfig: *external-memory-write
+  - id: memory.memorybank.vertex-ai
+    version: 1.0.0
+    description: Google Vertex AI Memory Bank selected through the Server Memory runtime profile.
+    providers:
+      - id: memory.provider.memorybank.vertex-ai
+        type: hybrid
+        providerRef: memory.provider.memorybank.vertex-ai
+    memoryTypes: *external-memory-types
+    provenancePolicy: required
+    retrievalPolicy: *external-memory-retrieval
+    writePolicyConfig: *external-memory-write
+  - id: memory.memorybank.hindsight-local
+    version: 1.0.0
+    description: Self-hosted Hindsight MemoryBank candidate; enable only after its live acceptance gate.
+    providers:
+      - id: memory.provider.memorybank.hindsight-local
+        type: hybrid
+        providerRef: memory.provider.memorybank.hindsight-local
+    memoryTypes: *external-memory-types
+    provenancePolicy: required
+    retrievalPolicy: *external-memory-retrieval
+    writePolicyConfig: *external-memory-write
 contextProfiles:
   - id: context.local
     version: 0.0.0
