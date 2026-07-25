@@ -294,7 +294,15 @@ function record(
   content: unknown,
   values: Omit<ServerLegacyMemoryRecord, 'key' | 'digest' | 'content'>
 ): ServerLegacyMemoryRecord {
-  return { key, digest: digest(content), content, ...values };
+  const normalizedContent = jsonValue(content);
+  return {
+    key,
+    digest: digest(normalizedContent),
+    content: normalizedContent,
+    ...values,
+    tags: [...values.tags],
+    metadata: jsonValue(values.metadata) as Record<string, unknown>,
+  };
 }
 
 function inventory(record: ServerLegacyMemoryRecord) {
@@ -316,6 +324,9 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+function jsonValue(value: unknown): unknown {
+  return JSON.parse(stableJson(value));
+}
 function requiredMetadata(record: ManagedMemoryRecord, key: string): string {
   const value = record.metadata?.[key];
   if (typeof value !== 'string' || !value) throw new Error(`Canonical record lacks ${key}.`);

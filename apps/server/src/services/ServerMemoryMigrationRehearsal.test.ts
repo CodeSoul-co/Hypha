@@ -49,6 +49,7 @@ describe('Server Memory migration rehearsal adapters', () => {
     });
 
     const legacy = await port.listLegacy();
+    expect(() => structuredClone(legacy)).not.toThrow();
     expect(legacy.map((record) => record.key)).toEqual([
       'conversation:conversation-1',
       'permanent-message:permanent-1',
@@ -170,7 +171,7 @@ function conversation() {
     modelId: 'model-1',
     modelProvider: 'provider-1',
     title: 'Legacy conversation',
-    tags: [],
+    tags: new Proxy(['legacy-tag'], {}),
     createdAt: new Date('2026-07-25T00:00:00.000Z'),
     updatedAt: new Date('2026-07-25T00:00:00.000Z'),
     isArchived: false,
@@ -184,6 +185,6 @@ function permanentMessage() {
     role: 'assistant' as const,
     content: 'legacy permanent message',
     timestamp: new Date('2026-07-25T00:01:00.000Z'),
-    metadata: {},
+    metadata: new Proxy({ legacy: true }, {}),
   };
 }
