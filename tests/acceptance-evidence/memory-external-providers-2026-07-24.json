@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "evidenceType": "memory.external-provider.live-acceptance",
-  "recordedAt": "2026-07-25T10:40:36.001Z",
+  "recordedAt": "2026-07-25T11:21:50.112Z",
   "source": {
     "kind": "curated-live-acceptance-output",
     "containsCredentials": false
@@ -40,7 +40,7 @@
           "asyncWrite": false,
           "batchOperations": false
         },
-        "memoryId": "memory:external:sha256:b7387858af8ecf588ae27b251",
+        "memoryId": "memory:external:sha256:c50461ce21056ceda78d56a4e",
         "addStatus": "committed",
         "searchCount": 2,
         "listCount": 2,
@@ -53,7 +53,7 @@
         "restartVerified": true,
         "failureProbeCount": 2,
         "evidence": {
-          "commitSha": "c4bca95fee18896642ec44dcb3b97d51026647c1",
+          "commitSha": "4e1d5d0a81f7e5a0e38b6266b9de799f444b3fdd",
           "providerId": "memory.provider.mem0.rest",
           "providerVersion": "d6d89c987bddf580870db14c69db974edfc5263c",
           "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
@@ -77,8 +77,8 @@
             "batchOperations": false
           },
           "environmentHash": "sha256:21b9a6a17a9372dfff77d55de988799d4ff6da28775190acc857e8506623fdbd",
-          "startedAt": "2026-07-25T10:40:28.263Z",
-          "finishedAt": "2026-07-25T10:40:36.001Z"
+          "startedAt": "2026-07-25T11:21:38.643Z",
+          "finishedAt": "2026-07-25T11:21:50.112Z"
         }
       },
       "limitations": [
