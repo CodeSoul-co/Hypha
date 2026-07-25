@@ -22,7 +22,6 @@ import {
   type RecoveryKnowledgePort,
   type RuntimeHumanWaitService,
   type SpecRef,
-  type TraceRecorder,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
 import {
@@ -954,8 +953,7 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
-    const availableToolIds =
-      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
@@ -1596,8 +1594,7 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash:
-        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
+      sourceCapabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
