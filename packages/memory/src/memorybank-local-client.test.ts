@@ -24,7 +24,7 @@ describe('MemoryBankLocalClient', () => {
       return json({ add: true, search: true, update: false });
     };
     const client = new MemoryBankLocalClient({
-      baseUrl: 'http://memorybank.local',
+      baseUrl: 'https://memorybank.local',
       fetch: fetcher,
     });
     await expect(client.capabilities()).resolves.toMatchObject({
@@ -34,7 +34,7 @@ describe('MemoryBankLocalClient', () => {
       decay: false,
     });
     expect(calls[0]).toMatchObject({
-      url: 'http://memorybank.local/hypha-memorybank/v1/capabilities',
+      url: 'https://memorybank.local/hypha-memorybank/v1/capabilities',
       headers: { 'MemoryBank-Protocol-Version': MEMORYBANK_LOCAL_PROTOCOL },
     });
   });
@@ -48,7 +48,7 @@ describe('MemoryBankLocalClient', () => {
       text: async () => '',
     });
     const client = new MemoryBankLocalClient({
-      baseUrl: 'http://memorybank.local',
+      baseUrl: 'https://memorybank.local',
       fetch: fetcher,
     });
     await expect(client.capabilities()).rejects.toMatchObject({
@@ -58,7 +58,7 @@ describe('MemoryBankLocalClient', () => {
   });
   it('rejects unknown or non-boolean capability fields as protocol drift', async () => {
     const unknown = new MemoryBankLocalClient({
-      baseUrl: 'http://memorybank.local',
+      baseUrl: 'https://memorybank.local',
       fetch: async () => json({ search: true, inventedCapability: true }),
     });
     await expect(unknown.capabilities()).rejects.toMatchObject({
@@ -67,7 +67,7 @@ describe('MemoryBankLocalClient', () => {
     });
 
     const invalid = new MemoryBankLocalClient({
-      baseUrl: 'http://memorybank.local',
+      baseUrl: 'https://memorybank.local',
       fetch: async () => json({ search: 'yes' }),
     });
     await expect(invalid.capabilities()).rejects.toMatchObject({

@@ -51,14 +51,14 @@ describe('Mem0 REST client', () => {
       requests.push(url);
       return jsonResponse({ status: 'ok' });
     };
-    const oss = new Mem0OssClient({ baseUrl: 'http://mem0.local', fetch: fetcher });
-    const legacy = new Mem0RestClient({ baseUrl: 'http://mem0.local', fetch: fetcher });
+    const oss = new Mem0OssClient({ baseUrl: 'http://127.0.0.1:8888', fetch: fetcher });
+    const legacy = new Mem0RestClient({ baseUrl: 'http://127.0.0.1:8888', fetch: fetcher });
 
     await expect(oss.health()).resolves.toMatchObject({
       status: 'healthy',
       details: { deployment: 'self_hosted', protocol: 'mem0-oss-rest' },
     });
-    expect(requests[0]).toBe('http://mem0.local/auth/setup-status');
+    expect(requests[0]).toBe('http://127.0.0.1:8888/auth/setup-status');
     await expect(legacy.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
@@ -106,7 +106,7 @@ describe('Mem0 REST client', () => {
       return jsonResponse({ message: 'not found' }, 404);
     };
     const client = new Mem0RestClient({
-      baseUrl: 'http://mem0.local/',
+      baseUrl: 'http://127.0.0.1:8888/',
       apiKey: 'test-api-key',
       healthPath: '/health',
       fetch: fetcher,
@@ -143,6 +143,15 @@ describe('Mem0 REST client', () => {
       topK: 5,
     });
     expect(results.map((result) => result.record.id)).toEqual([memoryId]);
+    expect(requests.find((request) => request.url.endsWith('/search'))?.body).toMatchObject({
+      query: 'blue',
+      filters: {
+        user_id: 'user:mem0',
+        app_id: 'workspace:mem0',
+        run_id: 'run:mem0',
+      },
+      top_k: 5,
+    });
     await expect(
       client.get({
         operationId: 'operation:mem0:get',
@@ -155,11 +164,31 @@ describe('Mem0 REST client', () => {
     await expect(client.health()).resolves.toMatchObject({ status: 'healthy' });
   });
 
+  it('allows loopback HTTP but rejects credential-bearing cleartext remote endpoints', () => {
+    const fetcher: Mem0HttpFetch = async () => jsonResponse({});
+    expect(
+      () =>
+        new Mem0OssClient({
+          baseUrl: 'http://mem0.example',
+          apiKey: 'must-not-leak',
+          fetch: fetcher,
+        })
+    ).toThrow('requires HTTPS outside loopback');
+    expect(
+      () =>
+        new Mem0OssClient({
+          baseUrl: 'http://127.12.0.1:8888',
+          apiKey: 'local-key',
+          fetch: fetcher,
+        })
+    ).not.toThrow();
+  });
+
   it('normalizes provider timestamps before storing durable mappings', async () => {
     const scopeHash = hashMemoryScope(scope);
     const mappingStore = new InMemoryExternalMemoryMappingStore();
     const client = new Mem0OssClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       mappingStore,
       now: () => new Date('2026-07-18T00:00:00.000Z'),
       fetch: async () =>
@@ -240,7 +269,7 @@ describe('Mem0 REST client', () => {
       syncState: 'synced',
     });
     const client = new Mem0OssClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       mappingStore,
       fetch: async (_url, init) =>
         init?.method === 'PUT'
@@ -296,7 +325,7 @@ describe('Mem0 REST client', () => {
       syncState: 'synced',
     });
     const forbidden = new Mem0RestClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       apiKey: 'do-not-leak',
       mappingStore: forbiddenMappings,
       fetch: async () => jsonResponse({ message: 'forbidden' }, 403),
@@ -333,7 +362,7 @@ describe('Mem0 REST client', () => {
       syncState: 'synced',
     });
     const unavailable = new Mem0RestClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       mappingStore: unavailableMappings,
       fetch: async () => jsonResponse({ message: 'unavailable' }, 503),
     });
@@ -349,7 +378,7 @@ describe('Mem0 REST client', () => {
   it('uses protected provider cursors and rejects invalid JSON', async () => {
     const metadata = { _hypha_scope_hash: hashMemoryScope(scope) };
     const paging = new Mem0OssClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       fetch: async (url) => {
         const topK = Number(new URL(url).searchParams.get('top_k'));
         const memories = [
@@ -378,7 +407,7 @@ describe('Mem0 REST client', () => {
     expect(second.hasMore).toBe(false);
 
     const invalid = new Mem0OssClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       fetch: async () => ({
         ok: true,
         status: 200,
@@ -396,7 +425,7 @@ describe('Mem0 REST client', () => {
   it('normalizes a pre-aborted request without calling Mem0', async () => {
     let called = false;
     const client = new Mem0OssClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       fetch: async () => {
         called = true;
         return jsonResponse({ memories: [] });
@@ -417,7 +446,7 @@ describe('Mem0 REST client', () => {
   it('cancels in-flight requests when closed', async () => {
     let aborted = false;
     const client = new Mem0OssClient({
-      baseUrl: 'http://mem0.local',
+      baseUrl: 'http://127.0.0.1:8888',
       fetch: async (_url, init) =>
         new Promise((_resolve, reject) => {
           init?.signal?.addEventListener(

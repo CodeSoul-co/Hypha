@@ -10,14 +10,14 @@ containers, cloud accounts, and secret values remain deployment responsibilities
 
 ## Deployment profiles
 
-| Profile                      | Intended use                     | Required dependencies                                         | Runtime boundary                          |
-| ---------------------------- | -------------------------------- | ------------------------------------------------------------- | ----------------------------------------- |
-| `native-lite`                | Offline or single-process Memory | bounded working store, SQLite, local vector and artifact      | single writer; not multi-instance         |
-| `native-default`             | Shared structured Memory         | Redis, MongoDB, configured vector and artifact adapters       | distributed stores; not HA by default     |
-| `mem0-oss`                   | Self-hosted external Memory      | Mem0 endpoint and optional API credential                     | Mem0 OSS REST dialect                     |
-| `mem0-platform`              | Mem0 managed service             | Platform token, durable mapping and operation stores          | Mem0 Platform v3 dialect                  |
-| `memorybank-managed`         | Vertex AI Memory Bank            | Google project/location/engine credentials and stores         | Vertex resource names remain in adapter   |
-| `memorybank-hindsight-local` | Self-hosted Hindsight candidate  | Hindsight 0.8.x endpoint and durable mapping/operation stores | disabled candidate; explicit factory only |
+| Profile                      | Intended use                    | Required dependencies                                         | Runtime boundary                          |
+| ---------------------------- | ------------------------------- | ------------------------------------------------------------- | ----------------------------------------- |
+| `native-lite`                | Single-process Memory contract  | local adapters plus the Server storage bootstrap              | not yet a standalone offline Server mode  |
+| `native-default`             | Shared structured Memory        | Redis, MongoDB, configured vector and artifact adapters       | distributed stores; not HA by default     |
+| `mem0-oss`                   | Self-hosted external Memory     | Mem0 endpoint and optional API credential                     | Mem0 OSS REST dialect                     |
+| `mem0-platform`              | Mem0 managed service            | Platform token, durable mapping and operation stores          | Mem0 Platform v3 dialect                  |
+| `memorybank-managed`         | Vertex AI Memory Bank           | Google project/location/engine credentials and stores         | Vertex resource names remain in adapter   |
+| `memorybank-hindsight-local` | Self-hosted Hindsight candidate | Hindsight 0.8.x endpoint and durable mapping/operation stores | disabled candidate; explicit factory only |
 
 ## Native topology
 
@@ -40,8 +40,18 @@ reference cannot be resolved.
 Mem0 OSS and Mem0 Platform are separate protocol dialects and must use their corresponding clients.
 Deployment type is never inferred from a URL.
 
+`mem0-oss` targets the official self-hosted FastAPI service. Hypha sends current Mem0 scope
+selectors in `filters`, uses `top_k`, preserves immutable Hypha scope evidence in provider
+metadata, and keeps external-ID mappings in a durable Store. Loopback HTTP is allowed for local
+development; non-loopback endpoints must use HTTPS.
+
 `memorybank-managed` targets Google Vertex AI Agent Engine Memory Bank. Vertex project, location,
 reasoning-engine, operation, and memory resource names stay inside the adapter.
+Set `HYPHA_MEMORYBANK_AUTH_MODE=environment` to supply a short-lived, externally rotated
+`HYPHA_MEMORYBANK_ACCESS_TOKEN`. On Cloud Run, GKE Workload Identity, or Compute Engine, set
+`HYPHA_MEMORYBANK_AUTH_MODE=google-metadata`; Hypha then obtains renewable OAuth credentials only
+from Google's fixed metadata endpoint and verifies the `Metadata-Flavor: Google` response evidence.
+Service-account JSON and long-lived cloud secrets are not accepted in the profile.
 
 `memorybank-hindsight-local` targets the self-hosted Hindsight HTTP 0.8 dialect through
 `HindsightLocalMemoryBankClient`. Its candidate profile is stored separately at
@@ -69,6 +79,25 @@ Runtime composition must register `createHindsightLocalMemoryProviderFactory` an
 `memory.connection.hindsight-local`, `memory.mapping.durable`, and `memory.operation.durable`.
 Production composition fails when either store is ephemeral or the pinned API version drifts.
 
+## Mem0 OSS local deployment
+
+The Mem0 Compose template builds the official upstream repository at an exact Git commit and pins
+the pgvector image digest. It does not vendor third-party implementation code into Hypha.
+
+```powershell
+Copy-Item configs/memory/mem0-oss/.env.example configs/memory/mem0-oss/.env
+# Set OPENAI_API_KEY, POSTGRES_PASSWORD, JWT_SECRET, and HYPHA_MEM0_OSS_API_KEY.
+docker compose --env-file configs/memory/mem0-oss/.env `
+  -f configs/memory/mem0-oss/compose.yaml up -d --build
+```
+
+Select `mem0-oss` in `configs/memory-profiles.yaml`, set
+`HYPHA_MEM0_OSS_URL=http://127.0.0.1:8888`, and provide the same API key through
+`HYPHA_MEM0_OSS_API_KEY`. The service binds only to loopback by default, keeps authentication
+enabled, persists PostgreSQL data in a named volume, and opts out of upstream telemetry in the
+provided environment template. Update the pinned upstream commit only through a separately
+reviewed dependency change and rerun live-provider acceptance before release.
+
 Production external profiles require durable `StructuredExternalMemoryMappingStore` and
 `StructuredExternalProviderOperationStore` implementations. In-memory stores are permitted only
 when the runtime profile explicitly selects `test` or `ephemeral` behavior.
@@ -94,4 +123,5 @@ structured source of truth.
 
 Unknown external writes remain quarantined until reconciliation proves their outcome. Deletion is
 complete only when `MemoryDeletionEvidence` verifies all requested IDs or lists the outstanding
-provider work.
+provider work. Vertex Memory Bank create, update, and delete operations use durable long-running
+operation receipts; a pending or unknown provider response is never reported as a completed write.

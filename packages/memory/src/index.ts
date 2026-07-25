@@ -889,6 +889,7 @@ export * from './provider-operational-health';
 export * from './provider-governance';
 export * from './provider-observability';
 export * from './memory-utils';
+export * from './external-provider-url';
 export * from './managed-store';
 export * from './structured-managed-store';
 export * from './structured-memory-persistence';

@@ -245,11 +245,19 @@ function createManagedMemoryBankFetch(): Mem0HttpFetch {
     }
     if (path === '/' + name && method === 'PATCH') {
       fact = typeof body.fact === 'string' ? body.fact : fact;
-      return response(item());
+      return response({
+        name: 'operations/memory-contract-update',
+        done: true,
+        response: item(),
+      });
     }
     if (path === '/' + name && method === 'DELETE') {
       deleted = true;
-      return response({}, 204);
+      return response({
+        name: 'operations/memory-contract-delete',
+        done: true,
+        response: {},
+      });
     }
     return response({ message: 'unexpected route ' + method + ' ' + path }, 404);
   };
@@ -261,7 +269,7 @@ describe('concrete external provider management contract', () => {
       'Mem0 OSS',
       () =>
         new Mem0OssClient({
-          baseUrl: 'http://mem0.test',
+          baseUrl: 'http://127.0.0.1:8888',
           fetch: createMem0DialectFetch('oss'),
         }),
     ],
@@ -278,7 +286,7 @@ describe('concrete external provider management contract', () => {
       'MemoryBank Local',
       () =>
         new MemoryBankLocalClient({
-          baseUrl: 'http://memorybank.test',
+          baseUrl: 'https://memorybank.test',
           fetch: createMem0DialectFetch('memorybank-local'),
         }),
     ],
