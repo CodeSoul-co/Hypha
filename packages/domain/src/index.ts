@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
+import stableStringify from 'fast-json-stable-stringify';
 import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import type {
@@ -38,7 +39,13 @@ import {
   timeoutPolicySpecSchema,
   versionedSpecSchema,
 } from '@hypha/core';
-import type { FSMProcessSpec, FSMStateSpec, FSMTransitionSpec } from '@hypha/fsm';
+import {
+  defaultFSMRecoveryPolicy,
+  type FSMProcessSpec,
+  type FSMStateKind,
+  type FSMStateSpec,
+  type FSMTransitionSpec,
+} from '@hypha/fsm';
 import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@hypha/mcp';
 import { memorySpecSchema, type MemorySpec } from '@hypha/memory';
 import type { SkillRef } from '@hypha/skills';
@@ -218,11 +225,43 @@ export interface DomainCompilationResult {
   domainPack: DomainPackSpec;
   bindings: DomainBindingResolution;
   fsmProcess: FSMProcessSpec;
+  workflowRef: SpecRef;
+  compilerVersion: string;
+  processHash: string;
+  dependencySnapshot: WorkflowDependencySnapshot;
   harnessedSystem: HarnessedAgentSystemSpec;
   agentPatch: DomainAgentPatch;
   sessionInitialization: DomainSessionInitialization;
   audit: DomainCompilationAudit;
 }
+
+export interface WorkflowDependencySnapshot {
+  domainPackRefs: SpecRef[];
+  taskSchemaRefs: SpecRef[];
+  outputContractRefs: SpecRef[];
+  sessionProfileRefs: SpecRef[];
+  agentRefs: SpecRef[];
+  skillRefs: SpecRef[];
+  skillPolicyRefs: SpecRef[];
+  toolRefs: SpecRef[];
+  toolProfileRefs: SpecRef[];
+  mcpProfileRefs: SpecRef[];
+  memoryProfileRefs: SpecRef[];
+  contextProfileRefs: SpecRef[];
+  reasoningProfileRefs: SpecRef[];
+  workspaceProfileRefs: SpecRef[];
+  businessRuleRefs: SpecRef[];
+  policyRefs: SpecRef[];
+  evaluationRefs: SpecRef[];
+  traceRefs: SpecRef[];
+  modelProfileRefs: SpecRef[];
+  replayRefs: SpecRef[];
+  regressionRefs: SpecRef[];
+  deploymentRefs: SpecRef[];
+  dependencyHash: string;
+}
+
+export const DOMAIN_COMPILER_VERSION = '1.0.0';
 
 export type DomainPackOverlayCollection =
   | 'taskSchemas'
@@ -429,7 +468,7 @@ export function compileWorkflowToFSM(
   options: WorkflowCompileOptions = {}
 ): FSMProcessSpec {
   const workflow = selectWorkflow(domainPack, options.workflowId);
-  const states: FSMStateSpec[] = workflow.states.map((state) => ({
+  const workflowStates: FSMStateSpec[] = workflow.states.map((state) => ({
     id: state.id,
     name: state.name,
     description: state.description ?? state.goal,
@@ -442,7 +481,7 @@ export function compileWorkflowToFSM(
     policyRefs: state.policyRefs,
     traceEvents: [`workflow.state.${state.id}`],
   }));
-  const transitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
+  const workflowTransitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
     from: transition.from,
     to: transition.to,
     guard: transition.guard,
@@ -450,17 +489,111 @@ export function compileWorkflowToFSM(
     traceEvent: `workflow.transition.${transition.from}.${transition.to}`,
   }));
 
+  const recoveryEnvelope = compileRecoveryEnvelope(
+    workflowStates,
+    workflowTransitions,
+    workflow.terminalStates
+  );
+
   return {
     id: options.fsmProcessId ?? `${domainPack.id}.${workflow.id}.fsm`,
     version: workflow.version,
     name: `${domainPack.name} ${workflow.name ?? workflow.id} FSM`,
     description: workflow.description,
     initialState: workflow.initialState,
-    states,
-    transitions,
-    terminalStates: workflow.terminalStates,
+    recoveryPolicy: defaultFSMRecoveryPolicy,
+    states: recoveryEnvelope.states,
+    transitions: recoveryEnvelope.transitions,
+    terminalStates: recoveryEnvelope.terminalStates,
     tags: ['compiled-from-domain-pack', domainPack.id],
   };
+}
+
+const DOMAIN_RECOVERY_STATES: ReadonlyArray<{
+  id: string;
+  kind: FSMStateKind;
+}> = [
+  { id: 'Recovering', kind: 'recovering' },
+  { id: 'Compensating', kind: 'compensating' },
+  { id: 'Quarantined', kind: 'quarantined' },
+  { id: 'HumanReview', kind: 'human_review' },
+  { id: 'Failed', kind: 'failed' },
+  { id: 'Cancelled', kind: 'cancelled' },
+];
+
+function compileRecoveryEnvelope(
+  workflowStates: FSMStateSpec[],
+  workflowTransitions: FSMTransitionSpec[],
+  workflowTerminalStates: string[]
+): {
+  states: FSMStateSpec[];
+  transitions: FSMTransitionSpec[];
+  terminalStates: string[];
+} {
+  const recoveryKinds = new Map(DOMAIN_RECOVERY_STATES.map((state) => [state.id, state.kind]));
+  const existingIds = new Set(workflowStates.map((state) => state.id));
+  const states = workflowStates.map((state) => {
+    const recoveryKind = recoveryKinds.get(state.id);
+    return recoveryKind ? { ...state, kind: recoveryKind } : state;
+  });
+  for (const state of DOMAIN_RECOVERY_STATES) {
+    if (existingIds.has(state.id)) continue;
+    states.push({
+      id: state.id,
+      kind: state.kind,
+      description: `Framework recovery state: ${state.id}`,
+      traceEvents: ['fsm.state.entered'],
+    });
+  }
+
+  const terminalStates = mergeStrings(workflowTerminalStates, ['Failed', 'Cancelled']);
+  const recoverableStates = workflowStates
+    .map((state) => state.id)
+    .filter((stateId) => !terminalStates.includes(stateId) && !recoveryKinds.has(stateId));
+  const transitions = [...workflowTransitions];
+  const transitionKeys = new Set(
+    transitions.map((transition) => `${transition.from}->${transition.to}`)
+  );
+  const addTransition = (from: string, to: string): void => {
+    const key = `${from}->${to}`;
+    if (from === to || transitionKeys.has(key)) return;
+    transitionKeys.add(key);
+    transitions.push({
+      from,
+      to,
+      description: `Framework recovery transition: ${from} -> ${to}`,
+      traceEvent: 'fsm.transition.accepted',
+    });
+  };
+
+  for (const stateId of recoverableStates) {
+    addTransition(stateId, 'Recovering');
+    addTransition(stateId, 'Compensating');
+    addTransition(stateId, 'Quarantined');
+    addTransition(stateId, 'Cancelled');
+    addTransition('Recovering', stateId);
+    addTransition('HumanReview', stateId);
+  }
+  for (const [from, to] of [
+    ['Recovering', 'Compensating'],
+    ['Recovering', 'HumanReview'],
+    ['Recovering', 'Quarantined'],
+    ['Recovering', 'Failed'],
+    ['Recovering', 'Cancelled'],
+    ['Compensating', 'Recovering'],
+    ['Compensating', 'HumanReview'],
+    ['Compensating', 'Quarantined'],
+    ['Compensating', 'Failed'],
+    ['Quarantined', 'HumanReview'],
+    ['Quarantined', 'Failed'],
+    ['Quarantined', 'Cancelled'],
+    ['HumanReview', 'Failed'],
+    ['HumanReview', 'Cancelled'],
+  ]) {
+    addTransition(from, to);
+  }
+
+  return { states, transitions, terminalStates };
 }
 
 export class DomainPackRegistry {
@@ -765,6 +898,13 @@ export function compileDomainPackToHarnessedSystem(
     fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
     agentRef: options.agentRef,
   });
+  const workflowRef = toSpecRef(workflow);
+  const traceRef = options.traceRef ?? {
+    id: `${domainPack.id}.trace`,
+    version: domainPack.version,
+  };
+  const regressionRef = options.regressionRef ?? toOptionalSpecRef(domainPack.regressionCases?.[0]);
+  const deploymentRef = options.deploymentRef ?? toOptionalSpecRef(domainPack.deploymentProfile);
   const harnessedSystem: HarnessedAgentSystemSpec = {
     id: options.systemId ?? `${domainPack.id}.${workflow.id}.system`,
     version: options.systemVersion ?? domainPack.version,
@@ -772,10 +912,7 @@ export function compileDomainPackToHarnessedSystem(
     description: domainPack.description,
     agentRef: options.agentRef,
     fsmProcessRef: toSpecRef(fsmProcess),
-    traceRef: options.traceRef ?? {
-      id: `${domainPack.id}.trace`,
-      version: domainPack.version,
-    },
+    traceRef,
     policyRefs: idsToRefs(policyIds, domainPack.policies),
     memoryRefs: memoryProfile ? [toSpecRef(memoryProfile)] : undefined,
     toolRefs: idsToRefs(selectedToolIds, domainPack.tools),
@@ -788,10 +925,46 @@ export function compileDomainPackToHarnessedSystem(
     modelProfileRef: options.modelProfileRef,
     evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles),
     replayRef: options.replayRef,
-    regressionRef: options.regressionRef ?? toOptionalSpecRef(domainPack.regressionCases?.[0]),
-    deploymentRef: options.deploymentRef ?? toOptionalSpecRef(domainPack.deploymentProfile),
+    regressionRef,
+    deploymentRef,
     tags: mergeStrings(domainPack.tags, ['compiled-from-domain-pack', domainPack.id]),
   };
+  const selectedSkillIds = new Set(selectedSkillRefs.map((ref) => ref.id));
+  const selectedSkillPolicies = (domainPack.skillPolicies ?? []).filter((binding) =>
+    selectedSkillIds.has(binding.skillRef.id)
+  );
+  const dependencySnapshot = createWorkflowDependencySnapshot({
+    domainPackRefs: [toSpecRef(domainPack)],
+    taskSchemaRefs: taskSchema ? [toSpecRef(taskSchema)] : [],
+    outputContractRefs: outputContract ? [toSpecRef(outputContract)] : [],
+    sessionProfileRefs: sessionInitialization.sessionProfileRef
+      ? [sessionInitialization.sessionProfileRef]
+      : [],
+    agentRefs: [options.agentRef],
+    skillRefs: selectedSkillRefs,
+    skillPolicyRefs: selectedSkillPolicies.map(toSpecRef),
+    toolRefs: idsToRefs(selectedToolIds, domainPack.tools) ?? [],
+    toolProfileRefs: idsToRefs(selectedToolProfileIds, domainPack.toolProfiles) ?? [],
+    mcpProfileRefs: idsToRefs(mcpProfileIds, domainPack.mcpProfiles) ?? [],
+    memoryProfileRefs: memoryProfile ? [toSpecRef(memoryProfile)] : [],
+    contextProfileRefs: contextProfile ? [toSpecRef(contextProfile)] : [],
+    reasoningProfileRefs: idsToRefs(reasoningProfileIds, domainPack.reasoningProfiles) ?? [],
+    workspaceProfileRefs: [],
+    businessRuleRefs: domainPack.businessRules?.map(toSpecRef) ?? [],
+    policyRefs: idsToRefs(policyIds, domainPack.policies) ?? [],
+    evaluationRefs: idsToRefs(evaluationIds, domainPack.evaluationProfiles) ?? [],
+    traceRefs: [traceRef],
+    modelProfileRefs: options.modelProfileRef ? [options.modelProfileRef] : [],
+    replayRefs: options.replayRef ? [options.replayRef] : [],
+    regressionRefs: regressionRef ? [regressionRef] : [],
+    deploymentRefs: deploymentRef ? [deploymentRef] : [],
+  });
+  const processHash = hashDomainCompilation({
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    workflowRef,
+    fsmProcess,
+    dependencySnapshot,
+  });
   const agentPatch: DomainAgentPatch = {
     promptRefs: selectedPromptRefs,
     skillRefs: selectedSkillRefs,
@@ -857,10 +1030,47 @@ export function compileDomainPackToHarnessedSystem(
       workflowStates: workflowStateBindings,
     },
     fsmProcess,
+    workflowRef,
+    compilerVersion: DOMAIN_COMPILER_VERSION,
+    processHash,
+    dependencySnapshot,
     harnessedSystem,
     agentPatch,
     sessionInitialization,
     audit,
+  };
+}
+
+export function createWorkflowDependencySnapshot(
+  input: Omit<WorkflowDependencySnapshot, 'dependencyHash'>
+): WorkflowDependencySnapshot {
+  const dependencies = {
+    domainPackRefs: cloneRefs(input.domainPackRefs),
+    taskSchemaRefs: cloneRefs(input.taskSchemaRefs),
+    outputContractRefs: cloneRefs(input.outputContractRefs),
+    sessionProfileRefs: cloneRefs(input.sessionProfileRefs),
+    agentRefs: cloneRefs(input.agentRefs),
+    skillRefs: cloneRefs(input.skillRefs),
+    skillPolicyRefs: cloneRefs(input.skillPolicyRefs),
+    toolRefs: cloneRefs(input.toolRefs),
+    toolProfileRefs: cloneRefs(input.toolProfileRefs),
+    mcpProfileRefs: cloneRefs(input.mcpProfileRefs),
+    memoryProfileRefs: cloneRefs(input.memoryProfileRefs),
+    contextProfileRefs: cloneRefs(input.contextProfileRefs),
+    reasoningProfileRefs: cloneRefs(input.reasoningProfileRefs),
+    workspaceProfileRefs: cloneRefs(input.workspaceProfileRefs),
+    businessRuleRefs: cloneRefs(input.businessRuleRefs),
+    policyRefs: cloneRefs(input.policyRefs),
+    evaluationRefs: cloneRefs(input.evaluationRefs),
+    traceRefs: cloneRefs(input.traceRefs),
+    modelProfileRefs: cloneRefs(input.modelProfileRefs),
+    replayRefs: cloneRefs(input.replayRefs),
+    regressionRefs: cloneRefs(input.regressionRefs),
+    deploymentRefs: cloneRefs(input.deploymentRefs),
+  };
+  return {
+    ...dependencies,
+    dependencyHash: hashDomainCompilation(dependencies),
   };
 }
 
@@ -1117,6 +1327,27 @@ function toOptionalSpecRef(spec: VersionedSpec | undefined): SpecRef | undefined
   return spec ? toSpecRef(spec) : undefined;
 }
 
+function cloneRefs(refs: SpecRef[]): SpecRef[] {
+  return refs
+    .map((ref) => ({
+      id: ref.id,
+      ...(ref.version === undefined ? {} : { version: ref.version }),
+      ...(ref.revision === undefined ? {} : { revision: ref.revision }),
+    }))
+    .sort(compareSpecRefs);
+}
+
+function compareSpecRefs(left: SpecRef, right: SpecRef): number {
+  const leftKey = `${left.id}\u0000${left.version ?? ''}\u0000${left.revision ?? ''}`;
+  const rightKey = `${right.id}\u0000${right.version ?? ''}\u0000${right.revision ?? ''}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function hashDomainCompilation(value: unknown): string {
+  const canonicalJson = stableStringify(value);
+  return `sha256:${createHash('sha256').update(canonicalJson).digest('hex')}`;
+}
+
 function compactRecord(input: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(input).filter(([, value]) => value !== undefined)
@@ -1125,18 +1356,6 @@ function compactRecord(input: Record<string, unknown>): Record<string, unknown> 
 
 function stableHash(value: unknown): string {
   return `sha256:${createHash('sha256').update(stableStringify(value)).digest('hex')}`;
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function selectWorkflow(domainPack: DomainPackSpec, workflowId?: string): WorkflowSpec {
