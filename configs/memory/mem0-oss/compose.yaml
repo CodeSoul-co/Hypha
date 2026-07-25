@@ -1,0 +1,77 @@
+name: hypha-mem0-oss
+
+services:
+  mem0:
+    build:
+      # Pin the upstream source rather than copying third-party implementation
+      # code into the Hypha repository.
+      context: https://github.com/mem0ai/mem0.git#b357a5a1b03c299ec8229c268e63cfac0f7c6566
+      dockerfile: server/dev.Dockerfile
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${HYPHA_MEM0_OSS_PORT:-8888}:8000'
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_COLLECTION_NAME: memories
+      APP_DB_NAME: mem0_app
+      ADMIN_API_KEY: ${HYPHA_MEM0_OSS_API_KEY:?set HYPHA_MEM0_OSS_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      AUTH_DISABLED: 'false'
+      MEM0_TELEMETRY: ${MEM0_TELEMETRY:-false}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/auth/setup-status', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+
+  postgres:
+    image: pgvector/pgvector:pg17@sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0
+    restart: unless-stopped
+    shm_size: 128mb
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -q -d postgres -U "$${POSTGRES_USER}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - mem0-postgres:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/10-create-mem0-app.sql:ro
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  mem0-postgres:

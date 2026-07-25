@@ -30,6 +30,7 @@ import { createExternalMemoryId } from './external-memory-identity';
 import {
   createExternalProviderOperation,
   resolveExternalProviderOperationStore,
+  type ExternalProviderOperation,
   type ExternalProviderOperationStore,
 } from './external-provider-operations';
 import {
@@ -39,6 +40,7 @@ import {
 } from './managed-credentials';
 import type { Mem0HttpFetch } from './mem0-rest-client';
 import { beginProviderPage, finishProviderPage } from './provider-pagination';
+import { normalizeExternalProviderBaseUrl } from './external-provider-url';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
 
 export interface MemoryBankManagedClientOptions {
@@ -107,12 +109,13 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         staticCredentialProvider(options.accessToken ?? '', 'oauth_bearer'),
       now: options.now,
     });
-    this.baseUrl = (
-      options.baseUrl ?? `https://${options.location}-aiplatform.googleapis.com/v1`
-    ).replace(/\/$/, '');
-    if (!options.allowInsecureForTests && !this.baseUrl.startsWith('https://')) {
-      throw memoryError('MEMORY_INVALID_INPUT', 'Managed MemoryBank requires TLS.');
-    }
+    this.baseUrl = normalizeExternalProviderBaseUrl(
+      options.baseUrl ?? `https://${options.location}-aiplatform.googleapis.com/v1`,
+      {
+        providerName: 'Managed MemoryBank',
+        allowInsecureForTests: options.allowInsecureForTests,
+      }
+    );
     const runtimeFetch = (globalThis as unknown as { fetch?: Mem0HttpFetch }).fetch;
     const fetcher = options.fetch ?? runtimeFetch;
     if (!fetcher)
@@ -230,12 +233,24 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         return null;
       }
       if (response.done !== true) {
+        const attempts = operation.attempts + 1;
         await this.operationStore.set({
           ...operation,
-          state: 'running',
-          attempts: operation.attempts + 1,
+          state: attempts >= this.maxOperationAttempts ? 'dead_letter' : 'running',
+          attempts,
           updatedAt: settledAt,
         });
+        if (attempts >= this.maxOperationAttempts) {
+          return {
+            operationId,
+            status: 'failed',
+            records: [],
+            events: [operation.externalOperationId],
+            warnings: [
+              'Managed MemoryBank operation reached the reconciliation attempt limit and was dead-lettered.',
+            ],
+          };
+        }
         return {
           operationId,
           status: 'queued',
@@ -246,12 +261,22 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
       if (response.error) {
         throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Managed MemoryBank operation failed.');
       }
-      const records = extractVertexMemories(response.response).map((item) =>
-        this.toRecord(item, operation.scope, {
-          type: 'derived',
-          sourceId: 'vertex-memory-bank:operation',
-        })
-      );
+      const operationKind = readVertexOperationKind(operation.metadata) ?? 'generate';
+      if (operationKind === 'delete') return null;
+      const records =
+        operationKind === 'update'
+          ? [
+              this.toRecord(asObject(response.response), operation.scope, {
+                type: 'human_review',
+                sourceId: operation.operationId,
+              }),
+            ]
+          : extractVertexMemories(response.response).map((item) =>
+              this.toRecord(item, operation.scope, {
+                type: 'derived',
+                sourceId: 'vertex-memory-bank:operation',
+              })
+            );
       await this.remember(records);
       await this.operationStore.set({
         ...operation,
@@ -276,7 +301,18 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     request: MemoryAddRequest,
     externalOperationId: string | undefined,
     kind: 'vertex_lro' | 'unknown_write',
-    state: 'pending' | 'reconcile_required'
+    state: 'pending' | 'reconcile_required',
+    metadata: Record<string, unknown> = { operationKind: 'generate' }
+  ): Promise<void> {
+    return this.persistGenericOperation(request, externalOperationId, kind, state, metadata);
+  }
+
+  private persistGenericOperation(
+    request: MemoryAddRequest | ManagedMemoryUpdateRequest | ManagedMemoryDeleteRequest,
+    externalOperationId: string | undefined,
+    kind: 'vertex_lro' | 'unknown_write',
+    state: 'pending' | 'reconcile_required',
+    metadata: Record<string, unknown>
   ): Promise<void> {
     return this.operationStore.set(
       createExternalProviderOperation({
@@ -286,14 +322,105 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         kind,
         state,
         scope: request.scope,
-        profileRef: request.profileRef,
+        profileRef: 'profileRef' in request ? request.profileRef : this.profileRef,
         principal: {
           principalId: request.principal.principalId,
           userId: request.principal.userId,
         },
         deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
         now: this.now().toISOString(),
+        metadata,
       })
+    );
+  }
+
+  private async reconcileDeleteOperation(
+    request: ManagedMemoryDeleteRequest,
+    operation: ExternalProviderOperation,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult> {
+    const now = this.now().toISOString();
+    const requestedMemoryIds = readStringArray(operation.metadata, 'requestedMemoryIds');
+    if (!sameStringSet(requestedMemoryIds, request.memoryIds ?? [])) {
+      throw memoryError(
+        'MEMORY_INVALID_INPUT',
+        'Managed MemoryBank deletion operation ID was reused with different memory IDs.'
+      );
+    }
+    const confirmed = new Set(readStringArray(operation.metadata, 'deletedMemoryIds'));
+    const pending = readDeleteOperations(operation.metadata);
+    if (operation.cancellationRequestedAt || signal?.aborted) {
+      await this.operationStore.set({ ...operation, state: 'cancelled', updatedAt: now });
+      return pendingDeleteResult(
+        request.operationId,
+        this.providerId,
+        confirmed,
+        pending,
+        'Managed MemoryBank deletion reconciliation was cancelled.'
+      );
+    }
+    if (operation.deadlineAt && operation.deadlineAt <= now) {
+      await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: now });
+      return pendingDeleteResult(
+        request.operationId,
+        this.providerId,
+        confirmed,
+        pending,
+        'Managed MemoryBank deletion exceeded its reconciliation deadline.'
+      );
+    }
+    if (pending.length === 0) {
+      return pendingDeleteResult(
+        request.operationId,
+        this.providerId,
+        confirmed,
+        pending,
+        'Managed MemoryBank deletion has an unknown provider outcome.'
+      );
+    }
+    const remaining: Array<{ memoryId: string; operationName: string }> = [];
+    for (const item of pending) {
+      const response = asObject(await this.request('/' + item.operationName, { signal }));
+      assertVertexOperationSucceeded(response);
+      if (response.done === true) confirmed.add(item.memoryId);
+      else remaining.push(item);
+    }
+    const settledAt = this.now().toISOString();
+    const attempts = operation.attempts + 1;
+    const allRequestedConfirmed =
+      requestedMemoryIds.length > 0 &&
+      requestedMemoryIds.every((memoryId) => confirmed.has(memoryId));
+    await this.operationStore.set({
+      ...operation,
+      state:
+        remaining.length === 0 && allRequestedConfirmed
+          ? 'succeeded'
+          : attempts >= this.maxOperationAttempts
+            ? 'dead_letter'
+            : 'running',
+      attempts,
+      updatedAt: settledAt,
+      metadata: {
+        ...operation.metadata,
+        deletedMemoryIds: [...confirmed].sort(),
+        deleteOperations: remaining,
+      },
+    });
+    if (remaining.length === 0 && allRequestedConfirmed) {
+      return {
+        operationId: request.operationId,
+        status: 'completed',
+        deletedMemoryIds: [...confirmed].sort(),
+      };
+    }
+    return pendingDeleteResult(
+      request.operationId,
+      this.providerId,
+      confirmed,
+      remaining,
+      attempts >= this.maxOperationAttempts
+        ? 'Managed MemoryBank deletion reached the reconciliation attempt limit.'
+        : undefined
     );
   }
   async search(
@@ -379,13 +506,77 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
     request: ManagedMemoryUpdateRequest,
     signal?: AbortSignal
   ): Promise<ManagedMemoryWriteResult> {
+    const existing = await this.operationStore.get(this.providerId, request.operationId);
+    if (
+      existing &&
+      readVertexOperationKind(existing.metadata) === 'update' &&
+      ['pending', 'running', 'reconcile_required'].includes(existing.state)
+    ) {
+      if (readString(asObject(existing.metadata), 'memoryId') !== request.memoryId) {
+        throw memoryError(
+          'MEMORY_INVALID_INPUT',
+          'Managed MemoryBank update operation ID was reused for a different memory.'
+        );
+      }
+      return (
+        (await this.reconcileOperation(request.operationId, signal)) ?? {
+          operationId: request.operationId,
+          status: 'queued',
+          records: [],
+          events: existing.externalOperationId ? [existing.externalOperationId] : undefined,
+          warnings: ['Managed MemoryBank update remains quarantined for reconciliation.'],
+        }
+      );
+    }
     const name = await this.resolveName(request.memoryId, request.scope);
-    const body = await this.request('/' + name + '?updateMask=fact', {
-      method: 'PATCH',
-      signal,
-      body: { fact: request.patch.canonicalText ?? stableStringify(request.patch.content) },
-    });
-    const record = this.toRecord(asObject(body), request.scope, {
+    let body: Record<string, unknown>;
+    try {
+      body = asObject(
+        await this.request('/' + name + '?updateMask=fact', {
+          method: 'PATCH',
+          signal,
+          body: { fact: request.patch.canonicalText ?? stableStringify(request.patch.content) },
+        })
+      );
+    } catch (error) {
+      if (isUnknownWriteOutcome(error)) {
+        await this.persistGenericOperation(
+          request,
+          undefined,
+          'unknown_write',
+          'reconcile_required',
+          { operationKind: 'update', memoryId: request.memoryId }
+        );
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Managed MemoryBank update outcome is unknown and requires reconciliation.',
+          false,
+          { operationId: request.operationId, quarantined: true }
+        );
+      }
+      throw error;
+    }
+    assertVertexOperationSucceeded(body);
+    const operationName = readString(body, 'name');
+    if (body.done !== true) {
+      if (!operationName) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Managed MemoryBank update returned no operation name.'
+        );
+      }
+      await this.persistGenericOperation(request, operationName, 'vertex_lro', 'pending', {
+        operationKind: 'update',
+        memoryId: request.memoryId,
+      });
+      return {
+        operationId: request.operationId,
+        status: 'queued',
+        records: [],
+        events: [operationName],
+      };
+    }
+    const record = this.toRecord(asObject(body.response), request.scope, {
       type: 'human_review',
       sourceId: request.operationId,
     });
@@ -405,15 +596,89 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
         warnings: ['Managed MemoryBank filter deletion requires an explicit purge workflow.'],
       };
     }
-    const deleted: string[] = [];
-    for (const id of request.memoryIds) {
-      await this.request('/' + (await this.resolveName(id, request.scope)), {
-        method: 'DELETE',
-        signal,
-      });
-      deleted.push(id);
+    const existing = await this.operationStore.get(this.providerId, request.operationId);
+    if (
+      existing?.state === 'succeeded' &&
+      readVertexOperationKind(existing.metadata) === 'delete'
+    ) {
+      return {
+        operationId: request.operationId,
+        status: 'completed',
+        deletedMemoryIds: readStringArray(existing.metadata, 'deletedMemoryIds'),
+      };
     }
-    return { operationId: request.operationId, status: 'completed', deletedMemoryIds: deleted };
+    if (
+      existing &&
+      readVertexOperationKind(existing.metadata) === 'delete' &&
+      ['pending', 'running', 'reconcile_required'].includes(existing.state)
+    ) {
+      return this.reconcileDeleteOperation(request, existing, signal);
+    }
+    const deleted: string[] = [];
+    const pending: Array<{ memoryId: string; operationName: string }> = [];
+    const warnings: string[] = [];
+    for (const id of request.memoryIds) {
+      try {
+        const body = asObject(
+          await this.request('/' + (await this.resolveName(id, request.scope)), {
+            method: 'DELETE',
+            signal,
+          })
+        );
+        assertVertexOperationSucceeded(body);
+        if (body.done === true) {
+          deleted.push(id);
+          continue;
+        }
+        const operationName = readString(body, 'name');
+        if (!operationName) {
+          throw memoryError(
+            'MEMORY_PROVIDER_UNAVAILABLE',
+            'Managed MemoryBank delete returned no operation name.'
+          );
+        }
+        pending.push({ memoryId: id, operationName });
+      } catch (error) {
+        warnings.push(normalizeProviderFailure(error));
+      }
+    }
+    if (pending.length > 0) {
+      await this.persistGenericOperation(
+        request,
+        pending[0]?.operationName,
+        'vertex_lro',
+        'pending',
+        {
+          operationKind: 'delete',
+          requestedMemoryIds: request.memoryIds,
+          deletedMemoryIds: deleted,
+          deleteOperations: pending,
+        }
+      );
+    } else if (warnings.length > 0) {
+      await this.persistGenericOperation(
+        request,
+        undefined,
+        'unknown_write',
+        'reconcile_required',
+        {
+          operationKind: 'delete',
+          requestedMemoryIds: request.memoryIds,
+          deletedMemoryIds: deleted,
+          deleteOperations: [],
+          unknownOutcomes: warnings,
+        }
+      );
+    }
+    const incomplete = pending.length > 0 || warnings.length > 0;
+    return {
+      operationId: request.operationId,
+      status: incomplete ? 'partial' : 'completed',
+      deletedMemoryIds: deleted,
+      pendingProviderIds: incomplete ? [this.providerId] : undefined,
+      events: pending.map((item) => item.operationName),
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
   }
 
   async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
@@ -596,6 +861,79 @@ export class MemoryBankManagedClient implements ExternalMemoryClient {
 function sameProfileRef(left: MemoryContractSpecRef, right: MemoryContractSpecRef): boolean {
   return left.id === right.id && left.version === right.version && left.revision === right.revision;
 }
+
+type VertexOperationKind = 'generate' | 'update' | 'delete';
+
+function readVertexOperationKind(metadata: unknown): VertexOperationKind | undefined {
+  const value = readString(asObject(metadata), 'operationKind');
+  return value === 'generate' || value === 'update' || value === 'delete' ? value : undefined;
+}
+
+function readStringArray(metadata: unknown, key: string): string[] {
+  const value = asObject(metadata)[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : [];
+}
+
+function readDeleteOperations(
+  metadata: unknown
+): Array<{ memoryId: string; operationName: string }> {
+  const value = asObject(metadata).deleteOperations;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => asObject(item))
+    .map((item) => ({
+      memoryId: readString(item, 'memoryId') ?? '',
+      operationName: readString(item, 'operationName') ?? '',
+    }))
+    .filter((item) => item.memoryId.length > 0 && item.operationName.length > 0);
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+function assertVertexOperationSucceeded(operation: Record<string, unknown>): void {
+  if (operation.done === true && operation.error) {
+    const error = asObject(operation.error);
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      readString(error, 'message') ?? 'Managed MemoryBank operation failed.',
+      false,
+      { providerOperationFailed: true }
+    );
+  }
+}
+
+function normalizeProviderFailure(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function pendingDeleteResult(
+  operationId: string,
+  providerId: string,
+  confirmed: Set<string>,
+  pending: Array<{ memoryId: string; operationName: string }>,
+  warning?: string
+): ManagedMemoryDeleteResult {
+  return {
+    operationId,
+    status: 'partial',
+    deletedMemoryIds: [...confirmed].sort(),
+    pendingProviderIds: [providerId],
+    events: pending.map((item) => item.operationName),
+    warnings: warning ? [warning] : undefined,
+  };
+}
+
 function toVertexScope(scope: ManagedMemoryScope): Record<string, string> {
   return Object.fromEntries(
     Object.entries({

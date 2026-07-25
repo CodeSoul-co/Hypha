@@ -133,7 +133,7 @@ describe('external provider release gap baseline', () => {
 
   it('treats omitted local capabilities as unsupported', async () => {
     const client = new MemoryBankLocalClient({
-      baseUrl: 'http://memorybank.local',
+      baseUrl: 'https://memorybank.local',
       fetch: async () => response({ search: true }),
     });
 
