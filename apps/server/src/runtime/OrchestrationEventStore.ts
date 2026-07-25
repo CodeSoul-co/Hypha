@@ -199,11 +199,11 @@ export async function migrateCanonicalEventFamilies(input: {
     inheritMigrationScope(event, scopes.get(event.runId))
   );
   const humanWaitMigration = migrateLegacyHumanWaitEvents(scopedEvents);
-  const eligible = humanWaitMigration.events
+  const eligible = orderMigrationEvents(
+    humanWaitMigration.events
     .map((event, index) => ({ event, index }))
-    .filter(({ event }) => isCanonicalRuntimeEvent(event.type) && selectedTypes.has(event.type))
-    .sort(compareMigrationEvents)
-    .map(({ event }) => event);
+      .filter(({ event }) => isCanonicalRuntimeEvent(event.type) && selectedTypes.has(event.type))
+  ).map(({ event }) => event);
   const existing = new Set((await input.canonical.list()).map((event) => eventIdentity(event)));
   const entries: CanonicalEventFamilyMigrationEntry[] = [];
   for (const event of eligible) {
@@ -479,33 +479,218 @@ function inheritMigrationScope(
   };
 }
 
-function compareMigrationEvents(
-  left: { event: FrameworkEvent; index: number },
-  right: { event: FrameworkEvent; index: number }
-): number {
-  const timestamp = left.event.timestamp.localeCompare(right.event.timestamp);
-  if (timestamp !== 0) return timestamp;
-  const priority = migrationPriority(left.event.type) - migrationPriority(right.event.type);
-  return priority || left.index - right.index;
+interface IndexedMigrationEvent {
+  event: FrameworkEvent;
+  index: number;
 }
 
-function migrationPriority(type: FrameworkEvent['type']): number {
-  if (type === 'run.created') return 0;
-  if (type === 'run.started') return 1;
-  if (type === 'fsm.transition.requested') return 2;
-  if (type === 'fsm.transition.accepted') return 3;
-  if (type === 'fsm.state.exited') return 4;
-  if (type === 'fsm.state.entered') return 5;
-  if (
-    type === 'run.waiting_human' ||
-    type === 'run.waiting_signal' ||
-    type === 'run.waiting_timer' ||
-    type === 'run.paused'
-  ) {
-    return 7;
+interface MigrationRunState {
+  runCreated: boolean;
+  runStarted: boolean;
+  currentState?: string;
+  pendingTransition?: { from: string; to: string };
+}
+
+/**
+ * Legacy appenders could complete concurrent writes in a different order while
+ * assigning the same millisecond timestamp. Rebuild only the causal order that
+ * can be proven from Run and FSM fields; ambiguous records retain their source
+ * order and are rejected by the subsequent canonical replay audit.
+ */
+function orderMigrationEvents(events: IndexedMigrationEvent[]): IndexedMigrationEvent[] {
+  const sorted = [...events].sort(
+    (left, right) =>
+      left.event.timestamp.localeCompare(right.event.timestamp) || left.index - right.index
+  );
+  const states = new Map<string, MigrationRunState>();
+  const ordered: IndexedMigrationEvent[] = [];
+  for (let start = 0; start < sorted.length; ) {
+    let end = start + 1;
+    while (end < sorted.length && sorted[end]!.event.timestamp === sorted[start]!.event.timestamp) {
+      end += 1;
+    }
+    const timestampGroup = sorted.slice(start, end);
+    const streams = new Map<string, IndexedMigrationEvent[]>();
+    for (const item of timestampGroup) {
+      const key = migrationStreamIdentity(item.event);
+      const stream = streams.get(key) ?? [];
+      stream.push(item);
+      streams.set(key, stream);
+    }
+    for (const [key, stream] of [...streams.entries()].sort(
+      (left, right) => left[1][0]!.index - right[1][0]!.index
+    )) {
+      const state = states.get(key) ?? { runCreated: false, runStarted: false };
+      ordered.push(...orderMigrationTimestampStream(stream, state));
+      states.set(key, state);
+    }
+    start = end;
   }
-  if (type === 'run.completed' || type === 'run.failed' || type === 'run.cancelled') return 8;
-  return 6;
+  return ordered;
+}
+
+function orderMigrationTimestampStream(
+  events: IndexedMigrationEvent[],
+  state: MigrationRunState
+): IndexedMigrationEvent[] {
+  const remaining = [...events];
+  const ordered: IndexedMigrationEvent[] = [];
+  while (remaining.length > 0) {
+    const preferred = preferredMigrationEventIndex(remaining, state);
+    const ready =
+      preferred >= 0
+        ? preferred
+        : remaining.findIndex(({ event }) => migrationEventReady(event, state, remaining));
+    const index = ready >= 0 ? ready : 0;
+    const [next] = remaining.splice(index, 1);
+    ordered.push(next!);
+    applyMigrationEvent(next!.event, state);
+  }
+  return ordered;
+}
+
+function preferredMigrationEventIndex(
+  events: readonly IndexedMigrationEvent[],
+  state: MigrationRunState
+): number {
+  if (!state.runCreated) {
+    return events.findIndex(({ event }) => event.type === 'run.created');
+  }
+  if (!state.runStarted) {
+    return events.findIndex(({ event }) => event.type === 'run.started');
+  }
+  if (state.pendingTransition && state.currentState) {
+    const exit = events.findIndex(
+      ({ event }) =>
+        event.type === 'fsm.state.exited' &&
+        stateId(event) === state.currentState
+    );
+    if (exit >= 0) return exit;
+    return events.findIndex(
+      ({ event }) =>
+        event.type === 'fsm.state.entered' &&
+        stateId(event) === state.pendingTransition?.to
+    );
+  }
+  if (!state.pendingTransition && state.currentState) {
+    const accepted = events.findIndex(
+      ({ event }) =>
+        event.type === 'fsm.transition.accepted' &&
+        transition(event)?.from === state.currentState
+    );
+    if (accepted >= 0) {
+      const target = transition(events[accepted]!.event);
+      const requested = events.findIndex(({ event }) => {
+        const candidate = transition(event);
+        return (
+          event.type === 'fsm.transition.requested' &&
+          candidate?.from === target?.from &&
+          candidate?.to === target?.to
+        );
+      });
+      return requested >= 0 ? requested : accepted;
+    }
+  }
+  return -1;
+}
+
+function migrationEventReady(
+  event: FrameworkEvent,
+  state: MigrationRunState,
+  remaining: readonly IndexedMigrationEvent[]
+): boolean {
+  switch (event.type) {
+    case 'run.created':
+      return !state.runCreated;
+    case 'run.started':
+      return state.runCreated;
+    case 'fsm.transition.requested':
+      return state.runStarted;
+    case 'fsm.transition.accepted': {
+      const candidate = transition(event);
+      return (
+        state.runStarted &&
+        state.currentState !== undefined &&
+        state.pendingTransition === undefined &&
+        candidate?.from === state.currentState
+      );
+    }
+    case 'fsm.state.exited':
+      return (
+        state.runStarted &&
+        state.currentState !== undefined &&
+        stateId(event) === state.currentState
+      );
+    case 'fsm.state.entered': {
+      if (!state.runStarted) return false;
+      const entered = stateId(event);
+      return (
+        entered !== undefined &&
+        (state.currentState === undefined ||
+          state.pendingTransition?.to === entered ||
+          (state.pendingTransition === undefined && state.currentState === entered))
+      );
+    }
+    case 'run.waiting_human':
+    case 'run.waiting_signal':
+    case 'run.waiting_timer':
+    case 'run.paused':
+    case 'run.completed':
+    case 'run.failed':
+    case 'run.cancelled':
+      return (
+        state.runStarted &&
+        !remaining.some(({ event: candidate }) => isStructuralFsmEvent(candidate.type))
+      );
+    default:
+      return true;
+  }
+}
+
+function applyMigrationEvent(event: FrameworkEvent, state: MigrationRunState): void {
+  if (event.type === 'run.created') state.runCreated = true;
+  if (event.type === 'run.started') state.runStarted = true;
+  if (event.type === 'fsm.transition.accepted') {
+    const candidate = transition(event);
+    if (candidate?.from === state.currentState && !state.pendingTransition) {
+      state.pendingTransition = candidate;
+    }
+  }
+  if (event.type === 'fsm.state.entered') {
+    const entered = stateId(event);
+    if (!entered) return;
+    if (
+      state.currentState === undefined ||
+      state.currentState === entered ||
+      state.pendingTransition?.to === entered
+    ) {
+      state.currentState = entered;
+      state.pendingTransition = undefined;
+    }
+  }
+}
+
+function migrationStreamIdentity(event: FrameworkEvent): string {
+  return [event.tenantId ?? '', eventOwnerId(event) ?? '', event.runId].join('\u0000');
+}
+
+function transition(event: FrameworkEvent): { from: string; to: string } | undefined {
+  const payload = asRecord(event.payload);
+  const from = stringValue(payload.from);
+  const to = stringValue(payload.to);
+  return from && to ? { from, to } : undefined;
+}
+
+function stateId(event: FrameworkEvent): string | undefined {
+  return stringValue(asRecord(event.payload).stateId) ?? event.fsmState;
+}
+
+function isStructuralFsmEvent(type: FrameworkEvent['type']): boolean {
+  return (
+    type === 'fsm.transition.accepted' ||
+    type === 'fsm.state.entered' ||
+    type === 'fsm.state.exited'
+  );
 }
 
 function upcastRecoveryCasePayload(
