@@ -232,7 +232,17 @@ export class LocalProcessSupervisor {
     await delay(gracefulTerminationMs);
     if (this.isPosixScopeAlive(pid)) {
       this.signalPosixScope(pid, 'SIGKILL');
-      await delay(Math.min(100, Math.max(10, gracefulTerminationMs)));
+      return this.waitForPosixScopeExit(pid, Math.min(1_000, Math.max(250, gracefulTerminationMs)));
+    }
+    return true;
+  }
+
+  private async waitForPosixScopeExit(pid: number, maximumWaitMs: number): Promise<boolean> {
+    const pollIntervalMs = 25;
+    const maximumAttempts = Math.max(1, Math.ceil(maximumWaitMs / pollIntervalMs));
+    for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+      if (!this.isPosixScopeAlive(pid)) return true;
+      await delay(pollIntervalMs);
     }
     return !this.isPosixScopeAlive(pid);
   }

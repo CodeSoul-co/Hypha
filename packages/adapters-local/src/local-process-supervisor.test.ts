@@ -52,7 +52,12 @@ describe('LocalProcessSupervisor', () => {
   it('terminates a command that stops producing output after its idle timeout', async () => {
     const result = await new LocalProcessSupervisor().run(
       request(['-e', "process.stdout.write('started'); setInterval(() => {}, 1000)"], {
-        idleTimeoutMs: 250,
+        // Leave enough startup budget for the child to be scheduled when the
+        // full contract suite is running under constrained CI resources. The
+        // assertion still proves the timer is reset by observed output and
+        // eventually terminates the idle process.
+        idleTimeoutMs: 1_000,
+        timeoutMs: 5_000,
       })
     );
 
