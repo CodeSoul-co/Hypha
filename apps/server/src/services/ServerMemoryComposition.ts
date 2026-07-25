@@ -14,11 +14,13 @@ import {
   memoryError,
   type EmbeddingProvider,
   type MemoryApplicationService,
+  type MemoryLifecycleTaskStore,
   type MemoryProviderCostEstimator,
   type MemoryProviderOperationalReport,
   type MemoryProviderOperation,
   type MemoryRuntime,
   type MemoryRuntimeCompositionReceipt,
+  type NativeMemoryRuntimeResources,
   type MemoryServerConsumer,
   type MongoTransactionMode,
   type MongoDatabaseLike,
@@ -131,6 +133,23 @@ export class ServerMemoryComposition {
       version: this.runtime.profile.version,
       revision: this.runtime.profile.revision,
     };
+  }
+
+  lifecycleTaskStore(): MemoryLifecycleTaskStore {
+    if (this.state !== 'ready' || !this.runtime) {
+      throw memoryError(
+        'MEMORY_PROVIDER_UNAVAILABLE',
+        `Server Memory composition is ${this.state}.`
+      );
+    }
+    const resources = this.runtime.resources as Partial<NativeMemoryRuntimeResources> | undefined;
+    if (!resources?.lifecycleStore) {
+      throw memoryError(
+        'MEMORY_PROVIDER_UNAVAILABLE',
+        'The active Memory Provider does not expose a lifecycle task store.'
+      );
+    }
+    return resources.lifecycleStore;
   }
 
   async operationalSnapshot(): Promise<ServerMemoryOperationalSnapshot> {
