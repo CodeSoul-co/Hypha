@@ -175,8 +175,6 @@ profiles:
       deployment: self_hosted
       connectionRef: memory.connection.mem0-oss
       config:
-        baseUrlEnv: HYPHA_MEM0_OSS_URL
-        apiKeyEnv: HYPHA_MEM0_OSS_API_KEY
         protocol: mem0-oss-rest
         mappingStoreRef: memory.mapping.durable
       capabilities: &mem0-oss-capabilities
