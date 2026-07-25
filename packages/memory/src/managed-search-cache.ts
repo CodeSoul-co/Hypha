@@ -123,6 +123,29 @@ export interface CachedMemoryManagementProviderOptions {
   trace?: (event: MemorySearchCacheEvent) => Promise<void> | void;
 }
 
+export type MemorySearchCacheMode = 'enabled' | 'disabled';
+
+export type MemorySearchCacheCompositionOptions =
+  | {
+      mode: 'disabled';
+      provider: MemoryManagementProvider;
+    }
+  | (CachedMemoryManagementProviderOptions & {
+      mode: 'enabled';
+    });
+
+/**
+ * Explicit product-composition boundary for Search Cache mode. Disabled mode
+ * returns the canonical provider without opening or consulting a Cache Store.
+ */
+export function composeMemorySearchCacheProvider(
+  options: MemorySearchCacheCompositionOptions
+): MemoryManagementProvider {
+  if (options.mode === 'disabled') return options.provider;
+  const { mode: _mode, ...cachedOptions } = options;
+  return new CachedMemoryManagementProvider(cachedOptions);
+}
+
 /**
  * Managed-memory read-through cache. Mutations always execute against the
  * provider first and then invalidate the exact scope. Access-stat searches are
