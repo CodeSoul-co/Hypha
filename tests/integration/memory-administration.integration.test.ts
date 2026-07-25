@@ -80,7 +80,7 @@ describe('Memory administration API', () => {
     });
   });
 
-  it('plans and reconciles live legacy/canonical inventories without writing', async () => {
+  it('exposes archived migration evidence without reviving the legacy path', async () => {
     const migrationId = `admin-${randomUUID()}`;
     const plan = await request(app)
       .get(`/api/v1/memory/admin/migrations/${migrationId}/plan`)
@@ -89,13 +89,9 @@ describe('Memory administration API', () => {
     expect(plan.status).toBe(200);
     expect(plan.body.data).toMatchObject({
       migrationId,
-      inventory: {
-        legacyRecords: expect.any(Number),
-        canonicalRecords: expect.any(Number),
-        missingCanonicalKeys: expect.any(Array),
-        unexpectedCanonicalKeys: expect.any(Array),
-        digestMismatchKeys: expect.any(Array),
-      },
+      lifecycle: 'retired',
+      legacyPathAvailable: false,
+      action: 'none',
       checkpoint: null,
     });
 
@@ -104,7 +100,7 @@ describe('Memory administration API', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ userId });
     expect(reconciled.status).toBe(200);
-    expect(reconciled.body.data.inventory).toEqual(plan.body.data.inventory);
+    expect(reconciled.body.data).toEqual(plan.body.data);
   });
 
   it('returns redacted DLQ inspection records', async () => {

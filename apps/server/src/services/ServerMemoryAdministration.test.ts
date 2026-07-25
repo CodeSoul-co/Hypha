@@ -1,27 +1,11 @@
 import {
   InMemoryMemoryLifecycleTaskStore,
   canonicalMemoryRuntimeConfigExample,
-  type MemoryServerMigrationInventoryPlan,
 } from '@hypha/memory';
 import {
   ServerMemoryAdministration,
   validateServerMemoryConfiguration,
 } from './ServerMemoryAdministration';
-
-const inventory: MemoryServerMigrationInventoryPlan = {
-  legacyRecords: 2,
-  canonicalRecords: 1,
-  matchingRecords: 1,
-  missingCanonicalKeys: ['message:2'],
-  unexpectedCanonicalKeys: [],
-  digestMismatchKeys: [],
-  reconciliation: {
-    status: 'failed',
-    comparedRecords: 2,
-    mismatchCount: 1,
-    shadowResult: 'mismatched',
-  },
-};
 
 describe('ServerMemoryAdministration', () => {
   it('strictly validates profiles and reports whether the Server factory is installed', () => {
@@ -59,7 +43,7 @@ describe('ServerMemoryAdministration', () => {
     expect(JSON.stringify(result)).not.toContain('inline-secret');
   });
 
-  it('returns read-only migration reconciliation and operator-safe DLQ inspection', async () => {
+  it('returns retired migration evidence and operator-safe DLQ inspection', async () => {
     const lifecycle = new InMemoryMemoryLifecycleTaskStore();
     await lifecycle.enqueue({
       id: 'task-1',
@@ -81,19 +65,28 @@ describe('ServerMemoryAdministration', () => {
     const administration = new ServerMemoryAdministration({
       operationalSnapshot: async () => ({ receipt: { providerId: 'provider-1' } }) as never,
       readConfiguration: async () => canonicalMemoryRuntimeConfigExample,
-      migrationContext: () => ({
-        rehearsal: { plan: async () => inventory },
-        checkpoints: { load: async () => null },
-      }),
+      migrationCheckpoints: () => ({ load: async () => null }),
       lifecycleTaskStore: () => lifecycle,
     });
 
     await expect(
       administration.migrationPlan({ migrationId: 'migration-1', userId: 'user-1' })
-    ).resolves.toEqual({ migrationId: 'migration-1', inventory, checkpoint: null });
+    ).resolves.toEqual({
+      migrationId: 'migration-1',
+      lifecycle: 'retired',
+      legacyPathAvailable: false,
+      action: 'none',
+      checkpoint: null,
+    });
     await expect(
       administration.reconcile({ migrationId: 'migration-1', userId: 'user-1' })
-    ).resolves.toEqual({ migrationId: 'migration-1', inventory, checkpoint: null });
+    ).resolves.toEqual({
+      migrationId: 'migration-1',
+      lifecycle: 'retired',
+      legacyPathAvailable: false,
+      action: 'none',
+      checkpoint: null,
+    });
     const deadLetters = await administration.inspectDeadLetters({
       workerType: 'provider_reconciliation',
     });

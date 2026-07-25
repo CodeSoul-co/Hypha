@@ -1,18 +1,23 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 
-const serverFiles = [
-  'apps/server/src/app.ts',
-  'apps/server/src/routes/chat.routes.ts',
-  'apps/server/src/routes/memory.routes.ts',
+const retiredFiles = [
+  'apps/server/src/core/memory/TemporaryMemory.ts',
+  'apps/server/src/core/memory/PermanentMemory.ts',
+  'apps/server/src/models/Conversation.ts',
+  'apps/server/src/services/ServerMemoryMigrationRehearsal.ts',
 ];
 
 describe('Server canonical Memory cutover', () => {
-  it('keeps legacy Memory implementations out of the product runtime path', () => {
-    for (const file of serverFiles) {
-      const source = readFileSync(resolve(process.cwd(), file), 'utf8');
+  it('removes legacy implementations and imports from the Server runtime', () => {
+    for (const file of retiredFiles) {
+      expect(existsSync(resolve(process.cwd(), file))).toBe(false);
+    }
+
+    for (const file of productionTypeScriptFiles(resolve(process.cwd(), 'apps/server/src'))) {
+      const source = readFileSync(file, 'utf8');
       expect(source).not.toMatch(
-        /(?:getTemporaryMemory|getPermanentMemory|TemporaryMemory|PermanentMemory)/
+        /(?:getTemporaryMemory|getPermanentMemory|core\/memory\/(?:TemporaryMemory|PermanentMemory)|ServerMemoryMigrationRehearsal)/
       );
     }
   });
@@ -42,3 +47,16 @@ describe('Server canonical Memory cutover', () => {
     );
   });
 });
+
+function productionTypeScriptFiles(directory: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const candidate = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...productionTypeScriptFiles(candidate));
+    } else if (entry.isFile() && candidate.endsWith('.ts') && !candidate.endsWith('.test.ts')) {
+      files.push(candidate);
+    }
+  }
+  return files;
+}

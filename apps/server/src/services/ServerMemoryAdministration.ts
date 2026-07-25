@@ -2,30 +2,21 @@ import fs from 'fs/promises';
 import path from 'path';
 import YAML from 'yaml';
 import {
-  MemoryServerMigrationRehearsal,
   canonicalMemoryRuntimeConfigSchema,
   inspectMemoryLifecycleDeadLetters,
   sha256,
   type MemoryDeadLetterInspection,
   type MemoryLifecycleTaskStore,
   type MemoryLifecycleWorkerType,
-  type MemoryServerMigrationInventoryPlan,
   type MemoryServerMigrationRehearsalCheckpoint,
   type MemoryServerMigrationRehearsalCheckpointStore,
 } from '@hypha/memory';
-import { getPermanentMemory } from '../core/memory/PermanentMemory';
-import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
 import { getMongoConnection } from './database';
 import {
-  getMemoryApplicationService,
   getServerMemoryComposition,
   type ServerMemoryOperationalSnapshot,
 } from './ServerMemoryComposition';
-import {
-  MongoServerMemoryMigrationCheckpointStore,
-  ServerCanonicalMemoryMigrationDataPort,
-  ServerLegacyMemoryMigrationSource,
-} from './ServerMemoryMigrationRehearsal';
+import { MongoServerMemoryMigrationCheckpointStore } from './ServerMemoryMigrationArchive';
 
 export interface ServerMemoryProfileValidation {
   valid: boolean;
@@ -43,7 +34,9 @@ export interface ServerMemoryProfileValidation {
 
 export interface ServerMemoryMigrationAdministrationSnapshot {
   migrationId: string;
-  inventory: MemoryServerMigrationInventoryPlan;
+  lifecycle: 'retired';
+  legacyPathAvailable: false;
+  action: 'none';
   checkpoint: null | {
     phase: string;
     activePath: string;
@@ -53,15 +46,10 @@ export interface ServerMemoryMigrationAdministrationSnapshot {
   };
 }
 
-interface ServerMemoryMigrationContext {
-  rehearsal: Pick<MemoryServerMigrationRehearsal, 'plan'>;
-  checkpoints: Pick<MemoryServerMigrationRehearsalCheckpointStore, 'load'>;
-}
-
 export interface ServerMemoryAdministrationOptions {
   operationalSnapshot(): Promise<ServerMemoryOperationalSnapshot>;
   readConfiguration(): Promise<unknown>;
-  migrationContext(input: { migrationId: string; userId: string }): ServerMemoryMigrationContext;
+  migrationCheckpoints(): Pick<MemoryServerMigrationRehearsalCheckpointStore, 'load'>;
   lifecycleTaskStore(): MemoryLifecycleTaskStore;
 }
 
@@ -106,14 +94,12 @@ export class ServerMemoryAdministration {
     if (!input.migrationId.trim() || !input.userId.trim()) {
       throw new Error('Migration ID and user ID are required.');
     }
-    const context = this.options.migrationContext(input);
-    const [inventory, checkpoint] = await Promise.all([
-      context.rehearsal.plan(),
-      context.checkpoints.load(input.migrationId),
-    ]);
+    const checkpoint = await this.options.migrationCheckpoints().load(input.migrationId);
     return {
       migrationId: input.migrationId,
-      inventory,
+      lifecycle: 'retired',
+      legacyPathAvailable: false,
+      action: 'none',
       checkpoint: checkpoint
         ? {
             phase: checkpoint.state.phase,
@@ -134,7 +120,7 @@ export function getServerMemoryAdministration(): ServerMemoryAdministration {
     productionAdministration = new ServerMemoryAdministration({
       operationalSnapshot: () => getServerMemoryComposition().operationalSnapshot(),
       readConfiguration: readServerMemoryConfiguration,
-      migrationContext: createProductionMigrationContext,
+      migrationCheckpoints: createProductionMigrationCheckpointStore,
       lifecycleTaskStore: () => getServerMemoryComposition().lifecycleTaskStore(),
     });
   }
@@ -179,30 +165,12 @@ async function readServerMemoryConfiguration(): Promise<unknown> {
   return YAML.parse(await fs.readFile(configPath, 'utf8')) as unknown;
 }
 
-function createProductionMigrationContext(input: {
-  migrationId: string;
-  userId: string;
-}): ServerMemoryMigrationContext {
-  const source = new ServerLegacyMemoryMigrationSource(
-    { temporary: getTemporaryMemory(), permanent: getPermanentMemory() },
-    input.userId
-  );
-  const data = new ServerCanonicalMemoryMigrationDataPort({
-    migrationId: input.migrationId,
-    userId: input.userId,
-    source,
-    service: getMemoryApplicationService,
-    profileRef: () => getServerMemoryComposition().profileRef(),
-  });
+function createProductionMigrationCheckpointStore(): MemoryServerMigrationRehearsalCheckpointStore {
   const database = getMongoConnection()?.connection.db;
   if (!database) throw new Error('MongoDB is not initialized for Memory administration.');
-  const checkpoints = new MongoServerMemoryMigrationCheckpointStore(
+  return new MongoServerMemoryMigrationCheckpointStore(
     database.collection('memory_migration_rehearsal_checkpoints') as never
   );
-  return {
-    rehearsal: new MemoryServerMigrationRehearsal(data, checkpoints),
-    checkpoints,
-  };
 }
 
 function isInstalledServerProvider(management: {

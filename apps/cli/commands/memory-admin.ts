@@ -68,10 +68,10 @@ export function registerMemoryAdministration(program: Command): void {
       });
     });
 
-  const migration = memory.command('migration').description('Inspect legacy migration state');
+  const migration = memory.command('migration').description('Inspect retired migration evidence');
   migration
     .command('plan <migrationId>')
-    .description('Build a read-only legacy/canonical migration plan')
+    .description('Inspect the archived migration checkpoint')
     .option('--user-id <id>', 'Inspect a specific user as an administrator')
     .option('--json', 'Print machine-readable JSON')
     .action(async (migrationId: string, options: OutputOptions & { userId?: string }) => {
@@ -84,7 +84,7 @@ export function registerMemoryAdministration(program: Command): void {
 
   memory
     .command('reconcile <migrationId>')
-    .description('Compare live legacy and canonical inventories without writing')
+    .description('Confirm that the legacy path remains retired')
     .option('--user-id <id>', 'Inspect a specific user as an administrator')
     .option('--json', 'Print machine-readable JSON')
     .action(async (migrationId: string, options: OutputOptions & { userId?: string }) => {
@@ -124,16 +124,10 @@ export function registerMemoryAdministration(program: Command): void {
 
 function printMigration(result: any, options: OutputOptions): void {
   print(result, options, () => {
-    const inventory = result.inventory;
     console.log(`${chalk.bold('migration:')} ${result.migrationId}`);
-    console.log(
-      `legacy=${inventory.legacyRecords} canonical=${inventory.canonicalRecords} ` +
-        `matching=${inventory.matchingRecords} mismatches=${inventory.reconciliation.mismatchCount}`
-    );
-    printKeys('missing canonical', inventory.missingCanonicalKeys);
-    printKeys('unexpected canonical', inventory.unexpectedCanonicalKeys);
-    printKeys('digest mismatch', inventory.digestMismatchKeys);
-    console.log(`checkpoint: ${result.checkpoint?.phase ?? 'not started'}`);
+    console.log(`${chalk.bold('lifecycle:')} ${result.lifecycle}`);
+    console.log(`legacy path: ${result.legacyPathAvailable ? 'available' : 'retired'}`);
+    console.log(`checkpoint: ${result.checkpoint?.phase ?? 'not archived'}`);
   });
 }
 
