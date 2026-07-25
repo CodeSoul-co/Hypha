@@ -112,6 +112,11 @@ async function createDurableAcceptanceStores(prefix: string) {
   });
   await connection.asPromise();
   if (!connection.db) throw new Error('MongoDB connection has no database.');
+  const hello = (await connection.db.command({ hello: 1 })) as {
+    setName?: string;
+    msg?: string;
+  };
+  const transactionMode = hello.setName || hello.msg === 'isdbgrid' ? 'preferred' : 'disabled';
   const collectionPrefix = `${prefix.replace(/[^a-z0-9]/giu, '_')}_${Date.now()}_`;
   const client = connection.getClient();
   const database: MongoDatabaseLike = {
@@ -122,7 +127,7 @@ async function createDurableAcceptanceStores(prefix: string) {
   const store = new MongoStructuredStoreProvider({
     database,
     collectionPrefix,
-    transactionMode: 'preferred',
+    transactionMode,
   });
   const mappingStore = new StructuredExternalMemoryMappingStore({ store });
   const operationStore = new StructuredExternalProviderOperationStore({ store });
