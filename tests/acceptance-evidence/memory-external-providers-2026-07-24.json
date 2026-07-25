@@ -64,21 +64,82 @@
     },
     {
       "provider": "mem0-platform-v3",
-      "status": "machine-evidence-missing",
-      "requiredCaseSkipped": null,
+      "status": "passed",
+      "requiredCaseSkipped": false,
       "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
       "testName": "mem0-platform-v3",
-      "userReportedFinalStatus": "passed",
-      "recoveredMachineRun": {
-        "status": "failed",
-        "observedAt": "2026-07-24T03:29:54.514Z",
-        "failure": "Provider createdAt was not a valid RFC 3339 datetime before timestamp normalization.",
-        "subsequentFixCommits": [
-          "6643391f5b10181402c312db650e3ceb4453ebe6",
-          "a5bf83410e4dc73d5b93137b3387df3cb504779f"
-        ]
+      "testExecution": {
+        "targetedCaseCount": 1,
+        "targetedPassed": 1,
+        "targetedSkipped": 0,
+        "suiteSkippedOtherUnconfiguredProviders": 3
       },
-      "releaseDecision": "Do not claim live-validated until the final passing machine report is recovered or rerun."
+      "report": {
+        "status": "passed",
+        "capabilities": {
+          "add": true,
+          "search": true,
+          "get": true,
+          "list": true,
+          "update": true,
+          "delete": true,
+          "deleteByFilter": true,
+          "history": true,
+          "summarize": false,
+          "consolidate": false,
+          "decay": false,
+          "reinforce": false,
+          "conflictDetection": true,
+          "hybridSearch": true,
+          "graphRelations": false,
+          "asyncWrite": true,
+          "batchOperations": false
+        },
+        "memoryId": "memory:external:sha256:4a2841c493260a77b39d11a3a",
+        "addStatus": "queued",
+        "searchCount": 2,
+        "listCount": 2,
+        "updateStatus": "committed",
+        "historyCount": 2,
+        "deleteStatus": "completed",
+        "healthStatus": "healthy",
+        "paginationPageCount": 2,
+        "scopeIsolationVerified": true,
+        "restartVerified": true,
+        "failureProbeCount": 1,
+        "evidence": {
+          "commitSha": "3bd0bc0f7ef46c44b0c56b51135443680a9779ea",
+          "providerId": "memory.provider.mem0.platform.v3",
+          "providerVersion": "mem0-platform-v3",
+          "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
+          "capabilitySnapshot": {
+            "add": true,
+            "search": true,
+            "get": true,
+            "list": true,
+            "update": true,
+            "delete": true,
+            "deleteByFilter": true,
+            "history": true,
+            "summarize": false,
+            "consolidate": false,
+            "decay": false,
+            "reinforce": false,
+            "conflictDetection": true,
+            "hybridSearch": true,
+            "graphRelations": false,
+            "asyncWrite": true,
+            "batchOperations": false
+          },
+          "environmentHash": "sha256:21b9a6a17a9372dfff77d55de988799d4ff6da28775190acc857e8506623fdbd",
+          "startedAt": "2026-07-25T09:34:55.688Z",
+          "finishedAt": "2026-07-25T09:35:35.147Z"
+        }
+      },
+      "limitations": [
+        "The durable acceptance store used standalone MongoDB without transaction or HA claims.",
+        "Three unrelated unconfigured Provider cases remained skipped; the required mem0-platform-v3 case ran and passed without skipping."
+      ]
     },
     {
       "provider": "vertex-memory-bank",
