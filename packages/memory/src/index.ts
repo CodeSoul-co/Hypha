@@ -931,3 +931,4 @@ export * from './managed-search-cache';
 export * from './context-cache-validity';
 
 export * from './hybrid';
+export * from './memory-server-migration-rehearsal';
