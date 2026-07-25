@@ -84,6 +84,26 @@ const agent = applyDomainAgentPatch(baseAgent, compiled.agentPatch);
 includes task, output, workflow, skill, tool, MCP, memory, context, business
 rule, policy, evaluation, regression, and deployment bindings.
 
+`researchEvidenceDomainPackExample` is an importable product-facing example
+for a bounded research workflow:
+
+```ts
+import {
+  compileDomainPackToHarnessedSystem,
+  researchEvidenceDomainPackExample,
+} from '@hypha/domain';
+
+const compiled = compileDomainPackToHarnessedSystem(researchEvidenceDomainPackExample, {
+  agentRef: { id: 'agent.research', version: '1.0.0' },
+});
+```
+
+The example keeps evidence collection read-only, requires provenance-bearing
+citations, reviews the exact draft before publication, and declares the final
+publish action as an idempotent external side effect that requires human
+approval and a provider receipt. It is a Domain Pack example, not
+business-specific behavior embedded in framework core.
+
 ## Field Contracts
 
 | Field                            | Required | Purpose                                                                              |
