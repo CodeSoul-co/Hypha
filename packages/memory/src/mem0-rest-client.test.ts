@@ -220,6 +220,57 @@ describe('Mem0 REST client', () => {
     await expect(mappingStore.list('memory.provider.mem0.rest')).resolves.toHaveLength(3);
   });
 
+  it('verifies an empty Mem0 update response by reading the updated record back', async () => {
+    const mappingStore = new InMemoryExternalMemoryMappingStore();
+    const memoryId = createExternalMemoryId('memory.provider.mem0.rest', 'mem0:update');
+    await mappingStore.set({
+      memoryId,
+      providerId: 'memory.provider.mem0.rest',
+      externalId: 'mem0:update',
+      binding: {
+        scopeHash: hashMemoryScope(scope),
+        recordRevision: 1,
+        provenance: {
+          createdBy: 'mem0-test',
+          providerId: 'memory.provider.mem0.rest',
+          createdAt: '2026-07-17T00:00:00.000Z',
+        },
+      },
+      lastSyncedAt: '2026-07-17T00:00:00.000Z',
+      syncState: 'synced',
+    });
+    const client = new Mem0OssClient({
+      baseUrl: 'http://mem0.local',
+      mappingStore,
+      fetch: async (_url, init) =>
+        init?.method === 'PUT'
+          ? jsonResponse({})
+          : jsonResponse({
+              id: 'mem0:update',
+              memory: 'User prefers green.',
+              metadata: {
+                _hypha_scope_hash: hashMemoryScope(scope),
+                _hypha_revision: 2,
+              },
+              updated_at: '2026-07-18T00:00:00.000Z',
+            }),
+    });
+
+    await expect(
+      client.update({
+        operationId: 'operation:mem0:update',
+        principal,
+        scope,
+        memoryId,
+        expectedRevision: 1,
+        patch: { canonicalText: 'User prefers green.' },
+        reason: 'test',
+      })
+    ).resolves.toMatchObject({
+      status: 'committed',
+      records: [{ canonicalText: 'User prefers green.' }],
+    });
+  });
   it('normalizes authorization and transient provider failures without leaking credentials', async () => {
     const memoryId = createExternalMemoryId('memory.provider.mem0.rest', 'mem0:1');
     const forbiddenMappings = new InMemoryExternalMemoryMappingStore();
@@ -300,18 +351,13 @@ describe('Mem0 REST client', () => {
     const paging = new Mem0OssClient({
       baseUrl: 'http://mem0.local',
       fetch: async (url) => {
-        const cursor = new URL(url).searchParams.get('cursor');
-        return cursor
-          ? jsonResponse({
-              memories: [{ id: '3', memory: 'three', metadata }],
-            })
-          : jsonResponse({
-              memories: [
-                { id: '1', memory: 'one', metadata },
-                { id: '2', memory: 'two', metadata },
-              ],
-              next_cursor: 'provider-page-2',
-            });
+        const topK = Number(new URL(url).searchParams.get('top_k'));
+        const memories = [
+          { id: '1', memory: 'one', metadata },
+          { id: '2', memory: 'two', metadata },
+          { id: '3', memory: 'three', metadata },
+        ];
+        return jsonResponse({ memories: memories.slice(0, topK) });
       },
     });
     const first = await paging.list({
@@ -346,6 +392,27 @@ describe('Mem0 REST client', () => {
     await expect(invalid.list({ operationId: 'bad-json', principal, scope })).rejects.toMatchObject(
       { code: 'MEMORY_PROVIDER_UNAVAILABLE', details: { schemaDrift: true } }
     );
+  });
+  it('normalizes a pre-aborted request without calling Mem0', async () => {
+    let called = false;
+    const client = new Mem0OssClient({
+      baseUrl: 'http://mem0.local',
+      fetch: async () => {
+        called = true;
+        return jsonResponse({ memories: [] });
+      },
+    });
+    const controller = new AbortController();
+    controller.abort(new Error('deadline exceeded'));
+
+    await expect(
+      client.search({ ...addRequest('cancelled'), query: 'blue' }, controller.signal)
+    ).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      retryable: false,
+      details: { cancelled: true },
+    });
+    expect(called).toBe(false);
   });
   it('cancels in-flight requests when closed', async () => {
     let aborted = false;

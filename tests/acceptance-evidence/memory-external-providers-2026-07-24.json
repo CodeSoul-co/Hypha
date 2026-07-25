@@ -1,10 +1,9 @@
 {
   "schemaVersion": "1.0.0",
   "evidenceType": "memory.external-provider.live-acceptance",
-  "recordedAt": "2026-07-25T07:05:00.000Z",
+  "recordedAt": "2026-07-25T10:40:36.001Z",
   "source": {
-    "kind": "recovered-codex-rollout-output",
-    "rolloutId": "019f8ced-ca0e-74a0-af3d-c06174bf49be",
+    "kind": "curated-live-acceptance-output",
     "containsCredentials": false
   },
   "providers": [
@@ -14,6 +13,12 @@
       "requiredCaseSkipped": false,
       "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
       "testName": "mem0-oss",
+      "testExecution": {
+        "targetedCaseCount": 1,
+        "targetedPassed": 1,
+        "targetedSkipped": 0,
+        "suiteSkippedOtherUnconfiguredProviders": 3
+      },
       "report": {
         "status": "passed",
         "capabilities": {
@@ -35,31 +40,50 @@
           "asyncWrite": false,
           "batchOperations": false
         },
+        "memoryId": "memory:external:sha256:b7387858af8ecf588ae27b251",
         "addStatus": "committed",
-        "searchCount": 1,
-        "listCount": 1,
-        "updateStatus": "partial",
+        "searchCount": 2,
+        "listCount": 2,
+        "updateStatus": "committed",
         "historyCount": 0,
         "deleteStatus": "completed",
         "healthStatus": "healthy",
-        "paginationPageCount": 1,
+        "paginationPageCount": 2,
         "scopeIsolationVerified": true,
-        "restartVerified": false,
-        "failureProbeCount": 0,
+        "restartVerified": true,
+        "failureProbeCount": 2,
         "evidence": {
-          "commitSha": "a5bf83410e4dc73d5b93137b3387df3cb504779f",
+          "commitSha": "c4bca95fee18896642ec44dcb3b97d51026647c1",
           "providerId": "memory.provider.mem0.rest",
           "providerVersion": "d6d89c987bddf580870db14c69db974edfc5263c",
           "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
+          "capabilitySnapshot": {
+            "add": true,
+            "search": true,
+            "get": true,
+            "list": true,
+            "update": true,
+            "delete": true,
+            "deleteByFilter": true,
+            "history": true,
+            "summarize": false,
+            "consolidate": false,
+            "decay": false,
+            "reinforce": false,
+            "conflictDetection": true,
+            "hybridSearch": false,
+            "graphRelations": false,
+            "asyncWrite": false,
+            "batchOperations": false
+          },
           "environmentHash": "sha256:21b9a6a17a9372dfff77d55de988799d4ff6da28775190acc857e8506623fdbd",
-          "startedAt": "2026-07-24T04:39:05.324Z",
-          "finishedAt": "2026-07-24T04:39:10.756Z"
+          "startedAt": "2026-07-25T10:40:28.263Z",
+          "finishedAt": "2026-07-25T10:40:36.001Z"
         }
       },
       "limitations": [
-        "The recovered run did not verify restart recovery.",
-        "The recovered run did not execute failure probes.",
-        "The update operation completed with the Provider-neutral partial status."
+        "The durable acceptance store used standalone MongoDB without transaction or HA claims.",
+        "Three unrelated unconfigured Provider cases remained skipped; the required mem0-oss case ran and passed without skipping."
       ]
     },
     {

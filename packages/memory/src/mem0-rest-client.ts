@@ -215,8 +215,18 @@ export class Mem0OssClient implements ExternalMemoryClient {
     for (const [key, value] of Object.entries(toMem0Scope(request.scope))) {
       if (value) query.set(key, value);
     }
-    if (request.pagination?.limit) query.set('page_size', String(request.pagination.limit));
-    if (page.providerCursor) query.set('cursor', page.providerCursor);
+    const limit = request.pagination?.limit;
+    const offset = page.providerCursor ? Number(page.providerCursor) : 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw memoryError('MEMORY_INVALID_INPUT', 'Mem0 pagination offset is malformed.');
+    }
+    if (limit) {
+      const topK = offset + limit + 1;
+      if (topK > 1_000) {
+        throw memoryError('MEMORY_INVALID_INPUT', 'Mem0 pagination exceeds the top_k limit.');
+      }
+      query.set('top_k', String(topK));
+    }
     const body = await this.request('/memories' + (query.size > 0 ? '?' + query.toString() : ''), {
       signal,
     });
@@ -227,15 +237,18 @@ export class Mem0OssClient implements ExternalMemoryClient {
     });
     await this.rememberMappings(records);
     const filtered = records.filter((record) => matchesFilter(record, request.filter));
+    const pageRecords = limit ? filtered.slice(offset, offset + limit) : filtered;
+    const nextOffset =
+      limit && filtered.length > offset + limit ? String(offset + limit) : undefined;
     const pagination = finishProviderPage(
       page,
       this.providerId,
       request.scope,
-      filtered,
-      readProviderCursor(body),
+      pageRecords,
+      nextOffset,
       this.now().getTime()
     );
-    return { records: filtered, ...pagination };
+    return { records: pageRecords, ...pagination };
   }
   async update(
     request: ManagedMemoryUpdateRequest,
@@ -265,12 +278,28 @@ export class Mem0OssClient implements ExternalMemoryClient {
       revision,
       requireScopeMetadata: false,
     });
+    if (records.length === 0) {
+      const verified = await this.get(
+        {
+          operationId: request.operationId + ':verify',
+          principal: request.principal,
+          scope: request.scope,
+          memoryId: request.memoryId,
+        },
+        signal
+      );
+      const expectedText = request.patch.canonicalText ?? toText(request.patch.content);
+      if (verified && (!expectedText || verified.canonicalText === expectedText)) {
+        records.push(verified);
+      }
+    }
     await this.rememberMappings(records);
     return {
       operationId: request.operationId,
       status: records.length > 0 ? 'committed' : 'partial',
       records,
-      warnings: records.length === 0 ? ['Mem0 returned no updated record.'] : undefined,
+      warnings:
+        records.length === 0 ? ['Mem0 update could not be verified by read-back.'] : undefined,
     };
   }
 
@@ -395,6 +424,11 @@ export class Mem0OssClient implements ExternalMemoryClient {
     if (this.closed) {
       throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Mem0 client is closed.');
     }
+    if (options.signal?.aborted) {
+      throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Mem0 request was cancelled.', false, {
+        cancelled: true,
+      });
+    }
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(options.signal?.reason);
     options.signal?.addEventListener('abort', onAbort, { once: true });
@@ -440,6 +474,13 @@ export class Mem0OssClient implements ExternalMemoryClient {
           schemaDrift: true,
         });
       }
+    } catch (error) {
+      if (controller.signal.aborted && !this.closed) {
+        throw memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Mem0 request was cancelled.', false, {
+          cancelled: true,
+        });
+      }
+      throw error;
     } finally {
       options.signal?.removeEventListener('abort', onAbort);
       this.inFlight.delete(controller);
@@ -609,21 +650,6 @@ function extractItems(body: unknown): Array<Record<string, unknown>> {
   return Object.keys(object).length > 0 ? [object] : [];
 }
 
-function readProviderCursor(body: unknown): string | undefined {
-  const value = asObject(body);
-  for (const key of ['next_cursor', 'nextCursor', 'cursor', 'next_page_token']) {
-    const cursor = readString(value, key);
-    if (cursor) return cursor;
-  }
-  const next = readString(value, 'next');
-  if (!next) return undefined;
-  try {
-    const url = new URL(next);
-    return url.searchParams.get('cursor') ?? url.searchParams.get('page') ?? undefined;
-  } catch {
-    return next;
-  }
-}
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
