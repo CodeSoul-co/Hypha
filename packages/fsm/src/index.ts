@@ -18,6 +18,20 @@ import {
   timeoutPolicySpecSchema,
   versionedSpecSchema,
 } from '@hypha/core';
+import {
+  FSM_ANOMALY_CATEGORIES,
+  defaultFSMRecoveryPolicy,
+  fsmRecoveryPolicySpecSchema,
+  fsmRecoverySnapshotSchema,
+  planFSMRecovery,
+  registerFSMRecoverySuccess,
+  type FSMAnomaly,
+  type FSMRecoveryDecision,
+  type FSMRecoveryPolicySpec,
+  type FSMRecoverySnapshot,
+} from './recovery';
+
+export * from './recovery';
 
 export type FsmTerminalStatus = 'completed' | 'failed' | 'cancelled';
 
@@ -32,6 +46,9 @@ export type FSMStateKind =
   | 'observation_recorded'
   | 'verifying'
   | 'memory_sync'
+  | 'recovering'
+  | 'compensating'
+  | 'quarantined'
   | 'human_review'
   | 'completed'
   | 'failed'
@@ -63,6 +80,7 @@ export interface FSMProcessSpec extends VersionedSpec, SpecMetadata {
   states: FSMStateSpec[];
   transitions: FSMTransitionSpec[];
   terminalStates: string[];
+  recoveryPolicy?: FSMRecoveryPolicySpec;
 }
 
 export interface FSMSnapshot {
@@ -72,6 +90,7 @@ export interface FSMSnapshot {
   statePath: string[];
   status: 'running' | FsmTerminalStatus;
   updatedAt: string;
+  recovery?: FSMRecoverySnapshot;
   metadata?: Record<string, unknown>;
 }
 
@@ -119,17 +138,22 @@ export interface FSMStateEnteredRecord {
   metadata?: Record<string, unknown>;
 }
 
+export interface FSMRecoveryDecisionRecord {
+  processId: string;
+  runId: string;
+  decision: FSMRecoveryDecision;
+  snapshot: FSMSnapshot;
+}
+
 export interface FSMRuntimeOptions {
   now?: () => string;
   policy?: PolicyEngine;
   onStateEntered?: (record: FSMStateEnteredRecord) => Promise<void> | void;
   onTransition?: (record: StateTransition) => Promise<void> | void;
+  onRecoveryDecision?: (record: FSMRecoveryDecisionRecord) => Promise<void> | void;
 }
 
-export type FSMGuardEvaluator = (
-  guard: string,
-  context: FSMGuardContext
-) => boolean;
+export type FSMGuardEvaluator = (guard: string, context: FSMGuardContext) => boolean;
 
 export interface FSMTimeoutEvaluation {
   timedOut: boolean;
@@ -141,6 +165,13 @@ export interface FSMTimeoutEvaluation {
 
 export function validateFSMProcessSpec(spec: FSMProcessSpec): void {
   const stateIds = new Set(spec.states.map((state) => state.id));
+  if (stateIds.size !== spec.states.length) {
+    throw new FrameworkError({
+      code: 'FSM_DUPLICATE_STATE',
+      message: 'FSM state ids must be unique.',
+      context: { processId: spec.id },
+    });
+  }
   if (!stateIds.has(spec.initialState)) {
     throw new FrameworkError({
       code: 'FSM_INVALID_INITIAL_STATE',
@@ -169,6 +200,32 @@ export function validateFSMProcessSpec(spec: FSMProcessSpec): void {
     }
   }
 
+  const transitionKeys = new Set(
+    spec.transitions.map(
+      (transition) => `${transition.from}\u0000${transition.to}\u0000${transition.guard ?? ''}`
+    )
+  );
+  if (transitionKeys.size !== spec.transitions.length) {
+    throw new FrameworkError({
+      code: 'FSM_DUPLICATE_TRANSITION',
+      message: 'FSM transitions with the same endpoints and guard must be unique.',
+      context: { processId: spec.id },
+    });
+  }
+
+  if (spec.recoveryPolicy) {
+    const policy = fsmRecoveryPolicySpecSchema.parse(spec.recoveryPolicy);
+    for (const [role, stateId] of Object.entries(policy.stateTargets)) {
+      if (!stateIds.has(stateId)) {
+        throw new FrameworkError({
+          code: 'FSM_INVALID_RECOVERY_STATE',
+          message: `Recovery state not found: ${stateId}`,
+          context: { processId: spec.id, role, stateId },
+        });
+      }
+    }
+  }
+
   const terminalSet = new Set(spec.terminalStates);
   for (const state of spec.states) {
     if (terminalSet.has(state.id) && state.retryPolicy) {
@@ -181,10 +238,7 @@ export function validateFSMProcessSpec(spec: FSMProcessSpec): void {
   }
 }
 
-export function getAllowedTransitions(
-  spec: FSMProcessSpec,
-  stateId: string
-): FSMTransitionSpec[] {
+export function getAllowedTransitions(spec: FSMProcessSpec, stateId: string): FSMTransitionSpec[] {
   return spec.transitions.filter((transition) => transition.from === stateId);
 }
 
@@ -194,12 +248,15 @@ export function createInitialSnapshot(
   now = new Date().toISOString()
 ): FSMSnapshot {
   validateFSMProcessSpec(spec);
+  assertValidFSMTimestamp(now, 'initial snapshot');
   return {
     processId: spec.id,
     runId,
     currentState: spec.initialState,
     statePath: [spec.initialState],
-    status: spec.terminalStates.includes(spec.initialState) ? 'completed' : 'running',
+    status: spec.terminalStates.includes(spec.initialState)
+      ? inferTerminalStatus(spec, spec.initialState)
+      : 'running',
     updatedAt: now,
   };
 }
@@ -218,12 +275,26 @@ export const REACT_FSM_STATE_PATH = [
   'Completed',
 ] as const;
 
+const REACT_RECOVERABLE_STATES = [
+  'Idle',
+  'RunInitialized',
+  'ContextBuilt',
+  'Reasoning',
+  'ActionSelected',
+  'PolicyChecked',
+  'Acting',
+  'ObservationRecorded',
+  'Verifying',
+  'MemorySync',
+] as const;
+
 export const defaultReActFSMProcessSpec: FSMProcessSpec = {
   id: 'fsm.react.runtime.default',
   version: '0.0.0',
   name: 'Default ReAct Runtime FSM',
   description: 'Default ReAct + FSM runtime path for a minimal governed agent run.',
   initialState: 'Idle',
+  recoveryPolicy: defaultFSMRecoveryPolicy,
   states: [
     { id: 'Idle', kind: 'idle', traceEvents: ['fsm.state.entered'] },
     { id: 'RunInitialized', kind: 'run_initialized', traceEvents: ['fsm.state.entered'] },
@@ -235,6 +306,9 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { id: 'ObservationRecorded', kind: 'observation_recorded', traceEvents: ['fsm.state.entered'] },
     { id: 'Verifying', kind: 'verifying', traceEvents: ['fsm.state.entered'] },
     { id: 'MemorySync', kind: 'memory_sync', traceEvents: ['fsm.state.entered'] },
+    { id: 'Recovering', kind: 'recovering', traceEvents: ['fsm.state.entered'] },
+    { id: 'Compensating', kind: 'compensating', traceEvents: ['fsm.state.entered'] },
+    { id: 'Quarantined', kind: 'quarantined', traceEvents: ['fsm.state.entered'] },
     { id: 'HumanReview', kind: 'human_review', traceEvents: ['fsm.state.entered'] },
     { id: 'Completed', kind: 'completed', traceEvents: ['fsm.state.entered'] },
     { id: 'Failed', kind: 'failed', traceEvents: ['fsm.state.entered'] },
@@ -267,6 +341,28 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { from: 'HumanReview', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
     { from: 'HumanReview', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
     { from: 'HumanReview', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    ...REACT_RECOVERABLE_STATES.flatMap((from) => [
+      { from, to: 'Recovering', traceEvent: 'fsm.transition.accepted' },
+      { from, to: 'Compensating', traceEvent: 'fsm.transition.accepted' },
+      { from, to: 'Quarantined', traceEvent: 'fsm.transition.accepted' },
+    ]),
+    ...REACT_RECOVERABLE_STATES.map((to) => ({
+      from: 'Recovering',
+      to,
+      traceEvent: 'fsm.transition.accepted',
+    })),
+    { from: 'Recovering', to: 'Compensating', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Recovering', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Recovering', to: 'Quarantined', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Recovering', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Recovering', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Compensating', to: 'Recovering', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Compensating', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Compensating', to: 'Quarantined', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Compensating', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Quarantined', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Quarantined', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Quarantined', to: 'Cancelled', traceEvent: 'fsm.transition.accepted' },
     { from: 'Idle', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'RunInitialized', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
     { from: 'ContextBuilt', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
@@ -302,6 +398,8 @@ export class FSMRuntime {
     private readonly options: FSMRuntimeOptions = {},
     snapshot?: FSMSnapshot
   ) {
+    validateFSMProcessSpec(spec);
+    if (snapshot) validateFSMSnapshot(spec, snapshot, runId);
     this.snapshot = snapshot ?? createInitialSnapshot(spec, runId, this.now());
   }
 
@@ -377,6 +475,37 @@ export class FSMRuntime {
     });
   }
 
+  async decideRecovery(
+    anomaly: FSMAnomaly,
+    options: { stateId?: string; now?: string } = {}
+  ): Promise<FSMRecoveryDecision> {
+    const now = options.now ?? this.now();
+    const plan = planFSMRecovery({
+      anomaly,
+      stateId: options.stateId ?? this.snapshot.currentState,
+      policy: this.spec.recoveryPolicy ?? defaultFSMRecoveryPolicy,
+      snapshot: this.snapshot.recovery,
+      now,
+    });
+    this.snapshot = { ...this.snapshot, recovery: plan.snapshot };
+    await this.options.onRecoveryDecision?.({
+      processId: this.spec.id,
+      runId: this.snapshot.runId,
+      decision: plan.decision,
+      snapshot: this.snapshot,
+    });
+    return plan.decision;
+  }
+
+  registerRecoverySuccess(circuitKey: string, now = this.now()): FSMSnapshot {
+    if (!this.snapshot.recovery) return this.snapshot;
+    this.snapshot = {
+      ...this.snapshot,
+      recovery: registerFSMRecoverySuccess(this.snapshot.recovery, circuitKey, now),
+    };
+    return this.snapshot;
+  }
+
   private async emitStateEntered(input: {
     stateId: string;
     fromState?: string;
@@ -406,7 +535,9 @@ export function applyTransition(
   nowOrOptions: string | FSMTransitionOptions = new Date().toISOString()
 ): FSMSnapshot {
   validateFSMProcessSpec(spec);
+  validateFSMSnapshot(spec, snapshot, snapshot.runId);
   const options = normalizeTransitionOptions(nowOrOptions);
+  assertValidFSMTimestamp(options.now, 'transition');
   const transition = spec.transitions.find(
     (candidate) => candidate.from === snapshot.currentState && candidate.to === to
   );
@@ -420,7 +551,7 @@ export function applyTransition(
   assertGuardAllows(transition, options.guardContext, options.guardEvaluator);
 
   const status: FSMSnapshot['status'] = spec.terminalStates.includes(to)
-    ? inferTerminalStatus(to)
+    ? inferTerminalStatus(spec, to)
     : 'running';
   return {
     ...snapshot,
@@ -474,7 +605,9 @@ export async function applyTransitionWithRuntimePolicy(
     if (decision.requiresHumanReview) {
       throw new FrameworkError({
         code: 'FSM_HUMAN_REVIEW_REQUIRED',
-        message: decision.reason ?? `FSM transition requires human review: ${snapshot.currentState} -> ${to}`,
+        message:
+          decision.reason ??
+          `FSM transition requires human review: ${snapshot.currentState} -> ${to}`,
         context: { processId: spec.id, runId: snapshot.runId, decision },
       });
     }
@@ -489,6 +622,8 @@ export function evaluateStateTimeout(
   now = new Date().toISOString()
 ): FSMTimeoutEvaluation | null {
   validateFSMProcessSpec(spec);
+  validateFSMSnapshot(spec, snapshot, snapshot.runId);
+  assertValidFSMTimestamp(now, 'timeout evaluation');
   const state = spec.states.find((candidate) => candidate.id === snapshot.currentState);
   const timeoutMs = state?.timeoutPolicy?.timeoutMs;
   if (!state || !timeoutMs) return null;
@@ -513,12 +648,16 @@ export function canRetryState(
   return attemptedCount < state.retryPolicy.maxAttempts;
 }
 
-export function evaluateGuardExpression(
-  guard: string,
-  context: FSMGuardContext = {}
-): boolean {
+export function evaluateGuardExpression(guard: string, context: FSMGuardContext = {}): boolean {
   const expression = guard.trim();
-  if (!expression || expression === 'true' || expression === 'always' || expression === 'default') return true;
+  if (expression.length > 1_024) {
+    throw new FrameworkError({
+      code: 'FSM_GUARD_TOO_LONG',
+      message: 'FSM guard expressions cannot exceed 1024 characters.',
+    });
+  }
+  if (!expression || expression === 'true' || expression === 'always' || expression === 'default')
+    return true;
   if (expression === 'false' || expression === 'never') return false;
   if (expression.startsWith('else:')) {
     return !evaluateGuardExpression(expression.slice('else:'.length), context);
@@ -544,7 +683,14 @@ export function evaluateGuardExpression(
   if (matches) {
     const actual = readGuardPath(matches[1].trim(), context);
     const pattern = String(parseGuardLiteral(matches[2]));
-    return new RegExp(pattern).test(String(actual ?? ''));
+    const value = String(actual ?? '');
+    if (value.length > 4_096) {
+      throw new FrameworkError({
+        code: 'FSM_GUARD_INPUT_TOO_LONG',
+        message: 'FSM guard match inputs cannot exceed 4096 characters.',
+      });
+    }
+    return compileSafeGuardPattern(pattern).test(value);
   }
 
   const comparison = expression.match(/^([A-Za-z_][\w.]*?)\s*(===|==|!==|!=|>=|<=|>|<)\s*(.+)$/);
@@ -583,6 +729,9 @@ const fsmStateKindSchema = z.enum([
   'observation_recorded',
   'verifying',
   'memory_sync',
+  'recovering',
+  'compensating',
+  'quarantined',
   'human_review',
   'completed',
   'failed',
@@ -610,14 +759,13 @@ export const fsmTransitionSpecSchema = z.object({
   traceEvent: z.string().optional(),
 });
 
-export const fsmProcessSpecSchema = versionedSpecSchema
-  .merge(specMetadataSchema)
-  .extend({
-    initialState: z.string().min(1),
-    states: z.array(fsmStateSpecSchema).min(1),
-    transitions: z.array(fsmTransitionSpecSchema),
-    terminalStates: z.array(z.string().min(1)),
-  }) satisfies ZodType<FSMProcessSpec>;
+export const fsmProcessSpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
+  initialState: z.string().min(1),
+  states: z.array(fsmStateSpecSchema).min(1),
+  transitions: z.array(fsmTransitionSpecSchema),
+  terminalStates: z.array(z.string().min(1)),
+  recoveryPolicy: fsmRecoveryPolicySpecSchema.optional(),
+}) satisfies ZodType<FSMProcessSpec>;
 
 export const fsmProcessSpecJsonSchema: JsonSchema = {
   type: 'object',
@@ -658,6 +806,33 @@ export const fsmProcessSpecJsonSchema: JsonSchema = {
       },
     },
     terminalStates: { type: 'array', items: { type: 'string' } },
+    recoveryPolicy: {
+      type: 'object',
+      required: [
+        'maxAttemptsPerState',
+        'maxTotalAttempts',
+        'maxElapsedMs',
+        'retryableCategories',
+        'backoff',
+        'circuitBreaker',
+        'stateTargets',
+        'onExhausted',
+        'afterCompensation',
+      ],
+      properties: {
+        maxAttemptsPerState: { type: 'integer', minimum: 1 },
+        maxTotalAttempts: { type: 'integer', minimum: 1 },
+        maxElapsedMs: { type: 'integer', minimum: 1 },
+        retryableCategories: { type: 'array', items: { enum: [...FSM_ANOMALY_CATEGORIES] } },
+        nonRetryableCodes: { type: 'array', items: { type: 'string' } },
+        backoff: { type: 'object' },
+        circuitBreaker: { type: 'object' },
+        stateTargets: { type: 'object' },
+        onExhausted: { enum: ['human_review', 'quarantine', 'fail'] },
+        afterCompensation: { enum: ['human_review', 'quarantine', 'fail'] },
+      },
+      additionalProperties: false,
+    },
   },
   additionalProperties: false,
 };
@@ -699,9 +874,56 @@ export function parseFSMProcessSpec(input: unknown): FSMProcessSpec {
   return spec;
 }
 
-function inferTerminalStatus(stateId: string): FsmTerminalStatus {
-  if (stateId.toLowerCase().includes('fail')) return 'failed';
-  if (stateId.toLowerCase().includes('cancel')) return 'cancelled';
+export function validateFSMSnapshot(
+  spec: FSMProcessSpec,
+  snapshot: FSMSnapshot,
+  expectedRunId = snapshot.runId
+): void {
+  validateFSMProcessSpec(spec);
+  if (snapshot.processId !== spec.id || snapshot.runId !== expectedRunId) {
+    throw new FrameworkError({
+      code: 'FSM_SNAPSHOT_IDENTITY_MISMATCH',
+      message: 'FSM snapshot identity does not match its process or run.',
+      context: {
+        expectedProcessId: spec.id,
+        actualProcessId: snapshot.processId,
+        expectedRunId,
+        actualRunId: snapshot.runId,
+      },
+    });
+  }
+  const stateIds = new Set(spec.states.map((state) => state.id));
+  const lastState = snapshot.statePath.at(-1);
+  if (
+    snapshot.statePath.length === 0 ||
+    snapshot.statePath[0] !== spec.initialState ||
+    lastState !== snapshot.currentState ||
+    !stateIds.has(snapshot.currentState)
+  ) {
+    throw new FrameworkError({
+      code: 'FSM_INVALID_SNAPSHOT_PATH',
+      message: 'FSM snapshot path is not consistent with the process and current state.',
+      context: { processId: spec.id, runId: snapshot.runId },
+    });
+  }
+  const expectedStatus: FSMSnapshot['status'] = spec.terminalStates.includes(snapshot.currentState)
+    ? inferTerminalStatus(spec, snapshot.currentState)
+    : 'running';
+  if (snapshot.status !== expectedStatus) {
+    throw new FrameworkError({
+      code: 'FSM_INVALID_SNAPSHOT_STATUS',
+      message: `FSM snapshot status must be ${expectedStatus} in state ${snapshot.currentState}.`,
+      context: { processId: spec.id, runId: snapshot.runId, status: snapshot.status },
+    });
+  }
+  assertValidFSMTimestamp(snapshot.updatedAt, 'snapshot');
+  if (snapshot.recovery) fsmRecoverySnapshotSchema.parse(snapshot.recovery);
+}
+
+function inferTerminalStatus(spec: FSMProcessSpec, stateId: string): FsmTerminalStatus {
+  const kind = spec.states.find((state) => state.id === stateId)?.kind;
+  if (kind === 'failed' || stateId.toLowerCase().includes('fail')) return 'failed';
+  if (kind === 'cancelled' || stateId.toLowerCase().includes('cancel')) return 'cancelled';
   return 'completed';
 }
 
@@ -731,7 +953,12 @@ function assertGuardAllows(
 function readGuardPath(path: string, context: FSMGuardContext): unknown {
   const normalizedPath = path.includes('.') ? path : `variables.${path}`;
   return normalizedPath.split('.').reduce<unknown>((current, segment) => {
-    if (current && typeof current === 'object' && segment in current) {
+    if (['__proto__', 'prototype', 'constructor'].includes(segment)) return undefined;
+    if (
+      current &&
+      typeof current === 'object' &&
+      Object.prototype.hasOwnProperty.call(current, segment)
+    ) {
       return (current as Record<string, unknown>)[segment];
     }
     return undefined;
@@ -748,6 +975,44 @@ function parseGuardLiteral(value: string): unknown {
   return quoted ? quoted[1] : trimmed;
 }
 
+function compileSafeGuardPattern(pattern: string): RegExp {
+  if (pattern.length > 128) {
+    throw new FrameworkError({
+      code: 'FSM_GUARD_PATTERN_TOO_LONG',
+      message: 'FSM guard patterns cannot exceed 128 characters.',
+    });
+  }
+  if (
+    /\\[1-9]/.test(pattern) ||
+    /\(\?[=!<]/.test(pattern) ||
+    /\((?:[^()]|\\.)*[*+}](?:[^()]|\\.)*\)[*+{]/.test(pattern) ||
+    /\((?:[^()]|\\.)*\|(?:[^()]|\\.)*\)[*+{]/.test(pattern)
+  ) {
+    throw new FrameworkError({
+      code: 'FSM_UNSAFE_GUARD_PATTERN',
+      message: 'FSM guard patterns cannot use backreferences, lookarounds, or nested quantifiers.',
+    });
+  }
+  try {
+    return new RegExp(pattern);
+  } catch (error) {
+    throw new FrameworkError({
+      code: 'FSM_INVALID_GUARD_PATTERN',
+      message: error instanceof Error ? error.message : String(error),
+      cause: error,
+    });
+  }
+}
+
+function assertValidFSMTimestamp(value: string, label: string): void {
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new FrameworkError({
+      code: 'FSM_INVALID_TIMESTAMP',
+      message: `Invalid timestamp for ${label}: ${value}`,
+    });
+  }
+}
+
 function splitGuardExpression(expression: string, operator: '&&' | '||'): string[] {
   const parts: string[] = [];
   let quote: string | null = null;
@@ -756,7 +1021,7 @@ function splitGuardExpression(expression: string, operator: '&&' | '||'): string
   for (let index = 0; index < expression.length; index += 1) {
     const char = expression[index];
     if ((char === '"' || char === "'") && expression[index - 1] !== '\\') {
-      quote = quote === char ? null : quote ?? char;
+      quote = quote === char ? null : (quote ?? char);
       continue;
     }
     if (quote) continue;

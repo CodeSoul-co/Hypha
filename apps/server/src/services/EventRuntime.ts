@@ -11,11 +11,16 @@ import {
   createFrameworkEvent,
   InMemoryTelemetryRecorder,
   FrameworkError,
+  recoveryFailureFingerprint,
+  stableRecoveryHash,
   type FrameworkEvent,
   type FrameworkEventType,
+  type RecoveryFailure,
+  type RecoveryKnowledge,
+  type RecoveryKnowledgePort,
   type SpecRef,
 } from '@hypha/core';
-import { EventFirstRuntime } from '@hypha/harness';
+import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
 import {
   compileWorkflowToFSM,
   validateDomainPackSpec,
@@ -26,6 +31,7 @@ import {
   applyTransitionWithRuntimePolicy,
   createInitialSnapshot,
   evaluateGuardExpression,
+  FSMRuntime,
   type FSMProcessSpec,
   type FSMSnapshot,
 } from '@hypha/fsm';
@@ -38,6 +44,7 @@ import {
   InMemoryKvCacheProvider,
   InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
+  classifyInferenceFailure,
   type AgentPromptRef,
   type AgentPromptResolution,
   type AgentPromptSpec,
@@ -50,15 +57,19 @@ import {
   type KvCacheScope,
   type KvCacheWriteMode,
   type PrefixCacheRef,
+  type ReasoningRequest,
   type ReasoningOptions,
   type ReasoningStrategy,
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
+import { classifyMemoryFailure } from '@hypha/memory';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
   hashToolContract,
+  InMemoryToolResultCache,
+  RedisToolResultCache,
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
@@ -90,7 +101,8 @@ import {
   type ServingCacheEvent,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
-import { inferenceConfig, storageConfig } from '../config';
+import { inferenceConfig, storageConfig, toolResultCacheConfig } from '../config';
+import { getRedisClient } from './database';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
@@ -494,6 +506,7 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor() {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -517,6 +530,29 @@ class EventRuntimeService {
     const observationPort = new FileToolObservationStore(
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
+    const toolCacheConfig = toolResultCacheConfig();
+    const redis = getRedisClient();
+    const toolResultCache =
+      toolCacheConfig.store === 'memory'
+        ? new InMemoryToolResultCache({
+            maxEntries: toolCacheConfig.maxEntries,
+            maxEntryBytes: toolCacheConfig.maxEntryBytes,
+          })
+        : toolCacheConfig.store === 'redis' && redis
+          ? new RedisToolResultCache({
+              client: {
+                get: (key) => redis.get(key),
+                set: (key, value, mode, durationMilliseconds) =>
+                  mode && durationMilliseconds !== undefined
+                    ? redis.set(key, value, mode, durationMilliseconds)
+                    : redis.set(key, value),
+                del: (...keys) => redis.del(...keys),
+              },
+              namespace: toolCacheConfig.namespace,
+              maxEntryBytes: toolCacheConfig.maxEntryBytes,
+              defaultTtlMs: toolCacheConfig.redisDefaultTtlMs,
+            })
+          : undefined;
     this.toolRunner = new GovernedToolRunner(this.toolRegistry, this.events, undefined, {
       approvalStore: toolRuntimeStore,
       invocationStore: toolRuntimeStore,
@@ -524,11 +560,16 @@ class EventRuntimeService {
       snapshotStore: this.toolSnapshotStore,
       observationPort,
       telemetry: this.toolTelemetry,
+      resultCache: toolResultCache,
+      resultCacheFailureMode: toolCacheConfig.failureMode,
+      resultCacheTimeoutMs: toolCacheConfig.operationTimeoutMs,
+      resultCacheMaxEntryBytes: toolCacheConfig.maxEntryBytes,
     });
     this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
+      onRecoveryFailure: (failure) => this.recordBypassedCacheFailure(failure),
     });
     const inferenceProvider = createRuntimeInferenceProvider((event) =>
       this.recordServingCacheEvent(event)
@@ -688,39 +729,74 @@ class EventRuntimeService {
       { stepId: input.stepId }
     );
 
+    const inferenceRequest: ReasoningRequest<LLMInferenceInput> = {
+      runId: input.runId,
+      stepId: input.stepId,
+      sessionId: runContext?.clientSessionId,
+      modelAlias: resolved.model,
+      cachePolicy: input.cachePolicy,
+      cacheScope: { userId: runContext?.userId ?? 'single-user' },
+      input: {
+        messages: input.messages,
+        options: {
+          ...input.options,
+          model: input.options?.model ?? resolved.model,
+        },
+      },
+      reasoning: {
+        ...(input.reasoning ?? { method: 'direct' as const }),
+        trace: async (event) => {
+          await this.append(
+            input.runId,
+            'reasoning.decision.recorded',
+            { strategyEvent: event },
+            undefined,
+            { stepId: input.stepId }
+          );
+        },
+      },
+      metadata: {
+        ...input.metadata,
+        userId: runContext?.userId,
+        sessionId: runContext?.clientSessionId,
+        runtimeSessionId: runContext?.sessionId,
+        provider: resolved.provider,
+        domainPackId: runContext?.domainPackId,
+      },
+    };
+
     try {
-      const response = await this.reasoning.infer({
+      const response = await this.executeRecoveredOperation({
         runId: input.runId,
         stepId: input.stepId,
-        sessionId: runContext?.clientSessionId,
-        modelAlias: resolved.model,
-        cachePolicy: input.cachePolicy,
-        input: {
-          messages: input.messages,
-          options: {
-            ...input.options,
-            model: input.options?.model ?? resolved.model,
+        caseId: `${input.runId}:${input.stepId}:inference`,
+        participant: {
+          id: 'inference-primary',
+          module: 'inference',
+          execute: async () => {
+            const output = await this.reasoning.infer(inferenceRequest);
+            return {
+              output,
+              evidence: {
+                observedAt: new Date().toISOString(),
+                operationKey: `inference:${this.inferenceProviderId}:${resolved.model}:${input.stepId}`,
+                dependencyKey: `inference-provider:${this.inferenceProviderId}`,
+                state: 'completed',
+                inputHash: stableRecoveryHash(inferenceRequest),
+                outputHash: stableRecoveryHash(output.output),
+                providerRevision: resolved.provider,
+              },
+            };
           },
-        },
-        reasoning: {
-          ...(input.reasoning ?? { method: 'direct' as const }),
-          trace: async (event) => {
-            await this.append(
-              input.runId,
-              'reasoning.decision.recorded',
-              { strategyEvent: event },
-              undefined,
-              { stepId: input.stepId }
-            );
-          },
-        },
-        metadata: {
-          ...input.metadata,
-          userId: runContext?.userId,
-          sessionId: runContext?.clientSessionId,
-          runtimeSessionId: runContext?.sessionId,
-          provider: resolved.provider,
-          domainPackId: runContext?.domainPackId,
+          classify: (error) =>
+            classifyInferenceFailure(error, {
+              id: `${input.runId}:${input.stepId}:inference:failure`,
+              operation: 'infer',
+              request: inferenceRequest,
+              providerId: this.inferenceProviderId,
+              providerRevision: resolved.provider,
+              occurredAt: new Date().toISOString(),
+            }),
         },
       });
       const chat = response.output as ChatResponse;
@@ -1015,6 +1091,7 @@ class EventRuntimeService {
       sessionId: runContext?.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
+      cacheScope: { userId: runContext?.userId ?? 'single-user' },
       input: {
         messages: input.messages,
         options: {
@@ -1268,11 +1345,45 @@ class EventRuntimeService {
   async approveToolInvocation(invocationId: string, approvedBy: string): Promise<ToolCallResult> {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     if (invocation) this.registerManagedTool(invocation.toolId);
-    return this.toolRunner.approveAndResume(invocationId, approvedBy);
+    const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
+    if (invocation && result.status === 'completed') {
+      await this.completeApprovedToolRun(invocation, result);
+    }
+    return result;
   }
 
   async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
-    return this.toolRunner.rejectInvocation(invocationId);
+    const invocation = await this.toolRunner.getInvocation(invocationId);
+    const result = await this.toolRunner.rejectInvocation(invocationId);
+    const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
+    const run = runId ? this.runs.get(runId) : undefined;
+    if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
+    }
+    return result;
+  }
+
+  private async completeApprovedToolRun(
+    invocation: ToolInvocationRecord,
+    result: ToolCallResult
+  ): Promise<void> {
+    const runId = invocation.scope?.runId ?? invocation.request.context.runId;
+    const run = this.runs.get(runId);
+    if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
+
+    if (run.snapshot.currentState === 'HumanReview') {
+      await this.transition(runId, 'ObservationRecorded', {
+        tool: invocation.toolId,
+        invocationId: invocation.id,
+      });
+      await this.transition(runId, 'Verifying', { invocationId: invocation.id });
+      await this.transition(runId, 'MemorySync', { invocationId: invocation.id });
+    }
+    await this.completeRun(runId, {
+      tool: invocation.toolId,
+      invocationId: invocation.id,
+      output: result.output,
+    });
   }
 
   async runGovernedTool<TOutput>(input: {
@@ -1443,6 +1554,7 @@ class EventRuntimeService {
     target: string;
     details?: Record<string, unknown>;
     reader: () => Promise<TValue>;
+    degrade?: () => Promise<TValue>;
   }): Promise<TValue> {
     await this.record(
       input.runId,
@@ -1454,7 +1566,41 @@ class EventRuntimeService {
       input.stepId
     );
     try {
-      const value = await input.reader();
+      const value = await this.executeRecoveredOperation({
+        runId: input.runId,
+        stepId: input.stepId,
+        caseId: `${input.runId}:${input.stepId}:memory-read:${input.target}`,
+        participant: {
+          id: `memory-read:${input.target}`,
+          module: 'memory',
+          execute: async () => ({
+            output: await input.reader(),
+            evidence: {
+              observedAt: new Date().toISOString(),
+              operationKey: `memory.read:${input.target}`,
+              state: 'completed',
+            },
+          }),
+          classify: (error) =>
+            classifyMemoryFailure(error, {
+              id: `${input.runId}:${input.stepId}:memory-read:failure`,
+              operation: 'read',
+              scope: { runId: input.runId },
+              occurredAt: new Date().toISOString(),
+              providerId: input.target,
+            }),
+          degrade: input.degrade
+            ? async () => ({
+                output: await input.degrade!(),
+                evidence: {
+                  observedAt: new Date().toISOString(),
+                  operationKey: `memory.read:${input.target}`,
+                  state: 'degraded',
+                },
+              })
+            : undefined,
+        },
+      });
       await this.record(
         input.runId,
         'memory.read.completed',
@@ -1487,6 +1633,9 @@ class EventRuntimeService {
     target: string;
     details?: Record<string, unknown>;
     writer: () => Promise<TValue>;
+    reconcile?: () => Promise<TValue>;
+    sideEffectState?: 'not_started' | 'committed' | 'unknown';
+    idempotencyKey?: string;
   }): Promise<TValue> {
     await this.record(
       input.runId,
@@ -1508,7 +1657,47 @@ class EventRuntimeService {
       input.stepId
     );
     try {
-      const value = await input.writer();
+      const value = await this.executeRecoveredOperation({
+        runId: input.runId,
+        stepId: input.stepId,
+        caseId: `${input.runId}:${input.stepId}:memory-write:${input.target}`,
+        participant: {
+          id: `memory-write:${input.target}`,
+          module: 'memory',
+          execute: async () => ({
+            output: await input.writer(),
+            evidence: {
+              observedAt: new Date().toISOString(),
+              operationKey: `memory.write:${input.target}`,
+              state: 'committed',
+              receiptStatus: 'completed',
+              idempotencyKey: input.idempotencyKey,
+            },
+          }),
+          classify: (error) =>
+            classifyMemoryFailure(error, {
+              id: `${input.runId}:${input.stepId}:memory-write:failure`,
+              operation: 'write',
+              scope: { runId: input.runId },
+              occurredAt: new Date().toISOString(),
+              providerId: input.target,
+              idempotencyKey: input.idempotencyKey,
+              sideEffectState: input.sideEffectState,
+            }),
+          reconcile: input.reconcile
+            ? async () => ({
+                output: await input.reconcile!(),
+                evidence: {
+                  observedAt: new Date().toISOString(),
+                  operationKey: `memory.write:${input.target}`,
+                  state: 'reconciled',
+                  receiptStatus: 'completed',
+                  idempotencyKey: input.idempotencyKey,
+                },
+              })
+            : undefined,
+        },
+      });
       await this.record(
         input.runId,
         'memory.write.committed',
@@ -1533,6 +1722,162 @@ class EventRuntimeService {
       );
       throw error;
     }
+  }
+
+  private async executeRecoveredOperation<TValue>(input: {
+    runId: string;
+    stepId: string;
+    caseId: string;
+    participant: RecoveryParticipant<TValue>;
+  }): Promise<TValue> {
+    const context = this.requireRun(input.runId);
+    const recoveryFsm = new FSMRuntime(
+      context.fsm,
+      input.runId,
+      {
+        onTransition: async (transition) => {
+          context.snapshot = transition.snapshot;
+          this.runs.set(input.runId, context);
+          await this.append(
+            input.runId,
+            'fsm.state.exited',
+            { stateId: transition.from, phase: 'recovery' },
+            transition.acceptedAt,
+            { stepId: input.stepId, fsmState: transition.from }
+          );
+          await this.append(
+            input.runId,
+            'fsm.transition.accepted',
+            {
+              from: transition.from,
+              to: transition.to,
+              phase: 'recovery',
+              ...transition.metadata,
+            },
+            transition.acceptedAt,
+            { stepId: input.stepId, fsmState: transition.to }
+          );
+        },
+        onStateEntered: async (entered) => {
+          context.snapshot = entered.snapshot;
+          this.runs.set(input.runId, context);
+          await this.append(
+            input.runId,
+            'fsm.state.entered',
+            { stateId: entered.stateId, fromState: entered.fromState, phase: 'recovery' },
+            entered.enteredAt,
+            { stepId: input.stepId, fsmState: entered.stateId }
+          );
+        },
+      },
+      context.snapshot
+    );
+    const result = await runRecoverySupervisor({
+      fsm: recoveryFsm,
+      caseId: input.caseId,
+      userId: context.userId,
+      participants: [input.participant],
+      knowledge: this.recoveryKnowledge,
+      sessionId: context.sessionId,
+      domainPackId: context.domainPackId,
+      stepId: input.stepId,
+      metadata: {
+        userId: context.userId,
+        clientSessionId: context.clientSessionId,
+        domainPackId: context.domainPackId,
+      },
+      trace: {
+        record: async (event) => {
+          await this.append(input.runId, event.type, event.payload, event.timestamp, {
+            stepId: event.stepId ?? input.stepId,
+            fsmState: event.fsmState,
+          });
+        },
+      },
+      scheduler: {
+        wait: async (delayMs) => waitForRecoveryDelay(delayMs),
+      },
+      maxInlineDelayMs: 1_000,
+    });
+    context.snapshot = recoveryFsm.getSnapshot();
+    this.runs.set(input.runId, context);
+    if (result.status === 'succeeded' || result.status === 'degraded') {
+      return result.outputs[input.participant.id] as TValue;
+    }
+    throw new FrameworkError({
+      code:
+        result.status === 'suspended'
+          ? 'RECOVERY_SUSPENDED'
+          : result.status === 'quarantined'
+            ? 'RECOVERY_QUARANTINED'
+            : result.status === 'cancelled'
+              ? 'RECOVERY_CANCELLED'
+              : 'RECOVERY_FAILED',
+      message: `Recovery case ${input.caseId} ended with ${result.status}.`,
+      context: {
+        caseId: input.caseId,
+        status: result.status,
+        failureCode: result.failure?.code,
+        cycles: result.snapshot?.cycles,
+      },
+      cause: result.error,
+    });
+  }
+
+  private async recordBypassedCacheFailure(failure: RecoveryFailure): Promise<void> {
+    if (failure.module !== 'cache') return;
+    const runId = stringValue(failure.metadata?.runId);
+    if (!runId || !this.runs.has(runId)) return;
+    const context = this.runs.get(runId)!;
+    const stepId = stringValue(failure.metadata?.stepId);
+    const fingerprint = recoveryFailureFingerprint(failure);
+    const knowledge: RecoveryKnowledge = {
+      key: {
+        fingerprint,
+        participantId: 'inference-cache',
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          domainPackId: context.domainPackId,
+        },
+        policyRevision: failure.evidence.policyRevision,
+        specRevision: failure.evidence.specRevision,
+        providerRevision: failure.evidence.providerRevision,
+      },
+      strategy: 'degrade',
+      outcome: 'degraded',
+      evidenceHash: stableRecoveryHash(failure.evidence),
+      learnedAt: failure.occurredAt,
+      validation: {
+        status: 'verified',
+        proof: { cacheBypassed: true, primaryInferencePreserved: true },
+      },
+    };
+    await this.recoveryKnowledge?.put(knowledge);
+    await this.append(
+      runId,
+      'recovery.case.opened',
+      {
+        caseId: failure.id,
+        rootFingerprint: fingerprint,
+        failure,
+      },
+      failure.occurredAt,
+      { stepId }
+    );
+    await this.append(
+      runId,
+      'recovery.case.resolved',
+      {
+        caseId: failure.id,
+        rootFingerprint: fingerprint,
+        status: 'degraded',
+        strategy: 'degrade',
+        knowledge,
+      },
+      failure.occurredAt,
+      { stepId }
+    );
   }
 
   private async recordServingCacheEvent(event: ServingCacheEvent): Promise<void> {
@@ -2237,7 +2582,12 @@ function createDefaultDomainPack(): DomainPackSpec {
     ),
     ...states
       .filter((state) => state !== 'Completed' && state !== 'Failed')
-      .map((from) => ({ from, to: 'Failed', description: `${from} failed` }))
+      .map((from) => ({ from, to: 'Failed', description: `${from} failed` })),
+    {
+      from: 'HumanReview',
+      to: 'ObservationRecorded',
+      description: 'Approved Tool execution produced an observation',
+    }
   );
   return validateDomainPackSpec({
     id: 'hypha.default',
@@ -2286,24 +2636,31 @@ function workflowDefinitionToWorkflowSpec(workflow: WorkflowDefinition): Workflo
     { id: 'Failed', goal: 'Workflow failed' },
   ];
   const transitions: WorkflowSpec['transitions'] = [];
+  const transitionKeys = new Set<string>();
+  const appendTransition = (transition: WorkflowSpec['transitions'][number]): void => {
+    const key = `${transition.from}\u0000${transition.to}\u0000${transition.guard ?? ''}`;
+    if (transitionKeys.has(key)) return;
+    transitionKeys.add(key);
+    transitions.push(transition);
+  };
   for (const stage of workflow.stages) {
     const next = stage.next === 'end' || !stage.next ? 'Completed' : stage.next;
-    transitions.push({ from: stage.id, to: next, description: `${stage.id} next` });
+    appendTransition({ from: stage.id, to: next, description: `${stage.id} next` });
     for (const branch of stage.branches ?? []) {
-      transitions.push({
+      appendTransition({
         from: stage.id,
         to: branch.then === 'end' ? 'Completed' : branch.then,
         description: `${stage.id} branch:${branch.condition}`,
       });
       if (branch.else) {
-        transitions.push({
+        appendTransition({
           from: stage.id,
           to: branch.else === 'end' ? 'Completed' : branch.else,
           description: `${stage.id} else:${branch.condition}`,
         });
       }
     }
-    transitions.push({ from: stage.id, to: 'Failed', description: `${stage.id} failed` });
+    appendTransition({ from: stage.id, to: 'Failed', description: `${stage.id} failed` });
   }
   return {
     id: workflow.name,
@@ -2356,6 +2713,11 @@ function summarizeValue(value: unknown): Record<string, unknown> {
     return { type: 'object', keys: Object.keys(value as Record<string, unknown>) };
   }
   return { type: typeof value };
+}
+
+function toolResultErrorMessage(result: ToolCallResult, fallback: string): string {
+  if (typeof result.error === 'string') return result.error;
+  return result.error?.message ?? fallback;
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> {
@@ -2511,6 +2873,10 @@ function scopedKvCacheId(
 
 function parseKvCacheScope(input: unknown): KvCacheScope {
   return input === 'run' || input === 'workspace' ? input : 'session';
+}
+
+function waitForRecoveryDelay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
 }
 
 function parseKvCacheWriteMode(input: unknown): KvCacheWriteMode | undefined {

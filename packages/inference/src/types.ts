@@ -10,12 +10,19 @@ export interface InferenceRequest<TInput = unknown> {
   options?: InferenceGenerationOptions;
   tools?: InferenceToolDescriptor[];
   cachePolicy?: InferenceCachePolicy;
+  cacheScope?: InferenceCacheScope;
   prefix?: PrefixCacheRef;
   resolvedPrefixContent?: string;
   kvCache?: KvCacheRef;
   resolvedKvCacheValue?: unknown;
   trace?: boolean;
   metadata?: Record<string, unknown>;
+}
+
+export interface InferenceCacheScope {
+  tenantId?: string;
+  userId: string;
+  workspaceId?: string;
 }
 
 export interface InferenceToolDescriptor {
@@ -58,6 +65,7 @@ export interface PrefixCacheRef {
   version: string;
   contentHash: string;
   tokenCount?: number;
+  cacheScope?: InferenceCacheScope;
   metadata?: Record<string, unknown>;
 }
 
@@ -66,13 +74,21 @@ export interface KvCacheRef {
   provider: string;
   modelAlias: string;
   scope: KvCacheScope;
+  cacheScope?: InferenceCacheScope;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
 }
 
 export type KvCacheScope = 'run' | 'session' | 'workspace';
 
-export type InferenceCacheMissReason = 'missing' | 'expired' | 'not_configured';
+export type InferenceCacheMissReason = 'missing' | 'expired' | 'not_configured' | 'error';
+
+export interface InferenceCacheIssue {
+  operation: 'prefix_read' | 'kv_read' | 'kv_write' | 'invalidate';
+  code: string;
+  message: string;
+  bypassed: boolean;
+}
 
 export type KvCacheWriteMode = 'write_through' | 'write_if_missing' | 'refresh';
 
@@ -98,6 +114,8 @@ export interface InferenceCacheUsage {
   kvCacheWritten?: boolean;
   kvCacheWriteRef?: KvCacheRef;
   reusedTokens?: number;
+  bypassed?: boolean;
+  issues?: InferenceCacheIssue[];
 }
 
 export interface InferenceProvider {
@@ -121,6 +139,12 @@ export interface KvCacheProvider {
 export interface InferenceManagerOptions {
   prefixCache?: PrefixCacheProvider;
   kvCache?: KvCacheProvider;
+  cacheFailureMode?: 'bypass' | 'strict';
+  cacheOperationTimeoutMs?: number;
+  providerRevision?: string;
+  policyRevision?: string;
+  specRevision?: string;
+  onRecoveryFailure?: (failure: RecoveryFailure) => void | Promise<void>;
 }
 
 export type PromptRole =
@@ -239,6 +263,7 @@ export interface PlasmodHotLayerPrepareInput {
   agentId?: string;
   modelAlias: string;
   backendId: string;
+  cacheScope?: InferenceCacheScope;
   segmentation: PrefixSegmentationResult;
   kvCache?: KvCacheRef;
   resolvedKvCacheValue?: unknown;
@@ -312,3 +337,4 @@ export interface InferenceBackendRegistryEntry {
   backend: InferenceBackend;
   default?: boolean;
 }
+import type { RecoveryFailure } from '@hypha/core';

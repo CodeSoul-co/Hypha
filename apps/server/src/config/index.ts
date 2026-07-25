@@ -443,6 +443,17 @@ const configSchema = z.object({
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
+    resultCache: z
+      .object({
+        store: z.enum(['off', 'memory', 'redis']).default('off'),
+        failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+        operationTimeoutMs: z.coerce.number().int().positive().default(250),
+        maxEntries: z.coerce.number().int().positive().default(1000),
+        maxEntryBytes: z.coerce.number().int().positive().default(1048576),
+        redisDefaultTtlMs: z.coerce.number().int().positive().default(86400000),
+        namespace: z.string().min(1).default('tool-result-cache:v1'),
+      })
+      .default({}),
     filesystem: z
       .object({
         workingDirectory: z.string().default('.'),
@@ -679,6 +690,7 @@ export const servingCacheConfig = () => {
 };
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
+export const toolResultCacheConfig = () => getConfig().tools.resultCache;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;
 export const filesystemToolConfig = () => {

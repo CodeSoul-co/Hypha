@@ -10,6 +10,7 @@ import {
 import { BaseTool } from './types';
 import FilesystemTool from './builtins/FilesystemTool';
 import SearchTool from './builtins/SearchTool';
+import { createUtilityTools } from './builtins/UtilityTools';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
@@ -335,6 +336,7 @@ export class ToolManager {
     const builtinTools: ITool[] = [
       new FilesystemTool(workspaceRuntime, filesystemConfig),
       new SearchTool(),
+      ...createUtilityTools(),
     ];
     for (const tool of builtinTools) {
       try {
@@ -553,7 +555,12 @@ export class ToolManager {
         spec,
         adapter: new LocalFunctionToolAdapter(`server-local:${localTool.id}`, async (input) => {
           const result = await localTool.execute(input as ToolParams);
-          if (!result.success) throw new Error(result.error ?? `Tool failed: ${localTool.id}`);
+          if (!result.success) {
+            const error = new Error(result.error ?? `Tool failed: ${localTool.id}`);
+            const code = result.metadata?.errorCode;
+            if (typeof code === 'string') Object.assign(error, { code });
+            throw error;
+          }
           return result.output;
         }),
       };
