@@ -16,6 +16,16 @@ export interface MemoryServerMigrationInventoryRecord {
   digest: string;
 }
 
+export interface MemoryServerMigrationInventoryPlan {
+  legacyRecords: number;
+  canonicalRecords: number;
+  matchingRecords: number;
+  missingCanonicalKeys: string[];
+  unexpectedCanonicalKeys: string[];
+  digestMismatchKeys: string[];
+  reconciliation: MemoryServerMigrationReconciliation;
+}
+
 export interface MemoryServerMigrationRehearsalDataPort {
   listLegacy(): Promise<readonly MemoryServerMigrationInventoryRecord[]>;
   listCanonical(): Promise<readonly MemoryServerMigrationInventoryRecord[]>;
@@ -65,6 +75,13 @@ export class MemoryServerMigrationRehearsal {
     private readonly store: MemoryServerMigrationRehearsalCheckpointStore
   ) {}
 
+  async plan(): Promise<MemoryServerMigrationInventoryPlan> {
+    return planMemoryServerMigrationInventories(
+      await this.data.listLegacy(),
+      await this.data.listCanonical()
+    );
+  }
+
   async prepare(
     input: MemoryServerMigrationPrepareInput
   ): Promise<MemoryServerMigrationRehearsalCheckpoint> {
@@ -88,7 +105,10 @@ export class MemoryServerMigrationRehearsal {
     });
     checkpoint = {
       ...checkpoint,
-      reconciliation: compare(await this.data.listLegacy(), await this.data.listCanonical()),
+      reconciliation: planMemoryServerMigrationInventories(
+        await this.data.listLegacy(),
+        await this.data.listCanonical()
+      ).reconciliation,
     };
     await this.store.save(input.migrationId, checkpoint);
     checkpoint = await this.move(checkpoint, {
@@ -111,7 +131,10 @@ export class MemoryServerMigrationRehearsal {
     }
     const probe = await this.data.writeDualProbe(`memory-migration:${input.migrationId}:probe`);
     checkpoint = await this.recordImport(checkpoint, probe.canonicalId);
-    const reconciliation = compare(await this.data.listLegacy(), await this.data.listCanonical());
+    const reconciliation = planMemoryServerMigrationInventories(
+      await this.data.listLegacy(),
+      await this.data.listCanonical()
+    ).reconciliation;
     checkpoint = { ...checkpoint, reconciliation };
     checkpoint = await this.move(checkpoint, {
       targetPhase: 'verify',
@@ -195,22 +218,44 @@ export class MemoryServerMigrationRehearsal {
   }
 }
 
-function compare(
+export function planMemoryServerMigrationInventories(
   legacyInput: readonly MemoryServerMigrationInventoryRecord[],
   canonicalInput: readonly MemoryServerMigrationInventoryRecord[]
-): MemoryServerMigrationReconciliation {
+): MemoryServerMigrationInventoryPlan {
   const legacy = unique(legacyInput, 'legacy');
-  const canonical = new Map(unique(canonicalInput, 'canonical').map((item) => [item.key, item]));
+  const canonicalRecords = unique(canonicalInput, 'canonical');
+  const canonical = new Map(canonicalRecords.map((item) => [item.key, item]));
   const legacyKeys = new Set(legacy.map((item) => item.key));
-  let mismatchCount = legacy.filter(
-    (item) => canonical.get(item.key)?.digest !== item.digest
+  const missingCanonicalKeys = legacy
+    .filter((item) => !canonical.has(item.key))
+    .map((item) => item.key);
+  const digestMismatchKeys = legacy
+    .filter((item) => {
+      const candidate = canonical.get(item.key);
+      return candidate !== undefined && candidate.digest !== item.digest;
+    })
+    .map((item) => item.key);
+  const unexpectedCanonicalKeys = canonicalRecords
+    .filter((item) => !legacyKeys.has(item.key))
+    .map((item) => item.key);
+  const matchingRecords = legacy.filter(
+    (item) => canonical.get(item.key)?.digest === item.digest
   ).length;
-  mismatchCount += [...canonical.keys()].filter((key) => !legacyKeys.has(key)).length;
+  const mismatchCount =
+    missingCanonicalKeys.length + digestMismatchKeys.length + unexpectedCanonicalKeys.length;
   return {
-    status: mismatchCount === 0 ? 'passed' : 'failed',
-    comparedRecords: legacy.length,
-    mismatchCount,
-    shadowResult: mismatchCount === 0 ? 'matched' : 'mismatched',
+    legacyRecords: legacy.length,
+    canonicalRecords: canonicalRecords.length,
+    matchingRecords,
+    missingCanonicalKeys,
+    unexpectedCanonicalKeys,
+    digestMismatchKeys,
+    reconciliation: {
+      status: mismatchCount === 0 ? 'passed' : 'failed',
+      comparedRecords: legacy.length,
+      mismatchCount,
+      shadowResult: mismatchCount === 0 ? 'matched' : 'mismatched',
+    },
   };
 }
 
