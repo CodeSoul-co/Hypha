@@ -25,6 +25,19 @@ describe('Memory administration API', () => {
     const denied = await request(app).get('/api/v1/memory/admin/health');
     expect(denied.status).toBe(401);
 
+    const created = await request(app)
+      .post('/api/v1/memory/permanent')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sessionId: `metrics-${randomUUID()}`,
+        agentId: 'memory-admin-integration',
+        modelId: 'integration-model',
+        modelProvider: 'integration-provider',
+        title: 'Memory telemetry integration fixture',
+        tags: ['memory-admin-integration'],
+      });
+    expect(created.status).toBe(201);
+
     const result = await request(app)
       .get('/api/v1/memory/admin/health')
       .set('Authorization', `Bearer ${token}`);
@@ -39,6 +52,14 @@ describe('Memory administration API', () => {
         slo: { status: expect.stringMatching(/^(met|breached|insufficient_data)$/) },
       },
     });
+
+    expect(result.body.data.telemetry.operations.byOperation.add).toBeGreaterThanOrEqual(1);
+    expect(result.body.data.telemetry.storage.measuredBytes).toBeGreaterThan(0);
+
+    const removed = await request(app)
+      .delete(`/api/v1/memory/permanent/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(removed.status).toBe(200);
   });
 
   it('validates the repository profile through the canonical schema', async () => {
