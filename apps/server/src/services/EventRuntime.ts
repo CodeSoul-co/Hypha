@@ -1917,6 +1917,16 @@ class EventRuntimeService {
     const context = this.runs.get(runId)!;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
+    const candidateHash = stableRecoveryHash(failure.evidence);
+    const recoveryEvidence = {
+      caseId: failure.id,
+      rootFingerprint: fingerprint,
+      cycles: 1,
+      candidateId: failure.id,
+      candidateHash,
+      reason: `${failure.category}:${failure.code}`,
+      safeAction: 'apply_observation',
+    };
     const knowledge: RecoveryKnowledge = {
       key: {
         fingerprint,
@@ -1932,7 +1942,7 @@ class EventRuntimeService {
       },
       strategy: 'degrade',
       outcome: 'degraded',
-      evidenceHash: stableRecoveryHash(failure.evidence),
+      evidenceHash: candidateHash,
       learnedAt: failure.occurredAt,
       validation: {
         status: 'verified',
@@ -1944,8 +1954,8 @@ class EventRuntimeService {
       runId,
       'recovery.case.opened',
       {
-        caseId: failure.id,
-        rootFingerprint: fingerprint,
+        ...recoveryEvidence,
+        status: 'active',
         failure,
       },
       failure.occurredAt,
@@ -1955,9 +1965,9 @@ class EventRuntimeService {
       runId,
       'recovery.case.resolved',
       {
-        caseId: failure.id,
-        rootFingerprint: fingerprint,
-        status: 'degraded',
+        ...recoveryEvidence,
+        status: 'recovered',
+        disposition: 'recovered',
         strategy: 'degrade',
         knowledge,
       },
