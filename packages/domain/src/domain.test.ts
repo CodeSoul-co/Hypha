@@ -560,6 +560,29 @@ describe('@hypha/domain workflow compiler', () => {
     expect(changed.processHash).not.toBe(compiled.processHash);
   });
 
+  it.each([
+    ['memory.mem0.oss', 'memory.provider.mem0.oss'],
+    ['memory.mem0.platform', 'memory.provider.mem0.platform-v3'],
+    ['memory.memorybank.vertex-ai', 'memory.provider.memorybank.vertex-ai'],
+    ['memory.memorybank.hindsight-local', 'memory.provider.memorybank.hindsight-local'],
+  ])('compiles the selectable %s provider profile', (profileId, providerRef) => {
+    const compiled = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      memoryProfileId: profileId,
+    });
+
+    expect(compiled.bindings.memoryProfile).toMatchObject({
+      id: profileId,
+      providers: [{ providerRef }],
+      provenancePolicy: 'required',
+      retrievalPolicy: { requireScope: true },
+    });
+    expect(compiled.agentPatch.memoryProfileRef).toBe(profileId);
+    expect(compiled.dependencySnapshot.memoryProfileRefs).toEqual([
+      { id: profileId, version: '1.0.0' },
+    ]);
+  });
+
   it('compiles only profile-selected tools and gives state denies precedence', () => {
     const example = domainPackSpecDefinition.example;
     const compiled = compileDomainPackToHarnessedSystem(
