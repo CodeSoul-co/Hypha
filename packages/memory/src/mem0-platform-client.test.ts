@@ -124,4 +124,16 @@ describe('Mem0PlatformClient', () => {
     ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_UNAVAILABLE', retryable: true });
     expect(body).toMatchObject({ filters: { user_id: 'platform-user' }, top_k: 7 });
   });
+
+  it('rejects cleartext custom endpoints before attaching a platform token', () => {
+    expect(
+      () =>
+        new Mem0PlatformClient({
+          baseUrl: 'http://platform.example',
+          apiToken: 'must-not-leak',
+          mappingProfile: 'test',
+          fetch: async () => json({}),
+        })
+    ).toThrow('requires HTTPS');
+  });
 });

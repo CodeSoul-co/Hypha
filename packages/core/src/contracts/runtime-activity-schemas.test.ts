@@ -1,12 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   runtimeActivityContractJsonSchemas,
+  runtimeActivityDescriptorExample,
+  validateRuntimeActivityDescriptor,
   validateRuntimeActivityInvocation,
   validateRuntimeActivityObservation,
   validateRuntimeActivityRequest,
 } from './runtime-activity-schemas';
 
 describe('runtime Activity schemas', () => {
+  it('exports a versioned durable Activity descriptor contract', () => {
+    expect(validateRuntimeActivityDescriptor(runtimeActivityDescriptorExample)).toEqual(
+      runtimeActivityDescriptorExample
+    );
+    expect(runtimeActivityContractJsonSchemas.RuntimeActivityDescriptor).toMatchObject({
+      type: 'object',
+      required: expect.arrayContaining(['activityId', 'inputRef', 'inputHash']),
+    });
+  });
+
   it('validates governed requests and exports their JSON schema', () => {
     expect(
       validateRuntimeActivityRequest({

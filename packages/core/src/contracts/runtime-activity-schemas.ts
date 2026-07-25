@@ -14,9 +14,16 @@ import {
   type RuntimeActivityObservation,
   type RuntimeActivityRequest,
 } from './runtime-activities';
+import {
+  RUNTIME_ACTIVITY_DESCRIPTOR_VERSION,
+  RUNTIME_ACTIVITY_KINDS,
+  type RuntimeActivityDescriptor,
+} from './runtime-activity';
 import type { RuntimeJsonValue } from './runtime-helpers';
 
 const nonEmptyStringSchema = z.string().min(1);
+const hashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
+const timestampSchema = z.string().datetime({ offset: true });
 const jsonValueSchema: ZodType<RuntimeJsonValue> = z.lazy(() =>
   z.union([
     z.null(),
@@ -81,7 +88,7 @@ export const runtimeActivityInvocationSchema = z
     correlationId: nonEmptyStringSchema,
     causationId: nonEmptyStringSchema.optional(),
     idempotencyKey: nonEmptyStringSchema,
-    requestedAt: z.string().datetime({ offset: true }),
+    requestedAt: timestampSchema,
     effect: z.enum(RUNTIME_ACTIVITY_EFFECTS),
     timeoutMs: z.number().int().positive().optional(),
     retry: retrySchema.optional(),
@@ -118,7 +125,29 @@ export const runtimeActivityObservationSchema = z
     }
   }) satisfies ZodType<RuntimeActivityObservation>;
 
+export const runtimeActivityDescriptorSchema = z
+  .object({
+    version: z.literal(RUNTIME_ACTIVITY_DESCRIPTOR_VERSION),
+    activityId: nonEmptyStringSchema,
+    activityKind: z.enum(RUNTIME_ACTIVITY_KINDS),
+    runId: nonEmptyStringSchema,
+    stateId: nonEmptyStringSchema,
+    stateAttempt: z.number().int().positive(),
+    operationId: nonEmptyStringSchema,
+    inputRef: nonEmptyStringSchema,
+    inputHash: hashSchema,
+    providerRef: nonEmptyStringSchema.optional(),
+    providerRevision: nonEmptyStringSchema.optional(),
+    idempotencyKey: nonEmptyStringSchema,
+    deadlineAt: timestampSchema.optional(),
+  })
+  .strict() satisfies ZodType<RuntimeActivityDescriptor>;
+
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
+const hashJsonSchema: JsonSchema = {
+  type: 'string',
+  pattern: '^sha256:[a-f0-9]{64}$',
+};
 
 export const runtimeActivityRequestJsonSchema: JsonSchema = {
   type: 'object',
@@ -167,6 +196,38 @@ export const runtimeActivityObservationJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+export const runtimeActivityDescriptorJsonSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'version',
+    'activityId',
+    'activityKind',
+    'runId',
+    'stateId',
+    'stateAttempt',
+    'operationId',
+    'inputRef',
+    'inputHash',
+    'idempotencyKey',
+  ],
+  properties: {
+    version: { const: RUNTIME_ACTIVITY_DESCRIPTOR_VERSION },
+    activityId: nonEmptyStringJsonSchema,
+    activityKind: { type: 'string', enum: [...RUNTIME_ACTIVITY_KINDS] },
+    runId: nonEmptyStringJsonSchema,
+    stateId: nonEmptyStringJsonSchema,
+    stateAttempt: { type: 'integer', minimum: 1 },
+    operationId: nonEmptyStringJsonSchema,
+    inputRef: nonEmptyStringJsonSchema,
+    inputHash: hashJsonSchema,
+    providerRef: nonEmptyStringJsonSchema,
+    providerRevision: nonEmptyStringJsonSchema,
+    idempotencyKey: nonEmptyStringJsonSchema,
+    deadlineAt: { type: 'string', format: 'date-time' },
+  },
+  additionalProperties: false,
+};
+
 export const runtimeActivityRequestExample: RuntimeActivityRequest = {
   target: 'tool.search',
   input: { query: 'runtime helper' },
@@ -177,6 +238,21 @@ export const runtimeActivityRequestExample: RuntimeActivityRequest = {
   },
 };
 
+export const runtimeActivityDescriptorExample: RuntimeActivityDescriptor = {
+  version: '1.0.0',
+  activityId: 'activity.default',
+  activityKind: 'tool',
+  runId: 'run.default',
+  stateId: 'Execute',
+  stateAttempt: 1,
+  operationId: 'operation.default',
+  inputRef: 'artifact-ref:activity-input.default',
+  inputHash: `sha256:${'a'.repeat(64)}`,
+  providerRef: 'tool:filesystem.write',
+  providerRevision: '1.0.0',
+  idempotencyKey: 'activity.default:attempt:1',
+};
+
 export const runtimeActivityRequestDefinition = defineSpecSchema<RuntimeActivityRequest>({
   id: 'RuntimeActivityRequest',
   zod: runtimeActivityRequestSchema,
@@ -184,7 +260,17 @@ export const runtimeActivityRequestDefinition = defineSpecSchema<RuntimeActivity
   example: runtimeActivityRequestExample,
 });
 
-export const runtimeActivityContractDefinitions = [runtimeActivityRequestDefinition] as const;
+export const runtimeActivityDescriptorDefinition = defineSpecSchema<RuntimeActivityDescriptor>({
+  id: 'RuntimeActivityDescriptor',
+  zod: runtimeActivityDescriptorSchema,
+  jsonSchema: runtimeActivityDescriptorJsonSchema,
+  example: runtimeActivityDescriptorExample,
+});
+
+export const runtimeActivityContractDefinitions = [
+  runtimeActivityRequestDefinition,
+  runtimeActivityDescriptorDefinition,
+] as const;
 export const runtimeActivityContractJsonSchemas = exportSpecJsonSchemas(
   runtimeActivityContractDefinitions
 );
@@ -199,4 +285,8 @@ export function validateRuntimeActivityInvocation(input: unknown): RuntimeActivi
 
 export function validateRuntimeActivityObservation(input: unknown): RuntimeActivityObservation {
   return runtimeActivityObservationSchema.parse(input);
+}
+
+export function validateRuntimeActivityDescriptor(input: unknown): RuntimeActivityDescriptor {
+  return runtimeActivityDescriptorDefinition.parse(input);
 }

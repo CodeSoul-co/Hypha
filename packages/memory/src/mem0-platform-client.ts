@@ -30,6 +30,7 @@ import {
   staticCredentialProvider,
   type RenewableCredentialProvider,
 } from './managed-credentials';
+import { normalizeExternalProviderBaseUrl } from './external-provider-url';
 import { memoryError } from './memory-utils';
 
 export interface Mem0PlatformClientOptions {
@@ -44,6 +45,7 @@ export interface Mem0PlatformClientOptions {
   operationDeadlineMs?: number;
   maxOperationAttempts?: number;
   now?: () => Date;
+  allowInsecureForTests?: boolean;
 }
 
 export interface Mem0PlatformEvent {
@@ -92,7 +94,10 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
         'Mem0 Platform requires exactly one API token or renewable credential provider.'
       );
     }
-    this.baseUrl = (options.baseUrl ?? 'https://api.mem0.ai').replace(/\/$/, '');
+    this.baseUrl = normalizeExternalProviderBaseUrl(options.baseUrl ?? 'https://api.mem0.ai', {
+      providerName: 'Mem0 Platform',
+      allowInsecureForTests: options.allowInsecureForTests,
+    });
     this.credentials = new RenewableCredentialManager({
       provider:
         options.credentialProvider ?? staticCredentialProvider(options.apiToken ?? '', 'api_token'),
@@ -126,6 +131,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
       listPaginationMode: 'provider-cursor',
       now: options.now,
       healthPath: '/v1/events/?page=1&page_size=1',
+      allowInsecureForTests: options.allowInsecureForTests,
     });
   }
 
@@ -387,11 +393,11 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
 }
 
 function toV3SearchBody(input: Record<string, unknown>): Record<string, unknown> {
-  const filters: Record<string, unknown> = {};
+  const filters: Record<string, unknown> = { ...asObject(input.filters) };
   for (const key of ['user_id', 'agent_id', 'app_id', 'run_id']) {
     if (input[key] !== undefined) filters[key] = input[key];
   }
-  return { query: input.query, filters, top_k: input.limit };
+  return { query: input.query, filters, top_k: input.top_k ?? input.limit };
 }
 
 function asObject(value: unknown): Record<string, unknown> {
