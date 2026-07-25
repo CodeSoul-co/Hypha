@@ -492,9 +492,20 @@ function compareMigrationEvents(
 function migrationPriority(type: FrameworkEvent['type']): number {
   if (type === 'run.created') return 0;
   if (type === 'run.started') return 1;
-  if (type === 'run.waiting_human') return 3;
-  if (type === 'run.completed' || type === 'run.failed' || type === 'run.cancelled') return 4;
-  return 2;
+  if (type === 'fsm.transition.requested') return 2;
+  if (type === 'fsm.transition.accepted') return 3;
+  if (type === 'fsm.state.exited') return 4;
+  if (type === 'fsm.state.entered') return 5;
+  if (
+    type === 'run.waiting_human' ||
+    type === 'run.waiting_signal' ||
+    type === 'run.waiting_timer' ||
+    type === 'run.paused'
+  ) {
+    return 7;
+  }
+  if (type === 'run.completed' || type === 'run.failed' || type === 'run.cancelled') return 8;
+  return 6;
 }
 
 function upcastRecoveryCasePayload(

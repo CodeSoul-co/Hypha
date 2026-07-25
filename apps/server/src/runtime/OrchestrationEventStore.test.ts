@@ -244,6 +244,55 @@ describe('OrchestrationEventStore', () => {
     expect(auditCanonicalRuntimeStreams(migrated).quarantinedStreams).toBe(0);
   });
 
+  it('restores causal FSM order when legacy appends share a millisecond', async () => {
+    const schemas = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(schemas);
+    const durable = new DurableEventRuntime({
+      store: new InMemoryDurableEventStore({ schemaRegistry: schemas }),
+    });
+    const canonical = new DurableEventStoreBridge({ events: durable });
+    const source = [
+      event('run-created', 'run.created', '2026-07-21T06:00:00.000Z'),
+      event('run-started', 'run.started', '2026-07-21T06:00:00.100Z'),
+      event('state-initial', 'fsm.state.entered', '2026-07-21T06:00:00.200Z'),
+      event('state-next', 'fsm.state.entered', '2026-07-21T06:00:00.300Z'),
+      event('state-initial-exited', 'fsm.state.exited', '2026-07-21T06:00:00.300Z'),
+      event(
+        'transition-accepted',
+        'fsm.transition.accepted',
+        '2026-07-21T06:00:00.300Z'
+      ),
+      event(
+        'transition-requested',
+        'fsm.transition.requested',
+        '2026-07-21T06:00:00.300Z'
+      ),
+    ];
+    source[2]!.payload = { stateId: 'RunInitialized' };
+    source[3]!.payload = { stateId: 'Reasoning' };
+    source[4]!.payload = { stateId: 'RunInitialized' };
+    source[5]!.payload = { from: 'RunInitialized', to: 'Reasoning' };
+    source[6]!.payload = { from: 'RunInitialized', to: 'Reasoning' };
+
+    const migration = await migrateCanonicalEventFamilies({
+      sourceEvents: source,
+      canonical,
+    });
+    const migrated = await canonical.list({ runId: 'run-1' });
+
+    expect(migration.quarantinedEvents).toBe(0);
+    expect(migrated.map((item) => item.type)).toEqual([
+      'run.created',
+      'run.started',
+      'fsm.state.entered',
+      'fsm.transition.requested',
+      'fsm.transition.accepted',
+      'fsm.state.exited',
+      'fsm.state.entered',
+    ]);
+    expect(auditCanonicalRuntimeStreams(migrated).quarantinedStreams).toBe(0);
+  });
+
   it('audits valid canonical Run streams before Runtime workers start', () => {
     const report = auditCanonicalRuntimeStreams(
       persistedEvents([
