@@ -34,6 +34,7 @@ export interface CanonicalEventFamilyMigrationReport {
   eligibleEvents: number;
   synthesizedEvents: number;
   synthesizedRunIds: string[];
+  resetImportedEvents: number;
   migratedEvents: number;
   alreadyCanonicalEvents: number;
   quarantinedEvents: number;
@@ -244,6 +245,7 @@ export async function migrateCanonicalEventFamilies(input: {
     eligibleEvents: eligible.length,
     synthesizedEvents: legacyResumeMigration.synthesizedEvents,
     synthesizedRunIds: legacyResumeMigration.synthesizedRunIds,
+    resetImportedEvents: 0,
     migratedEvents: entries.filter((entry) => entry.status === 'migrated').length,
     alreadyCanonicalEvents: entries.filter((entry) => entry.status === 'already_canonical').length,
     quarantinedEvents: entries.filter((entry) => entry.status === 'quarantined').length,

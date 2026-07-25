@@ -66,6 +66,13 @@ export class ServerCanonicalRuntime {
       },
       {
         audit: async (backbone, signal) => {
+          const reset = await backbone.eventStore.resetUnauditedImportedEvents();
+          if (reset.reason === 'non_imported_events') {
+            throw failure(
+              'RUNTIME_EVENT_STREAM_CORRUPT',
+              'Unaudited canonical Runtime history contains non-imported Events'
+            );
+          }
           const legacyEvents = await options.legacyEvents.list();
           if (legacyEvents.length > maxLegacyEvents) {
             throw failure(
@@ -75,10 +82,14 @@ export class ServerCanonicalRuntime {
           }
 
           const bridge = new DurableEventStoreBridge({ events: backbone.events });
-          const migration = await migrateCanonicalEventFamilies({
+          const migrationResult = await migrateCanonicalEventFamilies({
             sourceEvents: legacyEvents,
             canonical: bridge,
           });
+          const migration = {
+            ...migrationResult,
+            resetImportedEvents: reset.deletedEvents,
+          };
           if (migration.quarantinedEvents > 0) {
             throw failure(
               'RUNTIME_EVENT_STREAM_CORRUPT',
