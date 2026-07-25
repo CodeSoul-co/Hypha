@@ -64,6 +64,11 @@ adapter 和应用状态不进入 Runtime core。
 Event 与 checkpoint 证据防止 stale worker 或重复循环被误判为有效进展。详见
 [Runtime 模型](docs/reference/runtime-model.md)与 [Framework API](docs/api/framework.md)。
 
+持久 Runtime graph 是需要显式装配的 Framework 能力。仓库内置的 Express Server 当前仍使用
+`EventRuntime` 兼容路径，默认不会启动 canonical session-command、continuation、timer 或 recovery
+scheduler。需要在进程重启后继续自主执行的应用必须显式装配并管理这些 worker 的生命周期；不能把
+默认 Server 当作跨重启连续执行器。
+
 ## 跨模块协同恢复
 
 Hypha 使用同一套 FSM 恢复契约协调 inference、tool、MCP、memory、execution、storage、消息投递、policy 与 cache 异常。参与模块按依赖顺序执行，已经完成的上游不会重复运行；系统通过稳定的 receipt、revision、hash 或 provider state 判断是否真正取得进展，而不是把再次循环视为进展。有界重试、对账、兼容 fallback、降级、补偿、人工复核、隔离、取消和失败都具有显式策略与 trace event。
@@ -129,6 +134,19 @@ scope metadata，并在不确定写入重放前完成对账。
 Memory、Context、Domain、Cache、Replay 与 Evaluation 通过版本化依赖和 validity snapshot 协同。
 Context builder 在注入模型前执行 policy、provenance、token budget、确定性压缩以及指令/数据边界。
 详见[受治理的 Memory 架构](docs/architecture/memory.md)。
+
+Server 默认读取 `configs/memory-profiles.yaml`，并使用 `native-default`：MongoDB 负责持久记录、
+历史、外部 ID 映射与恢复证据，Redis 负责 Native working state。同一套组合也可以选择本地
+`mem0-oss`，或云端 `mem0-platform`、`memorybank-managed`，且凭据不会写入
+profile。可通过 `HYPHA_MEMORY_CONFIG_PATH` 指向另一份通过严格校验的 profile 文件，并只提供当前
+Provider 需要的环境引用。外部 Provider 仍使用 MongoDB 保存 Hypha 自有身份映射与治理证据。参见
+[Memory Provider Profiles](docs/guides/memory-provider-profiles.md)和
+[外部 Provider Runtime](docs/guides/memory-external-provider-runtime.md)。
+
+`MemoryBankLocalClient` 只是协议兼容测试夹具，不是内置的 MemoryBank 服务。单独保存、默认禁用的
+`memorybank-hindsight-local` profile 与已注册 Factory 共同构成仓库提供的自托管 MemoryBank 风格
+部署候选；它被有意排除在默认可选 profile 文件之外。本地或云端 Provider 只有在其真实环境验收
+套件以 `0 skipped` 完成后，才能作为对应部署环境的发布能力。
 
 ## 开发命令
 

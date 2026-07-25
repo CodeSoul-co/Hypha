@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { authMiddleware, apiKeyMiddleware } from '../middleware/auth';
-import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
-import { getPermanentMemory } from '../core/memory/PermanentMemory';
+import { getServerMemoryOperations } from '../services/ServerMemoryOperations';
+import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
 import { getEventRuntime } from '../services/EventRuntime';
@@ -128,8 +128,7 @@ router.post(
       runId = runtimeRun.runId;
       const messageId = generateMessageId();
       const startTime = Date.now();
-      const tempMemory = getTemporaryMemory();
-      const permanentMemory = getPermanentMemory();
+      const memory = getServerMemoryOperations('chat');
       const resolvedChatModel = runtime.resolveChatModel(model);
 
       logger.debug(`[Chat] Request started`, {
@@ -149,16 +148,16 @@ router.post(
         modelProvider: provider,
       };
 
-      // Save to temporary memory
+      // Save through canonical Memory
       const t1 = Date.now();
       await runtime.recordMemoryWrite({
         runId,
         stepId: 'memory:user',
-        target: 'temporary',
+        target: 'canonical',
         details: { role: 'user', messageId },
-        writer: () => tempMemory.addMessage(session, userMsg),
+        writer: () => memory.addMessage(session, userMsg),
       });
-      logger.debug(`[Chat] Redis: addMessage done`, {
+      logger.debug(`[Chat] Memory: addMessage done`, {
         durationMs: Date.now() - t1,
         sessionId: session,
       });
@@ -168,9 +167,9 @@ router.post(
       const history = await runtime.recordMemoryRead({
         runId,
         stepId: 'memory:read',
-        target: 'temporary',
+        target: 'canonical',
         details: { sessionId: session },
-        reader: () => tempMemory.getMessages(session, undefined, userId),
+        reader: () => memory.getMessages(session, undefined, userId),
       });
       await runtime.transition(runId, 'ContextBuilt', {
         messageCount: history.length,
@@ -179,12 +178,12 @@ router.post(
         runId,
         'context.build.completed',
         {
-          source: 'temporary-memory',
+          source: 'canonical-memory',
           messageCount: history.length,
         },
         'context'
       );
-      logger.debug(`[Chat] Redis: getMessages done`, {
+      logger.debug(`[Chat] Memory: getMessages done`, {
         durationMs: Date.now() - t2,
         sessionId: session,
         historyCount: history.length,
@@ -283,52 +282,27 @@ router.post(
       await runtime.recordMemoryWrite({
         runId,
         stepId: 'memory:assistant',
-        target: 'temporary',
+        target: 'canonical',
         details: { role: 'assistant', responseId: response.id },
-        writer: () => tempMemory.addMessage(session, assistantMsg),
+        writer: () => memory.addMessage(session, assistantMsg),
       });
       await runtime.transition(runId, 'ObservationRecorded', {
         responseId: response.id,
       });
       await runtime.transition(runId, 'Verifying');
 
-      // Save to permanent memory (if conversation exists)
+      // Conversation metadata remains a canonical record. Chat messages were
+      // already committed through the single canonical write path above.
       const t4 = Date.now();
       const conversation = await runtime.recordMemoryRead({
         runId,
-        stepId: 'memory:permanent',
-        target: 'permanent',
-        details: {
-          sessionId: session,
-          operation: 'getConversationBySessionId',
-        },
-        reader: () => permanentMemory.getConversationBySessionId(session, userId),
+        stepId: 'memory:conversation',
+        target: 'canonical',
+        details: { sessionId: session, operation: 'getConversationBySessionId' },
+        reader: () => memory.getConversationBySessionId(session, userId),
       });
-      if (conversation) {
-        await runtime.recordMemoryWrite({
-          runId,
-          stepId: 'memory:permanent',
-          target: 'permanent',
-          details: { conversationId: conversation.id },
-          writer: () =>
-            Promise.all([
-              permanentMemory.addMessage(conversation.id, {
-                role: 'user',
-                content: trimmedMessage,
-                modelId: model,
-                modelProvider: provider,
-              }),
-              permanentMemory.addMessage(conversation.id, {
-                role: 'assistant',
-                content: response.content,
-                modelId: response.model,
-                modelProvider: response.provider,
-              }),
-            ]),
-        });
-      }
       await runtime.transition(runId, 'MemorySync');
-      logger.debug(`[Chat] MongoDB save done`, {
+      logger.debug(`[Chat] Canonical Memory sync done`, {
         durationMs: Date.now() - t4,
         sessionId: session,
         conversationId: conversation?.id || 'none',
@@ -439,7 +413,7 @@ router.post('/stream', async (req: Request, res: Response) => {
   const lock = acquireSessionLock(session, userId);
   await lock.wait(); // Wait for any previous request on this session to finish
 
-  const tempMemory = getTemporaryMemory();
+  const memory = getServerMemoryOperations('chat');
   const startTime = Date.now();
   const runtime = getEventRuntime();
   let runId: string | undefined;
@@ -471,9 +445,9 @@ router.post('/stream', async (req: Request, res: Response) => {
     const history = await runtime.recordMemoryRead({
       runId,
       stepId: 'memory:read',
-      target: 'temporary',
+      target: 'canonical',
       details: { sessionId: session, stream: true },
-      reader: () => tempMemory.getMessages(session, undefined, userId),
+      reader: () => memory.getMessages(session, undefined, userId),
     });
     await runtime.transition(runId, 'ContextBuilt', {
       messageCount: history.length,
@@ -482,12 +456,12 @@ router.post('/stream', async (req: Request, res: Response) => {
       runId,
       'context.build.completed',
       {
-        source: 'temporary-memory',
+        source: 'canonical-memory',
         messageCount: history.length,
       },
       'context'
     );
-    logger.debug(`[SSE] Redis: getMessages done`, {
+    logger.debug(`[SSE] Memory: getMessages done`, {
       durationMs: Date.now() - t1,
       historyCount: history.length,
     });
@@ -573,21 +547,21 @@ router.post('/stream', async (req: Request, res: Response) => {
           await runtime.transition(runId, 'Acting');
           streamActionEntered = true;
         }
-        // Save to temporary memory
+        // Save through canonical Memory
         await runtime.recordMemoryWrite({
           runId,
           stepId: 'memory:stream',
-          target: 'temporary',
+          target: 'canonical',
           details: { roles: ['user', 'assistant'], stream: true },
           writer: () =>
             Promise.all([
-              tempMemory.addMessage(session, {
+              memory.addMessage(session, {
                 userId,
                 sessionId: session,
                 role: 'user',
                 content: trimmedMessage,
               }),
-              tempMemory.addMessage(session, {
+              memory.addMessage(session, {
                 userId,
                 sessionId: session,
                 role: 'assistant',
@@ -697,8 +671,8 @@ router.get(
       });
     }
 
-    const tempMemory = getTemporaryMemory();
-    const messages = await tempMemory.getMessages(
+    const memory = getServerMemoryOperations('chat');
+    const messages = await memory.getMessages(
       sessionId,
       limit ? parseInt(limit as string) : undefined,
       userId
@@ -725,8 +699,8 @@ router.post(
       });
     }
 
-    const tempMemory = getTemporaryMemory();
-    await tempMemory.clearMessages(sessionId, userId);
+    const memory = getServerMemoryOperations('chat');
+    await memory.clearMessages(sessionId, userId);
 
     res.json({
       success: true,
@@ -749,16 +723,15 @@ router.delete(
       });
     }
 
-    const tempMemory = getTemporaryMemory();
-    const permanentMemory = getPermanentMemory();
+    const memory = getServerMemoryOperations('chat');
 
     // Clear temporary memory
-    await tempMemory.clearMessages(sessionId, userId);
+    await memory.clearMessages(sessionId, userId);
 
     // Delete from permanent memory
-    const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId);
+    const conversation = await memory.getConversationBySessionId(sessionId, userId);
     if (conversation) {
-      await permanentMemory.deleteConversation(conversation.id);
+      await memory.deleteConversation(conversation.id, userId);
     }
 
     res.json({

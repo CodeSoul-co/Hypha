@@ -8,10 +8,11 @@ import type {
 import { RUNTIME_WAIT_INTENT_TYPES } from '../../contracts/runtime-helpers';
 import { validateRuntimeOrchestrationProjection } from '../../contracts/runtime-projection-schemas';
 import { FrameworkError } from '../../errors';
+import { migrateLegacyHumanWaitEvent } from './legacy-wait-migration';
 import type { ProjectionDefinition } from './projection';
 
 export const RUNTIME_ORCHESTRATION_PROJECTION_ID = 'runtime.orchestration';
-export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.3.0';
+export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.4.0';
 
 const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.created',
@@ -27,6 +28,7 @@ const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'human.review.requested',
   'runtime.wait.created',
   'runtime.wait.resolved',
   'runtime.signal.received',
@@ -103,6 +105,8 @@ export function reduceRuntimeOrchestrationProjection(
       return terminateRun(state, event, 'failed');
     case 'run.cancelled':
       return terminateRun(state, event, 'cancelled');
+    case 'human.review.requested':
+      return humanReviewRequested(state, event);
     case 'runtime.wait.created':
       return waitCreated(state, event);
     case 'runtime.wait.resolved':
@@ -204,9 +208,19 @@ function runWaiting(
     paused: 'pause',
   } as const;
   const expectedWaitType: RuntimePendingWaitProjection['type'] = waitTypesByStatus[runStatus];
+  let projectedEvent = event;
+  if (!state.pendingWait && runStatus === 'waiting_human') {
+    const migration = migrateLegacyHumanWaitEvent(event, state.pendingHumanActionRef);
+    if (migration.entry.status === 'quarantined') {
+      divergence('Legacy Human Wait cannot be migrated safely', event, {
+        migration: migration.entry,
+      });
+    }
+    projectedEvent = migration.event;
+  }
   const withPendingWait = state.pendingWait
     ? state
-    : projectLegacyPendingWait(state, event, expectedWaitType);
+    : projectLegacyPendingWait(state, projectedEvent, expectedWaitType);
   if (withPendingWait.pendingWait?.type !== expectedWaitType) {
     divergence(`${event.type} requires a matching pending Wait`, event, {
       expectedWaitType,
@@ -240,6 +254,10 @@ function projectLegacyPendingWait(
     stateAttempt: state.stateAttempt,
     type: expectedWaitType,
     ...(optionalString(wait.key) === undefined ? {} : { key: optionalString(wait.key) }),
+    ...(optionalString(wait.pendingActionRef) === undefined
+      ? {}
+      : { pendingActionRef: optionalString(wait.pendingActionRef) }),
+    ...(optionalString(wait.reason) === undefined ? {} : { reason: optionalString(wait.reason) }),
     ...(recordValue(wait.expectedSchema) === null
       ? {}
       : { expectedSchema: recordValue(wait.expectedSchema) ?? undefined }),
@@ -248,7 +266,21 @@ function projectLegacyPendingWait(
       : { expiresAt: optionalString(wait.expiresAt) }),
     createdAt: event.timestamp,
   };
-  return { ...omitLastResume(state), pendingWait };
+  return { ...omitPendingHumanActionRef(omitLastResume(state)), pendingWait };
+}
+
+function humanReviewRequested(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  const payload = payloadRecord(event);
+  const actionRef =
+    optionalString(payload.pendingActionRef) ??
+    optionalString(payload.invocationId) ??
+    optionalString(payload.taskId) ??
+    optionalString(payload.requestId) ??
+    (optionalString(payload.toolId) ? `tool:${optionalString(payload.toolId)}` : undefined);
+  return actionRef ? validated({ ...state, pendingHumanActionRef: actionRef }, event) : state;
 }
 
 function runResumeRequested(
@@ -256,7 +288,7 @@ function runResumeRequested(
   event: PersistedFrameworkEvent
 ): RuntimeOrchestrationProjection {
   requireCreated(state, event);
-  if (!['paused', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
+  if (!['paused', 'waiting_human', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
     divergence(`Run cannot resume from ${state.runStatus}`, event);
   }
   if (!state.pendingWait) divergence('Run resume requires a pending Wait', event);
@@ -325,6 +357,10 @@ function waitCreated(
     stateAttempt,
     type: type as RuntimePendingWaitProjection['type'],
     ...(optionalString(wait.key) === undefined ? {} : { key: optionalString(wait.key) }),
+    ...(optionalString(wait.pendingActionRef) === undefined
+      ? {}
+      : { pendingActionRef: optionalString(wait.pendingActionRef) }),
+    ...(optionalString(wait.reason) === undefined ? {} : { reason: optionalString(wait.reason) }),
     ...(recordValue(wait.expectedSchema) === null
       ? {}
       : { expectedSchema: recordValue(wait.expectedSchema) ?? undefined }),
@@ -333,7 +369,7 @@ function waitCreated(
       : { expiresAt: optionalString(wait.expiresAt) }),
     createdAt: requiredString(payload.createdAt, 'wait createdAt', event),
   };
-  const withoutLastResume = omitLastResume(state);
+  const withoutLastResume = omitPendingHumanActionRef(omitLastResume(state));
   return validated({ ...withoutLastResume, pendingWait }, event);
 }
 
@@ -636,6 +672,14 @@ function omitPendingWait(
 ): Omit<RuntimeOrchestrationProjection, 'pendingWait'> {
   const { pendingWait, ...remaining } = state;
   void pendingWait;
+  return remaining;
+}
+
+function omitPendingHumanActionRef(
+  state: RuntimeOrchestrationProjection
+): Omit<RuntimeOrchestrationProjection, 'pendingHumanActionRef'> {
+  const { pendingHumanActionRef, ...remaining } = state;
+  void pendingHumanActionRef;
   return remaining;
 }
 

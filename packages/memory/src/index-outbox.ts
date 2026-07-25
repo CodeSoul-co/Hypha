@@ -1,6 +1,7 @@
 import type { EmbeddingProvider, VectorIndexProvider } from './index';
 import type { ManagedMemoryRecord, NormalizedMemoryError } from './contracts';
 import type { ProviderHealth } from './operations';
+import { runWithLeaseHeartbeat } from './lease-heartbeat';
 import type {
   ManagedMemoryRecordStore,
   MemoryIndexOutboxRecord,
@@ -120,11 +121,13 @@ export interface IndexOutboxWorkerOptions {
   vectorStores: ManagedVectorStoreAdapter[];
   batchSize?: number;
   leaseMs?: number;
+  renewalMs?: number;
   maxAttempts?: number;
   retryDelayMs?: number;
   pollIntervalMs?: number;
   now?: () => Date;
   onEvent?: (event: IndexOutboxWorkerEvent) => void | Promise<void>;
+  onError?: (error: NormalizedMemoryError) => void | Promise<void>;
 }
 
 export interface IndexOutboxWorkerRunResult {
@@ -137,6 +140,8 @@ export interface IndexOutboxWorkerRunResult {
 export class IndexOutboxWorker {
   private running = false;
   private timer?: ReturnType<typeof setTimeout>;
+  private controller?: AbortController;
+  private activeRun?: Promise<IndexOutboxWorkerRunResult>;
   private readonly stores: Map<string, ManagedVectorStoreAdapter>;
   private readonly now: () => Date;
 
@@ -163,25 +168,64 @@ export class IndexOutboxWorker {
 
     for (const record of records) {
       await this.emit('memory.index.started', record);
+      const controller = new AbortController();
+      this.controller = controller;
+      const leaseToken = requiredLeaseToken(record);
       try {
-        await this.process(record);
-        await this.options.outboxStore.complete(record.id, this.now().toISOString());
+        await runWithLeaseHeartbeat((signal) => this.process(record, signal), {
+          leaseMs: this.options.leaseMs ?? 30_000,
+          renewalMs: this.options.renewalMs,
+          now: this.now,
+          controller,
+          description: `Memory index outbox record ${record.id}`,
+          renew: (renewedAt, renewedUntil) =>
+            this.options.outboxStore.renew(
+              record.id,
+              this.options.ownerId,
+              leaseToken,
+              renewedAt,
+              renewedUntil
+            ),
+        });
+        const completed = await this.options.outboxStore.complete(
+          record.id,
+          this.options.ownerId,
+          leaseToken,
+          this.now().toISOString()
+        );
+        if (!completed) throw new Error('Memory index outbox lease was lost.');
         result.completed += 1;
         await this.emit('memory.index.completed', record);
       } catch (error) {
         const normalized = normalizeMemoryError(error, 'MEMORY_INDEX_FAILED');
         const deadLetter = record.attempts >= (this.options.maxAttempts ?? 5);
+        const failedAt = this.now();
         const retryAt = new Date(
-          this.now().getTime() + (this.options.retryDelayMs ?? 1_000) * Math.max(1, record.attempts)
+          failedAt.getTime() + (this.options.retryDelayMs ?? 1_000) * Math.max(1, record.attempts)
         ).toISOString();
-        await this.options.outboxStore.fail(record.id, normalized, retryAt, deadLetter);
-        if (deadLetter) result.deadLettered += 1;
+        const failed = await this.options.outboxStore.fail(
+          record.id,
+          this.options.ownerId,
+          leaseToken,
+          failedAt.toISOString(),
+          normalized,
+          retryAt,
+          deadLetter
+        );
+        if (!failed) {
+          await this.options.onError?.(
+            normalizeMemoryError(new Error('Memory index outbox lease was lost.'))
+          );
+        }
+        if (failed && deadLetter) result.deadLettered += 1;
         else result.failed += 1;
         await this.emit(
-          deadLetter ? 'memory.index.failed' : 'memory.index.partial',
+          failed && deadLetter ? 'memory.index.failed' : 'memory.index.partial',
           record,
           normalized
         );
+      } finally {
+        if (this.controller === controller) this.controller = undefined;
       }
     }
     return result;
@@ -193,8 +237,12 @@ export class IndexOutboxWorker {
     const poll = async (): Promise<void> => {
       if (!this.running) return;
       try {
-        await this.runOnce();
+        this.activeRun = this.runOnce();
+        await this.activeRun;
+      } catch (error) {
+        await this.options.onError?.(normalizeMemoryError(error));
       } finally {
+        this.activeRun = undefined;
         if (this.running) {
           this.timer = setTimeout(poll, this.options.pollIntervalMs ?? 1_000);
         }
@@ -205,11 +253,22 @@ export class IndexOutboxWorker {
 
   stop(): void {
     this.running = false;
+    this.controller?.abort(new Error('Memory index worker stopped.'));
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
 
-  private async process(record: MemoryIndexOutboxRecord): Promise<void> {
+  async drain(): Promise<void> {
+    await this.activeRun;
+  }
+
+  async stopAndDrain(): Promise<void> {
+    this.stop();
+    await this.drain();
+  }
+
+  private async process(record: MemoryIndexOutboxRecord, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
     const targets = record.targetVectorStoreIds.map((id) => {
       const store = this.stores.get(id);
       if (!store) throw new Error(`Vector store is not registered: ${id}`);
@@ -217,6 +276,7 @@ export class IndexOutboxWorker {
     });
     if (record.action === 'delete') {
       await Promise.all(targets.map((store) => store.delete([record.memoryId])));
+      throwIfAborted(signal);
       return;
     }
     const memory = await this.options.recordStore.getVersionByScopeHash(
@@ -224,6 +284,7 @@ export class IndexOutboxWorker {
       record.memoryVersionId,
       record.scopeHash
     );
+    throwIfAborted(signal);
     if (!memory) {
       throw new Error(
         `Memory version is unavailable for indexing: ${record.memoryId}@${record.memoryVersionId}`
@@ -231,9 +292,11 @@ export class IndexOutboxWorker {
     }
     const text = memory.canonicalText ?? stringify(memory.content);
     const [vector] = await this.options.embeddingProvider.embed([text]);
+    throwIfAborted(signal);
     if (!vector) throw new Error('Embedding provider returned no vector.');
-    const point = vectorPoint(memory, vector);
+    const point = vectorPoint(memory, vector, record.fencingToken);
     await Promise.all(targets.map((store) => store.upsert([point])));
+    throwIfAborted(signal);
   }
 
   private async emit(
@@ -253,7 +316,11 @@ export class IndexOutboxWorker {
   }
 }
 
-function vectorPoint(record: ManagedMemoryRecord, vector: number[]): ManagedVectorPoint {
+function vectorPoint(
+  record: ManagedMemoryRecord,
+  vector: number[],
+  fencingToken?: number
+): ManagedVectorPoint {
   return {
     id: record.id,
     vector,
@@ -264,6 +331,7 @@ function vectorPoint(record: ManagedMemoryRecord, vector: number[]): ManagedVect
       type: record.type,
       status: record.status,
       contentHash: record.contentHash,
+      fencingToken,
       tags: record.tags,
       updatedAt: record.updatedAt,
     },
@@ -300,4 +368,14 @@ function cosineSimilarity(left: number[], right: number[]): number {
 
 function stringify(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Memory index worker aborted.');
+}
+
+function requiredLeaseToken(record: MemoryIndexOutboxRecord): string {
+  if (!record.leaseToken) throw new Error('Leased Memory index record is missing its lease token.');
+  return record.leaseToken;
 }
