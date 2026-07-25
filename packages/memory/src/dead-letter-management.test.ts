@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   InMemoryMemoryDeadLetterRepository,
+  InMemoryMemoryLifecycleTaskStore,
   MemoryDeadLetterManager,
   deadLetterFromTask,
   type MemoryLifecycleTask,
+  inspectMemoryLifecycleDeadLetters,
 } from './index';
 
 const task: MemoryLifecycleTask = {
@@ -41,6 +43,32 @@ describe('MemoryDeadLetterManager', () => {
       state: 'replay_queued',
       disposition: { actorId: 'operator-1', reason: 'provider recovered' },
     });
+  });
+
+  it('inspects durable lifecycle DLQ metadata without returning payloads or messages', async () => {
+    const store = new InMemoryMemoryLifecycleTaskStore();
+    await store.enqueue(task);
+
+    const result = await inspectMemoryLifecycleDeadLetters(store, {
+      workerType: 'provider_reconciliation',
+      scopeHash: 'scope-1',
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        taskId: 'task-1',
+        operationId: 'operation-1',
+        workerType: 'provider_reconciliation',
+        attempts: 5,
+        error: {
+          code: 'MEMORY_PROVIDER_UNAVAILABLE',
+          retryable: true,
+          providerCode: undefined,
+        },
+        payloadHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain('write-1');
+    expect(JSON.stringify(result)).not.toContain('offline');
   });
 
   it('requires exact fingerprint and explicit discard confirmation', async () => {

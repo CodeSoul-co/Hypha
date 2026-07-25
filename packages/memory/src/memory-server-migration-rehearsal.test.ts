@@ -112,6 +112,29 @@ describe('MemoryServerMigrationRehearsal', () => {
     expect(retired.state).toMatchObject({ phase: 'retire', activePath: 'canonical' });
   });
 
+  it('returns a read-only migration plan with actionable reconciliation keys', async () => {
+    const data = new DataPort();
+    data.canonical.set('message:1', { digest: 'drifted', id: 'canonical:message:1' });
+    data.canonical.set('unexpected:1', { digest: 'digest:unexpected', id: 'canonical:unexpected' });
+
+    await expect(
+      new MemoryServerMigrationRehearsal(data, new Checkpoints()).plan()
+    ).resolves.toEqual({
+      legacyRecords: 2,
+      canonicalRecords: 2,
+      matchingRecords: 0,
+      missingCanonicalKeys: ['conversation:1'],
+      unexpectedCanonicalKeys: ['unexpected:1'],
+      digestMismatchKeys: ['message:1'],
+      reconciliation: {
+        status: 'failed',
+        comparedRecords: 2,
+        mismatchCount: 3,
+        shadowResult: 'mismatched',
+      },
+    });
+  });
+
   it('fails closed and removes imports when reconciliation detects drift', async () => {
     const data = new DataPort();
     data.listCanonical = async () =>

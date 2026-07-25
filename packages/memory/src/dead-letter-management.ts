@@ -1,4 +1,8 @@
-import type { MemoryLifecycleTask, MemoryLifecycleWorkerType } from './lifecycle-workers';
+import type {
+  MemoryLifecycleTask,
+  MemoryLifecycleTaskStore,
+  MemoryLifecycleWorkerType,
+} from './lifecycle-workers';
 import type { NormalizedMemoryError } from './contracts';
 import { memoryError, sha256 } from './memory-utils';
 
@@ -148,4 +152,43 @@ export function deadLetterFromTask(
     createdAt: task.createdAt,
     updatedAt: occurredAt,
   };
+}
+
+export interface MemoryDeadLetterInspection {
+  taskId: string;
+  operationId: string;
+  workerType: MemoryLifecycleWorkerType;
+  scopeHash: string;
+  attempts: number;
+  error: Pick<NormalizedMemoryError, 'code' | 'retryable' | 'providerCode'>;
+  payloadHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Returns operator-safe DLQ metadata without exposing task payloads or Provider messages. */
+export async function inspectMemoryLifecycleDeadLetters(
+  store: MemoryLifecycleTaskStore,
+  query: { workerType?: MemoryLifecycleWorkerType; scopeHash?: string } = {}
+): Promise<MemoryDeadLetterInspection[]> {
+  const tasks = await store.list(query.workerType);
+  return tasks
+    .filter((task) => task.state === 'dead_letter')
+    .filter((task) => !query.scopeHash || task.scopeHash === query.scopeHash)
+    .map((task) => ({
+      taskId: task.id,
+      operationId: task.operationId,
+      workerType: task.type,
+      scopeHash: task.scopeHash,
+      attempts: task.attempts,
+      error: {
+        code: task.lastError?.code ?? 'MEMORY_INTERNAL_ERROR',
+        retryable: task.lastError?.retryable ?? false,
+        providerCode: task.lastError?.providerCode,
+      },
+      payloadHash: sha256(task.payload),
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
