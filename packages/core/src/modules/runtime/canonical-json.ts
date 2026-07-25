@@ -44,7 +44,7 @@ function serializeCanonicalJson(value: unknown, ancestors: Set<object>, path: st
     }
 
     const prototype = Object.getPrototypeOf(value);
-    if (!isPlainObjectPrototype(prototype)) {
+    if (prototype !== Object.prototype && prototype !== null) {
       fail(path, 'must contain only plain JSON objects');
     }
     if (Object.getOwnPropertySymbols(value).length > 0) {
@@ -61,18 +61,6 @@ function serializeCanonicalJson(value: unknown, ancestors: Set<object>, path: st
   } finally {
     ancestors.delete(objectValue);
   }
-}
-
-function isPlainObjectPrototype(prototype: object | null): boolean {
-  if (prototype === null || prototype === Object.prototype) return true;
-  const constructor = Object.prototype.hasOwnProperty.call(prototype, 'constructor')
-    ? (prototype as { constructor?: unknown }).constructor
-    : undefined;
-  return (
-    Object.getPrototypeOf(prototype) === null &&
-    typeof constructor === 'function' &&
-    Function.prototype.toString.call(constructor) === Function.prototype.toString.call(Object)
-  );
 }
 
 function compareUnicodeCodePoints(left: string, right: string): number {
