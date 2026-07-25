@@ -9,6 +9,7 @@ export const RUNTIME_RECOVERY_CANDIDATE_REASONS = [
   'PROJECTION_BEHIND',
   'CHECKPOINT_BEHIND',
   'ACTIVITY_RESULT_UNAPPLIED',
+  'ACTIVITY_COMPENSATION_REQUIRED',
   'MESSAGE_UNACKED',
   'OUTBOX_UNPUBLISHED',
   'WAIT_WITHOUT_REGISTRATION',
@@ -23,6 +24,7 @@ export const RUNTIME_RECOVERY_SAFE_ACTIONS = [
   'rebuild_projection',
   'requeue',
   'apply_observation',
+  'compensate_activity',
   'restore_wait',
   'fire_timer',
   'republish_message',
@@ -34,6 +36,7 @@ export const RUNTIME_RECOVERY_DISPOSITIONS = [
   'recovered',
   'reused',
   'requeued',
+  'compensated',
   'requires_review',
   'lease_unavailable',
   'stale',
@@ -48,11 +51,19 @@ export const RUNTIME_ACTIVITY_RECONCILIATION_STATUSES = [
   'unknown',
 ] as const;
 
+export const RUNTIME_ACTIVITY_COMPENSATION_STATUSES = [
+  'completed',
+  'failed',
+  'requires_review',
+] as const;
+
 export type RuntimeRecoveryCandidateReason = (typeof RUNTIME_RECOVERY_CANDIDATE_REASONS)[number];
 export type RuntimeRecoverySafeAction = (typeof RUNTIME_RECOVERY_SAFE_ACTIONS)[number];
 export type RuntimeRecoveryDisposition = (typeof RUNTIME_RECOVERY_DISPOSITIONS)[number];
 export type RuntimeActivityReconciliationStatus =
   (typeof RUNTIME_ACTIVITY_RECONCILIATION_STATUSES)[number];
+export type RuntimeActivityCompensationStatus =
+  (typeof RUNTIME_ACTIVITY_COMPENSATION_STATUSES)[number];
 
 export interface RuntimeRecoveryScope {
   tenantId?: string;
@@ -68,6 +79,8 @@ export interface RuntimeRecoveryCandidate {
   eventHeadSequence: number;
   projectionSequence?: number;
   activityId?: string;
+  stateId?: string;
+  stateAttempt?: number;
   currentLease?: FencedRunLease;
   detectedAt: string;
 }
@@ -108,6 +121,22 @@ export interface RuntimeActivityRetryRequest extends RuntimeActivityReconciliati
   fencingToken: number;
 }
 
+export interface RuntimeActivityCompensationRequest {
+  invocation: RuntimeActivityInvocation;
+  reason: string;
+  requestedAt: string;
+  fencingToken: number;
+  idempotencyKey: string;
+}
+
+export interface RuntimeActivityCompensationResult {
+  activityId: string;
+  status: RuntimeActivityCompensationStatus;
+  providerRevision?: string;
+  receiptId?: string;
+  errorCode?: string;
+}
+
 export interface RuntimeActivityReconciliationResult {
   activityId: string;
   status: RuntimeActivityReconciliationStatus;
@@ -121,6 +150,9 @@ export interface RuntimeActivityReconciliationPort {
     request: RuntimeActivityReconciliationRequest
   ): Promise<RuntimeActivityReconciliationResult>;
   retry(request: RuntimeActivityRetryRequest): Promise<RuntimeActivityObservation>;
+  compensate?(
+    request: RuntimeActivityCompensationRequest
+  ): Promise<RuntimeActivityCompensationResult>;
 }
 
 export interface RuntimeRecoveryRequeueRequest {
@@ -128,6 +160,8 @@ export interface RuntimeRecoveryRequeueRequest {
   reason: RuntimeRecoveryCandidateReason;
   requestedAt: string;
   fencingToken: number;
+  expectedStateId?: string;
+  expectedStateAttempt?: number;
   idempotencyKey: string;
 }
 

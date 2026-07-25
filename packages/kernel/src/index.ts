@@ -3,6 +3,8 @@ import type { ContextSpec, JsonSchema, SpecMetadata, SpecRef, VersionedSpec } fr
 import {
   defineSpecSchema,
   exportSpecJsonSchemas,
+  FrameworkError,
+  hashCanonicalJson,
   specMetadataSchema,
   specRefSchema,
   versionedSpecSchema,
@@ -181,7 +183,9 @@ export type ReActPhase =
   | 'memory_sync'
   | 'complete'
   | 'fail'
-  | 'human_review';
+  | 'human_review'
+  | 'suspend'
+  | 'cancel';
 
 export interface ReActStep {
   id: string;
@@ -324,13 +328,18 @@ export interface ReActRunnerOptions {
   inference: InferenceProvider;
   toolRunner?: ToolRunner;
   maxIterations?: number;
+  executionBudget?: Partial<ReActExecutionBudget>;
+  checkpointStore?: ReActContinuationCheckpointStore;
   continueAfterTool?: boolean;
   onStep?: (step: ReActStep) => Promise<void> | void;
+  onCheckpoint?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
+  onResume?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
   syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
   resolveToolExecutionScope?: (
     context: ReActRunContext,
     action: ReActAction
   ) => ToolExecutionScope | undefined;
+  now?: () => string;
 }
 
 export interface ContextBuildInput<TInput = unknown> {
@@ -442,11 +451,231 @@ export interface ReActAgentRunnerOptions extends Omit<ReActRunnerOptions, 'toolR
 
 export interface ReActRunResult {
   runId: string;
-  status: 'completed' | 'failed' | 'human_review_required';
+  status: 'completed' | 'failed' | 'human_review_required' | 'suspended' | 'cancelled';
   steps: ReActStep[];
   output?: unknown;
   finalAction?: ReActAction;
+  checkpoint?: ReActContinuationCheckpoint;
+  suspension?: ReActSuspension;
   error?: unknown;
+}
+
+export const REACT_SUSPENSION_REASONS = [
+  'quantum_exhausted',
+  'iteration_budget_exhausted',
+  'model_call_budget_exhausted',
+  'tool_call_budget_exhausted',
+  'token_budget_exhausted',
+  'non_progress',
+  'deadline_exceeded',
+] as const;
+
+export type ReActSuspensionReason = (typeof REACT_SUSPENSION_REASONS)[number];
+
+/**
+ * Global limits survive process restarts through ReActContinuationCheckpoint.
+ * quantumIterations only bounds one worker turn; it is not a new total budget.
+ */
+export interface ReActExecutionBudget {
+  maxIterations: number;
+  maxModelCalls: number;
+  maxToolCalls: number;
+  maxTotalTokens?: number;
+  maxConsecutiveNoProgress: number;
+  quantumIterations: number;
+  deadlineAt?: string;
+}
+
+export interface ReActContinuationCheckpoint {
+  version: '1.0.0';
+  runId: string;
+  stepId: string;
+  scopeHash: string;
+  agentRef: SpecRef;
+  nextPhase: 'reason' | 'act';
+  messages: ModelMessage[];
+  iterations: number;
+  modelCalls: number;
+  toolCalls: number;
+  totalTokens: number;
+  toolInvocationSequence: number;
+  stepSequence: number;
+  consecutiveNoProgress: number;
+  lastProgressFingerprint?: string;
+  pendingAction?: ReActAction;
+  pendingToolInvocationId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReActSuspension {
+  reason: ReActSuspensionReason;
+  retryable: boolean;
+  requiresHumanReview: boolean;
+  message: string;
+}
+
+export interface ReActRunControl {
+  checkpoint?: ReActContinuationCheckpoint;
+  executionBudget?: Partial<ReActExecutionBudget>;
+  abortSignal?: AbortSignal;
+  resumeFromCheckpointStore?: boolean;
+}
+
+export interface ReActContinuationCheckpointPutResult {
+  checkpoint: ReActContinuationCheckpoint;
+  reused: boolean;
+}
+
+export interface ReActContinuationCheckpointStore {
+  put(
+    checkpoint: ReActContinuationCheckpoint,
+    idempotencyKey: string
+  ): Promise<ReActContinuationCheckpointPutResult>;
+  get(
+    runId: string,
+    stepId: string,
+    expectedScopeHash: string
+  ): Promise<ReActContinuationCheckpoint | null>;
+  delete(
+    runId: string,
+    stepId: string,
+    expectedScopeHash: string,
+    expectedStepSequence?: number
+  ): Promise<boolean>;
+}
+
+interface InMemoryReActCheckpointIdempotency {
+  requestHash: string;
+  result: ReActContinuationCheckpointPutResult;
+}
+
+export interface InMemoryReActContinuationCheckpointStoreOptions {
+  maxCheckpoints?: number;
+  maxIdempotencyRecords?: number;
+  maxCheckpointBytes?: number;
+}
+
+export class InMemoryReActContinuationCheckpointStore implements ReActContinuationCheckpointStore {
+  private readonly checkpoints = new Map<string, ReActContinuationCheckpoint>();
+  private readonly idempotency = new Map<string, InMemoryReActCheckpointIdempotency>();
+  private writeBarrier = Promise.resolve();
+  private readonly maxCheckpoints: number;
+  private readonly maxIdempotencyRecords: number;
+  private readonly maxCheckpointBytes: number;
+
+  constructor(options: InMemoryReActContinuationCheckpointStoreOptions = {}) {
+    this.maxCheckpoints = positiveReActInteger(options.maxCheckpoints ?? 1_000, 'maxCheckpoints');
+    this.maxIdempotencyRecords = positiveReActInteger(
+      options.maxIdempotencyRecords ?? 10_000,
+      'maxIdempotencyRecords'
+    );
+    this.maxCheckpointBytes = positiveReActInteger(
+      options.maxCheckpointBytes ?? 4 * 1024 * 1024,
+      'maxCheckpointBytes'
+    );
+  }
+
+  async put(
+    input: ReActContinuationCheckpoint,
+    idempotencyKey: string
+  ): Promise<ReActContinuationCheckpointPutResult> {
+    const checkpoint = validateReActContinuationCheckpoint(input);
+    assertReActCheckpointBytes(checkpoint, this.maxCheckpointBytes);
+    nonEmptyReActValue(idempotencyKey, 'checkpoint idempotencyKey');
+    const previousWrite = this.writeBarrier;
+    let releaseWrite = (): void => undefined;
+    this.writeBarrier = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    await previousWrite;
+    try {
+      const scopeKey = reActCheckpointKey(checkpoint.runId, checkpoint.stepId);
+      const idempotencyScope = `${scopeKey}:${idempotencyKey}`;
+      const requestHash = hashCanonicalJson(checkpoint);
+      const prior = this.idempotency.get(idempotencyScope);
+      if (prior) {
+        if (prior.requestHash !== requestHash) {
+          reActCheckpointConflict('Checkpoint idempotency key was reused with different input');
+        }
+        return structuredClone({ ...prior.result, reused: true });
+      }
+      const current = this.checkpoints.get(scopeKey);
+      if (current) assertReActCheckpointScope(current, checkpoint.scopeHash);
+      if (!current && this.checkpoints.size >= this.maxCheckpoints) {
+        throw new FrameworkError({
+          code: 'RUNTIME_RESOURCE_CONFLICT',
+          message: 'In-memory ReAct checkpoint capacity is exhausted',
+          context: { maxCheckpoints: this.maxCheckpoints },
+        });
+      }
+      if (current && checkpoint.stepSequence < current.stepSequence) {
+        reActCheckpointConflict('Checkpoint stepSequence cannot move backwards');
+      }
+      if (current && checkpoint.stepSequence === current.stepSequence) {
+        if (hashCanonicalJson(current) !== requestHash) {
+          reActCheckpointConflict('Checkpoint stepSequence already contains different content');
+        }
+        const reused = { checkpoint: structuredClone(current), reused: true };
+        this.rememberIdempotency(idempotencyScope, { requestHash, result: reused });
+        return structuredClone(reused);
+      }
+      const result = { checkpoint: structuredClone(checkpoint), reused: false };
+      this.checkpoints.set(scopeKey, structuredClone(checkpoint));
+      this.rememberIdempotency(idempotencyScope, {
+        requestHash,
+        result: structuredClone(result),
+      });
+      return result;
+    } finally {
+      releaseWrite();
+    }
+  }
+
+  async get(
+    runId: string,
+    stepId: string,
+    expectedScopeHash: string
+  ): Promise<ReActContinuationCheckpoint | null> {
+    nonEmptyReActValue(runId, 'checkpoint runId');
+    nonEmptyReActValue(stepId, 'checkpoint stepId');
+    validReActHash(expectedScopeHash, 'checkpoint expectedScopeHash');
+    const checkpoint = this.checkpoints.get(reActCheckpointKey(runId, stepId));
+    if (!checkpoint) return null;
+    assertReActCheckpointScope(checkpoint, expectedScopeHash);
+    return structuredClone(checkpoint);
+  }
+
+  async delete(
+    runId: string,
+    stepId: string,
+    expectedScopeHash: string,
+    expectedStepSequence?: number
+  ): Promise<boolean> {
+    nonEmptyReActValue(runId, 'checkpoint runId');
+    nonEmptyReActValue(stepId, 'checkpoint stepId');
+    validReActHash(expectedScopeHash, 'checkpoint expectedScopeHash');
+    const key = reActCheckpointKey(runId, stepId);
+    const checkpoint = this.checkpoints.get(key);
+    if (!checkpoint) return false;
+    assertReActCheckpointScope(checkpoint, expectedScopeHash);
+    if (expectedStepSequence !== undefined && checkpoint.stepSequence !== expectedStepSequence) {
+      reActCheckpointConflict('Checkpoint delete expectedStepSequence does not match');
+    }
+    const deleted = this.checkpoints.delete(key);
+    for (const idempotencyKey of this.idempotency.keys()) {
+      if (idempotencyKey.startsWith(`${key}:`)) this.idempotency.delete(idempotencyKey);
+    }
+    return deleted;
+  }
+
+  private rememberIdempotency(key: string, record: InMemoryReActCheckpointIdempotency): void {
+    if (!this.idempotency.has(key) && this.idempotency.size >= this.maxIdempotencyRecords) {
+      const oldest = this.idempotency.keys().next().value as string | undefined;
+      if (oldest) this.idempotency.delete(oldest);
+    }
+    this.idempotency.set(key, record);
+  }
 }
 
 export const REACT_PHASE_ORDER: ReActPhase[] = [
@@ -854,17 +1083,23 @@ export class MemoryContextBuilder implements ContextBuilder {
 export function createEpisodicMemorySync(
   options: EpisodicMemorySyncOptions
 ): NonNullable<ReActRunnerOptions['syncMemory']> {
-  let sequence = 0;
   const now = options.now ?? (() => new Date().toISOString());
   return async (context, observation) => {
-    sequence += 1;
     const scope: MemoryScope = {
       ...context.memoryScope,
       runId: context.memoryScope?.runId ?? context.runId,
     };
     const timestamp = now();
+    const observationHash = hashCanonicalJson({
+      runId: context.runId,
+      stepId: context.stepId,
+      source: observation.source,
+      value: stringifyReActMessage(observation.value),
+      provenance: stringifyReActMessage(observation.provenance ?? null),
+    });
+    const memorySyncId = observationHash.slice('sha256:'.length);
     const record: MemoryRecord = {
-      id: `${options.idPrefix ?? 'episodic'}:${context.runId}:${sequence}`,
+      id: `${options.idPrefix ?? 'episodic'}:${context.runId}:${memorySyncId}`,
       type: 'episodic',
       value: {
         observationSource: observation.source,
@@ -875,6 +1110,7 @@ export function createEpisodicMemorySync(
       provenance: {
         runId: context.runId,
         stepId: context.stepId,
+        memorySyncId,
         observationSource: observation.source,
         ...(observation.provenance ?? {}),
       },
@@ -885,6 +1121,7 @@ export function createEpisodicMemorySync(
     await options.memory.write(scope, record, {
       allowLongTerm: options.allowLongTerm ?? true,
       requireProvenance: true,
+      idempotencyKey: `react-memory-sync:${observationHash}`,
     });
   };
 }
@@ -951,41 +1188,230 @@ export class BasicReActAgentRuntime implements ReActAgentRuntime {
 
 export class ReActRunner {
   private readonly maxIterations: number;
-  private toolInvocationSequence = 0;
+  private readonly now: () => string;
 
   constructor(
     private readonly runtime: ReActAgentRuntime,
     private readonly options: ReActRunnerOptions
   ) {
     this.maxIterations = Math.max(1, options.maxIterations ?? 4);
+    this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  async run(context: ReActRunContext): Promise<ReActRunResult> {
+  async run(context: ReActRunContext, control: ReActRunControl = {}): Promise<ReActRunResult> {
     const steps: ReActStep[] = [];
+    const scopeHash = reActContinuationScopeHash(context);
+    const budget = resolveReActExecutionBudget(
+      this.maxIterations,
+      this.options.executionBudget,
+      control.executionBudget
+    );
+    let checkpointInput = control.checkpoint;
+    if (!checkpointInput && control.resumeFromCheckpointStore) {
+      if (!this.options.checkpointStore) {
+        throw new Error('resumeFromCheckpointStore requires checkpointStore.');
+      }
+      checkpointInput =
+        (await this.options.checkpointStore.get(context.runId, context.stepId, scopeHash)) ??
+        undefined;
+      if (!checkpointInput) {
+        throw new Error(`ReAct continuation checkpoint was not found: ${context.runId}.`);
+      }
+    }
+    const resumed = checkpointInput
+      ? validateReActContinuationCheckpoint(checkpointInput)
+      : undefined;
+    if (resumed) assertCheckpointMatchesContext(resumed, context);
+    if (resumed) await this.options.onResume?.(structuredClone(resumed));
+
+    const startedAt = resumed?.createdAt ?? this.timestamp('ReAct start');
+    let iterations = resumed?.iterations ?? 0;
+    let modelCalls = resumed?.modelCalls ?? 0;
+    let toolCalls = resumed?.toolCalls ?? 0;
+    let totalTokens = resumed?.totalTokens ?? 0;
+    let toolInvocationSequence = resumed?.toolInvocationSequence ?? 0;
+    let stepSequence = resumed?.stepSequence ?? 0;
+    let consecutiveNoProgress = resumed?.consecutiveNoProgress ?? 0;
+    let lastProgressFingerprint = resumed?.lastProgressFingerprint;
+    let quantumIterations = 0;
+    let persistedStepSequence = resumed?.stepSequence;
+    if (resumed) context.messages = structuredClone(resumed.messages);
+
     const pushStep = async (
       phase: ReActPhase,
       input?: unknown,
       output?: unknown
     ): Promise<ReActStep> => {
-      const step = createReActStep(`${context.stepId}:${steps.length + 1}:${phase}`, phase, input);
+      stepSequence += 1;
+      const step = createReActStep(`${context.stepId}:${stepSequence}:${phase}`, phase, input);
       step.output = output;
       steps.push(step);
       await this.options.onStep?.(step);
       return step;
     };
+    let pendingToolInvocationId = resumed?.pendingToolInvocationId;
+    const checkpoint = (
+      nextPhase: ReActContinuationCheckpoint['nextPhase'],
+      pendingAction?: ReActAction,
+      pendingInvocationId?: string
+    ): ReActContinuationCheckpoint =>
+      validateReActContinuationCheckpoint({
+        version: '1.0.0',
+        runId: context.runId,
+        stepId: context.stepId,
+        scopeHash,
+        agentRef: { id: context.agent.id, version: context.agent.version },
+        nextPhase,
+        messages: structuredClone(context.messages),
+        iterations,
+        modelCalls,
+        toolCalls,
+        totalTokens,
+        toolInvocationSequence,
+        stepSequence,
+        consecutiveNoProgress,
+        ...(lastProgressFingerprint === undefined ? {} : { lastProgressFingerprint }),
+        ...(pendingAction === undefined ? {} : { pendingAction: structuredClone(pendingAction) }),
+        ...(pendingInvocationId === undefined
+          ? {}
+          : { pendingToolInvocationId: pendingInvocationId }),
+        createdAt: startedAt,
+        updatedAt: this.timestamp('ReAct checkpoint'),
+      });
+    const persistCheckpoint = async (
+      nextPhase: ReActContinuationCheckpoint['nextPhase'],
+      pendingAction?: ReActAction,
+      pendingInvocationId?: string
+    ): Promise<ReActContinuationCheckpoint> => {
+      const current = checkpoint(nextPhase, pendingAction, pendingInvocationId);
+      await this.options.checkpointStore?.put(
+        current,
+        `${current.runId}:${current.stepId}:${current.stepSequence}:${current.nextPhase}`
+      );
+      persistedStepSequence = current.stepSequence;
+      await this.options.onCheckpoint?.(structuredClone(current));
+      return current;
+    };
+    const clearCheckpoint = async (): Promise<void> => {
+      if (!this.options.checkpointStore || persistedStepSequence === undefined) return;
+      await this.options.checkpointStore.delete(
+        context.runId,
+        context.stepId,
+        scopeHash,
+        persistedStepSequence
+      );
+      persistedStepSequence = undefined;
+    };
+    const suspend = async (
+      reason: ReActSuspensionReason,
+      nextPhase: ReActContinuationCheckpoint['nextPhase'],
+      pendingAction?: ReActAction,
+      pendingInvocationId?: string
+    ): Promise<ReActRunResult> => {
+      const suspension = reActSuspension(reason);
+      await pushStep('suspend', { reason }, suspension);
+      const current = await persistCheckpoint(nextPhase, pendingAction, pendingInvocationId);
+      return {
+        runId: context.runId,
+        status: 'suspended',
+        steps,
+        checkpoint: current,
+        suspension,
+        ...(pendingAction === undefined ? {} : { finalAction: pendingAction }),
+      };
+    };
+    const cancelled = async (): Promise<ReActRunResult> => {
+      await pushStep('cancel', undefined, 'ReAct execution was cancelled.');
+      await clearCheckpoint();
+      return { runId: context.runId, status: 'cancelled', steps };
+    };
+    const beforeExternalCall = async (
+      kind: 'model' | 'tool',
+      pendingAction?: ReActAction
+    ): Promise<ReActRunResult | undefined> => {
+      if (control.abortSignal?.aborted) return cancelled();
+      if (
+        budget.deadlineAt &&
+        Date.parse(this.timestamp('ReAct deadline check')) >= Date.parse(budget.deadlineAt)
+      ) {
+        return suspend(
+          'deadline_exceeded',
+          kind === 'model' ? 'reason' : 'act',
+          kind === 'tool' ? pendingAction : undefined,
+          kind === 'tool' ? pendingToolInvocationId : undefined
+        );
+      }
+      if (kind === 'tool' && iterations >= budget.maxIterations) {
+        return suspend('iteration_budget_exhausted', 'act', pendingAction, pendingToolInvocationId);
+      }
+      if (kind === 'tool' && quantumIterations >= budget.quantumIterations) {
+        return suspend('quantum_exhausted', 'act', pendingAction, pendingToolInvocationId);
+      }
+      if (kind === 'model' && modelCalls >= budget.maxModelCalls) {
+        return suspend('model_call_budget_exhausted', 'reason');
+      }
+      if (kind === 'tool' && toolCalls >= budget.maxToolCalls) {
+        return suspend('tool_call_budget_exhausted', 'act', pendingAction, pendingToolInvocationId);
+      }
+      if (budget.maxTotalTokens !== undefined && totalTokens >= budget.maxTotalTokens) {
+        return suspend(
+          'token_budget_exhausted',
+          kind === 'model' ? 'reason' : 'act',
+          kind === 'tool' ? pendingAction : undefined,
+          kind === 'tool' ? pendingToolInvocationId : undefined
+        );
+      }
+      return undefined;
+    };
+    const infer = async (): Promise<
+      | { disposition: 'inferred'; response: InferenceResponse; action: ReActAction }
+      | { disposition: 'suspended'; result: ReActRunResult }
+    > => {
+      const blocked = await beforeExternalCall('model');
+      if (blocked) return { disposition: 'suspended', result: blocked };
+      const inferenceRequest = await this.runtime.reason(context);
+      await pushStep(
+        'reason',
+        {
+          modelAlias: inferenceRequest.modelAlias,
+          ...(modelCalls === 0 ? {} : { afterObservation: true }),
+        },
+        inferenceRequest
+      );
+      const response = await this.options.inference.infer(inferenceRequest);
+      modelCalls += 1;
+      totalTokens += inferenceResponseTotalTokens(response);
+      const action = validateReActAction(await this.runtime.selectAction(response));
+      await pushStep('select_action', response, action);
+      return { disposition: 'inferred', response, action };
+    };
 
     try {
-      await pushStep('observe', { messageCount: context.messages.length });
-      const inferenceRequest = await this.runtime.reason(context);
-      await pushStep('reason', { modelAlias: inferenceRequest.modelAlias }, inferenceRequest);
+      let response: InferenceResponse = { id: 'checkpoint', output: undefined };
+      let action: ReActAction;
+      if (resumed?.nextPhase === 'act') {
+        if (!resumed.pendingAction || resumed.pendingAction.type !== 'tool') {
+          throw new Error('ReAct act checkpoint requires a pending Tool action.');
+        }
+        action = structuredClone(resumed.pendingAction);
+      } else {
+        if (!resumed) await pushStep('observe', { messageCount: context.messages.length });
+        const inferred = await infer();
+        if (inferred.disposition === 'suspended') return inferred.result;
+        response = inferred.response;
+        action = inferred.action;
+      }
 
-      let response = await this.options.inference.infer(inferenceRequest);
-      let action = await this.runtime.selectAction(response);
-      await pushStep('select_action', response, action);
-
-      for (let iteration = 0; iteration < this.maxIterations; iteration += 1) {
+      for (;;) {
+        if (control.abortSignal?.aborted) return cancelled();
+        if (action.type === 'tool' && !pendingToolInvocationId) {
+          toolInvocationSequence += 1;
+          pendingToolInvocationId = reActToolInvocationId(context, action, toolInvocationSequence);
+          await persistCheckpoint('act', action, pendingToolInvocationId);
+        }
         if (action.type === 'human_review') {
           await pushStep('human_review', action);
+          await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
@@ -999,10 +1425,13 @@ export class ReActRunner {
             source: action.type === 'model' ? 'model' : 'system',
             value: action.input ?? response.output,
           };
-          const verifiedAction = await this.runtime.verify(context, observation);
+          const verifiedAction = validateReActAction(
+            await this.runtime.verify(context, observation)
+          );
           await pushStep('verify', observation, verifiedAction);
           if (verifiedAction.type === 'human_review') {
             await pushStep('human_review', verifiedAction);
+            await clearCheckpoint();
             return {
               runId: context.runId,
               status: 'human_review_required',
@@ -1018,6 +1447,7 @@ export class ReActRunner {
           await pushStep('memory_sync', { source: observation.source });
           const output = verifiedAction.input ?? observation.value;
           await pushStep('complete', verifiedAction, output);
+          await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'completed',
@@ -1027,8 +1457,32 @@ export class ReActRunner {
           };
         }
 
+        const blocked = await beforeExternalCall('tool', action);
+        if (blocked) return blocked;
         await pushStep('policy_check', action);
-        const observation = await this.executeAction(context, action);
+        const executedAction = structuredClone(action);
+        if (!pendingToolInvocationId) {
+          throw new Error('Prepared Tool action is missing its invocation id.');
+        }
+        const observation = await this.executeAction(
+          context,
+          executedAction,
+          toolInvocationSequence,
+          pendingToolInvocationId,
+          control.abortSignal,
+          budget.deadlineAt
+        );
+        toolCalls += 1;
+        iterations += 1;
+        quantumIterations += 1;
+        pendingToolInvocationId = undefined;
+        const progressFingerprint = reActProgressFingerprint(executedAction, observation);
+        if (progressFingerprint === lastProgressFingerprint) {
+          consecutiveNoProgress += 1;
+        } else {
+          lastProgressFingerprint = progressFingerprint;
+          consecutiveNoProgress = 0;
+        }
         await pushStep('act', action, observation);
         await pushStep('observe_result', action, observation);
         if (observation.source === 'human') {
@@ -1039,6 +1493,7 @@ export class ReActRunner {
             reason: 'Tool action requires human review.',
           };
           await pushStep('human_review', observation, humanReviewAction);
+          await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
@@ -1047,12 +1502,13 @@ export class ReActRunner {
           };
         }
 
-        action = await this.runtime.verify(context, observation);
+        action = validateReActAction(await this.runtime.verify(context, observation));
         await pushStep('verify', observation, action);
         await this.options.syncMemory?.(context, observation);
         await pushStep('memory_sync', { source: observation.source });
         if (action.type === 'human_review') {
           await pushStep('human_review', action);
+          await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
@@ -1060,22 +1516,30 @@ export class ReActRunner {
             finalAction: action,
           };
         }
-        if (action.type === 'model' && this.options.continueAfterTool) {
-          this.appendToolObservation(context, actionFromStep(steps), observation);
-          const nextRequest = await this.runtime.reason(context);
-          await pushStep(
-            'reason',
-            { modelAlias: nextRequest.modelAlias, afterObservation: true },
-            nextRequest
+        if (consecutiveNoProgress >= budget.maxConsecutiveNoProgress) {
+          if (action.type === 'model' && this.options.continueAfterTool) {
+            this.appendToolObservation(context, executedAction, observation);
+            return suspend('non_progress', 'reason');
+          }
+          return suspend(
+            'non_progress',
+            action.type === 'tool' ? 'act' : 'reason',
+            action.type === 'tool' ? action : undefined
           );
-          response = await this.options.inference.infer(nextRequest);
-          action = await this.runtime.selectAction(response);
-          await pushStep('select_action', response, action);
+        }
+        if (action.type === 'model' && this.options.continueAfterTool) {
+          this.appendToolObservation(context, executedAction, observation);
+          await persistCheckpoint('reason');
+          const inferred = await infer();
+          if (inferred.disposition === 'suspended') return inferred.result;
+          response = inferred.response;
+          action = inferred.action;
           continue;
         }
         if (action.type === 'finish' || action.type === 'model') {
           const output = action.input ?? observation.value;
           await pushStep('complete', action, output);
+          await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'completed',
@@ -1084,9 +1548,8 @@ export class ReActRunner {
             finalAction: action,
           };
         }
+        await persistCheckpoint('act', action);
       }
-
-      throw new Error(`ReAct runner exceeded max iterations: ${this.maxIterations}`);
     } catch (error) {
       await pushStep('fail', undefined, error instanceof Error ? error.message : String(error));
       return {
@@ -1114,15 +1577,19 @@ export class ReActRunner {
     });
     context.messages.push({
       role: 'tool',
-      name: action.target,
-      toolCallId: action.toolCallId,
+      ...(action.target === undefined ? {} : { name: action.target }),
+      ...(action.toolCallId === undefined ? {} : { toolCallId: action.toolCallId }),
       content: stringifyReActMessage(observation.value),
     });
   }
 
   private async executeAction(
     context: ReActRunContext,
-    action: ReActAction
+    action: ReActAction,
+    toolInvocationSequence: number,
+    invocationId: string,
+    abortSignal?: AbortSignal,
+    deadlineAt?: string
   ): Promise<ReActObservation> {
     if (action.type !== 'tool') {
       return { source: 'system', value: action };
@@ -1132,10 +1599,6 @@ export class ReActRunner {
         `Tool action cannot execute without toolRunner and target: ${action.target ?? '<missing>'}`
       );
     }
-    this.toolInvocationSequence += 1;
-    const invocationId =
-      action.toolCallId ??
-      [context.runId, context.stepId, 'tool', action.target, this.toolInvocationSequence].join(':');
     const executionScope =
       this.options.resolveToolExecutionScope?.(context, action) ?? context.toolExecutionScope;
     const result = await this.options.toolRunner.run({
@@ -1143,12 +1606,15 @@ export class ReActRunner {
       input: action.input ?? {},
       context: {
         runId: context.runId,
-        stepId: `${context.stepId}:tool:${action.target}:${this.toolInvocationSequence}`,
+        stepId: `${context.stepId}:tool:${action.target}:${toolInvocationSequence}`,
         invocationId,
         userId: context.memoryScope?.userId,
         sessionId: context.memoryScope?.sessionId,
         agentId: context.agent.id,
         fsmState: executionScope?.fsmState,
+        ...(deadlineAt === undefined ? {} : { deadlineAt }),
+        ...(abortSignal === undefined ? {} : { abortSignal }),
+        idempotencyKey: invocationId,
         executionScope,
         principal: context.toolPrincipal,
         metadata: context.metadata,
@@ -1167,16 +1633,22 @@ export class ReActRunner {
       provenance: { toolId: action.target, status: result.status, invocationId },
     };
   }
+
+  private timestamp(label: string): string {
+    const value = this.now();
+    if (!Number.isFinite(Date.parse(value))) {
+      throw new Error(`${label} timestamp must be a valid ISO date-time.`);
+    }
+    return value;
+  }
 }
 
-function actionFromStep(steps: ReActStep[]): ReActAction {
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    const step = steps[index];
-    if (step.phase === 'act' && step.input && typeof step.input === 'object') {
-      return step.input as ReActAction;
-    }
-  }
-  throw new Error('ReAct tool observation is missing its action step.');
+function reActToolInvocationId(
+  context: ReActRunContext,
+  action: ReActAction,
+  sequence: number
+): string {
+  return [context.runId, context.stepId, 'tool', action.target, sequence].join(':');
 }
 
 function stringifyReActMessage(value: unknown): string {
@@ -1186,6 +1658,209 @@ function stringifyReActMessage(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function resolveReActExecutionBudget(
+  legacyMaxIterations: number,
+  configured?: Partial<ReActExecutionBudget>,
+  override?: Partial<ReActExecutionBudget>
+): ReActExecutionBudget {
+  const maxIterations = override?.maxIterations ?? configured?.maxIterations ?? legacyMaxIterations;
+  return validateReActExecutionBudget({
+    maxIterations,
+    maxModelCalls:
+      override?.maxModelCalls ?? configured?.maxModelCalls ?? Math.max(1, maxIterations + 1),
+    maxToolCalls: override?.maxToolCalls ?? configured?.maxToolCalls ?? maxIterations,
+    ...(override?.maxTotalTokens !== undefined
+      ? { maxTotalTokens: override.maxTotalTokens }
+      : configured?.maxTotalTokens !== undefined
+        ? { maxTotalTokens: configured.maxTotalTokens }
+        : {}),
+    maxConsecutiveNoProgress:
+      override?.maxConsecutiveNoProgress ?? configured?.maxConsecutiveNoProgress ?? 3,
+    quantumIterations:
+      override?.quantumIterations ?? configured?.quantumIterations ?? maxIterations,
+    ...(override?.deadlineAt !== undefined
+      ? { deadlineAt: override.deadlineAt }
+      : configured?.deadlineAt !== undefined
+        ? { deadlineAt: configured.deadlineAt }
+        : {}),
+  });
+}
+
+function assertCheckpointMatchesContext(
+  checkpoint: ReActContinuationCheckpoint,
+  context: ReActRunContext
+): void {
+  const expectedScopeHash = reActContinuationScopeHash(context);
+  if (
+    checkpoint.runId !== context.runId ||
+    checkpoint.stepId !== context.stepId ||
+    checkpoint.scopeHash !== expectedScopeHash ||
+    checkpoint.agentRef.id !== context.agent.id ||
+    checkpoint.agentRef.version !== context.agent.version
+  ) {
+    throw new Error(
+      `ReAct checkpoint does not match Run, Step, or Agent revision: ${checkpoint.runId}.`
+    );
+  }
+}
+
+export function reActContinuationScopeHash(context: ReActRunContext): string {
+  return hashCanonicalJson({
+    runId: context.runId,
+    stepId: context.stepId,
+    agentId: context.agent.id,
+    agentVersion: context.agent.version,
+    tenantId: context.toolPrincipal?.tenantId ?? null,
+    userId: context.memoryScope?.userId ?? context.toolPrincipal?.userId ?? null,
+    workspaceId: context.toolPrincipal?.workspaceId ?? null,
+    sessionId: context.memoryScope?.sessionId ?? null,
+    principalId: context.toolPrincipal?.principalId ?? context.toolPrincipal?.id ?? null,
+  });
+}
+
+function assertReActCheckpointScope(
+  checkpoint: ReActContinuationCheckpoint,
+  expectedScopeHash: string
+): void {
+  if (checkpoint.scopeHash !== expectedScopeHash) {
+    throw new FrameworkError({
+      code: 'RUNTIME_CHECKPOINT_FAILED',
+      message: 'ReAct checkpoint scope does not match the requested execution scope',
+      context: { runId: checkpoint.runId, stepId: checkpoint.stepId },
+    });
+  }
+}
+
+function inferenceResponseTotalTokens(response: InferenceResponse): number {
+  const explicit = response.usage?.totalTokens;
+  if (explicit !== undefined) return Math.max(0, explicit);
+  return Math.max(0, (response.usage?.inputTokens ?? 0) + (response.usage?.outputTokens ?? 0));
+}
+
+function reActProgressFingerprint(
+  action: Readonly<ReActAction>,
+  observation: Readonly<ReActObservation>
+): string {
+  return hashCanonicalJson({
+    action: {
+      type: action.type,
+      target: action.target ?? null,
+      input: stringifyReActMessage(action.input),
+    },
+    observation: {
+      source: observation.source,
+      value: stringifyReActMessage(observation.value),
+    },
+  });
+}
+
+function reActSuspension(reason: ReActSuspensionReason): ReActSuspension {
+  switch (reason) {
+    case 'quantum_exhausted':
+      return {
+        reason,
+        retryable: true,
+        requiresHumanReview: false,
+        message: 'The current worker quantum completed; resume from the durable checkpoint.',
+      };
+    case 'iteration_budget_exhausted':
+      return {
+        reason,
+        retryable: false,
+        requiresHumanReview: true,
+        message: 'The global ReAct iteration budget is exhausted.',
+      };
+    case 'model_call_budget_exhausted':
+      return {
+        reason,
+        retryable: false,
+        requiresHumanReview: true,
+        message: 'The global Model call budget is exhausted.',
+      };
+    case 'tool_call_budget_exhausted':
+      return {
+        reason,
+        retryable: false,
+        requiresHumanReview: true,
+        message: 'The global Tool call budget is exhausted.',
+      };
+    case 'token_budget_exhausted':
+      return {
+        reason,
+        retryable: false,
+        requiresHumanReview: true,
+        message: 'The global token budget is exhausted.',
+      };
+    case 'non_progress':
+      return {
+        reason,
+        retryable: false,
+        requiresHumanReview: true,
+        message: 'Repeated Action/Observation fingerprints produced no new progress.',
+      };
+    case 'deadline_exceeded':
+      return {
+        reason,
+        retryable: false,
+        requiresHumanReview: true,
+        message: 'The ReAct execution deadline elapsed before the next external call.',
+      };
+  }
+}
+
+function reActCheckpointKey(runId: string, stepId: string): string {
+  return `${runId.length}:${runId}:${stepId.length}:${stepId}`;
+}
+
+function nonEmptyReActValue(value: string, label: string): void {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: `${label} must be non-empty`,
+    });
+  }
+}
+
+function validReActHash(value: string, label: string): void {
+  if (!/^sha256:[a-f0-9]{64}$/u.test(value)) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: `${label} must be a sha256 digest`,
+    });
+  }
+}
+
+function positiveReActInteger(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: `${label} must be a positive integer`,
+    });
+  }
+  return value;
+}
+
+function assertReActCheckpointBytes(
+  checkpoint: ReActContinuationCheckpoint,
+  maxCheckpointBytes: number
+): void {
+  const observedBytes = new TextEncoder().encode(JSON.stringify(checkpoint)).byteLength;
+  if (observedBytes > maxCheckpointBytes) {
+    throw new FrameworkError({
+      code: 'RUNTIME_RESOURCE_EXHAUSTED',
+      message: `ReAct checkpoint exceeds ${maxCheckpointBytes} bytes`,
+      context: { maxCheckpointBytes, observedBytes },
+    });
+  }
+}
+
+function reActCheckpointConflict(message: string): never {
+  throw new FrameworkError({
+    code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+    message,
+  });
 }
 
 export class ReActAgentRunner {
@@ -1220,15 +1895,20 @@ export class ReActAgentRunner {
       inference: options.inference,
       toolRunner: options.toolRunner,
       maxIterations: options.maxIterations,
+      executionBudget: options.executionBudget,
+      checkpointStore: options.checkpointStore,
       continueAfterTool: options.continueAfterTool,
       onStep: options.onStep,
+      onCheckpoint: options.onCheckpoint,
+      onResume: options.onResume,
       syncMemory: options.syncMemory,
       resolveToolExecutionScope: options.resolveToolExecutionScope,
+      now: options.now,
     });
   }
 
-  async run(input: ContextBuildInput): Promise<ReActRunResult> {
-    return this.runner.run(await this.contextBuilder.build(input));
+  async run(input: ContextBuildInput, control: ReActRunControl = {}): Promise<ReActRunResult> {
+    return this.runner.run(await this.contextBuilder.build(input), control);
   }
 }
 
@@ -1236,29 +1916,34 @@ function actionFromInferenceOutput(output: unknown): ReActAction {
   if (isRecord(output)) {
     const action = stringField(output, 'action') ?? stringField(output, 'type');
     if (action === 'tool') {
+      const toolCallId =
+        stringField(output, 'toolCallId') ??
+        stringField(output, 'callId') ??
+        stringField(output, 'id');
+      const target = stringField(output, 'toolId') ?? stringField(output, 'target');
+      const reason = stringField(output, 'reason');
       return {
         type: 'tool',
-        toolCallId:
-          stringField(output, 'toolCallId') ??
-          stringField(output, 'callId') ??
-          stringField(output, 'id'),
-        target: stringField(output, 'toolId') ?? stringField(output, 'target'),
+        ...(toolCallId === undefined ? {} : { toolCallId }),
+        ...(target === undefined ? {} : { target }),
         input: output.input ?? output.arguments ?? {},
-        reason: stringField(output, 'reason'),
+        ...(reason === undefined ? {} : { reason }),
       };
     }
     if (action === 'human_review') {
+      const reason = stringField(output, 'reason');
       return {
         type: 'human_review',
         input: output.input ?? output,
-        reason: stringField(output, 'reason'),
+        ...(reason === undefined ? {} : { reason }),
       };
     }
     if (action === 'finish' || action === 'model') {
+      const reason = stringField(output, 'reason');
       return {
         type: action,
         input: output.output ?? output.content ?? output.input ?? output,
-        reason: stringField(output, 'reason'),
+        ...(reason === undefined ? {} : { reason }),
       };
     }
     const toolCall = firstToolCall(output);
@@ -1275,13 +1960,15 @@ function firstToolCall(output: Record<string, unknown>): ReActAction | null {
   const target =
     stringField(first, 'toolId') ?? stringField(first, 'name') ?? stringField(first, 'target');
   if (!target) return null;
+  const toolCallId =
+    stringField(first, 'toolCallId') ?? stringField(first, 'callId') ?? stringField(first, 'id');
+  const reason = stringField(first, 'reason');
   return {
     type: 'tool',
-    toolCallId:
-      stringField(first, 'toolCallId') ?? stringField(first, 'callId') ?? stringField(first, 'id'),
+    ...(toolCallId === undefined ? {} : { toolCallId }),
     target,
     input: first.arguments ?? first.input ?? {},
-    reason: stringField(first, 'reason'),
+    ...(reason === undefined ? {} : { reason }),
   };
 }
 
@@ -1711,7 +2398,267 @@ export const reactPhaseSchema = z.enum([
   'complete',
   'fail',
   'human_review',
+  'suspend',
+  'cancel',
 ]);
+
+const checkpointJsonValueSchema = z.unknown().superRefine((value, context) => {
+  try {
+    hashCanonicalJson(value);
+  } catch {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'must contain only canonical JSON values',
+    });
+  }
+});
+
+const modelMessageSchema = z
+  .object({
+    role: z.enum(['system', 'user', 'assistant', 'tool']),
+    content: z.string().max(1_000_000),
+    name: z.string().min(1).max(512).optional(),
+    toolCallId: z.string().min(1).max(1024).optional(),
+  })
+  .strict() satisfies ZodType<ModelMessage>;
+
+export const reActActionSchema = z
+  .object({
+    type: z.enum(['tool', 'model', 'finish', 'human_review']),
+    toolCallId: z.string().min(1).max(1024).optional(),
+    target: z.string().min(1).max(1024).optional(),
+    input: checkpointJsonValueSchema.optional(),
+    reason: z.string().max(16_384).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.type === 'tool' && !value.target) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['target'],
+        message: 'Tool actions require target',
+      });
+    }
+  }) satisfies ZodType<ReActAction>;
+
+export const reActExecutionBudgetSchema = z
+  .object({
+    maxIterations: z.number().int().positive().max(1_000_000),
+    maxModelCalls: z.number().int().positive().max(1_000_000),
+    maxToolCalls: z.number().int().positive().max(1_000_000),
+    maxTotalTokens: z.number().int().positive().max(1_000_000_000).optional(),
+    maxConsecutiveNoProgress: z.number().int().positive().max(10_000),
+    quantumIterations: z.number().int().positive().max(100_000),
+    deadlineAt: z.string().datetime({ offset: true }).optional(),
+  })
+  .strict() satisfies ZodType<ReActExecutionBudget>;
+
+export const reActContinuationCheckpointSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    runId: z.string().min(1).max(1024),
+    stepId: z.string().min(1).max(1024),
+    scopeHash: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+    agentRef: z
+      .object({
+        id: z.string().min(1).max(1024),
+        version: z.string().min(1).max(256),
+      })
+      .strict(),
+    nextPhase: z.enum(['reason', 'act']),
+    messages: z.array(modelMessageSchema).max(10_000),
+    iterations: z.number().int().nonnegative().max(1_000_000),
+    modelCalls: z.number().int().nonnegative().max(1_000_000),
+    toolCalls: z.number().int().nonnegative().max(1_000_000),
+    totalTokens: z.number().int().nonnegative().max(1_000_000_000),
+    toolInvocationSequence: z.number().int().nonnegative().max(1_000_000),
+    stepSequence: z.number().int().nonnegative().max(10_000_000),
+    consecutiveNoProgress: z.number().int().nonnegative().max(10_000),
+    lastProgressFingerprint: z
+      .string()
+      .regex(/^sha256:[a-f0-9]{64}$/u)
+      .optional(),
+    pendingAction: reActActionSchema.optional(),
+    pendingToolInvocationId: z.string().min(1).max(4096).optional(),
+    createdAt: z.string().datetime({ offset: true }),
+    updatedAt: z.string().datetime({ offset: true }),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.nextPhase === 'act' && value.pendingAction?.type !== 'tool') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingAction'],
+        message: 'Act checkpoints require a pending Tool action',
+      });
+    }
+    if (value.nextPhase === 'reason' && value.pendingAction !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingAction'],
+        message: 'Reason checkpoints must not contain pendingAction',
+      });
+    }
+    if (value.nextPhase === 'reason' && value.pendingToolInvocationId !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingToolInvocationId'],
+        message: 'Reason checkpoints must not contain pendingToolInvocationId',
+      });
+    }
+    if (value.pendingToolInvocationId !== undefined && value.pendingAction?.type !== 'tool') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingToolInvocationId'],
+        message: 'pendingToolInvocationId requires a pending Tool action',
+      });
+    }
+    if (Date.parse(value.updatedAt) < Date.parse(value.createdAt)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['updatedAt'],
+        message: 'updatedAt must not precede createdAt',
+      });
+    }
+  }) satisfies ZodType<ReActContinuationCheckpoint>;
+
+export const reActExecutionBudgetJsonSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'maxIterations',
+    'maxModelCalls',
+    'maxToolCalls',
+    'maxConsecutiveNoProgress',
+    'quantumIterations',
+  ],
+  properties: {
+    maxIterations: { type: 'integer', minimum: 1, maximum: 1_000_000 },
+    maxModelCalls: { type: 'integer', minimum: 1, maximum: 1_000_000 },
+    maxToolCalls: { type: 'integer', minimum: 1, maximum: 1_000_000 },
+    maxTotalTokens: { type: 'integer', minimum: 1, maximum: 1_000_000_000 },
+    maxConsecutiveNoProgress: { type: 'integer', minimum: 1, maximum: 10_000 },
+    quantumIterations: { type: 'integer', minimum: 1, maximum: 100_000 },
+    deadlineAt: { type: 'string', format: 'date-time' },
+  },
+  additionalProperties: false,
+};
+
+export const reActContinuationCheckpointJsonSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'version',
+    'runId',
+    'stepId',
+    'scopeHash',
+    'agentRef',
+    'nextPhase',
+    'messages',
+    'iterations',
+    'modelCalls',
+    'toolCalls',
+    'totalTokens',
+    'toolInvocationSequence',
+    'stepSequence',
+    'consecutiveNoProgress',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    version: { const: '1.0.0' },
+    runId: { type: 'string', minLength: 1, maxLength: 1024 },
+    stepId: { type: 'string', minLength: 1, maxLength: 1024 },
+    scopeHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+    agentRef: {
+      type: 'object',
+      required: ['id', 'version'],
+      properties: { id: { type: 'string' }, version: { type: 'string' } },
+      additionalProperties: false,
+    },
+    nextPhase: { enum: ['reason', 'act'] },
+    messages: {
+      type: 'array',
+      maxItems: 10_000,
+      items: {
+        type: 'object',
+        required: ['role', 'content'],
+        properties: {
+          role: { enum: ['system', 'user', 'assistant', 'tool'] },
+          content: { type: 'string', maxLength: 1_000_000 },
+          name: { type: 'string', minLength: 1, maxLength: 512 },
+          toolCallId: { type: 'string', minLength: 1, maxLength: 1024 },
+        },
+        additionalProperties: false,
+      },
+    },
+    iterations: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+    modelCalls: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+    toolCalls: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+    totalTokens: { type: 'integer', minimum: 0, maximum: 1_000_000_000 },
+    toolInvocationSequence: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+    stepSequence: { type: 'integer', minimum: 0, maximum: 10_000_000 },
+    consecutiveNoProgress: { type: 'integer', minimum: 0, maximum: 10_000 },
+    lastProgressFingerprint: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+    pendingAction: {
+      type: 'object',
+      required: ['type'],
+      properties: {
+        type: { enum: ['tool', 'model', 'finish', 'human_review'] },
+        toolCallId: { type: 'string', minLength: 1, maxLength: 1024 },
+        target: { type: 'string', minLength: 1, maxLength: 1024 },
+        input: {},
+        reason: { type: 'string', maxLength: 16_384 },
+      },
+      additionalProperties: false,
+    },
+    pendingToolInvocationId: { type: 'string', minLength: 1, maxLength: 4096 },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+  allOf: [
+    {
+      if: {
+        properties: { nextPhase: { const: 'act' } },
+        required: ['nextPhase'],
+      },
+      then: {
+        required: ['pendingAction'],
+        properties: {
+          pendingAction: {
+            type: 'object',
+            required: ['type', 'target'],
+            properties: {
+              type: { const: 'tool' },
+              target: { type: 'string', minLength: 1, maxLength: 1024 },
+            },
+          },
+        },
+      },
+    },
+    {
+      if: {
+        properties: { nextPhase: { const: 'reason' } },
+        required: ['nextPhase'],
+      },
+      then: {
+        allOf: [
+          {
+            not: {
+              properties: { pendingAction: {} },
+              required: ['pendingAction'],
+            },
+          },
+          {
+            not: {
+              properties: { pendingToolInvocationId: {} },
+              required: ['pendingToolInvocationId'],
+            },
+          },
+        ],
+      },
+    },
+  ],
+  additionalProperties: false,
+};
 
 export const thinkingModeSchema = z.enum(['none', 'summary', 'structured']);
 export const agenticReasoningModeSchema = z.enum(['react', 'fsm_react', 'tot', 'critique']);
@@ -1837,4 +2784,120 @@ export function validateReActAgentSpec(input: unknown): ReActAgentSpec {
 
 export function validateReasoningConfig(input: unknown): ReasoningConfig {
   return reasoningConfigSpecDefinition.parse(input);
+}
+
+export function validateReActExecutionBudget(input: unknown): ReActExecutionBudget {
+  return reActExecutionBudgetSchema.parse(input);
+}
+
+export function validateReActAction(input: unknown): ReActAction {
+  const candidate =
+    isRecord(input) && Object.prototype.hasOwnProperty.call(input, 'input')
+      ? {
+          ...input,
+          input: normalizeCanonicalReActValue(input.input, new WeakSet<object>()),
+        }
+      : input;
+  const action = reActActionSchema.parse(candidate);
+  return {
+    type: action.type,
+    ...(action.toolCallId === undefined ? {} : { toolCallId: action.toolCallId }),
+    ...(action.target === undefined ? {} : { target: action.target }),
+    ...(action.input === undefined ? {} : { input: structuredClone(action.input) }),
+    ...(action.reason === undefined ? {} : { reason: action.reason }),
+  };
+}
+
+function normalizeCanonicalReActValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object') {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: 'ReAct values must contain only canonical JSON data',
+    });
+  }
+  if (seen.has(value)) {
+    throw new FrameworkError({
+      code: 'RUNTIME_INVALID_INPUT',
+      message: 'ReAct values must not contain circular references',
+    });
+  }
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => {
+        if (item === undefined) {
+          throw new FrameworkError({
+            code: 'RUNTIME_INVALID_INPUT',
+            message: 'ReAct arrays must not contain undefined values',
+          });
+        }
+        return normalizeCanonicalReActValue(item, seen);
+      });
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new FrameworkError({
+        code: 'RUNTIME_INVALID_INPUT',
+        message: 'ReAct values must contain only plain JSON objects',
+      });
+    }
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, nested]) => nested !== undefined)
+        .map(([key, nested]) => [key, normalizeCanonicalReActValue(nested, seen)])
+    );
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function validateReActContinuationCheckpoint(input: unknown): ReActContinuationCheckpoint {
+  const parsed = reActContinuationCheckpointSchema.parse(input);
+  const checkpoint: ReActContinuationCheckpoint = {
+    version: parsed.version,
+    runId: parsed.runId,
+    stepId: parsed.stepId,
+    scopeHash: parsed.scopeHash,
+    agentRef: { id: parsed.agentRef.id, version: parsed.agentRef.version },
+    nextPhase: parsed.nextPhase,
+    messages: parsed.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      ...(message.name === undefined ? {} : { name: message.name }),
+      ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
+    })),
+    iterations: parsed.iterations,
+    modelCalls: parsed.modelCalls,
+    toolCalls: parsed.toolCalls,
+    totalTokens: parsed.totalTokens,
+    toolInvocationSequence: parsed.toolInvocationSequence,
+    stepSequence: parsed.stepSequence,
+    consecutiveNoProgress: parsed.consecutiveNoProgress,
+    ...(parsed.lastProgressFingerprint === undefined
+      ? {}
+      : { lastProgressFingerprint: parsed.lastProgressFingerprint }),
+    ...(parsed.pendingAction === undefined
+      ? {}
+      : { pendingAction: validateReActAction(parsed.pendingAction) }),
+    ...(parsed.pendingToolInvocationId === undefined
+      ? {}
+      : { pendingToolInvocationId: parsed.pendingToolInvocationId }),
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
+  };
+  hashCanonicalJson(checkpoint);
+  const serialized = JSON.stringify(checkpoint);
+  if (Buffer.byteLength(serialized, 'utf8') > 4 * 1024 * 1024) {
+    throw new Error('ReAct continuation checkpoint exceeds the 4 MiB serialized limit.');
+  }
+  return checkpoint;
 }

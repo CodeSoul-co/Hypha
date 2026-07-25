@@ -2,7 +2,6 @@ import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import rateLimit from 'express-rate-limit';
 import http from 'http';
 
 import { getConfig } from './config';
@@ -27,14 +26,11 @@ import {
   getDevTestToken,
 } from './services/DevAuth';
 import routes from './routes';
-import {
-  errorHandler,
-  notFoundHandler,
-  requestLogger,
-  rateLimitHandler,
-} from './middleware/errorHandler';
+import { errorHandler, notFoundHandler, requestLogger } from './middleware/errorHandler';
+import { createApiRateLimiter } from './middleware/rateLimiter';
 import { HTTP_STATUS } from './constants';
 import { getEventRuntime } from './services/EventRuntime';
+import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 
 class Application {
   private app: Express;
@@ -88,6 +84,11 @@ class Application {
 
     // Request logging
     this.app.use(requestLogger);
+
+    // Rate limiting must run before routes; middleware registered after the
+    // terminal 404/error handlers can never protect successful requests.
+    const limiter = createApiRateLimiter(this.config.rateLimit);
+    if (limiter) this.app.use(limiter);
   }
 
   private setupRoutes(): void {
@@ -108,19 +109,6 @@ class Application {
 
     // Global error handler
     this.app.use(errorHandler);
-
-    // Rate limiting
-    if (this.config.rateLimit.enabled) {
-      const limiter = rateLimit({
-        windowMs: this.config.rateLimit.windowMs,
-        max: this.config.rateLimit.max,
-        handler: rateLimitHandler,
-        standardHeaders: true,
-        legacyHeaders: false,
-      });
-
-      this.app.use(limiter);
-    }
   }
 
   private async initializeServices(): Promise<void> {
@@ -228,7 +216,7 @@ class Application {
   }
 
   private async startupHealthCheck(host: string, port: number): Promise<void> {
-    const baseUrl = `http://${host}:${port}`;
+    const baseUrl = formatLocalHealthBaseUrl(host, port);
     const apiBase = `${baseUrl}${this.config.app.apiPrefix}`;
     const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] = [];
 

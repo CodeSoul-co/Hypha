@@ -1,27 +1,42 @@
 import type { ProviderHealth } from '../../contracts/execution';
 import {
+  DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
   SESSION_COMMAND_STATUSES,
+  SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
   type ClaimSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
   type ListSessionCommandsRequest,
+  type ListStuckSessionCommandsRequest,
+  type RedriveDeadLetterSessionCommandRequest,
   type ReleaseSessionCommandRequest,
+  type RenewSessionCommandRequest,
+  type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueueScope,
+  type StuckSessionCommand,
 } from '../../contracts/session-queue';
-import { validateSessionCommandRecord } from '../../contracts/session-queue-schemas';
+import {
+  validateListStuckSessionCommandsRequest,
+  validateRedriveDeadLetterSessionCommandRequest,
+  validateSessionCommandRecord,
+  validateStuckSessionCommand,
+} from '../../contracts/session-queue-schemas';
 import { hashCanonicalJson } from './canonical-json';
 import { addMilliseconds, busError, isAtOrBefore, nonEmpty, positive } from './message-bus';
 
 export interface SessionQueue {
   enqueue(request: EnqueueSessionCommandRequest): Promise<SessionCommandRecord>;
   claim(request: ClaimSessionCommandRequest): Promise<SessionCommandRecord | null>;
+  renew(request: RenewSessionCommandRequest): Promise<SessionCommandClaim>;
   complete(request: CompleteSessionCommandRequest): Promise<void>;
   fail(request: FailSessionCommandRequest): Promise<void>;
   release(request: ReleaseSessionCommandRequest): Promise<void>;
   list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]>;
+  redriveDeadLetter(request: RedriveDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
+  listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]>;
   drain(scope: SessionQueueScope): Promise<void>;
   health(): Promise<ProviderHealth>;
 }
@@ -30,7 +45,10 @@ export interface InMemorySessionQueueOptions {
   now?: () => string;
   duplicatePolicy?: 'reuse' | 'reject';
   maxPendingPerSession?: number;
+  maxPendingPerUser?: number;
+  maxPendingGlobal?: number;
   maxConcurrentSessions?: number;
+  maxConcurrentSessionsPerUser?: number;
   priorityAgingMs?: number;
 }
 
@@ -49,7 +67,10 @@ export class InMemorySessionQueue implements SessionQueue {
   private readonly now: () => string;
   private readonly duplicatePolicy: 'reuse' | 'reject';
   private readonly maxPendingPerSession: number;
+  private readonly maxPendingPerUser: number;
+  private readonly maxPendingGlobal: number;
   private readonly maxConcurrentSessions: number;
+  private readonly maxConcurrentSessionsPerUser: number;
   private readonly priorityAgingMs: number;
 
   constructor(options: InMemorySessionQueueOptions = {}) {
@@ -59,14 +80,29 @@ export class InMemorySessionQueue implements SessionQueue {
       options.maxPendingPerSession ?? 100,
       'maxPendingPerSession'
     );
+    this.maxPendingPerUser = positive(
+      options.maxPendingPerUser ?? Number.MAX_SAFE_INTEGER,
+      'maxPendingPerUser'
+    );
+    this.maxPendingGlobal = positive(
+      options.maxPendingGlobal ?? Number.MAX_SAFE_INTEGER,
+      'maxPendingGlobal'
+    );
     this.maxConcurrentSessions = positive(
       options.maxConcurrentSessions ?? Number.MAX_SAFE_INTEGER,
       'maxConcurrentSessions'
     );
+    this.maxConcurrentSessionsPerUser = positive(
+      options.maxConcurrentSessionsPerUser ?? Number.MAX_SAFE_INTEGER,
+      'maxConcurrentSessionsPerUser'
+    );
     this.priorityAgingMs = positive(options.priorityAgingMs ?? 30_000, 'priorityAgingMs');
     if (
       !Number.isInteger(this.maxPendingPerSession) ||
+      !Number.isInteger(this.maxPendingPerUser) ||
+      !Number.isInteger(this.maxPendingGlobal) ||
       !Number.isInteger(this.maxConcurrentSessions) ||
+      !Number.isInteger(this.maxConcurrentSessionsPerUser) ||
       !Number.isInteger(this.priorityAgingMs)
     ) {
       throw busError('RUNTIME_INVALID_INPUT', 'Session queue limits must be integers');
@@ -94,13 +130,29 @@ export class InMemorySessionQueue implements SessionQueue {
     if (this.records.has(request.id)) {
       throw busError('RUNTIME_IDEMPOTENCY_CONFLICT', `Session command id exists: ${request.id}`);
     }
-    const pending = [...this.records.values()].filter(
-      (record) => sessionKey(scopeFromCommand(record)) === key && isPending(record)
+    const pending = [...this.records.values()].filter(isPending);
+    const pendingForSession = pending.filter(
+      (record) => sessionKey(scopeFromCommand(record)) === key
     ).length;
-    if (pending >= this.maxPendingPerSession) {
+    if (pendingForSession >= this.maxPendingPerSession) {
       throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Session queue depth limit reached', {
         sessionId: request.sessionId,
         maxPendingPerSession: this.maxPendingPerSession,
+      });
+    }
+    const owner = userKey(scope);
+    const pendingForUser = pending.filter(
+      (record) => userKey(scopeFromCommand(record)) === owner
+    ).length;
+    if (pendingForUser >= this.maxPendingPerUser) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'User queue depth limit reached', {
+        userId: request.userId,
+        maxPendingPerUser: this.maxPendingPerUser,
+      });
+    }
+    if (pending.length >= this.maxPendingGlobal) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Global queue depth limit reached', {
+        maxPendingGlobal: this.maxPendingGlobal,
       });
     }
 
@@ -121,6 +173,9 @@ export class InMemorySessionQueue implements SessionQueue {
       ...(request.targetRunId === undefined ? {} : { targetRunId: request.targetRunId }),
       enqueueSequence,
       priority: request.priority ?? 50,
+      attempts: 0,
+      maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+      leaseEpoch: 0,
       ...(request.payloadRef === undefined ? {} : { payloadRef: request.payloadRef }),
       payloadHash: request.payloadHash,
       status: 'queued',
@@ -141,12 +196,14 @@ export class InMemorySessionQueue implements SessionQueue {
     if (request.scope) validateScope(request.scope);
     this.recover(request.now);
 
-    const activeSessions = new Set(
-      [...this.records.values()]
-        .filter((record) => record.status === 'claimed')
-        .map((record) => sessionKey(scopeFromCommand(record)))
-    );
+    const active = [...this.records.values()].filter((record) => record.status === 'claimed');
+    const activeSessions = new Set(active.map((record) => sessionKey(scopeFromCommand(record))));
     if (activeSessions.size >= this.maxConcurrentSessions) return null;
+    const activeSessionsByUser = active.reduce((counts, record) => {
+      const owner = userKey(scopeFromCommand(record));
+      counts.set(owner, (counts.get(owner) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>());
 
     const heads = new Map<string, SessionCommandRecord>();
     for (const record of this.records.values()) {
@@ -158,7 +215,11 @@ export class InMemorySessionQueue implements SessionQueue {
     }
     const candidate = [...heads.values()]
       .filter(
-        (record) => record.status === 'queued' && isAtOrBefore(record.availableAt, request.now)
+        (record) =>
+          record.status === 'queued' &&
+          isAtOrBefore(record.availableAt, request.now) &&
+          (activeSessionsByUser.get(userKey(scopeFromCommand(record))) ?? 0) <
+            this.maxConcurrentSessionsPerUser
       )
       .sort((left, right) =>
         compareClaimCandidates(left, right, request.now, this.priorityAgingMs)
@@ -166,10 +227,22 @@ export class InMemorySessionQueue implements SessionQueue {
     if (!candidate) return null;
 
     candidate.status = 'claimed';
+    candidate.attempts += 1;
+    candidate.leaseEpoch += 1;
     candidate.claimedBy = request.workerId;
+    candidate.claimToken = claimToken(candidate, request.workerId, request.now);
     candidate.leaseExpiresAt = addMilliseconds(request.now, request.leaseMs);
     validateSessionCommandRecord(candidate);
     return structuredClone(candidate);
+  }
+
+  async renew(request: RenewSessionCommandRequest): Promise<SessionCommandClaim> {
+    timestamp(request.renewedAt, 'renewedAt');
+    positiveInteger(request.leaseMs, 'leaseMs');
+    const record = this.requireOwnedClaim(request, request.renewedAt);
+    record.leaseExpiresAt = addMilliseconds(request.renewedAt, request.leaseMs);
+    validateSessionCommandRecord(record);
+    return claimFromRecord(record);
   }
 
   async complete(request: CompleteSessionCommandRequest): Promise<void> {
@@ -178,7 +251,7 @@ export class InMemorySessionQueue implements SessionQueue {
     if (request.resultEventIds?.some((eventId) => eventId.length === 0)) {
       throw busError('RUNTIME_INVALID_INPUT', 'resultEventIds must not contain empty ids');
     }
-    const record = this.requireOwnedClaim(request.commandId, request.workerId, request.completedAt);
+    const record = this.requireOwnedClaim(request, request.completedAt);
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
       status: 'applied',
@@ -195,7 +268,7 @@ export class InMemorySessionQueue implements SessionQueue {
   async fail(request: FailSessionCommandRequest): Promise<void> {
     nonEmpty(request.rejectionCode, 'rejectionCode');
     timestamp(request.failedAt, 'failedAt');
-    const record = this.requireOwnedClaim(request.commandId, request.workerId, request.failedAt);
+    const record = this.requireOwnedClaim(request, request.failedAt);
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
       status: request.deadLetter ? 'dead_letter' : 'failed',
@@ -209,13 +282,18 @@ export class InMemorySessionQueue implements SessionQueue {
   async release(request: ReleaseSessionCommandRequest): Promise<void> {
     timestamp(request.releasedAt, 'releasedAt');
     if (request.availableAt) timestamp(request.availableAt, 'availableAt');
-    const record = this.requireOwnedClaim(request.commandId, request.workerId, request.releasedAt);
+    const record = this.requireOwnedClaim(request, request.releasedAt);
+    const exhausted = record.attempts >= record.maxAttempts;
     const updated = validateSessionCommandRecord({
       ...withoutClaim(record),
-      status: 'queued',
+      status: exhausted ? 'dead_letter' : 'queued',
       availableAt: request.availableAt ?? request.releasedAt,
+      ...(exhausted
+        ? { rejectionCode: 'attempt_budget_exhausted', completedAt: request.releasedAt }
+        : {}),
     });
     this.records.set(updated.id, updated);
+    if (exhausted) this.notifyIfDrained(scopeFromCommand(updated));
   }
 
   async list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]> {
@@ -248,6 +326,102 @@ export class InMemorySessionQueue implements SessionQueue {
       .map((record) => structuredClone(record));
   }
 
+  async redriveDeadLetter(
+    request: RedriveDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateRedriveDeadLetterSessionCommandRequest(request);
+    const key = sessionKey(validated.scope);
+    const idempotencyKey = `${key}\u0000${validated.idempotencyKey}`;
+    const fingerprint = hashCanonicalJson(validated);
+    const prior = this.idempotency.get(idempotencyKey);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint || this.duplicatePolicy === 'reject') {
+        throw busError(
+          'RUNTIME_IDEMPOTENCY_CONFLICT',
+          `Session command idempotency key is already used: ${validated.idempotencyKey}`
+        );
+      }
+      const existing = this.records.get(prior.commandId);
+      if (!existing) throw busError('RUNTIME_INTERNAL_ERROR', 'Session command index is corrupt');
+      return { ...structuredClone(existing), status: 'reused' };
+    }
+    if (this.records.has(validated.id)) {
+      throw busError('RUNTIME_IDEMPOTENCY_CONFLICT', `Session command id exists: ${validated.id}`);
+    }
+    const source = this.records.get(validated.sourceCommandId);
+    if (
+      !source ||
+      !sameScope(scopeFromCommand(source), validated.scope) ||
+      source.status !== 'dead_letter'
+    ) {
+      throw busError(
+        'RUNTIME_SESSION_QUEUE_CONFLICT',
+        'Only a dead-letter command in the requested scope can be redriven',
+        { sourceCommandId: validated.sourceCommandId }
+      );
+    }
+    this.assertCapacity(validated.scope);
+    const requestedAt = validated.requestedAt ?? this.now();
+    const availableAt = validated.availableAt ?? requestedAt;
+    const enqueueSequence = (this.sessionSequences.get(key) ?? 0) + 1;
+    const record = validateSessionCommandRecord({
+      id: validated.id,
+      commandType: source.commandType,
+      idempotencyKey: validated.idempotencyKey,
+      ...(source.tenantId === undefined ? {} : { tenantId: source.tenantId }),
+      userId: source.userId,
+      ...(source.workspaceId === undefined ? {} : { workspaceId: source.workspaceId }),
+      sessionId: source.sessionId,
+      ...(source.targetRunId === undefined ? {} : { targetRunId: source.targetRunId }),
+      enqueueSequence,
+      priority: validated.priority ?? source.priority,
+      attempts: 0,
+      maxAttempts: validated.maxAttempts ?? source.maxAttempts,
+      leaseEpoch: 0,
+      ...(source.payloadRef === undefined ? {} : { payloadRef: source.payloadRef }),
+      payloadHash: source.payloadHash,
+      status: 'queued',
+      createdAt: requestedAt,
+      availableAt,
+      ...(validated.expiresAt === undefined ? {} : { expiresAt: validated.expiresAt }),
+      redrive: {
+        version: '1.0.0',
+        sourceCommandId: source.id,
+        operatorId: validated.operatorId,
+        reason: validated.reason,
+        requestedAt,
+      },
+    });
+    this.records.set(record.id, record);
+    this.idempotency.set(idempotencyKey, { commandId: record.id, fingerprint });
+    this.sessionSequences.set(key, enqueueSequence);
+    return structuredClone(record);
+  }
+
+  async listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]> {
+    const validated = validateListStuckSessionCommandsRequest(request);
+    const graceMs = validated.graceMs ?? 0;
+    const limit = validated.limit ?? 100;
+    const checkedAtMs = Date.parse(validated.checkedAt);
+    return [...this.records.values()]
+      .filter(
+        (record) =>
+          sameScope(scopeFromCommand(record), validated.scope) &&
+          record.status === 'claimed' &&
+          record.leaseExpiresAt !== undefined &&
+          Date.parse(record.leaseExpiresAt) + graceMs <= checkedAtMs
+      )
+      .sort((left, right) => left.leaseExpiresAt!.localeCompare(right.leaseExpiresAt!))
+      .slice(0, limit)
+      .map((command) =>
+        validateStuckSessionCommand({
+          command: structuredClone(command),
+          detectedAt: validated.checkedAt,
+          overdueMs: checkedAtMs - Date.parse(command.leaseExpiresAt!),
+        })
+      );
+  }
+
   async drain(scope: SessionQueueScope): Promise<void> {
     validateScope(scope);
     this.recover(this.now());
@@ -274,23 +448,63 @@ export class InMemorySessionQueue implements SessionQueue {
     };
   }
 
-  private requireOwnedClaim(commandId: string, workerId: string, at: string): SessionCommandRecord {
-    const record = this.records.get(commandId);
+  private requireOwnedClaim(
+    claim: Pick<SessionCommandClaim, 'commandId' | 'workerId' | 'claimToken' | 'leaseEpoch'>,
+    at: string
+  ): SessionCommandRecord {
+    nonEmpty(claim.commandId, 'commandId');
+    nonEmpty(claim.workerId, 'workerId');
+    nonEmpty(claim.claimToken, 'claimToken');
+    positiveInteger(claim.leaseEpoch, 'leaseEpoch');
+    const record = this.records.get(claim.commandId);
     if (!record) {
-      throw busError('RUNTIME_SESSION_QUEUE_CONFLICT', `Session command not found: ${commandId}`);
+      throw busError(
+        'RUNTIME_SESSION_QUEUE_CONFLICT',
+        `Session command not found: ${claim.commandId}`
+      );
     }
     if (
       record.status !== 'claimed' ||
-      record.claimedBy !== workerId ||
+      record.claimedBy !== claim.workerId ||
+      record.claimToken !== claim.claimToken ||
+      record.leaseEpoch !== claim.leaseEpoch ||
       record.leaseExpiresAt === undefined ||
       isAtOrBefore(record.leaseExpiresAt, at)
     ) {
       throw busError('RUNTIME_SESSION_QUEUE_CONFLICT', 'Session command claim is not owned', {
-        commandId,
-        workerId,
+        commandId: claim.commandId,
+        workerId: claim.workerId,
+        leaseEpoch: claim.leaseEpoch,
       });
     }
     return record;
+  }
+
+  private assertCapacity(scope: SessionQueueScope): void {
+    const pending = [...this.records.values()].filter(isPending);
+    const pendingForSession = pending.filter(
+      (record) => sessionKey(scopeFromCommand(record)) === sessionKey(scope)
+    ).length;
+    if (pendingForSession >= this.maxPendingPerSession) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Session queue depth limit reached', {
+        sessionId: scope.sessionId,
+        maxPendingPerSession: this.maxPendingPerSession,
+      });
+    }
+    const pendingForUser = pending.filter(
+      (record) => userKey(scopeFromCommand(record)) === userKey(scope)
+    ).length;
+    if (pendingForUser >= this.maxPendingPerUser) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'User queue depth limit reached', {
+        userId: scope.userId,
+        maxPendingPerUser: this.maxPendingPerUser,
+      });
+    }
+    if (pending.length >= this.maxPendingGlobal) {
+      throw busError('RUNTIME_SESSION_QUEUE_OVERFLOW', 'Global queue depth limit reached', {
+        maxPendingGlobal: this.maxPendingGlobal,
+      });
+    }
   }
 
   private recover(now: string): void {
@@ -302,8 +516,15 @@ export class InMemorySessionQueue implements SessionQueue {
         record.leaseExpiresAt !== undefined &&
         isAtOrBefore(record.leaseExpiresAt, now)
       ) {
-        record.status = 'queued';
+        const exhausted = record.attempts >= record.maxAttempts;
+        record.status = exhausted ? 'dead_letter' : 'queued';
+        if (exhausted) {
+          record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
+          record.completedAt = now;
+          affected.set(sessionKey(scopeFromCommand(record)), scopeFromCommand(record));
+        }
         delete record.claimedBy;
+        delete record.claimToken;
         delete record.leaseExpiresAt;
       }
       if (
@@ -352,6 +573,17 @@ function validateEnqueueRequest(request: EnqueueSessionCommandRequest): void {
   ) {
     throw busError('RUNTIME_INVALID_INPUT', 'priority must be an integer between 0 and 100');
   }
+  if (
+    request.maxAttempts !== undefined &&
+    (!Number.isInteger(request.maxAttempts) ||
+      request.maxAttempts < 1 ||
+      request.maxAttempts > SESSION_COMMAND_MAX_ATTEMPTS_LIMIT)
+  ) {
+    throw busError(
+      'RUNTIME_INVALID_INPUT',
+      `maxAttempts must be an integer between 1 and ${SESSION_COMMAND_MAX_ATTEMPTS_LIMIT}`
+    );
+  }
   if (request.createdAt) timestamp(request.createdAt, 'createdAt');
   if (request.availableAt) timestamp(request.availableAt, 'availableAt');
   if (request.expiresAt) timestamp(request.expiresAt, 'expiresAt');
@@ -366,6 +598,7 @@ function enqueueFingerprint(request: EnqueueSessionCommandRequest): string {
     sessionId: request.sessionId,
     targetRunId: request.targetRunId ?? null,
     priority: request.priority ?? 50,
+    maxAttempts: request.maxAttempts ?? DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
     payloadRef: request.payloadRef ?? null,
     payloadHash: request.payloadHash,
     availableAt: request.availableAt ?? null,
@@ -423,6 +656,10 @@ function sessionKey(scope: SessionQueueScope): string {
   return `${scope.tenantId ?? ''}\u0000${scope.userId}\u0000${scope.sessionId}`;
 }
 
+function userKey(scope: Pick<SessionQueueScope, 'tenantId' | 'userId'>): string {
+  return `${scope.tenantId ?? ''}\u0000${scope.userId}`;
+}
+
 function sameScope(left: SessionQueueScope, right: SessionQueueScope): boolean {
   return sessionKey(left) === sessionKey(right);
 }
@@ -434,8 +671,48 @@ function isPending(record: SessionCommandRecord): boolean {
 function withoutClaim(record: SessionCommandRecord): SessionCommandRecord {
   const clone = structuredClone(record);
   delete clone.claimedBy;
+  delete clone.claimToken;
   delete clone.leaseExpiresAt;
   return clone;
+}
+
+function claimToken(
+  record: Pick<SessionCommandRecord, 'id' | 'attempts' | 'leaseEpoch'>,
+  workerId: string,
+  claimedAt: string
+): string {
+  return hashCanonicalJson({
+    commandId: record.id,
+    workerId,
+    attempts: record.attempts,
+    leaseEpoch: record.leaseEpoch,
+    claimedAt,
+  });
+}
+
+function claimFromRecord(record: SessionCommandRecord): SessionCommandClaim {
+  if (
+    record.status !== 'claimed' ||
+    record.claimedBy === undefined ||
+    record.claimToken === undefined ||
+    record.leaseExpiresAt === undefined
+  ) {
+    throw busError('RUNTIME_INTERNAL_ERROR', 'Session command claim is incomplete');
+  }
+  return {
+    commandId: record.id,
+    workerId: record.claimedBy,
+    claimToken: record.claimToken,
+    leaseEpoch: record.leaseEpoch,
+    leaseExpiresAt: record.leaseExpiresAt,
+  };
+}
+
+function positiveInteger(value: number, label: string): void {
+  positive(value, label);
+  if (!Number.isInteger(value)) {
+    throw busError('RUNTIME_INVALID_INPUT', `${label} must be a positive integer`);
+  }
 }
 
 function timestamp(value: string, label: string): void {
