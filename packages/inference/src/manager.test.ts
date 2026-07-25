@@ -13,7 +13,7 @@ import { HyphaInferencePipeline } from './pipeline';
 import { InMemoryPlasmodHotLayer } from './plasmod';
 import { DefaultPrefixSegmenter } from './prefix';
 import { DefaultPromptCompiler } from './prompt';
-import { AgentPromptRegistry } from './agent-prompts';
+import { AgentPromptRegistry, agentPromptSubjectHash } from './agent-prompts';
 import { ReasoningOrchestrator } from './reasoning';
 import { ReasoningStrategyRegistry } from './reasoning-registry';
 import { REACT_OFFICIAL_REFERENCES } from './reasoning-sources';
@@ -186,8 +186,11 @@ describe('@hypha/inference', () => {
     });
 
     const resolved = registry.resolve([{ id: 'agent.base', required: true }], {
-      agent_name: 'Hypha',
-      user_id: 'user-1',
+      variables: {
+        agent_name: 'Hypha',
+        user_id: 'user-1',
+      },
+      principal: { principalId: 'user-1', agentId: 'agent.base' },
     });
     expect(resolved.instructions).toBe('Act as Hypha for user-1.');
     expect(resolved.blocks[0]).toMatchObject({
@@ -211,8 +214,147 @@ describe('@hypha/inference', () => {
     });
 
     expect(() =>
-      registry.resolve([{ id: 'agent.invalid', required: true }], { known: 'value' })
+      registry.resolve([{ id: 'agent.invalid', required: true }], {
+        variables: { known: 'value' },
+        principal: { principalId: 'user-1' },
+      })
     ).toThrow('Undeclared agent prompt variables: agent.invalid.unknown');
+  });
+
+  it('enforces prompt tenant, owner, agent, domain, and exact untrusted approval scope', () => {
+    const registry = new AgentPromptRegistry();
+    const stored = registry.register({
+      id: 'agent.scoped',
+      version: '1.0.0',
+      name: 'Scoped prompt',
+      role: 'developer',
+      template: 'Scoped instructions.',
+      scope: 'tenant',
+      tenantId: 'tenant-a',
+      ownerId: 'owner-a',
+      trustLevel: 'untrusted',
+      agentIds: ['agent-a'],
+      domainIds: ['domain-a'],
+      provenance: { source: 'remote-package', signer: 'vendor-a' },
+    });
+    const ref = [{ id: stored.id, version: stored.version, required: true }];
+    const principal = {
+      principalId: 'owner-a',
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      domainId: 'domain-a',
+    };
+
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, tenantId: 'tenant-b' },
+      })
+    ).toThrow(/access denied/);
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, agentId: 'agent-b' },
+      })
+    ).toThrow(/agent binding/);
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, domainId: 'domain-b' },
+      })
+    ).toThrow(/domain binding/);
+    expect(() => registry.resolve(ref, { variables: {}, principal })).toThrow(
+      /exact, unexpired approval/
+    );
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal,
+        approvals: [
+          {
+            taskId: 'prompt-review:wrong',
+            subjectType: 'agent_prompt',
+            subjectHash: '0'.repeat(64),
+            promptId: stored.id,
+            promptVersion: stored.version,
+            promptRevision: stored.revision!,
+            contentHash: '0'.repeat(64),
+            approvedBy: 'reviewer-a',
+            status: 'approved',
+          },
+        ],
+      })
+    ).toThrow(/exact, unexpired approval/);
+
+    const resolved = registry.resolve(ref, {
+      variables: {},
+      principal,
+      approvals: [
+        {
+          taskId: 'prompt-review:approved',
+          subjectType: 'agent_prompt',
+          subjectHash: agentPromptSubjectHash(stored),
+          promptId: stored.id,
+          promptVersion: stored.version,
+          promptRevision: stored.revision!,
+          contentHash: stored.contentHash!,
+          approvedBy: 'reviewer-a',
+          tenantId: 'tenant-a',
+          agentId: 'agent-a',
+          domainId: 'domain-a',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          status: 'approved',
+        },
+      ],
+    });
+    expect(resolved.blocks[0]).toMatchObject({
+      templateRevision: stored.revision,
+      templateContentHash: stored.contentHash,
+      scope: 'tenant',
+      trustLevel: 'untrusted',
+      tenantId: 'tenant-a',
+      provenance: { source: 'remote-package', signer: 'vendor-a' },
+    });
+
+    registry.register({
+      id: 'agent.owner',
+      version: '1.0.0',
+      name: 'Owner prompt',
+      role: 'system',
+      template: 'Owner instructions.',
+      scope: 'owner',
+      ownerId: 'owner-a',
+    });
+    expect(() =>
+      registry.resolve([{ id: 'agent.owner', required: true }], {
+        variables: {},
+        principal: { principalId: 'owner-b' },
+      })
+    ).toThrow(/owner scope/);
+  });
+
+  it('enforces compare-and-swap revisions for agent prompt updates', () => {
+    const registry = new AgentPromptRegistry();
+    const created = registry.register({
+      id: 'agent.cas',
+      version: '1.0.0',
+      name: 'CAS prompt',
+      role: 'system',
+      template: 'First.',
+    });
+    expect(created.revision).toBe(1);
+    expect(() =>
+      registry.register(
+        { ...created, template: 'Conflict.' },
+        { replace: true, expectedRevision: 2 }
+      )
+    ).toThrow(/revision conflict/);
+    const updated = registry.register(
+      { ...created, template: 'Second.' },
+      { replace: true, expectedRevision: 1 }
+    );
+    expect(updated).toMatchObject({ revision: 2, template: 'Second.' });
+    expect(updated.contentHash).not.toBe(created.contentHash);
   });
   it('routes inference requests through registered providers', async () => {
     const manager = new InferenceManager();

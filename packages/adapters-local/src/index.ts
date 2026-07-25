@@ -535,7 +535,7 @@ class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     const rows = this.db
-      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, id ASC')
+      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, rowid ASC')
       .all();
     return filterEvents(
       rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent),
@@ -948,12 +948,24 @@ export class FileMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore 
     );
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
     const records = readJsonFile<MCPCapabilityRecord[]>(this.filename, []);
     const index = records.findIndex((candidate) => candidate.id === record.id);
+    if (
+      options &&
+      'expected' in options &&
+      JSON.stringify(index >= 0 ? records[index] : null) !==
+        JSON.stringify(options.expected ?? null)
+    ) {
+      return false;
+    }
     if (index >= 0) records[index] = record;
     else records.push(record);
     writeJsonFile(this.filename, records);
+    return true;
   }
 }
 
@@ -1006,7 +1018,7 @@ function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): Frame
 }
 
 function compareEvents(left: FrameworkEvent, right: FrameworkEvent): number {
-  return left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id);
+  return left.timestamp.localeCompare(right.timestamp);
 }
 
 function readJsonFile<T>(filename: string, fallback: T): T {

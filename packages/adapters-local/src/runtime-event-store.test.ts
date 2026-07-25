@@ -262,6 +262,72 @@ describe('SQLiteDurableEventStore', () => {
     });
   });
 
+  it('resets only unaudited compatibility imports and preserves live or audited history', async () => {
+    const registry = await eventRegistry('run.created');
+    const imported = openStore(temporaryDatabase(), registry);
+    const importedScope = stream('user-a', 'run-imported');
+    await imported.append(
+      appendRequest(
+        importedScope,
+        [event('event-imported', 'run.created', importedScope, 'imported')],
+        { idempotencyKey: 'legacy-event:event-imported' }
+      )
+    );
+
+    await expect(imported.resetUnauditedImportedEvents()).resolves.toEqual({
+      reset: true,
+      deletedEvents: 1,
+      reason: 'reset',
+    });
+    await expect(imported.getStreamHead(importedScope)).resolves.toBeNull();
+    await expect(imported.readStream(importedScope)).resolves.toEqual([]);
+
+    const live = openStore(temporaryDatabase(), registry);
+    const liveScope = stream('user-a', 'run-live');
+    await live.append(
+      appendRequest(liveScope, [event('event-live', 'run.created', liveScope, 'live')], {
+        idempotencyKey: 'live-event:event-live',
+      })
+    );
+    await expect(live.resetUnauditedImportedEvents()).resolves.toEqual({
+      reset: false,
+      deletedEvents: 0,
+      reason: 'non_imported_events',
+    });
+    await expect(live.readStream(liveScope)).resolves.toHaveLength(1);
+
+    const filename = temporaryDatabase();
+    const audited = openStore(filename, registry);
+    const auditedScope = stream('user-a', 'run-audited');
+    await audited.append(
+      appendRequest(
+        auditedScope,
+        [event('event-audited', 'run.created', auditedScope, 'audited')],
+        { idempotencyKey: 'legacy-event:event-audited' }
+      )
+    );
+    const sqlite = loadSqlite(true);
+    if (!sqlite) throw new Error('SQLite driver is unavailable');
+    const db = new sqlite.DatabaseSync(filename);
+    db.exec(
+      'CREATE TABLE runtime_integrity_watermark (' +
+        'singleton_id INTEGER PRIMARY KEY, watermark_json TEXT NOT NULL, ' +
+        'watermark_hash TEXT NOT NULL, updated_at TEXT NOT NULL)'
+    );
+    db.prepare(
+      'INSERT INTO runtime_integrity_watermark ' +
+        '(singleton_id, watermark_json, watermark_hash, updated_at) VALUES (1, ?, ?, ?)'
+    ).run('{}', 'hash', '2026-07-21T00:00:00.000Z');
+    db.close?.();
+
+    await expect(audited.resetUnauditedImportedEvents()).resolves.toEqual({
+      reset: false,
+      deletedEvents: 0,
+      reason: 'audited_history',
+    });
+    await expect(audited.readStream(auditedScope)).resolves.toHaveLength(1);
+  });
+
   function openStore(
     filename: string,
     schemaRegistry: EventSchemaRegistry
