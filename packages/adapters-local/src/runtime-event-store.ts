@@ -33,6 +33,12 @@ export interface SQLiteDurableEventStoreOptions {
   now?: () => string;
 }
 
+export interface SQLiteImportedEventResetResult {
+  reset: boolean;
+  deletedEvents: number;
+  reason: 'empty' | 'reset' | 'audited_history' | 'non_imported_events';
+}
+
 export class SQLiteDurableEventStore implements DurableEventStore, CanonicalEventScanPort {
   private readonly db: SqliteDatabaseSync;
   private readonly now: () => string;
@@ -265,6 +271,64 @@ export class SQLiteDurableEventStore implements DurableEventStore, CanonicalEven
         checkedAt,
         message: error instanceof Error ? error.message : 'SQLite health check failed',
       };
+    }
+  }
+
+  /**
+   * Clears only an incomplete compatibility import. A successful integrity
+   * watermark or any live/non-imported Event makes the operation fail closed.
+   */
+  async resetUnauditedImportedEvents(): Promise<SQLiteImportedEventResetResult> {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const existing = Number(
+        this.db.prepare('SELECT COUNT(*) AS value FROM runtime_events').get()?.value ?? 0
+      );
+      if (existing === 0) {
+        this.db.exec('COMMIT');
+        return { reset: false, deletedEvents: 0, reason: 'empty' };
+      }
+      const watermarkTable = this.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' " +
+            "AND name = 'runtime_integrity_watermark'"
+        )
+        .get();
+      const audited =
+        watermarkTable &&
+        Number(
+          this.db.prepare('SELECT COUNT(*) AS value FROM runtime_integrity_watermark').get()
+            ?.value ?? 0
+        ) > 0;
+      if (audited) {
+        this.db.exec('COMMIT');
+        return { reset: false, deletedEvents: 0, reason: 'audited_history' };
+      }
+      const nonImported = this.db
+        .prepare(
+          "SELECT event_id FROM runtime_events WHERE idempotency_key NOT LIKE 'legacy-event:%' " +
+            "AND idempotency_key NOT LIKE 'legacy-human-resume:%' LIMIT 1"
+        )
+        .get();
+      if (nonImported) {
+        this.db.exec('COMMIT');
+        return { reset: false, deletedEvents: 0, reason: 'non_imported_events' };
+      }
+
+      this.db.exec(
+        'DELETE FROM runtime_event_append_idempotency; ' +
+          'DELETE FROM runtime_events; ' +
+          'DELETE FROM runtime_event_streams'
+      );
+      this.db.exec('COMMIT');
+      return { reset: true, deletedEvents: existing, reason: 'reset' };
+    } catch (error) {
+      rollback(this.db);
+      throw new FrameworkError({
+        code: 'RUNTIME_INTEGRITY_CONFLICT',
+        message: 'SQLite incomplete Runtime import reset failed',
+        cause: error,
+      });
     }
   }
 

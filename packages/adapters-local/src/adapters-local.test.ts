@@ -47,6 +47,26 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(catalog.list('server')).resolves.toMatchObject([
       { capabilityHash: 'hash-1', stableToolId: 'mcp.server.search' },
     ]);
+    const [storedCapability] = await catalog.list('server');
+    const updatedCapability = {
+      ...storedCapability!,
+      descriptorHash: 'descriptor-2',
+      lastSeenAt: '2026-07-16T00:01:00.000Z',
+    };
+    await expect(
+      catalog.save(updatedCapability, {
+        expected: { ...storedCapability!, descriptorHash: 'stale-descriptor' },
+      })
+    ).resolves.toBe(false);
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { descriptorHash: 'descriptor-1' },
+    ]);
+    await expect(catalog.save(updatedCapability, { expected: storedCapability })).resolves.toBe(
+      true
+    );
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { descriptorHash: 'descriptor-2' },
+    ]);
 
     const snapshots = new FileToolContractSnapshotStore(path.join(root, 'snapshots'));
     await snapshots.save({
@@ -285,6 +305,40 @@ describe('@hypha/adapters-local reference providers', () => {
       { id: 'run_1:created', type: 'run.created', sessionId: 'session_1' },
     ]);
   });
+
+  it.each(['sqlite', 'json'] as const)(
+    'preserves causal insertion order for equal-timestamp Events in %s mode',
+    async (mode) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `hypha-event-order-${mode}-`));
+      const events = new SQLiteEventStore({
+        filename: path.join(root, 'events.sqlite'),
+        mode,
+      });
+      const timestamp = '2026-07-26T00:00:00.000Z';
+      for (const [id, type] of [
+        ['z-run-created', 'run.created'],
+        ['a-run-started', 'run.started'],
+        ['m-state-entered', 'fsm.state.entered'],
+      ] as const) {
+        await events.append(
+          createFrameworkEvent({
+            id,
+            type,
+            runId: 'run-order',
+            userId: 'user-order',
+            timestamp,
+            payload: { id },
+          })
+        );
+      }
+
+      await expect(events.list({ runId: 'run-order' })).resolves.toEqual([
+        expect.objectContaining({ id: 'z-run-created' }),
+        expect.objectContaining({ id: 'a-run-started' }),
+        expect.objectContaining({ id: 'm-state-entered' }),
+      ]);
+    }
+  );
 
   it('exports and imports framework event traces as JSONL', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-event-jsonl-'));

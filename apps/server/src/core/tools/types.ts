@@ -90,12 +90,39 @@ export interface MCPServerConfig {
   id: string;
   name: string;
   mode: 'local' | 'remote' | 'fixture';
+  connectionProfileRef?: string;
   command?: string;
   args?: string[];
   endpoint?: string;
-  authToken?: string;
+  sessionMode?: 'protocol_default' | 'stateless';
+  credentialRef?: string;
   autoStart?: boolean;
   autoConnect?: boolean;
+  required?: boolean;
+  reconnectPolicy?: {
+    maxAttempts: number;
+    backoffMs?: number;
+    maxBackoffMs?: number;
+    jitterRatio?: number;
+    maxElapsedMs?: number;
+  };
+  protocolVersionPolicy?: {
+    allowedVersions: string[];
+    rejectUnknown?: boolean;
+  };
+  egressPolicy?: {
+    allowedHosts?: string[];
+    denyPrivateNetworks?: boolean;
+    requireTls?: boolean;
+    maxRedirects?: number;
+    allowCrossOriginRedirects?: boolean;
+  };
+  contentPolicy?: {
+    maxResourceBytes?: number;
+    maxPromptBytes?: number;
+    maxPromptTokens?: number;
+    oversizeAction?: 'reject' | 'artifact';
+  };
 }
 
 export interface MCPCapabilities {
