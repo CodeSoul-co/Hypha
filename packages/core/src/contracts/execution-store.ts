@@ -3,6 +3,7 @@ import type {
   CommandExecutionResult,
   CommandExecutionStatus,
 } from './command-execution';
+import type { ProviderHealth } from './execution';
 
 export interface ExecutionLease {
   id: string;
@@ -141,5 +142,11 @@ export interface ExecutionStore {
   acquireLease(request: ExecutionLeaseAcquireRequest): Promise<ExecutionRecord>;
   renewLease(request: ExecutionLeaseRenewRequest): Promise<ExecutionRecord>;
   releaseLease(request: ExecutionLeaseReleaseRequest): Promise<ExecutionRecord>;
+  health(): Promise<ProviderHealth>;
   close?(): Promise<void>;
+}
+
+export interface ExecutionStoreFactory {
+  readonly storeId: string;
+  create(): Promise<ExecutionStore>;
 }
