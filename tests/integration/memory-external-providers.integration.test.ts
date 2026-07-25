@@ -339,9 +339,9 @@ describe('external memory real integration entry points', () => {
             const restarted = createClient();
             try {
               await expect(restarted.get(fixture.get(memoryId), signal)).resolves.toBeTruthy();
-              await expect(restarted.list(fixture.list, signal)).resolves.toMatchObject({
-                records: expect.any(Array),
-              });
+              const restartedList = await restarted.list(fixture.list, signal);
+              expect(Array.isArray(restartedList.records)).toBe(true);
+              expect(restartedList.records.length).toBeGreaterThan(0);
             } finally {
               await restarted.close();
             }
