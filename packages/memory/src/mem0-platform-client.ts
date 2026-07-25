@@ -275,11 +275,14 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
         await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: settledAt });
         return null;
       }
-      const attempts = operation.attempts + 1;
+      const attempts =
+        event.status === 'SUCCEEDED' || event.status === 'FAILED'
+          ? operation.attempts + 1
+          : operation.attempts;
       const state =
         event.status === 'SUCCEEDED'
           ? 'succeeded'
-          : event.status === 'FAILED' || attempts >= this.maxOperationAttempts
+          : event.status === 'FAILED'
             ? 'dead_letter'
             : event.status === 'RUNNING'
               ? 'running'
