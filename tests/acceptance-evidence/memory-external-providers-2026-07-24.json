@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "1.0.0",
+  "evidenceType": "memory.external-provider.live-acceptance",
+  "recordedAt": "2026-07-25T07:05:00.000Z",
+  "source": {
+    "kind": "recovered-codex-rollout-output",
+    "rolloutId": "019f8ced-ca0e-74a0-af3d-c06174bf49be",
+    "containsCredentials": false
+  },
+  "providers": [
+    {
+      "provider": "mem0-oss",
+      "status": "passed",
+      "requiredCaseSkipped": false,
+      "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
+      "testName": "mem0-oss",
+      "report": {
+        "status": "passed",
+        "capabilities": {
+          "add": true,
+          "search": true,
+          "get": true,
+          "list": true,
+          "update": true,
+          "delete": true,
+          "deleteByFilter": true,
+          "history": true,
+          "summarize": false,
+          "consolidate": false,
+          "decay": false,
+          "reinforce": false,
+          "conflictDetection": true,
+          "hybridSearch": false,
+          "graphRelations": false,
+          "asyncWrite": false,
+          "batchOperations": false
+        },
+        "addStatus": "committed",
+        "searchCount": 1,
+        "listCount": 1,
+        "updateStatus": "partial",
+        "historyCount": 0,
+        "deleteStatus": "completed",
+        "healthStatus": "healthy",
+        "paginationPageCount": 1,
+        "scopeIsolationVerified": true,
+        "restartVerified": false,
+        "failureProbeCount": 0,
+        "evidence": {
+          "commitSha": "a5bf83410e4dc73d5b93137b3387df3cb504779f",
+          "providerId": "memory.provider.mem0.rest",
+          "providerVersion": "d6d89c987bddf580870db14c69db974edfc5263c",
+          "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
+          "environmentHash": "sha256:21b9a6a17a9372dfff77d55de988799d4ff6da28775190acc857e8506623fdbd",
+          "startedAt": "2026-07-24T04:39:05.324Z",
+          "finishedAt": "2026-07-24T04:39:10.756Z"
+        }
+      },
+      "limitations": [
+        "The recovered run did not verify restart recovery.",
+        "The recovered run did not execute failure probes.",
+        "The update operation completed with the Provider-neutral partial status."
+      ]
+    },
+    {
+      "provider": "mem0-platform-v3",
+      "status": "machine-evidence-missing",
+      "requiredCaseSkipped": null,
+      "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
+      "testName": "mem0-platform-v3",
+      "userReportedFinalStatus": "passed",
+      "recoveredMachineRun": {
+        "status": "failed",
+        "observedAt": "2026-07-24T03:29:54.514Z",
+        "failure": "Provider createdAt was not a valid RFC 3339 datetime before timestamp normalization.",
+        "subsequentFixCommits": [
+          "6643391f5b10181402c312db650e3ceb4453ebe6",
+          "a5bf83410e4dc73d5b93137b3387df3cb504779f"
+        ]
+      },
+      "releaseDecision": "Do not claim live-validated until the final passing machine report is recovered or rerun."
+    },
+    {
+      "provider": "vertex-memory-bank",
+      "status": "skipped-by-decision",
+      "requiredCaseSkipped": true,
+      "reason": "ADC and the Google Cloud API were configured, but no usable Agent Engine reasoning-engine resource and complete IAM/quota lifecycle were available for a real GenerateMemories/LRO acceptance run.",
+      "releaseDecision": "Keep the Provider at controlled-test and do not claim live-validated or release-ready."
+    }
+  ]
+}
