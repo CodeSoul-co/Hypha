@@ -262,19 +262,103 @@ function emitEvidence(report: unknown): void {
 
 describe('external memory real integration entry points', () => {
   registerExternalCase('mem0-oss', Boolean(process.env.HYPHA_TEST_MEM0_OSS_URL), async () => {
-    const report = await runExternalProviderAcceptance(
+    const fixture = managedLiveFixture('mem0-oss');
+    const stores = await createDurableAcceptanceStores('mem0-oss');
+    const createClient = (apiKey = process.env.HYPHA_TEST_MEM0_OSS_API_KEY!) =>
       new Mem0OssClient({
         baseUrl: process.env.HYPHA_TEST_MEM0_OSS_URL!,
-        apiKey: process.env.HYPHA_TEST_MEM0_OSS_API_KEY,
-      }),
-      liveFixture('mem0-oss'),
+        apiKey,
+        mappingStore: stores.mappingStore,
+        mappingProfile: 'test',
+      });
+    const client = createClient();
+    const report = await runExternalProviderAcceptance(
+      client,
+      fixture,
       undefined,
-      evidence('memory.provider.mem0.rest', 'HYPHA_TEST_MEM0_OSS_VERSION')
+      evidence('memory.provider.mem0.rest', 'HYPHA_TEST_MEM0_OSS_VERSION'),
+      {
+        preparePagination: async (signal) => {
+          const operationId = fixture.add.operationId + ':pagination';
+          await client.add(
+            {
+              ...fixture.add,
+              operationId,
+              input: String(fixture.add.input) + ' pagination companion',
+              idempotencyKey: operationId,
+            },
+            signal
+          );
+        },
+        verifyRestart: async (memoryId, signal) => {
+          const restarted = createClient();
+          try {
+            await expect(restarted.get(fixture.get(memoryId), signal)).resolves.toBeTruthy();
+            const restartedList = await restarted.list(fixture.list, signal);
+            expect(restartedList.records.length).toBeGreaterThan(0);
+          } finally {
+            await restarted.close();
+          }
+        },
+        failureProbes: [
+          {
+            id: 'invalid-api-key',
+            expectedCodes: ['MEMORY_PERMISSION_DENIED'],
+            run: async (signal) => {
+              const denied = createClient('hypha-invalid-live-probe-key');
+              try {
+                await denied.search(
+                  {
+                    ...fixture.search,
+                    operationId: fixture.search.operationId + ':invalid-api-key',
+                  },
+                  signal
+                );
+              } finally {
+                await denied.close();
+              }
+            },
+          },
+          {
+            id: 'cancelled-request',
+            expectedCodes: ['MEMORY_PROVIDER_UNAVAILABLE'],
+            run: async () => {
+              const controller = new AbortController();
+              controller.abort(new Error('live acceptance cancellation probe'));
+              await client.search(
+                {
+                  ...fixture.search,
+                  operationId: fixture.search.operationId + ':cancelled',
+                },
+                controller.signal
+              );
+            },
+          },
+        ],
+        cleanup: async (signal) => {
+          try {
+            await cleanupAcceptanceScope(
+              client,
+              fixture.list,
+              (memoryIds) => ({
+                ...fixture.delete(memoryIds[0]),
+                operationId: fixture.delete(memoryIds[0]).operationId + ':scope-cleanup',
+                memoryIds,
+              }),
+              signal
+            );
+          } finally {
+            await stores.close();
+          }
+        },
+      }
     );
     expect(report).toMatchObject({
       status: 'passed',
-      searchCount: expect.any(Number),
-      listCount: expect.any(Number),
+      updateStatus: 'committed',
+      scopeIsolationVerified: true,
+      restartVerified: true,
+      failureProbeCount: 2,
       deleteStatus: 'completed',
       healthStatus: 'healthy',
       evidence: {
@@ -285,11 +369,11 @@ describe('external memory real integration entry points', () => {
         environmentHash: expect.stringMatching(/^sha256:/u),
       },
     });
+    expect(report.paginationPageCount).toBeGreaterThan(1);
     expect(report.searchCount).toBeGreaterThan(0);
-    expect(report.listCount).toBeGreaterThan(0);
+    expect(report.listCount).toBeGreaterThan(1);
     emitEvidence(report);
   });
-
   registerExternalCase(
     'mem0-platform-v3',
     Boolean(process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN),
