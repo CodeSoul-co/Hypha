@@ -2,6 +2,8 @@ import {
   createRuntimeOrchestrationProjectionDefinition,
   eventStreamKey,
   FrameworkError,
+  hashCanonicalJson,
+  migrateLegacyHumanWaitEvents,
   RUNTIME_CANONICAL_EVENT_TYPES,
   RUNTIME_ORCHESTRATION_EVENT_TYPES,
   type EventFilter,
@@ -192,9 +194,16 @@ export async function migrateCanonicalEventFamilies(input: {
   eventTypes?: readonly FrameworkEvent['type'][];
 }): Promise<CanonicalEventFamilyMigrationReport> {
   const selectedTypes = new Set(input.eventTypes ?? RUNTIME_CANONICAL_EVENT_TYPES);
-  const eligible = input.sourceEvents.filter(
-    (event) => isCanonicalRuntimeEvent(event.type) && selectedTypes.has(event.type)
+  const scopes = migrationRunScopes(input.sourceEvents);
+  const scopedEvents = input.sourceEvents.map((event) =>
+    inheritMigrationScope(event, scopes.get(event.runId))
   );
+  const humanWaitMigration = migrateLegacyHumanWaitEvents(scopedEvents);
+  const eligible = humanWaitMigration.events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => isCanonicalRuntimeEvent(event.type) && selectedTypes.has(event.type))
+    .sort(compareMigrationEvents)
+    .map(({ event }) => event);
   const existing = new Set((await input.canonical.list()).map((event) => eventIdentity(event)));
   const entries: CanonicalEventFamilyMigrationEntry[] = [];
   for (const event of eligible) {
@@ -387,6 +396,10 @@ function upcastCanonicalMigrationEvent(event: FrameworkEvent): FrameworkEvent {
         ...payload,
         terminalState: payload.terminalState ?? 'Cancelled',
       });
+    case 'recovery.case.opened':
+    case 'recovery.case.resolved':
+    case 'recovery.case.escalated':
+      return withPayload(event, upcastRecoveryCasePayload(event.type, payload));
     case 'fsm.state.entered':
     case 'fsm.state.exited':
       return withPayload(event, {
@@ -396,6 +409,144 @@ function upcastCanonicalMigrationEvent(event: FrameworkEvent): FrameworkEvent {
     default:
       return structuredClone(event);
   }
+}
+
+function migrationRunScopes(
+  events: readonly FrameworkEvent[]
+): ReadonlyMap<string, CanonicalRunScope> {
+  const primary = new Map<string, Map<string, CanonicalRunScope>>();
+  const fallback = new Map<string, Map<string, CanonicalRunScope>>();
+  for (const event of events) {
+    const scope = migrationScope(event);
+    if (!scope) continue;
+    addMigrationScope(fallback, event.runId, scope);
+    if (event.type === 'run.created') addMigrationScope(primary, event.runId, scope);
+  }
+
+  const resolved = new Map<string, CanonicalRunScope>();
+  for (const runId of new Set([...primary.keys(), ...fallback.keys()])) {
+    const candidates = primary.get(runId) ?? fallback.get(runId);
+    if (candidates?.size === 1) resolved.set(runId, [...candidates.values()][0]!);
+  }
+  return resolved;
+}
+
+function migrationScope(event: FrameworkEvent): CanonicalRunScope | null {
+  const payload = asRecord(event.payload);
+  const approvalRequest = asRecord(payload.approvalRequest);
+  const userId =
+    eventOwnerId(event) ??
+    stringValue(payload.userId) ??
+    stringValue(approvalRequest.userId) ??
+    stringValue(approvalRequest.principalId);
+  if (!userId) return null;
+  return {
+    ...(event.tenantId === undefined ? {} : { tenantId: event.tenantId }),
+    userId,
+    ...(event.workspaceId === undefined ? {} : { workspaceId: event.workspaceId }),
+    ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+  };
+}
+
+function addMigrationScope(
+  scopes: Map<string, Map<string, CanonicalRunScope>>,
+  runId: string,
+  scope: CanonicalRunScope
+): void {
+  const candidates = scopes.get(runId) ?? new Map<string, CanonicalRunScope>();
+  candidates.set(runScopeIdentity(scope), scope);
+  scopes.set(runId, candidates);
+}
+
+function inheritMigrationScope(
+  event: FrameworkEvent,
+  scope: CanonicalRunScope | undefined
+): FrameworkEvent {
+  if (!scope || eventOwnerId(event)) return structuredClone(event);
+  return {
+    ...structuredClone(event),
+    ...(event.tenantId === undefined && scope.tenantId !== undefined
+      ? { tenantId: scope.tenantId }
+      : {}),
+    userId: scope.userId,
+    ...(event.workspaceId === undefined && scope.workspaceId !== undefined
+      ? { workspaceId: scope.workspaceId }
+      : {}),
+    ...(event.sessionId === undefined && scope.sessionId !== undefined
+      ? { sessionId: scope.sessionId }
+      : {}),
+    metadata: { ...event.metadata, userId: scope.userId },
+  };
+}
+
+function compareMigrationEvents(
+  left: { event: FrameworkEvent; index: number },
+  right: { event: FrameworkEvent; index: number }
+): number {
+  const timestamp = left.event.timestamp.localeCompare(right.event.timestamp);
+  if (timestamp !== 0) return timestamp;
+  const priority = migrationPriority(left.event.type) - migrationPriority(right.event.type);
+  return priority || left.index - right.index;
+}
+
+function migrationPriority(type: FrameworkEvent['type']): number {
+  if (type === 'run.created') return 0;
+  if (type === 'run.started') return 1;
+  if (type === 'run.waiting_human') return 3;
+  if (type === 'run.completed' || type === 'run.failed' || type === 'run.cancelled') return 4;
+  return 2;
+}
+
+function upcastRecoveryCasePayload(
+  type: 'recovery.case.opened' | 'recovery.case.resolved' | 'recovery.case.escalated',
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const caseId = stringValue(payload.caseId) ?? 'legacy-recovery-case';
+  const rootFingerprint = stringValue(payload.rootFingerprint) ?? hashCanonicalJson(payload);
+  const failure = asRecord(payload.failure);
+  const strategy = stringValue(payload.strategy);
+  const safeAction =
+    stringValue(payload.safeAction) ??
+    (strategy === 'retry'
+      ? 'requeue'
+      : strategy === 'compensate'
+        ? 'compensate_activity'
+        : strategy === 'fail'
+          ? 'mark_failed'
+          : 'manual_review');
+  return {
+    ...payload,
+    caseId,
+    rootFingerprint,
+    status:
+      type === 'recovery.case.opened'
+        ? 'active'
+        : type === 'recovery.case.resolved'
+          ? 'recovered'
+          : 'suspended',
+    cycles:
+      Number.isSafeInteger(payload.cycles) && (payload.cycles as number) >= 0 ? payload.cycles : 1,
+    candidateId: stringValue(payload.candidateId) ?? caseId,
+    candidateHash:
+      stringValue(payload.candidateHash) ?? hashCanonicalJson({ caseId, rootFingerprint, failure }),
+    reason:
+      stringValue(payload.reason) ??
+      stringValue(failure.category) ??
+      stringValue(failure.code) ??
+      'CUSTOM',
+    safeAction,
+    ...(type === 'recovery.case.opened'
+      ? {}
+      : {
+          disposition:
+            stringValue(payload.disposition) ??
+            (type === 'recovery.case.resolved' && strategy === 'retry'
+              ? 'requeued'
+              : type === 'recovery.case.resolved'
+                ? 'recovered'
+                : 'requires_review'),
+        }),
+  };
 }
 
 function withPayload(event: FrameworkEvent, payload: Record<string, unknown>): FrameworkEvent {
