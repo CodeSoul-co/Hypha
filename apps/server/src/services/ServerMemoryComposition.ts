@@ -460,13 +460,13 @@ export function resolveMongoTransactionMode(
   configuredReplicaSet?: string
 ): MongoTransactionMode {
   const explicit = configured?.trim().toLowerCase();
-  if (explicit) {
+  if (explicit && explicit !== 'auto') {
     if (explicit === 'required' || explicit === 'preferred' || explicit === 'disabled') {
       return explicit;
     }
     throw memoryError(
       'MEMORY_INVALID_INPUT',
-      'HYPHA_MEMORY_MONGO_TRANSACTION_MODE must be required, preferred, or disabled.'
+      'HYPHA_MEMORY_MONGO_TRANSACTION_MODE must be auto, required, preferred, or disabled.'
     );
   }
   const transactionCapable =

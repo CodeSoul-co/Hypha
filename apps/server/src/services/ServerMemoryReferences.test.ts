@@ -1,5 +1,6 @@
 import type { RenewableCredentialProvider, StructuredStoreProvider } from '@hypha/memory';
 import {
+  createGoogleMetadataCredentialProvider,
   createRotatingEnvironmentCredentialProvider,
   createServerMemoryReferenceResolver,
 } from './ServerMemoryReferences';
@@ -83,7 +84,7 @@ describe('Server Memory managed credential references', () => {
     const resolver = createServerMemoryReferenceResolver({
       structuredStore,
       environment: {
-        HYPHA_MEM0_OSS_URL: 'http://127.0.0.1:8765',
+        HYPHA_MEM0_OSS_URL: 'http://127.0.0.1:8888',
         HYPHA_MEM0_OSS_API_KEY: 'mem0-local-secret',
         HYPHA_HINDSIGHT_URL: 'http://127.0.0.1:8888',
         HYPHA_HINDSIGHT_BEARER_TOKEN: 'hindsight-local-secret',
@@ -91,7 +92,7 @@ describe('Server Memory managed credential references', () => {
     });
 
     await expect(resolver.resolve('memory.connection.mem0-oss', 'connection')).resolves.toEqual({
-      baseUrl: 'http://127.0.0.1:8765',
+      baseUrl: 'http://127.0.0.1:8888',
       apiKey: 'mem0-local-secret',
       authMode: 'x-api-key',
     });
@@ -100,6 +101,69 @@ describe('Server Memory managed credential references', () => {
     ).resolves.toEqual({
       baseUrl: 'http://127.0.0.1:8888',
       bearerToken: 'hindsight-local-secret',
+    });
+  });
+
+  it('uses fixed-endpoint Google metadata credentials for workload identity', async () => {
+    let requestedUrl = '';
+    let requestedHeaders: Record<string, string> = {};
+    const now = new Date('2026-07-26T00:00:00.000Z');
+    const provider = createGoogleMetadataCredentialProvider({
+      now: () => now,
+      fetch: async (url, init) => {
+        requestedUrl = url;
+        requestedHeaders = init.headers;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (name) => (name === 'Metadata-Flavor' ? 'Google' : null) },
+          json: async () => ({
+            access_token: 'workload-identity-token',
+            expires_in: 3600,
+            token_type: 'Bearer',
+          }),
+        };
+      },
+    });
+    await expect(provider.acquire()).resolves.toEqual({
+      token: 'workload-identity-token',
+      tokenType: 'oauth_bearer',
+      expiresAt: '2026-07-26T01:00:00.000Z',
+    });
+    expect(requestedUrl).toBe(
+      'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token'
+    );
+    expect(requestedHeaders).toEqual({ 'Metadata-Flavor': 'Google' });
+  });
+
+  it('selects Google metadata auth explicitly and rejects invalid auth modes', async () => {
+    const metadataFetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'Google' },
+      json: async () => ({
+        access_token: 'metadata-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      }),
+    }));
+    const resolver = createServerMemoryReferenceResolver({
+      structuredStore,
+      environment: { HYPHA_MEMORYBANK_AUTH_MODE: 'google-metadata' },
+      googleMetadataFetch: metadataFetch,
+    });
+    const credential = (await resolver.resolve(
+      'credential:memorybank-managed',
+      'secret'
+    )) as RenewableCredentialProvider;
+    await expect(credential.acquire()).resolves.toMatchObject({ token: 'metadata-token' });
+
+    const invalid = createServerMemoryReferenceResolver({
+      structuredStore,
+      environment: { HYPHA_MEMORYBANK_AUTH_MODE: 'implicit' },
+    });
+    await expect(invalid.resolve('credential:memorybank-managed', 'secret')).rejects.toMatchObject({
+      code: 'MEMORY_INVALID_INPUT',
     });
   });
 

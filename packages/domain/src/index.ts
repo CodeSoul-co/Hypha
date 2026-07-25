@@ -338,13 +338,7 @@ export interface ReasoningSpec extends VersionedSpec, SpecMetadata {
 }
 
 export type BusinessRuleScope =
-  | 'domain'
-  | 'task'
-  | 'workflow'
-  | 'state'
-  | 'tool'
-  | 'memory'
-  | 'output';
+  'domain' | 'task' | 'workflow' | 'state' | 'tool' | 'memory' | 'output';
 export type BusinessRuleEffect = 'constraint' | 'precondition' | 'postcondition' | 'guidance';
 
 export interface BusinessRuleSpec extends VersionedSpec, SpecMetadata {
@@ -1722,6 +1716,19 @@ export const businessRuleSpecExample: BusinessRuleSpec = {
   severity: 'low',
 };
 
+function externalMemoryProfile(id: string, description: string, providerRef: string): MemorySpec {
+  return {
+    id,
+    version: '1.0.0',
+    description,
+    providers: [{ id: providerRef, type: 'hybrid', providerRef }],
+    memoryTypes: ['working', 'episodic', 'semantic', 'procedural'],
+    provenancePolicy: 'required',
+    retrievalPolicy: { defaultTopK: 10, requireScope: true },
+    writePolicyConfig: { allowLongTerm: true, requireProvenance: true },
+  };
+}
+
 export const domainPackSpecExample: DomainPackSpec = {
   id: 'domain.default',
   version: '0.0.0',
@@ -1821,17 +1828,42 @@ export const domainPackSpecExample: DomainPackSpec = {
     {
       id: 'memory.default',
       version: '0.0.0',
+      description: 'Hypha native durable Memory using Redis working state and MongoDB records.',
       providers: [
-        { id: 'structured', type: 'structured', providerRef: 'storage.sqlite.local' },
-        { id: 'vector', type: 'vector', providerRef: 'vector.local' },
+        {
+          id: 'hypha-native-default',
+          type: 'hybrid',
+          providerRef: 'memory.provider.native-default',
+        },
       ],
       memoryTypes: ['working', 'episodic', 'semantic'],
-      structuredStoreRef: 'storage.sqlite.local',
-      vectorIndexRef: 'vector.local',
+      structuredStoreRef: 'memory.store.record.mongodb',
+      vectorIndexRef: 'memory.vector.local',
+      artifactStoreRef: 'memory.artifact.local',
       provenancePolicy: 'required',
       retrievalPolicy: { defaultTopK: 5, requireScope: true },
       writePolicyConfig: { allowLongTerm: false, requireProvenance: true },
     },
+    externalMemoryProfile(
+      'memory.mem0.oss',
+      'Self-hosted Mem0 OSS selected through the Server Memory runtime profile.',
+      'memory.provider.mem0.oss'
+    ),
+    externalMemoryProfile(
+      'memory.mem0.platform',
+      'Managed Mem0 Platform v3 selected through the Server Memory runtime profile.',
+      'memory.provider.mem0.platform-v3'
+    ),
+    externalMemoryProfile(
+      'memory.memorybank.vertex-ai',
+      'Google Vertex AI Memory Bank selected through the Server Memory runtime profile.',
+      'memory.provider.memorybank.vertex-ai'
+    ),
+    externalMemoryProfile(
+      'memory.memorybank.hindsight-local',
+      'Self-hosted Hindsight MemoryBank candidate; enable only after its live acceptance gate.',
+      'memory.provider.memorybank.hindsight-local'
+    ),
   ],
   contextProfiles: [
     {
