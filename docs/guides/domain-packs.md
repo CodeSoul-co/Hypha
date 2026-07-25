@@ -84,6 +84,21 @@ const agent = applyDomainAgentPatch(baseAgent, compiled.agentPatch);
 includes task, output, workflow, skill, tool, MCP, memory, context, business
 rule, policy, evaluation, regression, and deployment bindings.
 
+The example defaults to Hypha Native Memory (`memory.local`) and also declares
+selectable profiles for Mem0 OSS, Mem0 Platform, Vertex AI Memory Bank, and the
+disabled Hindsight local candidate. Select a profile during compilation:
+
+```ts
+const compiled = compileDomainPackToHarnessedSystem(validPack, {
+  agentRef: { id: 'agent.default', version: '0.0.0' },
+  memoryProfileId: 'memory.mem0.oss',
+});
+```
+
+DomainPack only selects the versioned provider reference. Connection URLs,
+credentials, enablement, and live acceptance remain Server Memory runtime
+configuration and are never embedded in DomainPack.
+
 `researchEvidenceDomainPackExample` is an importable product-facing example
 for a bounded research workflow:
 

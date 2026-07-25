@@ -338,7 +338,13 @@ export interface ReasoningSpec extends VersionedSpec, SpecMetadata {
 }
 
 export type BusinessRuleScope =
-  'domain' | 'task' | 'workflow' | 'state' | 'tool' | 'memory' | 'output';
+  | 'domain'
+  | 'task'
+  | 'workflow'
+  | 'state'
+  | 'tool'
+  | 'memory'
+  | 'output';
 export type BusinessRuleEffect = 'constraint' | 'precondition' | 'postcondition' | 'guidance';
 
 export interface BusinessRuleSpec extends VersionedSpec, SpecMetadata {
