@@ -341,16 +341,6 @@ export class ToolManager {
     string,
     { status: 'ready' | 'degraded'; required: boolean; error?: string }
   >();
-  private readonly mcpServerStates = new Map<
-    string,
-    {
-      status: 'ready' | 'degraded' | 'failed';
-      required: boolean;
-      error?: string;
-      reconnecting?: boolean;
-    }
-  >();
-  private readonly mcpReconnectSupervisors = new Map<string, Promise<void>>();
   private mcpCatalogStore: MCPCapabilityCatalogStore = new FileMCPCapabilityCatalogStore(
     process.env.HYPHA_MCP_CATALOG_STORE ??
       path.resolve(process.cwd(), 'data/runtime/mcp-capability-catalog.json')
@@ -538,7 +528,9 @@ export class ToolManager {
 
     for (const spec of this.approvedMCPRegistry.list()) {
       const serverId = mcpServerId(spec);
-      const client = serverId ? this.mcpClients.get(serverId) : undefined;
+      const client = serverId
+        ? this.mcpClients.get(serverId)
+        : undefined;
       if (client?.status === 'connected') list.push(this.toolSpecToDefinition(spec));
     }
 
@@ -546,9 +538,7 @@ export class ToolManager {
     for (const client of this.fixtureMCPClients()) {
       if (client.status !== 'connected') continue;
       list.push(
-        ...client.tools.map((tool) =>
-          this.toolSpecToDefinition(this.normalizeMCPTool(client, tool))
-        )
+        ...client.tools.map((tool) => this.toolSpecToDefinition(this.normalizeMCPTool(client, tool)))
       );
     }
 
@@ -699,7 +689,6 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
-    const required = config.required !== false;
     this.mcpServerModes.set(config.id, config.mode);
     if (config.mode !== 'fixture') {
       this.connectionManager.register({
@@ -725,13 +714,7 @@ export class ToolManager {
         initializationTimeoutMs: 10_000,
         requestTimeoutMs: 30_000,
         shutdownTimeoutMs: 5_000,
-        reconnectPolicy: config.reconnectPolicy ?? {
-          maxAttempts: 3,
-          backoffMs: 250,
-          maxBackoffMs: 5_000,
-          jitterRatio: 0.2,
-          maxElapsedMs: 15_000,
-        },
+        reconnectPolicy: { maxAttempts: 3, backoffMs: 250 },
         egressPolicy:
           config.mode === 'remote' ? { requireTls: true, denyPrivateNetworks: true } : undefined,
         requestGuardPolicy: {
@@ -777,33 +760,14 @@ export class ToolManager {
         : new ManagedMCPClient(config.id, config.name, this.connectionManager);
 
     this.mcpClients.set(config.id, client);
-    this.mcpServerStates.set(config.id, { status: 'ready', required });
 
     if (config.autoStart || config.autoConnect) {
       try {
         await client.connect();
         await this.mcpCatalogs.get(config.id)?.refresh(config.id, 'server-auto-connect');
         await this.syncApprovedMCPTools(config.id);
-        this.mcpServerStates.set(config.id, { status: 'ready', required });
       } catch (error) {
         logger.error(`Failed to auto-connect MCP server ${config.id}:`, error);
-        const message = error instanceof Error ? error.message : String(error);
-        this.mcpServerStates.set(config.id, {
-          status: required ? 'failed' : 'degraded',
-          required,
-          error: message,
-        });
-        if (required) {
-          throw Object.assign(
-            new Error(`Required MCP server failed to auto-connect: ${config.id}`),
-            {
-              code: 'MCP_REQUIRED_SERVER_UNAVAILABLE',
-              serverId: config.id,
-              cause: error,
-            }
-          );
-        }
-        void this.superviseMCPReconnect(config.id);
       }
     }
 
@@ -821,20 +785,9 @@ export class ToolManager {
   async connectMCPServer(serverId: string): Promise<void> {
     const client = this.mcpClients.get(serverId);
     if (!client) throw new Error(`MCP server not found: ${serverId}`);
-    const required = this.mcpServerStates.get(serverId)?.required ?? true;
-    try {
-      await client.connect();
-      await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-connect-command');
-      await this.syncApprovedMCPTools(serverId);
-      this.mcpServerStates.set(serverId, { status: 'ready', required });
-    } catch (error) {
-      this.mcpServerStates.set(serverId, {
-        status: required ? 'failed' : 'degraded',
-        required,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+    await client.connect();
+    await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-connect-command');
+    await this.syncApprovedMCPTools(serverId);
   }
 
   async listMCPCapabilities(): Promise<MCPCapabilityRecord[]> {
@@ -867,7 +820,7 @@ export class ToolManager {
   ): Promise<unknown> {
     if (typeof access === 'string') throw unverifiedMCPRunAccess(serverId, uri, 'resource');
     const binding = await this.bindMCPContextCapability(serverId, uri, 'resource', access);
-    const result = await this.connectionManager.readResource({
+    return this.connectionManager.readResource({
       serverId,
       uri,
       context: {
@@ -891,8 +844,6 @@ export class ToolManager {
         metadata: binding,
       },
     });
-    await this.assertMCPContextBindingCurrent(serverId, uri, 'resource', access, binding);
-    return result;
   }
 
   async renderMCPPrompt(
@@ -903,7 +854,7 @@ export class ToolManager {
   ): Promise<unknown> {
     if (typeof access === 'string') throw unverifiedMCPRunAccess(serverId, name, 'prompt');
     const binding = await this.bindMCPContextCapability(serverId, name, 'prompt', access);
-    const result = await this.connectionManager.getPrompt({
+    return this.connectionManager.getPrompt({
       serverId,
       name,
       arguments: args,
@@ -928,8 +879,6 @@ export class ToolManager {
         metadata: binding,
       },
     });
-    await this.assertMCPContextBindingCurrent(serverId, name, 'prompt', access, binding);
-    return result;
   }
 
   private async requireApprovedMCPContextCapability(
@@ -975,7 +924,11 @@ export class ToolManager {
         kind,
       });
     }
-    const capability = await this.requireApprovedMCPContextCapability(serverId, capabilityId, kind);
+    const capability = await this.requireApprovedMCPContextCapability(
+      serverId,
+      capabilityId,
+      kind
+    );
     const serverIdentityHash = hashToolContract(
       (capability.descriptor as { serverIdentity?: unknown }).serverIdentity ?? {
         serverId,
@@ -1049,48 +1002,6 @@ export class ToolManager {
     };
   }
 
-  private async assertMCPContextBindingCurrent(
-    serverId: string,
-    capabilityId: string,
-    kind: 'resource' | 'prompt',
-    access: MCPContextRunAccess,
-    binding: Record<string, string>
-  ): Promise<void> {
-    if (Date.parse(access.deadlineAt) <= Date.now()) {
-      throw Object.assign(new Error(`MCP ${kind} deadline expired before completion.`), {
-        code: 'MCP_REQUEST_TIMEOUT',
-        serverId,
-        capabilityId,
-        kind,
-      });
-    }
-    const persisted = await this.mcpSnapshotStore.get(binding.snapshotId);
-    const pinned = persisted?.toolContracts[0];
-    const current = await this.requireApprovedMCPContextCapability(serverId, capabilityId, kind);
-    const currentServerIdentityHash = hashToolContract(
-      (current.descriptor as { serverIdentity?: unknown }).serverIdentity ?? {
-        serverId,
-        protocolVersion: current.protocolVersion,
-      }
-    );
-    if (
-      !persisted ||
-      persisted.runId !== access.runId ||
-      persisted.snapshotHash !== binding.snapshotHash ||
-      pinned?.sourceCapabilityHash !== binding.capabilityHash ||
-      current.capabilityHash !== binding.capabilityHash ||
-      currentServerIdentityHash !== binding.serverIdentityHash
-    ) {
-      throw Object.assign(new Error('MCP context binding changed before completion.'), {
-        code: 'MCP_CAPABILITY_SNAPSHOT_MISMATCH',
-        serverId,
-        capabilityId,
-        kind,
-        snapshotId: binding.snapshotId,
-      });
-    }
-  }
-
   async listMCPDrifts(): Promise<MCPCapabilityRecord[]> {
     return (await this.listMCPCapabilities()).filter(
       (record) =>
@@ -1161,7 +1072,9 @@ export class ToolManager {
         tools:
           this.mcpServerModes.get(client.id) === 'fixture'
             ? client.tools.map((tool) => this.normalizeMCPTool(client, tool))
-            : this.approvedMCPRegistry.list().filter((spec) => mcpServerId(spec) === client.id),
+            : this.approvedMCPRegistry
+                .list()
+                .filter((spec) => mcpServerId(spec) === client.id),
       }));
   }
 
@@ -1189,53 +1102,6 @@ export class ToolManager {
     { status: 'ready' | 'degraded'; required: boolean; error?: string }
   > {
     return Object.fromEntries(this.profileStates);
-  }
-
-  mcpServerReadiness(): Record<
-    string,
-    {
-      status: 'ready' | 'degraded' | 'failed';
-      required: boolean;
-      error?: string;
-      reconnecting?: boolean;
-    }
-  > {
-    return Object.fromEntries(this.mcpServerStates);
-  }
-
-  private superviseMCPReconnect(serverId: string): Promise<void> {
-    const active = this.mcpReconnectSupervisors.get(serverId);
-    if (active) return active;
-    const client = this.mcpClients.get(serverId);
-    if (!client) return Promise.resolve();
-    const required = this.mcpServerStates.get(serverId)?.required ?? false;
-    this.mcpServerStates.set(serverId, {
-      ...this.mcpServerStates.get(serverId),
-      status: 'degraded',
-      required,
-      reconnecting: true,
-    });
-    const supervisor = (async () => {
-      try {
-        await this.connectionManager.reconnect(serverId);
-        await client.connect();
-        await this.mcpCatalogs.get(serverId)?.refresh(serverId, 'server-supervisor-reconnect');
-        await this.syncApprovedMCPTools(serverId);
-        this.mcpServerStates.set(serverId, { status: 'ready', required });
-      } catch (error) {
-        this.mcpServerStates.set(serverId, {
-          status: 'degraded',
-          required,
-          error: error instanceof Error ? error.message : String(error),
-          reconnecting: false,
-        });
-        logger.error(`MCP reconnect supervisor exhausted for ${serverId}:`, error);
-      } finally {
-        this.mcpReconnectSupervisors.delete(serverId);
-      }
-    })();
-    this.mcpReconnectSupervisors.set(serverId, supervisor);
-    return supervisor;
   }
 
   private async loadAdapterProfiles(profiles: ToolAdapterProfile[]): Promise<void> {
@@ -1286,7 +1152,9 @@ export class ToolManager {
     }
   }
 
-  private findProfileTool(nameOrId: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+  private findProfileTool(
+    nameOrId: string
+  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.profileToolRegistry.list()) {
       if (spec.id !== nameOrId && spec.name !== nameOrId) continue;
       return this.profileToolRegistry.resolve({
@@ -1302,7 +1170,9 @@ export class ToolManager {
     return normalizeMCPToolSpec(this.toMCPCapabilityDescriptor(client, tool));
   }
 
-  private findApprovedMCPTool(name: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+  private findApprovedMCPTool(
+    name: string
+  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.approvedMCPRegistry.list()) {
       const candidateNames = new Set(
         [spec.id, spec.name, mcpCapabilityId(spec)].filter(
@@ -1370,7 +1240,9 @@ export class ToolManager {
 
   private mcpToolCount(serverId: string, client: MCPClient): number {
     if (this.mcpServerModes.get(serverId) === 'fixture') return client.tools.length;
-    return this.approvedMCPRegistry.list().filter((spec) => mcpServerId(spec) === serverId).length;
+    return this.approvedMCPRegistry
+      .list()
+      .filter((spec) => mcpServerId(spec) === serverId).length;
   }
 
   private toMCPCapabilityDescriptor(
