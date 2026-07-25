@@ -55,11 +55,19 @@ describe('Memory Provider observability', () => {
     const first = telemetry.begin('provider-1', 'add', { costUnits: 3, storedBytesDelta: 10 });
     first.complete('succeeded');
 
+    const health = telemetry.begin('provider-1', 'health');
+    health.complete('succeeded');
+
     expect(() => telemetry.begin('provider-1', 'search', { costUnits: 1 })).toThrow(
       'operation_quota was exhausted'
     );
     expect(telemetry.snapshot('provider-1')).toMatchObject({
-      operations: { total: 2, succeeded: 1, quotaRejected: 1 },
+      operations: {
+        total: 3,
+        succeeded: 2,
+        quotaRejected: 1,
+        byOperation: { add: 1, health: 1, search: 1 },
+      },
       quota: {
         maxOperations: 1,
         remainingOperations: 0,
