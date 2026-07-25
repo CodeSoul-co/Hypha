@@ -2,6 +2,8 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import {
+  runtimeActivityCompensationResultDefinition,
+  runtimeActivityCompensationResultExample,
   runtimeActivityReconciliationResultExample,
   runtimeActivityReconciliationResultJsonSchema,
   runtimeActivityReconciliationResultSchema,
@@ -54,13 +56,18 @@ describe('Runtime Recovery contracts', () => {
         runtimeActivityReconciliationResultJsonSchema,
         runtimeActivityReconciliationResultExample,
       ],
+      [
+        runtimeActivityCompensationResultDefinition.zod,
+        runtimeActivityCompensationResultDefinition.jsonSchema,
+        runtimeActivityCompensationResultExample,
+      ],
     ] as const;
 
     for (const [zod, jsonSchema, example] of fixtures) {
       expect(zod.parse(example)).toEqual(example);
       expect(ajv.validate(jsonSchema, example), ajv.errorsText()).toBe(true);
     }
-    expect(runtimeRecoveryContractDefinitions).toHaveLength(6);
+    expect(runtimeRecoveryContractDefinitions).toHaveLength(fixtures.length);
   });
 
   it('requires Activity candidates to identify their target', () => {
