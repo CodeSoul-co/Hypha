@@ -940,12 +940,24 @@ export class FileMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore 
     );
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
     const records = readJsonFile<MCPCapabilityRecord[]>(this.filename, []);
     const index = records.findIndex((candidate) => candidate.id === record.id);
+    if (
+      options &&
+      'expected' in options &&
+      JSON.stringify(index >= 0 ? records[index] : null) !==
+        JSON.stringify(options.expected ?? null)
+    ) {
+      return false;
+    }
     if (index >= 0) records[index] = record;
     else records.push(record);
     writeJsonFile(this.filename, records);
+    return true;
   }
 }
 

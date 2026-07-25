@@ -39,6 +39,8 @@ import {
   type MCPCapabilityRecord,
   type MCPCapabilityDescriptor,
   type MCPGateway,
+  type RedisLikeMCPLeaseClient,
+  type RedisLikeMCPStoreClient,
 } from '@hypha/mcp';
 import {
   LocalFunctionToolAdapter,
@@ -360,7 +362,7 @@ export class ToolManager {
             release: async () => undefined,
           };
         }
-        return new RedisMCPReconnectCoordinator(redis).acquire(input);
+        return new RedisMCPReconnectCoordinator(asRedisMCPLeaseClient(redis)).acquire(input);
       },
     },
     contentArtifacts: {
@@ -407,8 +409,7 @@ export class ToolManager {
   );
 
   constructor(
-    private readonly profileBindings: ToolProfileBindingRegistry =
-      getToolProfileBindingRegistry()
+    private readonly profileBindings: ToolProfileBindingRegistry = getToolProfileBindingRegistry()
   ) {}
 
   async initialize(): Promise<void> {
@@ -419,7 +420,7 @@ export class ToolManager {
       if (!redis) {
         throw new Error('Production MCP governance requires the shared Redis store.');
       }
-      this.mcpCatalogStore = new RedisMCPCapabilityCatalogStore(redis);
+      this.mcpCatalogStore = new RedisMCPCapabilityCatalogStore(asRedisMCPStoreClient(redis));
       this.mcpSnapshotStore = new RedisToolContractSnapshotStore(redis);
     }
 
@@ -1339,8 +1340,7 @@ export class ToolManager {
     registerConcreteToolAdapterFactories(registry, {
       localFunctions,
       plugins: this.profileBindings.pluginHandlers(),
-      createExecutionAdapter: (input) =>
-        this.profileBindings.createExecutionAdapter(input),
+      createExecutionAdapter: (input) => this.profileBindings.createExecutionAdapter(input),
       prepareMCPConnection: (input) => this.prepareMCPProfileConnection(input),
     });
 
@@ -1463,9 +1463,7 @@ export class ToolManager {
     };
   }
 
-  private findProfileTool(
-    nameOrId: string
-  ): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
+  private findProfileTool(nameOrId: string): { spec: HyphaToolSpec; adapter: ToolAdapter } | null {
     for (const spec of this.profileToolRegistry.list()) {
       if (spec.id !== nameOrId && spec.name !== nameOrId) continue;
       return this.profileToolRegistry.resolve({
@@ -1647,6 +1645,29 @@ function unverifiedMCPRunAccess(
       kind,
     }
   );
+}
+
+function asRedisMCPLeaseClient(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>
+): RedisLikeMCPLeaseClient {
+  return {
+    set: (key, value, mode, ttlMs, condition) => redis.set(key, value, mode, ttlMs, condition),
+    eval: (script, numberOfKeys, ...args) =>
+      redis.eval(script, numberOfKeys, ...args) as Promise<number | string | null>,
+  };
+}
+
+function asRedisMCPStoreClient(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>
+): RedisLikeMCPStoreClient {
+  return {
+    get: (key) => redis.get(key),
+    set: (key, value) => redis.set(key, value),
+    sadd: (key, ...members) => redis.sadd(key, ...members),
+    smembers: (key) => redis.smembers(key),
+    eval: (script, numberOfKeys, ...args) =>
+      redis.eval(script, numberOfKeys, ...args) as Promise<number | string | null>,
+  };
 }
 
 export default ToolManager;

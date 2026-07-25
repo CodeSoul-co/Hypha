@@ -47,6 +47,26 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(catalog.list('server')).resolves.toMatchObject([
       { capabilityHash: 'hash-1', stableToolId: 'mcp.server.search' },
     ]);
+    const [storedCapability] = await catalog.list('server');
+    const updatedCapability = {
+      ...storedCapability!,
+      descriptorHash: 'descriptor-2',
+      lastSeenAt: '2026-07-16T00:01:00.000Z',
+    };
+    await expect(
+      catalog.save(updatedCapability, {
+        expected: { ...storedCapability!, descriptorHash: 'stale-descriptor' },
+      })
+    ).resolves.toBe(false);
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { descriptorHash: 'descriptor-1' },
+    ]);
+    await expect(catalog.save(updatedCapability, { expected: storedCapability })).resolves.toBe(
+      true
+    );
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { descriptorHash: 'descriptor-2' },
+    ]);
 
     const snapshots = new FileToolContractSnapshotStore(path.join(root, 'snapshots'));
     await snapshots.save({
