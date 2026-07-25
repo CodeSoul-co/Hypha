@@ -2,6 +2,7 @@ import { Router } from 'express';
 import chatRoutes from './chat.routes';
 import authRoutes from './auth.routes';
 import memoryRoutes from './memory.routes';
+import memoryAdminRoutes from './memory-admin.routes';
 import skillRoutes from './skill.routes';
 import toolRoutes from './tool.routes';
 import workflowRoutes from './workflow.routes';
@@ -31,6 +32,7 @@ router.get('/health', (_req, res) => {
 // Mount routes
 router.use('/auth', authRoutes);
 router.use('/chat', chatRoutes);
+router.use('/memory/admin', memoryAdminRoutes);
 router.use('/memory', memoryRoutes);
 router.use('/skills', skillRoutes);
 router.use('/tools', toolRoutes);

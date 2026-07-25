@@ -35,7 +35,11 @@ import type {
 } from './operations';
 
 export * from './recovery';
+export * from './bounded-recovery';
 
+/**
+ * @deprecated Use ManagedMemoryScope for new integrations.
+ */
 export interface MemoryScope {
   workspaceId?: string;
   sessionId?: string;
@@ -51,6 +55,9 @@ export type MemoryType =
   | 'artifact'
   | 'governance';
 
+/**
+ * @deprecated Use ManagedMemoryRecord for new integrations.
+ */
 export interface MemoryRecord<TValue = unknown> {
   id: string;
   type: MemoryType;
@@ -107,6 +114,12 @@ export interface StructuredStoreProvider {
   get<T>(table: string, id: string): Promise<T | null>;
   insert<T extends { id: string }>(table: string, record: T): Promise<void>;
   update<T>(table: string, id: string, patch: Partial<T>): Promise<void>;
+  compareAndSet?<T>(
+    table: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>
+  ): Promise<boolean>;
   delete(table: string, id: string): Promise<void>;
   query<T>(table: string, query: StructuredQuery): Promise<T[]>;
   transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T>;
@@ -213,6 +226,9 @@ export interface MemoryAuditReport {
   missingProvenance: string[];
 }
 
+/**
+ * @deprecated Use MemoryManagementProvider behind GovernedMemoryManager.
+ */
 export interface MemoryProvider {
   read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
   search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
@@ -252,6 +268,10 @@ export interface MemoryManagerRecoveryOptions {
   onFailure?: (failure: RecoveryFailure) => void | Promise<void>;
 }
 
+/**
+ * @deprecated Use GovernedMemoryManager for managed operations. This class remains for legacy
+ * MemoryProvider compatibility during the documented migration window.
+ */
 export class MemoryManager {
   private sequence = 0;
 
@@ -841,22 +861,68 @@ export * from './operations';
 export * from './operation-contract';
 export * from './lifecycle-contracts';
 export * from './lifecycle-schema';
+export * from './governed-memory-manager';
+export * from './memory-application-service';
+export * from './memory-runtime-factory';
+export * from './memory-runtime-coordinator';
+export * from './native-memory-runtime';
+export * from './memory-worker-supervisor';
+export * from './memory-data-migration';
+export * from './mongo-structured-store';
+export * from './structured-idempotency-store';
+export * from './memory-server-migration-contract';
+export * from './memory-server-migration-schema';
+export * from './memory-server-migration-acceptance';
+export * from './memory-server-migration-package';
+export * from './memory-server-migration-package-fixtures';
+export * from './memory-server-migration-package-schema';
+export * from './memory-server-consumer-migration';
+export * from './memory-server-migration-fixtures';
+export * from './memory-server-redis-migration';
+export * from './memory-server-redis-migration-fixtures';
+export * from './memory-server-redis-migration-acceptance';
+export * from './memory-server-permanent-migration';
+export * from './memory-server-permanent-migration-fixtures';
+export * from './memory-server-permanent-migration-acceptance';
+export * from './provider-reconciliation';
+export * from './provider-operational-health';
+export * from './provider-governance';
+export * from './provider-observability';
 export * from './memory-utils';
 export * from './managed-store';
 export * from './structured-managed-store';
 export * from './structured-memory-persistence';
 export * from './index-outbox';
 export * from './lifecycle-workers';
+export * from './dead-letter-management';
+export * from './external-provider-operations';
+export * from './provider-pagination';
+export * from './managed-credentials';
+export * from './managed-provider-factories';
+export * from './self-hosted-provider-factories';
+export * from './canonical-runtime-config';
 export * from './native-maintenance';
 export * from './native-memory';
 export * from './extraction';
+export * from './structured-extraction-state-store';
 export * from './working-store';
+export * from './structured-lifecycle-task-store';
 export * from './external-adapters';
+export * from './external-provider-acceptance';
+export * from './external-memory-identity';
+export * from './structured-external-mapping-store';
 export * from './mem0-rest-client';
+export * from './mem0-platform-client';
+export * from './memorybank-local-client';
+export * from './hindsight-local-client';
+export * from './hindsight-local-factory';
+export * from './memorybank-managed-client';
 export * from './memory-events';
+export * from './context-artifacts';
 export * from './context-contracts';
 export * from './context-schema';
 export * from './context-builder';
+export * from './context-gateway';
 export * from './context-source-resolver';
 export * from './context-compaction';
 export * from './retrieval';
@@ -864,5 +930,7 @@ export * from './integration-contracts';
 export * from './integration-schema';
 export * from './integration-json-schema';
 export * from './managed-search-cache';
+export * from './context-cache-validity';
 
 export * from './hybrid';
+export * from './memory-server-migration-rehearsal';
