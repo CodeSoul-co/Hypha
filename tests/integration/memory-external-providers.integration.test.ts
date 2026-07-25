@@ -25,6 +25,7 @@ const explicitlyRequired = new Set(
     .map((value) => value.trim())
     .filter(Boolean)
 );
+const externalAcceptanceTestTimeoutMs = 600_000;
 
 function liveFixture(prefix: string): ExternalProviderAcceptanceFixture {
   const suffix = Date.now().toString(36);
@@ -211,7 +212,7 @@ function isRequired(provider: string): boolean {
 
 function registerExternalCase(name: string, ready: boolean, run: () => Promise<void>): void {
   if (ready) {
-    it(name, run);
+    it(name, run, externalAcceptanceTestTimeoutMs);
     return;
   }
   if (isRequired(name)) {
