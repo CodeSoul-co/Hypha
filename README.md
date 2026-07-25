@@ -156,6 +156,21 @@ snapshots. Context builders apply policy, provenance, token budgets, determinist
 instruction/data boundaries before model injection. See the
 [Governed Memory architecture](docs/architecture/memory.md).
 
+The bundled server loads `configs/memory-profiles.yaml` and starts with `native-default`, backed by
+MongoDB for durable records, history, mappings, and recovery evidence plus Redis for native working
+state. The same composition can select self-hosted `mem0-oss` or `hindsight-local`, managed
+`mem0-platform`, or `memorybank-managed` without placing credentials in the profile. Set
+`HYPHA_MEMORY_CONFIG_PATH` to an alternative validated profile file and provide only the environment
+references required by the selected provider. External providers still use MongoDB for Hypha-owned
+identity mappings and durable governance evidence. See
+[Memory provider profiles](docs/guides/memory-provider-profiles.md) and
+[External provider runtime](docs/guides/memory-external-provider-runtime.md).
+
+`MemoryBankLocalClient` is a protocol compatibility fixture, not a bundled MemoryBank service.
+`hindsight-local` is the supplied self-hosted MemoryBank-style deployment candidate. Managed and
+self-hosted provider profiles become release-ready only after their environment-specific acceptance
+suite runs with zero skipped cases.
+
 ## Development Commands
 
 ```bash
