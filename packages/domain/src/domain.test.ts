@@ -32,12 +32,8 @@ describe('@hypha/domain workflow compiler', () => {
     const compiled = compileDomainPackToHarnessedSystem(validated, {
       agentRef: { id: 'agent.research', version: '1.0.0' },
     });
-    const research = compiled.bindings.workflowStates.find(
-      (state) => state.stateId === 'Research'
-    );
-    const publish = compiled.bindings.workflowStates.find(
-      (state) => state.stateId === 'Publish'
-    );
+    const research = compiled.bindings.workflowStates.find((state) => state.stateId === 'Research');
+    const publish = compiled.bindings.workflowStates.find((state) => state.stateId === 'Publish');
     const review = validated.workflows[0]?.states.find((state) => state.id === 'HumanReview');
 
     expect(research).toMatchObject({
@@ -892,7 +888,9 @@ defaultWorkflow: workflow.file
       sessionProfileId: 'session.local',
       agentRef: { id: 'agent.minimal', version: '1.0.0' },
     });
-    const reasoning = compiled.bindings.workflowStates.find((state) => state.stateId === 'Reasoning');
+    const reasoning = compiled.bindings.workflowStates.find(
+      (state) => state.stateId === 'Reasoning'
+    );
     expect(reasoning).toMatchObject({
       toolProfileRefs: [{ id: 'tools.minimal.search', version: '1.0.0' }],
       allowedToolRefs: [{ id: 'common.search', version: '1.0.0' }],
