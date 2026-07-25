@@ -1,5 +1,4 @@
 import { z, type ZodType } from 'zod';
-export * from './store-registry';
 import type {
   ArtifactAccessPolicySpec,
   ArtifactAccessRecord,
