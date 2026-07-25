@@ -535,7 +535,7 @@ class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     const rows = this.db
-      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, id ASC')
+      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, rowid ASC')
       .all();
     return filterEvents(
       rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent),
@@ -1018,7 +1018,7 @@ function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): Frame
 }
 
 function compareEvents(left: FrameworkEvent, right: FrameworkEvent): number {
-  return left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id);
+  return left.timestamp.localeCompare(right.timestamp);
 }
 
 function readJsonFile<T>(filename: string, fallback: T): T {
