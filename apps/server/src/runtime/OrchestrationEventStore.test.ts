@@ -195,7 +195,7 @@ describe('OrchestrationEventStore', () => {
             waitId: 'legacy-human-wait:human-wait',
             wait: expect.objectContaining({
               type: 'human',
-              pendingActionRef: 'tool:external-write',
+              pendingActionRef: 'invocation-1',
             }),
           }),
         }),
@@ -286,6 +286,67 @@ describe('OrchestrationEventStore', () => {
       'run.started',
       'fsm.state.entered',
       'fsm.transition.requested',
+      'fsm.transition.accepted',
+      'fsm.state.exited',
+      'fsm.state.entered',
+    ]);
+    expect(auditCanonicalRuntimeStreams(migrated).quarantinedStreams).toBe(0);
+  });
+
+  it('synthesizes a canonical resume batch only from matching Human Review evidence', async () => {
+    const schemas = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(schemas);
+    const durable = new DurableEventRuntime({
+      store: new InMemoryDurableEventStore({ schemaRegistry: schemas }),
+    });
+    const canonical = new DurableEventStoreBridge({ events: durable });
+    const source = [
+      event('run-created', 'run.created', '2026-07-21T06:00:00.000Z'),
+      event('run-started', 'run.started', '2026-07-21T06:00:00.100Z'),
+      event('state-human', 'fsm.state.entered', '2026-07-21T06:00:00.200Z'),
+      event('human-requested', 'human.review.requested', '2026-07-21T06:00:00.300Z'),
+      event('human-wait', 'run.waiting_human', '2026-07-21T06:00:00.400Z'),
+      event('human-resolved', 'human.review.resolved', '2026-07-21T06:00:00.500Z'),
+      event('transition-accepted', 'fsm.transition.accepted', '2026-07-21T06:00:00.600Z'),
+      event('state-human-exited', 'fsm.state.exited', '2026-07-21T06:00:00.600Z'),
+      event('state-observed', 'fsm.state.entered', '2026-07-21T06:00:00.700Z'),
+    ];
+    source[2]!.payload = { stateId: 'HumanReview' };
+    source[2]!.fsmState = 'HumanReview';
+    source[3]!.payload = { invocationId: 'invocation-1' };
+    source[4]!.payload = { tool: 'external-write', reason: 'approval required' };
+    source[4]!.fsmState = 'HumanReview';
+    source[5]!.payload = {
+      invocationId: 'invocation-1',
+      grant: { invocationId: 'invocation-1', approvedBy: 'operator-1' },
+    };
+    source[5]!.fsmState = 'HumanReview';
+    source[6]!.payload = { from: 'HumanReview', to: 'ObservationRecorded' };
+    source[7]!.payload = { stateId: 'HumanReview' };
+    source[8]!.payload = { stateId: 'ObservationRecorded' };
+
+    const migration = await migrateCanonicalEventFamilies({
+      sourceEvents: source,
+      canonical,
+    });
+    const migrated = await canonical.list({ runId: 'run-1' });
+
+    expect(migration).toMatchObject({
+      synthesizedEvents: 4,
+      synthesizedRunIds: ['run-1'],
+      quarantinedEvents: 0,
+    });
+    expect(migrated.map((item) => item.type)).toEqual([
+      'run.created',
+      'run.started',
+      'fsm.state.entered',
+      'human.review.requested',
+      'run.waiting_human',
+      'human.review.resolved',
+      'run.resume.requested',
+      'runtime.wait.resolved',
+      'run.resumed',
+      'fsm.state.entered',
       'fsm.transition.accepted',
       'fsm.state.exited',
       'fsm.state.entered',

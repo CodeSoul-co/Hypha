@@ -61,6 +61,23 @@ describe('Legacy Human Wait migration', () => {
     expect(result.events[1].payloadHash).toBe(hashCanonicalJson(result.events[1].payload));
   });
 
+  it('prefers a preceding invocation over a generic Tool id on the Wait event', () => {
+    const result = migrateLegacyHumanWaitEvents([
+      event('review.requested', 'human.review.requested', {
+        invocationId: 'tool-invocation.precise',
+        toolId: 'filesystem',
+      }),
+      event('wait.legacy', 'run.waiting_human', {
+        tool: 'filesystem',
+        reason: 'operator approval required',
+      }),
+    ]);
+
+    expect(result.events[1].payload).toMatchObject({
+      wait: { pendingActionRef: 'tool-invocation.precise' },
+    });
+  });
+
   it('quarantines streams whose pending action cannot be reconstructed', () => {
     const result = migrateLegacyHumanWaitEvents([
       event('wait.unknown', 'run.waiting_human', { reason: 'approval required' }),

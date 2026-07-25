@@ -35,10 +35,15 @@ export function migrateLegacyHumanWaitEvents<TEvent extends FrameworkEvent>(
   const entries: LegacyHumanWaitMigrationEntry[] = [];
   const migrated = events.map((event) => {
     const evidence = humanActionRef(event);
-    if (evidence) evidenceByRun.set(event.runId, evidence);
-    if (event.type !== 'run.waiting_human') return structuredClone(event);
+    if (event.type !== 'run.waiting_human') {
+      if (evidence) evidenceByRun.set(event.runId, evidence);
+      return structuredClone(event);
+    }
 
     const result = migrateLegacyHumanWaitEvent(event, evidenceByRun.get(event.runId));
+    if (result.entry.pendingActionRef) {
+      evidenceByRun.set(event.runId, result.entry.pendingActionRef);
+    }
     entries.push(result.entry);
     return result.event;
   });
@@ -72,7 +77,7 @@ export function migrateLegacyHumanWaitEvent<TEvent extends FrameworkEvent>(
   const wait = record(payload.wait);
   const waitId = stringValue(payload.waitId) ?? `legacy-human-wait:${event.id}`;
   const pendingActionRef =
-    stringValue(wait.pendingActionRef) ?? humanActionRef(event) ?? priorPendingActionRef;
+    stringValue(wait.pendingActionRef) ?? priorPendingActionRef ?? humanActionRef(event);
   const reason =
     stringValue(wait.reason) ??
     stringValue(payload.reason) ??

@@ -32,6 +32,8 @@ export interface CanonicalEventFamilyMigrationEntry {
 export interface CanonicalEventFamilyMigrationReport {
   scannedEvents: number;
   eligibleEvents: number;
+  synthesizedEvents: number;
+  synthesizedRunIds: string[];
   migratedEvents: number;
   alreadyCanonicalEvents: number;
   quarantinedEvents: number;
@@ -199,9 +201,10 @@ export async function migrateCanonicalEventFamilies(input: {
     inheritMigrationScope(event, scopes.get(event.runId))
   );
   const humanWaitMigration = migrateLegacyHumanWaitEvents(scopedEvents);
+  const legacyResumeMigration = synthesizeLegacyHumanResumeEvents(humanWaitMigration.events);
   const eligible = orderMigrationEvents(
-    humanWaitMigration.events
-    .map((event, index) => ({ event, index }))
+    legacyResumeMigration.events
+      .map((event, index) => ({ event, index }))
       .filter(({ event }) => isCanonicalRuntimeEvent(event.type) && selectedTypes.has(event.type))
   ).map(({ event }) => event);
   const existing = new Set((await input.canonical.list()).map((event) => eventIdentity(event)));
@@ -239,6 +242,8 @@ export async function migrateCanonicalEventFamilies(input: {
   return {
     scannedEvents: input.sourceEvents.length,
     eligibleEvents: eligible.length,
+    synthesizedEvents: legacyResumeMigration.synthesizedEvents,
+    synthesizedRunIds: legacyResumeMigration.synthesizedRunIds,
     migratedEvents: entries.filter((entry) => entry.status === 'migrated').length,
     alreadyCanonicalEvents: entries.filter((entry) => entry.status === 'already_canonical').length,
     quarantinedEvents: entries.filter((entry) => entry.status === 'quarantined').length,
@@ -482,6 +487,185 @@ function inheritMigrationScope(
 interface IndexedMigrationEvent {
   event: FrameworkEvent;
   index: number;
+}
+
+interface LegacyPendingHumanWait {
+  waitId: string;
+  stateId: string;
+  pendingActionRef: string;
+}
+
+function synthesizeLegacyHumanResumeEvents(events: FrameworkEvent[]): {
+  events: FrameworkEvent[];
+  synthesizedEvents: number;
+  synthesizedRunIds: string[];
+} {
+  const existingResolvedWaitIds = new Set(
+    events.flatMap((event) => {
+      if (event.type !== 'runtime.wait.resolved') return [];
+      const waitId = stringValue(asRecord(event.payload).waitId);
+      return waitId ? [waitId] : [];
+    })
+  );
+  const terminalReviewActions = new Set(
+    events.flatMap((event) => {
+      if (event.type !== 'human.review.resolved' && event.type !== 'human.review.rejected') {
+        return [];
+      }
+      const actionRef = legacyReviewActionRef(event);
+      return actionRef ? [actionRef] : [];
+    })
+  );
+  const pendingByStream = new Map<string, LegacyPendingHumanWait>();
+  const currentStateByStream = new Map<string, string>();
+  const synthesizedRunIds = new Set<string>();
+  let synthesizedEvents = 0;
+  const expanded: FrameworkEvent[] = [];
+
+  for (const event of events) {
+    const stream = migrationStreamIdentity(event);
+    expanded.push(structuredClone(event));
+    if (event.type === 'fsm.state.entered') {
+      const entered = stateId(event);
+      if (entered) currentStateByStream.set(stream, entered);
+    }
+    if (event.type === 'run.waiting_human') {
+      const payload = asRecord(event.payload);
+      const wait = asRecord(payload.wait);
+      const waitId = stringValue(payload.waitId);
+      const pendingActionRef = stringValue(wait.pendingActionRef);
+      const waitingState = event.fsmState ?? currentStateByStream.get(stream);
+      if (waitId && pendingActionRef && waitingState) {
+        pendingByStream.set(stream, { waitId, pendingActionRef, stateId: waitingState });
+      }
+      continue;
+    }
+
+    const actionRef = legacyReviewActionRef(event);
+    const isTerminalDecision =
+      event.type === 'human.review.resolved' ||
+      event.type === 'human.review.rejected' ||
+      (event.type === 'human.review.approved' &&
+        actionRef !== undefined &&
+        !terminalReviewActions.has(actionRef));
+    if (!isTerminalDecision || !actionRef) continue;
+
+    const pending = pendingByStream.get(stream);
+    if (
+      !pending ||
+      pending.pendingActionRef !== actionRef ||
+      existingResolvedWaitIds.has(pending.waitId)
+    ) {
+      continue;
+    }
+    const synthetic = legacyHumanResumeEvents(event, pending);
+    expanded.push(...synthetic);
+    synthesizedEvents += synthetic.length;
+    synthesizedRunIds.add(event.runId);
+    pendingByStream.delete(stream);
+  }
+
+  return {
+    events: expanded,
+    synthesizedEvents,
+    synthesizedRunIds: [...synthesizedRunIds].sort(),
+  };
+}
+
+function legacyHumanResumeEvents(
+  resolution: FrameworkEvent,
+  pending: LegacyPendingHumanWait
+): FrameworkEvent[] {
+  const principalId = legacyReviewPrincipalId(resolution);
+  const commandId = `legacy-human-resume:${resolution.id}`;
+  const commandHash = hashCanonicalJson({
+    migration: 'legacy-human-resume:1.0.0',
+    resolutionEventId: resolution.id,
+    waitId: pending.waitId,
+    principalId,
+  });
+  const resume = {
+    commandId,
+    kind: 'manual',
+    waitId: pending.waitId,
+    principalId,
+    resumedAt: resolution.timestamp,
+  };
+  const migrated = (
+    suffix: string,
+    type: FrameworkEvent['type'],
+    payload: Record<string, unknown>,
+    fsmState = resolution.fsmState
+  ): FrameworkEvent => ({
+    ...structuredClone(resolution),
+    id: `${resolution.id}:${suffix}`,
+    type,
+    idempotencyKey: `legacy-human-resume:${resolution.id}:${suffix}`,
+    ...(fsmState === undefined ? {} : { fsmState }),
+    payload,
+    metadata: {
+      ...resolution.metadata,
+      migration: 'legacy-human-resume:1.0.0',
+      sourceEventId: resolution.id,
+    },
+  });
+  return [
+    migrated('run-resume-requested', 'run.resume.requested', {
+      commandId,
+      commandHash,
+      waitId: pending.waitId,
+    }),
+    migrated('wait-resolved', 'runtime.wait.resolved', {
+      commandId,
+      commandHash,
+      waitId: pending.waitId,
+      resolution: 'manual',
+      resolvedAt: resolution.timestamp,
+    }),
+    migrated('run-resumed', 'run.resumed', {
+      commandId,
+      commandHash,
+      resume,
+    }),
+    migrated(
+      'state-reentered',
+      'fsm.state.entered',
+      {
+        commandId,
+        commandHash,
+        stateId: pending.stateId,
+        reason: 'legacy_human_review_resolved',
+      },
+      pending.stateId
+    ),
+  ];
+}
+
+function legacyReviewActionRef(event: FrameworkEvent): string | undefined {
+  const payload = asRecord(event.payload);
+  const grant = asRecord(payload.grant);
+  const approvalRequest = asRecord(payload.approvalRequest);
+  return (
+    stringValue(payload.invocationId) ??
+    stringValue(grant.invocationId) ??
+    stringValue(approvalRequest.invocationId) ??
+    stringValue(payload.taskId) ??
+    stringValue(payload.requestId)
+  );
+}
+
+function legacyReviewPrincipalId(event: FrameworkEvent): string {
+  const payload = asRecord(event.payload);
+  const grant = asRecord(payload.grant);
+  const approvalRequest = asRecord(payload.approvalRequest);
+  return (
+    stringValue(grant.approvedBy) ??
+    stringValue(payload.approvedBy) ??
+    stringValue(approvalRequest.principalId) ??
+    stringValue(approvalRequest.userId) ??
+    eventOwnerId(event) ??
+    'legacy-operator'
+  );
 }
 
 interface MigrationRunState {
