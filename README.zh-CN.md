@@ -64,6 +64,11 @@ adapter 和应用状态不进入 Runtime core。
 Event 与 checkpoint 证据防止 stale worker 或重复循环被误判为有效进展。详见
 [Runtime 模型](docs/reference/runtime-model.md)与 [Framework API](docs/api/framework.md)。
 
+持久 Runtime graph 是需要显式装配的 Framework 能力。仓库内置的 Express Server 当前仍使用
+`EventRuntime` 兼容路径，默认不会启动 canonical session-command、continuation、timer 或 recovery
+scheduler。需要在进程重启后继续自主执行的应用必须显式装配并管理这些 worker 的生命周期；不能把
+默认 Server 当作跨重启连续执行器。
+
 ## 跨模块协同恢复
 
 Hypha 使用同一套 FSM 恢复契约协调 inference、tool、MCP、memory、execution、storage、消息投递、policy 与 cache 异常。参与模块按依赖顺序执行，已经完成的上游不会重复运行；系统通过稳定的 receipt、revision、hash 或 provider state 判断是否真正取得进展，而不是把再次循环视为进展。有界重试、对账、兼容 fallback、降级、补偿、人工复核、隔离、取消和失败都具有显式策略与 trace event。
