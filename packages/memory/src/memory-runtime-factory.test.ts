@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   MemoryManagementProviderRegistry,
   MemoryRuntimeFactory,
+  MemoryProviderTelemetry,
   NativeMemoryManagementProvider,
   memoryManagementProviderSpecExample,
   memoryProfileSpecExample,
@@ -33,7 +34,11 @@ function config(): MemoryRuntimeConfig {
   };
 }
 
-function runtimeFactory(registry: MemoryManagementProviderRegistry, now?: () => string) {
+function runtimeFactory(
+  registry: MemoryManagementProviderRegistry,
+  now?: () => string,
+  telemetry?: MemoryProviderTelemetry
+) {
   return new MemoryRuntimeFactory({
     registry,
     activities: {
@@ -43,6 +48,8 @@ function runtimeFactory(registry: MemoryManagementProviderRegistry, now?: () => 
     },
     eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
     now,
+    telemetry,
+    providerCostEstimator: () => ({ costUnits: 0 }),
   });
 }
 
@@ -85,6 +92,30 @@ describe('MemoryRuntimeFactory', () => {
     });
     expect(runtime.compositionReceipt.runtimeId).toMatch(/^memory-runtime:[a-f0-9]{32}$/);
     expect(runtime.compositionReceipt.serviceInstanceId).toMatch(/^memory-service:[a-f0-9]{32}$/);
+  });
+
+  it('wires Provider telemetry into the canonical runtime', async () => {
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'observed-native',
+      supports: () => true,
+      create: async ({ profile }) => new NativeMemoryManagementProvider({ profile }),
+    });
+    const telemetry = new MemoryProviderTelemetry({
+      defaultPolicy: {
+        windowMs: 60_000,
+        slo: { minimumOperations: 1, availabilityTarget: 1, latencyP95Ms: 1_000 },
+      },
+      now: () => new Date('2026-07-25T00:00:00.000Z'),
+    });
+    const runtime = await runtimeFactory(registry, undefined, telemetry).create(config());
+
+    await expect(runtime.service.providerHealth()).resolves.toMatchObject({ status: 'healthy' });
+    expect(runtime.telemetry).toBe(telemetry);
+    expect(telemetry.snapshot(runtime.provider.id)).toMatchObject({
+      operations: { total: 2, succeeded: 2, byOperation: { health: 2 } },
+      cost: { measuredUnits: 0, unpricedOperations: 0, complete: true },
+      slo: { status: 'met' },
+    });
   });
 
   it('changes the real service provider when the active profile changes', async () => {

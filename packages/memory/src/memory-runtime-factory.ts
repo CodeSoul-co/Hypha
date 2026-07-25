@@ -25,6 +25,12 @@ import {
 import type { MemoryEventContext } from './memory-events';
 import { memoryError, sha256 } from './memory-utils';
 import type { MemoryManagementProvider } from './operations';
+import {
+  ObservedMemoryManagementProvider,
+  type MemoryProviderCostEstimator,
+  type MemoryProviderTelemetry,
+} from './provider-observability';
+
 import { memoryManagementProviderSpecSchema, memoryProfileSpecSchema } from './profile-contract';
 
 export interface MemoryRuntimeProfile {
@@ -208,6 +214,8 @@ export interface MemoryRuntimeFactoryOptions {
   contextBuilder?: MemoryContextBuilder;
   contextGateway?: ContextInjectionGateway;
   reconciliationStore?: MemoryLifecycleTaskStore;
+  telemetry?: MemoryProviderTelemetry;
+  providerCostEstimator?: MemoryProviderCostEstimator;
   now?: () => string;
 }
 
@@ -234,6 +242,7 @@ export interface MemoryRuntime {
   compositionReceipt: MemoryRuntimeCompositionReceipt;
   resources?: unknown;
   close(): Promise<void>;
+  telemetry?: MemoryProviderTelemetry;
 }
 
 /** Strict composition root for all Memory consumers. */
@@ -264,9 +273,16 @@ export class MemoryRuntimeFactory {
       references,
     });
     const installation = isProviderInstallation(created) ? created : undefined;
-    const provider: MemoryManagementProvider = installation
+    const installedProvider: MemoryManagementProvider = installation
       ? installation.provider
       : (created as MemoryManagementProvider);
+    const provider: MemoryManagementProvider = this.options.telemetry
+      ? new ObservedMemoryManagementProvider({
+          provider: installedProvider,
+          telemetry: this.options.telemetry,
+          estimate: this.options.providerCostEstimator,
+        })
+      : installedProvider;
     try {
       const capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
       const errors = [
@@ -348,6 +364,7 @@ export class MemoryRuntimeFactory {
         capabilities,
         compositionReceipt,
         resources: installation?.resources,
+        telemetry: this.options.telemetry,
         close: () => {
           closePromise ??= closeMemoryRuntimeResources(service, provider, installation);
           return closePromise;
