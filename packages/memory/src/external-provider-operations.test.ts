@@ -106,6 +106,53 @@ describe('durable external provider operations', () => {
     });
   });
 
+  it('does not consume the failure budget while a Mem0 event remains pending', async () => {
+    const database = new Store();
+    const operations = new StructuredExternalProviderOperationStore({ store: database });
+    let eventCalls = 0;
+    const client = new Mem0PlatformClient({
+      apiToken: 'token',
+      mappingProfile: 'test',
+      operationStore: operations,
+      maxOperationAttempts: 2,
+      fetch: async (_url, init) => {
+        if (init?.method === 'POST') {
+          return response({ status: 'PENDING', event_id: 'event:slow' });
+        }
+        eventCalls += 1;
+        return response({
+          id: 'event:slow',
+          status: eventCalls <= 6 ? 'PENDING' : 'SUCCEEDED',
+          results: [],
+        });
+      },
+    });
+    await client.add({
+      operationId: 'operation:mem0:slow',
+      principal,
+      scope,
+      input: 'remember slow blue',
+      source: { type: 'user_message', sourceId: 'message:slow' },
+      profileRef: memoryProfileSpecExample,
+    });
+
+    for (let call = 0; call < 6; call += 1) {
+      await expect(client.resumeEvent('operation:mem0:slow')).resolves.toMatchObject({
+        status: 'PENDING',
+      });
+    }
+    await expect(
+      operations.get('memory.provider.mem0.platform.v3', 'operation:mem0:slow')
+    ).resolves.toMatchObject({ state: 'pending', attempts: 0 });
+
+    await expect(client.resumeEvent('operation:mem0:slow')).resolves.toMatchObject({
+      status: 'SUCCEEDED',
+    });
+    await expect(
+      operations.get('memory.provider.mem0.platform.v3', 'operation:mem0:slow')
+    ).resolves.toMatchObject({ state: 'succeeded', attempts: 1 });
+  });
+
   it('resumes a Vertex LRO after restart and commits its provider-scoped result', async () => {
     const database = new Store();
     const operations = new StructuredExternalProviderOperationStore({ store: database });

@@ -57,6 +57,50 @@ describe('Mem0PlatformClient', () => {
     });
   });
 
+  it('keeps v3 pagination in query parameters and filters in the body', async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const fetcher: Mem0HttpFetch = async (url, init) => {
+      const page = new URL(url).searchParams.get('page');
+      requests.push({ url, body: JSON.parse(init?.body ?? '{}') as unknown });
+      return json({
+        count: 2,
+        next: page === '1' ? 'https://api.mem0.ai/v3/memories/?page=2&page_size=1' : null,
+        previous: null,
+        results: [],
+      });
+    };
+    const client = new Mem0PlatformClient({
+      apiToken: 'token',
+      mappingProfile: 'test',
+      fetch: fetcher,
+    });
+    const first = await client.list({
+      operationId: 'op-list-1',
+      principal,
+      scope,
+      pagination: { limit: 1 },
+    });
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toBeTruthy();
+    const second = await client.list({
+      operationId: 'op-list-2',
+      principal,
+      scope,
+      pagination: { limit: 1, cursor: first.nextCursor },
+    });
+    expect(second.hasMore).toBe(false);
+    expect(requests).toEqual([
+      {
+        url: 'https://api.mem0.ai/v3/memories/?page=1&page_size=1',
+        body: { filters: { user_id: 'platform-user', app_id: 'platform-app' } },
+      },
+      {
+        url: 'https://api.mem0.ai/v3/memories/?page=2&page_size=1',
+        body: { filters: { user_id: 'platform-user', app_id: 'platform-app' } },
+      },
+    ]);
+  });
+
   it('maps v3 search entity ids inside filters and normalizes rate limits', async () => {
     let body: Record<string, unknown> = {};
     const fetcher: Mem0HttpFetch = async (_url, init) => {

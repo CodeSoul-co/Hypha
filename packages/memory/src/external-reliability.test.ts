@@ -14,13 +14,22 @@ import {
 class TestStructuredStore implements StructuredStoreProvider {
   private readonly tables = new Map<string, Map<string, unknown>>();
 
+  constructor(private readonly nullMissingExternalVersion = false) {}
+
   async get<T>(table: string, id: string): Promise<T | null> {
     const value = this.table(table).get(id);
     return value === undefined ? null : structuredClone(value as T);
   }
 
   async insert<T extends { id: string }>(table: string, record: T): Promise<void> {
-    this.table(table).set(record.id, structuredClone(record));
+    const stored = structuredClone(record) as T & Record<string, unknown>;
+    if (
+      this.nullMissingExternalVersion &&
+      table === 'memory_external_mappings' &&
+      !('externalVersion' in stored)
+    )
+      (stored as Record<string, unknown>).externalVersion = null;
+    this.table(table).set(record.id, stored);
   }
 
   async update<T>(table: string, id: string, patch: Partial<T>): Promise<void> {
@@ -68,8 +77,8 @@ const scope: ManagedMemoryScope = {
 };
 
 describe('external provider governance and reliability', () => {
-  it('persists bidirectional provider mappings across store instances', async () => {
-    const database = new TestStructuredStore();
+  it('persists bidirectional mappings and normalizes BSON null optionals', async () => {
+    const database = new TestStructuredStore(true);
     const first = new StructuredExternalMemoryMappingStore({ store: database });
     const mapping = {
       memoryId: 'memory:external:stable',

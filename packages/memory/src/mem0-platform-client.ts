@@ -275,11 +275,14 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
         await this.operationStore.set({ ...operation, state: 'dead_letter', updatedAt: settledAt });
         return null;
       }
-      const attempts = operation.attempts + 1;
+      const attempts =
+        event.status === 'SUCCEEDED' || event.status === 'FAILED'
+          ? operation.attempts + 1
+          : operation.attempts;
       const state =
         event.status === 'SUCCEEDED'
           ? 'succeeded'
-          : event.status === 'FAILED' || attempts >= this.maxOperationAttempts
+          : event.status === 'FAILED'
             ? 'dead_letter'
             : event.status === 'RUNNING'
               ? 'running'
@@ -344,11 +347,9 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
       const { cursor, page_size: pageSize, ...filters } = params;
       url.pathname = '/v3/memories/';
       url.search = '';
-      body = {
-        filters,
-        page: cursor ?? '1',
-        page_size: pageSize ? Number(pageSize) : 50,
-      };
+      url.searchParams.set('page', cursor ?? '1');
+      url.searchParams.set('page_size', pageSize ?? '50');
+      body = { filters };
       method = 'POST';
     } else if (url.pathname.startsWith('/memories/')) {
       url.pathname = '/v1' + url.pathname + (url.pathname.endsWith('/') ? '' : '/');

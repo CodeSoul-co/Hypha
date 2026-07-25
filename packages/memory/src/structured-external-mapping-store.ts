@@ -45,8 +45,10 @@ export class StructuredExternalMemoryMappingStore implements ExternalMemoryMappi
 
   async set(mapping: ExternalMemoryMapping): Promise<void> {
     const validated = externalMemoryMappingSchema.parse(mapping);
+    const { externalVersion, ...required } = structuredClone(validated);
     const record: StoredExternalMemoryMapping = {
-      ...structuredClone(validated),
+      ...required,
+      ...(externalVersion ? { externalVersion } : {}),
       id: mappingId(mapping.providerId, mapping.memoryId),
     };
     await this.options.store.transaction(async (transaction) => {
@@ -81,5 +83,9 @@ function mappingId(providerId: string, memoryId: string): string {
 
 function withoutStorageId(stored: StoredExternalMemoryMapping): ExternalMemoryMapping {
   const { id: _id, ...mapping } = stored;
-  return structuredClone(mapping);
+  const normalized = structuredClone(mapping) as typeof mapping & {
+    externalVersion?: unknown;
+  };
+  if (normalized.externalVersion == null) delete normalized.externalVersion;
+  return externalMemoryMappingSchema.parse(normalized);
 }

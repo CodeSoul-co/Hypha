@@ -25,6 +25,7 @@ const explicitlyRequired = new Set(
     .map((value) => value.trim())
     .filter(Boolean)
 );
+const externalAcceptanceTestTimeoutMs = 600_000;
 
 function liveFixture(prefix: string): ExternalProviderAcceptanceFixture {
   const suffix = Date.now().toString(36);
@@ -111,6 +112,11 @@ async function createDurableAcceptanceStores(prefix: string) {
   });
   await connection.asPromise();
   if (!connection.db) throw new Error('MongoDB connection has no database.');
+  const hello = (await connection.db.command({ hello: 1 })) as {
+    setName?: string;
+    msg?: string;
+  };
+  const transactionMode = hello.setName || hello.msg === 'isdbgrid' ? 'preferred' : 'disabled';
   const collectionPrefix = `${prefix.replace(/[^a-z0-9]/giu, '_')}_${Date.now()}_`;
   const client = connection.getClient();
   const database: MongoDatabaseLike = {
@@ -121,7 +127,7 @@ async function createDurableAcceptanceStores(prefix: string) {
   const store = new MongoStructuredStoreProvider({
     database,
     collectionPrefix,
-    transactionMode: 'preferred',
+    transactionMode,
   });
   const mappingStore = new StructuredExternalMemoryMappingStore({ store });
   const operationStore = new StructuredExternalProviderOperationStore({ store });
@@ -211,7 +217,7 @@ function isRequired(provider: string): boolean {
 
 function registerExternalCase(name: string, ready: boolean, run: () => Promise<void>): void {
   if (ready) {
-    it(name, run);
+    it(name, run, externalAcceptanceTestTimeoutMs);
     return;
   }
   if (isRequired(name)) {
@@ -306,6 +312,8 @@ describe('external memory real integration entry points', () => {
           isSettled: (event) => event.status === 'SUCCEEDED',
           isFailed: (event) => event.status === 'FAILED',
           signal,
+          maxCalls: 180,
+          timeoutMs: 180_000,
         });
       const report = await runExternalProviderAcceptance(
         client,
@@ -331,9 +339,9 @@ describe('external memory real integration entry points', () => {
             const restarted = createClient();
             try {
               await expect(restarted.get(fixture.get(memoryId), signal)).resolves.toBeTruthy();
-              await expect(restarted.list(fixture.list, signal)).resolves.toMatchObject({
-                records: expect.any(Array),
-              });
+              const restartedList = await restarted.list(fixture.list, signal);
+              expect(Array.isArray(restartedList.records)).toBe(true);
+              expect(restartedList.records.length).toBeGreaterThan(0);
             } finally {
               await restarted.close();
             }
