@@ -20,6 +20,7 @@ import {
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type RuntimeHumanWaitService,
   type SpecRef,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
@@ -504,10 +505,14 @@ function legacyToolToModelTool(
 export interface EventRuntimeInitialization {
   events: EventStore & TraceRecorder;
   eventDbPath?: string;
+  humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
 }
 
 class EventRuntimeService {
   private readonly events: EventStore & TraceRecorder;
+  private readonly humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  private readonly humanWaitOwnerId = `server-event-runtime:${process.pid}`;
+  private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
@@ -537,6 +542,7 @@ class EventRuntimeService {
         filename: eventDbPath,
         mode: sqliteStorage.sqliteMode,
       });
+    this.humanWaits = options?.humanWaits;
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
@@ -1432,17 +1438,18 @@ class EventRuntimeService {
     if (invocation) this.registerManagedTool(invocation.toolId);
     const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
     if (invocation && result.status === 'completed') {
-      await this.completeApprovedToolRun(invocation, result);
+      await this.completeApprovedToolRun(invocation, result, approvedBy);
     }
     return result;
   }
 
-  async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
+  async rejectToolInvocation(invocationId: string, rejectedBy: string): Promise<ToolCallResult> {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     const result = await this.toolRunner.rejectInvocation(invocationId);
     const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
     const run = runId ? this.runs.get(runId) : undefined;
     if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      await this.resolveHumanReview(run, invocationId, rejectedBy, 'rejected');
       await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
     }
     return result;
@@ -1450,13 +1457,15 @@ class EventRuntimeService {
 
   private async completeApprovedToolRun(
     invocation: ToolInvocationRecord,
-    result: ToolCallResult
+    result: ToolCallResult,
+    approvedBy: string
   ): Promise<void> {
     const runId = invocation.scope?.runId ?? invocation.request.context.runId;
     const run = this.runs.get(runId);
     if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
 
     if (run.snapshot.currentState === 'HumanReview') {
+      await this.resolveHumanReview(run, invocation.id, approvedBy, 'approved');
       await this.transition(runId, 'ObservationRecorded', {
         tool: invocation.toolId,
         invocationId: invocation.id,
@@ -2016,11 +2025,76 @@ class EventRuntimeService {
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
+    const context = this.requireRun(runId);
     const waitId =
       typeof payload.waitId === 'string' && payload.waitId.trim()
         ? payload.waitId
         : `human-review:${generateId()}`;
+    const pendingActionRef =
+      typeof payload.pendingActionRef === 'string' && payload.pendingActionRef.trim()
+        ? payload.pendingActionRef
+        : typeof payload.invocationId === 'string' && payload.invocationId.trim()
+          ? payload.invocationId
+          : waitId;
+    if (this.humanWaits) {
+      const result = await this.humanWaits.create({
+        commandId: `create:${waitId}`,
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          runId,
+        },
+        ownerId: this.humanWaitOwnerId,
+        leaseTtlMs: this.humanWaitLeaseTtlMs,
+        waitId,
+        pendingActionRef,
+        reason:
+          typeof payload.reason === 'string' && payload.reason.trim()
+            ? payload.reason
+            : 'Human review required',
+        requestedAt: new Date().toISOString(),
+        idempotencyKey: `create:${waitId}`,
+      });
+      if (result.disposition === 'lease_unavailable') {
+        throw new FrameworkError({
+          code: 'RUNTIME_RESOURCE_CONFLICT',
+          message: `Run ${runId} Human Wait Lease is unavailable`,
+        });
+      }
+      return;
+    }
     await this.append(runId, 'run.waiting_human', { ...payload, waitId });
+  }
+
+  private async resolveHumanReview(
+    context: RuntimeRunContext,
+    pendingActionRef: string,
+    principalId: string,
+    decision: 'approved' | 'rejected'
+  ): Promise<void> {
+    if (!this.humanWaits) return;
+    const resolvedAt = new Date().toISOString();
+    const result = await this.humanWaits.resolve({
+      commandId: `resolve:${pendingActionRef}:${decision}`,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+      },
+      ownerId: this.humanWaitOwnerId,
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      pendingActionRef,
+      principalId,
+      decision,
+      resolvedAt,
+      idempotencyKey: `resolve:${pendingActionRef}:${decision}`,
+    });
+    if (result.disposition === 'lease_unavailable') {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: `Run ${context.runId} Human Wait Lease is unavailable`,
+      });
+    }
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {
