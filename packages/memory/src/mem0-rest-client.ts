@@ -28,6 +28,7 @@ import {
 } from './external-adapters';
 import { createExternalMemoryId } from './external-memory-identity';
 import { beginProviderPage, finishProviderPage } from './provider-pagination';
+import { normalizeExternalProviderBaseUrl } from './external-provider-url';
 import { hashMemoryContent, hashMemoryScope, memoryError, stableStringify } from './memory-utils';
 
 export interface Mem0HttpResponse {
@@ -59,6 +60,7 @@ export interface Mem0OssClientOptions {
   mappingStore?: ExternalMemoryMappingStore;
   mappingProfile?: ExternalMemoryMappingRuntimeProfile;
   listPaginationMode?: 'top-k-offset' | 'provider-cursor';
+  allowInsecureForTests?: boolean;
 }
 
 const mem0RestCapabilities: MemoryManagementCapabilities = {
@@ -91,7 +93,11 @@ export class Mem0OssClient implements ExternalMemoryClient {
   private closed = false;
 
   constructor(private readonly options: Mem0OssClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/$/, '');
+    this.baseUrl = normalizeExternalProviderBaseUrl(options.baseUrl, {
+      providerName: 'Mem0 OSS',
+      allowLoopbackHttp: true,
+      allowInsecureForTests: options.allowInsecureForTests,
+    });
     const runtimeFetch = (globalThis as unknown as { fetch?: Mem0HttpFetch }).fetch;
     const fetcher = options.fetch ?? runtimeFetch;
     if (!fetcher) {
@@ -161,8 +167,8 @@ export class Mem0OssClient implements ExternalMemoryClient {
       method: 'POST',
       body: {
         query: request.query ?? '',
-        ...toMem0Scope(request.scope),
-        limit: request.topK,
+        filters: toMem0Scope(request.scope),
+        top_k: request.topK,
       },
       signal,
     });
