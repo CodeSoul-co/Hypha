@@ -38,8 +38,10 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
+import { loadSqlite, type SqliteDatabaseSync, type SqliteModule } from './sqlite-driver';
 
 export * from './workspace-runtime';
+export * from './common-tool-port-bindings';
 export * from './local-process-output-collector';
 export * from './execution-provider-error';
 export * from './local-process-policy';
@@ -52,7 +54,26 @@ export * from './local-process-result';
 export * from './local-process-execution-provider';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
+export * from './runtime-event-store';
+export * from './runtime-integrity-store';
+export * from './runtime-checkpoint-store';
+export * from './react-continuation-checkpoint-store';
+export * from './run-lease-store';
+export * from './state-execution-claim-store';
+export * from './session-queue';
+export * from './runtime-capacity-semaphore';
+export * from './projection-store';
+export * from './sqlite-driver';
 export * from './artifact-content-io';
+export * from './artifact-manager-tool-port';
+export * from './legacy-tool-artifact-importer';
+export * from './legacy-tool-artifact-inventory';
+export * from './legacy-tool-artifact-migration-planner';
+export * from './legacy-tool-artifact-migration-report';
+export * from './legacy-tool-artifact-migration-executor';
+export * from './legacy-tool-artifact-migration-rollback';
+export * from './sqlite-execution-store';
+export * from './sqlite-execution-store-factory';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
 export * from './local-artifact-manifest';
@@ -65,19 +86,6 @@ export {
   type InMemoryExecutionArtifactStoreOptions,
   type InMemoryExecutionArtifactStoreStats,
 } from './in-memory-execution-artifact-store';
-
-interface SqliteDatabaseSync {
-  exec(sql: string): void;
-  prepare(sql: string): {
-    get(...params: unknown[]): Record<string, unknown> | undefined;
-    all(...params: unknown[]): Array<Record<string, unknown>>;
-    run(...params: unknown[]): unknown;
-  };
-}
-
-interface SqliteModule {
-  DatabaseSync: new (filename: string) => SqliteDatabaseSync;
-}
 
 export interface LocalAdapterProfile {
   id: string;
@@ -527,7 +535,7 @@ class NodeSQLiteEventStoreBackend implements EventStore, TraceRecorder {
 
   async list(filter: EventFilter = {}): Promise<FrameworkEvent[]> {
     const rows = this.db
-      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, id ASC')
+      .prepare('SELECT event FROM framework_events ORDER BY timestamp ASC, rowid ASC')
       .all();
     return filterEvents(
       rows.map((row) => JSON.parse(String(row.event)) as FrameworkEvent),
@@ -940,12 +948,24 @@ export class FileMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore 
     );
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
     const records = readJsonFile<MCPCapabilityRecord[]>(this.filename, []);
     const index = records.findIndex((candidate) => candidate.id === record.id);
+    if (
+      options &&
+      'expected' in options &&
+      JSON.stringify(index >= 0 ? records[index] : null) !==
+        JSON.stringify(options.expected ?? null)
+    ) {
+      return false;
+    }
     if (index >= 0) records[index] = record;
     else records.push(record);
     writeJsonFile(this.filename, records);
+    return true;
   }
 }
 
@@ -987,25 +1007,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / Math.sqrt(aNorm * bNorm);
 }
 
-function loadSqlite(required = false): SqliteModule | null {
-  try {
-    return require('node:sqlite') as SqliteModule;
-  } catch (nodeSqliteError) {
-    try {
-      const BetterSqliteDatabase = require('better-sqlite3') as new (
-        filename: string
-      ) => SqliteDatabaseSync;
-      return { DatabaseSync: BetterSqliteDatabase };
-    } catch (betterSqliteError) {
-      if (!required) return null;
-      throw new Error(
-        'SQLite local adapters require node:sqlite or better-sqlite3 when mode is sqlite.',
-        { cause: { nodeSqliteError, betterSqliteError } }
-      );
-    }
-  }
-}
-
 function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): FrameworkEvent[] {
   return events.filter((event) => {
     if (filter.workspaceId && event.workspaceId !== filter.workspaceId) return false;
@@ -1017,7 +1018,7 @@ function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): Frame
 }
 
 function compareEvents(left: FrameworkEvent, right: FrameworkEvent): number {
-  return left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id);
+  return left.timestamp.localeCompare(right.timestamp);
 }
 
 function readJsonFile<T>(filename: string, fallback: T): T {

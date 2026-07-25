@@ -17,8 +17,7 @@ import path from 'path';
 import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
-import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
-import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
+import { getServerMemoryOperations } from '../../apps/server/src/services/ServerMemoryOperations';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
 import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
@@ -184,8 +183,8 @@ describe('POST /api/v1/auth/register', () => {
 });
 
 describe('user-scoped session storage', () => {
-  it('keeps the same sessionId isolated across users in temporary memory', async () => {
-    const tempMemory = getTemporaryMemory();
+  it('keeps the same sessionId isolated across users in canonical working memory', async () => {
+    const tempMemory = getServerMemoryOperations('memory-routes');
     const sessionId = `shared-${Date.now()}`;
 
     await tempMemory.addMessage(sessionId, {
@@ -211,8 +210,8 @@ describe('user-scoped session storage', () => {
     await tempMemory.clearMessages(sessionId, 'user-b');
   });
 
-  it('allows duplicate sessionId across users in permanent memory', async () => {
-    const permanentMemory = getPermanentMemory();
+  it('allows duplicate sessionId across users in canonical durable memory', async () => {
+    const permanentMemory = getServerMemoryOperations('memory-routes');
     const sessionId = `shared-${Date.now()}`;
 
     const a = await permanentMemory.createConversation({
@@ -238,8 +237,8 @@ describe('user-scoped session storage', () => {
     expect((await permanentMemory.getConversationBySessionId(sessionId, 'user-a'))?.id).toBe(a.id);
     expect((await permanentMemory.getConversationBySessionId(sessionId, 'user-b'))?.id).toBe(b.id);
 
-    await permanentMemory.deleteConversation(a.id);
-    await permanentMemory.deleteConversation(b.id);
+    await permanentMemory.deleteConversation(a.id, 'user-a');
+    await permanentMemory.deleteConversation(b.id, 'user-b');
   });
 });
 
@@ -727,6 +726,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
           'tool.policy.checked',
           'human.review.requested',
           'fsm.state.entered',
+          'runtime.wait.created',
           'run.waiting_human',
         ])
       );
@@ -793,8 +793,13 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       const completedEvents = await request(app)
         .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
         .set('Authorization', `Bearer ${devToken}`);
-      expect((completedEvents.body.data || []).map((event: any) => event.type)).toContain(
-        'run.completed'
+      expect((completedEvents.body.data || []).map((event: any) => event.type)).toEqual(
+        expect.arrayContaining([
+          'run.resume.requested',
+          'runtime.wait.resolved',
+          'run.resumed',
+          'run.completed',
+        ])
       );
     } finally {
       await getToolManager().unregister('approval-test-tool');
