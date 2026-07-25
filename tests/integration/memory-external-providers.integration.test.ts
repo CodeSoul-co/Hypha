@@ -312,6 +312,8 @@ describe('external memory real integration entry points', () => {
           isSettled: (event) => event.status === 'SUCCEEDED',
           isFailed: (event) => event.status === 'FAILED',
           signal,
+          maxCalls: 180,
+          timeoutMs: 180_000,
         });
       const report = await runExternalProviderAcceptance(
         client,
