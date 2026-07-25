@@ -135,9 +135,7 @@ export const researchEvidenceDomainPackExample: DomainPackSpec = {
           id: 'Intake',
           goal: 'Validate the question and acceptance criteria.',
           allowedTools: [],
-          requiredPromptRefs: [
-            { id: 'prompt.research.system', version: '1.0.0', required: true },
-          ],
+          requiredPromptRefs: [{ id: 'prompt.research.system', version: '1.0.0', required: true }],
         },
         {
           id: 'Research',
