@@ -59,6 +59,32 @@ describe('LocalProcessSupervisor', () => {
     expect(result).toMatchObject({ outcome: 'idle_timed_out', stdout: 'started' });
   });
 
+  it.runIf(process.platform !== 'win32')(
+    'falls back to the owned child when macOS denies a process-group signal',
+    async () => {
+      let denied = false;
+      const supervisor = new LocalProcessSupervisor({
+        kill: (pid, signal) => {
+          if (pid < 0 && signal !== 0 && !denied) {
+            denied = true;
+            throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+          }
+          process.kill(pid, signal);
+        },
+      });
+
+      const result = await supervisor.run(
+        request(['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 40 })
+      );
+
+      expect(denied).toBe(true);
+      expect(result).toMatchObject({
+        outcome: 'timed_out',
+        processTreeTerminationVerified: true,
+      });
+    }
+  );
+
   it('stops and bounds a process that exceeds an output limit', async () => {
     const result = await new LocalProcessSupervisor().run(
       request(['-e', "process.stdout.write('x'.repeat(4096)); setInterval(() => {}, 1000)"], {
