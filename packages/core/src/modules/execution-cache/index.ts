@@ -3,6 +3,8 @@ import type {
   ExecutionCacheArtifactReference,
   ExecutionCacheEntryProjection,
   ExecutionCacheResultMetadata,
+  ExecutionCacheRecord,
+  ExecutionCacheScope,
   ExecutionCacheReuseAssessment,
   ExecutionCacheReuseAssessmentInput,
   ExecutionCacheValidityInput,
@@ -19,7 +21,7 @@ import {
   executionResourceUsageSchema,
 } from '../command-execution';
 
-const nonEmptyString = z.string().min(1);
+const nonEmptyString = z.string().min(1).max(16_384);
 const timestampSchema = z.string().datetime({ offset: true });
 const hashSchema = nonEmptyString.regex(
   /^[a-z0-9][a-z0-9+._-]*:[^\s]+$/iu,
@@ -140,7 +142,7 @@ export const executionCacheEntryProjectionSchema = z
     validityHash: hashSchema,
     validity: executionCacheValidityInputSchema,
     resultMetadata: executionCacheResultMetadataSchema,
-    artifacts: z.array(executionCacheArtifactReferenceSchema),
+    artifacts: z.array(executionCacheArtifactReferenceSchema).max(1_000),
   })
   .strict()
   .superRefine((value, context) => {
@@ -162,12 +164,47 @@ export const executionCacheEntryProjectionSchema = z
     }
   }) satisfies ZodType<ExecutionCacheEntryProjection>;
 
+export const executionCacheScopeSchema = z
+  .object({
+    tenantId: nonEmptyString.optional(),
+    userId: nonEmptyString,
+    workspaceId: nonEmptyString,
+  })
+  .strict() satisfies ZodType<ExecutionCacheScope>;
+
+export const executionCacheRecordSchema = z
+  .object({
+    schemaVersion: z.literal('1.0'),
+    keyVersion: z.literal('1'),
+    key: nonEmptyString,
+    scope: executionCacheScopeSchema,
+    projection: executionCacheEntryProjectionSchema,
+    createdAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().nonnegative().optional(),
+    sizeBytes: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.expiresAt !== undefined && value.expiresAt <= value.createdAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expiresAt'],
+        message: 'must be later than createdAt',
+      });
+    }
+  }) satisfies ZodType<ExecutionCacheRecord>;
+
 const hashJsonSchema: JsonSchema = {
   type: 'string',
   minLength: 1,
+  maxLength: 16_384,
   pattern: '^[A-Za-z0-9][A-Za-z0-9+._-]*:[^\\s]+$',
 };
-const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
+const nonEmptyStringJsonSchema: JsonSchema = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 16_384,
+};
 const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
 
 export const executionCacheValidityInputJsonSchema: JsonSchema = {
@@ -291,8 +328,36 @@ export const executionCacheEntryProjectionJsonSchema: JsonSchema = {
     resultMetadata: executionCacheResultMetadataJsonSchema,
     artifacts: {
       type: 'array',
+      maxItems: 1000,
       items: executionCacheArtifactReferenceJsonSchema,
     },
+  },
+  additionalProperties: false,
+};
+
+export const executionCacheScopeJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['userId', 'workspaceId'],
+  properties: {
+    tenantId: nonEmptyStringJsonSchema,
+    userId: nonEmptyStringJsonSchema,
+    workspaceId: nonEmptyStringJsonSchema,
+  },
+  additionalProperties: false,
+};
+
+export const executionCacheRecordJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['schemaVersion', 'keyVersion', 'key', 'scope', 'projection', 'createdAt'],
+  properties: {
+    schemaVersion: { const: '1.0' },
+    keyVersion: { const: '1' },
+    key: nonEmptyStringJsonSchema,
+    scope: executionCacheScopeJsonSchema,
+    projection: executionCacheEntryProjectionJsonSchema,
+    createdAt: { type: 'integer', minimum: 0 },
+    expiresAt: { type: 'integer', minimum: 0 },
+    sizeBytes: { type: 'integer', minimum: 0 },
   },
   additionalProperties: false,
 };
@@ -328,6 +393,8 @@ export const executionCacheJsonSchemas: Record<string, JsonSchema> = {
   ExecutionCacheArtifactReference: executionCacheArtifactReferenceJsonSchema,
   ExecutionCacheResultMetadata: executionCacheResultMetadataJsonSchema,
   ExecutionCacheEntryProjection: executionCacheEntryProjectionJsonSchema,
+  ExecutionCacheScope: executionCacheScopeJsonSchema,
+  ExecutionCacheRecord: executionCacheRecordJsonSchema,
 };
 
 export const executionCacheValidityInputExample: ExecutionCacheValidityInput = {
@@ -420,6 +487,31 @@ export function validateExecutionCacheEntryProjection(
   return executionCacheEntryProjectionSchema.parse(input);
 }
 
+export function validateExecutionCacheScope(input: unknown): ExecutionCacheScope {
+  return executionCacheScopeSchema.parse(input);
+}
+
+export function validateExecutionCacheRecord(
+  input: unknown,
+  maxEntryBytes = 1024 * 1024
+): ExecutionCacheRecord {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(input);
+  } catch (error) {
+    throw new Error(
+      `Execution Cache record is not JSON-safe: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!serialized) throw new Error('Execution Cache record is empty.');
+  const limit = positiveInteger(maxEntryBytes, 'maxEntryBytes');
+  const actualBytes = Buffer.byteLength(serialized, 'utf8');
+  if (actualBytes > limit) {
+    throw new Error(`Execution Cache record is ${actualBytes} bytes; limit is ${limit} bytes.`);
+  }
+  return executionCacheRecordSchema.parse(JSON.parse(serialized));
+}
+
 export function canonicalizeExecutionFingerprintInput(
   input: ExecutionCommandFingerprintInput | ExecutionCacheValidityInput
 ): string {
@@ -443,6 +535,9 @@ export function assessExecutionCacheReuse(
   if (parsed.environmentFingerprintStatus === 'unavailable') {
     return { reusable: false, reason: 'environment_fingerprint_unavailable' };
   }
+  if (parsed.sideEffectLevel === 'write') {
+    return { reusable: false, reason: 'workspace_write' };
+  }
   if (parsed.sideEffectLevel === 'external_effect') {
     return { reusable: false, reason: 'external_side_effect' };
   }
@@ -465,3 +560,12 @@ function canonicalizeJsonValue(value: unknown): unknown {
   }
   return value;
 }
+
+function positiveInteger(value: number, field: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+export * from './runtime';

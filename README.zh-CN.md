@@ -51,6 +51,24 @@ hypha 默认采用单用户运行模式，适合本地和自托管部署。系�
 
 内部 API 仍保留 `userId` 边界，用于 session、memory、token usage、API key 和 session queue。这样默认部署保持简单，同时保留多用户客户端需要的并发模型。
 
+## 受治理的 Runtime
+
+`@hypha/core` 提供以事件为先的编排契约与本地参考实现，使 FSM 任务无需隐藏循环即可运行。
+Runtime 包含版本化 Event Schema 与 upcaster、带乐观并发的事件流追加、projection、按 scope 隔离的
+session command、message inbox/outbox、带 fencing 的 run lease 与 state claim、共享/独占资源声明、
+确定性 helper、timer、pause/resume/signal 控制、取消、checkpoint、恢复、replay 与 query service。
+`@hypha/harness` 提供有界 FSM driver 与 execution context，同时确保 DomainPack workflow、provider
+adapter 和应用状态不进入 Runtime core。
+
+每条 command 和持久化操作都以 user、session 与 run 身份为边界。系统使用 revision、lease、claim、
+Event 与 checkpoint 证据防止 stale worker 或重复循环被误判为有效进展。详见
+[Runtime 模型](docs/reference/runtime-model.md)与 [Framework API](docs/api/framework.md)。
+
+持久 Runtime graph 是需要显式装配的 Framework 能力。仓库内置的 Express Server 当前仍使用
+`EventRuntime` 兼容路径，默认不会启动 canonical session-command、continuation、timer 或 recovery
+scheduler。需要在进程重启后继续自主执行的应用必须显式装配并管理这些 worker 的生命周期；不能把
+默认 Server 当作跨重启连续执行器。
+
 ## 跨模块协同恢复
 
 Hypha 使用同一套 FSM 恢复契约协调 inference、tool、MCP、memory、execution、storage、消息投递、policy 与 cache 异常。参与模块按依赖顺序执行，已经完成的上游不会重复运行；系统通过稳定的 receipt、revision、hash 或 provider state 判断是否真正取得进展，而不是把再次循环视为进展。有界重试、对账、兼容 fallback、降级、补偿、人工复核、隔离、取消和失败都具有显式策略与 trace event。
@@ -87,7 +105,48 @@ Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`To
 
 `@hypha/core` 提供 provider-neutral 的受管 Workspace、sandbox environment、command execution、带 revision 的 record/lease、生命周期 event 与确定性 cache fingerprint 契约。文件系统、进程、容器、远端 provider、存储、artifact、policy 与 secret 的具体实现都保留在 adapter 和 harness 边界之后。Adapter 执行副作用之前，框架会验证路径、身份、状态转换、终态证据、敏感事件字段、幂等边界与 stale-writer fencing。
 
+Runtime 通过经过验证的 `ExecutionActivityRequest` 进入 Execution 边界；请求会绑定 Run、FSM state
+attempt、Workspace、fencing token、deadline、principal 与幂等身份。`DefaultExecutionRiskEvaluator`
+生成 provider-neutral 风险证据，`GovernedExecutionPort` 则在 dispatch 前验证 Tool binding、权限 scope、
+Policy/Human Approval 证据、取消状态、deadline 与授权有效期。所有非成功 Activity 终态都必须携带
+标准化错误和持久 Event 引用。
+
+`DefaultExecutionOutputPlanner` 确定性筛选有界、content-addressed 的 Workspace mutation；
+`DefaultExecutionOutputCollector` 仅在返回记录与计划中的 hash、size、path、principal、user、tenant、
+Workspace、Run、provenance 和 Artifact version 全部一致时创建或 finalize Artifact。这些能力是框架
+port，不代表内置了某个容器、云对象存储或远端 Execution Provider。
+
+Artifact 生命周期采用 content-addressed、append-only 语义。`DefaultArtifactManager` 及其 eventing
+wrapper 通过 principal-scoped policy 管理创建、读取、列表、版本导航、lineage、retention、垃圾回收
+与下载授权。框架提供内存、本地文件和 SQLite 参考组件；具体云 Provider 仍属于 Adapter 扩展，
+core contract 不承诺未实现的云端能力。
+
 契约分层与扩展规则参见 [Execution 架构](docs/architecture/execution.md)。
+
+## 受治理的 Memory 与 Context
+
+`@hypha/memory` 提供版本化 Memory profile、principal/user/workspace scope 隔离、乐观并发版本、
+scope 级幂等、结构化历史、record 与 index outbox 原子持久化、确定性检索解释、生命周期 worker
+和有界 Context 构建。Native provider 以结构化记录为真相源，向量索引通过带 lease 和有界重试的
+outbox 异步更新。hard delete 会同时清除当前记录与历史版本；外部 provider adapter 必须保留
+scope metadata，并在不确定写入重放前完成对账。
+
+Memory、Context、Domain、Cache、Replay 与 Evaluation 通过版本化依赖和 validity snapshot 协同。
+Context builder 在注入模型前执行 policy、provenance、token budget、确定性压缩以及指令/数据边界。
+详见[受治理的 Memory 架构](docs/architecture/memory.md)。
+
+Server 默认读取 `configs/memory-profiles.yaml`，并使用 `native-default`：MongoDB 负责持久记录、
+历史、外部 ID 映射与恢复证据，Redis 负责 Native working state。同一套组合也可以选择本地
+`mem0-oss`，或云端 `mem0-platform`、`memorybank-managed`，且凭据不会写入
+profile。可通过 `HYPHA_MEMORY_CONFIG_PATH` 指向另一份通过严格校验的 profile 文件，并只提供当前
+Provider 需要的环境引用。外部 Provider 仍使用 MongoDB 保存 Hypha 自有身份映射与治理证据。参见
+[Memory Provider Profiles](docs/guides/memory-provider-profiles.md)和
+[外部 Provider Runtime](docs/guides/memory-external-provider-runtime.md)。
+
+`MemoryBankLocalClient` 只是协议兼容测试夹具，不是内置的 MemoryBank 服务。单独保存、默认禁用的
+`memorybank-hindsight-local` profile 与已注册 Factory 共同构成仓库提供的自托管 MemoryBank 风格
+部署候选；它被有意排除在默认可选 profile 文件之外。本地或云端 Provider 只有在其真实环境验收
+套件以 `0 skipped` 完成后，才能作为对应部署环境的发布能力。
 
 ## 开发命令
 

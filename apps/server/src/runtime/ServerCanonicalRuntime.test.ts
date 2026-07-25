@@ -1,0 +1,106 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { createFrameworkEvent, InMemoryEventStore } from '@hypha/core';
+import { ServerCanonicalRuntime } from './ServerCanonicalRuntime';
+
+describe('ServerCanonicalRuntime', () => {
+  const services: ServerCanonicalRuntime[] = [];
+
+  afterEach(async () => {
+    while (services.length > 0) await services.pop()?.close();
+  });
+
+  it('migrates canonical legacy Events and exposes one authoritative merged store', async () => {
+    const legacy = new InMemoryEventStore();
+    await legacy.append(event('legacy-created', 'run.created'));
+    await legacy.append(event('legacy-model', 'model.call.completed'));
+    const service = createService(legacy);
+
+    const composition = await service.initialize();
+
+    expect(composition.migration).toMatchObject({
+      scannedEvents: 2,
+      eligibleEvents: 1,
+      migratedEvents: 1,
+      quarantinedEvents: 0,
+    });
+    await expect(composition.events.list({ runId: 'run-1' })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'legacy-created', type: 'run.created' }),
+        expect.objectContaining({ id: 'legacy-model', type: 'model.call.completed' }),
+      ])
+    );
+
+    await composition.events.append(event('canonical-started', 'run.started'));
+    await composition.events.append(event('legacy-tool', 'tool.call.completed'));
+
+    await expect(legacy.list({ runId: 'run-1', type: 'run.started' })).resolves.toEqual([]);
+    await expect(legacy.list({ runId: 'run-1', type: 'tool.call.completed' })).resolves.toEqual([
+      expect.objectContaining({ id: 'legacy-tool' }),
+    ]);
+    await expect(composition.events.list({ runId: 'run-1', type: 'run.started' })).resolves.toEqual(
+      [expect.objectContaining({ id: 'canonical-started' })]
+    );
+    expect(await service.initialize()).toBe(composition);
+  });
+
+  it('fails closed when a canonical legacy Event cannot establish its owner scope', async () => {
+    const legacy = new InMemoryEventStore();
+    const ownerless = event('ownerless-created', 'run.created');
+    delete ownerless.userId;
+    ownerless.metadata = {};
+    await legacy.append(ownerless);
+    const service = createService(legacy);
+
+    await expect(service.initialize()).rejects.toMatchObject({
+      code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+      context: {
+        migration: expect.objectContaining({ quarantinedEvents: 1 }),
+      },
+    });
+    expect(service.isInitialized()).toBe(false);
+  });
+
+  it('fails before readiness when the compatibility migration exceeds its bound', async () => {
+    const legacy = new InMemoryEventStore();
+    await legacy.append(event('legacy-created', 'run.created'));
+    const service = createService(legacy, 1);
+    await legacy.append(event('legacy-model', 'model.call.completed'));
+
+    await expect(service.initialize()).rejects.toMatchObject({
+      code: 'RUNTIME_INTEGRITY_LIMIT_EXCEEDED',
+    });
+  });
+
+  function createService(legacyEvents: InMemoryEventStore, maxLegacyEvents = 100) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-canonical-runtime-'));
+    const service = new ServerCanonicalRuntime({
+      filename: path.join(root, 'runtime.sqlite'),
+      legacyEvents,
+      maxLegacyEvents,
+      auditLimits: {
+        pageSize: 25,
+        pageMaxBytes: 1024 * 1024,
+        maxEvents: 100,
+        maxBytes: 4 * 1024 * 1024,
+        maxDurationMs: 5_000,
+      },
+      now: () => '2026-07-26T00:00:00.000Z',
+    });
+    services.push(service);
+    return service;
+  }
+});
+
+function event(id: string, type: Parameters<typeof createFrameworkEvent>[0]['type']) {
+  return createFrameworkEvent({
+    id,
+    type,
+    runId: 'run-1',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    timestamp: '2026-07-26T00:00:00.000Z',
+    payload: { id, runId: 'run-1' },
+  });
+}

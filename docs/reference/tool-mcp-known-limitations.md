@@ -2,8 +2,9 @@
 
 - The reference persistent stores are file/SQLite implementations. Multi-process production
   deployments need a transactional shared store that preserves the same revision CAS contract.
-- `InMemoryToolResultCache` is process-local; production cache adapters must preserve the complete
-  validity key and audit cache hits.
+- `InMemoryToolResultCache` is process-local. `RedisToolResultCache` provides a shared Store, but
+  deployments must supply Artifact verification before results containing Artifact references can
+  be reused.
 - External side-effect recovery needs a provider-specific `ToolReceiptReconciler`. Without one,
   interrupted writes intentionally become `conflict`.
 - HTTP Tool cancellation uses the runner-owned AbortSignal; providers without cancellation or

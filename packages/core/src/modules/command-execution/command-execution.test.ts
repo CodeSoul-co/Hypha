@@ -1,3 +1,5 @@
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import {
   canTransitionCommandExecutionStatus,
@@ -198,6 +200,35 @@ describe('Command execution contracts', () => {
         stdoutArtifactRef: 'artifact:stdout',
       }).stdoutArtifactRef
     ).toBe('artifact:stdout');
+  });
+
+  it('requires content hashes for bounded inline output', () => {
+    const { stdoutContentHash: _stdoutHash, ...withoutStdoutHash } = commandExecutionResultExample;
+    const { stderrContentHash: _stderrHash, ...withoutStderrHash } = commandExecutionResultExample;
+
+    expect(() => validateCommandExecutionResult(withoutStdoutHash)).toThrow(/stdoutContentHash/u);
+    expect(() => validateCommandExecutionResult(withoutStderrHash)).toThrow(/stderrContentHash/u);
+    expect(commandExecutionResultExample.stdoutContentHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(commandExecutionResultExample.stderrContentHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  });
+
+  it('enforces inline output hashes in the exported JSON Schema', () => {
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    const validate = ajv.compile(commandExecutionJsonSchemas.CommandExecutionResult);
+    const { stdoutContentHash: _stdoutHash, ...withoutStdoutHash } = commandExecutionResultExample;
+
+    expect(validate(commandExecutionResultExample), ajv.errorsText(validate.errors)).toBe(true);
+    expect(validate(withoutStdoutHash)).toBe(false);
+    expect(validate.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          instancePath: '',
+          keyword: 'required',
+          params: { missingProperty: 'stdoutContentHash' },
+        }),
+      ])
+    );
   });
 
   it('rejects invalid usage, duplicate Artifacts, and reversed timestamps', () => {

@@ -157,9 +157,23 @@ export const defaultRecoveryConvergencePolicy: RecoveryConvergencePolicy = {
   onExhausted: 'human_review',
 };
 
+export interface RecoveryKnowledgeScope {
+  tenantId?: string;
+  userId: string;
+  workspaceId?: string;
+  sessionId?: string;
+  agentId?: string;
+  domainPackId?: string;
+}
+
 export interface RecoveryKnowledgeKey {
   fingerprint: string;
   participantId: string;
+  /**
+   * New runtime writes always include scope. Absence is accepted only for
+   * legacy Provider migration and must not be persisted by strict adapters.
+   */
+  scope?: RecoveryKnowledgeScope;
   policyRevision?: string;
   specRevision?: string;
   providerRevision?: string;
@@ -215,9 +229,25 @@ export function recoveryKnowledgeKeyMatches(
   return (
     expected.fingerprint === actual.fingerprint &&
     expected.participantId === actual.participantId &&
+    recoveryKnowledgeScopeMatches(expected.scope, actual.scope) &&
     expected.policyRevision === actual.policyRevision &&
     expected.specRevision === actual.specRevision &&
     expected.providerRevision === actual.providerRevision
+  );
+}
+
+export function recoveryKnowledgeScopeMatches(
+  expected: RecoveryKnowledgeScope | undefined,
+  actual: RecoveryKnowledgeScope | undefined
+): boolean {
+  if (!expected || !actual) return expected === actual;
+  return (
+    expected.tenantId === actual.tenantId &&
+    expected.userId === actual.userId &&
+    expected.workspaceId === actual.workspaceId &&
+    expected.sessionId === actual.sessionId &&
+    expected.agentId === actual.agentId &&
+    expected.domainPackId === actual.domainPackId
   );
 }
 

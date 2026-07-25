@@ -636,6 +636,27 @@ skills:
   autoLoad: true
 
 tools:
+  # Profiles contain only declarative references. Executable plugin/execution
+  # bindings are registered by the trusted Server composition layer.
+  profiles:
+    - id: "local.text-normalize"
+      kind: "local_function"
+      toolSpecRef:
+        id: "utility.text"
+        version: "1.0.0"
+      binding:
+        localFunctionId: "utility.text"
+      requiredCapabilities: ["execute", "health"]
+  # Optional, non-authoritative cache for governed none/read Tool results.
+  # `redis` reuses the configured local, self-hosted, or managed Redis connection.
+  resultCache:
+    store: "${HYPHA_TOOL_RESULT_CACHE:off}"
+    failureMode: "${HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE:bypass}"
+    operationTimeoutMs: "${HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS:250}"
+    maxEntries: "${HYPHA_TOOL_RESULT_CACHE_MAX_ENTRIES:1000}"
+    maxEntryBytes: "${HYPHA_TOOL_RESULT_CACHE_MAX_ENTRY_BYTES:1048576}"
+    redisDefaultTtlMs: "${HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS:86400000}"
+    namespace: "${HYPHA_TOOL_RESULT_CACHE_NAMESPACE:tool-result-cache:v1}"
   configPath: "./configs/tools.yaml"
   filesystem:
     # Relative paths resolve from workingDirectory. Lists are comma-separated
@@ -648,14 +669,26 @@ tools:
       enabled: "${HYPHA_FILESYSTEM_EXECUTION_ENABLED:false}"
       timeoutMs: "${HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS:30000}"
       maxOutputBytes: "${HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES:1048576}"
-  # The fixture gateway keeps MCP calls locally verifiable without requiring
-  # external MCP binaries. Replace or extend this list with local/remote MCP
-  # servers for deployment.
+  # The local stdio example is a real child-process MCP server and is the
+  # default product-development path. The classic in-process fixture remains
+  # optional for deterministic compatibility tests only.
   mcpServers:
+    - id: "local-example"
+      name: "Hypha Local MCP Example"
+      mode: "local"
+      connectionProfileRef: "mcp.local"
+      command: "node"
+      args: ["./examples/mcp/local-stdio-server.cjs"]
+      autoConnect: true
+      required: true
+      protocolVersionPolicy:
+        allowedVersions: ["2025-11-25"]
+        rejectUnknown: true
     - id: "classic"
       name: "Classic MCP Fixture"
       mode: "fixture"
       autoConnect: true
+      required: false
 
 workflows:
   configPath: "./configs/workflows"
@@ -664,6 +697,15 @@ workflows:
 prompts:
   templatesPath: "./apps/server/src/prompts"
   cacheEnabled: true
+
+runtime:
+  canonical:
+    auditPageSize: 250
+    auditPageMaxBytes: 4194304
+    auditMaxEvents: 100000
+    auditMaxBytes: 268435456
+    auditMaxDurationMs: 30000
+    maxLegacyEvents: 100000
 
 logging:
   level: "debug"

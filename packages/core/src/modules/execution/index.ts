@@ -35,25 +35,29 @@ export const executionErrorCodes = [
   'EXECUTION_INTERNAL_ERROR',
 ] as const;
 
-export const executionPrincipalSchema = z.object({
-  principalId: z.string().min(1),
-  type: z.enum(['user', 'agent', 'service', 'system']),
-  tenantId: z.string().min(1).optional(),
-  userId: z.string().min(1).optional(),
-  agentId: z.string().min(1).optional(),
-  roles: z.array(z.string().min(1)).optional(),
-  permissionScopes: z.array(z.string().min(1)),
-  metadata: z.record(z.unknown()).optional(),
-}) satisfies ZodType<ExecutionPrincipal>;
+export const executionPrincipalSchema = z
+  .object({
+    principalId: z.string().min(1),
+    type: z.enum(['user', 'agent', 'service', 'system']),
+    tenantId: z.string().min(1).optional(),
+    userId: z.string().min(1).optional(),
+    agentId: z.string().min(1).optional(),
+    roles: z.array(z.string().min(1)).optional(),
+    permissionScopes: z.array(z.string().min(1)),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict() satisfies ZodType<ExecutionPrincipal>;
 
-export const normalizedExecutionErrorSchema = z.object({
-  code: z.enum(executionErrorCodes),
-  message: z.string().min(1),
-  retryable: z.boolean(),
-  providerCode: z.union([z.string(), z.number()]).optional(),
-  details: z.record(z.unknown()).optional(),
-  causeRef: z.string().min(1).optional(),
-}) satisfies ZodType<NormalizedExecutionError>;
+export const normalizedExecutionErrorSchema = z
+  .object({
+    code: z.enum(executionErrorCodes),
+    message: z.string().min(1),
+    retryable: z.boolean(),
+    providerCode: z.union([z.string(), z.number()]).optional(),
+    details: z.record(z.unknown()).optional(),
+    causeRef: z.string().min(1).optional(),
+  })
+  .strict() satisfies ZodType<NormalizedExecutionError>;
 
 export const executionPrincipalJsonSchema: JsonSchema = {
   type: 'object',
@@ -84,3 +88,11 @@ export const normalizedExecutionErrorJsonSchema: JsonSchema = {
   },
   additionalProperties: false,
 };
+
+export function validateExecutionPrincipal(input: unknown): ExecutionPrincipal {
+  return executionPrincipalSchema.parse(input);
+}
+
+export function validateNormalizedExecutionError(input: unknown): NormalizedExecutionError {
+  return normalizedExecutionErrorSchema.parse(input);
+}

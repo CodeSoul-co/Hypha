@@ -50,6 +50,28 @@ The exact event sequence depends on the route, workflow, tools, memory writes, p
 
 `RunManager` is the canonical package-level writer for run lifecycle events. It records run start/completion/failure, human-review waits, FSM transition acceptance, FSM state entry, context build events, and ReAct step completion. Application surfaces should call runtime APIs instead of constructing ad hoc run state.
 
+## Durable Orchestration Building Blocks
+
+`@hypha/core` exposes provider-neutral runtime contracts together with in-memory reference
+implementations. Durable adapters can implement the same interfaces without changing FSM or
+DomainPack semantics.
+
+| Boundary     | Public contract and reference behavior                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Event log    | `DurableEventStore`, `DurableEventRuntime`, `EventSchemaRegistry`, optimistic expected revision, idempotency key, canonical hash, import/export checksum, and schema upcasting. |
+| Projection   | `ProjectionEngine` and `RuntimeOrchestrationProjection` rebuild run, wait, transition, cancellation, and resume state from events.                                              |
+| Session work | `SessionQueue` serializes scoped commands and uses claim token, attempt budget, lease expiry, retry, completion, and failure records.                                           |
+| Messaging    | `MessageBus`, inbox, outbox, and dispatcher isolate delivery from handling and deduplicate by scope and idempotency evidence.                                                   |
+| Coordination | `RunLeaseStore`, `StateExecutionClaimStore`, and `RuntimeResourceCoordinator` use fencing and guarded revisions to reject stale workers and conflicting resource claims.        |
+| Determinism  | Runtime helper APIs provide recorded transition, wait, clock, id, event, resource, and activity observations instead of reading untracked process state.                        |
+| Lifecycle    | Control, timer, cancellation, checkpoint, recovery, replay, and query services persist commands and observations before deriving the next action.                               |
+
+`BoundedFSMDriver` in `@hypha/harness` advances an FSM only while a transition is supported by
+current event-derived state and the configured step/time budgets. It returns an explicit completed,
+waiting, yielded, cancelled, failed, or exhausted result; exhaustion is never converted into another
+unbounded loop. `RuntimeExecutionContext` carries the scoped runtime ports used by the driver and
+does not give core code direct access to a provider SDK or application store.
+
 ## Evaluation, Replay, and Regression
 
 Replay and evaluation are deterministic views over events. They must not call
@@ -228,9 +250,18 @@ These events contain summaries and decisions, not raw hidden chain-of-thought. R
 
 ## Context and Memory
 
-Memory is persisted state; context is the bounded model-call view built for one run. `MemoryContextBuilder` resolves the active `MemoryScope`, searches the configured semantic, episodic, procedural, or other memory types, applies `ContextBudget`, and injects selected records into the model request as tagged system context. Each included memory item carries `ContextProvenance` with record id, type, score, original provenance, and inclusion time.
+Memory is persisted state; context is the bounded model-call view built for one run. Managed memory
+operations carry a principal, explicit user scope, operation id, and profile ref. Structured records
+are revisioned and remain the source of truth; vector indexes are rebuildable projections updated
+through an atomic outbox. Idempotency, history, deletion, provider mappings, retrieval snapshots,
+and cache validity all remain scope-qualified.
 
-Memory writes should use `MemoryManager.write()` with explicit `MemoryWritePolicy`. Long-term records require provenance and an explicit long-term allowance. `createEpisodicMemorySync()` can be attached to `ReActRunner` so verified observations become episodic memory through the same policy and trace path.
+`DefaultMemoryContextBuilder` resolves registered sources, searches authorized records, applies hard
+scope/policy filters, sensitivity rules, stable ordering, deduplication, per-source and total token
+budgets, and deterministic compaction. Every included item carries `ContextProvenance`; injection
+keeps memory data separated from model instructions. The compatibility kernel
+`MemoryContextBuilder` and `createEpisodicMemorySync()` remain available for existing ReAct assembly.
+See [Governed Memory](../architecture/memory.md).
 
 ## Side Effects
 

@@ -38,21 +38,54 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { HybridMemoryProvider } from '@hypha/memory';
+import { loadSqlite, type SqliteDatabaseSync, type SqliteModule } from './sqlite-driver';
 
 export * from './workspace-runtime';
-
-interface SqliteDatabaseSync {
-  exec(sql: string): void;
-  prepare(sql: string): {
-    get(...params: unknown[]): Record<string, unknown> | undefined;
-    all(...params: unknown[]): Array<Record<string, unknown>>;
-    run(...params: unknown[]): unknown;
-  };
-}
-
-interface SqliteModule {
-  DatabaseSync: new (filename: string) => SqliteDatabaseSync;
-}
+export * from './common-tool-port-bindings';
+export * from './local-process-output-collector';
+export * from './execution-provider-error';
+export * from './local-process-policy';
+export * from './local-workspace-adapter';
+export * from './local-process-resource-accounting';
+export * from './execution-provider-values';
+export * from './local-sandbox-lifecycle';
+export * from './local-active-execution-registry';
+export * from './local-process-result';
+export * from './local-process-execution-provider';
+export * from './in-memory-execution-cache-store';
+export * from './redis-execution-cache-store';
+export * from './runtime-event-store';
+export * from './runtime-integrity-store';
+export * from './runtime-checkpoint-store';
+export * from './react-continuation-checkpoint-store';
+export * from './run-lease-store';
+export * from './state-execution-claim-store';
+export * from './session-queue';
+export * from './runtime-capacity-semaphore';
+export * from './projection-store';
+export * from './sqlite-driver';
+export * from './artifact-content-io';
+export * from './artifact-manager-tool-port';
+export * from './legacy-tool-artifact-importer';
+export * from './legacy-tool-artifact-inventory';
+export * from './legacy-tool-artifact-migration-planner';
+export * from './legacy-tool-artifact-migration-report';
+export * from './legacy-tool-artifact-migration-executor';
+export * from './legacy-tool-artifact-migration-rollback';
+export * from './sqlite-execution-store';
+export * from './sqlite-execution-store-factory';
+export * from './artifact-store-adapter-error';
+export * from './local-artifact-files';
+export * from './local-artifact-manifest';
+export * from './local-artifact-store-values';
+export * from './local-filesystem-execution-artifact-store';
+export * from './in-memory-artifact-record-repository';
+export * from './sqlite-artifact-record-repository';
+export {
+  InMemoryExecutionArtifactStore,
+  type InMemoryExecutionArtifactStoreOptions,
+  type InMemoryExecutionArtifactStoreStats,
+} from './in-memory-execution-artifact-store';
 
 export interface LocalAdapterProfile {
   id: string;
@@ -235,6 +268,10 @@ export class SQLiteStructuredStore implements StructuredStoreProvider {
 
   async update<T>(table: string, id: string, patch: Partial<T>): Promise<void> {
     await this.backend.update(table, id, patch);
+  }
+
+  async delete(table: string, id: string): Promise<void> {
+    await this.backend.delete(table, id);
   }
 
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
@@ -567,6 +604,11 @@ class NodeSQLiteStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    this.ensureTable(table);
+    this.db.prepare('DELETE FROM ' + quoteIdentifier(table) + ' WHERE id = ?').run(id);
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     this.ensureTable(table);
     const rows = this.db.prepare(`SELECT record FROM ${quoteIdentifier(table)}`).all();
@@ -627,6 +669,13 @@ class JsonStructuredStoreBackend implements StructuredStoreProvider {
     await this.insert(table, { ...existing, ...(patch as Record<string, unknown>), id });
   }
 
+  async delete(table: string, id: string): Promise<void> {
+    validateIdentifier(table);
+    if (!this.tables[table]) return;
+    delete this.tables[table][id];
+    this.flush();
+  }
+
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
     validateIdentifier(table);
     const records = Object.values(this.tables[table] ?? {});
@@ -670,6 +719,10 @@ export class InMemoryStructuredStore implements StructuredStoreProvider {
     const existing = records?.get(id);
     if (!records || !existing) return;
     records.set(id, { ...existing, ...(patch as Record<string, unknown>) });
+  }
+
+  async delete(table: string, id: string): Promise<void> {
+    this.tables.get(table)?.delete(id);
   }
 
   async query<T>(table: string, query: StructuredQuery): Promise<T[]> {
@@ -895,12 +948,24 @@ export class FileMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore 
     );
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
     const records = readJsonFile<MCPCapabilityRecord[]>(this.filename, []);
     const index = records.findIndex((candidate) => candidate.id === record.id);
+    if (
+      options &&
+      'expected' in options &&
+      JSON.stringify(index >= 0 ? records[index] : null) !==
+        JSON.stringify(options.expected ?? null)
+    ) {
+      return false;
+    }
     if (index >= 0) records[index] = record;
     else records.push(record);
     writeJsonFile(this.filename, records);
+    return true;
   }
 }
 
@@ -940,25 +1005,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
   }
   if (aNorm === 0 || bNorm === 0) return 0;
   return dot / Math.sqrt(aNorm * bNorm);
-}
-
-function loadSqlite(required = false): SqliteModule | null {
-  try {
-    return require('node:sqlite') as SqliteModule;
-  } catch (nodeSqliteError) {
-    try {
-      const BetterSqliteDatabase = require('better-sqlite3') as new (
-        filename: string
-      ) => SqliteDatabaseSync;
-      return { DatabaseSync: BetterSqliteDatabase };
-    } catch (betterSqliteError) {
-      if (!required) return null;
-      throw new Error(
-        'SQLite local adapters require node:sqlite or better-sqlite3 when mode is sqlite.',
-        { cause: { nodeSqliteError, betterSqliteError } }
-      );
-    }
-  }
 }
 
 function filterEvents(events: FrameworkEvent[], filter: EventFilter = {}): FrameworkEvent[] {
