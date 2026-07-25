@@ -39,201 +39,181 @@ describe('SQLiteExecutionStore public adapter', () => {
     await reopened.close?.();
   });
 
-  it(
-    'allows only one compare-and-set across independent processes',
-    async () => {
-      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
-      const first = new SQLiteExecutionStore({ rootPath: root });
-      const queued = await first.create(structuredClone(executionRecordCreateRequestExample));
-      const mutation = {
-        operationId: 'operation.execution.update.first',
-        executionId: queued.id,
-        expectedRevision: queued.revision,
-        next: {
-          ...queued,
-          revision: queued.revision + 1,
-          status: 'starting' as const,
-          attempt: 1,
-          updatedAt: '2026-07-16T00:00:01.000Z',
-        },
-        idempotencyKey: 'execution-update:first',
-      };
-      const competing = structuredClone(mutation);
-      competing.operationId = 'operation.execution.update.competing';
-      competing.idempotencyKey = 'execution-update:competing';
+  it('allows only one compare-and-set across independent processes', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
+    const first = new SQLiteExecutionStore({ rootPath: root });
+    const queued = await first.create(structuredClone(executionRecordCreateRequestExample));
+    const mutation = {
+      operationId: 'operation.execution.update.first',
+      executionId: queued.id,
+      expectedRevision: queued.revision,
+      next: {
+        ...queued,
+        revision: queued.revision + 1,
+        status: 'starting' as const,
+        attempt: 1,
+        updatedAt: '2026-07-16T00:00:01.000Z',
+      },
+      idempotencyKey: 'execution-update:first',
+    };
+    const competing = structuredClone(mutation);
+    competing.operationId = 'operation.execution.update.competing';
+    competing.idempotencyKey = 'execution-update:competing';
 
-      try {
-        const results = await Promise.allSettled([
-          first.compareAndSet(mutation),
-          runStoreOperationInChild(root, 'compareAndSet', competing),
-        ]);
+    try {
+      const results = await Promise.allSettled([
+        first.compareAndSet(mutation),
+        runStoreOperationInChild(root, 'compareAndSet', competing),
+      ]);
 
-        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-        expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-        const rejected = results.find(
-          (result): result is PromiseRejectedResult => result.status === 'rejected'
-        );
-        expect(rejected?.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
-        await expect(first.get(queued.id)).resolves.toMatchObject({
-          revision: 1,
-          status: 'starting',
-        });
-      } finally {
-        await first.close();
-      }
-    },
-    20_000
-  );
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      const rejected = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      );
+      expect(rejected?.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+      await expect(first.get(queued.id)).resolves.toMatchObject({
+        revision: 1,
+        status: 'starting',
+      });
+    } finally {
+      await first.close();
+    }
+  }, 60_000);
 
-  it(
-    'fences an expired lease takeover across independent processes',
-    async () => {
-      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-lease-'));
-      const first = new SQLiteExecutionStore({ rootPath: root });
-      try {
-        await first.create(structuredClone(executionRecordCreateRequestExample));
-        const acquired = await first.acquireLease(
-          structuredClone(executionLeaseAcquireRequestExample)
-        );
-
-        const takeover = await runStoreOperationInChild<typeof acquired>(
-          root,
-          'acquireLease',
-          {
-            ...structuredClone(executionLeaseAcquireRequestExample),
-            operationId: 'operation.lease.acquire.takeover',
-            expectedRevision: acquired.revision,
-            requestedLeaseId: 'lease.execution.example.takeover',
-            ownerId: 'runtime-worker.takeover',
-            acquiredAt: acquired.lease!.expiresAt,
-            idempotencyKey: 'lease-acquire:takeover',
-          }
-        );
-
-        expect(takeover.lease).toMatchObject({
-          id: 'lease.execution.example.takeover',
-          ownerId: 'runtime-worker.takeover',
-          fencingToken: acquired.lease!.fencingToken + 1,
-        });
-        await expect(
-          first.renewLease({
-            operationId: 'operation.lease.renew.stale',
-            executionId: acquired.id,
-            expectedRevision: takeover.revision,
-            leaseGuard: {
-              leaseId: acquired.lease!.id,
-              ownerId: acquired.lease!.ownerId,
-              fencingToken: acquired.lease!.fencingToken,
-            },
-            ttlMs: 30_000,
-            heartbeatAt: '2026-07-16T00:00:31.000Z',
-            idempotencyKey: 'lease-renew:stale',
-          })
-        ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
-      } finally {
-        await first.close();
-      }
-    },
-    20_000
-  );
-
-  it(
-    'recovers atomically when a worker crashes immediately before or after compare-and-set',
-    async () => {
-      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-cas-'));
-      const store = new SQLiteExecutionStore({ rootPath: root });
-      const queued = await store.create(structuredClone(executionRecordCreateRequestExample));
-      await store.close();
-      const mutation = startingMutation(
-        queued,
-        'operation.execution.update.crash-boundary',
-        'execution-update:crash-boundary'
+  it('fences an expired lease takeover across independent processes', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-lease-'));
+    const first = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      await first.create(structuredClone(executionRecordCreateRequestExample));
+      const acquired = await first.acquireLease(
+        structuredClone(executionLeaseAcquireRequestExample)
       );
 
-      await runStoreCrashInChild(
-        root,
-        'crashBeforeCompareAndSet',
-        mutation,
-        CRASH_BEFORE_CAS_EXIT_CODE
-      );
-      const beforeCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
-      await expect(beforeCrashRecovery.get(queued.id)).resolves.toEqual(queued);
-      await beforeCrashRecovery.close();
+      const takeover = await runStoreOperationInChild<typeof acquired>(root, 'acquireLease', {
+        ...structuredClone(executionLeaseAcquireRequestExample),
+        operationId: 'operation.lease.acquire.takeover',
+        expectedRevision: acquired.revision,
+        requestedLeaseId: 'lease.execution.example.takeover',
+        ownerId: 'runtime-worker.takeover',
+        acquiredAt: acquired.lease!.expiresAt,
+        idempotencyKey: 'lease-acquire:takeover',
+      });
 
-      await runStoreCrashInChild(
-        root,
-        'crashAfterCompareAndSet',
-        mutation,
-        CRASH_AFTER_CAS_EXIT_CODE
-      );
-      const afterCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
-      await expect(afterCrashRecovery.get(queued.id)).resolves.toEqual(mutation.next);
-      await afterCrashRecovery.close();
-    },
-    20_000
-  );
-
-  it(
-    'takes over an expired lease after its worker crashes and rejects the late result',
-    async () => {
-      root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-lease-'));
-      const store = new SQLiteExecutionStore({ rootPath: root });
-      await store.create(structuredClone(executionRecordCreateRequestExample));
-      await store.close();
-
-      await runStoreCrashInChild(
-        root,
-        'crashAfterAcquireLease',
-        structuredClone(executionLeaseAcquireRequestExample),
-        CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE
-      );
-
-      const recovered = new SQLiteExecutionStore({ rootPath: root });
-      try {
-        const crashedWorkerRecord = await recovered.get(
-          executionLeaseAcquireRequestExample.executionId
-        );
-        expect(crashedWorkerRecord).toMatchObject({
-          revision: 1,
-          status: 'starting',
-          lease: {
-            id: executionLeaseAcquireRequestExample.requestedLeaseId,
-            ownerId: executionLeaseAcquireRequestExample.ownerId,
-            fencingToken: 1,
+      expect(takeover.lease).toMatchObject({
+        id: 'lease.execution.example.takeover',
+        ownerId: 'runtime-worker.takeover',
+        fencingToken: acquired.lease!.fencingToken + 1,
+      });
+      await expect(
+        first.renewLease({
+          operationId: 'operation.lease.renew.stale',
+          executionId: acquired.id,
+          expectedRevision: takeover.revision,
+          leaseGuard: {
+            leaseId: acquired.lease!.id,
+            ownerId: acquired.lease!.ownerId,
+            fencingToken: acquired.lease!.fencingToken,
           },
-        });
+          ttlMs: 30_000,
+          heartbeatAt: '2026-07-16T00:00:31.000Z',
+          idempotencyKey: 'lease-renew:stale',
+        })
+      ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+    } finally {
+      await first.close();
+    }
+  }, 60_000);
 
-        const takeover = await recovered.acquireLease({
-          ...structuredClone(executionLeaseAcquireRequestExample),
-          operationId: 'operation.lease.acquire.after-crash',
-          expectedRevision: crashedWorkerRecord!.revision,
-          requestedLeaseId: 'lease.execution.example.after-crash',
-          ownerId: 'runtime-worker.after-crash',
-          acquiredAt: crashedWorkerRecord!.lease!.expiresAt,
-          idempotencyKey: 'lease-acquire:after-crash',
-        });
-        expect(takeover.lease).toMatchObject({
-          id: 'lease.execution.example.after-crash',
-          ownerId: 'runtime-worker.after-crash',
-          fencingToken: 2,
-        });
+  it('recovers atomically when a worker crashes immediately before or after compare-and-set', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-cas-'));
+    const store = new SQLiteExecutionStore({ rootPath: root });
+    const queued = await store.create(structuredClone(executionRecordCreateRequestExample));
+    await store.close();
+    const mutation = startingMutation(
+      queued,
+      'operation.execution.update.crash-boundary',
+      'execution-update:crash-boundary'
+    );
 
-        const lateResult = terminalMutation(
-          takeover,
-          crashedWorkerRecord!.lease!,
-          'operation.execution.complete.stale-worker',
-          'execution-complete:stale-worker'
-        );
-        await expect(recovered.compareAndSet(lateResult)).rejects.toMatchObject({
-          code: 'EXECUTION_STORE_FENCING_REJECTED',
-        });
-        await expect(recovered.get(takeover.id)).resolves.toEqual(takeover);
-      } finally {
-        await recovered.close();
-      }
-    },
-    20_000
-  );
+    await runStoreCrashInChild(
+      root,
+      'crashBeforeCompareAndSet',
+      mutation,
+      CRASH_BEFORE_CAS_EXIT_CODE
+    );
+    const beforeCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
+    await expect(beforeCrashRecovery.get(queued.id)).resolves.toEqual(queued);
+    await beforeCrashRecovery.close();
+
+    await runStoreCrashInChild(
+      root,
+      'crashAfterCompareAndSet',
+      mutation,
+      CRASH_AFTER_CAS_EXIT_CODE
+    );
+    const afterCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
+    await expect(afterCrashRecovery.get(queued.id)).resolves.toEqual(mutation.next);
+    await afterCrashRecovery.close();
+  }, 60_000);
+
+  it('takes over an expired lease after its worker crashes and rejects the late result', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-lease-'));
+    const store = new SQLiteExecutionStore({ rootPath: root });
+    await store.create(structuredClone(executionRecordCreateRequestExample));
+    await store.close();
+
+    await runStoreCrashInChild(
+      root,
+      'crashAfterAcquireLease',
+      structuredClone(executionLeaseAcquireRequestExample),
+      CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE
+    );
+
+    const recovered = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      const crashedWorkerRecord = await recovered.get(
+        executionLeaseAcquireRequestExample.executionId
+      );
+      expect(crashedWorkerRecord).toMatchObject({
+        revision: 1,
+        status: 'starting',
+        lease: {
+          id: executionLeaseAcquireRequestExample.requestedLeaseId,
+          ownerId: executionLeaseAcquireRequestExample.ownerId,
+          fencingToken: 1,
+        },
+      });
+
+      const takeover = await recovered.acquireLease({
+        ...structuredClone(executionLeaseAcquireRequestExample),
+        operationId: 'operation.lease.acquire.after-crash',
+        expectedRevision: crashedWorkerRecord!.revision,
+        requestedLeaseId: 'lease.execution.example.after-crash',
+        ownerId: 'runtime-worker.after-crash',
+        acquiredAt: crashedWorkerRecord!.lease!.expiresAt,
+        idempotencyKey: 'lease-acquire:after-crash',
+      });
+      expect(takeover.lease).toMatchObject({
+        id: 'lease.execution.example.after-crash',
+        ownerId: 'runtime-worker.after-crash',
+        fencingToken: 2,
+      });
+
+      const lateResult = terminalMutation(
+        takeover,
+        crashedWorkerRecord!.lease!,
+        'operation.execution.complete.stale-worker',
+        'execution-complete:stale-worker'
+      );
+      await expect(recovered.compareAndSet(lateResult)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_FENCING_REJECTED',
+      });
+      await expect(recovered.get(takeover.id)).resolves.toEqual(takeover);
+    } finally {
+      await recovered.close();
+    }
+  }, 60_000);
 });
 
 type ChildStoreOperation = 'acquireLease' | 'compareAndSet';
