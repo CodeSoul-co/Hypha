@@ -58,6 +58,7 @@ export interface Mem0OssClientOptions {
   now?: () => Date;
   mappingStore?: ExternalMemoryMappingStore;
   mappingProfile?: ExternalMemoryMappingRuntimeProfile;
+  listPaginationMode?: 'top-k-offset' | 'provider-cursor';
 }
 
 const mem0RestCapabilities: MemoryManagementCapabilities = {
@@ -216,11 +217,19 @@ export class Mem0OssClient implements ExternalMemoryClient {
       if (value) query.set(key, value);
     }
     const limit = request.pagination?.limit;
-    const offset = page.providerCursor ? Number(page.providerCursor) : 0;
+    const providerCursorPagination = this.options.listPaginationMode === 'provider-cursor';
+    const offset = providerCursorPagination
+      ? 0
+      : page.providerCursor
+        ? Number(page.providerCursor)
+        : 0;
     if (!Number.isSafeInteger(offset) || offset < 0) {
       throw memoryError('MEMORY_INVALID_INPUT', 'Mem0 pagination offset is malformed.');
     }
-    if (limit) {
+    if (providerCursorPagination) {
+      if (limit) query.set('page_size', String(limit));
+      if (page.providerCursor) query.set('cursor', page.providerCursor);
+    } else if (limit) {
       const topK = offset + limit + 1;
       if (topK > 1_000) {
         throw memoryError('MEMORY_INVALID_INPUT', 'Mem0 pagination exceeds the top_k limit.');
@@ -237,15 +246,19 @@ export class Mem0OssClient implements ExternalMemoryClient {
     });
     await this.rememberMappings(records);
     const filtered = records.filter((record) => matchesFilter(record, request.filter));
-    const pageRecords = limit ? filtered.slice(offset, offset + limit) : filtered;
-    const nextOffset =
-      limit && filtered.length > offset + limit ? String(offset + limit) : undefined;
+    const pageRecords =
+      limit && !providerCursorPagination ? filtered.slice(offset, offset + limit) : filtered;
+    const nextProviderCursor = providerCursorPagination
+      ? readProviderCursor(body)
+      : limit && filtered.length > offset + limit
+        ? String(offset + limit)
+        : undefined;
     const pagination = finishProviderPage(
       page,
       this.providerId,
       request.scope,
       pageRecords,
-      nextOffset,
+      nextProviderCursor,
       this.now().getTime()
     );
     return { records: pageRecords, ...pagination };
@@ -650,6 +663,21 @@ function extractItems(body: unknown): Array<Record<string, unknown>> {
   return Object.keys(object).length > 0 ? [object] : [];
 }
 
+function readProviderCursor(body: unknown): string | undefined {
+  const value = asObject(body);
+  for (const key of ['next_cursor', 'nextCursor', 'cursor', 'next_page_token']) {
+    const cursor = readString(value, key);
+    if (cursor) return cursor;
+  }
+  const next = readString(value, 'next');
+  if (!next) return undefined;
+  try {
+    const url = new URL(next);
+    return url.searchParams.get('cursor') ?? url.searchParams.get('page') ?? undefined;
+  } catch {
+    return next;
+  }
+}
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

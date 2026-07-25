@@ -123,6 +123,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
       authMode: 'none',
       mappingStore: options.mappingStore,
       mappingProfile,
+      listPaginationMode: 'provider-cursor',
       now: options.now,
       healthPath: '/v1/events/?page=1&page_size=1',
     });
