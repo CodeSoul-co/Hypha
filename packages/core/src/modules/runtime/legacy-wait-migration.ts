@@ -36,7 +36,9 @@ export function migrateLegacyHumanWaitEvents<TEvent extends FrameworkEvent>(
   const migrated = events.map((event) => {
     const evidence = humanActionRef(event);
     if (event.type !== 'run.waiting_human') {
-      if (evidence) evidenceByRun.set(event.runId, evidence);
+      if (evidence) {
+        evidenceByRun.set(event.runId, preferHumanActionRef(evidenceByRun.get(event.runId), evidence));
+      }
       return structuredClone(event);
     }
 
@@ -156,6 +158,13 @@ function humanActionRef(event: FrameworkEvent): string | undefined {
     stringValue(finalAction.toolId) ??
     stringValue(finalAction.tool);
   return toolId ? `tool:${toolId}` : undefined;
+}
+
+function preferHumanActionRef(current: string | undefined, candidate: string): string {
+  if (!current) return candidate;
+  if (current.startsWith('tool:') && !candidate.startsWith('tool:')) return candidate;
+  if (!current.startsWith('tool:') && candidate.startsWith('tool:')) return current;
+  return candidate;
 }
 
 function record(value: unknown): Record<string, unknown> {
