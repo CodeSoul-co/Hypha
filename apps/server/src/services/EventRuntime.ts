@@ -15,11 +15,13 @@ import {
   stableRecoveryHash,
   type FrameworkEvent,
   type FrameworkEventType,
+  type EventStore,
+  type TraceRecorder,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type RuntimeHumanWaitService,
   type SpecRef,
-  type TraceRecorder,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
 import {
@@ -64,7 +66,13 @@ import {
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
+import { RedisToolContractSnapshotStore } from '@hypha/mcp';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
+import {
+  createEffectiveAgentCapabilitySnapshot,
+  type EffectiveAgentCapabilitySnapshotInput,
+  type LoadedSkillContext,
+} from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -74,6 +82,7 @@ import {
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveAgentCapabilitySnapshot,
   type ToolCallResult,
   type ToolRunner,
   type ToolSpec,
@@ -148,6 +157,7 @@ type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
 
 type ResolvedRuntimeAgentSpec = ReActAgentSpec & {
   promptResolution?: AgentPromptResolution;
+  activeSkills?: LoadedSkillContext[];
 };
 
 export interface StartRunInput {
@@ -512,11 +522,21 @@ function legacyToolToModelTool(
   };
 }
 
+export interface EventRuntimeInitialization {
+  events: EventStore & TraceRecorder;
+  eventDbPath?: string;
+  humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+}
+
 class EventRuntimeService {
-  private readonly events: SQLiteEventStore;
+  private readonly events: EventStore & TraceRecorder;
+  private readonly humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  private readonly humanWaitOwnerId = `server-event-runtime:${process.pid}`;
+  private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
+  private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
   private readonly reasoning: ReasoningOrchestrator;
@@ -530,22 +550,32 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private readonly runCapabilitySnapshots = new Map<
+    string,
+    Readonly<EffectiveAgentCapabilitySnapshot>
+  >();
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
-  constructor() {
+  constructor(options?: EventRuntimeInitialization) {
     const sqliteStorage = storageConfig().relational.sqlite;
-    const eventDbPath =
-      process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
-    this.events = new SQLiteEventStore({
-      filename: eventDbPath,
-      mode: sqliteStorage.sqliteMode,
-    });
+    const eventDbPath = options?.eventDbPath ?? serverRuntimeEventDatabasePath();
+    this.events =
+      options?.events ??
+      new SQLiteEventStore({
+        filename: eventDbPath,
+        mode: sqliteStorage.sqliteMode,
+      });
+    this.humanWaits = options?.humanWaits;
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
-    this.toolSnapshotStore = new FileToolContractSnapshotStore(
-      process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
-    );
+    const redis = getRedisClient();
+    this.toolSnapshotStore =
+      process.env.NODE_ENV === 'production' && redis
+        ? new RedisToolContractSnapshotStore(redis)
+        : new FileToolContractSnapshotStore(
+            process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
+          );
     const artifactPort = new ArtifactStoreToolPort(
       new FileArtifactStore({
         rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
@@ -555,7 +585,6 @@ class EventRuntimeService {
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
     const toolCacheConfig = toolResultCacheConfig();
-    const redis = getRedisClient();
     const toolResultCache =
       toolCacheConfig.store === 'memory'
         ? new InMemoryToolResultCache({
@@ -645,10 +674,13 @@ class EventRuntimeService {
     return manager.listAgentPrompts();
   }
 
-  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+  async registerAgentPrompt(
+    spec: AgentPromptSpec,
+    options: { expectedRevision?: number } = {}
+  ): Promise<AgentPromptSpec> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
-    manager.registerAgentPrompt(spec);
+    return manager.registerAgentPrompt(spec, options);
   }
 
   async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
@@ -690,7 +722,7 @@ class EventRuntimeService {
       fsm,
       snapshot,
     });
-    await this.append(runId, 'run.started', { input: input.input }, timestamp);
+    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
     await this.append(runId, 'fsm.state.entered', { stateId: snapshot.currentState }, timestamp, {
       fsmState: snapshot.currentState,
     });
@@ -901,12 +933,47 @@ class EventRuntimeService {
           agentName: name,
           userId,
           sessionId,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          domainId: this.runs.get(input.runId)?.domainPackId,
           promptRefs,
         });
-    const systemInstructions =
+    const baseSystemInstructions =
       explicitInstructions ??
       promptResolution?.instructions ??
       `You are ${name}. Be helpful, harmless, and honest.`;
+    const workflowState = asRecord(asRecord(spec.metadata)?.workflowState);
+    const activeSkills = spec.skillRefs?.length
+      ? await getSkillManager().resolveSkills({
+          agentSkillRefs: spec.skillRefs,
+          inputText: [...input.messages].reverse().find((message) => message.role === 'user')
+            ?.content,
+          allowedSkills: stringList(workflowState?.allowedSkills),
+          requiredSkills: stringList(workflowState?.requiredSkills),
+          availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+          metadata: spec.metadata,
+        })
+      : [];
+    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const capabilityMetadata = asRecord(spec.metadata);
+    const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
+      runId: input.runId,
+      agentId: id,
+      principalId: userId,
+      tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+      domainId: this.runs.get(input.runId)?.domainPackId,
+      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
+      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+      activeSkills,
+    });
+    this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
+    const skillInstructions = activeSkills.map(
+      (skill) =>
+        `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
+          .map((reference) => reference.content)
+          .filter(Boolean)
+          .join('\n')}\n</skill>`
+    );
+    const systemInstructions = mergeSystemPrompts(baseSystemInstructions, ...skillInstructions);
 
     return {
       ...spec,
@@ -921,6 +988,7 @@ class EventRuntimeService {
         this.resolveChatModel().model,
       systemInstructions,
       promptResolution,
+      activeSkills,
       toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
     };
   }
@@ -936,6 +1004,8 @@ class EventRuntimeService {
     agentName: string;
     userId: string;
     sessionId: string;
+    tenantId?: string;
+    domainId?: string;
     promptRefs: AgentPromptRef[];
   }): Promise<AgentPromptResolution | undefined> {
     const variables = {
@@ -947,17 +1017,17 @@ class EventRuntimeService {
       current_date: new Date().toISOString(),
     };
 
-    try {
-      const promptManager = getPromptManager();
-      await promptManager.ensureInitialized();
-      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
-    } catch (error) {
-      logger.warn('Agent prompt template resolution failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return undefined;
+    const promptManager = getPromptManager();
+    await promptManager.ensureInitialized();
+    return promptManager.resolveAgentPrompts(input.promptRefs, {
+      variables,
+      principal: {
+        principalId: input.userId,
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        domainId: input.domainId,
+      },
+    });
   }
 
   async runReActChat(
@@ -1078,6 +1148,12 @@ class EventRuntimeService {
       messages: input.messages,
       memoryScope: { userId, sessionId },
       metadata: {
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1145,6 +1221,12 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1335,6 +1417,7 @@ class EventRuntimeService {
     const invocationId = `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
     const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
+    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1345,10 +1428,16 @@ class EventRuntimeService {
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
+        capabilitySnapshotRef: effectiveCapabilities ? contractSnapshotRef : undefined,
+        agentId: effectiveCapabilities?.agentId,
+        tenantId: effectiveCapabilities?.tenantId,
         principal: {
           id: input.userId,
+          principalId: input.userId,
           type: 'user',
           userId: input.userId,
+          agentId: effectiveCapabilities?.agentId,
+          tenantId: effectiveCapabilities?.tenantId,
           permissionScopes: ['*'],
         },
       },
@@ -1391,17 +1480,18 @@ class EventRuntimeService {
     if (invocation) this.registerManagedTool(invocation.toolId);
     const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
     if (invocation && result.status === 'completed') {
-      await this.completeApprovedToolRun(invocation, result);
+      await this.completeApprovedToolRun(invocation, result, approvedBy);
     }
     return result;
   }
 
-  async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
+  async rejectToolInvocation(invocationId: string, rejectedBy: string): Promise<ToolCallResult> {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     const result = await this.toolRunner.rejectInvocation(invocationId);
     const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
     const run = runId ? this.runs.get(runId) : undefined;
     if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      await this.resolveHumanReview(run, invocationId, rejectedBy, 'rejected');
       await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
     }
     return result;
@@ -1409,13 +1499,15 @@ class EventRuntimeService {
 
   private async completeApprovedToolRun(
     invocation: ToolInvocationRecord,
-    result: ToolCallResult
+    result: ToolCallResult,
+    approvedBy: string
   ): Promise<void> {
     const runId = invocation.scope?.runId ?? invocation.request.context.runId;
     const run = this.runs.get(runId);
     if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
 
     if (run.snapshot.currentState === 'HumanReview') {
+      await this.resolveHumanReview(run, invocation.id, approvedBy, 'approved');
       await this.transition(runId, 'ObservationRecorded', {
         tool: invocation.toolId,
         invocationId: invocation.id,
@@ -1502,7 +1594,7 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash: spec.sourceRef?.capabilityHash,
+      sourceCapabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -1511,6 +1603,7 @@ class EventRuntimeService {
       runId,
       createdAt,
       toolContracts,
+      effectiveCapabilities: this.runCapabilitySnapshots.get(runId),
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
@@ -1875,6 +1968,16 @@ class EventRuntimeService {
     const context = this.runs.get(runId)!;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
+    const candidateHash = stableRecoveryHash(failure.evidence);
+    const recoveryEvidence = {
+      caseId: failure.id,
+      rootFingerprint: fingerprint,
+      cycles: 1,
+      candidateId: failure.id,
+      candidateHash,
+      reason: `${failure.category}:${failure.code}`,
+      safeAction: 'apply_observation',
+    };
     const knowledge: RecoveryKnowledge = {
       key: {
         fingerprint,
@@ -1890,7 +1993,7 @@ class EventRuntimeService {
       },
       strategy: 'degrade',
       outcome: 'degraded',
-      evidenceHash: stableRecoveryHash(failure.evidence),
+      evidenceHash: candidateHash,
       learnedAt: failure.occurredAt,
       validation: {
         status: 'verified',
@@ -1902,8 +2005,8 @@ class EventRuntimeService {
       runId,
       'recovery.case.opened',
       {
-        caseId: failure.id,
-        rootFingerprint: fingerprint,
+        ...recoveryEvidence,
+        status: 'active',
         failure,
       },
       failure.occurredAt,
@@ -1913,9 +2016,9 @@ class EventRuntimeService {
       runId,
       'recovery.case.resolved',
       {
-        caseId: failure.id,
-        rootFingerprint: fingerprint,
-        status: 'degraded',
+        ...recoveryEvidence,
+        status: 'recovered',
+        disposition: 'recovered',
         strategy: 'degrade',
         knowledge,
       },
@@ -1944,7 +2047,10 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferCompletedState(context.fsm), { reason: 'completed' });
     }
-    await this.append(runId, 'run.completed', { output });
+    await this.append(runId, 'run.completed', {
+      terminalState: context.snapshot.currentState,
+      output,
+    });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
@@ -1953,11 +2059,83 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferFailedState(context.fsm), { reason: message });
     }
-    await this.append(runId, 'run.failed', { error: message });
+    await this.append(runId, 'run.failed', {
+      terminalState: context.snapshot.currentState,
+      error: message,
+    });
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    await this.append(runId, 'run.waiting_human', payload);
+    const context = this.requireRun(runId);
+    const waitId =
+      typeof payload.waitId === 'string' && payload.waitId.trim()
+        ? payload.waitId
+        : `human-review:${generateId()}`;
+    const pendingActionRef =
+      typeof payload.pendingActionRef === 'string' && payload.pendingActionRef.trim()
+        ? payload.pendingActionRef
+        : typeof payload.invocationId === 'string' && payload.invocationId.trim()
+          ? payload.invocationId
+          : waitId;
+    if (this.humanWaits) {
+      const result = await this.humanWaits.create({
+        commandId: `create:${waitId}`,
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          runId,
+        },
+        ownerId: this.humanWaitOwnerId,
+        leaseTtlMs: this.humanWaitLeaseTtlMs,
+        waitId,
+        pendingActionRef,
+        reason:
+          typeof payload.reason === 'string' && payload.reason.trim()
+            ? payload.reason
+            : 'Human review required',
+        requestedAt: new Date().toISOString(),
+        idempotencyKey: `create:${waitId}`,
+      });
+      if (result.disposition === 'lease_unavailable') {
+        throw new FrameworkError({
+          code: 'RUNTIME_RESOURCE_CONFLICT',
+          message: `Run ${runId} Human Wait Lease is unavailable`,
+        });
+      }
+      return;
+    }
+    await this.append(runId, 'run.waiting_human', { ...payload, waitId });
+  }
+
+  private async resolveHumanReview(
+    context: RuntimeRunContext,
+    pendingActionRef: string,
+    principalId: string,
+    decision: 'approved' | 'rejected'
+  ): Promise<void> {
+    if (!this.humanWaits) return;
+    const resolvedAt = new Date().toISOString();
+    const result = await this.humanWaits.resolve({
+      commandId: `resolve:${pendingActionRef}:${decision}`,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+      },
+      ownerId: this.humanWaitOwnerId,
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      pendingActionRef,
+      principalId,
+      decision,
+      resolvedAt,
+      idempotencyKey: `resolve:${pendingActionRef}:${decision}`,
+    });
+    if (result.disposition === 'lease_unavailable') {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: `Run ${context.runId} Human Wait Lease is unavailable`,
+      });
+    }
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {
@@ -2550,6 +2728,58 @@ class EventRuntimeService {
   ): Promise<void> {
     const runtimeSessionId = this.runtimeSessionId(userId, clientSessionId);
     if (this.knownSessions.has(runtimeSessionId)) return;
+    const pending = this.sessionInitializations.get(runtimeSessionId);
+    if (pending) return pending;
+    const initialization = this.initializeSession(
+      runtimeSessionId,
+      userId,
+      clientSessionId,
+      domainPack,
+      metadata
+    );
+    this.sessionInitializations.set(runtimeSessionId, initialization);
+    try {
+      await initialization;
+      this.knownSessions.add(runtimeSessionId);
+    } finally {
+      this.sessionInitializations.delete(runtimeSessionId);
+    }
+  }
+
+  private async initializeSession(
+    runtimeSessionId: string,
+    userId: string,
+    clientSessionId: string,
+    domainPack: DomainPackSpec,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const persisted = await this.events.list({
+      userId,
+      sessionId: runtimeSessionId,
+      type: 'session.created',
+    });
+    if (persisted.length > 0) {
+      if (persisted.length !== 1) {
+        throw new FrameworkError({
+          code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+          message: `Session ${runtimeSessionId} has more than one creation fact`,
+        });
+      }
+      const payload = asRecord(persisted[0]!.payload);
+      const domainPackRef = asRecord(payload?.domainPackRef);
+      if (
+        stringValue(payload?.id) !== runtimeSessionId ||
+        stringValue(payload?.userId) !== userId ||
+        stringValue(domainPackRef?.id) !== domainPack.id ||
+        stringValue(domainPackRef?.version) !== domainPack.version
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_RUN_CONFLICT',
+          message: `Session ${runtimeSessionId} conflicts with its persisted owner or Domain Pack`,
+        });
+      }
+      return;
+    }
     await this.runtime.createSession({
       id: runtimeSessionId,
       userId,
@@ -2559,7 +2789,6 @@ class EventRuntimeService {
         ...metadata,
       },
     });
-    this.knownSessions.add(runtimeSessionId);
   }
 
   private async append(
@@ -3105,6 +3334,41 @@ function asRecord(input: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function stringList(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter((value): value is string => typeof value === 'string');
+}
+
+function capabilityConstraint(
+  source: Record<string, unknown> | undefined,
+  fallbackToolIds: string[],
+  defaultPolicyRef: string
+): EffectiveAgentCapabilitySnapshotInput['agent'] {
+  const memory = stringValue(source?.memoryAccess);
+  const sideEffect = stringValue(source?.maximumSideEffectLevel);
+  const memoryAccess = ['none', 'read', 'write', 'read_write'].includes(memory ?? '')
+    ? (memory as EffectiveAgentCapabilitySnapshot['memoryAccess'])
+    : 'none';
+  const maximumSideEffectLevel = [
+    'none',
+    'read',
+    'write',
+    'external_effect',
+    'irreversible',
+  ].includes(sideEffect ?? '')
+    ? (sideEffect as EffectiveAgentCapabilitySnapshot['maximumSideEffectLevel'])
+    : 'read';
+  return {
+    allowedToolIds:
+      stringList(source?.allowedToolIds) ?? stringList(source?.allowedTools) ?? fallbackToolIds,
+    allowedMCPServerIds: stringList(source?.allowedMCPServerIds),
+    memoryAccess,
+    allowedExecutionProfiles: stringList(source?.allowedExecutionProfiles) ?? [],
+    maximumSideEffectLevel,
+    policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
+  };
+}
+
 function inferToolSideEffect(
   name: string,
   params: unknown
@@ -3120,9 +3384,37 @@ function inferToolSideEffect(
 
 let service: EventRuntimeService | null = null;
 
+export function serverRuntimeEventDatabasePath(): string {
+  const sqliteStorage = storageConfig().relational.sqlite;
+  return process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
+}
+
+export function createServerCompatibilityEventStore(): SQLiteEventStore {
+  const sqliteStorage = storageConfig().relational.sqlite;
+  return new SQLiteEventStore({
+    filename: serverRuntimeEventDatabasePath(),
+    mode: sqliteStorage.sqliteMode,
+  });
+}
+
+export function initializeEventRuntime(options: EventRuntimeInitialization): EventRuntimeService {
+  if (service) {
+    throw new FrameworkError({
+      code: 'RUNTIME_RESOURCE_CONFLICT',
+      message: 'Server Event Runtime is already initialized',
+    });
+  }
+  service = new EventRuntimeService(options);
+  return service;
+}
+
 export function getEventRuntime(): EventRuntimeService {
   if (!service) {
     service = new EventRuntimeService();
   }
   return service;
+}
+
+export function destroyEventRuntime(): void {
+  service = null;
 }

@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
+import { lookup } from 'dns/promises';
+import { isIP } from 'net';
 import { z, type ZodType } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -31,6 +33,7 @@ import {
   type NormalizedMCPError,
 } from './contracts';
 import { capabilityKey } from './governance';
+import type { MCPReconnectCoordinator } from './coordination';
 
 export type MCPConnectionState =
   | 'disconnected'
@@ -209,14 +212,50 @@ export interface MCPConnectionManagerOptions {
   trace?: TraceRecorder;
   traceContext?: { runId: string; stepId?: string; sessionId?: string };
   now?: () => string;
+  monotonicNow?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
   onListChanged?: (serverId: string) => Promise<void> | void;
   telemetry?: TelemetryRecorder;
+  contentArtifacts?: MCPRemoteContentArtifactPort;
+  reconnectCoordinator?: MCPReconnectCoordinator;
+  reconnectOwnerId?: string;
+}
+
+export interface MCPRemoteContentArtifact {
+  artifactRef: string;
+  contentHash: string;
+  sizeBytes: number;
+}
+
+export interface MCPRemoteContentArtifactPort {
+  store(input: {
+    serverId: string;
+    kind: 'resource' | 'prompt';
+    capabilityId: string;
+    mediaType: string;
+    bytes: Uint8Array;
+    contentHash: string;
+    provenance: Record<string, unknown>;
+  }): Promise<MCPRemoteContentArtifact>;
+}
+
+type MCPFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+export interface GuardedMCPFetchOptions {
+  policy?: MCPServerProfile['egressPolicy'];
+  fetch?: MCPFetch;
+  resolveHeaders?: () => Promise<Record<string, string>> | Record<string, string>;
+  resolveAuthorization?: () => Promise<string | undefined> | string | undefined;
 }
 
 interface ManagedConnection {
   profile: MCPServerProfile;
   record: MCPConnectionRecord;
   session?: MCPConnectionSession;
+  requestTimestamps: number[];
+  consecutiveFailures: number;
+  circuitOpenUntil?: number;
 }
 
 export class MCPConnectionManager implements MCPGateway {
@@ -224,10 +263,16 @@ export class MCPConnectionManager implements MCPGateway {
   private readonly connectPromises = new Map<string, Promise<MCPConnectionRecord>>();
   private readonly requests = new Map<string, AbortController>();
   private readonly now: () => string;
+  private readonly monotonicNow: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly listChangedListeners = new Set<(serverId: string) => Promise<void> | void>();
 
   constructor(private readonly options: MCPConnectionManagerOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.monotonicNow = options.monotonicNow ?? (() => Date.now());
+    this.sleep = options.sleep ?? delay;
+    this.random = options.random ?? Math.random;
     if (options.onListChanged) this.listChangedListeners.add(options.onListChanged);
   }
 
@@ -251,7 +296,12 @@ export class MCPConnectionManager implements MCPGateway {
       activeRequestCount: 0,
       reconnectAttempts: 0,
     };
-    this.connections.set(profile.id, { profile, record });
+    this.connections.set(profile.id, {
+      profile,
+      record,
+      requestTimestamps: [],
+      consecutiveFailures: 0,
+    });
     return clone(record);
   }
 
@@ -326,24 +376,85 @@ export class MCPConnectionManager implements MCPGateway {
   }
 
   async reconnect(serverId: string): Promise<MCPConnectionRecord> {
+    const coordinator = this.options.reconnectCoordinator;
+    const lease = coordinator
+      ? await coordinator.acquire({
+          serverId,
+          ownerId: this.options.reconnectOwnerId ?? 'mcp-worker',
+          ttlMs: this.reconnectLeaseTtl(serverId),
+        })
+      : undefined;
+    if (coordinator && !lease) {
+      throw Object.assign(new Error('Another worker owns the MCP reconnect lease.'), {
+        code: 'MCP_BULKHEAD_REJECTED',
+        retryable: true,
+        serverId,
+      });
+    }
+    try {
+      return await this.reconnectWithBudget(serverId);
+    } finally {
+      await lease?.release();
+    }
+  }
+
+  private async reconnectWithBudget(serverId: string): Promise<MCPConnectionRecord> {
     const managed = this.requireConnection(serverId);
     await this.metric('mcp_reconnect_total', 'counter', 1, { server_id: serverId });
     await this.transition(managed, 'reconnecting');
     await this.disconnect(serverId, 'reconnect');
     const policy = managed.profile.reconnectPolicy ?? { maxAttempts: 3, backoffMs: 250 };
+    const startedAt = this.monotonicNow();
     let lastError: unknown;
     for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+      if (
+        attempt > 1 &&
+        policy.maxElapsedMs !== undefined &&
+        this.monotonicNow() - startedAt >= policy.maxElapsedMs
+      ) {
+        break;
+      }
       this.patchRecord(managed, { reconnectAttempts: attempt });
       try {
         return await this.connect(serverId);
       } catch (error) {
         lastError = error;
         if (attempt < policy.maxAttempts) {
-          await delay((policy.backoffMs ?? 250) * 2 ** (attempt - 1));
+          const exponentialDelay = (policy.backoffMs ?? 250) * 2 ** (attempt - 1);
+          const jitterRatio = policy.jitterRatio ?? 0;
+          const jitteredDelay = exponentialDelay * (1 + (this.random() * 2 - 1) * jitterRatio);
+          const reconnectDelay = Math.max(
+            0,
+            Math.round(Math.min(jitteredDelay, policy.maxBackoffMs ?? Number.POSITIVE_INFINITY))
+          );
+          if (policy.maxElapsedMs !== undefined) {
+            const remaining = policy.maxElapsedMs - (this.monotonicNow() - startedAt);
+            if (reconnectDelay > remaining) break;
+          }
+          await this.sleep(reconnectDelay);
         }
       }
     }
-    throw lastError;
+    throw (
+      lastError ??
+      Object.assign(new Error('MCP reconnect budget exhausted.'), {
+        code: 'MCP_CONNECTION_FAILED',
+        serverId,
+      })
+    );
+  }
+
+  private reconnectLeaseTtl(serverId: string): number {
+    const policy = this.requireConnection(serverId).profile.reconnectPolicy;
+    if (policy?.maxElapsedMs !== undefined) return Math.max(1_000, policy.maxElapsedMs + 5_000);
+    const attempts = policy?.maxAttempts ?? 3;
+    const backoff = policy?.backoffMs ?? 250;
+    const maxBackoff = policy?.maxBackoffMs ?? Number.POSITIVE_INFINITY;
+    let delayBudget = 0;
+    for (let attempt = 1; attempt < attempts; attempt += 1) {
+      delayBudget += Math.min(backoff * 2 ** (attempt - 1), maxBackoff);
+    }
+    return Math.max(10_000, Math.min(delayBudget + 30_000, 5 * 60_000));
   }
 
   async cancelRequest(requestId: string): Promise<void> {
@@ -426,6 +537,7 @@ export class MCPConnectionManager implements MCPGateway {
   async call(request: MCPToolCallRequest): Promise<unknown> {
     const managed = this.requireConnection(request.serverId);
     await this.connect(request.serverId);
+    this.enterRequestGuard(managed);
     const requestId = `${request.serverId}:${request.context.invocationId ?? randomUUID()}`;
     const controller = new AbortController();
     const sourceSignal = request.context.signal ?? request.context.abortSignal;
@@ -447,9 +559,11 @@ export class MCPConnectionManager implements MCPGateway {
       capabilityId: request.capabilityId,
     });
     try {
+      this.assertRequestActive(controller.signal, request.context.deadlineAt, 'dispatch');
+      const timeoutMs = this.requestTimeoutMs(managed, request.context.deadlineAt);
       const output = await managed.session!.callTool(request.capabilityId, request.input, {
         signal: controller.signal,
-        timeoutMs: managed.profile.requestTimeoutMs ?? 30_000,
+        timeoutMs,
         onProgress: (progress) => {
           void request.context.reportProgress?.({
             stage: 'mcp',
@@ -457,13 +571,16 @@ export class MCPConnectionManager implements MCPGateway {
           });
         },
       });
+      this.assertRequestActive(controller.signal, request.context.deadlineAt, 'completion');
       await this.record('mcp.request.completed', {
         requestId,
         serverId: request.serverId,
         capabilityId: request.capabilityId,
       });
+      this.recordRequestSuccess(managed);
       return output;
     } catch (error) {
+      this.recordRequestFailure(managed);
       const normalized = normalizeMCPError(error, request.serverId, request.capabilityId);
       await this.record('mcp.request.failed', {
         requestId,
@@ -496,7 +613,12 @@ export class MCPConnectionManager implements MCPGateway {
             code: 'MCP_CAPABILITY_NOT_FOUND',
           });
         }
-        return session.readResource(request.uri, { signal, timeoutMs });
+        const result = await session.readResource(request.uri, { signal, timeoutMs });
+        return this.governResourceResult(
+          this.requireConnection(request.serverId),
+          request.uri,
+          result
+        );
       }
     );
   }
@@ -513,7 +635,15 @@ export class MCPConnectionManager implements MCPGateway {
             code: 'MCP_CAPABILITY_NOT_FOUND',
           });
         }
-        return session.getPrompt(request.name, request.arguments, { signal, timeoutMs });
+        const result = await session.getPrompt(request.name, request.arguments, {
+          signal,
+          timeoutMs,
+        });
+        return this.governPromptResult(
+          this.requireConnection(request.serverId),
+          request.name,
+          result
+        );
       }
     );
   }
@@ -527,6 +657,7 @@ export class MCPConnectionManager implements MCPGateway {
   ): Promise<T> {
     const managed = this.requireConnection(serverId);
     await this.connect(serverId);
+    this.enterRequestGuard(managed);
     const requestId = `${serverId}:${context?.invocationId ?? `${kind}:${randomUUID()}`}`;
     const controller = new AbortController();
     const sourceSignal = context?.signal ?? context?.abortSignal;
@@ -544,14 +675,15 @@ export class MCPConnectionManager implements MCPGateway {
     });
     await this.record('mcp.request.started', { requestId, serverId, capabilityId, kind });
     try {
-      const result = await execute(
-        managed.session!,
-        controller.signal,
-        managed.profile.requestTimeoutMs ?? 30_000
-      );
+      this.assertRequestActive(controller.signal, context?.deadlineAt, 'dispatch');
+      const timeoutMs = this.requestTimeoutMs(managed, context?.deadlineAt);
+      const result = await execute(managed.session!, controller.signal, timeoutMs);
+      this.assertRequestActive(controller.signal, context?.deadlineAt, 'completion');
+      this.recordRequestSuccess(managed);
       await this.record('mcp.request.completed', { requestId, serverId, capabilityId, kind });
       return result;
     } catch (error) {
+      this.recordRequestFailure(managed);
       const normalized = normalizeMCPError(error, serverId, capabilityId);
       await this.record('mcp.request.failed', {
         requestId,
@@ -570,6 +702,253 @@ export class MCPConnectionManager implements MCPGateway {
       await this.metric('mcp_active_requests', 'gauge', managed.record.activeRequestCount, {
         server_id: serverId,
       });
+    }
+  }
+
+  private async governResourceResult(
+    managed: ManagedConnection,
+    uri: string,
+    result: MCPResourceResult
+  ): Promise<MCPResourceResult> {
+    const encoded = encodeRemoteContent(result);
+    const provenance = remoteContentProvenance(managed, 'resource', uri, encoded);
+    const maxBytes = managed.profile.contentPolicy?.maxResourceBytes ?? 1024 * 1024;
+    if (encoded.bytes.byteLength > maxBytes) {
+      const artifact = await this.externalizeRemoteContent(
+        managed,
+        'resource',
+        uri,
+        'application/json',
+        encoded,
+        maxBytes
+      );
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'application/vnd.hypha.artifact-ref+json',
+            metadata: {
+              artifactRef: artifact.artifactRef,
+              contentHash: artifact.contentHash,
+              sizeBytes: artifact.sizeBytes,
+              provenance,
+              trust: 'untrusted',
+            },
+          },
+        ],
+        metadata: {
+          externalized: true,
+          artifactRef: artifact.artifactRef,
+          contentHash: artifact.contentHash,
+          sizeBytes: artifact.sizeBytes,
+          provenance,
+          trust: 'untrusted',
+        },
+      };
+    }
+    return {
+      ...result,
+      contents: result.contents.map((content) => ({
+        ...content,
+        metadata: {
+          ...content.metadata,
+          provenance,
+          trust: 'untrusted',
+          contentHash: encoded.contentHash,
+        },
+      })),
+      metadata: {
+        ...result.metadata,
+        provenance,
+        trust: 'untrusted',
+        contentHash: encoded.contentHash,
+        sizeBytes: encoded.bytes.byteLength,
+      },
+    };
+  }
+
+  private async governPromptResult(
+    managed: ManagedConnection,
+    name: string,
+    result: MCPPromptResult
+  ): Promise<MCPPromptResult> {
+    const encoded = encodeRemoteContent(result);
+    const provenance = remoteContentProvenance(managed, 'prompt', name, encoded);
+    const maxBytes = managed.profile.contentPolicy?.maxPromptBytes ?? 256 * 1024;
+    const maxTokens = managed.profile.contentPolicy?.maxPromptTokens ?? 32_768;
+    const estimatedTokens = Math.ceil(encoded.bytes.byteLength / 4);
+    if (encoded.bytes.byteLength > maxBytes || estimatedTokens > maxTokens) {
+      const artifact = await this.externalizeRemoteContent(
+        managed,
+        'prompt',
+        name,
+        'application/json',
+        encoded,
+        Math.min(maxBytes, maxTokens * 4)
+      );
+      return {
+        description: result.description,
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'resource',
+              artifactRef: artifact.artifactRef,
+              contentHash: artifact.contentHash,
+            },
+          },
+        ],
+        metadata: {
+          externalized: true,
+          artifactRef: artifact.artifactRef,
+          contentHash: artifact.contentHash,
+          sizeBytes: artifact.sizeBytes,
+          estimatedTokens,
+          provenance,
+          trust: 'untrusted',
+        },
+      };
+    }
+    return {
+      ...result,
+      metadata: {
+        ...result.metadata,
+        provenance,
+        trust: 'untrusted',
+        contentHash: encoded.contentHash,
+        sizeBytes: encoded.bytes.byteLength,
+        estimatedTokens,
+      },
+    };
+  }
+
+  private async externalizeRemoteContent(
+    managed: ManagedConnection,
+    kind: 'resource' | 'prompt',
+    capabilityId: string,
+    mediaType: string,
+    encoded: EncodedRemoteContent,
+    limit: number
+  ): Promise<MCPRemoteContentArtifact> {
+    if (
+      managed.profile.contentPolicy?.oversizeAction !== 'artifact' ||
+      !this.options.contentArtifacts
+    ) {
+      throw Object.assign(
+        new Error(`MCP ${kind} content exceeds its configured in-memory limit.`),
+        {
+          code: 'MCP_CONTENT_TOO_LARGE',
+          retryable: false,
+          details: {
+            kind,
+            limit,
+            actualBytes: encoded.bytes.byteLength,
+            contentHash: encoded.contentHash,
+          },
+        }
+      );
+    }
+    return this.options.contentArtifacts.store({
+      serverId: managed.profile.id,
+      kind,
+      capabilityId,
+      mediaType,
+      bytes: encoded.bytes,
+      contentHash: encoded.contentHash,
+      provenance: remoteContentProvenance(managed, kind, capabilityId, encoded),
+    });
+  }
+
+  private assertRequestActive(
+    signal: AbortSignal,
+    deadlineAt: string | undefined,
+    phase: 'dispatch' | 'completion'
+  ): void {
+    if (signal.aborted) {
+      throw guardedRequestError(
+        'MCP_REQUEST_CANCELLED',
+        `MCP request was cancelled before ${phase}.`,
+        false
+      );
+    }
+    if (deadlineAt !== undefined) {
+      const deadline = Date.parse(deadlineAt);
+      if (!Number.isFinite(deadline) || deadline <= Date.parse(this.now())) {
+        throw guardedRequestError(
+          'MCP_REQUEST_TIMEOUT',
+          `MCP request deadline expired before ${phase}.`,
+          true
+        );
+      }
+    }
+  }
+
+  private requestTimeoutMs(managed: ManagedConnection, deadlineAt: string | undefined): number {
+    const configured = managed.profile.requestTimeoutMs ?? 30_000;
+    if (deadlineAt === undefined) return configured;
+    const remaining = Date.parse(deadlineAt) - Date.parse(this.now());
+    return Math.max(1, Math.min(configured, remaining));
+  }
+
+  private enterRequestGuard(managed: ManagedConnection): void {
+    const policy = managed.profile.requestGuardPolicy;
+    if (!policy) return;
+    const now = Date.now();
+    if (managed.circuitOpenUntil !== undefined) {
+      if (managed.circuitOpenUntil > now) {
+        throw guardedRequestError(
+          'MCP_CIRCUIT_OPEN',
+          'MCP server circuit breaker is open.',
+          false,
+          {
+            retryAfterMs: managed.circuitOpenUntil - now,
+          }
+        );
+      }
+      managed.circuitOpenUntil = undefined;
+      managed.consecutiveFailures = 0;
+    }
+    if (
+      policy.maxConcurrentRequests !== undefined &&
+      managed.record.activeRequestCount >= policy.maxConcurrentRequests
+    ) {
+      throw guardedRequestError(
+        'MCP_BULKHEAD_REJECTED',
+        'MCP server concurrency bulkhead is full.',
+        true,
+        { maxConcurrentRequests: policy.maxConcurrentRequests }
+      );
+    }
+    if (policy.rateLimit) {
+      const threshold = now - policy.rateLimit.windowMs;
+      managed.requestTimestamps = managed.requestTimestamps.filter(
+        (timestamp) => timestamp > threshold
+      );
+      if (managed.requestTimestamps.length >= policy.rateLimit.maxRequests) {
+        throw guardedRequestError(
+          'MCP_RATE_LIMITED',
+          'MCP server request rate limit exceeded.',
+          true,
+          {
+            maxRequests: policy.rateLimit.maxRequests,
+            windowMs: policy.rateLimit.windowMs,
+          }
+        );
+      }
+      managed.requestTimestamps.push(now);
+    }
+  }
+
+  private recordRequestSuccess(managed: ManagedConnection): void {
+    managed.consecutiveFailures = 0;
+  }
+
+  private recordRequestFailure(managed: ManagedConnection): void {
+    const policy = managed.profile.requestGuardPolicy?.circuitBreaker;
+    if (!policy) return;
+    managed.consecutiveFailures += 1;
+    if (managed.consecutiveFailures >= policy.failureThreshold) {
+      managed.circuitOpenUntil = Date.now() + policy.resetAfterMs;
     }
   }
 
@@ -612,6 +991,14 @@ export class MCPConnectionManager implements MCPGateway {
         'MCP initialization timed out.'
       );
       const allowedVersions = managed.profile.protocolVersionPolicy?.allowedVersions;
+      if (
+        managed.profile.protocolVersionPolicy?.rejectUnknown &&
+        !initialized.negotiatedProtocolVersion
+      ) {
+        throw Object.assign(new Error('MCP server did not negotiate a protocol version.'), {
+          code: 'MCP_PROTOCOL_MISMATCH',
+        });
+      }
       if (
         initialized.negotiatedProtocolVersion &&
         allowedVersions?.length &&
@@ -745,6 +1132,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
   onListChanged?: () => void;
   private client?: Client;
   private transport?: StdioClientTransport | StreamableHTTPClientTransport;
+  private negotiatedProtocolVersion?: string;
 
   constructor(
     private readonly profile: MCPServerProfile,
@@ -757,6 +1145,14 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     serverCapabilities?: Record<string, unknown>;
   }> {
     this.transport = await this.createTransport();
+    const versionedTransport = this.transport as typeof this.transport & {
+      setProtocolVersion?: (version: string) => void;
+    };
+    const setProtocolVersion = versionedTransport.setProtocolVersion?.bind(versionedTransport);
+    versionedTransport.setProtocolVersion = (version: string) => {
+      this.negotiatedProtocolVersion = version;
+      setProtocolVersion?.(version);
+    };
     this.client = new Client(this.options.clientInfo ?? { name: 'hypha', version: '1.0.0' }, {
       capabilities: {},
       enforceStrictCapabilities: true,
@@ -770,14 +1166,10 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     this.client.onerror = (error) => this.onClose?.(error);
     await this.client.connect(this.transport);
     return {
-      negotiatedProtocolVersion:
-        this.transport instanceof StreamableHTTPClientTransport
-          ? this.transport.protocolVersion
-          : undefined,
+      negotiatedProtocolVersion: this.negotiatedProtocolVersion,
       serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
       serverCapabilities: this.client.getServerCapabilities() as
-        | Record<string, unknown>
-        | undefined,
+        Record<string, unknown> | undefined,
     };
   }
 
@@ -786,10 +1178,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     const capabilities: MCPCapabilityDescriptor[] = [];
     const serverInfo = client.getServerVersion();
     const serverCapabilities = client.getServerCapabilities();
-    const protocolVersion =
-      this.transport instanceof StreamableHTTPClientTransport
-        ? this.transport.protocolVersion
-        : undefined;
+    const protocolVersion = this.negotiatedProtocolVersion;
     const common = {
       version: serverInfo?.version ?? this.profile.version ?? '0.0.0',
       serverId: this.profile.id,
@@ -964,6 +1353,7 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     this.client = undefined;
     if (client) await client.close();
     this.transport = undefined;
+    this.negotiatedProtocolVersion = undefined;
   }
 
   private async createTransport(): Promise<StdioClientTransport | StreamableHTTPClientTransport> {
@@ -993,21 +1383,19 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
       });
     }
     if (transport.type === 'streamable_http') {
-      const referencedHeaders =
-        transport.headersRef && this.options.resolveHeadersRef
-          ? await this.options.resolveHeadersRef(transport.headersRef)
-          : {};
-      const authorization =
-        transport.authorizationRef && this.options.resolveAuthorizationRef
-          ? await this.options.resolveAuthorizationRef(transport.authorizationRef)
-          : undefined;
+      await assertRemoteEgressAllowed(transport.endpoint, this.profile.egressPolicy);
       return new StreamableHTTPClientTransport(new URL(transport.endpoint), {
-        requestInit: {
-          headers: {
-            ...referencedHeaders,
-            ...(authorization ? { Authorization: authorization } : {}),
-          },
-        },
+        fetch: createGuardedMCPFetch({
+          policy: this.profile.egressPolicy,
+          resolveHeaders:
+            transport.headersRef && this.options.resolveHeadersRef
+              ? () => this.options.resolveHeadersRef!(transport.headersRef!)
+              : undefined,
+          resolveAuthorization:
+            transport.authorizationRef && this.options.resolveAuthorizationRef
+              ? () => this.options.resolveAuthorizationRef!(transport.authorizationRef!)
+              : undefined,
+        }),
         reconnectionOptions: {
           initialReconnectionDelay: this.profile.reconnectPolicy?.backoffMs ?? 250,
           maxReconnectionDelay: 30_000,
@@ -1078,8 +1466,13 @@ function normalizeMCPError(
     'MCP_CAPABILITY_DRIFT',
     'MCP_SCHEMA_INVALID',
     'MCP_AUTH_FAILED',
+    'MCP_BULKHEAD_REJECTED',
+    'MCP_RATE_LIMITED',
+    'MCP_CIRCUIT_OPEN',
+    'MCP_EGRESS_DENIED',
     'MCP_REMOTE_ERROR',
     'MCP_TRANSPORT_CLOSED',
+    'MCP_CONTENT_TOO_LARGE',
     'MCP_INTERNAL_ERROR',
   ]);
   const candidate = String(source?.code ?? '');
@@ -1104,6 +1497,191 @@ function normalizeMCPError(
       source?.details && typeof source.details === 'object'
         ? (source.details as Record<string, unknown>)
         : undefined,
+  };
+}
+
+function guardedRequestError(
+  code: NormalizedMCPError['code'],
+  message: string,
+  retryable: boolean,
+  details?: Record<string, unknown>
+): Error {
+  return Object.assign(new Error(message), { code, retryable, details });
+}
+
+export async function assertRemoteEgressAllowed(
+  endpoint: string,
+  policy: MCPServerProfile['egressPolicy']
+): Promise<void> {
+  const url = new URL(endpoint);
+  if ((policy?.requireTls ?? true) && url.protocol !== 'https:') {
+    throw guardedRequestError('MCP_EGRESS_DENIED', 'Remote MCP endpoint must use TLS.', false);
+  }
+  if (
+    policy?.allowedHosts?.length &&
+    !policy.allowedHosts.some((candidate) => hostMatches(url.hostname, candidate))
+  ) {
+    throw guardedRequestError('MCP_EGRESS_DENIED', 'Remote MCP host is not allow-listed.', false);
+  }
+  if (!(policy?.denyPrivateNetworks ?? true)) return;
+  const addresses = isIP(url.hostname)
+    ? [{ address: url.hostname }]
+    : await lookup(url.hostname, { all: true, verbatim: true });
+  if (addresses.some(({ address }) => isPrivateOrLocalAddress(address))) {
+    throw guardedRequestError(
+      'MCP_EGRESS_DENIED',
+      'Remote MCP endpoint resolved to a private or local address.',
+      false
+    );
+  }
+}
+
+/**
+ * Applies the remote MCP egress policy to every request and redirect hop.
+ * Credentials are resolved immediately before each request so rotations take
+ * effect without rebuilding declarative profiles.
+ */
+export function createGuardedMCPFetch(options: GuardedMCPFetchOptions = {}): MCPFetch {
+  const baseFetch: MCPFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const maxRedirects = options.policy?.maxRedirects ?? 0;
+  const allowCrossOriginRedirects = options.policy?.allowCrossOriginRedirects ?? false;
+
+  return async (input, init) => {
+    const initial = new Request(input, { ...init, redirect: 'manual' });
+    const dynamicHeaders = options.resolveHeaders ? await options.resolveHeaders() : {};
+    const authorization = options.resolveAuthorization
+      ? await options.resolveAuthorization()
+      : undefined;
+    const headers = new Headers(initial.headers);
+    for (const [name, value] of Object.entries(dynamicHeaders)) headers.set(name, value);
+    if (authorization) headers.set('authorization', authorization);
+    let request = new Request(initial, { headers, redirect: 'manual' });
+    let redirects = 0;
+
+    for (;;) {
+      await assertRemoteEgressAllowed(request.url, options.policy);
+      const replay = request.clone();
+      const response = await baseFetch(request, { redirect: 'manual' });
+      if (!isRedirectStatus(response.status)) return response;
+
+      const location = response.headers.get('location');
+      if (!location) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          'Remote MCP redirect did not include a Location header.',
+          false
+        );
+      }
+      if (redirects >= maxRedirects) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          `Remote MCP redirect budget exhausted after ${redirects} hops.`,
+          false,
+          { maxRedirects }
+        );
+      }
+
+      const next = new URL(location, request.url);
+      await assertRemoteEgressAllowed(next.toString(), options.policy);
+      const crossesOrigin = next.origin !== new URL(request.url).origin;
+      if (crossesOrigin && !allowCrossOriginRedirects) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          'Remote MCP cross-origin redirect is not allowed.',
+          false,
+          { from: new URL(request.url).origin, to: next.origin }
+        );
+      }
+      if (!['GET', 'HEAD'].includes(request.method) && ![307, 308].includes(response.status)) {
+        throw guardedRequestError(
+          'MCP_EGRESS_DENIED',
+          'Remote MCP refused a redirect that could rewrite a request with side effects.',
+          false,
+          { method: request.method, status: response.status }
+        );
+      }
+
+      await response.body?.cancel().catch(() => undefined);
+      const redirectedHeaders = new Headers(replay.headers);
+      if (crossesOrigin) {
+        redirectedHeaders.delete('authorization');
+        redirectedHeaders.delete('cookie');
+        redirectedHeaders.delete('proxy-authorization');
+      }
+      request = new Request(next, {
+        method: replay.method,
+        headers: redirectedHeaders,
+        body: ['GET', 'HEAD'].includes(replay.method) ? undefined : replay.body,
+        redirect: 'manual',
+        signal: replay.signal,
+        ...(replay.body ? { duplex: 'half' } : {}),
+      } as RequestInit);
+      redirects += 1;
+    }
+  };
+}
+
+function isRedirectStatus(status: number): boolean {
+  return [301, 302, 303, 307, 308].includes(status);
+}
+
+function hostMatches(hostname: string, candidate: string): boolean {
+  const host = hostname.toLowerCase();
+  const rule = candidate.toLowerCase();
+  if (!rule.startsWith('*.')) return host === rule;
+  const suffix = rule.slice(1);
+  return host.endsWith(suffix) && host.length > suffix.length;
+}
+
+function isPrivateOrLocalAddress(address: string): boolean {
+  const normalized = address.toLowerCase().split('%')[0];
+  if (normalized === '::1' || normalized === '::' || normalized.startsWith('fe80:')) return true;
+  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(normalized)?.[1];
+  const ipv4 = mapped ?? (isIP(normalized) === 4 ? normalized : undefined);
+  if (!ipv4) return false;
+  const [first, second] = ipv4.split('.').map(Number);
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    first >= 224
+  );
+}
+
+interface EncodedRemoteContent {
+  bytes: Uint8Array;
+  contentHash: string;
+}
+
+function encodeRemoteContent(value: unknown): EncodedRemoteContent {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  return {
+    bytes,
+    contentHash: createHash('sha256').update(bytes).digest('hex'),
+  };
+}
+
+function remoteContentProvenance(
+  managed: ManagedConnection,
+  kind: 'resource' | 'prompt',
+  capabilityId: string,
+  encoded: EncodedRemoteContent
+): Record<string, unknown> {
+  return {
+    source: 'mcp',
+    serverId: managed.profile.id,
+    serverVersion: managed.profile.version,
+    connectionRevision: managed.record.revision,
+    protocolVersion: managed.record.negotiatedProtocolVersion,
+    transportType: managed.record.transportType,
+    kind,
+    capabilityId,
+    contentHash: encoded.contentHash,
   };
 }
 

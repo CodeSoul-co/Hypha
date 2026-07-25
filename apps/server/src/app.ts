@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import http from 'http';
 
-import { getConfig } from './config';
+import { getConfig, runtimeConfig } from './config';
 import { logger } from './utils/logger';
 import { initializeDatabases, closeDatabases, checkStorageHealth } from './services/database';
 import { initializeLLM, destroyLLM, getLLMManager } from './core/llm/LLMFactory';
@@ -29,13 +29,21 @@ import routes from './routes';
 import { errorHandler, notFoundHandler, requestLogger } from './middleware/errorHandler';
 import { createApiRateLimiter } from './middleware/rateLimiter';
 import { HTTP_STATUS } from './constants';
-import { getEventRuntime } from './services/EventRuntime';
+import {
+  createServerCompatibilityEventStore,
+  destroyEventRuntime,
+  getEventRuntime,
+  initializeEventRuntime,
+  serverRuntimeEventDatabasePath,
+} from './services/EventRuntime';
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
+import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
 
 class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
-  private server: any = null;
+  private server: http.Server | null = null;
+  private canonicalRuntime: ServerCanonicalRuntime | null = null;
 
   constructor() {
     this.app = express();
@@ -145,6 +153,10 @@ class Application {
     // Initialize Tool Manager
     await initializeToolManager();
 
+    // Cut legacy Runtime Events over to the schema-backed canonical store only
+    // after migration and bounded replay have passed.
+    await this.initializeCanonicalRuntime();
+
     // Recover persisted Tool invocations after their adapters are available.
     await getEventRuntime().recoverToolInvocations();
 
@@ -155,6 +167,39 @@ class Application {
     await initializePromptManager();
 
     logger.info('All services initialized');
+  }
+
+  private async initializeCanonicalRuntime(): Promise<void> {
+    const legacyEvents = createServerCompatibilityEventStore();
+    const limits = runtimeConfig().canonical;
+    const runtime = new ServerCanonicalRuntime({
+      filename: serverRuntimeEventDatabasePath(),
+      legacyEvents,
+      maxLegacyEvents: limits.maxLegacyEvents,
+      auditLimits: {
+        pageSize: limits.auditPageSize,
+        pageMaxBytes: limits.auditPageMaxBytes,
+        maxEvents: limits.auditMaxEvents,
+        maxBytes: limits.auditMaxBytes,
+        maxDurationMs: limits.auditMaxDurationMs,
+      },
+    });
+    try {
+      const composition = await runtime.initialize();
+      initializeEventRuntime({
+        events: composition.events,
+        eventDbPath: serverRuntimeEventDatabasePath(),
+        humanWaits: composition.humanWaits,
+      });
+      this.canonicalRuntime = runtime;
+      logger.info('Canonical Runtime initialized', {
+        migratedEvents: composition.migration.migratedEvents,
+        alreadyCanonicalEvents: composition.migration.alreadyCanonicalEvents,
+      });
+    } catch (error) {
+      await runtime.close();
+      throw error;
+    }
   }
 
   private async initializeLocalUsers(): Promise<void> {
@@ -290,7 +335,26 @@ class Application {
       logger.error('  Memory      | Error:', err);
     }
 
-    // 4. Check API /health endpoint
+    // 4. Check canonical Runtime Event authority.
+    try {
+      const runtimeHealth = await this.canonicalRuntime?.get().backbone.eventStore.health();
+      const healthy = runtimeHealth?.status === 'healthy';
+      checks.push({
+        name: 'Runtime',
+        status: healthy ? 'pass' : 'fail',
+        detail: runtimeHealth?.message ?? runtimeHealth?.status ?? 'not initialized',
+      });
+      if (healthy) {
+        logger.info('  ✅ Runtime     │ Canonical Event store ready');
+      } else {
+        logger.error('  ❌ Runtime     │ Canonical Event store unavailable');
+      }
+    } catch (err) {
+      checks.push({ name: 'Runtime', status: 'fail', detail: String(err) });
+      logger.error('  ❌ Runtime     │ Error:', err);
+    }
+
+    // 5. Check API /health endpoint
     try {
       const response = await fetch(`${apiBase}/health`);
       if (response.ok) {
@@ -309,7 +373,7 @@ class Application {
       logger.error('  ❌ API Health │ Error:', err);
     }
 
-    // 5. Check LLM Providers
+    // 6. Check LLM Providers
     try {
       const llmManager = getLLMManager();
       const llmHealth = await llmManager.healthCheck();
@@ -405,12 +469,17 @@ class Application {
 
     // Stop accepting new connections
     if (this.server) {
+      const server = this.server;
       await new Promise<void>((resolve) => {
-        this.server.close(() => resolve());
+        server.close(() => resolve());
       });
+      this.server = null;
     }
 
     // Cleanup services
+    destroyEventRuntime();
+    await this.canonicalRuntime?.close();
+    this.canonicalRuntime = null;
     await closeServerMemoryComposition();
     await destroyLLM();
     await destroySkillManager();
