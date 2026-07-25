@@ -67,13 +67,18 @@ describe('Legacy Human Wait migration', () => {
         invocationId: 'tool-invocation.precise',
         toolId: 'filesystem',
       }),
+      event('transition.requested', 'fsm.transition.requested', {
+        from: 'Acting',
+        to: 'HumanReview',
+        tool: 'filesystem',
+      }),
       event('wait.legacy', 'run.waiting_human', {
         tool: 'filesystem',
         reason: 'operator approval required',
       }),
     ]);
 
-    expect(result.events[1].payload).toMatchObject({
+    expect(result.events[2].payload).toMatchObject({
       wait: { pendingActionRef: 'tool-invocation.precise' },
     });
   });
