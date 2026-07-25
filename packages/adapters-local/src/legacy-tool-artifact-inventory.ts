@@ -154,7 +154,7 @@ export class LegacyToolArtifactInventory {
       }
       const content = new Uint8Array(await handle.readFile());
       const after = await handle.stat();
-      if (!sameStat(before, after) || content.byteLength !== before.size) {
+      if (!sameRegularFileStat(before, after) || content.byteLength !== before.size) {
         throw new LegacyToolArtifactInventoryError(
           'LEGACY_INVENTORY_SOURCE_CHANGED',
           'Legacy Artifact changed while the inventory was being generated.',
@@ -229,7 +229,7 @@ async function assertDirectoryUnchanged(
   before: Awaited<ReturnType<typeof fs.lstat>>
 ): Promise<void> {
   const after = await fs.lstat(directory);
-  if (!sameStat(before, after)) {
+  if (!sameDirectoryStat(before, after)) {
     throw new LegacyToolArtifactInventoryError(
       'LEGACY_INVENTORY_SOURCE_CHANGED',
       'Legacy Artifact directory changed while the inventory was being generated.',
@@ -238,12 +238,28 @@ async function assertDirectoryUnchanged(
   }
 }
 
-function sameStat(
+function sameRegularFileStat(
   before: Awaited<ReturnType<typeof fs.lstat>>,
   after: Awaited<ReturnType<typeof fs.lstat>>
 ): boolean {
   return (
     sameFileIdentity(before, after) &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+function sameDirectoryStat(
+  before: Awaited<ReturnType<typeof fs.lstat>>,
+  after: Awaited<ReturnType<typeof fs.lstat>>
+): boolean {
+  return (
+    before.isDirectory() &&
+    after.isDirectory() &&
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.mode === after.mode &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs
