@@ -511,6 +511,7 @@ class EventRuntimeService {
   private readonly runtime: EventFirstRuntime;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
+  private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
   private readonly reasoning: ReasoningOrchestrator;
@@ -2612,6 +2613,58 @@ class EventRuntimeService {
   ): Promise<void> {
     const runtimeSessionId = this.runtimeSessionId(userId, clientSessionId);
     if (this.knownSessions.has(runtimeSessionId)) return;
+    const pending = this.sessionInitializations.get(runtimeSessionId);
+    if (pending) return pending;
+    const initialization = this.initializeSession(
+      runtimeSessionId,
+      userId,
+      clientSessionId,
+      domainPack,
+      metadata
+    );
+    this.sessionInitializations.set(runtimeSessionId, initialization);
+    try {
+      await initialization;
+      this.knownSessions.add(runtimeSessionId);
+    } finally {
+      this.sessionInitializations.delete(runtimeSessionId);
+    }
+  }
+
+  private async initializeSession(
+    runtimeSessionId: string,
+    userId: string,
+    clientSessionId: string,
+    domainPack: DomainPackSpec,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const persisted = await this.events.list({
+      userId,
+      sessionId: runtimeSessionId,
+      type: 'session.created',
+    });
+    if (persisted.length > 0) {
+      if (persisted.length !== 1) {
+        throw new FrameworkError({
+          code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+          message: `Session ${runtimeSessionId} has more than one creation fact`,
+        });
+      }
+      const payload = asRecord(persisted[0]!.payload);
+      const domainPackRef = asRecord(payload?.domainPackRef);
+      if (
+        stringValue(payload?.id) !== runtimeSessionId ||
+        stringValue(payload?.userId) !== userId ||
+        stringValue(domainPackRef?.id) !== domainPack.id ||
+        stringValue(domainPackRef?.version) !== domainPack.version
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_RUN_CONFLICT',
+          message: `Session ${runtimeSessionId} conflicts with its persisted owner or Domain Pack`,
+        });
+      }
+      return;
+    }
     await this.runtime.createSession({
       id: runtimeSessionId,
       userId,
@@ -2621,7 +2674,6 @@ class EventRuntimeService {
         ...metadata,
       },
     });
-    this.knownSessions.add(runtimeSessionId);
   }
 
   private async append(

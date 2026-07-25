@@ -115,5 +115,22 @@ describe('Server EventRuntime canonical integration', () => {
         }),
       }),
     ]);
+
+    destroyEventRuntime();
+    const restarted = initializeEventRuntime({
+      events: composition.events,
+      eventDbPath: path.join(root, 'runtime.sqlite'),
+    });
+    await restarted.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.integration',
+    });
+    await expect(
+      composition.events.list({
+        userId: 'user.integration',
+        sessionId: 'user:user.integration:session:session.integration',
+        type: 'session.created',
+      })
+    ).resolves.toHaveLength(1);
   });
 });
