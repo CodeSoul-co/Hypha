@@ -39,7 +39,7 @@ export class InMemoryProjectionStore<TState = unknown> implements ProjectionStor
   }
 
   async put(record: ProjectionRecord<TState>, expectedRevision?: number): Promise<void> {
-    validateProjectionRecord(record);
+    validateRecord(record);
     if (
       expectedRevision !== undefined &&
       (!Number.isInteger(expectedRevision) || expectedRevision < 0)
@@ -178,7 +178,7 @@ function validateDefinition<TState>(definition: ProjectionDefinition<TState>): v
   }
 }
 
-export function validateProjectionRecord<TState>(record: ProjectionRecord<TState>): void {
+function validateRecord<TState>(record: ProjectionRecord<TState>): void {
   required(record.projectionId, 'projectionId');
   required(record.projectionVersion, 'projectionVersion');
   required(record.key, 'projection key');

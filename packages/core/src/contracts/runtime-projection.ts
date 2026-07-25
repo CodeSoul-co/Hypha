@@ -16,8 +16,6 @@ export interface RuntimePendingWaitProjection {
   stateAttempt: number;
   type: RuntimeWaitIntentType;
   key?: string;
-  pendingActionRef?: string;
-  reason?: string;
   expectedSchema?: JsonSchema;
   expiresAt?: string;
   createdAt: string;
@@ -49,7 +47,6 @@ export interface RuntimeOrchestrationProjection {
   stateVisitCounts: Record<string, number>;
   stateAttempt: number;
   pendingTransition?: RuntimePendingTransitionProjection;
-  pendingHumanActionRef?: string;
   pendingWait?: RuntimePendingWaitProjection;
   lastResume?: RuntimeResumeProjection;
   cancellation?: RuntimeCancellationProjection;
