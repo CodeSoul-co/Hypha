@@ -15,9 +15,10 @@ export function registerTools(program: Command): void {
   program
     .command('tools')
     .description('List registered tools (GET /tools)')
-    .action(async () => {
+    .option('--catalog', 'Show the full governed Tool Family catalog, including unbound ports')
+    .action(async (opts: { catalog?: boolean }) => {
       try {
-        const tools = await apiGet<ToolDefinition[]>('/tools');
+        const tools = await apiGet<ToolDefinition[]>(opts.catalog ? '/tools/catalog' : '/tools');
         if (tools.length === 0) { console.log(chalk.gray('(no tools registered)')); return; }
         for (const t of tools) {
           console.log(`${chalk.bold(t.name)}  ${chalk.gray('— ' + (t.description || ''))}`);
