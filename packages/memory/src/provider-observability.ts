@@ -144,7 +144,8 @@ export class MemoryProviderTelemetry {
     const startedAt = this.now().getTime();
     const policy = this.policy(providerId);
     const usage = this.currentUsage(providerId, policy, startedAt);
-    const quotaReason = rejectedQuota(policy, usage, estimate);
+    const quotaCounted = operation !== 'health';
+    const quotaReason = quotaCounted ? rejectedQuota(policy, usage, estimate) : undefined;
     if (quotaReason) {
       this.append(providerId, policy, {
         providerId,
@@ -163,10 +164,12 @@ export class MemoryProviderTelemetry {
         { providerId, operation, quotaReason }
       );
     }
-    usage.operations += 1;
     usage.inFlight += 1;
-    if (estimate.costUnits === undefined) usage.unpricedOperations += 1;
-    else usage.costUnits += estimate.costUnits;
+    if (quotaCounted) {
+      usage.operations += 1;
+      if (estimate.costUnits === undefined) usage.unpricedOperations += 1;
+      else usage.costUnits += estimate.costUnits;
+    }
 
     let completed = false;
     return {
@@ -178,7 +181,7 @@ export class MemoryProviderTelemetry {
         if (completed) return;
         completed = true;
         usage.inFlight = Math.max(0, usage.inFlight - 1);
-        if (outcome === 'succeeded') {
+        if (quotaCounted && outcome === 'succeeded') {
           usage.storedBytes = Math.max(0, usage.storedBytes + (estimate.storedBytesDelta ?? 0));
         }
         const failure = error === undefined ? undefined : normalizeMemoryError(error);
