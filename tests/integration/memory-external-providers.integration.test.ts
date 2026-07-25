@@ -284,7 +284,8 @@ describe('external memory real integration entry points', () => {
             {
               ...fixture.add,
               operationId,
-              input: String(fixture.add.input) + ' pagination companion',
+              input: 'Hypha pagination sentinel ' + operationId,
+              extractionMode: 'none',
               idempotencyKey: operationId,
             },
             signal
@@ -658,7 +659,8 @@ describe('external memory real integration entry points', () => {
             {
               ...fixture.add,
               operationId,
-              input: String(fixture.add.input) + ' pagination companion',
+              input: 'Hypha pagination sentinel ' + operationId,
+              extractionMode: 'none',
               idempotencyKey: operationId,
             },
             signal
