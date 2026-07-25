@@ -1,11 +1,20 @@
 import type {
   MemoryApplicationService,
   MemoryRuntime,
+  MemoryProviderTelemetry,
   MemoryRuntimeCompositionReceipt,
 } from '@hypha/memory';
-import { resolveMongoTransactionMode, ServerMemoryComposition } from './ServerMemoryComposition';
+import {
+  createServerMemoryTelemetry,
+  estimateServerMemoryOperation,
+  resolveMongoTransactionMode,
+  ServerMemoryComposition,
+} from './ServerMemoryComposition';
 
-function runtime(close = jest.fn(async () => undefined)): MemoryRuntime {
+function runtime(
+  close = jest.fn(async () => undefined),
+  telemetry?: MemoryProviderTelemetry
+): MemoryRuntime {
   const receipt: MemoryRuntimeCompositionReceipt = {
     runtimeId: 'memory-runtime:test',
     serviceInstanceId: 'memory-service:test',
@@ -26,13 +35,14 @@ function runtime(close = jest.fn(async () => undefined)): MemoryRuntime {
   } as unknown as MemoryApplicationService;
   return {
     service,
-    provider: {} as MemoryRuntime['provider'],
+    provider: { id: 'memory.provider.native-test' } as MemoryRuntime['provider'],
     profile: { id: 'native-test', version: '1.0.0' } as MemoryRuntime['profile'],
     providerSpec: {} as MemoryRuntime['providerSpec'],
     profileHash: receipt.profileHash,
     capabilities: {} as MemoryRuntime['capabilities'],
     compositionReceipt: receipt,
     close,
+    telemetry,
   };
 }
 
@@ -62,6 +72,50 @@ describe('ServerMemoryComposition', () => {
       state: 'ready',
       ready: true,
       providerStatus: 'healthy',
+    });
+  });
+
+  it('exposes Provider health, telemetry, quota and SLO state for administration', async () => {
+    const telemetry = createServerMemoryTelemetry({
+      HYPHA_MEMORY_SLO_MIN_OPERATIONS: '1',
+      HYPHA_MEMORY_SLO_AVAILABILITY: '1',
+      HYPHA_MEMORY_SLO_P95_MS: '1000',
+      HYPHA_MEMORY_QUOTA_MAX_OPERATIONS: '10',
+    });
+    const reservation = telemetry.begin('memory.provider.native-test', 'add', {
+      costUnits: 0,
+      storedBytesDelta: 20,
+    });
+    reservation.complete('succeeded');
+    const composition = new ServerMemoryComposition({
+      bootstrap: async () => runtime(undefined, telemetry),
+    });
+    await composition.start();
+
+    await expect(composition.operationalSnapshot()).resolves.toMatchObject({
+      receipt: { providerId: 'memory.provider.native-test' },
+      profile: { id: 'native-test', version: '1.0.0' },
+      provider: { id: 'memory.provider.native-test', status: 'healthy' },
+      telemetry: {
+        operations: { total: 1, succeeded: 1 },
+        cost: { measuredUnits: 0, complete: true },
+        storage: { measuredBytes: 20 },
+        quota: { maxOperations: 10, remainingOperations: 9 },
+        slo: { status: 'met' },
+      },
+    });
+  });
+
+  it('validates operations settings and prices only known Provider costs', () => {
+    expect(() => createServerMemoryTelemetry({ HYPHA_MEMORY_SLO_AVAILABILITY: '1.1' })).toThrow(
+      'Invalid HYPHA_MEMORY_SLO_AVAILABILITY'
+    );
+    expect(estimateServerMemoryOperation('add', { input: 'hello' }, 'native')).toEqual({
+      costUnits: 0,
+      storedBytesDelta: 7,
+    });
+    expect(estimateServerMemoryOperation('search', {}, 'mem0')).toEqual({
+      costUnits: undefined,
     });
   });
 

@@ -5,6 +5,7 @@ import {
   CanonicalMemoryRuntimeLoader,
   InMemoryLocalVectorStoreAdapter,
   MemoryManagementProviderRegistry,
+  MemoryProviderTelemetry,
   MemoryRuntimeFactory,
   MongoStructuredStoreProvider,
   createMem0PlatformMemoryProviderFactory,
@@ -13,11 +14,15 @@ import {
   memoryError,
   type EmbeddingProvider,
   type MemoryApplicationService,
+  type MemoryProviderCostEstimator,
+  type MemoryProviderOperationalReport,
+  type MemoryProviderOperation,
   type MemoryRuntime,
   type MemoryRuntimeCompositionReceipt,
   type MemoryServerConsumer,
   type MongoTransactionMode,
   type MongoDatabaseLike,
+  type ProviderHealth,
   type RedisLikeWorkingMemoryClient,
 } from '@hypha/memory';
 import { getMongoConnection, getRedisClient } from './database';
@@ -41,6 +46,12 @@ export interface ServerMemoryReadiness {
   message?: string;
 }
 
+export interface ServerMemoryOperationalSnapshot {
+  receipt: MemoryRuntimeCompositionReceipt;
+  profile: { id: string; version: string; revision?: string };
+  provider: ProviderHealth & { id: string };
+  telemetry?: MemoryProviderOperationalReport;
+}
 export interface ServerMemoryCompositionOptions {
   bootstrap: () => Promise<MemoryRuntime>;
 }
@@ -119,6 +130,26 @@ export class ServerMemoryComposition {
       id: this.runtime.profile.id,
       version: this.runtime.profile.version,
       revision: this.runtime.profile.revision,
+    };
+  }
+
+  async operationalSnapshot(): Promise<ServerMemoryOperationalSnapshot> {
+    if (this.state !== 'ready' || !this.runtime) {
+      throw memoryError(
+        'MEMORY_PROVIDER_UNAVAILABLE',
+        `Server Memory composition is ${this.state}.`
+      );
+    }
+    const health = await this.runtime.service.providerHealth();
+    return {
+      receipt: this.runtime.compositionReceipt,
+      profile: {
+        id: this.runtime.profile.id,
+        version: this.runtime.profile.version,
+        revision: this.runtime.profile.revision,
+      },
+      provider: { id: this.runtime.provider.id, ...health },
+      telemetry: this.runtime.telemetry?.snapshot(this.runtime.provider.id),
     };
   }
 
@@ -247,6 +278,9 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     .register(createMem0PlatformMemoryProviderFactory())
     .register(createMemoryBankManagedProviderFactory());
   let eventSequence = 0;
+  const telemetry = createServerMemoryTelemetry();
+  const activeProviderType = () =>
+    loaded.config.profiles[loaded.config.activeProfile].management.type;
   const factory = new MemoryRuntimeFactory({
     registry,
     activities: {
@@ -275,6 +309,9 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
       sessionId: request.scope.sessionId,
       agentId: request.scope.agentId,
     }),
+    telemetry,
+    providerCostEstimator: (operation, request) =>
+      estimateServerMemoryOperation(operation, request, activeProviderType()),
   });
   const configPath = path.resolve(
     process.cwd(),
@@ -293,6 +330,95 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     providerId: runtime.compositionReceipt.providerId,
   });
   return runtime;
+}
+
+export function createServerMemoryTelemetry(
+  environment: NodeJS.ProcessEnv = process.env
+): MemoryProviderTelemetry {
+  const maxOperations = optionalNumber(environment, 'HYPHA_MEMORY_QUOTA_MAX_OPERATIONS', {
+    integer: true,
+    minimum: 1,
+  });
+  const maxCostUnits = optionalNumber(environment, 'HYPHA_MEMORY_QUOTA_MAX_COST_UNITS', {
+    minimum: 0,
+  });
+  const maxStoredBytes = optionalNumber(environment, 'HYPHA_MEMORY_QUOTA_MAX_STORED_BYTES', {
+    integer: true,
+    minimum: 1,
+  });
+  const quota =
+    maxOperations === undefined && maxCostUnits === undefined && maxStoredBytes === undefined
+      ? undefined
+      : { maxOperations, maxCostUnits, maxStoredBytes };
+  return new MemoryProviderTelemetry({
+    defaultPolicy: {
+      windowMs:
+        optionalNumber(environment, 'HYPHA_MEMORY_METRICS_WINDOW_MS', {
+          integer: true,
+          minimum: 1,
+        }) ?? 300_000,
+      maxSamples:
+        optionalNumber(environment, 'HYPHA_MEMORY_METRICS_MAX_SAMPLES', {
+          integer: true,
+          minimum: 1,
+        }) ?? 10_000,
+      quota,
+      slo: {
+        minimumOperations:
+          optionalNumber(environment, 'HYPHA_MEMORY_SLO_MIN_OPERATIONS', {
+            integer: true,
+            minimum: 1,
+          }) ?? 10,
+        availabilityTarget:
+          optionalNumber(environment, 'HYPHA_MEMORY_SLO_AVAILABILITY', {
+            minimum: 0,
+            maximum: 1,
+          }) ?? 0.99,
+        latencyP95Ms:
+          optionalNumber(environment, 'HYPHA_MEMORY_SLO_P95_MS', {
+            minimum: 0,
+          }) ?? 2_000,
+      },
+    },
+  });
+}
+
+export function estimateServerMemoryOperation(
+  operation: MemoryProviderOperation,
+  request: unknown,
+  providerType?: string
+): ReturnType<MemoryProviderCostEstimator> {
+  const costUnits = providerType === 'native' ? 0 : undefined;
+  if (operation !== 'add' || !request || typeof request !== 'object') return { costUnits };
+  const input = (request as { input?: unknown }).input;
+  return { costUnits, storedBytesDelta: jsonBytes(input) };
+}
+
+function jsonBytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
+  } catch {
+    return 0;
+  }
+}
+
+function optionalNumber(
+  environment: NodeJS.ProcessEnv,
+  name: string,
+  rules: { integer?: boolean; minimum?: number; maximum?: number }
+): number | undefined {
+  const raw = environment[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (
+    !Number.isFinite(value) ||
+    (rules.integer && !Number.isInteger(value)) ||
+    (rules.minimum !== undefined && value < rules.minimum) ||
+    (rules.maximum !== undefined && value > rules.maximum)
+  ) {
+    throw memoryError('MEMORY_INVALID_INPUT', `Invalid ${name} Memory operations setting.`);
+  }
+  return value;
 }
 
 export function resolveMongoTransactionMode(
