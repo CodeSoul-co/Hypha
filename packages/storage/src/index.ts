@@ -12,8 +12,6 @@ import {
   type VersionedSpec,
 } from '@hypha/core';
 
-export * from './recovery';
-
 export type StorageProviderKind =
   | 'relational'
   | 'document'
@@ -218,38 +216,42 @@ export const storageConnectionSpecSchema = z.object({
   options: z.record(z.unknown()).optional(),
 }) satisfies ZodType<StorageConnectionSpec>;
 
-export const storageProviderProfileSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
-  kind: storageProviderKindSchema,
-  engine: storageEngineSchema,
-  deployment: storageDeploymentModeSchema,
-  role: storageRoleSchema,
-  connection: storageConnectionSpecSchema.optional(),
-  capabilities: z.array(storageCapabilitySchema).optional(),
-  consistency: z.enum(['strong', 'eventual']).optional(),
-  secrets: z
-    .object({
-      apiKey: storageSecretRefSchema.optional(),
-      username: storageSecretRefSchema.optional(),
-      password: storageSecretRefSchema.optional(),
-      token: storageSecretRefSchema.optional(),
-    })
-    .optional(),
-  configSchema: jsonSchemaSchema.optional(),
-}) satisfies ZodType<StorageProviderProfile>;
+export const storageProviderProfileSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    kind: storageProviderKindSchema,
+    engine: storageEngineSchema,
+    deployment: storageDeploymentModeSchema,
+    role: storageRoleSchema,
+    connection: storageConnectionSpecSchema.optional(),
+    capabilities: z.array(storageCapabilitySchema).optional(),
+    consistency: z.enum(['strong', 'eventual']).optional(),
+    secrets: z
+      .object({
+        apiKey: storageSecretRefSchema.optional(),
+        username: storageSecretRefSchema.optional(),
+        password: storageSecretRefSchema.optional(),
+        token: storageSecretRefSchema.optional(),
+      })
+      .optional(),
+    configSchema: jsonSchemaSchema.optional(),
+  }) satisfies ZodType<StorageProviderProfile>;
 
-export const storageTopologySpecSchema = versionedSpecSchema.merge(specMetadataSchema).extend({
-  providers: z.array(storageProviderProfileSchema).min(1),
-  defaults: z.object({
-    relationalRef: specRefSchema.optional(),
-    documentRef: specRefSchema.optional(),
-    messagingRef: specRefSchema.optional(),
-    cacheRef: specRefSchema.optional(),
-    vectorRef: specRefSchema.optional(),
-    artifactRef: specRefSchema.optional(),
-    eventRef: specRefSchema.optional(),
-    memoryRef: specRefSchema.optional(),
-  }),
-}) satisfies ZodType<StorageTopologySpec>;
+export const storageTopologySpecSchema = versionedSpecSchema
+  .merge(specMetadataSchema)
+  .extend({
+    providers: z.array(storageProviderProfileSchema).min(1),
+    defaults: z.object({
+      relationalRef: specRefSchema.optional(),
+      documentRef: specRefSchema.optional(),
+      messagingRef: specRefSchema.optional(),
+      cacheRef: specRefSchema.optional(),
+      vectorRef: specRefSchema.optional(),
+      artifactRef: specRefSchema.optional(),
+      eventRef: specRefSchema.optional(),
+      memoryRef: specRefSchema.optional(),
+    }),
+  }) satisfies ZodType<StorageTopologySpec>;
 
 export const storageProviderProfileJsonSchema: JsonSchema = {
   type: 'object',
@@ -478,9 +480,8 @@ export function resolveStorageConnection(
   const connection = profile.connection ?? {};
   const envUri = connection.uriEnv ? nonEmpty(env[connection.uriEnv]) : undefined;
   const inlineUri = nonEmpty(connection.uri);
-  const username =
-    nonEmpty(connection.username) ??
-    (connection.usernameEnv ? nonEmpty(env[connection.usernameEnv]) : undefined);
+  const username = nonEmpty(connection.username)
+    ?? (connection.usernameEnv ? nonEmpty(env[connection.usernameEnv]) : undefined);
   const resolved: ResolvedStorageConnection = {
     profileId: profile.id,
     engine: profile.engine,
@@ -499,11 +500,9 @@ export function resolveStorageConnection(
   if (inlineUri) {
     return { ...resolved, uri: inlineUri, uriSource: 'inline' };
   }
-  const composed = composeStorageUri(
-    profile,
-    username,
-    connection.passwordEnv ? nonEmpty(env[connection.passwordEnv]) : undefined
-  );
+  const composed = composeStorageUri(profile, username, connection.passwordEnv
+    ? nonEmpty(env[connection.passwordEnv])
+    : undefined);
   return composed ? { ...resolved, uri: composed, uriSource: 'composed' } : resolved;
 }
 
@@ -536,18 +535,16 @@ export function inferStorageDeployment(
   return isLocalHost(host) ? 'local' : 'cloud';
 }
 
-export function createMongoStorageProfile(
-  input: {
-    id?: string;
-    deployment?: StorageDeploymentMode;
-    uriEnv?: string;
-    uri?: string;
-    host?: string;
-    port?: number;
-    database?: string;
-    tls?: boolean;
-  } = {}
-): StorageProviderProfile {
+export function createMongoStorageProfile(input: {
+  id?: string;
+  deployment?: StorageDeploymentMode;
+  uriEnv?: string;
+  uri?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  tls?: boolean;
+} = {}): StorageProviderProfile {
   const deployment = input.deployment ?? 'local';
   return {
     id: input.id ?? 'storage.mongodb.document',
@@ -570,18 +567,16 @@ export function createMongoStorageProfile(
   };
 }
 
-export function createRedisStorageProfile(
-  input: {
-    id?: string;
-    deployment?: StorageDeploymentMode;
-    uriEnv?: string;
-    uri?: string;
-    host?: string;
-    port?: number;
-    database?: string;
-    tls?: boolean;
-  } = {}
-): StorageProviderProfile {
+export function createRedisStorageProfile(input: {
+  id?: string;
+  deployment?: StorageDeploymentMode;
+  uriEnv?: string;
+  uri?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  tls?: boolean;
+} = {}): StorageProviderProfile {
   const deployment = input.deployment ?? 'local';
   return {
     id: input.id ?? 'storage.redis.messaging',
@@ -642,19 +637,16 @@ export function createKafkaStorageProfile(
   };
 }
 
-export function createSQLiteStorageProfile(
-  input: {
-    id?: string;
-    role?: Extract<StorageRole, 'source_of_truth' | 'event_log'>;
-    uri?: string;
-    database?: string;
-  } = {}
-): StorageProviderProfile {
+export function createSQLiteStorageProfile(input: {
+  id?: string;
+  role?: Extract<StorageRole, 'source_of_truth' | 'event_log'>;
+  uri?: string;
+  database?: string;
+} = {}): StorageProviderProfile {
   const role = input.role ?? 'source_of_truth';
-  const defaultDatabase =
-    role === 'event_log'
-      ? './data/runtime/events/hypha-events.sqlite'
-      : './data/runtime/structured/hypha.sqlite';
+  const defaultDatabase = role === 'event_log'
+    ? './data/runtime/events/hypha-events.sqlite'
+    : './data/runtime/structured/hypha.sqlite';
   return {
     id: input.id ?? (role === 'event_log' ? 'storage.sqlite.events' : 'storage.sqlite.structured'),
     version: '0.0.0',
@@ -675,13 +667,11 @@ export function createSQLiteStorageProfile(
   };
 }
 
-export function createLocalVectorStorageProfile(
-  input: {
-    id?: string;
-    uri?: string;
-    database?: string;
-  } = {}
-): StorageProviderProfile {
+export function createLocalVectorStorageProfile(input: {
+  id?: string;
+  uri?: string;
+  database?: string;
+} = {}): StorageProviderProfile {
   return {
     id: input.id ?? 'storage.local-vector.semantic',
     version: '0.0.0',
@@ -699,13 +689,11 @@ export function createLocalVectorStorageProfile(
   };
 }
 
-export function createFileArtifactStorageProfile(
-  input: {
-    id?: string;
-    uri?: string;
-    rootPath?: string;
-  } = {}
-): StorageProviderProfile {
+export function createFileArtifactStorageProfile(input: {
+  id?: string;
+  uri?: string;
+  rootPath?: string;
+} = {}): StorageProviderProfile {
   return {
     id: input.id ?? 'storage.file-artifact.local',
     version: '0.0.0',
@@ -852,9 +840,10 @@ function safeUrlHost(uri: string): string | undefined {
 
 function isLocalHost(host: string): boolean {
   const lower = host.toLowerCase();
-  return (
-    lower === 'localhost' || lower === '127.0.0.1' || lower === '::1' || lower.endsWith('.local')
-  );
+  return lower === 'localhost'
+    || lower === '127.0.0.1'
+    || lower === '::1'
+    || lower.endsWith('.local');
 }
 
 function withDeploymentCapabilities(
