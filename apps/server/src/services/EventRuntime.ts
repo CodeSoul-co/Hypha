@@ -63,7 +63,13 @@ import {
   type ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { classifyMemoryFailure } from '@hypha/memory';
+import { RedisToolContractSnapshotStore } from '@hypha/mcp';
 import { ReActRunner, type ReActAgentRuntime, type ReActAgentSpec } from '@hypha/kernel';
+import {
+  createEffectiveAgentCapabilitySnapshot,
+  type EffectiveAgentCapabilitySnapshotInput,
+  type LoadedSkillContext,
+} from '@hypha/skills';
 import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
 import {
   GovernedToolRunner,
@@ -73,6 +79,7 @@ import {
   ToolRegistry,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
+  type EffectiveAgentCapabilitySnapshot,
   type ToolCallResult,
   type ToolRunner,
   type ToolSpec,
@@ -131,6 +138,7 @@ type RuntimeAgentSpecInput = Partial<ReActAgentSpec> & {
 
 type ResolvedRuntimeAgentSpec = ReActAgentSpec & {
   promptResolution?: AgentPromptResolution;
+  activeSkills?: LoadedSkillContext[];
 };
 
 export interface StartRunInput {
@@ -506,6 +514,10 @@ class EventRuntimeService {
   private readonly toolRunner: GovernedToolRunner;
   private readonly toolSnapshotStore: ToolContractSnapshotStore;
   private readonly runToolSnapshots = new Map<string, Promise<string>>();
+  private readonly runCapabilitySnapshots = new Map<
+    string,
+    Readonly<EffectiveAgentCapabilitySnapshot>
+  >();
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
   constructor() {
@@ -519,9 +531,13 @@ class EventRuntimeService {
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
-    this.toolSnapshotStore = new FileToolContractSnapshotStore(
-      process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
-    );
+    const redis = getRedisClient();
+    this.toolSnapshotStore =
+      process.env.NODE_ENV === 'production' && redis
+        ? new RedisToolContractSnapshotStore(redis)
+        : new FileToolContractSnapshotStore(
+            process.env.HYPHA_TOOL_CONTRACT_SNAPSHOT_ROOT ?? `${eventDbPath}.tool-snapshots`
+          );
     const artifactPort = new ArtifactStoreToolPort(
       new FileArtifactStore({
         rootPath: process.env.HYPHA_TOOL_ARTIFACT_ROOT ?? `${eventDbPath}.tool-artifacts`,
@@ -531,7 +547,6 @@ class EventRuntimeService {
       process.env.HYPHA_TOOL_OBSERVATION_ROOT ?? `${eventDbPath}.tool-observations`
     );
     const toolCacheConfig = toolResultCacheConfig();
-    const redis = getRedisClient();
     const toolResultCache =
       toolCacheConfig.store === 'memory'
         ? new InMemoryToolResultCache({
@@ -601,10 +616,13 @@ class EventRuntimeService {
     return manager.listAgentPrompts();
   }
 
-  async registerAgentPrompt(spec: AgentPromptSpec): Promise<void> {
+  async registerAgentPrompt(
+    spec: AgentPromptSpec,
+    options: { expectedRevision?: number } = {}
+  ): Promise<AgentPromptSpec> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
-    manager.registerAgentPrompt(spec);
+    return manager.registerAgentPrompt(spec, options);
   }
 
   async unregisterAgentPrompt(id: string, version?: string): Promise<boolean> {
@@ -857,12 +875,48 @@ class EventRuntimeService {
           agentName: name,
           userId,
           sessionId,
+          tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+          domainId: this.runs.get(input.runId)?.domainPackId,
           promptRefs,
         });
-    const systemInstructions =
+    const baseSystemInstructions =
       explicitInstructions ??
       promptResolution?.instructions ??
       `You are ${name}. Be helpful, harmless, and honest.`;
+    const workflowState = asRecord(asRecord(spec.metadata)?.workflowState);
+    const activeSkills = spec.skillRefs?.length
+      ? await getSkillManager().resolveSkills({
+          agentSkillRefs: spec.skillRefs,
+          inputText: [...input.messages].reverse().find((message) => message.role === 'user')
+            ?.content,
+          allowedSkills: stringList(workflowState?.allowedSkills),
+          requiredSkills: stringList(workflowState?.requiredSkills),
+          availableToolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [],
+          metadata: spec.metadata,
+        })
+      : [];
+    const availableToolIds =
+      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const capabilityMetadata = asRecord(spec.metadata);
+    const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
+      runId: input.runId,
+      agentId: id,
+      principalId: userId,
+      tenantId: stringValue(asRecord(input.metadata)?.tenantId),
+      domainId: this.runs.get(input.runId)?.domainPackId,
+      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
+      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+      activeSkills,
+    });
+    this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
+    const skillInstructions = activeSkills.map(
+      (skill) =>
+        `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
+          .map((reference) => reference.content)
+          .filter(Boolean)
+          .join('\n')}\n</skill>`
+    );
+    const systemInstructions = mergeSystemPrompts(baseSystemInstructions, ...skillInstructions);
 
     return {
       ...spec,
@@ -877,6 +931,7 @@ class EventRuntimeService {
         this.resolveChatModel().model,
       systemInstructions,
       promptResolution,
+      activeSkills,
       toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
     };
   }
@@ -892,6 +947,8 @@ class EventRuntimeService {
     agentName: string;
     userId: string;
     sessionId: string;
+    tenantId?: string;
+    domainId?: string;
     promptRefs: AgentPromptRef[];
   }): Promise<AgentPromptResolution | undefined> {
     const variables = {
@@ -903,17 +960,17 @@ class EventRuntimeService {
       current_date: new Date().toISOString(),
     };
 
-    try {
-      const promptManager = getPromptManager();
-      await promptManager.ensureInitialized();
-      return promptManager.resolveAgentPrompts(input.promptRefs, variables);
-    } catch (error) {
-      logger.warn('Agent prompt template resolution failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return undefined;
+    const promptManager = getPromptManager();
+    await promptManager.ensureInitialized();
+    return promptManager.resolveAgentPrompts(input.promptRefs, {
+      variables,
+      principal: {
+        principalId: input.userId,
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        domainId: input.domainId,
+      },
+    });
   }
 
   async runReActChat(
@@ -1034,6 +1091,12 @@ class EventRuntimeService {
       messages: input.messages,
       memoryScope: { userId, sessionId },
       metadata: {
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1101,6 +1164,12 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
+        skills: agent.activeSkills?.map((skill) => ({
+          id: skill.id,
+          version: skill.version,
+          trustLevel: skill.trustLevel,
+          provenance: skill.provenance,
+        })),
         prompt: agent.promptResolution
           ? {
               refs: agent.promptRefs,
@@ -1291,6 +1360,7 @@ class EventRuntimeService {
     const invocationId = `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
     const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
+    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1301,10 +1371,16 @@ class EventRuntimeService {
         userId: input.userId,
         sessionId: this.runtimeSessionId(input.userId, input.sessionId),
         contractSnapshotRef,
+        capabilitySnapshotRef: effectiveCapabilities ? contractSnapshotRef : undefined,
+        agentId: effectiveCapabilities?.agentId,
+        tenantId: effectiveCapabilities?.tenantId,
         principal: {
           id: input.userId,
+          principalId: input.userId,
           type: 'user',
           userId: input.userId,
+          agentId: effectiveCapabilities?.agentId,
+          tenantId: effectiveCapabilities?.tenantId,
           permissionScopes: ['*'],
         },
       },
@@ -1458,7 +1534,8 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash: spec.sourceRef?.capabilityHash,
+      sourceCapabilityHash:
+        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -1467,6 +1544,7 @@ class EventRuntimeService {
       runId,
       createdAt,
       toolContracts,
+      effectiveCapabilities: this.runCapabilitySnapshots.get(runId),
       catalogRevision: hashToolContract(
         toolContracts.map((contract) => [contract.toolId, contract.toolRevision])
       ),
@@ -2930,6 +3008,41 @@ function asRecord(input: unknown): Record<string, unknown> | undefined {
   return input && typeof input === 'object' && !Array.isArray(input)
     ? (input as Record<string, unknown>)
     : undefined;
+}
+
+function stringList(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter((value): value is string => typeof value === 'string');
+}
+
+function capabilityConstraint(
+  source: Record<string, unknown> | undefined,
+  fallbackToolIds: string[],
+  defaultPolicyRef: string
+): EffectiveAgentCapabilitySnapshotInput['agent'] {
+  const memory = stringValue(source?.memoryAccess);
+  const sideEffect = stringValue(source?.maximumSideEffectLevel);
+  const memoryAccess = ['none', 'read', 'write', 'read_write'].includes(memory ?? '')
+    ? (memory as EffectiveAgentCapabilitySnapshot['memoryAccess'])
+    : 'none';
+  const maximumSideEffectLevel = [
+    'none',
+    'read',
+    'write',
+    'external_effect',
+    'irreversible',
+  ].includes(sideEffect ?? '')
+    ? (sideEffect as EffectiveAgentCapabilitySnapshot['maximumSideEffectLevel'])
+    : 'read';
+  return {
+    allowedToolIds:
+      stringList(source?.allowedToolIds) ?? stringList(source?.allowedTools) ?? fallbackToolIds,
+    allowedMCPServerIds: stringList(source?.allowedMCPServerIds),
+    memoryAccess,
+    allowedExecutionProfiles: stringList(source?.allowedExecutionProfiles) ?? [],
+    maximumSideEffectLevel,
+    policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
+  };
 }
 
 function inferToolSideEffect(
