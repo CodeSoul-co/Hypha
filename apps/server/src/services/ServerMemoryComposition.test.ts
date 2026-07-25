@@ -160,9 +160,11 @@ describe('resolveMongoTransactionMode', () => {
 
   it('uses explicit standalone mode and rejects invalid configuration', () => {
     expect(resolveMongoTransactionMode({})).toBe('disabled');
+    expect(resolveMongoTransactionMode({ setName: 'rs0' }, 'auto')).toBe('required');
+    expect(resolveMongoTransactionMode({}, 'auto')).toBe('disabled');
     expect(resolveMongoTransactionMode({}, 'preferred')).toBe('preferred');
     expect(() => resolveMongoTransactionMode({}, 'sometimes')).toThrow(
-      'must be required, preferred, or disabled'
+      'must be auto, required, preferred, or disabled'
     );
   });
 });

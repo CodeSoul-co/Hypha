@@ -64,6 +64,12 @@ lease, claim, event, and checkpoint evidence prevents stale workers or repeated 
 being treated as progress. See the [Runtime Model](docs/reference/runtime-model.md) and
 [Framework API](docs/api/framework.md).
 
+The durable Runtime graph is an explicit framework composition. The bundled Express server still
+uses its `EventRuntime` compatibility path and does not start the canonical session-command,
+continuation, timer, or recovery schedulers by default. Applications that require autonomous work
+to continue across process restarts must compose and own those workers explicitly; the default
+server must not be treated as a cross-restart continuous executor.
+
 ## Coordinated Recovery
 
 Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and

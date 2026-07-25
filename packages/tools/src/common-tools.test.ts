@@ -4,6 +4,7 @@ import {
   executeHashUtility,
   executeJsonUtility,
   executeTextUtility,
+  executeTimeUtility,
   sanitizeJsonValue,
 } from './common-tools';
 import { validateToolSpec } from './index';
@@ -14,6 +15,7 @@ describe('@hypha/tools common utility tools', () => {
       'utility.json',
       'utility.text',
       'utility.hash',
+      'utility.time',
     ]);
     expect(commonUtilityToolSpecs.every((spec) => spec.sideEffectLevel === 'none')).toBe(true);
     expect(
@@ -95,5 +97,47 @@ describe('@hypha/tools common utility tools', () => {
     expect(left.digest).toBe(right.digest);
     expect(left).toMatchObject({ algorithm: 'sha256', encoding: 'hex', inputBytes: 13 });
     expect(String(left.digest)).toHaveLength(64);
+  });
+
+  it('validates JSON schemas and supports bounded literal split/join', () => {
+    expect(
+      executeJsonUtility({
+        operation: 'validate',
+        value: { answer: 'ok' },
+        schema: {
+          type: 'object',
+          required: ['answer'],
+          properties: { answer: { type: 'string' } },
+          additionalProperties: false,
+        },
+      })
+    ).toEqual({ valid: true, errors: [] });
+    expect(executeTextUtility({ operation: 'split', text: 'a::b', separator: '::' })).toEqual({
+      parts: ['a', 'b'],
+      count: 2,
+      truncated: false,
+    });
+    expect(executeTextUtility({ operation: 'join', parts: ['a', 'b'], separator: '::' })).toEqual({
+      text: 'a::b',
+      count: 2,
+    });
+  });
+
+  it('records deterministic clock output for replay and formats explicit timezones', () => {
+    expect(
+      executeTimeUtility({ operation: 'now' }, () => new Date('2026-07-21T08:00:00.000Z'))
+    ).toEqual({
+      iso: '2026-07-21T08:00:00.000Z',
+      epochMs: 1784620800000,
+      replaySource: 'recorded-output',
+    });
+    expect(
+      executeTimeUtility({
+        operation: 'format',
+        value: '2026-07-21T08:00:00.000Z',
+        timeZone: 'Asia/Shanghai',
+        locale: 'en-US',
+      })
+    ).toMatchObject({ timeZone: 'Asia/Shanghai', iso: '2026-07-21T08:00:00.000Z' });
   });
 });

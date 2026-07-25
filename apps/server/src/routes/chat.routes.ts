@@ -195,48 +195,6 @@ router.post(
         content: msg.content,
       }));
 
-      // Execute skills (preprocessing)
-      const skillManager = getSkillManager();
-      let contextVariables: Record<string, unknown> = {};
-
-      if (skillManager) {
-        const currentMessage = {
-          id: messageId,
-          role: 'user' as const,
-          content: trimmedMessage,
-          timestamp: now(),
-        };
-
-        const skillContext = {
-          userId,
-          sessionId: session,
-          messages: history,
-          currentMessage,
-          variables: contextVariables,
-          metadata: { modelId: model, modelProvider: provider, agentId },
-        };
-
-        const processedContext = await skillManager.executeSkills(skillContext);
-        contextVariables = processedContext.variables || {};
-        await runtime.record(
-          runId,
-          'skill.selected',
-          {
-            agentId,
-            variableKeys: Object.keys(contextVariables),
-          },
-          'skills'
-        );
-
-        // Update the last message if modified
-        if (processedContext.currentMessage.content !== trimmedMessage) {
-          llmMessages[llmMessages.length - 1] = {
-            role: 'user',
-            content: processedContext.currentMessage.content,
-          };
-        }
-      }
-
       // Get available tools
       const toolManager = getToolManager();
       const tools = toolManager?.listTools() || [];
