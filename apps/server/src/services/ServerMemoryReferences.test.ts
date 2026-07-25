@@ -78,4 +78,42 @@ describe('Server Memory managed credential references', () => {
       }
     );
   });
+
+  it('resolves self-hosted Mem0 and Hindsight connections without persisting secrets', async () => {
+    const resolver = createServerMemoryReferenceResolver({
+      structuredStore,
+      environment: {
+        HYPHA_MEM0_OSS_URL: 'http://127.0.0.1:8765',
+        HYPHA_MEM0_OSS_API_KEY: 'mem0-local-secret',
+        HYPHA_HINDSIGHT_URL: 'http://127.0.0.1:8888',
+        HYPHA_HINDSIGHT_BEARER_TOKEN: 'hindsight-local-secret',
+      },
+    });
+
+    await expect(resolver.resolve('memory.connection.mem0-oss', 'connection')).resolves.toEqual({
+      baseUrl: 'http://127.0.0.1:8765',
+      apiKey: 'mem0-local-secret',
+      authMode: 'x-api-key',
+    });
+    await expect(
+      resolver.resolve('memory.connection.hindsight-local', 'connection')
+    ).resolves.toEqual({
+      baseUrl: 'http://127.0.0.1:8888',
+      bearerToken: 'hindsight-local-secret',
+    });
+  });
+
+  it('fails closed when an active self-hosted connection lacks its URL', async () => {
+    const resolver = createServerMemoryReferenceResolver({
+      structuredStore,
+      environment: {},
+    });
+
+    await expect(
+      resolver.resolve('memory.connection.mem0-oss', 'connection')
+    ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_NOT_INSTALLED' });
+    await expect(
+      resolver.resolve('memory.connection.hindsight-local', 'connection')
+    ).rejects.toMatchObject({ code: 'MEMORY_PROVIDER_NOT_INSTALLED' });
+  });
 });

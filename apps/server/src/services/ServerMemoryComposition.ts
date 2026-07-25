@@ -8,6 +8,8 @@ import {
   MemoryProviderTelemetry,
   MemoryRuntimeFactory,
   MongoStructuredStoreProvider,
+  createHindsightLocalMemoryProviderFactory,
+  createMem0OssMemoryProviderFactory,
   createMem0PlatformMemoryProviderFactory,
   createMemoryBankManagedProviderFactory,
   createNativeMemoryManagementProviderFactory,
@@ -246,12 +248,11 @@ export async function closeServerMemoryComposition(): Promise<void> {
 
 async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
   const mongo = getMongoConnection();
-  const redis = getRedisClient();
   const database = mongo?.connection.db;
-  if (!mongo || !database || !redis) {
+  if (!mongo || !database) {
     throw memoryError(
       'MEMORY_STORE_UNAVAILABLE',
-      'Server storage must be initialized before Memory composition.'
+      'MongoDB storage must be initialized before Memory composition.'
     );
   }
   const client = mongo.connection.getClient();
@@ -283,8 +284,26 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     'memory_external_mappings',
     'memory_external_provider_operations',
   ]);
-  const registry = new MemoryManagementProviderRegistry()
-    .register(
+  const configPath = path.resolve(
+    process.cwd(),
+    process.env.HYPHA_MEMORY_CONFIG_PATH?.trim() || 'configs/memory-profiles.yaml'
+  );
+  const document = YAML.parse(await fs.readFile(configPath, 'utf8')) as unknown;
+  const loader = new CanonicalMemoryRuntimeLoader(
+    createServerMemoryReferenceResolver({ structuredStore })
+  );
+  const loaded = await loader.load(document);
+  const selected = loaded.config.profiles[loaded.config.activeProfile];
+  const redis = getRedisClient();
+  if (selected.management.type === 'native' && !redis) {
+    throw memoryError(
+      'MEMORY_STORE_UNAVAILABLE',
+      'The active Native Memory profile requires initialized Redis storage.'
+    );
+  }
+  const registry = new MemoryManagementProviderRegistry();
+  if (redis) {
+    registry.register(
       createNativeMemoryManagementProviderFactory({
         structuredStore,
         redisClient: redis as unknown as RedisLikeWorkingMemoryClient,
@@ -293,7 +312,11 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
         ownerId: `server:${process.pid}`,
         workingMemoryNamespace: 'hypha:memory:working',
       })
-    )
+    );
+  }
+  registry
+    .register(createMem0OssMemoryProviderFactory())
+    .register(createHindsightLocalMemoryProviderFactory())
     .register(createMem0PlatformMemoryProviderFactory())
     .register(createMemoryBankManagedProviderFactory());
   let eventSequence = 0;
@@ -332,15 +355,6 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     providerCostEstimator: (operation, request) =>
       estimateServerMemoryOperation(operation, request, activeProviderType()),
   });
-  const configPath = path.resolve(
-    process.cwd(),
-    process.env.HYPHA_MEMORY_CONFIG_PATH?.trim() || 'configs/memory-profiles.yaml'
-  );
-  const document = YAML.parse(await fs.readFile(configPath, 'utf8')) as unknown;
-  const loader = new CanonicalMemoryRuntimeLoader(
-    createServerMemoryReferenceResolver({ structuredStore })
-  );
-  const loaded = await loader.load(document);
   const runtime = await factory.create(loaded.config, loaded.references);
   logger.info('Canonical Server Memory composition ready', {
     runtimeId: runtime.compositionReceipt.runtimeId,

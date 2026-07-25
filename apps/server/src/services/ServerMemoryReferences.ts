@@ -2,7 +2,9 @@ import {
   StructuredExternalMemoryMappingStore,
   StructuredExternalProviderOperationStore,
   memoryError,
+  type HindsightLocalConnection,
   type ManagedCredentialLease,
+  type Mem0OssConnection,
   type MemoryRuntimeReferenceResolver,
   type RenewableCredentialProvider,
   type StructuredStoreProvider,
@@ -72,11 +74,42 @@ export function createServerMemoryReferenceResolver(
         }
         return value;
       }
+      if (kind === 'connection') {
+        if (reference === 'memory.connection.mem0-oss') {
+          return resolveMem0OssConnection(environment);
+        }
+        if (reference === 'memory.connection.hindsight-local') {
+          return resolveHindsightLocalConnection(environment);
+        }
+      }
       if (reference === 'memory.mapping.durable') return mappingStore;
       if (reference === 'memory.operation.durable') return operationStore;
       return Object.freeze({ reference, kind });
     },
   };
+}
+
+function resolveMem0OssConnection(environment: NodeJS.ProcessEnv): Mem0OssConnection {
+  const baseUrl = readRequiredEnvironment(
+    environment,
+    'HYPHA_MEM0_OSS_URL',
+    'Mem0 OSS connection URL'
+  );
+  const apiKey = environment.HYPHA_MEM0_OSS_API_KEY?.trim();
+  return Object.freeze({
+    baseUrl,
+    ...(apiKey ? { apiKey, authMode: 'x-api-key' as const } : { authMode: 'none' as const }),
+  });
+}
+
+function resolveHindsightLocalConnection(environment: NodeJS.ProcessEnv): HindsightLocalConnection {
+  const baseUrl = readRequiredEnvironment(
+    environment,
+    'HYPHA_HINDSIGHT_URL',
+    'Hindsight local connection URL'
+  );
+  const bearerToken = environment.HYPHA_HINDSIGHT_BEARER_TOKEN?.trim();
+  return Object.freeze({ baseUrl, ...(bearerToken ? { bearerToken } : {}) });
 }
 
 export interface RotatingEnvironmentCredentialProviderOptions {
@@ -132,4 +165,19 @@ function readEnvironmentToken(environment: NodeJS.ProcessEnv, name: string): str
     );
   }
   return token;
+}
+
+function readRequiredEnvironment(
+  environment: NodeJS.ProcessEnv,
+  name: string,
+  label: string
+): string {
+  const value = environment[name]?.trim();
+  if (!value) {
+    throw memoryError(
+      'MEMORY_PROVIDER_NOT_INSTALLED',
+      `${label} environment is unavailable: ${name}`
+    );
+  }
+  return value;
 }
