@@ -14,6 +14,7 @@ import {
   extendDomainPack,
   initializeDomainSession,
   LocalDomainPackLoader,
+  loadDomainPackFile,
   parseDomainPackDocument,
   reasoningSpecDefinition,
   resolveWorkflowToolExecutionScope,
@@ -23,8 +24,42 @@ import {
   workflowSpecDefinition,
   type DomainPackSpec,
 } from './index';
+import { researchEvidenceDomainPackExample } from './research-evidence-example';
 
 describe('@hypha/domain workflow compiler', () => {
+  it('ships a read-bounded research Domain Pack with reviewed publication', () => {
+    const validated = validateDomainPackSpec(researchEvidenceDomainPackExample);
+    const compiled = compileDomainPackToHarnessedSystem(validated, {
+      agentRef: { id: 'agent.research', version: '1.0.0' },
+    });
+    const research = compiled.bindings.workflowStates.find(
+      (state) => state.stateId === 'Research'
+    );
+    const publish = compiled.bindings.workflowStates.find(
+      (state) => state.stateId === 'Publish'
+    );
+    const review = validated.workflows[0]?.states.find((state) => state.id === 'HumanReview');
+
+    expect(research).toMatchObject({
+      allowedTools: ['family.data.query', 'family.document.parse', 'family.git.inspect'],
+      permissionScopes: ['data.query', 'document.parse', 'git.read'],
+      capabilityLoadPolicy: 'lazy',
+    });
+    expect(publish).toMatchObject({
+      allowedTools: ['family.messaging.send'],
+      permissionScopes: ['messaging.send'],
+    });
+    expect(review?.humanReviewPolicy).toMatchObject({
+      required: true,
+      approverRole: 'research-publisher',
+    });
+    expect(validated.tools?.find((tool) => tool.id === 'family.messaging.send')).toMatchObject({
+      sideEffectLevel: 'external_effect',
+      humanApprovalPolicy: { required: true },
+      idempotencyPolicy: { mode: 'required' },
+    });
+  });
+
   it('compiles a DomainPack WorkflowSpec into an FSMProcessSpec', () => {
     const domainPack: DomainPackSpec = {
       id: 'minimal',
@@ -842,6 +877,33 @@ defaultWorkflow: workflow.file
     }
   });
 
+  it('loads and compiles the shipped minimal pack with pinned Prompt and Tool profiles', async () => {
+    const filePath = path.resolve(process.cwd(), 'configs/domain-packs/minimal.domain.yaml');
+    const pack = await loadDomainPackFile(filePath);
+    expect(pack.sessionProfiles?.[0]?.defaultToolProfileRef).toBe('tools.minimal.search');
+    expect(pack.toolProfiles).toEqual([
+      expect.objectContaining({
+        id: 'tools.minimal.search',
+        toolRefs: [{ id: 'common.search', version: '1.0.0' }],
+        contractSnapshotMode: 'run',
+      }),
+    ]);
+    const compiled = compileDomainPackToHarnessedSystem(pack, {
+      sessionProfileId: 'session.local',
+      agentRef: { id: 'agent.minimal', version: '1.0.0' },
+    });
+    const reasoning = compiled.bindings.workflowStates.find((state) => state.stateId === 'Reasoning');
+    expect(reasoning).toMatchObject({
+      toolProfileRefs: [{ id: 'tools.minimal.search', version: '1.0.0' }],
+      allowedToolRefs: [{ id: 'common.search', version: '1.0.0' }],
+      humanApprovalPolicyRef: { id: 'policy.search-approval', version: '1.0.0' },
+      permissionScopes: ['search.query'],
+      requiredPromptRefs: [
+        expect.objectContaining({ id: 'prompt.agent.default', version: '1.0.0' }),
+      ],
+    });
+  });
+
   it('rejects broken internal DomainPack references', () => {
     expect(() =>
       validateDomainPackSpec({
@@ -935,5 +997,65 @@ defaultWorkflow: workflow.file
         ],
       })
     ).toThrow(/Workflow state memory policy not found/);
+  });
+
+  it('compiles prompt refs as state-scoped bindings and emits a deterministic audit hash', () => {
+    const first = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '1.0.0' },
+    });
+    const second = compileDomainPackToHarnessedSystem(domainPackSpecDefinition.example, {
+      agentRef: { id: 'agent.default', version: '1.0.0' },
+    });
+
+    expect(first.agentPatch.promptRefs).toEqual([
+      { id: 'prompt.agent.default', version: '1.0.0', required: true, priority: 0 },
+    ]);
+    expect(
+      first.bindings.workflowStates.find((state) => state.stateId === 'Reasoning')
+    ).toMatchObject({
+      allowedPromptRefs: [{ id: 'prompt.agent.default', version: '1.0.0' }],
+      requiredPromptRefs: [
+        { id: 'prompt.agent.default', version: '1.0.0', required: true, priority: 0 },
+      ],
+    });
+    expect(first.audit.compilationHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(first.audit).toEqual(second.audit);
+
+    const changed = compileDomainPackToHarnessedSystem(
+      { ...domainPackSpecDefinition.example, version: '0.0.1' },
+      { agentRef: { id: 'agent.default', version: '1.0.0' } }
+    );
+    expect(changed.audit.compilationHash).not.toBe(first.audit.compilationHash);
+  });
+
+  it('rejects prompt bindings outside the domain and workflow allowlists', () => {
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        defaultPromptRefs: [{ id: 'prompt.unknown', version: '1.0.0', required: true }],
+      })
+    ).toThrow(/outside allowedPromptRefs/);
+
+    expect(() =>
+      validateDomainPackSpec({
+        ...domainPackSpecDefinition.example,
+        workflows: [
+          {
+            ...domainPackSpecDefinition.example.workflows[0],
+            states: domainPackSpecDefinition.example.workflows[0].states.map((state) =>
+              state.id === 'Reasoning'
+                ? {
+                    ...state,
+                    allowedPromptRefs: [],
+                    requiredPromptRefs: [
+                      { id: 'prompt.agent.default', version: '1.0.0', required: true },
+                    ],
+                  }
+                : state
+            ),
+          },
+        ],
+      })
+    ).toThrow(/requires prompt outside state allowedPromptRefs/);
   });
 });
