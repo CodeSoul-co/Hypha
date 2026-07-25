@@ -20,10 +20,17 @@ import type {
 const metadataSchema = z.record(z.unknown());
 const unitIntervalSchema = z.number().min(0).max(1);
 
-export const paginationRequestSchema: ZodType<PaginationRequest> = z.object({
-  cursor: z.string().min(1).optional(),
-  limit: z.number().int().positive().optional(),
-});
+export const paginationRequestSchema: ZodType<PaginationRequest> = z
+  .object({
+    cursor: z.string().min(1).optional(),
+    limit: z.number().int().positive().optional(),
+    maxPages: z.number().int().positive().optional(),
+    maxItems: z.number().int().positive().optional(),
+    maxBytes: z.number().int().positive().optional(),
+    maxDurationMs: z.number().int().positive().optional(),
+    maxCalls: z.number().int().positive().optional(),
+  })
+  .strict();
 
 export const memorySearchFilterSchema: ZodType<MemorySearchFilter> = z.object({
   ids: z.array(z.string().min(1)).optional(),

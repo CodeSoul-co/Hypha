@@ -13,8 +13,12 @@ import { initializeSkillManager, destroySkillManager } from './core/skills/Skill
 import { initializeToolManager, destroyToolManager } from './core/tools/ToolManager';
 import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow/WorkflowEngine';
 import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
-import { getTemporaryMemory } from './core/memory/TemporaryMemory';
-import { getPermanentMemory } from './core/memory/PermanentMemory';
+import {
+  closeServerMemoryComposition,
+  getMemoryApplicationService,
+  getServerMemoryComposition,
+  initializeServerMemoryComposition,
+} from './services/ServerMemoryComposition';
 import {
   initSingleUserOwner,
   getSingleUserToken,
@@ -138,9 +142,14 @@ class Application {
     // previous behaviour was to silently boot with a broken default.
     await this.ensureDefaultProviderAvailable();
 
-    // Initialize Memory
-    const tempMemory = getTemporaryMemory();
-    await tempMemory.startCleanup();
+    // Initialize the unique canonical Memory application service after its
+    // MongoDB and Redis dependencies are ready.
+    await initializeServerMemoryComposition();
+
+    // Bind every Memory-capable Server subsystem to that same service instance.
+    getMemoryApplicationService('tool');
+    getMemoryApplicationService('workflow');
+    getMemoryApplicationService('harness');
 
     // Initialize Skill Manager
     await initializeSkillManager();
@@ -273,7 +282,27 @@ class Application {
       logger.error('  ❌ Messaging  │ Error:', err);
     }
 
-    // 3. Check API /health endpoint
+    // 3. Check canonical Memory composition and its active provider.
+    try {
+      const memoryReadiness = await getServerMemoryComposition().readiness();
+      checks.push({
+        name: 'Memory',
+        status: memoryReadiness.ready ? 'pass' : 'fail',
+        detail:
+          memoryReadiness.message ??
+          `${memoryReadiness.state}/${memoryReadiness.providerStatus ?? 'unavailable'}`,
+      });
+      if (memoryReadiness.ready) {
+        logger.info(`  Memory      | ${memoryReadiness.providerStatus}`);
+      } else {
+        logger.error(`  Memory      | ${memoryReadiness.state}`);
+      }
+    } catch (err) {
+      checks.push({ name: 'Memory', status: 'fail', detail: String(err) });
+      logger.error('  Memory      | Error:', err);
+    }
+
+    // 4. Check API /health endpoint
     try {
       const response = await fetch(`${apiBase}/health`);
       if (response.ok) {
@@ -292,7 +321,7 @@ class Application {
       logger.error('  ❌ API Health │ Error:', err);
     }
 
-    // 4. Check LLM Providers
+    // 5. Check LLM Providers
     try {
       const llmManager = getLLMManager();
       const llmHealth = await llmManager.healthCheck();
@@ -394,7 +423,7 @@ class Application {
     }
 
     // Cleanup services
-    await getTemporaryMemory().stopCleanup();
+    await closeServerMemoryComposition();
     await destroyLLM();
     await destroySkillManager();
     await destroyToolManager();

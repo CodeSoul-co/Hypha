@@ -11,7 +11,8 @@ export type LocalProcessOutcome =
   | 'cancelled'
   | 'timed_out'
   | 'idle_timed_out'
-  | 'output_limit';
+  | 'output_limit'
+  | 'termination_failed';
 
 export interface LocalProcessRunRequest {
   executable: string;
@@ -44,12 +45,14 @@ export interface LocalProcessRunResult {
   terminationMechanism: 'posix_process_group' | 'windows_taskkill';
   processTreeTerminationVerified: boolean;
   startError?: Error;
+  terminationError?: Error;
 }
 
 export interface LocalProcessSupervisorOptions {
   now?: () => string;
   monotonicNow?: () => number;
   taskkillPath?: string;
+  kill?: (pid: number, signal: NodeJS.Signals | 0) => void;
 }
 
 export class LocalProcessSupervisor {
@@ -60,11 +63,13 @@ export class LocalProcessSupervisor {
   private readonly now: () => string;
   private readonly monotonicNow: () => number;
   private readonly taskkillPath: string;
+  private readonly kill: (pid: number, signal: NodeJS.Signals | 0) => void;
 
   constructor(options: LocalProcessSupervisorOptions = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.taskkillPath = options.taskkillPath ?? 'taskkill.exe';
+    this.kill = options.kill ?? ((pid, signal) => process.kill(pid, signal));
   }
 
   run(request: LocalProcessRunRequest): Promise<LocalProcessRunResult> {
@@ -77,6 +82,7 @@ export class LocalProcessSupervisor {
       let terminationOutcome: Exclude<LocalProcessOutcome, 'exited' | 'start_failed'> | undefined;
       let outputLimitStream: LocalProcessRunResult['outputLimitStream'];
       let terminationPromise: Promise<boolean> | undefined;
+      let terminationError: Error | undefined;
       let timeout: NodeJS.Timeout | undefined;
       let idleTimeout: NodeJS.Timeout | undefined;
       const output = new LocalProcessOutputCollector({
@@ -91,7 +97,18 @@ export class LocalProcessSupervisor {
         if (terminationOutcome) return;
         terminationOutcome = outcome;
         if (child.pid) {
-          terminationPromise = this.terminateScope(child.pid, request.gracefulTerminationMs);
+          terminationPromise = this.terminateScope(child.pid, request.gracefulTerminationMs).catch(
+            (error) => {
+              terminationError = asError(error);
+              return false;
+            }
+          );
+          void terminationPromise.then((verified) => {
+            if (!verified && process.platform !== 'win32' && !settled) {
+              terminationError ??= new Error('POSIX process group could not be terminated.');
+              void finish(null, null);
+            }
+          });
         }
       };
 
@@ -142,7 +159,11 @@ export class LocalProcessSupervisor {
         const capturedOutput = output.snapshot();
         const completedAt = this.now();
         resolve({
-          outcome: startError ? 'start_failed' : (terminationOutcome ?? 'exited'),
+          outcome: startError
+            ? 'start_failed'
+            : terminationError
+              ? 'termination_failed'
+              : (terminationOutcome ?? 'exited'),
           exitCode,
           ...(signal ? { signal } : {}),
           stdout: capturedOutput.stdout,
@@ -157,6 +178,7 @@ export class LocalProcessSupervisor {
           terminationMechanism: this.terminationMechanism,
           processTreeTerminationVerified: terminationVerified,
           ...(startError ? { startError } : {}),
+          ...(terminationError ? { terminationError } : {}),
         });
       };
 
@@ -206,10 +228,10 @@ export class LocalProcessSupervisor {
   }
 
   private async terminatePosixScope(pid: number, gracefulTerminationMs: number): Promise<boolean> {
-    signalPosixScope(pid, 'SIGTERM');
+    this.signalPosixScope(pid, 'SIGTERM');
     await delay(gracefulTerminationMs);
     if (this.isPosixScopeAlive(pid)) {
-      signalPosixScope(pid, 'SIGKILL');
+      this.signalPosixScope(pid, 'SIGKILL');
       await delay(Math.min(100, Math.max(10, gracefulTerminationMs)));
     }
     return !this.isPosixScopeAlive(pid);
@@ -218,10 +240,31 @@ export class LocalProcessSupervisor {
   private isPosixScopeAlive(pid: number): boolean {
     if (process.platform === 'win32') return false;
     try {
-      process.kill(-pid, 0);
+      this.kill(-pid, 0);
       return true;
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  }
+
+  private signalPosixScope(pid: number, signal: NodeJS.Signals): void {
+    try {
+      this.kill(-pid, signal);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return;
+      if (code !== 'EPERM') throw error;
+    }
+
+    // macOS can transiently deny a process-group signal while the direct
+    // child is still owned by this process. Fall back to the child so timeout
+    // and cancellation always make progress, then verify the whole group
+    // disappeared before claiming process-tree termination.
+    try {
+      this.kill(pid, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
     }
   }
 
@@ -229,7 +272,7 @@ export class LocalProcessSupervisor {
     await delay(gracefulTerminationMs);
     await this.runTaskkill(pid, true);
     try {
-      process.kill(pid, 'SIGKILL');
+      this.kill(pid, 'SIGKILL');
     } catch {
       // taskkill may already have removed the direct child.
     }
@@ -267,14 +310,6 @@ function validateRunRequest(request: LocalProcessRunRequest): void {
     (!Number.isInteger(request.idleTimeoutMs) || request.idleTimeoutMs <= 0)
   ) {
     throw new Error('idleTimeoutMs must be a positive integer when provided.');
-  }
-}
-
-function signalPosixScope(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
 }
 

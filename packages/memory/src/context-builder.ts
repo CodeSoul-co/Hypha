@@ -20,6 +20,7 @@ import {
   DeterministicExtractiveContextCompactor,
   type ContextCompactor,
 } from './context-compaction';
+import type { ContextArtifactRef, ContextArtifactStore } from './context-artifacts';
 
 export class CalibratedCharacterTokenEstimator implements TokenEstimator {
   readonly id = 'tokenizer.calibrated-character-v1';
@@ -49,7 +50,8 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
     private readonly tokenizer: TokenEstimator = new CalibratedCharacterTokenEstimator(),
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly compactor: ContextCompactor = new DeterministicExtractiveContextCompactor(),
-    private readonly policy: ContextItemPolicyEvaluator = new MetadataContextItemPolicyEvaluator()
+    private readonly policy: ContextItemPolicyEvaluator = new MetadataContextItemPolicyEvaluator(),
+    private readonly artifactStore?: ContextArtifactStore
   ) {}
 
   async build(request: ContextBuildInput): Promise<ContextBundle> {
@@ -104,21 +106,19 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
       );
     const budgetPlan = createBudgetPlan(request, this.tokenizer.id);
     const selected: ContextItem[] = [];
+    const artifactRefs: ContextArtifactRef[] = [];
     const omittedItemIds: string[] = [];
-    const truncationRecords: Array<{
-      itemId: string;
-      originalTokens: number;
-      retainedTokens: number;
-      method: 'drop' | 'truncate' | 'summarize';
-      reason: string;
-    }> = [];
+    const truncationRecords: ContextEnvelope['truncationRecords'] = [];
     let remaining = budgetPlan.dynamicTokens;
+    let remainingCharacters = request.profile.maxCharacters ?? Number.MAX_SAFE_INTEGER;
+    let remainingBytes = request.profile.maxSerializedBytes ?? Number.MAX_SAFE_INTEGER;
+    const profileRevision = request.profile.revision ?? request.profile.version;
     const sourceRemaining = new Map(
       budgetPlan.sourceBudgets.map((budget) => [budget.sourceId, budget.maxTokens])
     );
 
     for (const rankedItem of ranked.slice(0, request.profile.maxItems ?? ranked.length)) {
-      const item = normalizeItem(
+      let item = normalizeItem(
         applyTrustBoundary(rankedItem.item, request.profile),
         this.tokenizer
       );
@@ -128,52 +128,85 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
       const sourceBudget = sourceSpec
         ? budgetPlan.sourceBudgets.find((budget) => budget.sourceId === sourceSpec.id)
         : undefined;
+      const required = Boolean(item.required || sourceSpec?.required);
+      if (required !== Boolean(item.required)) item = { ...item, required };
       const sourceAvailable = sourceBudget
         ? (sourceRemaining.get(sourceBudget.sourceId) ?? 0)
         : remaining;
       const maxTokens = Math.min(sourceAvailable, remaining);
-      if (item.tokenEstimate <= maxTokens) {
+      if (fitsLimits(item, maxTokens, remainingCharacters, remainingBytes)) {
         selected.push(item);
         remaining -= item.tokenEstimate;
+        remainingCharacters -= item.text.length;
+        remainingBytes -= serializedItemBytes(item);
         if (sourceBudget) {
           sourceRemaining.set(sourceBudget.sourceId, sourceAvailable - item.tokenEstimate);
         }
         continue;
       }
-      if (item.required && request.profile.truncation.preserveRequiredSources) {
-        if (maxTokens <= 0) throw new Error(`Required context item cannot fit budget: ${item.id}`);
-        const truncated = truncateItem(
-          item,
-          maxTokens,
-          request.profile.truncation.truncationMarker ?? '[truncated]',
-          this.tokenizer
-        );
-        selected.push(truncated);
-        remaining -= truncated.tokenEstimate;
+
+      const overflowPolicy = sourceBudget?.overflowPolicy ?? (required ? 'truncate' : 'drop');
+      if (overflowPolicy === 'fail') {
+        throw new Error(`Context item exceeded a fail-closed budget: ${item.id}`);
+      }
+      if (overflowPolicy === 'spill_to_artifact') {
+        if (!this.artifactStore) {
+          throw new Error(`Context Artifact store is required to spill item: ${item.id}`);
+        }
+        const reference = await this.artifactStore.put({
+          content: item.text,
+          scopeHash,
+          profileRevision,
+          sourceItemId: item.id,
+          createdAt: this.now(),
+        });
+        const spilled = createArtifactDescriptorItem(item, reference, this.tokenizer);
+        if (!fitsLimits(spilled, maxTokens, remainingCharacters, remainingBytes)) {
+          await this.artifactStore.delete(reference);
+          if (required) {
+            throw new Error(`Required Context Artifact descriptor cannot fit budget: ${item.id}`);
+          }
+          omitForBudget(item, omittedItemIds, rejectedItems, truncationRecords);
+          continue;
+        }
+        selected.push(spilled);
+        artifactRefs.push(reference);
+        remaining -= spilled.tokenEstimate;
+        remainingCharacters -= spilled.text.length;
+        remainingBytes -= serializedItemBytes(spilled);
         if (sourceBudget) {
-          sourceRemaining.set(sourceBudget.sourceId, sourceAvailable - truncated.tokenEstimate);
+          sourceRemaining.set(sourceBudget.sourceId, sourceAvailable - spilled.tokenEstimate);
         }
         truncationRecords.push({
           itemId: item.id,
           originalTokens: item.tokenEstimate,
-          retainedTokens: truncated.tokenEstimate,
-          method: 'truncate',
-          reason: 'required_source',
+          retainedTokens: spilled.tokenEstimate,
+          method: 'spill_to_artifact',
+          reason: 'content_externalized',
         });
-      } else if (
+        continue;
+      }
+
+      const shouldTruncate =
+        overflowPolicy === 'truncate' ||
+        (required && request.profile.truncation.preserveRequiredSources) ||
         request.profile.truncation.method === 'truncate_items' ||
-        request.profile.truncation.method === 'hybrid'
-      ) {
-        const minimum = request.profile.truncation.minItemTokens ?? 8;
-        if (maxTokens >= minimum) {
-          const truncated = truncateItem(
-            item,
-            maxTokens,
-            request.profile.truncation.truncationMarker ?? '[truncated]',
-            this.tokenizer
-          );
+        request.profile.truncation.method === 'hybrid';
+      if (shouldTruncate) {
+        const truncated = truncateItemToLimits(
+          item,
+          maxTokens,
+          remainingCharacters,
+          remainingBytes,
+          request.profile.truncation.truncationMarker ?? '[truncated]',
+          this.tokenizer
+        );
+        const minimum = required ? 1 : (request.profile.truncation.minItemTokens ?? 8);
+        if (truncated && truncated.tokenEstimate >= minimum) {
           selected.push(truncated);
           remaining -= truncated.tokenEstimate;
+          remainingCharacters -= truncated.text.length;
+          remainingBytes -= serializedItemBytes(truncated);
           if (sourceBudget) {
             sourceRemaining.set(sourceBudget.sourceId, sourceAvailable - truncated.tokenEstimate);
           }
@@ -182,32 +215,16 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
             originalTokens: item.tokenEstimate,
             retainedTokens: truncated.tokenEstimate,
             method: 'truncate',
-            reason: 'budget_exceeded',
+            reason: required ? 'required_source' : 'budget_exceeded',
           });
-        } else {
-          omittedItemIds.push(item.id);
-          rejectedItems.push({ itemId: item.id, reason: 'budget_exceeded' });
-          truncationRecords.push({
-            itemId: item.id,
-            originalTokens: item.tokenEstimate,
-            retainedTokens: 0,
-            method: 'drop',
-            reason: 'budget_exceeded',
-          });
+          continue;
         }
-      } else {
-        omittedItemIds.push(item.id);
-        rejectedItems.push({ itemId: item.id, reason: 'budget_exceeded' });
-        truncationRecords.push({
-          itemId: item.id,
-          originalTokens: item.tokenEstimate,
-          retainedTokens: 0,
-          method: 'drop',
-          reason: 'budget_exceeded',
-        });
       }
+      if (required) {
+        throw new Error(`Required context item cannot fit budget: ${item.id}`);
+      }
+      omitForBudget(item, omittedItemIds, rejectedItems, truncationRecords);
     }
-
     const requiredMissing = request.profile.sources
       .filter((source) => source.required)
       .filter(
@@ -241,9 +258,11 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
           applyTrustBoundary(compacted, request.profile),
           this.tokenizer
         );
-        if (bounded.tokenEstimate <= remaining) {
+        if (fitsLimits(bounded, remaining, remainingCharacters, remainingBytes)) {
           selected.push(bounded);
           remaining -= bounded.tokenEstimate;
+          remainingCharacters -= bounded.text.length;
+          remainingBytes -= serializedItemBytes(bounded);
           for (const item of omitted) {
             truncationRecords.push({
               itemId: item.id,
@@ -260,7 +279,11 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
     const sourceHashes = Object.fromEntries(
       request.profile.sources.map((source) => [
         source.id,
-        sha256(selected.filter((item) => item.sourceId === source.id).map((item) => item.text)),
+        sha256(
+          selected
+            .filter((item) => item.sourceId === source.id)
+            .map((item) => item.artifactRef?.contentHash ?? item.text)
+        ),
       ])
     );
     const contextHash = sha256({
@@ -269,6 +292,7 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
       items: selected.map((item) => ({
         id: item.id,
         text: item.text,
+        artifactHash: item.artifactRef?.contentHash,
         provenance: item.provenance,
       })),
       budgetPlan,
@@ -288,7 +312,15 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
       sourceHashes,
       contextHash,
       createdAt: this.now(),
-      metadata: { scopeHash, budgetPlan, truncationRecords },
+      artifactRefs,
+      metadata: {
+        scopeHash,
+        budgetPlan,
+        truncationRecords,
+        serializedBytes: request.profile.maxSerializedBytes
+          ? request.profile.maxSerializedBytes - remainingBytes
+          : selected.reduce((sum, item) => sum + serializedItemBytes(item), 0),
+      },
     };
     this.explanations.set(contextHash, {
       contextHash,
@@ -311,14 +343,40 @@ export class DefaultMemoryContextBuilder implements MemoryContextBuilder {
 }
 
 export class DefaultContextInjectionGateway implements ContextInjectionGateway {
-  constructor(private readonly now: () => string = () => new Date().toISOString()) {}
+  constructor(
+    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly artifactStore?: ContextArtifactStore
+  ) {}
 
   async buildEnvelope(
     bundle: ContextBundle,
     profile: ContextProfileSpec
   ): Promise<ContextEnvelope> {
+    const profileRevision = profile.revision ?? profile.version;
+    if (bundle.profileRevision !== profileRevision) {
+      throw new Error('Context bundle profile revision does not match the injection profile.');
+    }
     const explanationBudget = bundle.metadata?.budgetPlan as ContextBudgetPlan | undefined;
     const budgetPlan = explanationBudget ?? fallbackBudgetPlan(profile);
+    const scopeHash =
+      typeof bundle.metadata?.scopeHash === 'string' ? bundle.metadata.scopeHash : '';
+    const itemArtifactRefs = bundle.items
+      .map((item) => item.artifactRef)
+      .filter((reference): reference is ContextArtifactRef => Boolean(reference));
+    const artifactRefs = bundle.artifactRefs ?? itemArtifactRefs;
+    if (artifactRefs.length > 0 && (!this.artifactStore || !scopeHash)) {
+      throw new Error('Context Artifact validation requires an Artifact store and scope binding.');
+    }
+    const declaredArtifactIds = new Set(artifactRefs.map((reference) => reference.id));
+    if (itemArtifactRefs.some((reference) => !declaredArtifactIds.has(reference.id))) {
+      throw new Error('Context bundle omitted an item Artifact reference.');
+    }
+    for (const reference of artifactRefs) {
+      await this.artifactStore!.read(reference, {
+        scopeHash,
+        profileRevision: bundle.profileRevision,
+      });
+    }
     const systemSegments: PromptSegment[] = [];
     const dataSegments: PromptSegment[] = [];
     const provenanceIndex: ContextEnvelope['provenanceIndex'] = {};
@@ -338,6 +396,7 @@ export class DefaultContextInjectionGateway implements ContextInjectionGateway {
               : 'trusted_data',
         sourceRefs: [sourceRef],
         required: item.required,
+        artifactRefs: item.artifactRef ? [item.artifactRef] : undefined,
       };
       if (item.sourceType === 'system') systemSegments.push(segment);
       else dataSegments.push(segment);
@@ -372,6 +431,7 @@ export class DefaultContextInjectionGateway implements ContextInjectionGateway {
       conflicts: bundle.conflicts,
       totalTokens: bundle.totalTokens,
       createdAt: this.now(),
+      artifactRefs,
     };
   }
 }
@@ -431,7 +491,7 @@ function createBudgetPlan(request: ContextBuildInput, tokenizerId: string): Cont
     sourceId: source.id,
     maxTokens: source.maxTokens ?? dynamicTokens,
     required: source.required ?? false,
-    overflowPolicy: source.required ? 'truncate' : 'drop',
+    overflowPolicy: source.overflowPolicy ?? (source.required ? 'truncate' : 'drop'),
   }));
   return {
     totalAvailableTokens,
@@ -455,17 +515,81 @@ function applyTrustBoundary(item: ContextItem, profile: ContextProfileSpec): Con
   return item;
 }
 
-function truncateItem(
+function fitsLimits(
   item: ContextItem,
   maxTokens: number,
-  marker: string,
-  tokenizer: TokenEstimator
-): ContextItem {
-  const maxCharacters = Math.max(0, maxTokens * 4 - marker.length);
-  const text = `${item.text.slice(0, maxCharacters)}${marker}`;
-  return { ...item, text, tokenEstimate: tokenizer.estimate(text) };
+  maxCharacters: number,
+  maxBytes: number
+): boolean {
+  return (
+    item.tokenEstimate <= maxTokens &&
+    item.text.length <= maxCharacters &&
+    serializedItemBytes(item) <= maxBytes
+  );
 }
 
+function serializedItemBytes(item: ContextItem): number {
+  return Buffer.byteLength(JSON.stringify(item), 'utf8');
+}
+
+function truncateItemToLimits(
+  item: ContextItem,
+  maxTokens: number,
+  maxCharacters: number,
+  maxBytes: number,
+  marker: string,
+  tokenizer: TokenEstimator
+): ContextItem | null {
+  if (maxTokens <= 0 || maxCharacters <= 0 || maxBytes <= 0) return null;
+  let low = 0;
+  let high = Math.min(item.text.length, maxCharacters);
+  let best: ContextItem | null = null;
+  while (low <= high) {
+    const retained = Math.floor((low + high) / 2);
+    const text =
+      retained < item.text.length ? `${item.text.slice(0, retained)}${marker}` : item.text;
+    const candidate = { ...item, text, content: text, tokenEstimate: tokenizer.estimate(text) };
+    if (fitsLimits(candidate, maxTokens, maxCharacters, maxBytes)) {
+      best = candidate;
+      low = retained + 1;
+    } else {
+      high = retained - 1;
+    }
+  }
+  return best;
+}
+
+function createArtifactDescriptorItem(
+  item: ContextItem,
+  reference: ContextArtifactRef,
+  tokenizer: TokenEstimator
+): ContextItem {
+  const text = `[Context Artifact ${reference.id} hash=${reference.contentHash} bytes=${reference.sizeBytes}]`;
+  return {
+    ...item,
+    content: { artifactRef: reference },
+    text,
+    tokenEstimate: tokenizer.estimate(text),
+    artifactRef: reference,
+  };
+}
+
+function omitForBudget(
+  item: ContextItem,
+  omittedItemIds: string[],
+  rejectedItems: ContextRejectedItem[],
+  truncationRecords: ContextEnvelope['truncationRecords']
+): void {
+  omittedItemIds.push(item.id);
+  rejectedItems.push({ itemId: item.id, reason: 'budget_exceeded' });
+  truncationRecords.push({
+    itemId: item.id,
+    originalTokens: item.tokenEstimate,
+    retainedTokens: 0,
+    method: 'drop',
+    reason: 'budget_exceeded',
+  });
+}
 function looksInstructionLike(text: string): boolean {
   return /(ignore (all|previous)|system prompt|developer message|follow these instructions)/i.test(
     text
@@ -485,7 +609,7 @@ function fallbackBudgetPlan(profile: ContextProfileSpec): ContextBudgetPlan {
       sourceId: source.id,
       maxTokens: source.maxTokens ?? profile.maxTokens,
       required: source.required ?? false,
-      overflowPolicy: source.required ? 'truncate' : 'drop',
+      overflowPolicy: source.overflowPolicy ?? (source.required ? 'truncate' : 'drop'),
     })),
     tokenizerRef: { id: 'tokenizer.unknown', version: '1.0.0' },
     safetyMarginTokens: 0,
