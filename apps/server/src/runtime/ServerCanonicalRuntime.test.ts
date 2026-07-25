@@ -73,10 +73,41 @@ describe('ServerCanonicalRuntime', () => {
     });
   });
 
-  function createService(legacyEvents: InMemoryEventStore, maxLegacyEvents = 100) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-canonical-runtime-'));
+  it('replaces an incomplete imported history before retrying canonical cutover', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-canonical-runtime-retry-'));
+    const filename = path.join(root, 'runtime.sqlite');
+    const incomplete = new InMemoryEventStore();
+    await incomplete.append(event('legacy-started', 'run.started'));
+    const first = createService(incomplete, 100, filename);
+
+    await expect(first.initialize()).rejects.toMatchObject({
+      code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+    });
+
+    const corrected = new InMemoryEventStore();
+    await corrected.append(event('legacy-created', 'run.created'));
+    await corrected.append(event('legacy-started', 'run.started'));
+    const retried = createService(corrected, 100, filename);
+    const composition = await retried.initialize();
+
+    expect(composition.migration).toMatchObject({
+      resetImportedEvents: 1,
+      migratedEvents: 2,
+      quarantinedEvents: 0,
+    });
+    await expect(composition.events.list({ runId: 'run-1' })).resolves.toHaveLength(2);
+  });
+
+  function createService(
+    legacyEvents: InMemoryEventStore,
+    maxLegacyEvents = 100,
+    filename = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-canonical-runtime-')),
+      'runtime.sqlite'
+    )
+  ) {
     const service = new ServerCanonicalRuntime({
-      filename: path.join(root, 'runtime.sqlite'),
+      filename,
       legacyEvents,
       maxLegacyEvents,
       auditLimits: {
