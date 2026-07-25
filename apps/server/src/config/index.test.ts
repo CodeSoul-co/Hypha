@@ -4,6 +4,7 @@ import {
   inferenceConfig,
   redisConfig,
   reloadConfig,
+  runtimeConfig,
   storageConfig,
   toolResultCacheConfig,
 } from './index';
@@ -122,6 +123,17 @@ describe('configuration storage taxonomy', () => {
     expect(profiles).toContain('storage.redis.messaging');
     expect(profiles).toContain('storage.sqlite.events');
     expect(profiles).toContain('storage.local-vector.semantic');
+  });
+
+  it('loads bounded canonical Runtime startup limits', () => {
+    expect(runtimeConfig().canonical).toEqual({
+      auditPageSize: 250,
+      auditPageMaxBytes: 4 * 1024 * 1024,
+      auditMaxEvents: 100_000,
+      auditMaxBytes: 256 * 1024 * 1024,
+      auditMaxDurationMs: 30_000,
+      maxLegacyEvents: 100_000,
+    });
   });
 
   it('loads inference backend configuration with SGLang as default', () => {

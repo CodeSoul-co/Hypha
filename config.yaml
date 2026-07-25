@@ -698,6 +698,15 @@ prompts:
   templatesPath: "./apps/server/src/prompts"
   cacheEnabled: true
 
+runtime:
+  canonical:
+    auditPageSize: 250
+    auditPageMaxBytes: 4194304
+    auditMaxEvents: 100000
+    auditMaxBytes: 268435456
+    auditMaxDurationMs: 30000
+    maxLegacyEvents: 100000
+
 logging:
   level: "debug"
   format: "text"

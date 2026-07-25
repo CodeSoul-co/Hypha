@@ -15,6 +15,8 @@ import {
   stableRecoveryHash,
   type FrameworkEvent,
   type FrameworkEventType,
+  type EventStore,
+  type TraceRecorder,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
@@ -499,8 +501,13 @@ function legacyToolToModelTool(
   };
 }
 
+export interface EventRuntimeInitialization {
+  events: EventStore & TraceRecorder;
+  eventDbPath?: string;
+}
+
 class EventRuntimeService {
-  private readonly events: SQLiteEventStore;
+  private readonly events: EventStore & TraceRecorder;
   private readonly runtime: EventFirstRuntime;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
@@ -520,14 +527,15 @@ class EventRuntimeService {
   >();
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
-  constructor() {
+  constructor(options?: EventRuntimeInitialization) {
     const sqliteStorage = storageConfig().relational.sqlite;
-    const eventDbPath =
-      process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
-    this.events = new SQLiteEventStore({
-      filename: eventDbPath,
-      mode: sqliteStorage.sqliteMode,
-    });
+    const eventDbPath = options?.eventDbPath ?? serverRuntimeEventDatabasePath();
+    this.events =
+      options?.events ??
+      new SQLiteEventStore({
+        filename: eventDbPath,
+        mode: sqliteStorage.sqliteMode,
+      });
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
@@ -664,7 +672,7 @@ class EventRuntimeService {
       fsm,
       snapshot,
     });
-    await this.append(runId, 'run.started', { input: input.input }, timestamp);
+    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
     await this.append(runId, 'fsm.state.entered', { stateId: snapshot.currentState }, timestamp, {
       fsmState: snapshot.currentState,
     });
@@ -1978,7 +1986,10 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferCompletedState(context.fsm), { reason: 'completed' });
     }
-    await this.append(runId, 'run.completed', { output });
+    await this.append(runId, 'run.completed', {
+      terminalState: context.snapshot.currentState,
+      output,
+    });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
@@ -1987,11 +1998,18 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferFailedState(context.fsm), { reason: message });
     }
-    await this.append(runId, 'run.failed', { error: message });
+    await this.append(runId, 'run.failed', {
+      terminalState: context.snapshot.currentState,
+      error: message,
+    });
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    await this.append(runId, 'run.waiting_human', payload);
+    const waitId =
+      typeof payload.waitId === 'string' && payload.waitId.trim()
+        ? payload.waitId
+        : `human-review:${generateId()}`;
+    await this.append(runId, 'run.waiting_human', { ...payload, waitId });
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {
@@ -3060,9 +3078,37 @@ function inferToolSideEffect(
 
 let service: EventRuntimeService | null = null;
 
+export function serverRuntimeEventDatabasePath(): string {
+  const sqliteStorage = storageConfig().relational.sqlite;
+  return process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
+}
+
+export function createServerCompatibilityEventStore(): SQLiteEventStore {
+  const sqliteStorage = storageConfig().relational.sqlite;
+  return new SQLiteEventStore({
+    filename: serverRuntimeEventDatabasePath(),
+    mode: sqliteStorage.sqliteMode,
+  });
+}
+
+export function initializeEventRuntime(options: EventRuntimeInitialization): EventRuntimeService {
+  if (service) {
+    throw new FrameworkError({
+      code: 'RUNTIME_RESOURCE_CONFLICT',
+      message: 'Server Event Runtime is already initialized',
+    });
+  }
+  service = new EventRuntimeService(options);
+  return service;
+}
+
 export function getEventRuntime(): EventRuntimeService {
   if (!service) {
     service = new EventRuntimeService();
   }
   return service;
+}
+
+export function destroyEventRuntime(): void {
+  service = null;
 }

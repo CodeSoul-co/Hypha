@@ -562,6 +562,20 @@ const configSchema = z.object({
     cacheEnabled: z.boolean().default(true),
     registryPath: z.string().default('./data/prompts/registry.json'),
   }),
+  runtime: z
+    .object({
+      canonical: z
+        .object({
+          auditPageSize: z.number().int().positive().max(1000).default(250),
+          auditPageMaxBytes: z.number().int().positive().default(4 * 1024 * 1024),
+          auditMaxEvents: z.number().int().positive().default(100_000),
+          auditMaxBytes: z.number().int().positive().default(256 * 1024 * 1024),
+          auditMaxDurationMs: z.number().int().positive().default(30_000),
+          maxLegacyEvents: z.number().int().positive().default(100_000),
+        })
+        .default({}),
+    })
+    .default({}),
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     format: z.enum(['json', 'text']).default('json'),
@@ -794,6 +808,7 @@ export const servingCacheConfig = () => {
 };
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
+export const runtimeConfig = () => getConfig().runtime;
 export const toolResultCacheConfig = () => getConfig().tools.resultCache;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;
