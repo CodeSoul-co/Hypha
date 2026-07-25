@@ -47,6 +47,9 @@ const trackedEnv = [
   'HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS',
   'HYPHA_TOOL_RESULT_CACHE_NAMESPACE',
   'FILESYSTEM_TOOL_ROOT',
+  'NODE_ENV',
+  'JWT_SECRET',
+  'HYPHA_OWNER_PASSWORD',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -228,6 +231,28 @@ describe('configuration storage taxonomy', () => {
       workingDirectory: './legacy-workspace',
       readPaths: ['./legacy-workspace'],
       writePaths: ['./legacy-workspace'],
+    });
+  });
+
+  it('rejects development authentication credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+
+    expect(() => reloadConfig()).toThrow('Invalid configuration');
+  });
+
+  it('accepts explicit strong authentication credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'production-jwt-secret-with-32-plus-characters';
+    process.env.HYPHA_OWNER_PASSWORD = 'production-owner-password';
+
+    expect(reloadConfig()).toMatchObject({
+      app: { env: 'production' },
+      auth: {
+        enabled: true,
+        mode: 'single-user',
+        jwt: { secret: 'production-jwt-secret-with-32-plus-characters' },
+        singleUser: { password: 'production-owner-password' },
+      },
     });
   });
 });

@@ -320,6 +320,9 @@ const artifactStorageConfigSchema = z.object({
     .default({}),
 });
 
+const developmentJwtSecret = 'change-me-local-access-secret';
+const developmentOwnerPassword = 'hypha_owner_2026';
+
 // Configuration schema
 const configSchema = z.object({
   app: z.object({
@@ -608,6 +611,41 @@ const configSchema = z.object({
     windowMs: z.number().default(60000),
     max: z.number().default(100),
   }),
+}).superRefine((config, context) => {
+  if (config.app.env !== 'production') {
+    return;
+  }
+
+  if (!config.auth.enabled) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'enabled'],
+      message: 'Authentication must be enabled in production',
+    });
+  }
+
+  if (
+    config.auth.jwt.secret === developmentJwtSecret ||
+    config.auth.jwt.secret.length < 32
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'jwt', 'secret'],
+      message: 'Production JWT secret must be changed and contain at least 32 characters',
+    });
+  }
+
+  if (
+    config.auth.mode === 'single-user' &&
+    (config.auth.singleUser.password === developmentOwnerPassword ||
+      config.auth.singleUser.password.length < 16)
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'singleUser', 'password'],
+      message: 'Production owner password must be changed and contain at least 16 characters',
+    });
+  }
 });
 
 export type Config = z.infer<typeof configSchema>;
