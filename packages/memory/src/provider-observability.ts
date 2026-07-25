@@ -159,7 +159,9 @@ export class MemoryProviderTelemetry {
       });
       throw memoryError(
         'MEMORY_PROVIDER_UNAVAILABLE',
-        `Memory provider ${providerId} rejected ${operation} because ${quotaReason} was exhausted.`,
+        `Memory provider ${providerId} rejected ${operation} because ${
+          quotaReason === 'cost_unpriced' ? 'cost is unpriced' : `${quotaReason} was exhausted`
+        }.`,
         false,
         { providerId, operation, quotaReason }
       );
@@ -423,12 +425,15 @@ function rejectedQuota(
   policy: MemoryProviderTelemetryPolicy,
   usage: ProviderUsageWindow,
   estimate: MemoryProviderOperationEstimate
-): 'operation_quota' | 'cost_quota' | 'storage_quota' | undefined {
+): 'operation_quota' | 'cost_unpriced' | 'cost_quota' | 'storage_quota' | undefined {
   if (
     policy.quota?.maxOperations !== undefined &&
     usage.operations + 1 > policy.quota.maxOperations
   ) {
     return 'operation_quota';
+  }
+  if (policy.quota?.maxCostUnits !== undefined && estimate.costUnits === undefined) {
+    return 'cost_unpriced';
   }
   if (
     policy.quota?.maxCostUnits !== undefined &&

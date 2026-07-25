@@ -79,6 +79,20 @@ describe('Memory Provider observability', () => {
     });
   });
 
+  it('fails closed when a cost quota is configured for an unpriced operation', () => {
+    const telemetry = new MemoryProviderTelemetry({
+      defaultPolicy: { windowMs: 60_000, quota: { maxCostUnits: 5 } },
+    });
+
+    expect(() => telemetry.begin('provider-1', 'search')).toThrow('cost is unpriced');
+    const health = telemetry.begin('provider-1', 'health');
+    health.complete('succeeded');
+    expect(telemetry.snapshot('provider-1')).toMatchObject({
+      operations: { quotaRejected: 1, byOperation: { search: 1, health: 1 } },
+      quota: { maxCostUnits: 5, remainingCostUnits: 5 },
+    });
+  });
+
   it('instruments canonical Provider calls and preserves errors', async () => {
     let elapsed = 0;
     const telemetry = new MemoryProviderTelemetry({
