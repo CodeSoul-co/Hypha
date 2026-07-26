@@ -6,6 +6,8 @@ import {
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
+  type CancelSessionCommandsRequest,
+  type CancelSessionCommandsResult,
   type ListStuckSessionCommandsRequest,
   type RedriveDeadLetterSessionCommandRequest,
   type SessionCommandRedrive,
@@ -260,6 +262,98 @@ export const sessionCommandRecordDefinition = defineSpecSchema<SessionCommandRec
   example: sessionCommandRecordExample,
 });
 
+export const cancelSessionCommandsRequestSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    scope: sessionQueueScopeSchema,
+    targetRunId: nonEmptyStringSchema,
+    cancellationCommandId: nonEmptyStringSchema,
+    reason: nonEmptyStringSchema,
+    cancelledAt: timestampSchema,
+  })
+  .strict() satisfies ZodType<CancelSessionCommandsRequest>;
+
+export const cancelSessionCommandsResultSchema = z
+  .object({
+    targetRunId: nonEmptyStringSchema,
+    cancelledCommandIds: z.array(nonEmptyStringSchema),
+    alreadyCancelledCommandIds: z.array(nonEmptyStringSchema),
+    alreadyTerminalCommandIds: z.array(nonEmptyStringSchema),
+  })
+  .strict() satisfies ZodType<CancelSessionCommandsResult>;
+
+const sessionQueueScopeJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['userId', 'sessionId'],
+  properties: {
+    tenantId: stringProperty,
+    userId: stringProperty,
+    sessionId: stringProperty,
+  },
+  additionalProperties: false,
+};
+
+export const cancelSessionCommandsRequestDefinition =
+  defineSpecSchema<CancelSessionCommandsRequest>({
+    id: 'CancelSessionCommandsRequest',
+    zod: cancelSessionCommandsRequestSchema,
+    jsonSchema: {
+      type: 'object',
+      required: [
+        'version',
+        'scope',
+        'targetRunId',
+        'cancellationCommandId',
+        'reason',
+        'cancelledAt',
+      ],
+      properties: {
+        version: { const: '1.0.0' },
+        scope: sessionQueueScopeJsonSchema,
+        targetRunId: stringProperty,
+        cancellationCommandId: stringProperty,
+        reason: stringProperty,
+        cancelledAt: timestampProperty,
+      },
+      additionalProperties: false,
+    },
+    example: {
+      version: '1.0.0',
+      scope: { userId: 'user.example', sessionId: 'session.example' },
+      targetRunId: 'run.example',
+      cancellationCommandId: 'command.cancel.example',
+      reason: 'Run cancelled by user',
+      cancelledAt: '2026-07-18T06:00:00.000Z',
+    },
+  });
+
+export const cancelSessionCommandsResultDefinition = defineSpecSchema<CancelSessionCommandsResult>({
+  id: 'CancelSessionCommandsResult',
+  zod: cancelSessionCommandsResultSchema,
+  jsonSchema: {
+    type: 'object',
+    required: [
+      'targetRunId',
+      'cancelledCommandIds',
+      'alreadyCancelledCommandIds',
+      'alreadyTerminalCommandIds',
+    ],
+    properties: {
+      targetRunId: stringProperty,
+      cancelledCommandIds: { type: 'array', items: stringProperty },
+      alreadyCancelledCommandIds: { type: 'array', items: stringProperty },
+      alreadyTerminalCommandIds: { type: 'array', items: stringProperty },
+    },
+    additionalProperties: false,
+  },
+  example: {
+    targetRunId: 'run.example',
+    cancelledCommandIds: ['command.resume.example'],
+    alreadyCancelledCommandIds: [],
+    alreadyTerminalCommandIds: [],
+  },
+});
+
 export const redriveDeadLetterSessionCommandRequestSchema = z
   .object({
     version: z.literal('1.0.0'),
@@ -295,14 +389,7 @@ export const redriveDeadLetterSessionCommandRequestDefinition =
       properties: {
         version: { const: '1.0.0' },
         scope: {
-          type: 'object',
-          required: ['userId', 'sessionId'],
-          properties: {
-            tenantId: stringProperty,
-            userId: stringProperty,
-            sessionId: stringProperty,
-          },
-          additionalProperties: false,
+          ...sessionQueueScopeJsonSchema,
         },
         sourceCommandId: stringProperty,
         id: stringProperty,
@@ -352,6 +439,8 @@ export const stuckSessionCommandSchema = z
 
 export const sessionQueueContractDefinitions = [
   sessionCommandRecordDefinition,
+  cancelSessionCommandsRequestDefinition,
+  cancelSessionCommandsResultDefinition,
   redriveDeadLetterSessionCommandRequestDefinition,
 ] as const;
 export const sessionQueueContractJsonSchemas = exportSpecJsonSchemas(
@@ -360,6 +449,14 @@ export const sessionQueueContractJsonSchemas = exportSpecJsonSchemas(
 
 export function validateSessionCommandRecord(input: unknown): SessionCommandRecord {
   return sessionCommandRecordDefinition.parse(input);
+}
+
+export function validateCancelSessionCommandsRequest(input: unknown): CancelSessionCommandsRequest {
+  return cancelSessionCommandsRequestDefinition.parse(input);
+}
+
+export function validateCancelSessionCommandsResult(input: unknown): CancelSessionCommandsResult {
+  return cancelSessionCommandsResultDefinition.parse(input);
 }
 
 export function validateRedriveDeadLetterSessionCommandRequest(

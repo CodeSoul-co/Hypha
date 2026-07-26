@@ -1,9 +1,12 @@
 import type { ProviderHealth } from '../../contracts/execution';
 import {
   DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+  SESSION_COMMAND_RUN_CANCELLED_CODE,
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
+  type CancelSessionCommandsRequest,
+  type CancelSessionCommandsResult,
   type ClaimSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
@@ -19,6 +22,8 @@ import {
   type StuckSessionCommand,
 } from '../../contracts/session-queue';
 import {
+  validateCancelSessionCommandsRequest,
+  validateCancelSessionCommandsResult,
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
@@ -35,6 +40,7 @@ export interface SessionQueue {
   fail(request: FailSessionCommandRequest): Promise<void>;
   release(request: ReleaseSessionCommandRequest): Promise<void>;
   list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]>;
+  cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult>;
   redriveDeadLetter(request: RedriveDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
   listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]>;
   drain(scope: SessionQueueScope): Promise<void>;
@@ -324,6 +330,45 @@ export class InMemorySessionQueue implements SessionQueue {
       .sort((left, right) => left.enqueueSequence - right.enqueueSequence)
       .slice(0, limit)
       .map((record) => structuredClone(record));
+  }
+
+  async cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult> {
+    const validated = validateCancelSessionCommandsRequest(request);
+    this.recover(validated.cancelledAt);
+    const result: CancelSessionCommandsResult = {
+      targetRunId: validated.targetRunId,
+      cancelledCommandIds: [],
+      alreadyCancelledCommandIds: [],
+      alreadyTerminalCommandIds: [],
+    };
+    const records = [...this.records.values()]
+      .filter(
+        (record) =>
+          sameScope(scopeFromCommand(record), validated.scope) &&
+          record.targetRunId === validated.targetRunId &&
+          record.id !== validated.cancellationCommandId
+      )
+      .sort((left, right) => left.enqueueSequence - right.enqueueSequence);
+    for (const record of records) {
+      if (record.rejectionCode === SESSION_COMMAND_RUN_CANCELLED_CODE) {
+        result.alreadyCancelledCommandIds.push(record.id);
+        continue;
+      }
+      if (!isPending(record)) {
+        result.alreadyTerminalCommandIds.push(record.id);
+        continue;
+      }
+      record.status = 'rejected';
+      record.rejectionCode = SESSION_COMMAND_RUN_CANCELLED_CODE;
+      record.completedAt = validated.cancelledAt;
+      delete record.claimedBy;
+      delete record.claimToken;
+      delete record.leaseExpiresAt;
+      this.records.set(record.id, validateSessionCommandRecord(record));
+      result.cancelledCommandIds.push(record.id);
+      this.notifyIfDrained(scopeFromCommand(record));
+    }
+    return validateCancelSessionCommandsResult(result);
   }
 
   async redriveDeadLetter(

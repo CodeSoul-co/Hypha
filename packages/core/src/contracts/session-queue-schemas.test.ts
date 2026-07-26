@@ -2,6 +2,11 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import {
+  cancelSessionCommandsRequestDefinition,
+  cancelSessionCommandsRequestSchema,
+  cancelSessionCommandsResultDefinition,
+  cancelSessionCommandsResultSchema,
+  sessionQueueContractJsonSchemas,
   sessionCommandRecordDefinition,
   sessionCommandRecordExample,
   sessionCommandRecordJsonSchema,
@@ -32,5 +37,28 @@ describe('Session Queue contracts', () => {
     expect(() =>
       sessionCommandRecordSchema.parse({ ...sessionCommandRecordExample, status: 'claimed' })
     ).toThrow(/claimedBy/u);
+  });
+
+  it('exports strict, versioned Run-scoped cancellation request and result contracts', () => {
+    expect(
+      cancelSessionCommandsRequestSchema.parse(cancelSessionCommandsRequestDefinition.example)
+    ).toEqual(cancelSessionCommandsRequestDefinition.example);
+    expect(
+      cancelSessionCommandsResultSchema.parse(cancelSessionCommandsResultDefinition.example)
+    ).toEqual(cancelSessionCommandsResultDefinition.example);
+    expect(sessionQueueContractJsonSchemas).toHaveProperty('CancelSessionCommandsRequest');
+    expect(sessionQueueContractJsonSchemas).toHaveProperty('CancelSessionCommandsResult');
+    expect(() =>
+      cancelSessionCommandsRequestSchema.parse({
+        ...cancelSessionCommandsRequestDefinition.example,
+        targetRunId: '',
+      })
+    ).toThrow();
+    expect(() =>
+      cancelSessionCommandsRequestSchema.parse({
+        ...cancelSessionCommandsRequestDefinition.example,
+        scope: { userId: 'user.example', sessionId: 'session.example', runId: 'run.leaked' },
+      })
+    ).toThrow();
   });
 });

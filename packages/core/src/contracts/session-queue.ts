@@ -22,6 +22,7 @@ export const SESSION_COMMAND_STATUSES = [
 
 export const DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS = 5;
 export const SESSION_COMMAND_MAX_ATTEMPTS_LIMIT = 100;
+export const SESSION_COMMAND_RUN_CANCELLED_CODE = 'RUNTIME_RUN_CANCELLED';
 
 export type SessionCommandType = (typeof SESSION_COMMAND_TYPES)[number];
 export type SessionCommandStatus = (typeof SESSION_COMMAND_STATUSES)[number];
@@ -146,6 +147,22 @@ export interface ListSessionCommandsRequest {
   statuses?: SessionCommandStatus[];
   fromSequence?: number;
   limit?: number;
+}
+
+export interface CancelSessionCommandsRequest {
+  version: '1.0.0';
+  scope: SessionQueueScope;
+  targetRunId: string;
+  cancellationCommandId: string;
+  reason: string;
+  cancelledAt: string;
+}
+
+export interface CancelSessionCommandsResult {
+  targetRunId: string;
+  cancelledCommandIds: string[];
+  alreadyCancelledCommandIds: string[];
+  alreadyTerminalCommandIds: string[];
 }
 
 export interface RedriveDeadLetterSessionCommandRequest {

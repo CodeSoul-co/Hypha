@@ -542,4 +542,85 @@ describe('InMemorySessionQueue', () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  it('cancels only matching Run commands and fences an active stale owner', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.terminal', { targetRunId: 'run.cancelled' }));
+    const terminal = await queue.claim({
+      workerId: 'worker.terminal',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await queue.complete({
+      commandId: terminal!.id,
+      workerId: 'worker.terminal',
+      ...claimIdentity(terminal!),
+      completedAt: initialTime,
+    });
+    await queue.enqueue(command('command.claimed', { targetRunId: 'run.cancelled' }));
+    const claimed = await queue.claim({
+      workerId: 'worker.stale',
+      now: initialTime,
+      leaseMs: 10_000,
+    });
+    await queue.enqueue(command('command.queued', { targetRunId: 'run.cancelled' }));
+    await queue.enqueue(command('cancel.default', { targetRunId: 'run.cancelled' }));
+    await queue.enqueue(command('command.other-run', { targetRunId: 'run.other' }));
+    await queue.enqueue(
+      command('command.other-session', {
+        sessionId: 'session.other',
+        targetRunId: 'run.cancelled',
+      })
+    );
+    await queue.enqueue(
+      command('command.other-user', {
+        userId: 'user.other',
+        targetRunId: 'run.cancelled',
+      })
+    );
+
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      targetRunId: 'run.cancelled',
+      cancellationCommandId: 'cancel.default',
+      reason: 'Run cancelled by user',
+      cancelledAt: '2026-07-18T06:00:01.000Z',
+    };
+    await expect(queue.cancelPending(request)).resolves.toEqual({
+      targetRunId: 'run.cancelled',
+      cancelledCommandIds: ['command.claimed', 'command.queued'],
+      alreadyCancelledCommandIds: [],
+      alreadyTerminalCommandIds: ['command.terminal'],
+    });
+    await expect(
+      queue.complete({
+        commandId: claimed!.id,
+        workerId: 'worker.stale',
+        ...claimIdentity(claimed!),
+        completedAt: '2026-07-18T06:00:02.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(queue.cancelPending(request)).resolves.toEqual({
+      targetRunId: 'run.cancelled',
+      cancelledCommandIds: [],
+      alreadyCancelledCommandIds: ['command.claimed', 'command.queued'],
+      alreadyTerminalCommandIds: ['command.terminal'],
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { id: 'command.terminal', status: 'applied' },
+      {
+        id: 'command.claimed',
+        status: 'rejected',
+        rejectionCode: 'RUNTIME_RUN_CANCELLED',
+      },
+      {
+        id: 'command.queued',
+        status: 'rejected',
+        rejectionCode: 'RUNTIME_RUN_CANCELLED',
+      },
+      { id: 'cancel.default', status: 'queued' },
+      { id: 'command.other-run', status: 'queued' },
+    ]);
+  });
 });

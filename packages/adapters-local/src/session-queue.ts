@@ -1,13 +1,18 @@
 import {
   FrameworkError,
   DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+  SESSION_COMMAND_RUN_CANCELLED_CODE,
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
   hashCanonicalJson,
+  validateCancelSessionCommandsRequest,
+  validateCancelSessionCommandsResult,
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
+  type CancelSessionCommandsRequest,
+  type CancelSessionCommandsResult,
   type ClaimSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
@@ -322,6 +327,46 @@ export class SQLiteSessionQueue implements SessionQueue {
         .sort((left, right) => left.enqueueSequence - right.enqueueSequence)
         .slice(0, limit)
         .map((record) => structuredClone(record));
+    });
+  }
+
+  async cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult> {
+    const validated = validateCancelSessionCommandsRequest(request);
+    return this.transaction('cancelPending', () => {
+      this.recover(validated.cancelledAt);
+      const result: CancelSessionCommandsResult = {
+        targetRunId: validated.targetRunId,
+        cancelledCommandIds: [],
+        alreadyCancelledCommandIds: [],
+        alreadyTerminalCommandIds: [],
+      };
+      const records = this.rowsForScope(sessionKey(validated.scope))
+        .map((row) => parseRecord(row))
+        .filter(
+          (record) =>
+            record.targetRunId === validated.targetRunId &&
+            record.id !== validated.cancellationCommandId
+        )
+        .sort((left, right) => left.enqueueSequence - right.enqueueSequence);
+      for (const record of records) {
+        if (record.rejectionCode === SESSION_COMMAND_RUN_CANCELLED_CODE) {
+          result.alreadyCancelledCommandIds.push(record.id);
+          continue;
+        }
+        if (!isPending(record)) {
+          result.alreadyTerminalCommandIds.push(record.id);
+          continue;
+        }
+        record.status = 'rejected';
+        record.rejectionCode = SESSION_COMMAND_RUN_CANCELLED_CODE;
+        record.completedAt = validated.cancelledAt;
+        delete record.claimedBy;
+        delete record.claimToken;
+        delete record.leaseExpiresAt;
+        this.updateRecord(validateSessionCommandRecord(record));
+        result.cancelledCommandIds.push(record.id);
+      }
+      return validateCancelSessionCommandsResult(result);
     });
   }
 
@@ -941,4 +986,8 @@ function conflict(
   context?: Record<string, unknown>
 ): never {
   throw new FrameworkError({ code, message, context });
+}
+
+function isPending(record: SessionCommandRecord): boolean {
+  return record.status === 'queued' || record.status === 'claimed';
 }
