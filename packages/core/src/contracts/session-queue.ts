@@ -192,3 +192,16 @@ export interface StuckSessionCommand {
   detectedAt: string;
   overdueMs: number;
 }
+
+export interface SessionQueueHealthSnapshot extends Record<string, unknown> {
+  version: '1.0.0';
+  totalCommands: number;
+  pendingCommands: number;
+  queuedCommands: number;
+  claimedCommands: number;
+  deadLetterCommands: number;
+  retryingCommands: number;
+  redeliveredCommands: number;
+  recoveredExpiredLeases: number;
+  oldestPendingAgeMs?: number;
+}

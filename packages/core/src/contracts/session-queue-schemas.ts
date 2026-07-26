@@ -13,6 +13,7 @@ import {
   type SessionCommandRedrive,
   type SessionCommandRecord,
   type SessionQueueScope,
+  type SessionQueueHealthSnapshot,
   type StuckSessionCommand,
 } from './session-queue';
 
@@ -437,11 +438,101 @@ export const stuckSessionCommandSchema = z
   })
   .strict() satisfies ZodType<StuckSessionCommand>;
 
+export const sessionQueueHealthSnapshotSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    totalCommands: z.number().int().min(0),
+    pendingCommands: z.number().int().min(0),
+    queuedCommands: z.number().int().min(0),
+    claimedCommands: z.number().int().min(0),
+    deadLetterCommands: z.number().int().min(0),
+    retryingCommands: z.number().int().min(0),
+    redeliveredCommands: z.number().int().min(0),
+    recoveredExpiredLeases: z.number().int().min(0),
+    oldestPendingAgeMs: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    if (snapshot.pendingCommands !== snapshot.queuedCommands + snapshot.claimedCommands) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pendingCommands'],
+        message: 'pendingCommands must equal queuedCommands plus claimedCommands',
+      });
+    }
+    if (
+      snapshot.pendingCommands > snapshot.totalCommands ||
+      snapshot.deadLetterCommands > snapshot.totalCommands ||
+      snapshot.retryingCommands > snapshot.pendingCommands ||
+      snapshot.redeliveredCommands > snapshot.totalCommands
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Session Queue health counts must remain within their parent totals',
+      });
+    }
+    if (
+      (snapshot.pendingCommands === 0 && snapshot.oldestPendingAgeMs !== undefined) ||
+      (snapshot.pendingCommands > 0 && snapshot.oldestPendingAgeMs === undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['oldestPendingAgeMs'],
+        message: 'oldestPendingAgeMs must be present exactly when pending work exists',
+      });
+    }
+  }) satisfies ZodType<SessionQueueHealthSnapshot>;
+
+export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueueHealthSnapshot>({
+  id: 'SessionQueueHealthSnapshot',
+  zod: sessionQueueHealthSnapshotSchema,
+  jsonSchema: {
+    type: 'object',
+    required: [
+      'version',
+      'totalCommands',
+      'pendingCommands',
+      'queuedCommands',
+      'claimedCommands',
+      'deadLetterCommands',
+      'retryingCommands',
+      'redeliveredCommands',
+      'recoveredExpiredLeases',
+    ],
+    properties: {
+      version: { const: '1.0.0' },
+      totalCommands: { type: 'integer', minimum: 0 },
+      pendingCommands: { type: 'integer', minimum: 0 },
+      queuedCommands: { type: 'integer', minimum: 0 },
+      claimedCommands: { type: 'integer', minimum: 0 },
+      deadLetterCommands: { type: 'integer', minimum: 0 },
+      retryingCommands: { type: 'integer', minimum: 0 },
+      redeliveredCommands: { type: 'integer', minimum: 0 },
+      recoveredExpiredLeases: { type: 'integer', minimum: 0 },
+      oldestPendingAgeMs: { type: 'integer', minimum: 0 },
+    },
+    additionalProperties: false,
+  },
+  example: {
+    version: '1.0.0',
+    totalCommands: 4,
+    pendingCommands: 2,
+    queuedCommands: 1,
+    claimedCommands: 1,
+    deadLetterCommands: 1,
+    retryingCommands: 1,
+    redeliveredCommands: 1,
+    recoveredExpiredLeases: 0,
+    oldestPendingAgeMs: 15_000,
+  },
+});
+
 export const sessionQueueContractDefinitions = [
   sessionCommandRecordDefinition,
   cancelSessionCommandsRequestDefinition,
   cancelSessionCommandsResultDefinition,
   redriveDeadLetterSessionCommandRequestDefinition,
+  sessionQueueHealthSnapshotDefinition,
 ] as const;
 export const sessionQueueContractJsonSchemas = exportSpecJsonSchemas(
   sessionQueueContractDefinitions
@@ -473,4 +564,8 @@ export function validateListStuckSessionCommandsRequest(
 
 export function validateStuckSessionCommand(input: unknown): StuckSessionCommand {
   return stuckSessionCommandSchema.parse(input);
+}
+
+export function validateSessionQueueHealthSnapshot(input: unknown): SessionQueueHealthSnapshot {
+  return sessionQueueHealthSnapshotDefinition.parse(input);
 }

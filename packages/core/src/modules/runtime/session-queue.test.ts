@@ -623,4 +623,75 @@ describe('InMemorySessionQueue', () => {
       { id: 'command.other-run', status: 'queued' },
     ]);
   });
+
+  it('reports backlog age, lease recovery, redelivery, and dead letters in health', async () => {
+    let now = initialTime;
+    const queue = new InMemorySessionQueue({ now: () => now });
+    await queue.enqueue(command('command.health'));
+    const firstClaim = await queue.claim({
+      workerId: 'worker.health.first',
+      now,
+      leaseMs: 1_000,
+    });
+
+    now = '2026-07-18T06:00:02.000Z';
+    await expect(queue.health()).resolves.toMatchObject({
+      status: 'healthy',
+      checkedAt: now,
+      details: {
+        version: '1.0.0',
+        totalCommands: 1,
+        pendingCommands: 1,
+        queuedCommands: 1,
+        claimedCommands: 0,
+        deadLetterCommands: 0,
+        retryingCommands: 1,
+        redeliveredCommands: 0,
+        recoveredExpiredLeases: 1,
+        oldestPendingAgeMs: 2_000,
+      },
+    });
+
+    const secondClaim = await queue.claim({
+      workerId: 'worker.health.second',
+      now,
+      leaseMs: 1_000,
+    });
+    expect(secondClaim?.leaseEpoch).toBe(2);
+    now = '2026-07-18T06:00:02.500Z';
+    await expect(queue.health()).resolves.toMatchObject({
+      details: {
+        pendingCommands: 1,
+        claimedCommands: 1,
+        redeliveredCommands: 1,
+        recoveredExpiredLeases: 0,
+        oldestPendingAgeMs: 2_500,
+      },
+    });
+
+    await queue.fail({
+      commandId: secondClaim!.id,
+      workerId: 'worker.health.second',
+      ...claimIdentity(secondClaim!),
+      failedAt: now,
+      rejectionCode: 'poison_command',
+      deadLetter: true,
+    });
+    const terminalHealth = await queue.health();
+    expect(terminalHealth.details).toMatchObject({
+      totalCommands: 1,
+      pendingCommands: 0,
+      deadLetterCommands: 1,
+      redeliveredCommands: 1,
+    });
+    expect(terminalHealth.details).not.toHaveProperty('oldestPendingAgeMs');
+    await expect(
+      queue.complete({
+        commandId: firstClaim!.id,
+        workerId: 'worker.health.first',
+        ...claimIdentity(firstClaim!),
+        completedAt: now,
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+  });
 });

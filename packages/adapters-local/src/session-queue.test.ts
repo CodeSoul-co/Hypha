@@ -617,6 +617,68 @@ describe('SQLiteSessionQueue', () => {
     ]);
   });
 
+  it('persists health evidence for backlog, takeover, redelivery, and poison commands', async () => {
+    const filename = temporaryDatabase();
+    let now = initialTime;
+    const first = openQueue(filename, { now: () => now });
+    await first.enqueue(command('command.health'));
+    await first.claim({
+      workerId: 'worker.health.first',
+      now,
+      leaseMs: 1_000,
+    });
+    first.close();
+    queues.splice(queues.indexOf(first), 1);
+
+    now = '2026-07-22T06:00:02.000Z';
+    const recovered = openQueue(filename, { now: () => now });
+    await expect(recovered.health()).resolves.toMatchObject({
+      status: 'healthy',
+      checkedAt: now,
+      details: {
+        version: '1.0.0',
+        totalCommands: 1,
+        pendingCommands: 1,
+        queuedCommands: 1,
+        claimedCommands: 0,
+        deadLetterCommands: 0,
+        retryingCommands: 1,
+        redeliveredCommands: 0,
+        recoveredExpiredLeases: 1,
+        oldestPendingAgeMs: 2_000,
+      },
+    });
+
+    const secondClaim = await recovered.claim({
+      workerId: 'worker.health.second',
+      now,
+      leaseMs: 1_000,
+    });
+    expect(secondClaim?.leaseEpoch).toBe(2);
+    await recovered.fail({
+      commandId: secondClaim!.id,
+      workerId: 'worker.health.second',
+      ...claimIdentity(secondClaim!),
+      failedAt: now,
+      rejectionCode: 'poison_command',
+      deadLetter: true,
+    });
+    recovered.close();
+    queues.splice(queues.indexOf(recovered), 1);
+
+    now = '2026-07-22T06:00:03.000Z';
+    const reopened = openQueue(filename, { now: () => now });
+    const health = await reopened.health();
+    expect(health.details).toMatchObject({
+      totalCommands: 1,
+      pendingCommands: 0,
+      deadLetterCommands: 1,
+      redeliveredCommands: 1,
+      recoveredExpiredLeases: 0,
+    });
+    expect(health.details).not.toHaveProperty('oldestPendingAgeMs');
+  });
+
   function openQueue(
     filename: string,
     options: Partial<ConstructorParameters<typeof SQLiteSessionQueue>[0]> = {}

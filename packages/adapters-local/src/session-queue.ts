@@ -5,6 +5,7 @@ import {
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
+  createSessionQueueHealthSnapshot,
   hashCanonicalJson,
   validateCancelSessionCommandsRequest,
   validateCancelSessionCommandsResult,
@@ -26,6 +27,7 @@ import {
   type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueue,
+  type SessionQueueHealthSnapshot,
   type SessionQueueScope,
   type StuckSessionCommand,
 } from '@hypha/core';
@@ -487,22 +489,15 @@ export class SQLiteSessionQueue implements SessionQueue {
     }
   }
 
-  async health(): Promise<ProviderHealth> {
+  async health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }> {
     return this.transaction('health', () => {
       const checkedAt = this.timestamp('health.checkedAt');
-      this.recover(checkedAt);
-      const rows = this.pendingRecords();
+      const recoveredExpiredLeases = this.recover(checkedAt);
+      const records = this.allRecords();
       return {
         status: 'healthy',
         checkedAt,
-        details: {
-          commands: Number(
-            this.db.prepare('SELECT COUNT(*) AS count FROM runtime_session_commands').get()
-              ?.count ?? 0
-          ),
-          queued: rows.filter((record) => record.status === 'queued').length,
-          claimed: rows.filter((record) => record.status === 'claimed').length,
-        },
+        details: createSessionQueueHealthSnapshot(records, checkedAt, recoveredExpiredLeases),
       };
     });
   }
@@ -545,7 +540,8 @@ export class SQLiteSessionQueue implements SessionQueue {
     );
   }
 
-  private recover(now: string): void {
+  private recover(now: string): number {
+    let recoveredExpiredLeases = 0;
     for (const record of this.pendingRecords()) {
       let changed = false;
       if (
@@ -553,6 +549,7 @@ export class SQLiteSessionQueue implements SessionQueue {
         record.leaseExpiresAt !== undefined &&
         Date.parse(record.leaseExpiresAt) <= Date.parse(now)
       ) {
+        recoveredExpiredLeases += 1;
         const exhausted = record.attempts >= record.maxAttempts;
         record.status = exhausted ? 'dead_letter' : 'queued';
         if (exhausted) {
@@ -575,6 +572,16 @@ export class SQLiteSessionQueue implements SessionQueue {
       }
       if (changed) this.updateRecord(validateSessionCommandRecord(record));
     }
+    return recoveredExpiredLeases;
+  }
+
+  private allRecords(): SessionCommandRecord[] {
+    return this.db
+      .prepare(
+        'SELECT record_json, record_hash FROM runtime_session_commands ORDER BY scope_key, enqueue_sequence'
+      )
+      .all()
+      .map((row) => parseRecord(row));
   }
 
   private pendingRecords(scope?: SessionQueueScope): SessionCommandRecord[] {

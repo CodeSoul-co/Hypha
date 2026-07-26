@@ -18,6 +18,7 @@ import {
   type RenewSessionCommandRequest,
   type SessionCommandClaim,
   type SessionCommandRecord,
+  type SessionQueueHealthSnapshot,
   type SessionQueueScope,
   type StuckSessionCommand,
 } from '../../contracts/session-queue';
@@ -27,6 +28,7 @@ import {
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
+  validateSessionQueueHealthSnapshot,
   validateStuckSessionCommand,
 } from '../../contracts/session-queue-schemas';
 import { hashCanonicalJson } from './canonical-json';
@@ -44,7 +46,7 @@ export interface SessionQueue {
   redriveDeadLetter(request: RedriveDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
   listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]>;
   drain(scope: SessionQueueScope): Promise<void>;
-  health(): Promise<ProviderHealth>;
+  health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }>;
 }
 
 export interface InMemorySessionQueueOptions {
@@ -479,17 +481,14 @@ export class InMemorySessionQueue implements SessionQueue {
     });
   }
 
-  async health(): Promise<ProviderHealth> {
-    this.recover(this.now());
+  async health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }> {
+    const checkedAt = this.now();
+    const recoveredExpiredLeases = this.recover(checkedAt);
     const records = [...this.records.values()];
     return {
       status: 'healthy',
-      checkedAt: this.now(),
-      details: {
-        commands: records.length,
-        queued: records.filter((record) => record.status === 'queued').length,
-        claimed: records.filter((record) => record.status === 'claimed').length,
-      },
+      checkedAt,
+      details: createSessionQueueHealthSnapshot(records, checkedAt, recoveredExpiredLeases),
     };
   }
 
@@ -552,15 +551,17 @@ export class InMemorySessionQueue implements SessionQueue {
     }
   }
 
-  private recover(now: string): void {
+  private recover(now: string): number {
     timestamp(now, 'recovery.now');
     const affected = new Map<string, SessionQueueScope>();
+    let recoveredExpiredLeases = 0;
     for (const record of this.records.values()) {
       if (
         record.status === 'claimed' &&
         record.leaseExpiresAt !== undefined &&
         isAtOrBefore(record.leaseExpiresAt, now)
       ) {
+        recoveredExpiredLeases += 1;
         const exhausted = record.attempts >= record.maxAttempts;
         record.status = exhausted ? 'dead_letter' : 'queued';
         if (exhausted) {
@@ -584,6 +585,7 @@ export class InMemorySessionQueue implements SessionQueue {
       }
     }
     for (const scope of affected.values()) this.notifyIfDrained(scope);
+    return recoveredExpiredLeases;
   }
 
   private isDrained(scope: SessionQueueScope): boolean {
@@ -600,6 +602,33 @@ export class InMemorySessionQueue implements SessionQueue {
     this.drainWaiters.delete(key);
     for (const resolve of waiters) resolve();
   }
+}
+
+export function createSessionQueueHealthSnapshot(
+  records: readonly SessionCommandRecord[],
+  checkedAt: string,
+  recoveredExpiredLeases = 0
+): SessionQueueHealthSnapshot {
+  timestamp(checkedAt, 'health.checkedAt');
+  const pending = records.filter(isPending);
+  const oldestCreatedAtMs =
+    pending.length === 0
+      ? undefined
+      : Math.min(...pending.map((record) => Date.parse(record.createdAt)));
+  return validateSessionQueueHealthSnapshot({
+    version: '1.0.0',
+    totalCommands: records.length,
+    pendingCommands: pending.length,
+    queuedCommands: pending.filter((record) => record.status === 'queued').length,
+    claimedCommands: pending.filter((record) => record.status === 'claimed').length,
+    deadLetterCommands: records.filter((record) => record.status === 'dead_letter').length,
+    retryingCommands: pending.filter((record) => record.attempts > 0).length,
+    redeliveredCommands: records.filter((record) => record.leaseEpoch > 1).length,
+    recoveredExpiredLeases,
+    ...(oldestCreatedAtMs === undefined
+      ? {}
+      : { oldestPendingAgeMs: Math.max(0, Date.parse(checkedAt) - oldestCreatedAtMs) }),
+  });
 }
 
 function validateEnqueueRequest(request: EnqueueSessionCommandRequest): void {

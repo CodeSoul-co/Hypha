@@ -11,6 +11,8 @@ import {
   sessionCommandRecordExample,
   sessionCommandRecordJsonSchema,
   sessionCommandRecordSchema,
+  sessionQueueHealthSnapshotDefinition,
+  sessionQueueHealthSnapshotSchema,
 } from './session-queue-schemas';
 
 describe('Session Queue contracts', () => {
@@ -60,5 +62,26 @@ describe('Session Queue contracts', () => {
         scope: { userId: 'user.example', sessionId: 'session.example', runId: 'run.leaked' },
       })
     ).toThrow();
+  });
+
+  it('exports a strict, internally consistent Session Queue health snapshot', () => {
+    expect(
+      sessionQueueHealthSnapshotSchema.parse(sessionQueueHealthSnapshotDefinition.example)
+    ).toEqual(sessionQueueHealthSnapshotDefinition.example);
+    expect(sessionQueueContractJsonSchemas).toHaveProperty('SessionQueueHealthSnapshot');
+    expect(() =>
+      sessionQueueHealthSnapshotSchema.parse({
+        ...sessionQueueHealthSnapshotDefinition.example,
+        pendingCommands: 3,
+      })
+    ).toThrow(/pendingCommands/u);
+    expect(() =>
+      sessionQueueHealthSnapshotSchema.parse({
+        ...sessionQueueHealthSnapshotDefinition.example,
+        pendingCommands: 0,
+        queuedCommands: 0,
+        claimedCommands: 0,
+      })
+    ).toThrow(/oldestPendingAgeMs/u);
   });
 });
