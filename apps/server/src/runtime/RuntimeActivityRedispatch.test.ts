@@ -59,10 +59,16 @@ describe('RuntimeActivityRedispatchService', () => {
         taskKind,
         runId,
       });
-      const dispatch = jest.fn(async () => ({
-        commandId: `activity-command.${taskKind}`,
-        reused: false,
-      }));
+      const dispatchedIdentities: string[] = [];
+      const dispatch = jest.fn(
+        async (input: { redispatchCommandId: string; redispatchIdempotencyKey: string }) => {
+          dispatchedIdentities.push(input.redispatchCommandId, input.redispatchIdempotencyKey);
+          return {
+            commandId: `activity-command.${taskKind}`,
+            reused: false,
+          };
+        }
+      );
       const service = new RuntimeActivityRedispatchService({
         events,
         runLeases: new InMemoryRunLeaseStore({ now: () => now }),
@@ -92,11 +98,12 @@ describe('RuntimeActivityRedispatchService', () => {
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
-          redispatchCommandId: `command.${taskKind}`,
-          redispatchIdempotencyKey: `command.${taskKind}`,
+          redispatchCommandId: expect.stringMatching(/^activity-redispatch:[a-f0-9]{64}$/u),
+          redispatchIdempotencyKey: expect.stringMatching(/^activity-redispatch:[a-f0-9]{64}$/u),
           approvalEventId: 'event.task.decided',
         })
       );
+      expect(dispatchedIdentities[0]).toBe(dispatchedIdentities[1]);
     }
   );
 
@@ -156,6 +163,7 @@ describe('RuntimeActivityRedispatchService', () => {
       parentEventId: 'event.task.decided',
       metadata: {
         redispatchCommandHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+        redispatchIdentityVersion: '1.0.0',
         expectedTaskRevision: 2,
         subjectHash: `sha256:${'2'.repeat(64)}`,
       },
@@ -261,17 +269,21 @@ describe('RuntimeActivityRedispatchService', () => {
     expect(stream).toHaveLength(1);
   });
 
-  it('rejects stale task revisions and changed redispatch command evidence', async () => {
+  it('rejects stale task revisions and reuses alternate delivery commands', async () => {
     const events = await eventRuntime();
     const descriptors = new ArtifactRuntimeActivityDescriptorStore({
       artifacts: new InMemoryExecutionArtifactStore(),
     });
     const reference = await descriptors.put(descriptor());
     await appendApprovedTask(events, reference);
-    const dispatch = jest.fn(async () => ({
-      commandId: 'activity-command.redispatch',
-      reused: false,
-    }));
+    const redispatchIds: string[] = [];
+    const dispatch = jest.fn(async (input: { redispatchCommandId: string }) => {
+      redispatchIds.push(input.redispatchCommandId);
+      return {
+        commandId: 'activity-command.redispatch',
+        reused: false,
+      };
+    });
     const runtime = service({
       events,
       descriptors,
@@ -288,10 +300,12 @@ describe('RuntimeActivityRedispatchService', () => {
     await expect(
       runtime.redispatch({
         ...command,
+        commandId: 'command.redispatch.redelivered',
         idempotencyKey: 'changed-idempotency-evidence',
+        ownerId: 'worker.redispatch.replacement',
       })
-    ).rejects.toMatchObject({
-      code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+    ).resolves.toMatchObject({
+      eventReused: true,
     });
     await expect(
       runtime.redispatch({
@@ -299,9 +313,10 @@ describe('RuntimeActivityRedispatchService', () => {
         expectedSubjectHash: `sha256:${'3'.repeat(64)}`,
       })
     ).rejects.toMatchObject({
-      code: 'HUMAN_TASK_RESUME_REVALIDATION_FAILED',
+      code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
     });
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(redispatchIds[0]).toBe(redispatchIds[1]);
   });
 
   it('rejects expired approvals and descriptor hash mismatches before dispatch', async () => {
@@ -379,6 +394,94 @@ describe('RuntimeActivityRedispatchService', () => {
 
     expect(approvalDispatch).toHaveBeenCalledTimes(1);
     expect(rejectionDispatch).not.toHaveBeenCalled();
+  });
+
+  it('allows only one worker to dispatch while the run lease is active', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchBlocked = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let markStarted: (() => void) | undefined;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const dispatch = jest.fn(async () => {
+      markStarted?.();
+      await dispatchBlocked;
+      return { commandId: 'activity-command.winner', reused: false };
+    });
+    const first = service({
+      events,
+      descriptors,
+      runLeases,
+      dispatch,
+      ids: ['lease.worker-a', 'event.worker-a'],
+    });
+    const second = service({
+      events,
+      descriptors,
+      runLeases,
+      dispatch,
+      ids: ['lease.worker-b'],
+    });
+    const firstResult = first.redispatch(redispatchCommand(reference));
+    await dispatchStarted;
+
+    await expect(
+      second.redispatch({
+        ...redispatchCommand(reference),
+        commandId: 'command.redispatch.worker-b',
+        ownerId: 'worker.redispatch.b',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_LEASE_UNAVAILABLE' });
+    releaseDispatch?.();
+    await expect(firstResult).resolves.toMatchObject({
+      activityCommandId: 'activity-command.winner',
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a late dispatcher result after another worker fences the lease', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const dispatch = jest.fn(async () => {
+      await runLeases.preempt({
+        userId: 'user.redispatch',
+        runId: 'run.redispatch',
+        partitionKey: 'runtime:run.redispatch',
+        requestedLeaseId: 'lease.replacement',
+        ownerId: 'worker.redispatch.replacement',
+        ttlMs: 30_000,
+        acquiredAt: now,
+        idempotencyKey: 'preempt.redispatch',
+        reason: 'cancellation',
+      });
+      return { commandId: 'activity-command.late', reused: false };
+    });
+    const runtime = service({
+      events,
+      descriptors,
+      runLeases,
+      dispatch,
+      ids: ['lease.stale-worker', 'event.stale-worker'],
+    });
+
+    await expect(runtime.redispatch(redispatchCommand(reference))).rejects.toMatchObject({
+      code: 'RUNTIME_FENCING_REJECTED',
+    });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ fencingToken: 1 }));
   });
 });
 

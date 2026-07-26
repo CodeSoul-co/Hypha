@@ -124,7 +124,7 @@ export class RuntimeActivityRedispatchService {
           expectedRunRevision: head.runRevision,
           fencingToken: authorization.guard.fencingToken,
           idempotencyKey: `activity-redispatch:${command.idempotencyKey ?? command.commandId}`,
-          transactionGroupId: redispatchOperationId(command.commandId),
+          transactionGroupId: runtimeActivityRedispatchIdentity(command),
         });
       }
       assertActive(signal);
@@ -133,16 +133,22 @@ export class RuntimeActivityRedispatchService {
         guard: authorization.guard,
         checkedAt: this.now(),
       });
+      const redispatchIdentity = runtimeActivityRedispatchIdentity(command);
       const dispatched = await this.options.dispatcher.dispatch({
         scope: command.scope,
         task: evidence.task,
         descriptor: evidence.descriptor,
-        redispatchCommandId: command.commandId,
-        redispatchIdempotencyKey: command.idempotencyKey ?? command.commandId,
+        redispatchCommandId: redispatchIdentity,
+        redispatchIdempotencyKey: redispatchIdentity,
         approvalEventId: evidence.approvalEventId,
         requestEventId,
         fencingToken: authorization.guard.fencingToken,
         signal,
+      });
+      await this.options.runLeases.assertCurrent({
+        scope: authorization.scope,
+        guard: authorization.guard,
+        checkedAt: this.now(),
       });
       return {
         commandId: command.commandId,
@@ -197,31 +203,51 @@ export class RuntimeActivityRedispatchService {
       scope: streamScope(command.scope),
       types: ['activity.redispatch.requested'],
     });
-    const prior = events.find(
-      (event) => event.operationId === redispatchOperationId(command.commandId)
-    );
+    const prior = events.find((event) => {
+      const payload = record(event.payload);
+      const metadata = record(event.metadata);
+      if (payload?.taskId !== command.taskId) return false;
+      if (metadata?.expectedTaskRevision !== undefined) {
+        return metadata.expectedTaskRevision === command.expectedTaskRevision;
+      }
+      return (
+        payload.activityDescriptorRef === command.activityDescriptorRef &&
+        payload.activityDescriptorHash === command.activityDescriptorHash
+      );
+    });
     if (!prior) return null;
     const payload = record(prior.payload);
     const metadata = record(prior.metadata);
     const expectedCommandHash = redispatchCommandHash(command);
-    if (
-      payload?.commandId !== command.commandId ||
-      payload?.activityDescriptorRef !== command.activityDescriptorRef ||
-      payload?.activityDescriptorHash !== command.activityDescriptorHash ||
-      payload?.taskId !== command.taskId ||
-      prior.sessionId !== command.scope.sessionId ||
-      prior.workspaceId !== command.scope.workspaceId ||
-      prior.idempotencyKey !== (command.idempotencyKey ?? command.commandId) ||
-      (metadata?.expectedTaskRevision !== undefined &&
-        metadata.expectedTaskRevision !== command.expectedTaskRevision) ||
-      (metadata?.subjectHash !== undefined &&
-        metadata.subjectHash !== command.expectedSubjectHash) ||
-      (metadata?.redispatchCommandHash !== undefined &&
-        metadata.redispatchCommandHash !== expectedCommandHash)
-    ) {
+    const redispatchIdentity = runtimeActivityRedispatchIdentity(command);
+    const identityVersion = metadata?.redispatchIdentityVersion;
+    const mismatches = [
+      payload?.activityDescriptorRef !== command.activityDescriptorRef && 'descriptor_ref',
+      payload?.activityDescriptorHash !== command.activityDescriptorHash && 'descriptor_hash',
+      payload?.taskId !== command.taskId && 'task_id',
+      prior.sessionId !== command.scope.sessionId && 'session_id',
+      prior.workspaceId !== command.scope.workspaceId && 'workspace_id',
+      metadata?.expectedTaskRevision !== undefined &&
+        metadata.expectedTaskRevision !== command.expectedTaskRevision &&
+        'task_revision',
+      metadata?.subjectHash !== undefined &&
+        metadata.subjectHash !== command.expectedSubjectHash &&
+        'subject_hash',
+      identityVersion === '1.0.0' &&
+        metadata?.redispatchCommandHash !== expectedCommandHash &&
+        'command_hash',
+      identityVersion === '1.0.0' && prior.operationId !== redispatchIdentity && 'operation_id',
+      identityVersion === '1.0.0' &&
+        prior.idempotencyKey !== redispatchIdentity &&
+        'idempotency_key',
+    ].filter((mismatch): mismatch is string => typeof mismatch === 'string');
+    if (mismatches.length > 0) {
       throw new FrameworkError({
         code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
-        message: 'Activity redispatch command was reused with different evidence',
+        message: `Activity redispatch command was reused with different evidence: ${mismatches.join(
+          ','
+        )}`,
+        context: { mismatches },
       });
     }
     return prior;
@@ -241,7 +267,7 @@ export class RuntimeActivityRedispatchService {
       ownerId: command.ownerId,
       ttlMs: command.leaseTtlMs,
       acquiredAt,
-      idempotencyKey: `${redispatchOperationId(command.commandId)}:lease:${leaseId}`,
+      idempotencyKey: `${runtimeActivityRedispatchIdentity(command)}:lease:${leaseId}`,
     });
   }
 
@@ -278,8 +304,8 @@ function redispatchEvent(
     correlationId: command.scope.runId,
     causationId: approvalEventId,
     parentEventId: approvalEventId,
-    operationId: redispatchOperationId(command.commandId),
-    idempotencyKey: command.idempotencyKey ?? command.commandId,
+    operationId: runtimeActivityRedispatchIdentity(command),
+    idempotencyKey: runtimeActivityRedispatchIdentity(command),
     timestamp: command.requestedAt,
     payload: {
       commandId: command.commandId,
@@ -295,6 +321,7 @@ function redispatchEvent(
       stateAttempt: task.stateAttempt,
       subjectHash: task.subjectHash,
       expectedTaskRevision: command.expectedTaskRevision,
+      redispatchIdentityVersion: '1.0.0',
       redispatchCommandHash: redispatchCommandHash(command),
     },
   };
@@ -360,20 +387,27 @@ function descriptorKindForTask(
   return kind;
 }
 
-function redispatchOperationId(commandId: string): string {
-  return `activity-redispatch:${commandId}`;
+export function runtimeActivityRedispatchIdentity(
+  command: Pick<RuntimeActivityRedispatchCommand, 'scope' | 'taskId' | 'expectedTaskRevision'>
+): string {
+  const digest = hashCanonicalJson({
+    ...(command.scope.tenantId === undefined ? {} : { tenantId: command.scope.tenantId }),
+    userId: command.scope.userId,
+    runId: command.scope.runId,
+    taskId: command.taskId,
+    expectedTaskRevision: command.expectedTaskRevision,
+  }).slice('sha256:'.length);
+  return `activity-redispatch:${digest}`;
 }
 
 function redispatchCommandHash(command: RuntimeActivityRedispatchCommand): string {
   return hashCanonicalJson({
-    commandId: command.commandId,
     scope: command.scope,
     taskId: command.taskId,
     expectedTaskRevision: command.expectedTaskRevision,
     expectedSubjectHash: command.expectedSubjectHash,
     activityDescriptorRef: command.activityDescriptorRef,
     activityDescriptorHash: command.activityDescriptorHash,
-    idempotencyKey: command.idempotencyKey ?? command.commandId,
   });
 }
 
