@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { EventCreateInput } from '../../events';
 import type {
   FencedRunLease,
@@ -42,6 +43,9 @@ export interface RuntimeActivityRedispatchPort {
     scope: Readonly<RuntimeScope>;
     task: Readonly<RuntimeHumanTask>;
     descriptor: Readonly<RuntimeActivityDescriptor>;
+    redispatchCommandId: string;
+    redispatchIdempotencyKey: string;
+    approvalEventId: string;
     requestEventId: string;
     fencingToken: number;
     signal: AbortSignal;
@@ -75,8 +79,7 @@ export class RuntimeActivityRedispatchService {
   private readonly now: () => string;
 
   constructor(private readonly options: RuntimeActivityRedispatchServiceOptions) {
-    let sequence = 0;
-    this.nextId = options.nextId ?? ((namespace) => `${namespace}.${++sequence}`);
+    this.nextId = options.nextId ?? ((namespace) => `${namespace}.${randomUUID()}`);
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -86,7 +89,9 @@ export class RuntimeActivityRedispatchService {
     validateCommand(command);
     const signal = command.signal ?? new AbortController().signal;
     assertActive(signal);
-    const lease = await this.acquire(command);
+    const startedAt = this.now();
+    validTimestamp(startedAt, 'Activity redispatch clock');
+    const lease = await this.acquire(command, startedAt);
     if (!lease) {
       throw new FrameworkError({
         code: 'RUNTIME_LEASE_UNAVAILABLE',
@@ -95,7 +100,7 @@ export class RuntimeActivityRedispatchService {
     }
     const authorization = authorizationFor(lease);
     try {
-      const evidence = await this.loadEvidence(command);
+      const evidence = await this.loadEvidence(command, startedAt);
       await this.options.revisions.validate(evidence);
       assertActive(signal);
       const prior = await this.findPrior(command);
@@ -106,7 +111,15 @@ export class RuntimeActivityRedispatchService {
         if (!head) corrupt('Run Event stream does not exist');
         await this.options.events.append({
           scope,
-          events: [redispatchEvent(command, evidence.task, evidence.descriptor, requestEventId)],
+          events: [
+            redispatchEvent(
+              command,
+              evidence.task,
+              evidence.descriptor,
+              evidence.approvalEventId,
+              requestEventId
+            ),
+          ],
           expectedLastSequence: head.lastSequence,
           expectedRunRevision: head.runRevision,
           fencingToken: authorization.guard.fencingToken,
@@ -115,10 +128,18 @@ export class RuntimeActivityRedispatchService {
         });
       }
       assertActive(signal);
+      await this.options.runLeases.assertCurrent({
+        scope: authorization.scope,
+        guard: authorization.guard,
+        checkedAt: this.now(),
+      });
       const dispatched = await this.options.dispatcher.dispatch({
         scope: command.scope,
         task: evidence.task,
         descriptor: evidence.descriptor,
+        redispatchCommandId: command.commandId,
+        redispatchIdempotencyKey: command.idempotencyKey ?? command.commandId,
+        approvalEventId: evidence.approvalEventId,
         requestEventId,
         fencingToken: authorization.guard.fencingToken,
         signal,
@@ -135,9 +156,13 @@ export class RuntimeActivityRedispatchService {
     }
   }
 
-  private async loadEvidence(command: RuntimeActivityRedispatchCommand): Promise<{
+  private async loadEvidence(
+    command: RuntimeActivityRedispatchCommand,
+    checkedAt: string
+  ): Promise<{
     task: RuntimeHumanTask;
     descriptor: RuntimeActivityDescriptor;
+    approvalEventId: string;
   }> {
     const events = await this.options.events.read({ scope: streamScope(command.scope) });
     const task = projectRuntimeHumanTasks(events).find(
@@ -151,7 +176,7 @@ export class RuntimeActivityRedispatchService {
       subjectHash: command.expectedSubjectHash,
       revision: command.expectedTaskRevision,
       requestedBy: task.requestedBy,
-      resumedAt: command.requestedAt,
+      resumedAt: checkedAt,
       ...(task.checkpointRef === undefined ? {} : { checkpointRef: task.checkpointRef }),
       ...(task.policyRef === undefined ? {} : { policyRef: task.policyRef }),
       ...(task.providerRevision === undefined ? {} : { providerRevision: task.providerRevision }),
@@ -162,8 +187,9 @@ export class RuntimeActivityRedispatchService {
       activityDescriptorRef: command.activityDescriptorRef,
       activityDescriptorHash: command.activityDescriptorHash,
     });
-    assertDescriptorIdentity(task, descriptor, command);
-    return { task, descriptor };
+    assertDescriptorIdentity(task, descriptor, command, checkedAt);
+    const approvalEventId = approvedEventId(events, command);
+    return { task, descriptor, approvalEventId };
   }
 
   private async findPrior(command: RuntimeActivityRedispatchCommand) {
@@ -176,9 +202,22 @@ export class RuntimeActivityRedispatchService {
     );
     if (!prior) return null;
     const payload = record(prior.payload);
+    const metadata = record(prior.metadata);
+    const expectedCommandHash = redispatchCommandHash(command);
     if (
+      payload?.commandId !== command.commandId ||
+      payload?.activityDescriptorRef !== command.activityDescriptorRef ||
       payload?.activityDescriptorHash !== command.activityDescriptorHash ||
-      payload?.taskId !== command.taskId
+      payload?.taskId !== command.taskId ||
+      prior.sessionId !== command.scope.sessionId ||
+      prior.workspaceId !== command.scope.workspaceId ||
+      prior.idempotencyKey !== (command.idempotencyKey ?? command.commandId) ||
+      (metadata?.expectedTaskRevision !== undefined &&
+        metadata.expectedTaskRevision !== command.expectedTaskRevision) ||
+      (metadata?.subjectHash !== undefined &&
+        metadata.subjectHash !== command.expectedSubjectHash) ||
+      (metadata?.redispatchCommandHash !== undefined &&
+        metadata.redispatchCommandHash !== expectedCommandHash)
     ) {
       throw new FrameworkError({
         code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
@@ -188,7 +227,10 @@ export class RuntimeActivityRedispatchService {
     return prior;
   }
 
-  private acquire(command: RuntimeActivityRedispatchCommand): Promise<FencedRunLease | null> {
+  private acquire(
+    command: RuntimeActivityRedispatchCommand,
+    acquiredAt: string
+  ): Promise<FencedRunLease | null> {
     const leaseId = this.nextId('activity-redispatch-lease');
     return this.options.runLeases.acquire({
       ...(command.scope.tenantId === undefined ? {} : { tenantId: command.scope.tenantId }),
@@ -198,7 +240,7 @@ export class RuntimeActivityRedispatchService {
       requestedLeaseId: leaseId,
       ownerId: command.ownerId,
       ttlMs: command.leaseTtlMs,
-      acquiredAt: command.requestedAt,
+      acquiredAt,
       idempotencyKey: `${redispatchOperationId(command.commandId)}:lease:${leaseId}`,
     });
   }
@@ -220,6 +262,7 @@ function redispatchEvent(
   command: RuntimeActivityRedispatchCommand,
   task: RuntimeHumanTask,
   descriptor: RuntimeActivityDescriptor,
+  approvalEventId: string,
   eventId: string
 ): EventCreateInput {
   return {
@@ -233,6 +276,8 @@ function redispatchEvent(
     runId: command.scope.runId,
     fsmState: task.stateId,
     correlationId: command.scope.runId,
+    causationId: approvalEventId,
+    parentEventId: approvalEventId,
     operationId: redispatchOperationId(command.commandId),
     idempotencyKey: command.idempotencyKey ?? command.commandId,
     timestamp: command.requestedAt,
@@ -249,6 +294,8 @@ function redispatchEvent(
     metadata: {
       stateAttempt: task.stateAttempt,
       subjectHash: task.subjectHash,
+      expectedTaskRevision: command.expectedTaskRevision,
+      redispatchCommandHash: redispatchCommandHash(command),
     },
   };
 }
@@ -256,7 +303,8 @@ function redispatchEvent(
 function assertDescriptorIdentity(
   task: RuntimeHumanTask,
   descriptor: RuntimeActivityDescriptor,
-  command: RuntimeActivityRedispatchCommand
+  command: RuntimeActivityRedispatchCommand,
+  checkedAt: string
 ): void {
   if (
     descriptor.runId !== command.scope.runId ||
@@ -271,10 +319,38 @@ function assertDescriptorIdentity(
   }
   if (
     descriptor.deadlineAt !== undefined &&
-    Date.parse(descriptor.deadlineAt) <= Date.parse(command.requestedAt)
+    Date.parse(descriptor.deadlineAt) <= Date.parse(checkedAt)
   ) {
     humanTaskError('HUMAN_TASK_EXPIRED', 'Activity descriptor expired before redispatch');
   }
+}
+
+function approvedEventId(
+  events: readonly {
+    id: string;
+    type: string;
+    payload: unknown;
+  }[],
+  command: RuntimeActivityRedispatchCommand
+): string {
+  const approval = events.find((event) => {
+    if (event.type !== 'human.review.approved') return false;
+    const payload = record(event.payload);
+    return (
+      payload?.taskId === command.taskId &&
+      (payload.expectedRevision === undefined ||
+        payload.expectedRevision === command.expectedTaskRevision - 1) &&
+      (payload.expectedSubjectHash === undefined ||
+        payload.expectedSubjectHash === command.expectedSubjectHash)
+    );
+  });
+  if (!approval) {
+    humanTaskError(
+      'HUMAN_TASK_RESUME_REVALIDATION_FAILED',
+      'Approved HumanTask decision Event was not found'
+    );
+  }
+  return approval.id;
 }
 
 function descriptorKindForTask(
@@ -286,6 +362,19 @@ function descriptorKindForTask(
 
 function redispatchOperationId(commandId: string): string {
   return `activity-redispatch:${commandId}`;
+}
+
+function redispatchCommandHash(command: RuntimeActivityRedispatchCommand): string {
+  return hashCanonicalJson({
+    commandId: command.commandId,
+    scope: command.scope,
+    taskId: command.taskId,
+    expectedTaskRevision: command.expectedTaskRevision,
+    expectedSubjectHash: command.expectedSubjectHash,
+    activityDescriptorRef: command.activityDescriptorRef,
+    activityDescriptorHash: command.activityDescriptorHash,
+    idempotencyKey: command.idempotencyKey ?? command.commandId,
+  });
 }
 
 function streamScope(scope: RuntimeScope): EventStreamScope {
@@ -339,6 +428,10 @@ function validateCommand(command: RuntimeActivityRedispatchCommand): void {
   if (!Number.isFinite(Date.parse(command.requestedAt))) {
     invalid('requestedAt must be a valid date-time');
   }
+}
+
+function validTimestamp(value: string, label: string): void {
+  if (!Number.isFinite(Date.parse(value))) invalid(`${label} must be a valid date-time`);
 }
 
 function assertActive(signal: AbortSignal): void {
