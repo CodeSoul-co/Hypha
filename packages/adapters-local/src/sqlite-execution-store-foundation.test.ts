@@ -944,6 +944,54 @@ describe('SQLiteExecutionStoreFoundation', () => {
     backup.close();
   });
 
+  it('fails startup migration under a write lock and opens cleanly after release', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const created = structuredClone(executionRecordCreateRequestExample.record);
+    const lockHolder = openTestDatabase(filename);
+    createVersionOneDatabase(lockHolder);
+    insertLegacyRecord(lockHolder, created);
+    lockHolder.exec('PRAGMA journal_mode = WAL');
+    lockHolder.exec('BEGIN IMMEDIATE');
+
+    try {
+      expect(
+        () => new SQLiteExecutionStoreFoundation({ rootPath: root, busyTimeoutMs: 1 })
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'Unable to open the SQLite Execution store.',
+        })
+      );
+      expect(lockHolder.prepare('PRAGMA user_version').get()).toMatchObject({
+        user_version: 1,
+      });
+      expect(
+        lockHolder
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get('execution_mutation_idempotency')
+      ).toBeUndefined();
+    } finally {
+      lockHolder.exec('ROLLBACK');
+      lockHolder.close();
+    }
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root, busyTimeoutMs: 1 });
+    await expect(reopened.get(created.id)).resolves.toEqual(created);
+    await expect(reopened.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: 7 },
+    });
+    await reopened.close();
+
+    const backup = openTestDatabase(`${filename}.backup-v1.sqlite`);
+    expect(backup.prepare('PRAGMA integrity_check').get()).toMatchObject({
+      integrity_check: 'ok',
+    });
+    expect(backup.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+    backup.close();
+  });
+
   it('preserves the source and verified backup when migration rolls back', async () => {
     const root = await temporaryRoot();
     const filename = path.join(root, 'executions.sqlite');
