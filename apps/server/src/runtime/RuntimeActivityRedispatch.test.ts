@@ -10,6 +10,7 @@ import {
   type EventRuntime,
   type RuntimeActivityDescriptor,
   type RuntimeActivityKind,
+  type RuntimeActivityRedispatchPort,
   type RuntimeHumanTaskKind,
 } from '@hypha/core';
 
@@ -61,7 +62,7 @@ describe('RuntimeActivityRedispatchService', () => {
       });
       const dispatchedIdentities: string[] = [];
       const dispatch = jest.fn(
-        async (input: { redispatchCommandId: string; redispatchIdempotencyKey: string }) => {
+        async (input: Parameters<RuntimeActivityRedispatchPort['dispatch']>[0]) => {
           dispatchedIdentities.push(input.redispatchCommandId, input.redispatchIdempotencyKey);
           return {
             commandId: `activity-command.${taskKind}`,
@@ -277,13 +278,15 @@ describe('RuntimeActivityRedispatchService', () => {
     const reference = await descriptors.put(descriptor());
     await appendApprovedTask(events, reference);
     const redispatchIds: string[] = [];
-    const dispatch = jest.fn(async (input: { redispatchCommandId: string }) => {
-      redispatchIds.push(input.redispatchCommandId);
-      return {
-        commandId: 'activity-command.redispatch',
-        reused: false,
-      };
-    });
+    const dispatch = jest.fn(
+      async (input: Parameters<RuntimeActivityRedispatchPort['dispatch']>[0]) => {
+        redispatchIds.push(input.redispatchCommandId);
+        return {
+          commandId: 'activity-command.redispatch',
+          reused: false,
+        };
+      }
+    );
     const runtime = service({
       events,
       descriptors,
