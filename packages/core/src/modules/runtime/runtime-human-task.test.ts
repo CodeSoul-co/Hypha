@@ -77,6 +77,7 @@ describe('Generic Runtime HumanTask', () => {
     const task = projectRuntimeHumanTasks([event('human.review.requested', requested, 1)])[0];
     expect(
       assertRuntimeHumanTaskDecision(task, {
+        decision: 'approved',
         expectedRevision: 1,
         expectedSubjectHash: requested.subjectHash,
         principal: reviewer,
@@ -85,6 +86,7 @@ describe('Generic Runtime HumanTask', () => {
     ).toBe(task);
     expect(() =>
       assertRuntimeHumanTaskDecision(task, {
+        decision: 'approved',
         expectedRevision: 2,
         expectedSubjectHash: requested.subjectHash,
         principal: reviewer,
@@ -93,6 +95,7 @@ describe('Generic Runtime HumanTask', () => {
     ).toThrow(expect.objectContaining({ code: 'HUMAN_TASK_REVISION_CONFLICT' }));
     expect(() =>
       assertRuntimeHumanTaskDecision(task, {
+        decision: 'approved',
         expectedRevision: 1,
         expectedSubjectHash: `sha256:${'b'.repeat(64)}`,
         principal: reviewer,
@@ -101,6 +104,7 @@ describe('Generic Runtime HumanTask', () => {
     ).toThrow(expect.objectContaining({ code: 'HUMAN_TASK_SUBJECT_MISMATCH' }));
     expect(() =>
       assertRuntimeHumanTaskDecision(task, {
+        decision: 'approved',
         expectedRevision: 1,
         expectedSubjectHash: requested.subjectHash,
         principal: { ...reviewer, permissionScopes: ['runtime.run.read'] },
@@ -109,6 +113,7 @@ describe('Generic Runtime HumanTask', () => {
     ).toThrow(expect.objectContaining({ code: 'HUMAN_TASK_SCOPE_DENIED' }));
     expect(() =>
       assertRuntimeHumanTaskDecision(task, {
+        decision: 'approved',
         expectedRevision: 1,
         expectedSubjectHash: requested.subjectHash,
         principal: reviewer,
