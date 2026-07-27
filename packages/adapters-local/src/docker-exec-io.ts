@@ -3,7 +3,11 @@ import {
   type DockerCliResult,
   type DockerCommandTransport,
 } from './docker-cli-transport';
-import { validateContainerPath, validateLiteralArgv, validContainerReference } from './docker-engine-boundary';
+import {
+  validateContainerPath,
+  validateLiteralArgv,
+  validContainerReference,
+} from './docker-engine-boundary';
 import type { LocalProcessOutputEvent } from './local-process-supervisor';
 
 export interface DockerContainerExecInput {
@@ -64,13 +68,24 @@ export class DockerExecIo implements DockerContainerIo {
   }
 }
 
-function validateExecInput(input: DockerContainerExecInput): void {
+export function validateExecInput(input: DockerContainerExecInput): void {
   if (!isPlainRecord(input)) throw new TypeError('Docker exec input must be an object.');
   validContainerReference(input.containerReference);
   nonEmptyNoNul(input.executable, 'Docker executable');
   validateLiteralArgv(input.args, 'Docker executable args', true);
   validateContainerPath(input.workingDirectory, 'working directory');
   validateEnvironment(input.environment);
+  validateDockerCliRequest({
+    args: ['exec'],
+    ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+    timeoutMs: input.timeoutMs,
+    ...(input.idleTimeoutMs !== undefined ? { idleTimeoutMs: input.idleTimeoutMs } : {}),
+    maxStdoutBytes: input.maxStdoutBytes,
+    maxStderrBytes: input.maxStderrBytes,
+    maxCombinedOutputBytes: input.maxCombinedOutputBytes,
+    signal: input.signal,
+    ...(input.onOutput ? { onOutput: input.onOutput } : {}),
+  });
 }
 
 function validateEnvironment(value: unknown): asserts value is Record<string, string> {

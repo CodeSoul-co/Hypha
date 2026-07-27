@@ -25,6 +25,11 @@ export interface DockerExecutionCleanupEvidence {
   failureCode?: 'DOCKER_COMMAND_FAILED' | 'DOCKER_INVALID_RESPONSE' | 'UNEXPECTED';
 }
 
+export type DockerEvidenceFailureCode =
+  | 'DOCKER_COMMAND_FAILED'
+  | 'DOCKER_INVALID_RESPONSE'
+  | 'UNEXPECTED';
+
 export interface BuildDockerTerminalResultInput {
   providerId: string;
   executionId: string;
@@ -34,6 +39,7 @@ export interface BuildDockerTerminalResultInput {
   processResult: DockerCliResult;
   inspection: DockerContainerInspection;
   resourceSnapshot?: DockerResourceSnapshot;
+  resourceFailureCode?: DockerEvidenceFailureCode;
   cleanup: DockerExecutionCleanupEvidence;
   changedFiles: FileMutation[];
   generatedArtifactRefs: string[];
@@ -82,6 +88,7 @@ export function buildDockerTerminalResult(
     processTreeTerminationVerified: input.processResult.processTreeTerminationVerified,
     cleanup: input.cleanup,
     ...(input.resourceSnapshot ? { resourceSnapshot: input.resourceSnapshot } : {}),
+    ...(input.resourceFailureCode ? { resourceFailureCode: input.resourceFailureCode } : {}),
     ...(input.processResult.outputLimitStream
       ? { outputLimitStream: input.processResult.outputLimitStream }
       : {}),
@@ -98,6 +105,7 @@ export function buildDockerTerminalResult(
     oomKilled: input.inspection.oomKilled,
     cleanup: input.cleanup,
     ...(input.resourceSnapshot ? { resourceSnapshot: input.resourceSnapshot } : {}),
+    ...(input.resourceFailureCode ? { resourceFailureCode: input.resourceFailureCode } : {}),
   };
 
   return validateCommandExecutionResult({
@@ -301,6 +309,17 @@ function validateInput(input: BuildDockerTerminalResultInput): void {
   validateInspection(input.inspection, input.containerReference);
   if (input.resourceSnapshot !== undefined) {
     validateResourceSnapshot(input.resourceSnapshot);
+  }
+  if (input.resourceSnapshot !== undefined && input.resourceFailureCode !== undefined) {
+    throw invalidEvidence('Docker resource snapshot and failure evidence are mutually exclusive.');
+  }
+  if (
+    input.resourceFailureCode !== undefined &&
+    !['DOCKER_COMMAND_FAILED', 'DOCKER_INVALID_RESPONSE', 'UNEXPECTED'].includes(
+      input.resourceFailureCode
+    )
+  ) {
+    throw invalidEvidence('Docker resource failure code is invalid.');
   }
   validateCleanup(input.cleanup);
   if (!Array.isArray(input.changedFiles)) {
