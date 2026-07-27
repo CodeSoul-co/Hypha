@@ -7,6 +7,7 @@ import { DockerEngineCliClient } from './docker-engine-client';
 import { DockerExecIo } from './docker-exec-io';
 import {
   DockerExecutionCoordinator,
+  DockerExecutionCoordinatorError,
   type DockerExecutionOutputCollector,
 } from './docker-execution-coordinator';
 import { DockerStatsResourceAccounting } from './docker-resource-accounting';
@@ -148,6 +149,75 @@ describe('DockerExecutionCoordinator real daemon', () => {
     });
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
+
+  it('propagates real cancellation and removes the container process tree', async () => {
+    const workspace = await temporaryWorkspace('cancel');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('cancel');
+    const cancellation = new AbortController();
+    const startedMarker = path.join(workspace, 'cancel.started');
+
+    const execution = coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+      executionInput(name, workspace, 'cancel', {
+        executable: 'sh',
+        args: ['-c', 'touch /workspace/cancel.started && sleep 30'],
+        timeoutMs: 10_000,
+        signal: cancellation.signal,
+      })
+    );
+    await waitForPath(startedMarker);
+    cancellation.abort();
+    const result = await execution;
+
+    expect(result).toMatchObject({
+      status: 'cancelled',
+      exitCode: null,
+      error: { code: 'EXECUTION_CANCELLED', retryable: false },
+      changedFiles: [{ path: 'cancel.started', operation: 'created' }],
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+        processTreeTerminationVerified: true,
+      },
+    });
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
+
+  it('fails closed after a real output limit without an Artifact and still removes the container', async () => {
+    const workspace = await temporaryWorkspace('output-limit');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('output-limit');
+    let failure: unknown;
+
+    try {
+      await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+        executionInput(name, workspace, 'output-limit', {
+          executable: 'yes',
+          args: ['hypha'],
+          timeoutMs: 5_000,
+          maxStdoutBytes: 128,
+          maxCombinedOutputBytes: 256,
+        })
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(DockerExecutionCoordinatorError);
+    expect(failure).toMatchObject({
+      phase: 'terminal',
+      code: 'DOCKER_INVALID_RESPONSE',
+      cleanup: {
+        complete: true,
+        containerAbsent: true,
+        stopAttempted: true,
+      },
+    });
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
 });
 
 class RealWorkspaceOutputs implements DockerExecutionOutputCollector {
@@ -188,7 +258,15 @@ function executionInput(
   name: string,
   workspace: string,
   caseName: string,
-  command: { executable: string; args: string[]; timeoutMs: number }
+  command: {
+    executable: string;
+    args: string[];
+    timeoutMs: number;
+    signal?: AbortSignal;
+    maxStdoutBytes?: number;
+    maxStderrBytes?: number;
+    maxCombinedOutputBytes?: number;
+  }
 ) {
   return {
     providerId: 'docker.real',
@@ -222,10 +300,10 @@ function executionInput(
       workingDirectory: '/workspace',
       environment: {},
       timeoutMs: command.timeoutMs,
-      maxStdoutBytes: 1024,
-      maxStderrBytes: 1024,
-      maxCombinedOutputBytes: 2048,
-      signal: new AbortController().signal,
+      maxStdoutBytes: command.maxStdoutBytes ?? 1024,
+      maxStderrBytes: command.maxStderrBytes ?? 1024,
+      maxCombinedOutputBytes: command.maxCombinedOutputBytes ?? 2048,
+      signal: command.signal ?? new AbortController().signal,
     },
     cleanupStopTimeoutSeconds: 1,
   };
@@ -241,6 +319,18 @@ function uniqueContainerName(caseName: string): string {
   const name = `hypha-coordinator-${caseName}-${process.pid}-${Date.now()}`;
   containerNames.push(name);
   return name;
+}
+
+async function waitForPath(filename: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      await fs.access(filename);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error('Docker acceptance marker was not created before cancellation.');
 }
 
 async function inspectRawContainer(containerReference: string): Promise<Record<string, unknown>> {
