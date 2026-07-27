@@ -12,6 +12,12 @@ import { validateWorkspaceSnapshotManifest } from '@hypha/core';
 import { collectArtifactContent } from './artifact-content-io';
 import { executionProviderError } from './execution-provider-error';
 import type { LocalWorkspaceSnapshot } from './local-workspace-mutations';
+import {
+  createLocalWorkspaceRestoreJournal,
+  readLocalWorkspaceRestoreJournal,
+  removeLocalWorkspaceRestoreJournal,
+  withLocalWorkspaceRestoreLock,
+} from './local-workspace-restore-journal';
 import { verifyWorkspaceSnapshotManifestHash } from './local-workspace-snapshot-manifest';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 
@@ -25,10 +31,32 @@ export interface RestoreLocalWorkspaceSnapshotOptions {
   maxRestoreEntries: number;
 }
 
+export type LocalWorkspaceRestoreRecoveryResult = 'none' | 'finalized' | 'rolled_back';
+
 export async function restoreLocalWorkspaceSnapshot(
   options: RestoreLocalWorkspaceSnapshotOptions
 ): Promise<void> {
   const root = path.resolve(options.workspaceRoot);
+  await withLocalWorkspaceRestoreLock(root, async () => {
+    await recoverInterruptedRestoreUnlocked(root, options.capture);
+    await restoreLocalWorkspaceSnapshotUnlocked(root, options);
+  });
+}
+
+export async function recoverInterruptedLocalWorkspaceRestore(
+  workspaceRoot: string,
+  capture: () => Promise<LocalWorkspaceSnapshot>
+): Promise<LocalWorkspaceRestoreRecoveryResult> {
+  const root = path.resolve(workspaceRoot);
+  return withLocalWorkspaceRestoreLock(root, () =>
+    recoverInterruptedRestoreUnlocked(root, capture)
+  );
+}
+
+async function restoreLocalWorkspaceSnapshotUnlocked(
+  root: string,
+  options: RestoreLocalWorkspaceSnapshotOptions
+): Promise<void> {
   const guard = new WorkspaceControlPlaneGuard();
   guard.assertWorkspaceRoot(root);
   const initial = await options.capture();
@@ -41,8 +69,19 @@ export async function restoreLocalWorkspaceSnapshot(
   const staging = await fs.mkdtemp(path.join(parent, `.${path.basename(root)}.restore-`));
   const backup = `${staging}.previous`;
   let stagingExists = true;
+  let journalCreated = false;
 
   try {
+    await createLocalWorkspaceRestoreJournal(root, {
+      workspaceName: path.basename(root),
+      stagingName: path.basename(staging),
+      backupName: path.basename(backup),
+      operationId: options.request.operationId,
+      snapshotRef: options.request.snapshotRef,
+      initialTreeHash: initial.sourceTreeHash,
+      targetTreeHash: manifest.sourceTreeHash,
+    });
+    journalCreated = true;
     await populateStagingDirectory(staging, manifest, options, guard);
     const beforeSwap = await options.capture();
     if (beforeSwap.sourceTreeHash !== initial.sourceTreeHash) {
@@ -77,11 +116,85 @@ export async function restoreLocalWorkspaceSnapshot(
     }
 
     await fs.rm(backup, { recursive: true, force: true });
+    await removeLocalWorkspaceRestoreJournal(root);
+    journalCreated = false;
   } finally {
     if (stagingExists) await fs.rm(staging, { recursive: true, force: true });
+    if (journalCreated && !(await pathExists(backup))) {
+      await removeLocalWorkspaceRestoreJournal(root);
+    }
     // A backup is never deleted here. If rollback itself fails, preserving the
     // original tree is safer than silently cleaning recovery evidence.
   }
+}
+
+async function recoverInterruptedRestoreUnlocked(
+  root: string,
+  capture: () => Promise<LocalWorkspaceSnapshot>
+): Promise<LocalWorkspaceRestoreRecoveryResult> {
+  const journal = await readLocalWorkspaceRestoreJournal(root);
+  if (!journal) return 'none';
+  if (journal.ownerPid !== process.pid && processIsAlive(journal.ownerPid)) {
+    throw executionProviderError(
+      'EXECUTION_REVISION_CONFLICT',
+      'Another process still owns the Workspace restore transaction.',
+      true
+    );
+  }
+
+  const parent = path.dirname(root);
+  const staging = path.join(parent, journal.stagingName);
+  const backup = path.join(parent, journal.backupName);
+  const rootExists = await pathExists(root);
+  const stagingExists = await pathExists(staging);
+  const backupExists = await pathExists(backup);
+
+  if (!rootExists && backupExists) {
+    if (stagingExists) await fs.rm(staging, { recursive: true, force: true });
+    await fs.rename(backup, root);
+    await assertRecoveredTreeHash(capture, journal.initialTreeHash);
+    await removeLocalWorkspaceRestoreJournal(root);
+    return 'rolled_back';
+  }
+
+  if (rootExists && backupExists && !stagingExists) {
+    const current = await capture();
+    if (current.sourceTreeHash === journal.targetTreeHash) {
+      await fs.rm(backup, { recursive: true, force: true });
+      await removeLocalWorkspaceRestoreJournal(root);
+      return 'finalized';
+    }
+    if (current.sourceTreeHash === journal.initialTreeHash) {
+      await fs.rm(backup, { recursive: true, force: true });
+      await removeLocalWorkspaceRestoreJournal(root);
+      return 'rolled_back';
+    }
+    await rollbackWorkspaceSwap(root, backup);
+    await assertRecoveredTreeHash(capture, journal.initialTreeHash);
+    await removeLocalWorkspaceRestoreJournal(root);
+    return 'rolled_back';
+  }
+
+  if (rootExists && !backupExists && stagingExists) {
+    await assertRecoveredTreeHash(capture, journal.initialTreeHash);
+    await fs.rm(staging, { recursive: true, force: true });
+    await removeLocalWorkspaceRestoreJournal(root);
+    return 'rolled_back';
+  }
+
+  if (rootExists && !backupExists && !stagingExists) {
+    const current = await capture();
+    if (
+      current.sourceTreeHash !== journal.initialTreeHash &&
+      current.sourceTreeHash !== journal.targetTreeHash
+    ) {
+      throw recoveryFailed();
+    }
+    await removeLocalWorkspaceRestoreJournal(root);
+    return current.sourceTreeHash === journal.targetTreeHash ? 'finalized' : 'rolled_back';
+  }
+
+  throw recoveryFailed();
 }
 
 async function readManifest(
@@ -497,6 +610,32 @@ function pathDepth(relativePath: string): number {
   return relativePath.split('/').length;
 }
 
+async function assertRecoveredTreeHash(
+  capture: () => Promise<LocalWorkspaceSnapshot>,
+  expectedTreeHash: string
+): Promise<void> {
+  const recovered = await capture();
+  if (recovered.sourceTreeHash !== expectedTreeHash) throw recoveryFailed();
+}
+
+async function pathExists(candidate: string): Promise<boolean> {
+  try {
+    await fs.lstat(candidate);
+    return true;
+  } catch (error) {
+    if (nodeErrorCode(error) === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function recoveryFailed() {
+  return executionProviderError(
+    'EXECUTION_CLEANUP_FAILED',
+    'Workspace restore state is ambiguous; automatic recovery stopped.',
+    false
+  );
+}
+
 function assertSafeManifestPath(
   guard: WorkspaceControlPlaneGuard,
   relativePath: string,
@@ -511,5 +650,20 @@ function assertSafeManifestPath(
       'Workspace snapshot contains a path denied by the control-plane policy.',
       false
     );
+  }
+}
+
+function nodeErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  const code = error.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return nodeErrorCode(error) !== 'ESRCH';
   }
 }

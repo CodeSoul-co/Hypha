@@ -9,11 +9,12 @@ import {
   type WorkspaceSnapshotManifest,
   validateWorkspaceSnapshotManifest,
 } from '@hypha/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hashArtifactBytes, readArtifactStream } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
+import { workspaceRestoreJournalPath } from './local-workspace-restore-journal';
 import { LocalWorkspaceSnapshotArtifactService } from './local-workspace-snapshot-artifacts';
 import {
   encodeWorkspaceSnapshotManifest,
@@ -33,7 +34,7 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
   const roots: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.splice(0).map(cleanupWorkspaceRoot));
   });
 
   it('persists a complete Workspace tree and finalized manifest through ArtifactManager', async () => {
@@ -140,6 +141,9 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     await expect(workspace.capture()).resolves.toMatchObject({
       sourceTreeHash: original.sourceTreeHash,
     });
+    await expect(fs.access(workspaceRestoreJournalPath(root))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('does not modify the Workspace when the expected current hash is stale', async () => {
@@ -217,6 +221,101 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
       normalizedError: { code: 'EXECUTION_PATH_DENIED' },
     });
     await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+  });
+
+  it('rolls back an interrupted restore after the original tree was moved', async () => {
+    const root = await workspaceRoot('restore-recover-backup');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const service = createService(workspace, fixture.manager);
+    const snapshot = await service.createFullSnapshot(snapshotRequest());
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const current = await workspace.capture();
+    const realRename = fs.rename.bind(fs);
+    let injected = false;
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      await realRename(source, destination);
+      if (!injected && path.resolve(String(source)) === path.resolve(root)) {
+        injected = true;
+        throw nodeFailure('EIO');
+      }
+    });
+
+    try {
+      await expect(
+        service.restoreFullSnapshot(restoreRequest(snapshot.id, current.sourceTreeHash))
+      ).rejects.toMatchObject({
+        normalizedError: { code: 'EXECUTION_INTERNAL_ERROR' },
+      });
+    } finally {
+      rename.mockRestore();
+    }
+
+    const journalPath = workspaceRestoreJournalPath(root);
+    await expect(fs.access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readFile(journalPath, 'utf8')).resolves.not.toContain(path.dirname(root));
+    await expect(service.recoverInterruptedRestore()).resolves.toBe('rolled_back');
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+    await expect(fs.access(journalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('finalizes an interrupted restore after the staged tree was installed', async () => {
+    const root = await workspaceRoot('restore-recover-swap');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const service = createService(workspace, fixture.manager);
+    const snapshot = await service.createFullSnapshot(snapshotRequest());
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const current = await workspace.capture();
+    const realRename = fs.rename.bind(fs);
+    let injected = false;
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      await realRename(source, destination);
+      if (
+        !injected &&
+        path.resolve(String(destination)) === path.resolve(root) &&
+        path.basename(String(source)).startsWith(`.${path.basename(root)}.restore-`)
+      ) {
+        injected = true;
+        throw nodeFailure('EIO');
+      }
+    });
+
+    try {
+      await expect(
+        service.restoreFullSnapshot(restoreRequest(snapshot.id, current.sourceTreeHash))
+      ).rejects.toMatchObject({
+        normalizedError: { code: 'EXECUTION_INTERNAL_ERROR' },
+      });
+    } finally {
+      rename.mockRestore();
+    }
+
+    await expect(service.recoverInterruptedRestore()).resolves.toBe('finalized');
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('snapshot');
+    await expect(fs.access(workspaceRestoreJournalPath(root))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('preserves an invalid restore journal and fails closed', async () => {
+    const root = await workspaceRoot('restore-invalid-journal');
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const fixture = createFixture(root);
+    const service = createService(
+      new LocalWorkspaceAdapter({ workspaceRoot: root }),
+      fixture.manager
+    );
+    const journalPath = workspaceRestoreJournalPath(root);
+    await fs.writeFile(journalPath, '{"version":1,"journalHash":"invalid"}\n');
+
+    await expect(service.recoverInterruptedRestore()).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_CLEANUP_FAILED' },
+    });
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+    await expect(fs.access(journalPath)).resolves.toBeUndefined();
   });
 
   it('fails before Artifact writes when Workspace scope does not match', async () => {
@@ -479,4 +578,20 @@ async function createManifestArtifact(
     expectedRevision: draft.revision,
     reason: 'Workspace snapshot restore fixture',
   });
+}
+
+function nodeFailure(code: string): Error & { code: string } {
+  return Object.assign(new Error(`Injected ${code}`), { code });
+}
+
+async function cleanupWorkspaceRoot(root: string): Promise<void> {
+  await fs.rm(root, { recursive: true, force: true });
+  const parent = path.dirname(root);
+  const prefix = `.${path.basename(root)}.restore-`;
+  const candidates = await fs.readdir(parent);
+  await Promise.all(
+    candidates
+      .filter((candidate) => candidate.startsWith(prefix))
+      .map((candidate) => fs.rm(path.join(parent, candidate), { recursive: true, force: true }))
+  );
 }

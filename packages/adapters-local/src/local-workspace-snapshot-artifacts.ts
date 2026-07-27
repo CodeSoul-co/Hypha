@@ -20,7 +20,11 @@ import {
   encodeWorkspaceSnapshotManifest,
   hashWorkspaceSnapshotManifest,
 } from './local-workspace-snapshot-manifest';
-import { restoreLocalWorkspaceSnapshot } from './local-workspace-snapshot-restore';
+import {
+  recoverInterruptedLocalWorkspaceRestore,
+  type LocalWorkspaceRestoreRecoveryResult,
+  restoreLocalWorkspaceSnapshot,
+} from './local-workspace-snapshot-restore';
 
 export interface LocalWorkspaceSnapshotArtifactContext {
   profileRef: SpecRef;
@@ -179,6 +183,23 @@ export class LocalWorkspaceSnapshotArtifactService {
         'EXECUTION_INTERNAL_ERROR',
         'Workspace full snapshot restore failed.',
         true,
+        code ? { causeCode: code } : undefined
+      );
+    }
+  }
+
+  async recoverInterruptedRestore(): Promise<LocalWorkspaceRestoreRecoveryResult> {
+    try {
+      return await recoverInterruptedLocalWorkspaceRestore(this.workspace.workspaceRoot, () =>
+        this.workspace.capture()
+      );
+    } catch (error) {
+      if (hasNormalizedError(error)) throw error;
+      const code = nodeErrorCode(error);
+      throw executionProviderError(
+        'EXECUTION_CLEANUP_FAILED',
+        'Workspace restore recovery failed.',
+        false,
         code ? { causeCode: code } : undefined
       );
     }
