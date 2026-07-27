@@ -106,6 +106,45 @@ describe('LocalProcessSupervisor', () => {
     expect(result.observedStdoutBytes).toBeGreaterThan(32);
   });
 
+  it('publishes raw output bytes and the governed truncation boundary', async () => {
+    const observed: Array<{
+      stream: 'stdout' | 'stderr';
+      chunk: Uint8Array;
+      truncated: boolean;
+    }> = [];
+    const result = await new LocalProcessSupervisor().run(
+      request(['-e', "process.stdout.write('x'.repeat(128)); setInterval(() => {}, 1000)"], {
+        maxStdoutBytes: 16,
+        maxCombinedOutputBytes: 16,
+        onOutput: (event) => observed.push(event),
+      })
+    );
+
+    expect(result.outcome).toBe('output_limit');
+    expect(observed).toEqual([
+      {
+        stream: 'stdout',
+        chunk: new TextEncoder().encode('x'.repeat(128)),
+        truncated: true,
+      },
+    ]);
+  });
+
+  it('terminates the process when an output observer fails', async () => {
+    const result = await new LocalProcessSupervisor().run(
+      request(['-e', "process.stdout.write('output'); setInterval(() => {}, 1000)"], {
+        onOutput: () => {
+          throw new Error('observer unavailable');
+        },
+      })
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'termination_failed',
+      terminationError: { message: 'observer unavailable' },
+    });
+  });
+
   it('normalizes a process start failure into runner evidence', async () => {
     const missing = `${os.tmpdir()}/hypha-executable-that-does-not-exist`;
     const result = await new LocalProcessSupervisor().run(request([], { executable: missing }));

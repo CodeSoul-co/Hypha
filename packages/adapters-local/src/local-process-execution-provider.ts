@@ -2,11 +2,14 @@ import {
   validateCommandExecutionRequest,
   validateCommandExecutionResult,
   validateExecutionCancelRequest,
+  validateRemoteOutputStreamRequest,
   validateSandboxCreateRequest,
+  type CommandOutputChunk,
   type CommandExecutionRequest,
   type CommandExecutionResult,
   type ExecutionCancelRequest,
   type ProviderHealth,
+  type RemoteOutputStreamRequest,
   type SandboxCleanupRequest,
   type SandboxCreateRequest,
   type SandboxProvider,
@@ -28,8 +31,12 @@ import {
   buildLocalProcessResult,
   type LocalProcessOutputArtifactRefs,
 } from './local-process-result';
-import { LocalProcessSupervisor } from './local-process-supervisor';
+import {
+  LocalProcessSupervisor,
+  type LocalProcessOutputEvent,
+} from './local-process-supervisor';
 import type { LocalProcessOutputArtifactPort } from './local-process-output-artifacts';
+import { LocalProcessOutputStreamRegistry } from './local-process-output-stream-registry';
 import { LocalSandboxLifecycle } from './local-sandbox-lifecycle';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
 import {
@@ -49,6 +56,8 @@ export interface LocalProcessExecutionProviderOptions extends LocalProcessPolicy
   executionId?: (request: CommandExecutionRequest) => string;
   supervisor?: LocalProcessSupervisor;
   outputArtifacts?: LocalProcessOutputArtifactPort;
+  maxRetainedOutputChunks?: number;
+  maxTrackedOutputStreams?: number;
 }
 
 const localCapabilities = (processTreeKill: boolean): SandboxProviderCapabilities => ({
@@ -77,6 +86,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
   private readonly workspace: LocalWorkspaceAdapter;
   private readonly supervisor: LocalProcessSupervisor;
   private readonly outputArtifacts?: LocalProcessOutputArtifactPort;
+  private readonly outputStreams: LocalProcessOutputStreamRegistry;
   private readonly lifecycle: LocalSandboxLifecycle;
   private readonly active = new LocalActiveExecutionRegistry();
   private readonly resources = new LocalProcessResourceAccountant();
@@ -103,6 +113,11 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
     });
     this.supervisor = options.supervisor ?? new LocalProcessSupervisor({ now: this.now });
     this.outputArtifacts = options.outputArtifacts;
+    this.outputStreams = new LocalProcessOutputStreamRegistry({
+      maxRetainedChunks: options.maxRetainedOutputChunks,
+      maxTrackedExecutions: options.maxTrackedOutputStreams,
+      now: this.now,
+    });
     this.lifecycle = new LocalSandboxLifecycle({
       providerId: this.id,
       workspaceRoot: this.workspace.workspaceRoot,
@@ -170,9 +185,17 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
     const policy = await this.policy.resolve(environment, request);
     const before = request.captureFileMutations ? await this.workspace.capture() : undefined;
     const handle = this.active.begin(executionId, request.sandboxId!);
-    this.lifecycle.markBusy(request.sandboxId!, executionId);
+    const streamOutput = environment.logging.streamOutput ?? false;
+    let outputStreamBegun = false;
+    let markedBusy = false;
     let result: CommandExecutionResult | undefined;
     try {
+      if (streamOutput) {
+        this.outputStreams.begin(executionId, request.principal);
+        outputStreamBegun = true;
+      }
+      this.lifecycle.markBusy(request.sandboxId!, executionId);
+      markedBusy = true;
       const processResult = await this.supervisor.run({
         executable: policy.executable,
         args: request.args ?? [],
@@ -186,6 +209,23 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
         maxCombinedOutputBytes: policy.maxCombinedOutputBytes,
         gracefulTerminationMs: this.gracefulTerminationMs,
         signal: handle.signal,
+        ...(streamOutput
+          ? {
+              onOutput: (event: LocalProcessOutputEvent) => {
+                if (
+                  (event.stream === 'stdout' && environment.logging.captureStdout) ||
+                  (event.stream === 'stderr' && environment.logging.captureStderr)
+                ) {
+                  this.outputStreams.publish(
+                    executionId,
+                    event.stream,
+                    event.chunk,
+                    event.truncated
+                  );
+                }
+              },
+            }
+          : {}),
       });
       const changedFiles = before
         ? this.workspace.diff(before, await this.workspace.capture(), processResult.completedAt)
@@ -218,11 +258,29 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
         { causeName: error instanceof Error ? error.name : typeof error }
       );
     } finally {
+      if (outputStreamBegun) this.outputStreams.complete(executionId);
       this.active.complete(executionId);
-      this.lifecycle.markExecutionComplete(
-        request.sandboxId!,
-        executionId,
-        result?.completedAt ?? this.now()
+      if (markedBusy) {
+        this.lifecycle.markExecutionComplete(
+          request.sandboxId!,
+          executionId,
+          result?.completedAt ?? this.now()
+        );
+      }
+    }
+  }
+
+  streamOutput(input: RemoteOutputStreamRequest): AsyncIterable<CommandOutputChunk> {
+    this.assertOpen();
+    try {
+      return this.outputStreams.stream(validateRemoteOutputStreamRequest(input));
+    } catch (error) {
+      if (!(error instanceof ZodError)) throw error;
+      throw executionProviderError(
+        'EXECUTION_INVALID_REQUEST',
+        'Local Process output stream request failed schema validation.',
+        false,
+        { issueCount: error.issues.length }
       );
     }
   }
@@ -333,6 +391,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
   async close(): Promise<void> {
     if (this.closed) return;
     await this.active.close();
+    this.outputStreams.close();
     this.closed = true;
   }
 

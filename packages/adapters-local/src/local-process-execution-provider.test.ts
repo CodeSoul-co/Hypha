@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
+  CommandOutputChunk,
   CommandExecutionRequest,
   ExecutionEnvironmentSpec,
   SandboxCreateRequest,
@@ -188,6 +189,79 @@ describe('LocalProcessExecutionProvider', () => {
     await provider.close();
   });
 
+  it('streams real process output with replay, ordering, hashes, and completion', async () => {
+    const provider = createProvider(await temporaryWorkspace());
+    const ready = await createReadyStreamingSandbox(provider);
+    const execution = provider.execute(
+      command(ready.id, 'execution.local.streaming', [
+        '-e',
+        "process.stdout.write('out'); setTimeout(() => { process.stderr.write('err'); process.exit(0) }, 80)",
+      ])
+    );
+    await waitForStatus(provider, ready.id, 'busy');
+
+    const streamed = collectOutput(
+      provider.streamOutput({
+        operationId: 'operation.stream.local',
+        executionId: 'execution.local.streaming',
+        principal,
+        fromSequence: 0,
+        follow: true,
+      })
+    );
+    await expect(execution).resolves.toMatchObject({ status: 'completed' });
+    const chunks = await streamed;
+
+    expect(chunks.map(({ sequence, stream }) => ({ sequence, stream }))).toEqual([
+      { sequence: 0, stream: 'stdout' },
+      { sequence: 1, stream: 'stderr' },
+    ]);
+    expect(chunks.map(decodeChunk)).toEqual(['out', 'err']);
+    expect(chunks.every((chunk) => /^sha256:[0-9a-f]{64}$/u.test(chunk.contentHash))).toBe(
+      true
+    );
+    await provider.close();
+  });
+
+  it('marks the chunk that triggers governed output termination as truncated', async () => {
+    const provider = createProvider(await temporaryWorkspace());
+    const ready = await createReadyStreamingSandbox(provider);
+    const execution = provider.execute(
+      command(
+        ready.id,
+        'execution.local.streaming-limit',
+        [
+          '-e',
+          "setTimeout(() => { process.stdout.write('x'.repeat(128)); setInterval(() => {}, 1000) }, 40)",
+        ],
+        { maxStdoutBytes: 16 }
+      )
+    );
+    await waitForStatus(provider, ready.id, 'busy');
+    const streamed = collectOutput(
+      provider.streamOutput({
+        operationId: 'operation.stream.local.limit',
+        executionId: 'execution.local.streaming-limit',
+        principal,
+        follow: true,
+      })
+    );
+
+    await expect(execution).resolves.toMatchObject({
+      status: 'resource_exceeded',
+      error: { code: 'EXECUTION_OUTPUT_LIMIT' },
+    });
+    await expect(streamed).resolves.toEqual([
+      expect.objectContaining({
+        sequence: 0,
+        stream: 'stdout',
+        byteLength: 128,
+        truncated: true,
+      }),
+    ]);
+    await provider.close();
+  });
+
   it('cancels a running command with identity and execution revision fencing', async () => {
     const provider = createProvider(await temporaryWorkspace());
     const ready = await createReadySandbox(provider);
@@ -320,6 +394,21 @@ async function createReadySandbox(provider: LocalProcessExecutionProvider) {
   });
 }
 
+async function createReadyStreamingSandbox(provider: LocalProcessExecutionProvider) {
+  const request = createRequest();
+  request.environment = {
+    ...request.environment,
+    logging: { ...request.environment.logging, streamOutput: true },
+  };
+  const created = await provider.create(request);
+  return provider.start({
+    operationId: 'operation.start.local.streaming',
+    sandboxId: created.id,
+    principal,
+    expectedRevision: created.revision,
+  });
+}
+
 function command(
   sandboxId: string,
   executionId: string,
@@ -353,6 +442,20 @@ async function waitForStatus(
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Sandbox ${sandboxId} did not reach ${status}.`);
+}
+
+async function collectOutput(
+  stream: AsyncIterable<CommandOutputChunk>
+): Promise<CommandOutputChunk[]> {
+  const chunks: CommandOutputChunk[] = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return chunks;
+}
+
+function decodeChunk(chunk: CommandOutputChunk): string {
+  return chunk.encoding === 'base64'
+    ? Buffer.from(chunk.content, 'base64').toString('utf8')
+    : chunk.content;
 }
 
 function environment(): ExecutionEnvironmentSpec {

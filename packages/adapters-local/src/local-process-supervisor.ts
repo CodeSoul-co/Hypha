@@ -27,6 +27,13 @@ export interface LocalProcessRunRequest {
   maxCombinedOutputBytes: number;
   gracefulTerminationMs: number;
   signal: AbortSignal;
+  onOutput?: (event: LocalProcessOutputEvent) => void;
+}
+
+export interface LocalProcessOutputEvent {
+  stream: 'stdout' | 'stderr';
+  chunk: Uint8Array;
+  truncated: boolean;
 }
 
 export interface LocalProcessRunResult {
@@ -120,6 +127,17 @@ export class LocalProcessSupervisor {
 
       const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
         const appended = output.append(stream, chunk);
+        try {
+          request.onOutput?.({
+            stream,
+            chunk: Uint8Array.from(chunk),
+            truncated: appended.limitExceeded !== undefined,
+          });
+        } catch (error) {
+          terminationError = asError(error);
+          requestTermination('termination_failed');
+          return;
+        }
         if (appended.limitExceeded) {
           outputLimitStream = appended.limitExceeded;
           requestTermination('output_limit');

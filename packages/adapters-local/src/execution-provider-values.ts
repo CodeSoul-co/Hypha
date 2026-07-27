@@ -8,6 +8,10 @@ export function hashExecutionText(value: string): string {
   return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`;
 }
 
+export function hashExecutionBytes(value: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
 export function shortExecutionHash(value: string, length = 16): string {
   return createHash('sha256').update(value).digest('hex').slice(0, length);
 }
