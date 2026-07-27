@@ -75,6 +75,8 @@ export function buildDockerTerminalResult(
     ...(input.stderrArtifactRef ? [input.stderrArtifactRef] : []),
   ];
   ensureUniqueReferences(generatedArtifactRefs);
+  const processTreeTerminationVerified =
+    input.processResult.processTreeTerminationVerified || input.cleanup.containerAbsent;
 
   const metadata = {
     accountingMode: input.resourceSnapshot
@@ -85,7 +87,9 @@ export function buildDockerTerminalResult(
     oomKilled: input.inspection.oomKilled,
     observedStdoutBytes: input.processResult.observedStdoutBytes,
     observedStderrBytes: input.processResult.observedStderrBytes,
-    processTreeTerminationVerified: input.processResult.processTreeTerminationVerified,
+    // Removing the container is stronger workload process-tree evidence than
+    // the host-side Docker CLI supervisor can provide on every platform.
+    processTreeTerminationVerified,
     cleanup: input.cleanup,
     ...(input.resourceSnapshot ? { resourceSnapshot: input.resourceSnapshot } : {}),
     ...(input.resourceFailureCode ? { resourceFailureCode: input.resourceFailureCode } : {}),

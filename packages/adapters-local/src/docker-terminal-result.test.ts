@@ -150,6 +150,33 @@ describe('buildDockerTerminalResult', () => {
     });
   });
 
+  it('uses confirmed container absence as workload process-tree termination evidence', () => {
+    const result = buildDockerTerminalResult(
+      terminalInput({
+        processResult: processResult({ processTreeTerminationVerified: false }),
+      })
+    );
+
+    expect(result.metadata).toMatchObject({ processTreeTerminationVerified: true });
+  });
+
+  it('does not claim process-tree termination when CLI and container cleanup are unverified', () => {
+    const result = buildDockerTerminalResult(
+      terminalInput({
+        processResult: processResult({ processTreeTerminationVerified: false }),
+        cleanup: {
+          complete: false,
+          containerAbsent: false,
+          stopAttempted: true,
+          failureStage: 'remove',
+          failureCode: 'DOCKER_COMMAND_FAILED',
+        },
+      })
+    );
+
+    expect(result.metadata).toMatchObject({ processTreeTerminationVerified: false });
+  });
+
   it('requires Artifact references for truncated output and includes them exactly once', () => {
     const process = processResult({
       stdout: 'bounded',
