@@ -28,6 +28,18 @@ describe('LocalWorkspaceAdapter', () => {
     });
   });
 
+  it('normalizes unsafe hardlink identity as a revision conflict', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-workspace-hardlink-'));
+    const source = path.join(root, 'source.bin');
+    await fs.writeFile(source, Uint8Array.from([1, 2, 3]));
+    await fs.link(source, path.join(root, 'alias.bin'));
+    const adapter = new LocalWorkspaceAdapter({ workspaceRoot: root });
+
+    await expect(adapter.capture()).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_REVISION_CONFLICT', retryable: true },
+    });
+  });
+
   it('rejects a non-directory Workspace surface', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-workspace-file-'));
     const file = path.join(root, 'file.txt');

@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LocalWorkspaceSnapshotLimitError,
+  LocalWorkspaceSnapshotSourceChangedError,
   captureLocalWorkspaceSnapshot,
   diffLocalWorkspaceSnapshots,
 } from './local-workspace-mutations';
@@ -68,6 +70,39 @@ describe('local Workspace mutation capture', () => {
     await expect(captureLocalWorkspaceSnapshot(root, { maxBytes: 2 })).rejects.toMatchObject({
       details: { maxBytes: 2 },
     });
+  });
+
+  it('hashes large files incrementally without using whole-file reads', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-streaming-hash-'));
+    const bytes = Uint8Array.from({ length: 512 * 1024 }, (_unused, index) => index % 251);
+    await fs.writeFile(path.join(root, 'large.bin'), bytes);
+    const readFile = vi.spyOn(fs, 'readFile');
+    try {
+      const snapshot = await captureLocalWorkspaceSnapshot(root, {
+        maxBytes: bytes.byteLength,
+      });
+
+      expect(readFile).not.toHaveBeenCalled();
+      expect(snapshot.entries.get('large.bin')).toMatchObject({
+        contentHash: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+        sizeBytes: bytes.byteLength,
+        kind: 'file',
+      });
+      expect(snapshot.totalBytes).toBe(bytes.byteLength);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
+  it('rejects regular files that can be mutated through a hardlink alias', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-hardlink-'));
+    const source = path.join(root, 'source.bin');
+    await fs.writeFile(source, Uint8Array.from([1, 2, 3]));
+    await fs.link(source, path.join(root, 'alias.bin'));
+
+    await expect(captureLocalWorkspaceSnapshot(root)).rejects.toBeInstanceOf(
+      LocalWorkspaceSnapshotSourceChangedError
+    );
   });
 
   it('counts directories toward the bounded snapshot entry budget', async () => {

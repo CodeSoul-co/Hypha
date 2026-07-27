@@ -5,6 +5,7 @@ import type { FileMutation } from '@hypha/core';
 import { executionProviderError } from './execution-provider-error';
 import {
   LocalWorkspaceSnapshotLimitError,
+  LocalWorkspaceSnapshotSourceChangedError,
   captureLocalWorkspaceSnapshot,
   diffLocalWorkspaceSnapshots,
   type LocalWorkspaceSnapshot,
@@ -58,6 +59,9 @@ export class LocalWorkspaceAdapter {
           false,
           error.details
         );
+      }
+      if (error instanceof LocalWorkspaceSnapshotSourceChangedError) {
+        throw executionProviderError('EXECUTION_REVISION_CONFLICT', error.message, true);
       }
       throw error;
     }

@@ -8,6 +8,10 @@ import type {
 } from '@hypha/core';
 import { ExecutionProviderError, executionProviderError } from './execution-provider-error';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
+import {
+  hasSingleLinkRegularFileIdentity,
+  sameSingleLinkRegularFileIdentity,
+} from './local-workspace-file-identity';
 
 const defaultChunkSizeBytes = 64 * 1024;
 
@@ -164,8 +168,8 @@ export class LocalArtifactWorkspaceContentReader implements ArtifactWorkspaceCon
         const openedStat = await handle.stat({ bigint: true });
         const pathStat = await fs.lstat(source.filename, { bigint: true });
         if (
-          !sameRegularFileIdentity(source.stat, openedStat) ||
-          !sameRegularFileIdentity(source.stat, pathStat)
+          !sameSingleLinkRegularFileIdentity(source.stat, openedStat) ||
+          !sameSingleLinkRegularFileIdentity(source.stat, pathStat)
         ) {
           throw sourceChangedError();
         }
@@ -182,7 +186,7 @@ export class LocalArtifactWorkspaceContentReader implements ArtifactWorkspaceCon
         }
 
         const finalHandleStat = await handle.stat({ bigint: true });
-        if (!sameRegularFileIdentity(source.stat, finalHandleStat)) {
+        if (!sameSingleLinkRegularFileIdentity(source.stat, finalHandleStat)) {
           throw sourceChangedError();
         }
         await assertSourceUnchanged();
@@ -198,30 +202,12 @@ export class LocalArtifactWorkspaceContentReader implements ArtifactWorkspaceCon
   private async assertSourceUnchanged(source: ResolvedWorkspaceFile): Promise<void> {
     await this.assertSafePathSegments(source.filename);
     const current = await fs.lstat(source.filename, { bigint: true });
-    if (!sameRegularFileIdentity(source.stat, current)) throw sourceChangedError();
+    if (!sameSingleLinkRegularFileIdentity(source.stat, current)) throw sourceChangedError();
     const canonicalFilename = await fs.realpath(source.filename);
     assertContainedPath(source.realRoot, canonicalFilename);
     if (canonicalFilename !== source.canonicalFilename) throw sourceChangedError();
     this.controlPlaneGuard.assertResolvedPath(canonicalFilename);
   }
-}
-
-/**
- * A Workspace output file must remain a single-link regular file while it is
- * streamed. The single-link rule prevents mutation through a hardlink alias.
- */
-function sameRegularFileIdentity(before: BigIntStats, after: BigIntStats): boolean {
-  return (
-    before.isFile() &&
-    after.isFile() &&
-    before.nlink === 1n &&
-    after.nlink === 1n &&
-    before.dev === after.dev &&
-    before.ino === after.ino &&
-    before.size === after.size &&
-    before.mtimeNs === after.mtimeNs &&
-    before.ctimeNs === after.ctimeNs
-  );
 }
 
 function assertSafeRegularFile(stat: BigIntStats): void {
@@ -232,7 +218,7 @@ function assertSafeRegularFile(stat: BigIntStats): void {
       false
     );
   }
-  if (stat.nlink !== 1n) {
+  if (!hasSingleLinkRegularFileIdentity(stat)) {
     throw executionProviderError(
       'EXECUTION_PATH_DENIED',
       'Workspace Artifact source files cannot have hardlink aliases.',

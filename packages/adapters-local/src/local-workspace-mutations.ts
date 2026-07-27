@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto';
+import type { BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { FileMutation } from '@hypha/core';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
+import {
+  hasSingleLinkRegularFileIdentity,
+  sameSingleLinkRegularFileIdentity,
+} from './local-workspace-file-identity';
 
 export interface LocalWorkspaceEntry {
   path: string;
@@ -38,6 +43,13 @@ export class LocalWorkspaceSnapshotLimitError extends Error {
   ) {
     super(message);
     this.name = 'LocalWorkspaceSnapshotLimitError';
+  }
+}
+
+export class LocalWorkspaceSnapshotSourceChangedError extends Error {
+  constructor() {
+    super('Workspace file changed while its mutation evidence was being captured.');
+    this.name = 'LocalWorkspaceSnapshotSourceChangedError';
   }
 }
 
@@ -83,12 +95,19 @@ export async function captureLocalWorkspaceSnapshot(
         addDirectory({ path: relativePath, mode: stat.mode });
         await walk(absolutePath);
       } else if (stat.isFile()) {
-        const content = await fs.readFile(absolutePath);
+        assertEntryCapacity();
+        const file = await hashWorkspaceFile(
+          absolutePath,
+          realRoot,
+          controlPlaneGuard,
+          maxBytes - totalBytes,
+          () => snapshotLimitError(maxFiles, maxBytes)
+        );
         addEntry({
           path: relativePath,
-          contentHash: hashBuffer(content),
-          sizeBytes: content.byteLength,
-          mode: stat.mode,
+          contentHash: file.contentHash,
+          sizeBytes: file.sizeBytes,
+          mode: file.mode,
           kind: 'file',
         });
       }
@@ -98,20 +117,20 @@ export async function captureLocalWorkspaceSnapshot(
   const addEntry = (entry: LocalWorkspaceEntry): void => {
     totalBytes += entry.sizeBytes;
     if (entries.size + directories.size + 1 > maxFiles || totalBytes > maxBytes) {
-      throw new LocalWorkspaceSnapshotLimitError(
-        'Workspace mutation capture exceeded its configured scan limits.',
-        { maxFiles, maxBytes }
-      );
+      throw snapshotLimitError(maxFiles, maxBytes);
     }
     entries.set(entry.path, entry);
   };
 
+  const assertEntryCapacity = (): void => {
+    if (entries.size + directories.size + 1 > maxFiles) {
+      throw snapshotLimitError(maxFiles, maxBytes);
+    }
+  };
+
   const addDirectory = (entry: LocalWorkspaceDirectoryEntry): void => {
     if (entries.size + directories.size + 1 > maxFiles) {
-      throw new LocalWorkspaceSnapshotLimitError(
-        'Workspace mutation capture exceeded its configured scan limits.',
-        { maxFiles, maxBytes }
-      );
+      throw snapshotLimitError(maxFiles, maxBytes);
     }
     directories.set(entry.path, entry);
   };
@@ -251,6 +270,91 @@ function assertWithinRoot(candidate: string, root: string): void {
 
 function hashBuffer(content: Buffer): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
+}
+
+async function hashWorkspaceFile(
+  filename: string,
+  realRoot: string,
+  controlPlaneGuard: WorkspaceControlPlaneGuard,
+  remainingBytes: number,
+  limitError: () => LocalWorkspaceSnapshotLimitError
+): Promise<{ contentHash: string; sizeBytes: number; mode: number }> {
+  const before = await fs.lstat(filename, { bigint: true });
+  assertSingleLinkRegularFile(before);
+  const sizeBytes = safeSizeNumber(before.size, limitError);
+  if (sizeBytes > remainingBytes) throw limitError();
+  const canonicalBefore = await fs.realpath(filename);
+  assertWithinRoot(canonicalBefore, realRoot);
+  controlPlaneGuard.assertResolvedPath(canonicalBefore);
+
+  const handle = await fs.open(filename, 'r');
+  const hash = createHash('sha256');
+  let bytesReadTotal = 0;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    const pathAfterOpen = await fs.lstat(filename, { bigint: true });
+    if (
+      !sameSingleLinkRegularFileIdentity(before, opened) ||
+      !sameSingleLinkRegularFileIdentity(before, pathAfterOpen)
+    ) {
+      throw new LocalWorkspaceSnapshotSourceChangedError();
+    }
+
+    const buffer = new Uint8Array(64 * 1024);
+    let bytesRead = 0;
+    do {
+      ({ bytesRead } = await handle.read(buffer, 0, buffer.byteLength, null));
+      if (bytesRead === 0) continue;
+      bytesReadTotal += bytesRead;
+      if (bytesReadTotal > remainingBytes || BigInt(bytesReadTotal) > before.size) {
+        throw new LocalWorkspaceSnapshotSourceChangedError();
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead > 0);
+
+    const finalHandleStat = await handle.stat({ bigint: true });
+    const finalPathStat = await fs.lstat(filename, { bigint: true });
+    const canonicalAfter = await fs.realpath(filename);
+    if (
+      bytesReadTotal !== sizeBytes ||
+      canonicalAfter !== canonicalBefore ||
+      !sameSingleLinkRegularFileIdentity(before, finalHandleStat) ||
+      !sameSingleLinkRegularFileIdentity(before, finalPathStat)
+    ) {
+      throw new LocalWorkspaceSnapshotSourceChangedError();
+    }
+    assertWithinRoot(canonicalAfter, realRoot);
+    controlPlaneGuard.assertResolvedPath(canonicalAfter);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return {
+    contentHash: `sha256:${hash.digest('hex')}`,
+    sizeBytes,
+    mode: Number(before.mode),
+  };
+}
+
+/**
+ * Mutation evidence only accepts single-link regular files. This prevents a
+ * path outside the Workspace from mutating captured bytes through a hardlink.
+ */
+function assertSingleLinkRegularFile(stat: BigIntStats): void {
+  if (!hasSingleLinkRegularFileIdentity(stat)) {
+    throw new LocalWorkspaceSnapshotSourceChangedError();
+  }
+}
+
+function safeSizeNumber(size: bigint, limitError: () => LocalWorkspaceSnapshotLimitError): number {
+  if (size > BigInt(Number.MAX_SAFE_INTEGER)) throw limitError();
+  return Number(size);
+}
+
+function snapshotLimitError(maxFiles: number, maxBytes: number): LocalWorkspaceSnapshotLimitError {
+  return new LocalWorkspaceSnapshotLimitError(
+    'Workspace mutation capture exceeded its configured scan limits.',
+    { maxFiles, maxBytes }
+  );
 }
 
 function hashWorkspaceTree(
