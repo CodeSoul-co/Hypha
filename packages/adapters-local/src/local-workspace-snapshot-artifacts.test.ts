@@ -4,7 +4,6 @@ import path from 'node:path';
 import {
   DefaultArtifactManager,
   type ArtifactProfileSpec,
-  type ArtifactWorkspaceContentReader,
   type ExecutionPrincipal,
   type WorkspaceSnapshotManifest,
   validateWorkspaceSnapshotManifest,
@@ -13,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hashArtifactBytes, readArtifactStream } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';
+import { LocalArtifactWorkspaceContentReader } from './local-artifact-workspace-content-reader';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
 import { workspaceRestoreJournalPath } from './local-workspace-restore-journal';
 import { LocalWorkspaceSnapshotArtifactService } from './local-workspace-snapshot-artifacts';
@@ -505,27 +505,21 @@ function createFixture(root: string, afterRead?: () => Promise<void>) {
     allowedMimeTypes: ['application/json', 'application/octet-stream'],
     maxArtifactBytes: 1024 * 1024,
   };
-  const workspaceReader: ArtifactWorkspaceContentReader = {
-    async read(request) {
-      if (request.workspaceId !== 'workspace.snapshot') throw new Error('Workspace scope mismatch');
-      const candidate = path.resolve(root, request.relativePath);
-      const relative = path.relative(root, candidate);
-      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-        throw new Error('Workspace path escape');
+  const localWorkspaceReader = new LocalArtifactWorkspaceContentReader({
+    workspaceRoot: root,
+    workspaceId: 'workspace.snapshot',
+    userId: ownerUserId,
+    tenantId: principal.tenantId,
+  });
+  const workspaceReader = afterRead
+    ? {
+        async read(request: Parameters<typeof localWorkspaceReader.read>[0]) {
+          const source = await localWorkspaceReader.read(request);
+          await afterRead();
+          return source;
+        },
       }
-      const content = new Uint8Array(await fs.readFile(candidate));
-      if (request.maxBytes !== undefined && content.byteLength > request.maxBytes) {
-        throw new Error('Workspace content limit exceeded');
-      }
-      await afterRead?.();
-      return {
-        content,
-        contentHash: hashArtifactBytes(content),
-        sizeBytes: content.byteLength,
-        mimeType: 'application/octet-stream',
-      };
-    },
-  };
+    : localWorkspaceReader;
   let id = 0;
   const manager = new DefaultArtifactManager({
     profiles: [profile],
