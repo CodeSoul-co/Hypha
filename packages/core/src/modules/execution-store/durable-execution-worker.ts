@@ -147,6 +147,9 @@ export class DurableExecutionWorker {
     if (result.executionId !== record.id) {
       throw new TypeError('Execution result identity does not match the claimed record.');
     }
+    if (record.terminalReceipt && !result.externalReceipt) {
+      throw new TypeError('Terminal result must preserve the durable Provider receipt checkpoint.');
+    }
     if (result.externalReceipt) {
       if (!record.terminalReceipt) {
         throw new TypeError(

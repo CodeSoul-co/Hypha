@@ -3,10 +3,15 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DefaultExecutionOutputCollector,
+  DefaultExecutionOutputPlanner,
+  DurableExecutionCompletionCoordinator,
   DurableExecutionWorker,
   commandExecutionResultExample,
   executionRecordCreateRequestExample,
+  type ArtifactRecord,
   type ExecutionRecord,
+  type ExecutionOutputArtifactManager,
 } from '@hypha/core';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
 
@@ -145,6 +150,11 @@ describe('SQLite Execution Store durable worker integration', () => {
         externalReceipt: receipt,
       })
     ).rejects.toThrow(/durably checkpointed/u);
+
+    const checkpointed = await candidate.checkpointTerminalReceipt(claimed, receipt);
+    await expect(candidate.commit(checkpointed, resultFor(checkpointed))).rejects.toThrow(
+      /preserve the durable Provider receipt/u
+    );
   });
 
   it('rejects receipt mutation and stale-worker checkpoint writes', async () => {
@@ -183,6 +193,80 @@ describe('SQLite Execution Store durable worker integration', () => {
         },
       })
     ).rejects.toMatchObject({ code: 'EXECUTION_STORE_CONFLICT' });
+  });
+
+  it('recovers Artifact finalization failures without replaying Provider work', async () => {
+    const first = worker('worker.one');
+    const firstClaim = requiredRecord(await first.claimNext());
+    const receipt = receiptFor(firstClaim);
+    let finalized = false;
+    let createCalls = 0;
+    let finalizeCalls = 0;
+    const artifacts: ExecutionOutputArtifactManager = {
+      createFromWorkspace: async () => {
+        createCalls += 1;
+        return outputArtifact(finalized ? 'final' : 'draft');
+      },
+      finalize: async () => {
+        finalizeCalls += 1;
+        if (finalizeCalls === 1) throw new Error('Artifact finalize unavailable');
+        finalized = true;
+        return outputArtifact('final');
+      },
+    };
+    const request = completionRequest(firstClaim, receipt);
+
+    await expect(completionCoordinator(first, artifacts).complete(request)).rejects.toThrow(
+      /Artifact finalize unavailable/u
+    );
+    await expect(store.get(firstClaim.id)).resolves.toMatchObject({
+      status: 'starting',
+      terminalReceipt: receipt,
+    });
+
+    await store.close();
+    store = new SQLiteExecutionStore({ rootPath });
+    now = '2026-07-16T00:00:03.000Z';
+    const second = worker('worker.two');
+    const secondClaim = requiredRecord(await second.claimNext());
+    const failAfterFinalization = {
+      renew: second.renew.bind(second),
+      checkpointTerminalReceipt: second.checkpointTerminalReceipt.bind(second),
+      commit: async () => {
+        throw new Error('Execution CAS unavailable');
+      },
+    };
+
+    await expect(
+      completionCoordinator(failAfterFinalization, artifacts).complete({
+        ...request,
+        record: secondClaim,
+      })
+    ).rejects.toThrow(/Execution CAS unavailable/u);
+    expect(finalized).toBe(true);
+
+    await store.close();
+    store = new SQLiteExecutionStore({ rootPath });
+    now = '2026-07-16T00:00:05.000Z';
+    const recovery = worker('worker.recovery');
+    const recovered = requiredRecord(await recovery.claimNext());
+    const completed = await completionCoordinator(recovery, artifacts).complete({
+      ...request,
+      record: recovered,
+    });
+
+    expect(completed.record).toMatchObject({
+      status: 'completed',
+      terminalReceipt: receipt,
+      result: {
+        externalReceipt: receipt,
+        generatedArtifactRefs: ['artifact:output'],
+      },
+      lease: undefined,
+    });
+    expect(createCalls).toBe(3);
+    expect(finalizeCalls).toBe(2);
+    await expect(store.get(firstClaim.id)).resolves.toEqual(completed.record);
   });
 
   it('stops claiming new work during shutdown', async () => {
@@ -228,5 +312,84 @@ function receiptFor(record: ExecutionRecord) {
     status: 'completed' as const,
     issuedAt: '2026-07-16T00:00:01.250Z',
     receiptHash: 'sha256:provider-terminal-receipt',
+  };
+}
+
+function completionCoordinator(
+  worker: ConstructorParameters<typeof DurableExecutionCompletionCoordinator>[0]['worker'],
+  artifacts: ExecutionOutputArtifactManager
+): DurableExecutionCompletionCoordinator {
+  return new DurableExecutionCompletionCoordinator({
+    worker,
+    planner: new DefaultExecutionOutputPlanner(),
+    collector: new DefaultExecutionOutputCollector(artifacts),
+  });
+}
+
+function completionRequest(record: ExecutionRecord, receipt: ReturnType<typeof receiptFor>) {
+  const result = {
+    ...resultFor(record),
+    changedFiles: [
+      {
+        path: 'outputs/report.json',
+        operation: 'created' as const,
+        afterHash: `sha256:${'a'.repeat(64)}`,
+        afterSizeBytes: 12,
+        detectedAt: '2026-07-16T00:00:01.250Z',
+      },
+    ],
+    generatedArtifactRefs: [],
+    externalReceipt: receipt,
+  };
+  return {
+    record,
+    result,
+    outputPolicy: { finalizeOnSuccess: true },
+    outputContext: {
+      operationId: 'operation.collect',
+      principal: record.request.principal,
+      profileRef: { id: 'artifact-profile.execution', version: '1.0.0' },
+      userId: record.request.userId,
+      tenantId: record.request.tenantId,
+      workspaceId: record.request.workspaceId,
+      sessionId: record.request.sessionId,
+      runId: record.request.runId,
+      agentId: record.request.agentId,
+    },
+  };
+}
+
+function outputArtifact(status: 'draft' | 'final'): ArtifactRecord {
+  return {
+    id: 'artifact:output',
+    versionId: 'artifact:output:v1',
+    versionNumber: 1,
+    revision: status === 'final' ? 1 : 0,
+    userId: 'user.example',
+    workspaceId: 'workspace.example',
+    runId: 'run.example',
+    name: 'report.json',
+    relativePath: 'outputs/report.json',
+    kind: 'other',
+    sizeBytes: 12,
+    contentHash: `sha256:${'a'.repeat(64)}`,
+    hashAlgorithm: 'sha256',
+    storageRef: { storeId: 'store.test', objectKey: 'objects/report', encrypted: true },
+    logicalArtifactId: 'artifact:output',
+    provenance: {
+      sourceType: 'command_generated',
+      createdBy: 'agent.example',
+      executionId: 'execution.example',
+    },
+    access: {
+      visibility: 'workspace',
+      ownerPrincipalId: 'agent.example',
+      workspaceId: 'workspace.example',
+    },
+    retention: {},
+    status,
+    ...(status === 'final' ? { finalizedAt: '2026-07-16T00:00:02.000Z' } : {}),
+    createdAt: '2026-07-16T00:00:01.500Z',
+    updatedAt: status === 'final' ? '2026-07-16T00:00:02.000Z' : '2026-07-16T00:00:01.500Z',
   };
 }
