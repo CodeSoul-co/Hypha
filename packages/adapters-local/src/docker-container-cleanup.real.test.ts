@@ -38,7 +38,7 @@ afterEach(async () => {
   await Promise.all(
     temporaryWorkspaces.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))
   );
-});
+}, 60_000);
 
 describe('DockerManagedContainerCleanup real daemon', () => {
   it('reconciles owned orphans through a new client without touching active or foreign containers', async () => {
