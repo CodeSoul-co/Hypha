@@ -60,6 +60,7 @@ import {
 import { getRedisClient } from '../../services/database';
 import {
   getToolProfileBindingRegistry,
+  registerBuiltinToolProfileBindings,
   type ToolProfileBindingRegistry,
 } from './ToolProfileBindingRegistry';
 
@@ -413,6 +414,7 @@ export class ToolManager {
   ) {}
 
   async initialize(): Promise<void> {
+    registerBuiltinToolProfileBindings(this.profileBindings);
     const config = getConfig();
 
     if (process.env.NODE_ENV === 'production') {
