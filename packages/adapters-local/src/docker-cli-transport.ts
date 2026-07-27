@@ -73,7 +73,7 @@ export class DockerCliTransport implements DockerCommandTransport {
   }
 
   async run(request: DockerCliRequest): Promise<DockerCliResult> {
-    validateRequest(request);
+    validateDockerCliRequest(request);
     const { startError, terminationError, ...result } = await this.supervisor.run({
       executable: this.dockerPath,
       args: [...request.args],
@@ -113,7 +113,7 @@ function errorCode(error: Error): string | undefined {
   return 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 }
 
-function validateRequest(request: DockerCliRequest): void {
+export function validateDockerCliRequest(request: DockerCliRequest): void {
   if (!request || typeof request !== 'object') {
     throw new TypeError('Docker CLI request must be an object.');
   }

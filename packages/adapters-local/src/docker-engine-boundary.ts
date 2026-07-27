@@ -278,7 +278,7 @@ function validateUser(value: unknown): asserts value is string {
   }
 }
 
-function validateContainerPath(value: unknown, name: string): asserts value is string {
+export function validateContainerPath(value: unknown, name: string): asserts value is string {
   const containerPath = nonEmptyNoNul(value, `Docker ${name}`);
   if (
     !path.posix.isAbsolute(containerPath) ||
@@ -296,13 +296,18 @@ function validateLabel(name: string, value: unknown): void {
   nonEmptyNoNul(value, 'Docker label value');
 }
 
-function validateLiteralArgv(value: unknown, name: string): asserts value is string[] {
+export function validateLiteralArgv(
+  value: unknown,
+  name: string,
+  allowEmpty = false
+): asserts value is string[] {
   if (
     !Array.isArray(value) ||
-    value.length === 0 ||
+    (!allowEmpty && value.length === 0) ||
     value.some((entry) => typeof entry !== 'string' || entry.includes('\u0000'))
   ) {
-    throw new TypeError(`${name} must be a non-empty string array containing no NUL bytes.`);
+    const requirement = allowEmpty ? 'a string array' : 'a non-empty string array';
+    throw new TypeError(`${name} must be ${requirement} containing no NUL bytes.`);
   }
 }
 
