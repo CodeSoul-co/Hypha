@@ -24,11 +24,19 @@ import {
   type LocalProcessPolicyResolverOptions,
 } from './local-process-policy';
 import { LocalProcessResourceAccountant } from './local-process-resource-accounting';
-import { buildLocalProcessResult } from './local-process-result';
+import {
+  buildLocalProcessResult,
+  type LocalProcessOutputArtifactRefs,
+} from './local-process-result';
 import { LocalProcessSupervisor } from './local-process-supervisor';
+import type { LocalProcessOutputArtifactPort } from './local-process-output-artifacts';
 import { LocalSandboxLifecycle } from './local-sandbox-lifecycle';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
-import { cloneExecutionValue, shortExecutionHash } from './execution-provider-values';
+import {
+  cloneExecutionValue,
+  hashExecutionText,
+  shortExecutionHash,
+} from './execution-provider-values';
 
 export interface LocalProcessExecutionProviderOptions extends LocalProcessPolicyResolverOptions {
   gracefulTerminationMs?: number;
@@ -40,6 +48,7 @@ export interface LocalProcessExecutionProviderOptions extends LocalProcessPolicy
   sandboxId?: (request: SandboxCreateRequest) => string;
   executionId?: (request: CommandExecutionRequest) => string;
   supervisor?: LocalProcessSupervisor;
+  outputArtifacts?: LocalProcessOutputArtifactPort;
 }
 
 const localCapabilities = (processTreeKill: boolean): SandboxProviderCapabilities => ({
@@ -67,6 +76,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
   private readonly policy: LocalProcessPolicyResolver;
   private readonly workspace: LocalWorkspaceAdapter;
   private readonly supervisor: LocalProcessSupervisor;
+  private readonly outputArtifacts?: LocalProcessOutputArtifactPort;
   private readonly lifecycle: LocalSandboxLifecycle;
   private readonly active = new LocalActiveExecutionRegistry();
   private readonly resources = new LocalProcessResourceAccountant();
@@ -92,6 +102,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
       maxTrackedBytes: options.maxTrackedBytes,
     });
     this.supervisor = options.supervisor ?? new LocalProcessSupervisor({ now: this.now });
+    this.outputArtifacts = options.outputArtifacts;
     this.lifecycle = new LocalSandboxLifecycle({
       providerId: this.id,
       workspaceRoot: this.workspace.workspaceRoot,
@@ -109,6 +120,13 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
     this.assertOpen();
     const request = validateSandboxCreateRequest(input);
     this.policy.validateEnvironment(request.environment);
+    if (request.environment.logging.persistOutputAsArtifact && !this.outputArtifacts) {
+      throw executionProviderError(
+        'EXECUTION_ENVIRONMENT_UNAVAILABLE',
+        'Local Process output Artifact persistence requires a configured output Artifact port.',
+        false
+      );
+    }
     await Promise.all([this.policy.assertSurfaceAvailable(), this.workspace.assertAvailable()]);
     if (!this.supervisor.processTreeKillVerified && !this.allowBestEffortWindowsProcessTreeKill) {
       throw executionProviderError(
@@ -134,6 +152,13 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
     this.assertOpen();
     const request = validateLocalCommandRequest(input);
     const environment = this.lifecycle.environmentForCommand(request);
+    if (request.captureArtifacts && !this.outputArtifacts) {
+      throw executionProviderError(
+        'EXECUTION_ENVIRONMENT_UNAVAILABLE',
+        'Local Process output Artifact capture requires a configured output Artifact port.',
+        false
+      );
+    }
     const executionId = request.executionId ?? this.executionId(request);
     if (this.results.has(executionId)) {
       throw executionProviderError(
@@ -165,6 +190,12 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
       const changedFiles = before
         ? this.workspace.diff(before, await this.workspace.capture(), processResult.completedAt)
         : [];
+      const outputArtifacts = await this.persistOutputArtifacts(
+        request,
+        environment.logging,
+        executionId,
+        processResult
+      );
       result = validateCommandExecutionResult(
         buildLocalProcessResult({
           providerId: this.id,
@@ -173,6 +204,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
           processResult,
           changedFiles,
           resourceAccountant: this.resources,
+          ...(outputArtifacts ? { outputArtifacts } : {}),
         })
       );
       this.results.set(executionId, result);
@@ -193,6 +225,49 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
         result?.completedAt ?? this.now()
       );
     }
+  }
+
+  private async persistOutputArtifacts(
+    request: CommandExecutionRequest,
+    logging: {
+      captureStdout: boolean;
+      captureStderr: boolean;
+      persistOutputAsArtifact?: boolean;
+    },
+    executionId: string,
+    processResult: Awaited<ReturnType<LocalProcessSupervisor['run']>>
+  ): Promise<LocalProcessOutputArtifactRefs | undefined> {
+    if (!this.outputArtifacts || (!request.captureArtifacts && !logging.persistOutputAsArtifact)) {
+      return undefined;
+    }
+    const stdout = Buffer.from(processResult.stdout);
+    const stderr = Buffer.from(processResult.stderr);
+    const stdoutTruncated = processResult.observedStdoutBytes > stdout.byteLength;
+    const stderrTruncated = processResult.observedStderrBytes > stderr.byteLength;
+    const refs: LocalProcessOutputArtifactRefs = {};
+    if (logging.captureStdout && (stdout.byteLength > 0 || stdoutTruncated)) {
+      refs.stdout = await this.outputArtifacts.store({
+        executionId,
+        request,
+        stream: 'stdout',
+        content: stdout,
+        contentHash: hashExecutionText(processResult.stdout),
+        observedBytes: processResult.observedStdoutBytes,
+        truncated: stdoutTruncated,
+      });
+    }
+    if (logging.captureStderr && (stderr.byteLength > 0 || stderrTruncated)) {
+      refs.stderr = await this.outputArtifacts.store({
+        executionId,
+        request,
+        stream: 'stderr',
+        content: stderr,
+        contentHash: hashExecutionText(processResult.stderr),
+        observedBytes: processResult.observedStderrBytes,
+        truncated: stderrTruncated,
+      });
+    }
+    return refs.stdout || refs.stderr ? refs : undefined;
   }
 
   async cancel(input: ExecutionCancelRequest): Promise<void> {

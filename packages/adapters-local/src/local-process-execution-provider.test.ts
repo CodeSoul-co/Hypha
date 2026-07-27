@@ -8,6 +8,10 @@ import type {
 } from '@hypha/core';
 import { describe, expect, it } from 'vitest';
 import { LocalProcessExecutionProvider } from './local-process-execution-provider';
+import type {
+  LocalProcessOutputArtifactPort,
+  LocalProcessOutputArtifactRequest,
+} from './local-process-output-artifacts';
 
 const principal = {
   principalId: 'principal.local',
@@ -81,6 +85,106 @@ describe('LocalProcessExecutionProvider', () => {
       error: { code: 'EXECUTION_OUTPUT_LIMIT' },
     });
     expect(limited.resourceUsage?.outputBytes).toBeGreaterThan(16);
+    await provider.close();
+  });
+
+  it('persists bounded output and returns Artifact references when capture is requested', async () => {
+    const stored: LocalProcessOutputArtifactRequest[] = [];
+    const outputArtifacts: LocalProcessOutputArtifactPort = {
+      store: async (request) => {
+        stored.push(request);
+        return `artifact:${request.stream}`;
+      },
+    };
+    const provider = createProvider(await temporaryWorkspace(), outputArtifacts);
+    const ready = await createReadySandbox(provider);
+
+    const limited = await provider.execute(
+      command(
+        ready.id,
+        'execution.local.output-artifact',
+        ['-e', "process.stdout.write('x'.repeat(128)); setInterval(() => {}, 1000)"],
+        { maxStdoutBytes: 16, captureArtifacts: true }
+      )
+    );
+
+    expect(limited).toMatchObject({
+      status: 'resource_exceeded',
+      stdout: 'xxxxxxxxxxxxxxxx',
+      stdoutTruncated: true,
+      stdoutArtifactRef: 'artifact:stdout',
+      generatedArtifactRefs: ['artifact:stdout'],
+      error: { code: 'EXECUTION_OUTPUT_LIMIT' },
+    });
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      executionId: 'execution.local.output-artifact',
+      stream: 'stdout',
+      observedBytes: 128,
+      truncated: true,
+    });
+    expect(stored[0]!.content.byteLength).toBe(16);
+    await provider.close();
+  });
+
+  it('fails closed when environment policy requires output Artifacts without a port', async () => {
+    const provider = createProvider(await temporaryWorkspace());
+    const request = createRequest();
+    request.environment = {
+      ...request.environment,
+      logging: {
+        ...request.environment.logging,
+        persistOutputAsArtifact: true,
+      },
+    };
+
+    await expect(provider.create(request)).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_ENVIRONMENT_UNAVAILABLE' },
+    });
+    await provider.close();
+  });
+
+  it('honors environment output persistence for both governed streams', async () => {
+    const stored: LocalProcessOutputArtifactRequest[] = [];
+    const provider = createProvider(await temporaryWorkspace(), {
+      store: async (request) => {
+        stored.push(request);
+        return `artifact:${request.stream}`;
+      },
+    });
+    const request = createRequest();
+    request.environment = {
+      ...request.environment,
+      logging: {
+        ...request.environment.logging,
+        persistOutputAsArtifact: true,
+      },
+    };
+    const created = await provider.create(request);
+    const ready = await provider.start({
+      operationId: 'operation.start.local.output-policy',
+      sandboxId: created.id,
+      principal,
+      expectedRevision: created.revision,
+    });
+
+    const result = await provider.execute(
+      command(ready.id, 'execution.local.output-policy', [
+        '-e',
+        "process.stdout.write('out'); process.stderr.write('err')",
+      ])
+    );
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      stdoutArtifactRef: 'artifact:stdout',
+      stderrArtifactRef: 'artifact:stderr',
+      generatedArtifactRefs: ['artifact:stdout', 'artifact:stderr'],
+    });
+    expect(stored.map(({ stream, truncated }) => ({ stream, truncated }))).toEqual([
+      { stream: 'stdout', truncated: false },
+      { stream: 'stderr', truncated: false },
+    ]);
     await provider.close();
   });
 
@@ -181,12 +285,16 @@ async function temporaryWorkspace(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-provider-'));
 }
 
-function createProvider(workspaceRoot: string): LocalProcessExecutionProvider {
+function createProvider(
+  workspaceRoot: string,
+  outputArtifacts?: LocalProcessOutputArtifactPort
+): LocalProcessExecutionProvider {
   return new LocalProcessExecutionProvider({
     workspaceRoot,
     executables: { node: process.execPath },
     allowBestEffortWindowsProcessTreeKill: true,
     gracefulTerminationMs: 10,
+    ...(outputArtifacts ? { outputArtifacts } : {}),
   });
 }
 

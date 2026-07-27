@@ -19,6 +19,12 @@ export interface BuildLocalProcessResultInput {
   processResult: LocalProcessRunResult;
   changedFiles: FileMutation[];
   resourceAccountant: LocalProcessResourceAccountant;
+  outputArtifacts?: LocalProcessOutputArtifactRefs;
+}
+
+export interface LocalProcessOutputArtifactRefs {
+  stdout?: string;
+  stderr?: string;
 }
 
 export function buildLocalProcessResult(
@@ -33,6 +39,14 @@ export function buildLocalProcessResult(
     exitCode: terminal.exitCode,
     completedAt: input.processResult.completedAt,
   };
+  const stdoutTruncated =
+    input.processResult.observedStdoutBytes > Buffer.byteLength(input.processResult.stdout);
+  const stderrTruncated =
+    input.processResult.observedStderrBytes > Buffer.byteLength(input.processResult.stderr);
+  const generatedArtifactRefs = [
+    input.outputArtifacts?.stdout,
+    input.outputArtifacts?.stderr,
+  ].filter((reference): reference is string => reference !== undefined);
   return {
     executionId: input.executionId,
     revision: terminal.status === 'cancelled' ? 4 : 3,
@@ -44,8 +58,20 @@ export function buildLocalProcessResult(
     stderr: input.processResult.stderr,
     stdoutContentHash: hashExecutionText(input.processResult.stdout),
     stderrContentHash: hashExecutionText(input.processResult.stderr),
+    ...(input.outputArtifacts?.stdout
+      ? {
+          stdoutArtifactRef: input.outputArtifacts.stdout,
+          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
+        }
+      : {}),
+    ...(input.outputArtifacts?.stderr
+      ? {
+          stderrArtifactRef: input.outputArtifacts.stderr,
+          ...(stderrTruncated ? { stderrTruncated: true } : {}),
+        }
+      : {}),
     changedFiles: input.changedFiles,
-    generatedArtifactRefs: [],
+    generatedArtifactRefs,
     resourceUsage: resource.usage,
     externalReceipt: {
       id: `receipt.local.${shortExecutionHash(input.executionId)}`,

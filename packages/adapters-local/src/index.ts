@@ -42,6 +42,7 @@ import { HybridMemoryProvider } from '@hypha/memory';
 export * from './workspace-runtime';
 export * from './common-tool-port-bindings';
 export * from './local-process-output-collector';
+export * from './local-process-output-artifacts';
 export * from './execution-provider-error';
 export * from './local-process-policy';
 export * from './local-workspace-adapter';
