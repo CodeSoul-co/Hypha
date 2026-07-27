@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type {
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseRenewRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionStore,
@@ -11,6 +12,7 @@ import type {
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
+  executionLeaseRenewRequestExample,
   executionRecordCreateRequestExample,
 } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -225,17 +227,96 @@ describe('SQLiteExecutionStore public adapter', () => {
       await recovered.close();
     }
   }, 60_000);
+
+  it('preserves a renewed lease across worker crash and fences it after takeover', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-renew-'));
+    const store = new SQLiteExecutionStore({ rootPath: root });
+    await store.create(structuredClone(executionRecordCreateRequestExample));
+    await store.close();
+
+    await runStoreCrashInChild(
+      root,
+      'crashAfterRenewLease',
+      {
+        acquire: structuredClone(executionLeaseAcquireRequestExample),
+        renew: structuredClone(executionLeaseRenewRequestExample),
+      },
+      CRASH_AFTER_LEASE_RENEW_EXIT_CODE
+    );
+
+    const recovered = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      const renewed = await recovered.get(executionLeaseAcquireRequestExample.executionId);
+      expect(renewed).toMatchObject({
+        revision: 2,
+        lease: {
+          id: executionLeaseAcquireRequestExample.requestedLeaseId,
+          ownerId: executionLeaseAcquireRequestExample.ownerId,
+          fencingToken: 1,
+          heartbeatAt: executionLeaseRenewRequestExample.heartbeatAt,
+          expiresAt: '2026-07-16T00:00:40.000Z',
+        },
+      });
+      if (!renewed) throw new Error('Expected the renewed lease to survive worker crash.');
+
+      await expect(
+        recovered.acquireLease({
+          ...structuredClone(executionLeaseAcquireRequestExample),
+          operationId: 'operation.lease.acquire.before-renewed-expiry',
+          expectedRevision: renewed.revision,
+          requestedLeaseId: 'lease.execution.example.before-renewed-expiry',
+          ownerId: 'runtime-worker.before-renewed-expiry',
+          acquiredAt: '2026-07-16T00:00:30.000Z',
+          idempotencyKey: 'lease-acquire:before-renewed-expiry',
+        })
+      ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_HELD' });
+
+      const takeover = await recovered.acquireLease({
+        ...structuredClone(executionLeaseAcquireRequestExample),
+        operationId: 'operation.lease.acquire.after-renewed-expiry',
+        expectedRevision: renewed.revision,
+        requestedLeaseId: 'lease.execution.example.after-renewed-expiry',
+        ownerId: 'runtime-worker.after-renewed-expiry',
+        acquiredAt: '2026-07-16T00:00:40.000Z',
+        idempotencyKey: 'lease-acquire:after-renewed-expiry',
+      });
+      expect(takeover.lease).toMatchObject({
+        id: 'lease.execution.example.after-renewed-expiry',
+        ownerId: 'runtime-worker.after-renewed-expiry',
+        fencingToken: 2,
+      });
+
+      await expect(
+        recovered.renewLease({
+          ...structuredClone(executionLeaseRenewRequestExample),
+          operationId: 'operation.lease.renew.crashed-worker',
+          expectedRevision: takeover.revision,
+          idempotencyKey: 'lease-renew:crashed-worker',
+        })
+      ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+      await expect(recovered.get(takeover.id)).resolves.toEqual(takeover);
+    } finally {
+      await recovered.close();
+    }
+  }, 60_000);
 });
 
 type ChildStoreOperation = 'acquireLease' | 'compareAndSet';
 type ChildStoreCrashOperation =
   | 'crashAfterAcquireLease'
   | 'crashAfterCompareAndSet'
+  | 'crashAfterRenewLease'
   | 'crashBeforeCompareAndSet';
 
 const CRASH_BEFORE_CAS_EXIT_CODE = 71;
 const CRASH_AFTER_CAS_EXIT_CODE = 72;
 const CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE = 73;
+const CRASH_AFTER_LEASE_RENEW_EXIT_CODE = 74;
+
+interface ChildLeaseRenewCrashRequest {
+  acquire: ExecutionLeaseAcquireRequest;
+  renew: ExecutionLeaseRenewRequest;
+}
 
 interface ChildStoreResponse<T> {
   ready?: boolean;
@@ -299,7 +380,10 @@ async function runStoreOperationInChild<T>(
 async function runStoreCrashInChild(
   rootPath: string,
   operation: ChildStoreCrashOperation,
-  request: ExecutionLeaseAcquireRequest | ExecutionRecordCompareAndSetRequest,
+  request:
+    | ChildLeaseRenewCrashRequest
+    | ExecutionLeaseAcquireRequest
+    | ExecutionRecordCompareAndSetRequest,
   expectedExitCode: number
 ): Promise<void> {
   const repoRoot = process.cwd();
@@ -437,6 +521,11 @@ process.on('message', async ({ rootPath, operation, request }) => {
     if (operation === 'crashAfterAcquireLease') {
       await store.acquireLease(request);
       process.exit(${CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE});
+    }
+    if (operation === 'crashAfterRenewLease') {
+      await store.acquireLease(request.acquire);
+      await store.renewLease(request.renew);
+      process.exit(${CRASH_AFTER_LEASE_RENEW_EXIT_CODE});
     }
     const result = await store[operation](request);
     process.send({ ok: true, result });
