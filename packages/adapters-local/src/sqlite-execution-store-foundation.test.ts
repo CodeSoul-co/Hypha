@@ -92,6 +92,38 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await store.close();
   });
 
+  it('rolls back a disk-full write and retries safely after capacity is restored', async () => {
+    const root = await temporaryRoot();
+    const initial = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const filename = initial.filename;
+    await initial.close();
+
+    const capacityProbe = openTestDatabase(filename);
+    const pageCount = Number(capacityProbe.prepare('PRAGMA page_count').get()?.page_count);
+    expect(pageCount).toBeGreaterThan(0);
+    capacityProbe.close();
+
+    const limited = new SQLiteExecutionStoreFoundation({
+      rootPath: root,
+      maxDatabasePages: pageCount,
+    });
+    const request = queuedCreateRequest('execution.disk-full');
+    request.record.request.metadata = { padding: 'x'.repeat(256 * 1024) };
+
+    await expect(limited.create(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_UNAVAILABLE',
+      message: 'SQLite Execution store write failed.',
+    });
+    await expect(limited.get(request.record.id)).resolves.toBeNull();
+    await limited.close();
+
+    const restored = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const created = await restored.create(request);
+    await expect(restored.create(request)).resolves.toEqual(created);
+    await expect(restored.get(request.record.id)).resolves.toEqual(created);
+    await restored.close();
+  });
+
   it('lists only records matching owner, provider, status, and time filters', async () => {
     const root = await temporaryRoot();
     const store = new SQLiteExecutionStoreFoundation({ rootPath: root });

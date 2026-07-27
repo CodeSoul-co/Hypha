@@ -91,6 +91,11 @@ export interface SQLiteExecutionStoreFoundationOptions {
   rootPath: string;
   filename?: string;
   busyTimeoutMs?: number;
+  /**
+   * Optional hard database growth ceiling. SQLite returns SQLITE_FULL when a
+   * write would grow beyond this many pages.
+   */
+  maxDatabasePages?: number;
   now?: () => string;
 }
 
@@ -115,12 +120,19 @@ export class SQLiteExecutionStoreFoundation {
       fs.existsSync(this.filename) && fs.statSync(this.filename).size > 0;
     this.now = options.now ?? (() => new Date().toISOString());
     const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, 'busyTimeoutMs');
+    const maxDatabasePages =
+      options.maxDatabasePages === undefined
+        ? undefined
+        : positiveInteger(options.maxDatabasePages, 'maxDatabasePages');
     let database: SQLiteDatabase | undefined;
     try {
       database = openSQLiteDatabase(this.filename);
       secureSQLiteRuntimeFiles(this.filename);
       database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
       database.exec('PRAGMA journal_mode = WAL');
+      if (maxDatabasePages !== undefined) {
+        configureMaxDatabasePages(database, maxDatabasePages);
+      }
       secureSQLiteRuntimeFiles(this.filename);
       database.exec('PRAGMA foreign_keys = ON');
       backupBeforeMigration(database, this.filename, existingDatabaseHasContent);
@@ -1187,6 +1199,18 @@ function validateMigrationBackup(filename: string, expectedVersion: number): voi
 
 function sqliteStringLiteral(value: string): string {
   return `'${value.replace(/'/gu, "''")}'`;
+}
+
+function configureMaxDatabasePages(database: SQLiteDatabase, requested: number): void {
+  database.exec(`PRAGMA max_page_count = ${requested}`);
+  const configured = Number(
+    database.prepare('PRAGMA max_page_count').get()?.max_page_count
+  );
+  if (configured !== requested) {
+    throw new TypeError(
+      'maxDatabasePages must not be below the current database size or above the SQLite limit.'
+    );
+  }
 }
 
 function openSQLiteDatabase(filename: string): SQLiteDatabase {
