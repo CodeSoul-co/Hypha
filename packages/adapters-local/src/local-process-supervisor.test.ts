@@ -116,7 +116,9 @@ describe('LocalProcessSupervisor', () => {
       request(['-e', "process.stdout.write('x'.repeat(128)); setInterval(() => {}, 1000)"], {
         maxStdoutBytes: 16,
         maxCombinedOutputBytes: 16,
-        onOutput: (event) => observed.push(event),
+        onOutput: (event) => {
+          observed.push(event);
+        },
       })
     );
 
@@ -128,6 +130,31 @@ describe('LocalProcessSupervisor', () => {
         truncated: true,
       },
     ]);
+  });
+
+  it('waits for asynchronous output backpressure before completing the process result', async () => {
+    const outputObserved = deferred();
+    const releaseOutput = deferred();
+    let completed = false;
+    const execution = new LocalProcessSupervisor()
+      .run(
+        request(['-e', "process.stdout.write('output')"], {
+          onOutput: async () => {
+            outputObserved.resolve();
+            await releaseOutput.promise;
+          },
+        })
+      )
+      .then((result) => {
+        completed = true;
+        return result;
+      });
+
+    await outputObserved.promise;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(completed).toBe(false);
+    releaseOutput.resolve();
+    await expect(execution).resolves.toMatchObject({ outcome: 'exited', stdout: 'output' });
   });
 
   it('terminates the process when an output observer fails', async () => {
@@ -171,4 +198,12 @@ function request(
     signal: new AbortController().signal,
     ...overrides,
   };
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }

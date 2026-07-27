@@ -60,7 +60,81 @@ describe('ArtifactManagerLocalProcessOutputPort', () => {
       })
     );
   });
+
+  it('applies bounded backpressure until ArtifactManager consumes streamed bytes', async () => {
+    const consumption = deferred<void>();
+    const consumed: number[] = [];
+    const create = vi.fn(async (request: ArtifactCreateRequest): Promise<ArtifactRecord> => {
+      await consumption.promise;
+      if (request.content instanceof Uint8Array) {
+        throw new TypeError('Expected streamed Artifact content.');
+      }
+      for await (const chunk of request.content) consumed.push(...chunk);
+      return { id: 'artifact.execution-output.streamed' } as ArtifactRecord;
+    });
+    const port = new ArtifactManagerLocalProcessOutputPort({
+      manager: { create },
+      profileRef: { id: 'artifact-profile.execution', version: '1.0.0' },
+      maxBufferedStreamBytes: 4,
+    });
+    const stream = port.openStream({
+      executionId: 'execution.streaming',
+      request: commandRequest(),
+      stream: 'stdout',
+    });
+    let appended = false;
+    const append = stream
+      .append(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]))
+      .then(() => {
+        appended = true;
+      });
+
+    await Promise.resolve();
+    expect(appended).toBe(false);
+    consumption.resolve();
+    await append;
+    await expect(stream.complete()).resolves.toBe('artifact.execution-output.streamed');
+    expect(consumed).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('fails the Artifact creation when a streamed execution is aborted', async () => {
+    const create = vi.fn(async (request: ArtifactCreateRequest): Promise<ArtifactRecord> => {
+      if (request.content instanceof Uint8Array) {
+        throw new TypeError('Expected streamed Artifact content.');
+      }
+      for await (const _chunk of request.content) {
+        // Drain until the producer reports the execution failure.
+      }
+      return { id: 'artifact.unexpected' } as ArtifactRecord;
+    });
+    const port = new ArtifactManagerLocalProcessOutputPort({
+      manager: { create },
+      profileRef: { id: 'artifact-profile.execution', version: '1.0.0' },
+    });
+    const stream = port.openStream({
+      executionId: 'execution.aborted',
+      request: commandRequest(),
+      stream: 'stderr',
+    });
+
+    await stream.append(Uint8Array.from([1, 2, 3]));
+    await expect(stream.abort(new Error('execution failed'))).resolves.toBeUndefined();
+    await expect(stream.append(Uint8Array.from([4]))).rejects.toThrow(
+      'Artifact stream is already closed'
+    );
+  });
 });
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 function commandRequest(): CommandExecutionRequest {
   return {

@@ -35,7 +35,11 @@ import {
   LocalProcessSupervisor,
   type LocalProcessOutputEvent,
 } from './local-process-supervisor';
-import type { LocalProcessOutputArtifactPort } from './local-process-output-artifacts';
+import type {
+  LocalProcessArtifactStream,
+  LocalProcessOutputArtifactPort,
+  LocalProcessOutputArtifactStream,
+} from './local-process-output-artifacts';
 import { LocalProcessOutputStreamRegistry } from './local-process-output-stream-registry';
 import { LocalSandboxLifecycle } from './local-sandbox-lifecycle';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
@@ -186,6 +190,13 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
     const before = request.captureFileMutations ? await this.workspace.capture() : undefined;
     const handle = this.active.begin(executionId, request.sandboxId!);
     const streamOutput = environment.logging.streamOutput ?? false;
+    const persistOutput =
+      this.outputArtifacts !== undefined &&
+      (request.captureArtifacts === true ||
+        environment.logging.persistOutputAsArtifact === true);
+    const outputArtifactStreams: Partial<
+      Record<LocalProcessArtifactStream, LocalProcessOutputArtifactStream>
+    > = {};
     let outputStreamBegun = false;
     let markedBusy = false;
     let result: CommandExecutionResult | undefined;
@@ -209,19 +220,28 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
         maxCombinedOutputBytes: policy.maxCombinedOutputBytes,
         gracefulTerminationMs: this.gracefulTerminationMs,
         signal: handle.signal,
-        ...(streamOutput
+        ...(streamOutput || (persistOutput && this.outputArtifacts?.openStream)
           ? {
-              onOutput: (event: LocalProcessOutputEvent) => {
-                if (
-                  (event.stream === 'stdout' && environment.logging.captureStdout) ||
-                  (event.stream === 'stderr' && environment.logging.captureStderr)
-                ) {
+              onOutput: async (event: LocalProcessOutputEvent) => {
+                if (!capturesStream(environment.logging, event.stream)) return;
+                if (streamOutput) {
                   this.outputStreams.publish(
                     executionId,
                     event.stream,
                     event.chunk,
                     event.truncated
                   );
+                }
+                if (persistOutput && this.outputArtifacts?.openStream) {
+                  const artifactStream =
+                    outputArtifactStreams[event.stream] ??
+                    this.outputArtifacts.openStream({
+                      executionId,
+                      request,
+                      stream: event.stream,
+                    });
+                  outputArtifactStreams[event.stream] = artifactStream;
+                  await artifactStream.append(event.chunk);
                 }
               },
             }
@@ -234,7 +254,8 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
         request,
         environment.logging,
         executionId,
-        processResult
+        processResult,
+        outputArtifactStreams
       );
       result = validateCommandExecutionResult(
         buildLocalProcessResult({
@@ -250,6 +271,9 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
       this.results.set(executionId, result);
       return cloneExecutionValue(result);
     } catch (error) {
+      await Promise.allSettled(
+        Object.values(outputArtifactStreams).map((stream) => stream.abort(error))
+      );
       if (error instanceof ExecutionProviderError) throw error;
       throw executionProviderError(
         'EXECUTION_INTERNAL_ERROR',
@@ -293,10 +317,17 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
       persistOutputAsArtifact?: boolean;
     },
     executionId: string,
-    processResult: Awaited<ReturnType<LocalProcessSupervisor['run']>>
+    processResult: Awaited<ReturnType<LocalProcessSupervisor['run']>>,
+    streams: Partial<Record<LocalProcessArtifactStream, LocalProcessOutputArtifactStream>>
   ): Promise<LocalProcessOutputArtifactRefs | undefined> {
     if (!this.outputArtifacts || (!request.captureArtifacts && !logging.persistOutputAsArtifact)) {
       return undefined;
+    }
+    if (this.outputArtifacts.openStream) {
+      const refs: LocalProcessOutputArtifactRefs = {};
+      if (streams.stdout) refs.stdout = await streams.stdout.complete();
+      if (streams.stderr) refs.stderr = await streams.stderr.complete();
+      return refs.stdout || refs.stderr ? refs : undefined;
     }
     const stdout = Buffer.from(processResult.stdout);
     const stderr = Buffer.from(processResult.stderr);
@@ -411,6 +442,13 @@ function nonNegativeInteger(value: number, name: string): number {
     throw new Error(`${name} must be a non-negative integer.`);
   }
   return value;
+}
+
+function capturesStream(
+  logging: { captureStdout: boolean; captureStderr: boolean },
+  stream: LocalProcessArtifactStream
+): boolean {
+  return stream === 'stdout' ? logging.captureStdout : logging.captureStderr;
 }
 
 function validateLocalCommandRequest(input: CommandExecutionRequest): CommandExecutionRequest {

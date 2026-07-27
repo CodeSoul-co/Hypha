@@ -27,7 +27,7 @@ export interface LocalProcessRunRequest {
   maxCombinedOutputBytes: number;
   gracefulTerminationMs: number;
   signal: AbortSignal;
-  onOutput?: (event: LocalProcessOutputEvent) => void;
+  onOutput?: (event: LocalProcessOutputEvent) => void | Promise<void>;
 }
 
 export interface LocalProcessOutputEvent {
@@ -92,6 +92,7 @@ export class LocalProcessSupervisor {
       let terminationError: Error | undefined;
       let timeout: NodeJS.Timeout | undefined;
       let idleTimeout: NodeJS.Timeout | undefined;
+      const pendingOutput = new Set<Promise<void>>();
       const output = new LocalProcessOutputCollector({
         maxStdoutBytes: request.maxStdoutBytes,
         maxStderrBytes: request.maxStderrBytes,
@@ -125,10 +126,18 @@ export class LocalProcessSupervisor {
         idleTimeout = setTimeout(() => requestTermination('idle_timed_out'), request.idleTimeoutMs);
       };
 
-      const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
+      const appendOutput = async (
+        stream: 'stdout' | 'stderr',
+        chunk: Buffer
+      ): Promise<void> => {
         const appended = output.append(stream, chunk);
+        if (appended.limitExceeded) {
+          outputLimitStream = appended.limitExceeded;
+          requestTermination('output_limit');
+        }
+        resetIdleTimeout();
         try {
-          request.onOutput?.({
+          await request.onOutput?.({
             stream,
             chunk: Uint8Array.from(chunk),
             truncated: appended.limitExceeded !== undefined,
@@ -136,13 +145,20 @@ export class LocalProcessSupervisor {
         } catch (error) {
           terminationError = asError(error);
           requestTermination('termination_failed');
-          return;
         }
-        if (appended.limitExceeded) {
-          outputLimitStream = appended.limitExceeded;
-          requestTermination('output_limit');
-        }
-        resetIdleTimeout();
+      };
+
+      const observeOutput = (
+        source: NodeJS.ReadableStream,
+        stream: 'stdout' | 'stderr',
+        chunk: Buffer
+      ): void => {
+        source.pause();
+        const pending = appendOutput(stream, chunk).finally(() => {
+          pendingOutput.delete(pending);
+          if (!settled) source.resume();
+        });
+        pendingOutput.add(pending);
       };
 
       const clearTimers = (): void => {
@@ -174,6 +190,7 @@ export class LocalProcessSupervisor {
             request.gracefulTerminationMs
           );
         }
+        await Promise.all([...pendingOutput]);
         const capturedOutput = output.snapshot();
         const completedAt = this.now();
         resolve({
@@ -218,8 +235,8 @@ export class LocalProcessSupervisor {
       }
 
       request.signal.addEventListener('abort', onAbort, { once: true });
-      child.stdout.on('data', (chunk: Buffer) => appendOutput('stdout', chunk));
-      child.stderr.on('data', (chunk: Buffer) => appendOutput('stderr', chunk));
+      child.stdout.on('data', (chunk: Buffer) => observeOutput(child.stdout, 'stdout', chunk));
+      child.stderr.on('data', (chunk: Buffer) => observeOutput(child.stderr, 'stderr', chunk));
       child.once('error', (error) => void finish(null, null, asError(error)));
       child.once('close', (exitCode, signal) => void finish(exitCode, signal));
 

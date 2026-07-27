@@ -2,23 +2,29 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
+  ArtifactProfileSpec,
   CommandOutputChunk,
   CommandExecutionRequest,
   ExecutionEnvironmentSpec,
   SandboxCreateRequest,
 } from '@hypha/core';
+import { DefaultArtifactManager } from '@hypha/core';
 import { describe, expect, it } from 'vitest';
+import { readArtifactStream } from './artifact-content-io';
+import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { LocalProcessExecutionProvider } from './local-process-execution-provider';
-import type {
-  LocalProcessOutputArtifactPort,
-  LocalProcessOutputArtifactRequest,
+import {
+  ArtifactManagerLocalProcessOutputPort,
+  type LocalProcessOutputArtifactPort,
+  type LocalProcessOutputArtifactRequest,
 } from './local-process-output-artifacts';
+import { LocalFilesystemExecutionArtifactStore } from './local-filesystem-execution-artifact-store';
 
 const principal = {
   principalId: 'principal.local',
   type: 'user' as const,
   userId: 'user.local',
-  permissionScopes: ['execution.run'],
+  permissionScopes: ['execution.run', 'artifact:read', 'artifact:write'],
 };
 
 describe('LocalProcessExecutionProvider', () => {
@@ -126,6 +132,58 @@ describe('LocalProcessExecutionProvider', () => {
     });
     expect(stored[0]!.content.byteLength).toBe(16);
     await provider.close();
+  });
+
+  it('streams complete process bytes to ArtifactManager beyond the inline output limit', async () => {
+    const workspaceRoot = await temporaryWorkspace();
+    const artifactRoot = await temporaryWorkspace();
+    const store = new LocalFilesystemExecutionArtifactStore({
+      id: 'artifact-store.process-output',
+      rootPath: artifactRoot,
+    });
+    const profile = outputArtifactProfile(store.id);
+    const manager = new DefaultArtifactManager({
+      profiles: [profile],
+      stores: [store],
+      repository: new InMemoryArtifactRecordRepository(),
+      idGenerator: () => 'process-output.1',
+    });
+    const provider = createProvider(
+      workspaceRoot,
+      new ArtifactManagerLocalProcessOutputPort({
+        manager,
+        profileRef: { id: profile.id, version: profile.version },
+        maxBufferedStreamBytes: 8,
+      })
+    );
+    const ready = await createReadySandbox(provider);
+
+    const limited = await provider.execute(
+      command(
+        ready.id,
+        'execution.local.streamed-artifact',
+        ['-e', "process.stdout.write('x'.repeat(128)); setInterval(() => {}, 1000)"],
+        { maxStdoutBytes: 16, captureArtifacts: true }
+      )
+    );
+
+    expect(limited).toMatchObject({
+      status: 'resource_exceeded',
+      stdout: 'xxxxxxxxxxxxxxxx',
+      stdoutTruncated: true,
+      stdoutArtifactRef: 'artifact.process-output.1',
+      error: { code: 'EXECUTION_OUTPUT_LIMIT' },
+    });
+    if (!limited.stdoutArtifactRef) throw new Error('Expected a streamed stdout Artifact.');
+    const persisted = await manager.read({
+      principal,
+      artifactId: limited.stdoutArtifactRef,
+    });
+    await expect(readArtifactStream(persisted.content.stream)).resolves.toEqual(
+      new TextEncoder().encode('x'.repeat(128))
+    );
+    await provider.close();
+    await store.close();
   });
 
   it('fails closed when environment policy requires output Artifacts without a port', async () => {
@@ -489,5 +547,33 @@ function environment(): ExecutionEnvironmentSpec {
     lifecycle: { reuse: 'run', cleanupOnSuccess: true, cleanupOnFailure: true },
     workingDirectoryPolicy: 'workspace_only',
     defaultTimeoutMs: 2_000,
+  };
+}
+
+function outputArtifactProfile(storeId: string): ArtifactProfileSpec {
+  return {
+    id: 'artifact-profile.process-output',
+    version: '1.0.0',
+    storeRef: { id: storeId },
+    contentAddressing: { hashAlgorithm: 'sha256', verifyOnRead: true, deduplicate: true },
+    versioning: { strategy: 'append_only', retainPreviousVersions: true },
+    access: {
+      defaultVisibility: 'workspace',
+      allowedPrincipalTypes: ['user'],
+      requiredReadScopes: ['artifact:read'],
+      requiredWriteScopes: ['artifact:write'],
+      allowRangeRead: true,
+    },
+    retention: {
+      retainFinal: true,
+      legalHoldSupported: true,
+      garbageCollectUnreferenced: true,
+    },
+    // Live process output is hashed by the Store while streaming; no complete
+    // expected hash exists before the child process closes.
+    validation: { checksumRequired: false },
+    allowedKinds: ['log'],
+    allowedMimeTypes: ['application/octet-stream'],
+    maxArtifactBytes: 1024 * 1024,
   };
 }
