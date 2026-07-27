@@ -155,7 +155,7 @@ export const executionFrameworkEventEnvelopeSchema = z
 
 type EventRule = {
   required?: string[];
-  status?: string;
+  status?: string | readonly string[];
   decision?: NetworkAuthorizationEventPayload['decision'];
   errorCodes?: string[];
   outputTruncated?: true;
@@ -230,7 +230,7 @@ const executionEventRules: Record<ExecutionFrameworkEventType, EventRule> = {
   },
   'command.execution.failed': {
     required: ['executionId', 'error'],
-    status: 'failed',
+    status: ['failed', 'quarantined'],
   },
   'command.execution.result.unknown': {
     required: ['executionId', 'error', 'recoveryDisposition'],
@@ -481,11 +481,16 @@ function addEventRuleIssues(
       });
     }
   }
-  if (rule.status && payload.status !== rule.status) {
+  const allowedStatuses =
+    rule.status === undefined ? undefined : Array.isArray(rule.status) ? rule.status : [rule.status];
+  if (allowedStatuses && !allowedStatuses.includes(payload.status ?? '')) {
     issues.push({
       code: z.ZodIssueCode.custom,
       path: ['status'],
-      message: `must be ${rule.status} for ${type}`,
+      message:
+        allowedStatuses.length === 1
+          ? `must be ${allowedStatuses[0]} for ${type}`
+          : `must be one of ${allowedStatuses.join(', ')} for ${type}`,
     });
   }
   if ('decision' in payload && rule.decision && payload.decision !== rule.decision) {

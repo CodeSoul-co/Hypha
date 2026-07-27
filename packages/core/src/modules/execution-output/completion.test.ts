@@ -9,7 +9,10 @@ import type {
 } from '../../contracts/execution-output';
 import {
   DurableExecutionCompletionCoordinator,
+  DurableExecutionTerminalEventCoordinator,
+  createDurableExecutionTerminalEvent,
   type DurableExecutionCompletionWorker,
+  type DurableExecutionTerminalEventCommitPort,
 } from './completion';
 
 const contentHash = `sha256:${'a'.repeat(64)}`;
@@ -209,6 +212,105 @@ describe('DurableExecutionCompletionCoordinator', () => {
   });
 });
 
+describe('DurableExecutionTerminalEventCoordinator', () => {
+  it('builds a deterministic event from the durable terminal record', () => {
+    const terminal = committedRecord(runningRecord(), providerResult());
+    const event = createDurableExecutionTerminalEvent({
+      ...terminal,
+      revision: terminal.revision + 1,
+    });
+
+    expect(event).toMatchObject({
+      id: 'event:command.execution.completed:execution.example:2',
+      type: 'command.execution.completed',
+      workspaceId: 'workspace.example',
+      runId: 'run.example',
+      timestamp: '2026-07-24T00:00:01.000Z',
+      payload: {
+        operationId: 'operation.execute',
+        executionId: 'execution.example',
+        revision: 2,
+        providerId: 'execution.local',
+        artifactRefs: ['artifact:provider'],
+        status: 'completed',
+        exitCode: 0,
+        latencyMs: 1_000,
+      },
+    });
+  });
+
+  it('appends only after terminal CAS and preserves deterministic retry identity', async () => {
+    const calls: string[] = [];
+    const completed = committedRecord(runningRecord(), providerResult());
+    const requests: Parameters<DurableExecutionTerminalEventCommitPort['append']>[0][] = [];
+    const events: DurableExecutionTerminalEventCommitPort = {
+      append: vi.fn(async (request) => {
+        calls.push('event');
+        requests.push(structuredClone(request));
+        if (requests.length === 1) throw new Error('event store unavailable');
+        return request.event;
+      }),
+    };
+    const coordinator = new DurableExecutionTerminalEventCoordinator({ events });
+
+    await expect(coordinator.append(completed)).rejects.toThrow(/event store unavailable/u);
+    await expect(coordinator.append(completed)).resolves.toMatchObject({
+      type: 'command.execution.completed',
+    });
+
+    expect(calls).toEqual(['event', 'event']);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[0]).toMatchObject({
+      executionRevision: 2,
+      idempotencyKey: 'execution-terminal-event:execution.example:2',
+    });
+  });
+
+  it.each([
+    ['cancelled', 'command.execution.cancelled'],
+    ['timed_out', 'command.execution.timeout'],
+    ['oom_killed', 'command.execution.oom_killed'],
+    ['resource_exceeded', 'command.execution.resource.exceeded'],
+    ['failed', 'command.execution.failed'],
+    ['quarantined', 'command.execution.failed'],
+  ] as const)('maps %s terminal evidence to %s', (status, type) => {
+    const result = providerResult({
+      status,
+      exitCode: null,
+      error: terminalError(status),
+    });
+    const event = createDurableExecutionTerminalEvent(committedRecord(runningRecord(), result));
+
+    expect(event).toMatchObject({
+      type,
+      payload: { status, error: terminalError(status) },
+    });
+  });
+
+  it('rejects non-terminal and mismatched appended event identities', async () => {
+    expect(() => createDurableExecutionTerminalEvent(runningRecord())).toThrow(
+      /terminal result/u
+    );
+    const completed = committedRecord(runningRecord(), providerResult());
+    expect(() =>
+      createDurableExecutionTerminalEvent({
+        ...completed,
+        revision: completed.revision + 2,
+      })
+    ).toThrow(/does not match/u);
+    const coordinator = new DurableExecutionTerminalEventCoordinator({
+      events: {
+        append: async (request) => ({
+          ...request.event,
+          id: 'event:wrong',
+        }),
+      },
+    });
+
+    await expect(coordinator.append(completed)).rejects.toThrow(/identity/u);
+  });
+});
+
 function completionWorker(
   implementations: {
     renew?: (record: ExecutionRecord) => Promise<ExecutionRecord>;
@@ -376,4 +478,24 @@ function committedRecord(record: ExecutionRecord, result: CommandExecutionResult
     lease: undefined,
     updatedAt: '2026-07-24T00:00:03.000Z',
   };
+}
+
+function terminalError(
+  status:
+    | 'cancelled'
+    | 'timed_out'
+    | 'oom_killed'
+    | 'resource_exceeded'
+    | 'failed'
+    | 'quarantined'
+): NonNullable<CommandExecutionResult['error']> {
+  const code = {
+    cancelled: 'EXECUTION_CANCELLED',
+    timed_out: 'EXECUTION_TIMEOUT',
+    oom_killed: 'EXECUTION_OOM_KILLED',
+    resource_exceeded: 'EXECUTION_RESOURCE_EXCEEDED',
+    failed: 'EXECUTION_INTERNAL_ERROR',
+    quarantined: 'EXECUTION_INTERNAL_ERROR',
+  } as const;
+  return { code: code[status], message: `${status} execution`, retryable: false };
 }

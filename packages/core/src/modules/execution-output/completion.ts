@@ -1,4 +1,8 @@
 import type { CommandExecutionResult, ExecutionReceipt } from '../../contracts/command-execution';
+import type {
+  ExecutionFrameworkEvent,
+  ExecutionFrameworkEventType,
+} from '../../contracts/execution-events';
 import type { ExecutionRecord } from '../../contracts/execution-store';
 import type {
   ExecutionOutputCollectionContext,
@@ -10,6 +14,10 @@ import type {
 } from '../../contracts/execution-output';
 import { FrameworkError } from '../../errors';
 import { validateCommandExecutionResult } from '../command-execution';
+import {
+  createExecutionFrameworkEvent,
+  validateExecutionFrameworkEvent,
+} from '../execution-events';
 import { validateExecutionRecord } from '../execution-store';
 import {
   validateExecutionOutputCollectionPlan,
@@ -42,6 +50,24 @@ export interface DurableExecutionCompletionRequest {
 export interface DurableExecutionCompletionResult {
   record: ExecutionRecord;
   output: ExecutionOutputCollectionResult;
+}
+
+export interface DurableExecutionTerminalEventCommitRequest {
+  event: ExecutionFrameworkEvent;
+  executionRevision: number;
+  idempotencyKey: string;
+}
+
+/**
+ * Runtime implements this port with its durable Event Store. Repeated calls
+ * with the same idempotency key and event must resolve to the same append.
+ */
+export interface DurableExecutionTerminalEventCommitPort {
+  append(request: DurableExecutionTerminalEventCommitRequest): Promise<unknown>;
+}
+
+export interface DurableExecutionTerminalEventCoordinatorOptions {
+  events: DurableExecutionTerminalEventCommitPort;
 }
 
 /**
@@ -108,6 +134,147 @@ export class DurableExecutionCompletionCoordinator {
       await this.worker.commit(artifactLeaseRecord, resultWithArtifacts)
     );
     return { record: committed, output };
+  }
+}
+
+/**
+ * Appends the Execution terminal event only after a durable terminal record
+ * exists. Provider execution and Artifact collection are deliberately absent,
+ * so recovery can retry a failed append without repeating either side effect.
+ */
+export class DurableExecutionTerminalEventCoordinator {
+  private readonly events: DurableExecutionTerminalEventCommitPort;
+
+  constructor(options: DurableExecutionTerminalEventCoordinatorOptions) {
+    this.events = options.events;
+  }
+
+  async append(recordValue: ExecutionRecord): Promise<ExecutionFrameworkEvent> {
+    const record = validateExecutionRecord(recordValue);
+    const event = createDurableExecutionTerminalEvent(record);
+    const executionRevision = requiredTerminalResult(record).revision;
+    const idempotencyKey = terminalEventIdempotencyKey(record.id, executionRevision);
+    const appended = validateExecutionFrameworkEvent(
+      await this.events.append({ event, executionRevision, idempotencyKey })
+    );
+    assertAppendedTerminalEvent(event, appended);
+    return appended;
+  }
+}
+
+export function createDurableExecutionTerminalEvent(
+  recordValue: ExecutionRecord
+): ExecutionFrameworkEvent {
+  const record = validateExecutionRecord(recordValue);
+  const result = requiredTerminalResult(record);
+  const type = terminalEventType(result.status);
+  if (!result.completedAt) {
+    throw completionError('Execution terminal event requires a completion timestamp');
+  }
+  const latencyMs =
+    result.latencyMs ??
+    Date.parse(result.completedAt) - Date.parse(result.startedAt);
+  if (latencyMs !== undefined && (!Number.isFinite(latencyMs) || latencyMs < 0)) {
+    throw completionError('Execution terminal latency evidence is invalid');
+  }
+
+  const commonPayload = {
+    operationId: record.request.operationId,
+    executionId: record.id,
+    revision: result.revision,
+    sandboxId: result.sandboxId,
+    workspaceId: record.request.workspaceId,
+    providerId: record.providerId,
+    status: result.status,
+    exitCode: result.exitCode,
+    ...(result.signal === undefined ? {} : { signal: result.signal }),
+    artifactRefs: uniqueReferences(result.generatedArtifactRefs),
+    ...(latencyMs === undefined ? {} : { latencyMs }),
+    ...(result.resourceUsage === undefined ? {} : { resourceUsage: result.resourceUsage }),
+    ...(result.error === undefined ? {} : { error: result.error }),
+  };
+  const input = {
+    id: terminalEventId(record.id, result.revision, type),
+    type,
+    workspaceId: record.request.workspaceId,
+    ...(record.request.sessionId === undefined ? {} : { sessionId: record.request.sessionId }),
+    runId: record.request.runId,
+    ...(record.request.stepId === undefined ? {} : { stepId: record.request.stepId }),
+    ...(record.request.agentId === undefined ? {} : { agentId: record.request.agentId }),
+    ...(record.request.fsmState === undefined ? {} : { fsmState: record.request.fsmState }),
+    timestamp: result.completedAt,
+    payload: commonPayload,
+  };
+  return createExecutionFrameworkEvent(input);
+}
+
+function requiredTerminalResult(record: ExecutionRecord): CommandExecutionResult {
+  if (!record.result) {
+    throw completionError('Execution terminal event requires a durable terminal result');
+  }
+  const result = validateCommandExecutionResult(record.result);
+  terminalEventType(record.status);
+  const terminalRevisionMatches =
+    result.revision === record.revision || result.revision + 1 === record.revision;
+  if (
+    result.executionId !== record.id ||
+    result.status !== record.status ||
+    !terminalRevisionMatches
+  ) {
+    throw completionError('Execution terminal result does not match its durable record');
+  }
+  return result;
+}
+
+function terminalEventType(status: ExecutionRecord['status']): ExecutionFrameworkEventType {
+  switch (status) {
+    case 'completed':
+      return 'command.execution.completed';
+    case 'cancelled':
+      return 'command.execution.cancelled';
+    case 'timed_out':
+      return 'command.execution.timeout';
+    case 'oom_killed':
+      return 'command.execution.oom_killed';
+    case 'resource_exceeded':
+      return 'command.execution.resource.exceeded';
+    case 'failed':
+    case 'quarantined':
+      return 'command.execution.failed';
+    default:
+      throw completionError('Execution terminal event requires a terminal record');
+  }
+}
+
+function terminalEventId(
+  executionId: string,
+  revision: number,
+  type: ExecutionFrameworkEventType
+): string {
+  return `event:${type}:${executionId}:${revision}`;
+}
+
+function terminalEventIdempotencyKey(executionId: string, revision: number): string {
+  return `execution-terminal-event:${executionId}:${revision}`;
+}
+
+function assertAppendedTerminalEvent(
+  expected: ExecutionFrameworkEvent,
+  appended: ExecutionFrameworkEvent
+): void {
+  const expectedRevision =
+    'revision' in expected.payload ? expected.payload.revision : undefined;
+  const appendedRevision =
+    'revision' in appended.payload ? appended.payload.revision : undefined;
+  if (
+    appended.id !== expected.id ||
+    appended.type !== expected.type ||
+    appended.runId !== expected.runId ||
+    appended.workspaceId !== expected.workspaceId ||
+    appended.payload.executionId !== expected.payload.executionId ||
+    appendedRevision !== expectedRevision
+  ) {
+    throw completionError('Appended Execution terminal event identity does not match its request');
   }
 }
 
