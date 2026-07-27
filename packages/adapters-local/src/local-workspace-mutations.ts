@@ -12,10 +12,17 @@ export interface LocalWorkspaceEntry {
   kind: 'file' | 'symlink';
 }
 
+export interface LocalWorkspaceDirectoryEntry {
+  path: string;
+  mode: number;
+}
+
 export interface LocalWorkspaceSnapshot {
   rootPath: string;
   entries: ReadonlyMap<string, LocalWorkspaceEntry>;
+  directories: ReadonlyMap<string, LocalWorkspaceDirectoryEntry>;
   totalBytes: number;
+  sourceTreeHash: string;
 }
 
 export interface LocalWorkspaceSnapshotOptions {
@@ -45,6 +52,7 @@ export async function captureLocalWorkspaceSnapshot(
   const maxFiles = options.maxFiles ?? 10_000;
   const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
   const entries = new Map<string, LocalWorkspaceEntry>();
+  const directories = new Map<string, LocalWorkspaceDirectoryEntry>();
   let totalBytes = 0;
 
   const walk = async (directory: string): Promise<void> => {
@@ -69,6 +77,7 @@ export async function captureLocalWorkspaceSnapshot(
           kind: 'symlink',
         });
       } else if (stat.isDirectory()) {
+        addDirectory({ path: relativePath, mode: stat.mode });
         await walk(absolutePath);
       } else if (stat.isFile()) {
         const content = await fs.readFile(absolutePath);
@@ -85,7 +94,7 @@ export async function captureLocalWorkspaceSnapshot(
 
   const addEntry = (entry: LocalWorkspaceEntry): void => {
     totalBytes += entry.sizeBytes;
-    if (entries.size + 1 > maxFiles || totalBytes > maxBytes) {
+    if (entries.size + directories.size + 1 > maxFiles || totalBytes > maxBytes) {
       throw new LocalWorkspaceSnapshotLimitError(
         'Workspace mutation capture exceeded its configured scan limits.',
         { maxFiles, maxBytes }
@@ -94,8 +103,24 @@ export async function captureLocalWorkspaceSnapshot(
     entries.set(entry.path, entry);
   };
 
+  const addDirectory = (entry: LocalWorkspaceDirectoryEntry): void => {
+    if (entries.size + directories.size + 1 > maxFiles) {
+      throw new LocalWorkspaceSnapshotLimitError(
+        'Workspace mutation capture exceeded its configured scan limits.',
+        { maxFiles, maxBytes }
+      );
+    }
+    directories.set(entry.path, entry);
+  };
+
   await walk(root);
-  return { rootPath: root, entries, totalBytes };
+  return {
+    rootPath: root,
+    entries,
+    directories,
+    totalBytes,
+    sourceTreeHash: hashWorkspaceTree(entries, directories),
+  };
 }
 
 export function diffLocalWorkspaceSnapshots(
@@ -223,4 +248,25 @@ function assertWithinRoot(candidate: string, root: string): void {
 
 function hashBuffer(content: Buffer): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
+}
+
+function hashWorkspaceTree(
+  entries: ReadonlyMap<string, LocalWorkspaceEntry>,
+  directories: ReadonlyMap<string, LocalWorkspaceDirectoryEntry>
+): string {
+  const canonicalTree = {
+    directories: [...directories.values()]
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map(({ path: entryPath, mode }) => ({ path: entryPath, mode })),
+    entries: [...entries.values()]
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map(({ path: entryPath, kind, contentHash, sizeBytes, mode }) => ({
+        path: entryPath,
+        kind,
+        contentHash,
+        sizeBytes,
+        mode,
+      })),
+  };
+  return hashBuffer(Buffer.from(JSON.stringify(canonicalTree), 'utf8'));
 }

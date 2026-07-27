@@ -70,6 +70,51 @@ describe('local Workspace mutation capture', () => {
     });
   });
 
+  it('counts directories toward the bounded snapshot entry budget', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-directory-bounds-'));
+    await fs.mkdir(path.join(root, 'one'));
+    await fs.mkdir(path.join(root, 'two'));
+
+    await expect(captureLocalWorkspaceSnapshot(root, { maxFiles: 1 })).rejects.toBeInstanceOf(
+      LocalWorkspaceSnapshotLimitError
+    );
+  });
+
+  it('produces a deterministic tree hash that includes empty directories', async () => {
+    const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-tree-first-'));
+    const secondRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-tree-second-'));
+    for (const root of [firstRoot, secondRoot]) {
+      await fs.mkdir(path.join(root, 'empty'));
+      await fs.writeFile(path.join(root, 'result.txt'), 'same');
+    }
+
+    const first = await captureLocalWorkspaceSnapshot(firstRoot);
+    const repeated = await captureLocalWorkspaceSnapshot(firstRoot);
+    const equivalent = await captureLocalWorkspaceSnapshot(secondRoot);
+
+    expect(first.sourceTreeHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(repeated.sourceTreeHash).toBe(first.sourceTreeHash);
+    expect(equivalent.sourceTreeHash).toBe(first.sourceTreeHash);
+    expect([...first.directories.values()]).toEqual([
+      expect.objectContaining({ path: 'empty' }),
+    ]);
+
+    await fs.mkdir(path.join(firstRoot, 'another-empty'));
+    const changed = await captureLocalWorkspaceSnapshot(firstRoot);
+    expect(changed.sourceTreeHash).not.toBe(first.sourceTreeHash);
+  });
+
+  it('changes the tree hash when file bytes change', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-tree-content-'));
+    await fs.writeFile(path.join(root, 'result.txt'), 'before');
+    const before = await captureLocalWorkspaceSnapshot(root);
+
+    await fs.writeFile(path.join(root, 'result.txt'), 'after');
+    const after = await captureLocalWorkspaceSnapshot(root);
+
+    expect(after.sourceTreeHash).not.toBe(before.sourceTreeHash);
+  });
+
   it('fails closed instead of capturing protected control-plane entries', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-control-plane-'));
     await fs.mkdir(path.join(root, '.hypha'));
