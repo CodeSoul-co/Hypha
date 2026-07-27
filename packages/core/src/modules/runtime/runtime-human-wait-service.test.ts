@@ -28,6 +28,10 @@ const eventTypes: FrameworkEventType[] = [
   'runtime.wait.resolved',
   'fsm.state.entered',
   'human.review.requested',
+  'human.review.approved',
+  'human.review.rejected',
+  'human.review.expired',
+  'human.review.cancelled',
 ];
 
 async function fixture() {
@@ -68,7 +72,7 @@ async function fixture() {
     expectedLastSequence: 0,
     idempotencyKey: 'seed-human-review',
   });
-  return { service, events, runLeases, now };
+  return { service, events, runLeases, now, nextId };
 }
 
 describe('RuntimeHumanWaitService', () => {
@@ -178,6 +182,98 @@ describe('RuntimeHumanWaitService', () => {
     expect(resolved.projection).not.toHaveProperty('pendingWait');
     expect(resolved.eventIds).toHaveLength(4);
   });
+
+  it.each([
+    ['approved', 'human.review.approved', '2026-07-23T08:01:00.000Z'],
+    ['rejected', 'human.review.rejected', '2026-07-23T08:01:00.000Z'],
+    ['expired', 'human.review.expired', '2026-07-24T08:00:30.000Z'],
+    ['cancelled', 'human.review.cancelled', '2026-07-23T08:01:00.000Z'],
+  ] as const)(
+    'restores an exact Tool Invocation after restart and records one %s terminal event',
+    async (decision, terminalType, decidedAt) => {
+      const target = await fixture();
+      const request = {
+        taskId: 'human-task.tool-restart',
+        kind: 'tool' as const,
+        subjectRef: 'tool:filesystem.write@revision-7',
+        subjectHash: `sha256:${'b'.repeat(64)}`,
+        requestedBy: scope.userId,
+        allowedDecisionScopes: ['runtime.human-task.decide'],
+        requestedAt: '2026-07-23T08:00:30.000Z',
+        expiresAt: '2026-07-24T08:00:30.000Z',
+        checkpointRef: 'run.review:invocation.write:checkpoint-1',
+        policyRef: 'policy.tools@revision-4',
+        providerRevision: 'filesystem-provider@revision-3',
+        metadata: {
+          invocationId: 'invocation.write',
+          inputHash: `sha256:${'c'.repeat(64)}`,
+          approvalRevision: 1,
+          workspaceId: 'workspace.review',
+        },
+      };
+      await target.service.create({
+        ...createCommand(),
+        commandId: `create.tool-restart.${decision}`,
+        waitId: `wait.tool-restart.${decision}`,
+        pendingActionRef: 'invocation.write',
+        humanTasks: [request],
+      });
+
+      const restarted = new RuntimeHumanWaitService({
+        events: target.events,
+        projections: new ProjectionEngine({ events: target.events, now: target.now }),
+        projectionStore: new InMemoryProjectionStore<RuntimeOrchestrationProjection>(),
+        runLeases: target.runLeases,
+        now: target.now,
+        nextId: target.nextId,
+      });
+      const command = {
+        commandId: `resolve.tool-restart.${decision}`,
+        scope,
+        ownerId: 'worker.review.restarted',
+        leaseTtlMs: 30_000,
+        waitId: `wait.tool-restart.${decision}`,
+        pendingActionRef: 'invocation.write',
+        principalId: 'admin-1',
+        decision,
+        resolvedAt: decidedAt,
+        humanTaskDecision: {
+          commandId: `human-task.tool-restart.${decision}`,
+          scope,
+          principal: {
+            principalId: decision === 'expired' ? 'system.expiry' : 'admin-1',
+            type: decision === 'expired' ? ('system' as const) : ('user' as const),
+            ...(decision === 'expired' ? {} : { userId: 'admin-1' }),
+            tenantId: scope.tenantId,
+            permissionScopes: ['runtime.human-task.decide'],
+          },
+          taskId: request.taskId,
+          expectedRevision: 1,
+          expectedSubjectHash: request.subjectHash,
+          decision,
+          decidedAt,
+        },
+      };
+      const resolved = await restarted.resolve(command);
+      expect(resolved.disposition).toBe('applied');
+
+      const repeated = await restarted.resolve(command);
+      expect(repeated).toMatchObject({
+        disposition: 'reused',
+        eventIds: resolved.eventIds,
+      });
+      const written = await target.events.read({ scope: streamScope() });
+      expect(written.filter((event) => event.type === terminalType)).toHaveLength(1);
+      expect(written.filter((event) => event.type === 'fsm.state.entered')).toHaveLength(2);
+      expect(written.find((event) => event.type === terminalType)?.payload).toMatchObject({
+        taskId: request.taskId,
+        subjectRef: request.subjectRef,
+        subjectHash: request.subjectHash,
+        expectedRevision: 1,
+        decision,
+      });
+    }
+  );
 
   it('rejects a decision for a different pending action', async () => {
     const target = await fixture();

@@ -45,7 +45,7 @@ export function assertRuntimeHumanTaskDecision<TTask extends RuntimeHumanTask>(
   task: TTask | undefined,
   command: Pick<
     RuntimeHumanTaskDecisionCommand,
-    'expectedRevision' | 'expectedSubjectHash' | 'principal' | 'decidedAt'
+    'expectedRevision' | 'expectedSubjectHash' | 'principal' | 'decidedAt' | 'decision'
   >
 ): TTask {
   if (!task) humanTaskError('HUMAN_TASK_NOT_FOUND', 'Human task was not found.');
@@ -69,8 +69,16 @@ export function assertRuntimeHumanTaskDecision<TTask extends RuntimeHumanTask>(
       actualSubjectHash: task.subjectHash,
     });
   }
-  if (task.expiresAt !== undefined && Date.parse(task.expiresAt) <= Date.parse(command.decidedAt)) {
+  const expiresAt = task.expiresAt === undefined ? undefined : Date.parse(task.expiresAt);
+  const decidedAt = Date.parse(command.decidedAt);
+  if (command.decision !== 'expired' && expiresAt !== undefined && expiresAt <= decidedAt) {
     humanTaskError('HUMAN_TASK_EXPIRED', 'Human task has expired.', {
+      taskId: task.taskId,
+      expiresAt: task.expiresAt,
+    });
+  }
+  if (command.decision === 'expired' && (expiresAt === undefined || decidedAt < expiresAt)) {
+    humanTaskError('HUMAN_TASK_NOT_EXPIRED', 'Human task cannot expire before its deadline.', {
       taskId: task.taskId,
       expiresAt: task.expiresAt,
     });

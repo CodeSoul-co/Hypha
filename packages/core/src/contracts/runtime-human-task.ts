@@ -18,7 +18,12 @@ export const RUNTIME_HUMAN_TASK_STATUSES = [
   'cancelled',
 ] as const;
 
-export const RUNTIME_HUMAN_TASK_DECISIONS = ['approved', 'rejected', 'cancelled'] as const;
+export const RUNTIME_HUMAN_TASK_DECISIONS = [
+  'approved',
+  'rejected',
+  'expired',
+  'cancelled',
+] as const;
 
 export type RuntimeHumanTaskKind = (typeof RUNTIME_HUMAN_TASK_KINDS)[number];
 export type RuntimeHumanTaskStatus = (typeof RUNTIME_HUMAN_TASK_STATUSES)[number];
