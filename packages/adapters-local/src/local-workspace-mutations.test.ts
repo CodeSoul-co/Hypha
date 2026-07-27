@@ -69,4 +69,33 @@ describe('local Workspace mutation capture', () => {
       details: { maxBytes: 2 },
     });
   });
+
+  it('fails closed instead of capturing protected control-plane entries', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-control-plane-'));
+    await fs.mkdir(path.join(root, '.hypha'));
+    await fs.writeFile(path.join(root, '.hypha', 'runtime.sqlite'), 'protected');
+    await fs.writeFile(path.join(root, 'result.txt'), 'ordinary');
+
+    await expect(captureLocalWorkspaceSnapshot(root)).rejects.toThrow(
+      'protected by the control-plane policy'
+    );
+  });
+
+  it('rejects a Workspace root that contains a configured control-plane store', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-overlap-'));
+    const controlPlaneStore = path.join(root, 'state', 'runtime.sqlite');
+    const previousStore = process.env.HYPHA_RUNTIME_EVENT_DB;
+    await fs.mkdir(path.dirname(controlPlaneStore));
+    await fs.writeFile(controlPlaneStore, 'protected');
+    process.env.HYPHA_RUNTIME_EVENT_DB = controlPlaneStore;
+
+    try {
+      await expect(captureLocalWorkspaceSnapshot(root)).rejects.toThrow(
+        'Workspace root overlaps the framework control-plane'
+      );
+    } finally {
+      if (previousStore === undefined) delete process.env.HYPHA_RUNTIME_EVENT_DB;
+      else process.env.HYPHA_RUNTIME_EVENT_DB = previousStore;
+    }
+  });
 });

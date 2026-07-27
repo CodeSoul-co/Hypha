@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { FileMutation } from '@hypha/core';
+import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 
 export interface LocalWorkspaceEntry {
   path: string;
@@ -38,6 +39,9 @@ export async function captureLocalWorkspaceSnapshot(
 ): Promise<LocalWorkspaceSnapshot> {
   const root = path.resolve(rootPath);
   const realRoot = await fs.realpath(root);
+  const controlPlaneGuard = new WorkspaceControlPlaneGuard();
+  controlPlaneGuard.assertWorkspaceRoot(root);
+  controlPlaneGuard.assertWorkspaceRoot(realRoot);
   const maxFiles = options.maxFiles ?? 10_000;
   const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
   const entries = new Map<string, LocalWorkspaceEntry>();
@@ -46,11 +50,14 @@ export async function captureLocalWorkspaceSnapshot(
   const walk = async (directory: string): Promise<void> => {
     const realDirectory = await fs.realpath(directory);
     assertWithinRoot(realDirectory, realRoot);
+    controlPlaneGuard.assertResolvedPath(directory);
+    controlPlaneGuard.assertResolvedPath(realDirectory);
     const children = await fs.readdir(directory, { withFileTypes: true });
     children.sort((left, right) => left.name.localeCompare(right.name));
     for (const child of children) {
       const absolutePath = path.join(directory, child.name);
       const relativePath = portableRelative(root, absolutePath);
+      controlPlaneGuard.assertResolvedPath(absolutePath);
       const stat = await fs.lstat(absolutePath);
       if (stat.isSymbolicLink()) {
         const target = await fs.readlink(absolutePath);
