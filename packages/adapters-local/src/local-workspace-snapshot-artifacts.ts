@@ -3,14 +3,24 @@ import type {
   ArtifactManager,
   ArtifactRecord,
   SpecRef,
+  WorkspaceRestoreRequest,
   WorkspaceSnapshotEntry,
   WorkspaceSnapshotManifest,
   WorkspaceSnapshotRequest,
 } from '@hypha/core';
-import { validateWorkspaceSnapshotManifest, validateWorkspaceSnapshotRequest } from '@hypha/core';
+import {
+  validateWorkspaceRestoreRequest,
+  validateWorkspaceSnapshotManifest,
+  validateWorkspaceSnapshotRequest,
+} from '@hypha/core';
 import { executionProviderError } from './execution-provider-error';
 import { type LocalWorkspaceEntry, type LocalWorkspaceSnapshot } from './local-workspace-mutations';
 import type { LocalWorkspaceAdapter } from './local-workspace-adapter';
+import {
+  encodeWorkspaceSnapshotManifest,
+  hashWorkspaceSnapshotManifest,
+} from './local-workspace-snapshot-manifest';
+import { restoreLocalWorkspaceSnapshot } from './local-workspace-snapshot-restore';
 
 export interface LocalWorkspaceSnapshotArtifactContext {
   profileRef: SpecRef;
@@ -23,10 +33,13 @@ export interface LocalWorkspaceSnapshotArtifactContext {
 }
 
 export interface LocalWorkspaceSnapshotArtifactServiceOptions {
-  workspace: Pick<LocalWorkspaceAdapter, 'capture'>;
-  artifacts: Pick<ArtifactManager, 'create' | 'createFromWorkspace' | 'finalize'>;
+  workspace: Pick<LocalWorkspaceAdapter, 'capture' | 'workspaceRoot'>;
+  artifacts: Pick<ArtifactManager, 'create' | 'createFromWorkspace' | 'finalize' | 'read'>;
   context: LocalWorkspaceSnapshotArtifactContext;
   now?: () => string;
+  maxManifestBytes?: number;
+  maxRestoreBytes?: number;
+  maxRestoreEntries?: number;
 }
 
 /**
@@ -39,12 +52,27 @@ export class LocalWorkspaceSnapshotArtifactService {
   private readonly artifacts: LocalWorkspaceSnapshotArtifactServiceOptions['artifacts'];
   private readonly context: LocalWorkspaceSnapshotArtifactContext;
   private readonly now: () => string;
+  private readonly maxManifestBytes: number;
+  private readonly maxRestoreBytes: number;
+  private readonly maxRestoreEntries: number;
 
   constructor(options: LocalWorkspaceSnapshotArtifactServiceOptions) {
     this.workspace = options.workspace;
     this.artifacts = options.artifacts;
     this.context = options.context;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.maxManifestBytes = positiveInteger(
+      options.maxManifestBytes ?? 8 * 1024 * 1024,
+      'maxManifestBytes'
+    );
+    this.maxRestoreBytes = positiveInteger(
+      options.maxRestoreBytes ?? 256 * 1024 * 1024,
+      'maxRestoreBytes'
+    );
+    this.maxRestoreEntries = positiveInteger(
+      options.maxRestoreEntries ?? 10_000,
+      'maxRestoreEntries'
+    );
   }
 
   async createFullSnapshot(input: WorkspaceSnapshotRequest): Promise<ArtifactRecord> {
@@ -86,7 +114,7 @@ export class LocalWorkspaceSnapshotArtifactService {
     }
 
     const manifest = this.createManifest(request, captured, finalizedFiles);
-    const content = new TextEncoder().encode(JSON.stringify(manifest));
+    const content = encodeWorkspaceSnapshotManifest(manifest);
     const draftManifest = await this.artifacts.create({
       ...this.artifactIdentity(request),
       operationId: operationId(request.operationId, 'manifest'),
@@ -129,6 +157,31 @@ export class LocalWorkspaceSnapshotArtifactService {
         ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'finalize-manifest') }
         : {}),
     });
+  }
+
+  async restoreFullSnapshot(input: WorkspaceRestoreRequest): Promise<void> {
+    const request = validateWorkspaceRestoreRequest(input);
+    this.assertScope(request);
+    try {
+      await restoreLocalWorkspaceSnapshot({
+        workspaceRoot: this.workspace.workspaceRoot,
+        capture: () => this.workspace.capture(),
+        artifacts: this.artifacts,
+        request,
+        maxManifestBytes: this.maxManifestBytes,
+        maxRestoreBytes: this.maxRestoreBytes,
+        maxRestoreEntries: this.maxRestoreEntries,
+      });
+    } catch (error) {
+      if (hasNormalizedError(error)) throw error;
+      const code = nodeErrorCode(error);
+      throw executionProviderError(
+        'EXECUTION_INTERNAL_ERROR',
+        'Workspace full snapshot restore failed.',
+        true,
+        code ? { causeCode: code } : undefined
+      );
+    }
   }
 
   private async createFileArtifacts(
@@ -200,7 +253,7 @@ export class LocalWorkspaceSnapshotArtifactService {
     };
     return validateWorkspaceSnapshotManifest({
       ...manifestWithoutHash,
-      manifestHash: hashJson(manifestWithoutHash),
+      manifestHash: hashWorkspaceSnapshotManifest(manifestWithoutHash),
     });
   }
 
@@ -270,7 +323,9 @@ export class LocalWorkspaceSnapshotArtifactService {
     }
   }
 
-  private assertScope(request: WorkspaceSnapshotRequest): void {
+  private assertScope(
+    request: Pick<WorkspaceSnapshotRequest | WorkspaceRestoreRequest, 'workspaceId' | 'principal'>
+  ): void {
     if (
       request.workspaceId !== this.context.workspaceId ||
       (request.principal.userId !== undefined &&
@@ -335,14 +390,27 @@ function idempotencyKey(base: string, phase: string, entryPath?: string): string
   return `${base}:${phase}${entryPath ? `:${digest(entryPath).slice(0, 16)}` : ''}`;
 }
 
-function hashJson(value: unknown): string {
-  return hashBytes(new TextEncoder().encode(JSON.stringify(value)));
-}
-
 function hashBytes(content: Uint8Array): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
 function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function positiveInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${name} must be a positive safe integer.`);
+  }
+  return value;
+}
+
+function hasNormalizedError(error: unknown): error is { normalizedError: unknown } {
+  return typeof error === 'object' && error !== null && 'normalizedError' in error;
+}
+
+function nodeErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  const code = error.code;
+  return typeof code === 'string' ? code : undefined;
 }

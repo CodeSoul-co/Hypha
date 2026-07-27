@@ -6,6 +6,7 @@ import {
   type ArtifactProfileSpec,
   type ArtifactWorkspaceContentReader,
   type ExecutionPrincipal,
+  type WorkspaceSnapshotManifest,
   validateWorkspaceSnapshotManifest,
 } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,6 +15,10 @@ import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-re
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
 import { LocalWorkspaceSnapshotArtifactService } from './local-workspace-snapshot-artifacts';
+import {
+  encodeWorkspaceSnapshotManifest,
+  hashWorkspaceSnapshotManifest,
+} from './local-workspace-snapshot-manifest';
 
 const principal: ExecutionPrincipal = {
   principalId: 'user.snapshot',
@@ -100,6 +105,118 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     const storedObjects = fixture.store.stats();
     await expect(service.createFullSnapshot(snapshotRequest())).resolves.toEqual(artifact);
     expect(fixture.store.stats()).toEqual(storedObjects);
+  });
+
+  it('restores a complete Workspace tree from finalized snapshot Artifacts', async () => {
+    const root = await workspaceRoot('restore');
+    await fs.mkdir(path.join(root, 'empty'));
+    await fs.mkdir(path.join(root, 'nested'));
+    await fs.writeFile(path.join(root, 'nested', 'report.txt'), 'original report');
+    await fs.writeFile(path.join(root, 'raw.bin'), Uint8Array.from([0, 1, 2, 255]));
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const service = createService(workspace, fixture.manager);
+    const original = await workspace.capture();
+    const snapshot = await service.createFullSnapshot(snapshotRequest());
+
+    await fs.rm(path.join(root, 'nested'), { recursive: true });
+    await fs.rm(path.join(root, 'empty'), { recursive: true });
+    await fs.writeFile(path.join(root, 'raw.bin'), 'changed');
+    await fs.writeFile(path.join(root, 'stale.txt'), 'stale');
+    const changed = await workspace.capture();
+
+    await service.restoreFullSnapshot(restoreRequest(snapshot.id, changed.sourceTreeHash));
+
+    await expect(fs.readFile(path.join(root, 'nested', 'report.txt'), 'utf8')).resolves.toBe(
+      'original report'
+    );
+    await expect(fs.readFile(path.join(root, 'raw.bin'))).resolves.toEqual(
+      Buffer.from([0, 1, 2, 255])
+    );
+    await expect(fs.stat(path.join(root, 'empty'))).resolves.toMatchObject({});
+    await expect(fs.access(path.join(root, 'stale.txt'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(workspace.capture()).resolves.toMatchObject({
+      sourceTreeHash: original.sourceTreeHash,
+    });
+  });
+
+  it('does not modify the Workspace when the expected current hash is stale', async () => {
+    const root = await workspaceRoot('restore-stale');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const service = createService(workspace, fixture.manager);
+    const snapshot = await service.createFullSnapshot(snapshotRequest());
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+
+    await expect(
+      service.restoreFullSnapshot(restoreRequest(snapshot.id, 'sha256:stale'))
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_REVISION_CONFLICT' },
+    });
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+  });
+
+  it('fails closed when the Workspace changes while restore staging is prepared', async () => {
+    const root = await workspaceRoot('restore-race');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const snapshot = await createService(workspace, fixture.manager).createFullSnapshot(
+      snapshotRequest()
+    );
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const current = await workspace.capture();
+    let captureCount = 0;
+    const restoreService = createService(
+      {
+        workspaceRoot: root,
+        async capture() {
+          captureCount += 1;
+          if (captureCount === 2) {
+            await fs.writeFile(path.join(root, 'late.txt'), 'late');
+          }
+          return workspace.capture();
+        },
+      },
+      fixture.manager
+    );
+
+    await expect(
+      restoreService.restoreFullSnapshot(restoreRequest(snapshot.id, current.sourceTreeHash))
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_REVISION_CONFLICT' },
+    });
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+    await expect(fs.readFile(path.join(root, 'late.txt'), 'utf8')).resolves.toBe('late');
+  });
+
+  it('rejects protected control-plane paths from a validly hashed manifest', async () => {
+    const root = await workspaceRoot('restore-protected');
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const service = createService(workspace, fixture.manager);
+    const manifest = await createManifestArtifact(fixture.manager, {
+      id: 'snapshot.protected',
+      workspaceId: 'workspace.snapshot',
+      entries: [{ path: '.hypha', kind: 'directory' }],
+      sourceTreeHash: hashArtifactBytes(new TextEncoder().encode('protected')),
+      totalBytes: 0,
+      fileCount: 0,
+      createdAt: '2026-07-27T00:00:00.000Z',
+      createdBy: principal.principalId,
+    });
+    const before = await workspace.capture();
+
+    await expect(
+      service.restoreFullSnapshot(restoreRequest(manifest.id, before.sourceTreeHash))
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_PATH_DENIED' },
+    });
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
   });
 
   it('fails before Artifact writes when Workspace scope does not match', async () => {
@@ -206,7 +323,10 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
       sourceTreeHash: hashArtifactBytes(new TextEncoder().encode('unsafe')),
     };
     const fixture = createFixture(root);
-    const service = createService({ capture: async () => unsafeSnapshot }, fixture.manager);
+    const service = createService(
+      { workspaceRoot: root, capture: async () => unsafeSnapshot },
+      fixture.manager
+    );
 
     await expect(service.createFullSnapshot(snapshotRequest())).rejects.toMatchObject({
       normalizedError: { code: 'EXECUTION_PATH_ESCAPE' },
@@ -228,6 +348,17 @@ function snapshotRequest() {
     principal,
     type: 'full' as const,
     idempotencyKey: 'workspace.snapshot.create',
+  };
+}
+
+function restoreRequest(snapshotRef: string, expectedWorkspaceSnapshotHash: string) {
+  return {
+    operationId: 'workspace.snapshot.restore',
+    workspaceId: 'workspace.snapshot',
+    principal,
+    snapshotRef,
+    expectedWorkspaceSnapshotHash,
+    idempotencyKey: `workspace.snapshot.restore:${snapshotRef}`,
   };
 }
 
@@ -306,4 +437,46 @@ function createFixture(root: string, afterRead?: () => Promise<void>) {
     now: () => '2026-07-27T00:00:00.000Z',
   });
   return { manager, repository, store };
+}
+
+async function createManifestArtifact(
+  manager: DefaultArtifactManager,
+  manifestWithoutHash: Omit<WorkspaceSnapshotManifest, 'manifestHash'>
+) {
+  const manifest: WorkspaceSnapshotManifest = {
+    ...manifestWithoutHash,
+    manifestHash: hashWorkspaceSnapshotManifest(manifestWithoutHash),
+  };
+  const content = encodeWorkspaceSnapshotManifest(manifest);
+  const draft = await manager.create({
+    operationId: 'workspace.snapshot.fixture.create',
+    principal,
+    profileRef: { id: 'artifact-profile.snapshot', version: '1.0.0' },
+    userId: ownerUserId,
+    tenantId: principal.tenantId,
+    workspaceId: 'workspace.snapshot',
+    name: `${manifest.id}.json`,
+    kind: 'snapshot',
+    mimeType: 'application/json',
+    encoding: 'utf-8',
+    content,
+    expectedContentHash: hashArtifactBytes(content),
+    expectedSizeBytes: content.byteLength,
+    provenance: {
+      sourceType: 'snapshot',
+      createdBy: principal.principalId,
+    },
+    metadata: {
+      snapshotId: manifest.id,
+      sourceTreeHash: manifest.sourceTreeHash,
+      manifestHash: manifest.manifestHash,
+    },
+  });
+  return manager.finalize({
+    operationId: 'workspace.snapshot.fixture.finalize',
+    principal,
+    artifactId: draft.id,
+    expectedRevision: draft.revision,
+    reason: 'Workspace snapshot restore fixture',
+  });
 }
