@@ -360,6 +360,7 @@ export class ToolManager {
             ...input,
             fencingToken: `local:${process.pid}`,
             expiresAt: new Date(Date.now() + input.ttlMs).toISOString(),
+            assertCurrent: async () => undefined,
             release: async () => undefined,
           };
         }
