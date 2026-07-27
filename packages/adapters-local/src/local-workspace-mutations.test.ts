@@ -51,9 +51,9 @@ describe('local Workspace mutation capture', () => {
     }
 
     const snapshot = await captureLocalWorkspaceSnapshot(root);
-    expect([...snapshot.entries.values()]).toMatchObject([
-      { path: 'outside-link', kind: 'symlink' },
-    ]);
+    const [entry] = [...snapshot.entries.values()];
+    expect(entry).toMatchObject({ path: 'outside-link', kind: 'symlink' });
+    expect(entry?.symlinkTarget).toBeUndefined();
     expect(snapshot.entries.has('outside-link/secret.txt')).toBe(false);
   });
 
@@ -95,9 +95,7 @@ describe('local Workspace mutation capture', () => {
     expect(first.sourceTreeHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(repeated.sourceTreeHash).toBe(first.sourceTreeHash);
     expect(equivalent.sourceTreeHash).toBe(first.sourceTreeHash);
-    expect([...first.directories.values()]).toEqual([
-      expect.objectContaining({ path: 'empty' }),
-    ]);
+    expect([...first.directories.values()]).toEqual([expect.objectContaining({ path: 'empty' })]);
 
     await fs.mkdir(path.join(firstRoot, 'another-empty'));
     const changed = await captureLocalWorkspaceSnapshot(firstRoot);

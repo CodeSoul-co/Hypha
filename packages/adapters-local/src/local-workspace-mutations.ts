@@ -10,6 +10,7 @@ export interface LocalWorkspaceEntry {
   sizeBytes: number;
   mode: number;
   kind: 'file' | 'symlink';
+  symlinkTarget?: string;
 }
 
 export interface LocalWorkspaceDirectoryEntry {
@@ -69,12 +70,14 @@ export async function captureLocalWorkspaceSnapshot(
       const stat = await fs.lstat(absolutePath);
       if (stat.isSymbolicLink()) {
         const target = await fs.readlink(absolutePath);
+        const symlinkTarget = workspaceRelativeSymlinkTarget(root, absolutePath, target);
         addEntry({
           path: relativePath,
           contentHash: hashBuffer(Buffer.from(target, 'utf8')),
           sizeBytes: Buffer.byteLength(target, 'utf8'),
           mode: stat.mode,
           kind: 'symlink',
+          ...(symlinkTarget ? { symlinkTarget } : {}),
         });
       } else if (stat.isDirectory()) {
         addDirectory({ path: relativePath, mode: stat.mode });
@@ -260,13 +263,32 @@ function hashWorkspaceTree(
       .map(({ path: entryPath, mode }) => ({ path: entryPath, mode })),
     entries: [...entries.values()]
       .sort((left, right) => left.path.localeCompare(right.path))
-      .map(({ path: entryPath, kind, contentHash, sizeBytes, mode }) => ({
+      .map(({ path: entryPath, kind, contentHash, sizeBytes, mode, symlinkTarget }) => ({
         path: entryPath,
         kind,
         contentHash,
         sizeBytes,
         mode,
+        ...(symlinkTarget ? { symlinkTarget } : {}),
       })),
   };
   return hashBuffer(Buffer.from(JSON.stringify(canonicalTree), 'utf8'));
+}
+
+function workspaceRelativeSymlinkTarget(
+  root: string,
+  linkPath: string,
+  target: string
+): string | undefined {
+  const resolvedTarget = path.resolve(path.dirname(linkPath), target);
+  const relativeTarget = path.relative(root, resolvedTarget);
+  if (
+    !relativeTarget ||
+    relativeTarget === '..' ||
+    relativeTarget.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeTarget)
+  ) {
+    return undefined;
+  }
+  return relativeTarget.split(path.sep).join('/');
 }

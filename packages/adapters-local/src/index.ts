@@ -45,6 +45,7 @@ export * from './local-process-output-collector';
 export * from './execution-provider-error';
 export * from './local-process-policy';
 export * from './local-workspace-adapter';
+export * from './local-workspace-snapshot-artifacts';
 export * from './local-process-resource-accounting';
 export * from './execution-provider-values';
 export * from './local-sandbox-lifecycle';
