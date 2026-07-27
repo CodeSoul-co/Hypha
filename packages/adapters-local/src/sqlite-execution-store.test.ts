@@ -125,7 +125,7 @@ describe('SQLiteExecutionStore public adapter', () => {
     }
   }, 60_000);
 
-  it('recovers atomically when a worker crashes immediately before or after compare-and-set', async () => {
+  it('recovers atomically from a committed WAL after a worker crashes at compare-and-set', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-cas-'));
     const store = new SQLiteExecutionStore({ rootPath: root });
     const queued = await store.create(structuredClone(executionRecordCreateRequestExample));
@@ -152,8 +152,19 @@ describe('SQLiteExecutionStore public adapter', () => {
       mutation,
       CRASH_AFTER_CAS_EXIT_CODE
     );
+    const wal = await fs.stat(path.join(root, 'executions.sqlite-wal'));
+    expect(wal.size).toBeGreaterThan(32);
+
     const afterCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
     await expect(afterCrashRecovery.get(queued.id)).resolves.toEqual(mutation.next);
+    await expect(afterCrashRecovery.compareAndSet(mutation)).resolves.toEqual(mutation.next);
+    await expect(afterCrashRecovery.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: {
+        schemaVersion: SQLiteExecutionStore.schemaVersion,
+        quarantinedRecords: 0,
+      },
+    });
     await afterCrashRecovery.close();
   }, 60_000);
 
