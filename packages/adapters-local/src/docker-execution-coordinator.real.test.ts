@@ -218,6 +218,92 @@ describe('DockerExecutionCoordinator real daemon', () => {
     });
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
+
+  it('enforces CPU, memory, and process limits through the real container cgroup', async () => {
+    const workspace = await temporaryWorkspace('cgroup');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('cgroup');
+
+    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+      executionInput(name, workspace, 'cgroup', {
+        executable: 'cat',
+        args: ['/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/pids.max'],
+        timeoutMs: 5_000,
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      exitCode: 0,
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+      },
+    });
+    const stdout = requiredString(result.stdout, 'Docker cgroup stdout');
+    expect(stdout.trim().split(/\r?\n/)).toEqual(['25000 100000', String(64 * 1024 * 1024), '32']);
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
+
+  it('blocks direct-IP network access in the real container and cleans up', async () => {
+    const workspace = await temporaryWorkspace('network');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('network');
+
+    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+      executionInput(name, workspace, 'network', {
+        executable: 'redis-cli',
+        args: ['-h', '1.1.1.1', '-p', '6379', 'PING'],
+        timeoutMs: 2_000,
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      exitCode: 1,
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+      },
+    });
+    expect(result.stdout).not.toContain('PONG');
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
+
+  it('normalizes real memory-limit enforcement as OOM killed and cleans up', async () => {
+    const workspace = await temporaryWorkspace('oom');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('oom');
+
+    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+      executionInput(name, workspace, 'oom', {
+        executable: 'perl',
+        args: ['-e', '$value = "x" x (256 * 1024 * 1024); sleep 30'],
+        timeoutMs: 10_000,
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: 'oom_killed',
+      exitCode: 137,
+      error: { code: 'EXECUTION_OOM_KILLED', retryable: false },
+      metadata: {
+        oomKilled: true,
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+      },
+    });
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
 });
 
 class RealWorkspaceOutputs implements DockerExecutionOutputCollector {
@@ -366,6 +452,11 @@ function requiredRecord(value: unknown, name: string): Record<string, unknown> {
 function requiredRecordArray(value: unknown, name: string): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) throw new Error(`${name} is not an array.`);
   return value.map((entry) => requiredRecord(entry, name));
+}
+
+function requiredString(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new Error(`${name} is not a string.`);
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
