@@ -63,6 +63,35 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await reopened.close();
   });
 
+  it('fails closed under a competing write lock and retries the same create safely', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root, busyTimeoutMs: 1 });
+    const filename = path.join(root, 'executions.sqlite');
+    const lockHolder = openTestDatabase(filename);
+    const request = queuedCreateRequest('execution.locked');
+
+    lockHolder.exec('BEGIN IMMEDIATE');
+    try {
+      await expect(store.create(request)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_UNAVAILABLE',
+        message: 'SQLite Execution store write failed.',
+      });
+      expect(
+        lockHolder
+          .prepare('SELECT execution_id FROM execution_records WHERE execution_id = ?')
+          .get(request.record.id)
+      ).toBeUndefined();
+    } finally {
+      lockHolder.exec('ROLLBACK');
+      lockHolder.close();
+    }
+
+    const created = await store.create(request);
+    await expect(store.create(request)).resolves.toEqual(created);
+    await expect(store.get(request.record.id)).resolves.toEqual(created);
+    await store.close();
+  });
+
   it('lists only records matching owner, provider, status, and time filters', async () => {
     const root = await temporaryRoot();
     const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
