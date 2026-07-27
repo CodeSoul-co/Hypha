@@ -159,8 +159,11 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const execution = coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
       executionInput(name, workspace, 'cancel', {
-        executable: 'sh',
-        args: ['-c', 'touch /workspace/cancel.started && sleep 30'],
+        executable: 'perl',
+        args: [
+          '-e',
+          'my $pid = fork(); die "fork failed" unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } open(my $fh, ">", "/workspace/cancel.started") or die "marker failed"; print {$fh} "started\\n"; close($fh); wait;',
+        ],
         timeoutMs: 10_000,
         signal: cancellation.signal,
       })
@@ -300,6 +303,68 @@ describe('DockerExecutionCoordinator real daemon', () => {
           containerAbsent: true,
           stopAttempted: true,
         },
+      },
+    });
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
+
+  it('keeps protected paths read-only and does not expose the Docker socket', async () => {
+    const workspace = await temporaryWorkspace('filesystem');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('filesystem');
+
+    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+      executionInput(name, workspace, 'filesystem', {
+        executable: 'perl',
+        args: [
+          '-e',
+          'my $socket = -S "/var/run/docker.sock"; my $opened = open(my $fh, ">", "/etc/hypha-denied"); exit(($socket || $opened) ? 23 : 0);',
+        ],
+        timeoutMs: 5_000,
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      exitCode: 0,
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+      },
+    });
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
+
+  it('enforces the real PID limit and removes the forked process tree', async () => {
+    const workspace = await temporaryWorkspace('pids');
+    const before = await captureLocalWorkspaceSnapshot(workspace);
+    const name = uniqueContainerName('pids');
+
+    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+      executionInput(name, workspace, 'pids', {
+        executable: 'perl',
+        args: [
+          '-e',
+          'for (1..200) { my $pid = fork(); exit 42 unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } } wait;',
+        ],
+        timeoutMs: 10_000,
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      exitCode: 42,
+      error: { code: 'EXECUTION_INTERNAL_ERROR', providerCode: 42 },
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+        processTreeTerminationVerified: true,
       },
     });
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
