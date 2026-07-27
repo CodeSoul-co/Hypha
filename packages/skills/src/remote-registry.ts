@@ -16,6 +16,7 @@ export interface SkillSbomRef {
 export interface SkillSupplyChainManifest {
   skillId: string;
   version: string;
+  revision?: string;
   contentSha256: string;
   downloadUrl: string;
   publisherId: string;
@@ -54,8 +55,17 @@ export interface HttpsSkillRegistryClientOptions {
   artifactOrigins?: string[];
   maxMetadataBytes?: number;
   maxBundleBytes?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
   fetch?: typeof fetch;
   now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface SkillRegistryPage {
+  entries: SignedSkillRegistryEntry[];
+  nextCursor?: string;
+  revision?: string;
 }
 
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -77,6 +87,7 @@ const manifestSchema = z
   .object({
     skillId: z.string().regex(/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u),
     version: z.string().min(1),
+    revision: z.string().min(1).optional(),
     contentSha256: sha256Schema,
     downloadUrl: z.string().url(),
     publisherId: z.string().min(1),
@@ -110,6 +121,11 @@ export class HttpsSkillRegistryClient {
   private readonly fetchImpl: typeof fetch;
   private readonly allowedArtifactOrigins: Set<string>;
   private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly cache = new Map<
+    string,
+    { etag?: string; revision?: string; entry: SignedSkillRegistryEntry }
+  >();
 
   constructor(private readonly options: HttpsSkillRegistryClientOptions) {
     this.endpoint = secureUrl(options.endpoint, 'SKILL_REGISTRY_ENDPOINT_INVALID');
@@ -121,17 +137,35 @@ export class HttpsSkillRegistryClient {
       ),
     ]);
     this.now = options.now ?? Date.now;
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   async resolve(skillId: string, version: string): Promise<SignedSkillRegistryEntry> {
     if (!/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u.test(skillId) || !version) {
-      throw registryError('SKILL_REGISTRY_REFERENCE_INVALID', 'Skill registry reference is invalid.');
+      throw registryError(
+        'SKILL_REGISTRY_REFERENCE_INVALID',
+        'Skill registry reference is invalid.'
+      );
     }
     const url = new URL(
       `v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`,
       ensureTrailingSlash(this.endpoint)
     );
-    const response = await this.request(url);
+    const cacheKey = `${skillId}@${version}`;
+    const cached = this.cache.get(cacheKey);
+    const response = await this.request(
+      url,
+      cached?.etag ? { 'if-none-match': cached.etag } : undefined
+    );
+    if (response.status === 304) {
+      if (!cached) {
+        throw registryError(
+          'SKILL_REGISTRY_CACHE_MISS',
+          'Skill registry returned not-modified without a cached package.'
+        );
+      }
+      return clone(cached.entry);
+    }
     if (response.status === 404) {
       throw registryError('SKILL_REGISTRY_NOT_FOUND', 'Skill version was not found.');
     }
@@ -160,7 +194,57 @@ export class HttpsSkillRegistryClient {
       );
     }
     this.verifyEntry(entry);
+    const revision = response.headers.get('x-registry-revision') ?? undefined;
+    if (entry.manifest.revision && revision && entry.manifest.revision !== revision) {
+      throw registryError(
+        'SKILL_REGISTRY_REVISION_MISMATCH',
+        'Skill registry revision does not match the signed manifest.'
+      );
+    }
+    this.cache.set(cacheKey, {
+      entry: clone(entry),
+      etag: response.headers.get('etag') ?? undefined,
+      revision,
+    });
     return clone(entry);
+  }
+
+  async list(input: { cursor?: string; limit?: number } = {}): Promise<SkillRegistryPage> {
+    const limit = input.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw registryError('SKILL_REGISTRY_PAGE_INVALID', 'Skill registry page limit is invalid.');
+    }
+    const url = new URL('v1/skills', ensureTrailingSlash(this.endpoint));
+    url.searchParams.set('limit', String(limit));
+    if (input.cursor) url.searchParams.set('cursor', input.cursor);
+    const response = await this.request(url);
+    const text = await boundedText(
+      response,
+      this.options.maxMetadataBytes ?? 256 * 1024,
+      'SKILL_REGISTRY_METADATA_TOO_LARGE'
+    );
+    if (!response.ok) {
+      throw registryError(
+        'SKILL_REGISTRY_REQUEST_FAILED',
+        `Skill registry request failed (${response.status}).`
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw registryError('SKILL_REGISTRY_RESPONSE_INVALID', 'Skill registry response is invalid.');
+    }
+    const page = z
+      .object({
+        entries: z.array(entrySchema),
+        nextCursor: z.string().min(1).optional(),
+        revision: z.string().min(1).optional(),
+      })
+      .strict()
+      .parse(parsed);
+    for (const entry of page.entries) this.verifyEntry(entry);
+    return clone(page);
   }
 
   async download(entryInput: SignedSkillRegistryEntry): Promise<VerifiedSkillBundle> {
@@ -215,7 +299,10 @@ export class HttpsSkillRegistryClient {
     if (manifest.expiresAt && Date.parse(manifest.expiresAt) <= this.now()) {
       throw registryError('SKILL_REGISTRY_PACKAGE_EXPIRED', 'Skill package has expired.');
     }
-    if (manifest.tenantIds && (!this.options.tenantId || !manifest.tenantIds.includes(this.options.tenantId))) {
+    if (
+      manifest.tenantIds &&
+      (!this.options.tenantId || !manifest.tenantIds.includes(this.options.tenantId))
+    ) {
       throw registryError(
         'SKILL_REGISTRY_TENANT_DENIED',
         'Skill package is not distributed to this tenant.'
@@ -270,19 +357,40 @@ export class HttpsSkillRegistryClient {
     }
   }
 
-  private async request(url: URL): Promise<Response> {
-    const headers = new Headers({ accept: 'application/json' });
-    const authorization = await this.options.authorization?.();
-    if (authorization) headers.set('authorization', authorization);
-    try {
-      return await this.fetchImpl(url, {
-        method: 'GET',
-        headers,
-        redirect: 'error',
-      });
-    } catch {
-      throw registryError('SKILL_REGISTRY_UNAVAILABLE', 'Skill registry request failed.');
+  private async request(url: URL, additionalHeaders?: Record<string, string>): Promise<Response> {
+    const maxAttempts = this.options.maxAttempts ?? 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const headers = new Headers({ accept: 'application/json', ...additionalHeaders });
+      const authorization = await this.options.authorization?.();
+      if (authorization) headers.set('authorization', authorization);
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(new Error('Skill registry request timed out.')),
+        this.options.timeoutMs ?? 10_000
+      );
+      try {
+        const response = await this.fetchImpl(url, {
+          method: 'GET',
+          headers,
+          redirect: 'error',
+          signal: controller.signal,
+        });
+        if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts) {
+          await response.body?.cancel().catch(() => undefined);
+          await this.sleep(retryDelay(response, attempt, this.now()));
+          continue;
+        }
+        return response;
+      } catch {
+        if (attempt >= maxAttempts) {
+          throw registryError('SKILL_REGISTRY_UNAVAILABLE', 'Skill registry request failed.');
+        }
+        await this.sleep(Math.min(250 * 2 ** (attempt - 1), 2_000));
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    throw registryError('SKILL_REGISTRY_UNAVAILABLE', 'Skill registry request failed.');
   }
 }
 
@@ -290,7 +398,10 @@ function validateOptionalArtifactUrl(value: string | undefined, allowedOrigins: 
   if (!value) return;
   const url = secureUrl(value, 'SKILL_REGISTRY_SBOM_URL_INVALID');
   if (!allowedOrigins.has(url.origin)) {
-    throw registryError('SKILL_REGISTRY_SBOM_ORIGIN_DENIED', 'Skill SBOM origin is not allow-listed.');
+    throw registryError(
+      'SKILL_REGISTRY_SBOM_ORIGIN_DENIED',
+      'Skill SBOM origin is not allow-listed.'
+    );
   }
 }
 
@@ -311,7 +422,11 @@ async function boundedText(response: Response, maxBytes: number, code: string): 
   }
 }
 
-async function boundedBytes(response: Response, maxBytes: number, code: string): Promise<Uint8Array> {
+async function boundedBytes(
+  response: Response,
+  maxBytes: number,
+  code: string
+): Promise<Uint8Array> {
   const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw registryError(code, 'Skill registry response exceeds its configured limit.');
@@ -362,6 +477,17 @@ function sha256(value: Uint8Array): string {
 
 function registryError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+function retryDelay(response: Response, attempt: number, now: number): number {
+  const value = response.headers.get('retry-after');
+  if (value) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 10_000);
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp)) return Math.min(Math.max(0, timestamp - now), 10_000);
+  }
+  return Math.min(250 * 2 ** (attempt - 1), 2_000);
 }
 
 function clone<T>(value: T): T {
