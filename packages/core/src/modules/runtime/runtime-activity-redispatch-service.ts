@@ -83,6 +83,9 @@ export interface RuntimeActivityRedispatchServiceOptions {
   descriptors: RuntimeActivityDescriptorStore;
   revisions: RuntimeActivityRevisionValidator;
   dispatcher: RuntimeActivityRedispatchPort;
+  renewalIntervalMs?: number;
+  wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  onLeaseRenewalFailure?: (error: unknown, commandId: string) => void;
   nextId?: (namespace: string) => string;
   now?: () => string;
 }
@@ -106,18 +109,31 @@ export interface RuntimeActivityRedispatchResult {
 export class RuntimeActivityRedispatchService {
   private readonly nextId: (namespace: string) => string;
   private readonly now: () => string;
+  private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
 
   constructor(private readonly options: RuntimeActivityRedispatchServiceOptions) {
     this.nextId = options.nextId ?? ((namespace) => `${namespace}.${randomUUID()}`);
     this.now = options.now ?? (() => new Date().toISOString());
+    this.wait = options.wait ?? abortableDelay;
+    if (
+      options.renewalIntervalMs !== undefined &&
+      (!Number.isInteger(options.renewalIntervalMs) || options.renewalIntervalMs <= 0)
+    ) {
+      invalid('renewalIntervalMs must be a positive integer');
+    }
   }
 
   async redispatch(
     command: RuntimeActivityRedispatchCommand
   ): Promise<RuntimeActivityRedispatchResult> {
     validateCommand(command);
-    const signal = command.signal ?? new AbortController().signal;
-    assertActive(signal);
+    const callerSignal = command.signal ?? new AbortController().signal;
+    assertActive(callerSignal);
+    const renewalIntervalMs =
+      this.options.renewalIntervalMs ?? Math.max(1, Math.floor(command.leaseTtlMs / 3));
+    if (renewalIntervalMs >= command.leaseTtlMs) {
+      invalid('renewalIntervalMs must be shorter than leaseTtlMs');
+    }
     const startedAt = this.now();
     validTimestamp(startedAt, 'Activity redispatch clock');
     const lease = await this.acquire(command, startedAt);
@@ -128,11 +144,27 @@ export class RuntimeActivityRedispatchService {
       });
     }
     const authorization = authorizationFor(lease);
+    const operationController = new AbortController();
+    const heartbeatController = new AbortController();
+    const forwardAbort = () =>
+      operationController.abort(callerSignal.reason ?? 'runtime_activity_redispatch_cancelled');
+    callerSignal.addEventListener('abort', forwardAbort, { once: true });
+    if (callerSignal.aborted) forwardAbort();
+    const heartbeat = this.maintainLease({
+      command,
+      authorization,
+      renewalIntervalMs,
+      stopSignal: heartbeatController.signal,
+      operationController,
+    });
+    const signal = operationController.signal;
     try {
       const evidence = await this.loadEvidence(command, startedAt);
+      assertActive(signal);
       await this.options.revisions.validate(evidence);
       assertActive(signal);
       const prior = await this.findPrior(command);
+      assertActive(signal);
       const requestEventId = prior?.id ?? this.nextId('activity-redispatch-event');
       if (!prior) {
         const scope = streamScope(command.scope);
@@ -155,6 +187,7 @@ export class RuntimeActivityRedispatchService {
           idempotencyKey: `activity-redispatch:${command.idempotencyKey ?? command.commandId}`,
           transactionGroupId: runtimeActivityRedispatchIdentity(command),
         });
+        assertActive(signal);
       }
       assertActive(signal);
       await this.options.runLeases.assertCurrent({
@@ -175,6 +208,7 @@ export class RuntimeActivityRedispatchService {
         signal,
       };
       const receipt = await this.findReceipt(command, requestEventId, redispatchIdentity);
+      assertActive(signal);
       if (receipt) {
         return {
           commandId: command.commandId,
@@ -190,7 +224,11 @@ export class RuntimeActivityRedispatchService {
       let accepted: { commandId: string; reused: boolean };
       let source: 'dispatch' | 'reconcile' = 'dispatch';
       if (prior) {
-        const reconciliation = await this.options.dispatcher.reconcile(attempt);
+        const reconciliation = await awaitWithAbort(
+          this.options.dispatcher.reconcile(attempt),
+          signal
+        );
+        assertActive(signal);
         validateReconciliation(reconciliation);
         await this.assertLeaseCurrent(authorization);
         if (reconciliation.status === 'unknown') {
@@ -219,11 +257,13 @@ export class RuntimeActivityRedispatchService {
           source = 'reconcile';
         } else {
           assertActive(signal);
-          accepted = await this.options.dispatcher.dispatch(attempt);
+          accepted = await awaitWithAbort(this.options.dispatcher.dispatch(attempt), signal);
+          assertActive(signal);
           validateDispatchResult(accepted);
         }
       } else {
-        accepted = await this.options.dispatcher.dispatch(attempt);
+        accepted = await awaitWithAbort(this.options.dispatcher.dispatch(attempt), signal);
+        assertActive(signal);
         validateDispatchResult(accepted);
       }
       await this.options.runLeases.assertCurrent({
@@ -253,7 +293,39 @@ export class RuntimeActivityRedispatchService {
         reconciled: source === 'reconcile',
       };
     } finally {
+      heartbeatController.abort();
+      await heartbeat;
+      callerSignal.removeEventListener('abort', forwardAbort);
       await this.release(authorization);
+    }
+  }
+
+  private async maintainLease(input: {
+    command: RuntimeActivityRedispatchCommand;
+    authorization: RunLeaseAuthorization;
+    renewalIntervalMs: number;
+    stopSignal: AbortSignal;
+    operationController: AbortController;
+  }): Promise<void> {
+    while (!input.stopSignal.aborted) {
+      await this.wait(input.renewalIntervalMs, input.stopSignal);
+      if (input.stopSignal.aborted) return;
+      try {
+        await this.options.runLeases.heartbeat({
+          scope: input.authorization.scope,
+          guard: input.authorization.guard,
+          ttlMs: input.command.leaseTtlMs,
+          heartbeatAt: this.now(),
+        });
+      } catch (error) {
+        try {
+          this.options.onLeaseRenewalFailure?.(error, input.command.commandId);
+        } catch {
+          // Observer failures cannot hide the lease loss.
+        }
+        input.operationController.abort(error);
+        return;
+      }
     }
   }
 
@@ -844,11 +916,57 @@ function validTimestamp(value: string, label: string): void {
 
 function assertActive(signal: AbortSignal): void {
   if (signal.aborted) {
+    if (isFrameworkError(signal.reason)) throw signal.reason;
     throw new FrameworkError({
       code: 'RUNTIME_CANCELLED',
       message: 'Activity redispatch was cancelled',
     });
   }
+}
+
+function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    operation.catch(() => undefined);
+    return Promise.reject(abortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => {
+      signal.removeEventListener('abort', aborted);
+      reject(abortError(signal));
+    };
+    signal.addEventListener('abort', aborted, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', aborted);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', aborted);
+        reject(error);
+      }
+    );
+  });
+}
+
+function abortError(signal: AbortSignal): unknown {
+  if (isFrameworkError(signal.reason)) return signal.reason;
+  return new FrameworkError({
+    code: 'RUNTIME_CANCELLED',
+    message: 'Activity redispatch was cancelled',
+  });
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, delayMs);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

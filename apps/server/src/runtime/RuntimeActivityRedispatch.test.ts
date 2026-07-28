@@ -2,6 +2,7 @@ import { InMemoryExecutionArtifactStore } from '@hypha/adapters-local';
 import {
   ArtifactRuntimeActivityDescriptorStore,
   DurableEventRuntime,
+  FrameworkError,
   InMemoryDurableEventStore,
   InMemoryEventSchemaRegistry,
   InMemoryRunLeaseStore,
@@ -587,6 +588,141 @@ describe('RuntimeActivityRedispatchService', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
+  it('renews the run lease while an Activity dispatch remains in flight', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const heartbeat = jest.spyOn(runLeases, 'heartbeat');
+    const dispatch = jest.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { commandId: 'activity-command.long-running', reused: false };
+    });
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch,
+        ids: ['lease.long-running', 'event.long-running'],
+        renewalIntervalMs: 5,
+      }).redispatch({
+        ...redispatchCommand(reference),
+        leaseTtlMs: 100,
+      })
+    ).resolves.toMatchObject({
+      activityCommandId: 'activity-command.long-running',
+    });
+
+    expect(heartbeat).toHaveBeenCalled();
+    expect(heartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ttlMs: 100,
+        guard: expect.objectContaining({ fencingToken: 1 }),
+      })
+    );
+  });
+
+  it('aborts an in-flight dispatch and rejects its late result after lease renewal fails', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const leaseFailure = new FrameworkError({
+      code: 'RUNTIME_FENCING_REJECTED',
+      message: 'replacement worker owns the Run lease',
+    });
+    jest.spyOn(runLeases, 'heartbeat').mockRejectedValue(leaseFailure);
+    const observedSignals: AbortSignal[] = [];
+    const dispatch = jest.fn(
+      async (input: Parameters<RuntimeActivityRedispatchPort['dispatch']>[0]) => {
+        observedSignals.push(input.signal);
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return { commandId: 'activity-command.stale-result', reused: false };
+      }
+    );
+    const onLeaseRenewalFailure = jest.fn();
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch,
+        ids: ['lease.renewal-fails', 'event.renewal-fails'],
+        renewalIntervalMs: 1,
+        onLeaseRenewalFailure,
+      }).redispatch({
+        ...redispatchCommand(reference),
+        leaseTtlMs: 100,
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_FENCING_REJECTED' });
+
+    expect(observedSignals).toHaveLength(1);
+    expect(observedSignals[0].aborted).toBe(true);
+    expect(onLeaseRenewalFailure).toHaveBeenCalledWith(leaseFailure, 'command.redispatch');
+    expect(
+      await events.read({
+        scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+        types: ['activity.redispatch.accepted'],
+      })
+    ).toHaveLength(0);
+  });
+
+  it('does not persist an Activity receipt after the caller cancels an in-flight dispatch', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const controller = new AbortController();
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const dispatch = jest.fn(
+      async (input: Parameters<RuntimeActivityRedispatchPort['dispatch']>[0]) => {
+        markStarted?.();
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return { commandId: 'activity-command.cancelled-result', reused: false };
+      }
+    );
+    const runtime = service({
+      events,
+      descriptors,
+      runLeases: new InMemoryRunLeaseStore({ now: () => now }),
+      dispatch,
+      ids: ['lease.caller-cancelled', 'event.caller-cancelled'],
+      renewalIntervalMs: 1_000,
+    });
+    const result = runtime.redispatch({
+      ...redispatchCommand(reference),
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort('operator_cancelled');
+
+    await expect(result).rejects.toMatchObject({ code: 'RUNTIME_CANCELLED' });
+    expect(
+      await events.read({
+        scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+        types: ['activity.redispatch.accepted'],
+      })
+    ).toHaveLength(0);
+  });
+
   it('rejects a late dispatcher result after another worker fences the lease', async () => {
     const events = await eventRuntime();
     const descriptors = new ArtifactRuntimeActivityDescriptorStore({
@@ -631,6 +767,8 @@ function service(input: {
   dispatch: jest.Mock;
   reconcile?: jest.Mock;
   ids: string[];
+  renewalIntervalMs?: number;
+  onLeaseRenewalFailure?: (error: unknown, commandId: string) => void;
 }): RuntimeActivityRedispatchService {
   const ids = [...input.ids];
   return new RuntimeActivityRedispatchService({
@@ -639,6 +777,12 @@ function service(input: {
     runLeases: input.runLeases,
     revisions: { validate: async () => undefined },
     dispatcher: redispatchPort(input.dispatch, input.reconcile),
+    ...(input.renewalIntervalMs === undefined
+      ? {}
+      : { renewalIntervalMs: input.renewalIntervalMs }),
+    ...(input.onLeaseRenewalFailure === undefined
+      ? {}
+      : { onLeaseRenewalFailure: input.onLeaseRenewalFailure }),
     now: () => now,
     nextId: (namespace) => ids.shift() ?? `${namespace}.fallback`,
   });
