@@ -9,7 +9,9 @@ export type RuntimeActivityEventType =
   | 'runtime.activity.compensation.requested'
   | 'runtime.activity.compensation.completed'
   | 'runtime.activity.compensation.failed'
-  | 'activity.redispatch.requested';
+  | 'activity.redispatch.requested'
+  | 'activity.redispatch.accepted'
+  | 'activity.redispatch.outcome_unknown';
 
 export type FrameworkEventType =
   | 'session.created'

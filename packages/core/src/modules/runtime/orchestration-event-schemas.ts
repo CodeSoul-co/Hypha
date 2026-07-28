@@ -35,6 +35,8 @@ export const RUNTIME_ORCHESTRATION_EVENT_TYPES = [
   'runtime.activity.compensation.completed',
   'runtime.activity.compensation.failed',
   'activity.redispatch.requested',
+  'activity.redispatch.accepted',
+  'activity.redispatch.outcome_unknown',
   'recovery.case.opened',
   'recovery.case.resolved',
   'recovery.case.escalated',
@@ -247,6 +249,8 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'runtime.activity.compensation.completed': activityPayload(),
   'runtime.activity.compensation.failed': activityPayload(),
   'activity.redispatch.requested': activityRedispatchPayload(),
+  'activity.redispatch.accepted': activityRedispatchAcceptedPayload(),
+  'activity.redispatch.outcome_unknown': activityRedispatchOutcomeUnknownPayload(),
   'runtime.checkpoint.created': checkpointPayload(),
   'runtime.checkpoint.failed': checkpointPayload(),
   'recovery.case.opened': recoveryCasePayload(),
@@ -509,6 +513,64 @@ function activityRedispatchPayload(): JsonSchema {
       activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
       idempotencyKey: stringSchema,
       requestedAt: timestampSchema,
+    }
+  );
+}
+
+function activityRedispatchAcceptedPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'taskId',
+      'activityId',
+      'activityDescriptorRef',
+      'activityDescriptorHash',
+      'redispatchCommandId',
+      'activityCommandId',
+      'requestEventId',
+      'approvalEventId',
+      'commandReused',
+      'source',
+      'acceptedAt',
+    ],
+    {
+      taskId: stringSchema,
+      activityId: stringSchema,
+      activityDescriptorRef: stringSchema,
+      activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      redispatchCommandId: stringSchema,
+      activityCommandId: stringSchema,
+      requestEventId: stringSchema,
+      approvalEventId: stringSchema,
+      commandReused: { type: 'boolean' },
+      source: { type: 'string', enum: ['dispatch', 'reconcile'] },
+      acceptedAt: timestampSchema,
+    }
+  );
+}
+
+function activityRedispatchOutcomeUnknownPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'taskId',
+      'activityId',
+      'activityDescriptorRef',
+      'activityDescriptorHash',
+      'redispatchCommandId',
+      'requestEventId',
+      'approvalEventId',
+      'reason',
+      'detectedAt',
+    ],
+    {
+      taskId: stringSchema,
+      activityId: stringSchema,
+      activityDescriptorRef: stringSchema,
+      activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      redispatchCommandId: stringSchema,
+      requestEventId: stringSchema,
+      approvalEventId: stringSchema,
+      reason: stringSchema,
+      detectedAt: timestampSchema,
     }
   );
 }

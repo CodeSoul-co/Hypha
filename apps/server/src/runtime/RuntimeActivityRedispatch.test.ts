@@ -75,7 +75,7 @@ describe('RuntimeActivityRedispatchService', () => {
         runLeases: new InMemoryRunLeaseStore({ now: () => now }),
         descriptors,
         revisions: { validate: async () => undefined },
-        dispatcher: { dispatch },
+        dispatcher: redispatchPort(dispatch),
         now: () => now,
       });
 
@@ -128,7 +128,7 @@ describe('RuntimeActivityRedispatchService', () => {
       runLeases: new InMemoryRunLeaseStore({ now: () => now }),
       descriptors,
       revisions: { validate: revisions },
-      dispatcher: { dispatch },
+      dispatcher: redispatchPort(dispatch),
       now: () => now,
       nextId: (() => {
         let sequence = 0;
@@ -158,8 +158,8 @@ describe('RuntimeActivityRedispatchService', () => {
     const stream = await events.read({
       scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
     });
-    expect(stream.at(-1)?.type).toBe('activity.redispatch.requested');
-    expect(stream.at(-1)).toMatchObject({
+    const requestEvent = stream.find((event) => event.type === 'activity.redispatch.requested');
+    expect(requestEvent).toMatchObject({
       causationId: 'event.task.decided',
       parentEventId: 'event.task.decided',
       metadata: {
@@ -169,17 +169,24 @@ describe('RuntimeActivityRedispatchService', () => {
         subjectHash: `sha256:${'2'.repeat(64)}`,
       },
     });
+    expect(stream.at(-1)).toMatchObject({
+      type: 'activity.redispatch.accepted',
+      causationId: requestEvent?.id,
+      parentEventId: requestEvent?.id,
+      payload: {
+        activityCommandId: 'activity-command.redispatch',
+        commandReused: false,
+        source: 'dispatch',
+      },
+    });
     expect(callOrder).toEqual(['revisions', 'dispatch']);
 
-    dispatch.mockResolvedValueOnce({
-      commandId: 'activity-command.redispatch',
-      reused: true,
-    });
     await expect(service.redispatch(command)).resolves.toMatchObject({
       eventReused: true,
+      receiptReused: true,
       commandReused: true,
     });
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -187,45 +194,42 @@ describe('RuntimeActivityRedispatchService', () => {
     'human.review.cancelled',
     'human.review.expired',
     'human.review.superseded',
-  ] as const)(
-    'does not invoke the dispatcher for %s HumanTask evidence',
-    async (resolution) => {
-      const events = await eventRuntime();
-      const descriptors = new ArtifactRuntimeActivityDescriptorStore({
-        artifacts: new InMemoryExecutionArtifactStore(),
-      });
-      const reference = await descriptors.put(descriptor());
-      await appendApprovedTask(events, reference, resolution);
-      const dispatch = jest.fn();
-      const service = new RuntimeActivityRedispatchService({
-        events,
-        runLeases: new InMemoryRunLeaseStore({ now: () => now }),
-        descriptors,
-        revisions: { validate: jest.fn() },
-        dispatcher: { dispatch },
-        now: () => now,
-      });
+  ] as const)('does not invoke the dispatcher for %s HumanTask evidence', async (resolution) => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference, resolution);
+    const dispatch = jest.fn();
+    const service = new RuntimeActivityRedispatchService({
+      events,
+      runLeases: new InMemoryRunLeaseStore({ now: () => now }),
+      descriptors,
+      revisions: { validate: jest.fn() },
+      dispatcher: redispatchPort(dispatch),
+      now: () => now,
+    });
 
-      await expect(
-        service.redispatch({
-          commandId: `command.${resolution}`,
-          scope: {
-            userId: 'user.redispatch',
-            sessionId: 'session.redispatch',
-            runId: 'run.redispatch',
-          },
-          ownerId: 'worker.redispatch',
-          leaseTtlMs: 30_000,
-          taskId: 'task.redispatch',
-          expectedTaskRevision: 2,
-          expectedSubjectHash: `sha256:${'2'.repeat(64)}`,
-          ...reference,
-          requestedAt: now,
-        })
-      ).rejects.toMatchObject({ code: 'HUMAN_TASK_RESUME_REVALIDATION_FAILED' });
-      expect(dispatch).not.toHaveBeenCalled();
-    }
-  );
+    await expect(
+      service.redispatch({
+        commandId: `command.${resolution}`,
+        scope: {
+          userId: 'user.redispatch',
+          sessionId: 'session.redispatch',
+          runId: 'run.redispatch',
+        },
+        ownerId: 'worker.redispatch',
+        leaseTtlMs: 30_000,
+        taskId: 'task.redispatch',
+        expectedTaskRevision: 2,
+        expectedSubjectHash: `sha256:${'2'.repeat(64)}`,
+        ...reference,
+        requestedAt: now,
+      })
+    ).rejects.toMatchObject({ code: 'HUMAN_TASK_RESUME_REVALIDATION_FAILED' });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it('reuses durable redispatch intent after restart and allocates a fresh fenced lease', async () => {
     const events = await eventRuntime();
@@ -253,11 +257,13 @@ describe('RuntimeActivityRedispatchService', () => {
       commandId: 'activity-command.after-restart',
       reused: false,
     }));
+    const secondReconcile = jest.fn(async () => ({ status: 'safe_to_dispatch' as const }));
     const restarted = service({
       events,
       descriptors,
       runLeases,
       dispatch: secondDispatch,
+      reconcile: secondReconcile,
       ids: ['lease.after-restart'],
     });
     await expect(restarted.redispatch(command)).resolves.toMatchObject({
@@ -268,11 +274,135 @@ describe('RuntimeActivityRedispatchService', () => {
     expect(secondDispatch).toHaveBeenCalledWith(
       expect.objectContaining({ fencingToken: 2, requestEventId: expect.any(String) })
     );
+    expect(secondReconcile).toHaveBeenCalledTimes(1);
     const stream = await events.read({
       scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
       types: ['activity.redispatch.requested'],
     });
     expect(stream).toHaveLength(1);
+  });
+
+  it('reconciles an accepted dispatch after a crash before the durable receipt', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const firstDispatch = jest.fn(async () => {
+      throw new Error('connection closed after Activity accepted the command');
+    });
+    const command = redispatchCommand(reference);
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: firstDispatch,
+        ids: ['lease.before-reconcile', 'event.before-reconcile'],
+      }).redispatch(command)
+    ).rejects.toThrow('connection closed after Activity accepted the command');
+
+    const restartedDispatch = jest.fn();
+    const reconcile = jest.fn(async () => ({
+      status: 'accepted' as const,
+      commandId: 'activity-command.accepted-before-crash',
+    }));
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: restartedDispatch,
+        reconcile,
+        ids: ['lease.after-reconcile'],
+      }).redispatch(command)
+    ).resolves.toMatchObject({
+      activityCommandId: 'activity-command.accepted-before-crash',
+      eventReused: true,
+      receiptReused: false,
+      commandReused: true,
+      reconciled: true,
+    });
+
+    expect(firstDispatch).toHaveBeenCalledTimes(1);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(restartedDispatch).not.toHaveBeenCalled();
+    const receipts = await events.read({
+      scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+      types: ['activity.redispatch.accepted'],
+    });
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      payload: {
+        activityCommandId: 'activity-command.accepted-before-crash',
+        commandReused: true,
+        source: 'reconcile',
+      },
+    });
+  });
+
+  it('records an unknown outcome and blocks blind redispatch after restart', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const firstDispatch = jest.fn(async () => {
+      throw new Error('dispatcher response was lost');
+    });
+    const command = redispatchCommand(reference);
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: firstDispatch,
+        ids: ['lease.before-unknown', 'event.before-unknown'],
+      }).redispatch(command)
+    ).rejects.toThrow('dispatcher response was lost');
+
+    const restartedDispatch = jest.fn();
+    const reconcile = jest.fn(async () => ({
+      status: 'unknown' as const,
+      reason: 'Activity provider cannot prove whether the command was accepted',
+    }));
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: restartedDispatch,
+        reconcile,
+        ids: ['lease.after-unknown'],
+      }).redispatch(command)
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_ACTIVITY_OUTCOME_UNKNOWN',
+      context: {
+        taskId: 'task.redispatch',
+        reason: 'Activity provider cannot prove whether the command was accepted',
+      },
+    });
+
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(restartedDispatch).not.toHaveBeenCalled();
+    const unknownEvents = await events.read({
+      scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+      types: ['activity.redispatch.outcome_unknown'],
+    });
+    expect(unknownEvents).toHaveLength(1);
+    expect(unknownEvents[0]).toMatchObject({
+      causationId: expect.any(String),
+      payload: {
+        reason: 'Activity provider cannot prove whether the command was accepted',
+        requestEventId: expect.any(String),
+      },
+    });
   });
 
   it('rejects stale task revisions and reuses alternate delivery commands', async () => {
@@ -314,6 +444,7 @@ describe('RuntimeActivityRedispatchService', () => {
       })
     ).resolves.toMatchObject({
       eventReused: true,
+      receiptReused: true,
     });
     await expect(
       runtime.redispatch({
@@ -323,8 +454,8 @@ describe('RuntimeActivityRedispatchService', () => {
     ).rejects.toMatchObject({
       code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
     });
-    expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(redispatchIds[0]).toBe(redispatchIds[1]);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(redispatchIds).toHaveLength(1);
   });
 
   it('rejects expired approvals and descriptor hash mismatches before dispatch', async () => {
@@ -498,6 +629,7 @@ function service(input: {
   descriptors: ArtifactRuntimeActivityDescriptorStore;
   runLeases: InMemoryRunLeaseStore;
   dispatch: jest.Mock;
+  reconcile?: jest.Mock;
   ids: string[];
 }): RuntimeActivityRedispatchService {
   const ids = [...input.ids];
@@ -506,10 +638,17 @@ function service(input: {
     descriptors: input.descriptors,
     runLeases: input.runLeases,
     revisions: { validate: async () => undefined },
-    dispatcher: { dispatch: input.dispatch },
+    dispatcher: redispatchPort(input.dispatch, input.reconcile),
     now: () => now,
     nextId: (namespace) => ids.shift() ?? `${namespace}.fallback`,
   });
+}
+
+function redispatchPort(
+  dispatch: jest.Mock,
+  reconcile: jest.Mock = jest.fn(async () => ({ status: 'safe_to_dispatch' as const }))
+): RuntimeActivityRedispatchPort {
+  return { dispatch, reconcile };
 }
 
 function redispatchCommand(reference: {
