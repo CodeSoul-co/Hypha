@@ -98,4 +98,26 @@ describe('memory integration schemas', () => {
       })
     ).toThrow();
   });
+  it('requires Event and Provider facts and rejects cache-only replay references', () => {
+    expect(() =>
+      validateMemoryReplayReference({
+        ...memoryReplayReferenceExample,
+        eventIds: [],
+      })
+    ).toThrow();
+    expect(() =>
+      validateMemoryReplayReference({
+        ...memoryReplayReferenceExample,
+        memoryVersionIds: [],
+      })
+    ).toThrow();
+    expect(() =>
+      validateMemoryReplayReference({
+        ...memoryReplayReferenceExample,
+        cacheKey: 'memory-search-cache:stale',
+        cacheHit: true,
+        cachedEnvelope: { contextHash: 'cache-only' },
+      })
+    ).toThrow();
+  });
 });

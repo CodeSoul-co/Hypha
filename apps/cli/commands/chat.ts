@@ -69,7 +69,8 @@ async function runBlocking(body: any, session: string): Promise<void> {
     process.stderr.write(chalk.gray(
       `\n[${data.model}/${data.provider} • session=${data.sessionId}` +
       ` • in=${data.usage?.inputTokens ?? 0} out=${data.usage?.outputTokens ?? 0}` +
-      ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}]\n`,
+      ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}` +
+      ` cacheMiss=${data.usage?.cacheMissTokens ?? 0}]\n`,
     ));
   } catch (err: any) {
     console.error(chalk.red(`✗ ${err.message}`));
@@ -90,7 +91,7 @@ async function runStream(body: any, session: string): Promise<void> {
     });
 
     let buffer = '';
-    const tokens = { in: 0, out: 0, hit: 0, model: '' };
+    const tokens = { in: 0, out: 0, hit: 0, miss: 0, model: '' };
     await new Promise<void>((resolve, reject) => {
       response.data.on('data', (chunk: Buffer) => {
         buffer += chunk.toString('utf-8');
@@ -109,6 +110,7 @@ async function runStream(body: any, session: string): Promise<void> {
                 tokens.in  = m.usage?.inputTokens  ?? tokens.in;
                 tokens.out = m.usage?.outputTokens ?? tokens.out;
                 tokens.hit = m.usage?.cacheHitTokens ?? tokens.hit;
+                tokens.miss = m.usage?.cacheMissTokens ?? tokens.miss;
                 tokens.model = m.model || tokens.model;
               } else if (m.type === 'error') {
                 process.stderr.write(chalk.red(`\n✗ ${m.error || 'stream error'}\n`));
@@ -123,7 +125,8 @@ async function runStream(body: any, session: string): Promise<void> {
     if (!buffer.endsWith('\n')) process.stdout.write('\n');
     process.stderr.write(chalk.gray(
       `\n[${tokens.model || body.model || '?'} • session=${session}` +
-      ` • in=${tokens.in} out=${tokens.out} • cacheHit=${tokens.hit}]\n`,
+      ` • in=${tokens.in} out=${tokens.out}` +
+      ` • cacheHit=${tokens.hit} cacheMiss=${tokens.miss}]\n`,
     ));
   } catch (err: any) {
     console.error(chalk.red(`✗ ${err.message}`));

@@ -7,6 +7,7 @@ import type {
 } from '@hypha/models';
 import { buildPromptPrefixMetadata, hashStableJson } from '../key';
 import { cacheModeAllowsRead, cacheModeAllowsWrite, normalizeCachePolicy } from '../policies';
+import { PrefixCacheShapeTracker } from '../prefix-shape';
 import { ServingCacheManager } from '../cache-manager';
 import type {
   CachedLLMProviderOptions,
@@ -15,6 +16,8 @@ import type {
   CacheScope,
   LLMCacheKeyInput,
   ModelRequestCacheControl,
+  PromptPrefixBlockInput,
+  ProviderPrefixCacheUsage,
   ServingCacheEvent,
   ServingCacheMissReason,
   ServingCacheTraceSink,
@@ -24,6 +27,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
   readonly id: string;
   private readonly policy: CachePolicy;
   private readonly trace?: ServingCacheTraceSink;
+  private readonly prefixShapeTracker = new PrefixCacheShapeTracker();
 
   constructor(
     private readonly inner: ModelProvider<ModelRequest, ModelResponse>,
@@ -37,12 +41,16 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
     this.modelResolver = options.modelResolver ?? defaultModelResolver;
     this.scopeResolver = options.scopeResolver ?? defaultScopeResolver;
     this.paramsResolver = options.paramsResolver ?? defaultParamsResolver;
+    this.promptBlocksResolver = options.promptBlocksResolver ?? defaultPromptBlocksResolver;
   }
 
   private readonly providerResolver: NonNullable<CachedLLMProviderOptions['providerResolver']>;
   private readonly modelResolver: NonNullable<CachedLLMProviderOptions['modelResolver']>;
   private readonly scopeResolver: NonNullable<CachedLLMProviderOptions['scopeResolver']>;
   private readonly paramsResolver: NonNullable<CachedLLMProviderOptions['paramsResolver']>;
+  private readonly promptBlocksResolver: NonNullable<
+    CachedLLMProviderOptions['promptBlocksResolver']
+  >;
 
   capabilities(): ReturnType<ModelProvider['capabilities']> {
     return this.inner.capabilities();
@@ -74,12 +82,20 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
 
     const keyInput = this.keyInputFor(request, provider, model, scope);
     const key = this.cache.keyFor(keyInput);
+    const prefixMetadata = buildPromptPrefixMetadata(keyInput);
+    const prefixCache = this.prefixShapeTracker.observe({
+      provider,
+      model,
+      scope,
+      prefixMetadata,
+    });
     await this.emit({
       type: 'llm.cache.lookup',
       key,
       provider,
       model,
       scope,
+      prefixCache,
       runId: request.runId,
       stepId: request.stepId,
     });
@@ -94,6 +110,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
           provider,
           model,
           scope,
+          prefixCache,
           runId: request.runId,
           stepId: request.stepId,
         });
@@ -102,6 +119,8 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
           key,
           source: 'hypha-serving-cache',
           ageMs: cached.ageMs,
+          prefixCache,
+          providerPrefixCache: { source: 'hypha-serving-cache' },
         });
       }
       await this.emit({
@@ -111,6 +130,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         provider,
         model,
         scope,
+        prefixCache,
         runId: request.runId,
         stepId: request.stepId,
       });
@@ -122,6 +142,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         provider,
         model,
         scope,
+        prefixCache,
         runId: request.runId,
         stepId: request.stepId,
       });
@@ -130,7 +151,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
     const response = await this.inner.generate(request);
 
     if (cacheModeAllowsWrite(this.policy.mode)) {
-      const prefixMetadata = buildPromptPrefixMetadata(keyInput);
+      const providerPrefixCache = providerPrefixCacheUsage(response);
       const metadata: CacheMetadata = {
         provider,
         model,
@@ -148,6 +169,9 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
         provider,
         model,
         scope,
+        prefixMetadata,
+        prefixCache,
+        providerPrefixCache,
         runId: request.runId,
         stepId: request.stepId,
       });
@@ -157,6 +181,8 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
       hit: false,
       key,
       source: 'provider',
+      prefixCache,
+      providerPrefixCache: providerPrefixCacheUsage(response),
     });
   }
 
@@ -212,6 +238,7 @@ export class CachedLLMProvider implements ModelProvider<ModelRequest, ModelRespo
       tools: request.tools,
       params: this.paramsResolver(request),
       cacheScope: scope,
+      promptBlocks: this.promptBlocksResolver(request),
     };
   }
 
@@ -255,6 +282,25 @@ function defaultParamsResolver(request: ModelRequest): Record<string, unknown> {
   };
 }
 
+function defaultPromptBlocksResolver(request: ModelRequest): PromptPrefixBlockInput[] | undefined {
+  const cacheMetadata = recordFromUnknown(request.cache?.metadata);
+  const requestMetadata = recordFromUnknown(request.metadata);
+  const promptMetadata = recordFromUnknown(requestMetadata?.prompt);
+  const metadataCandidates = [
+    cacheMetadata?.promptBlocks,
+    requestMetadata?.promptBlocks,
+    promptMetadata?.blocks,
+  ];
+  for (const candidate of metadataCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate
+        .filter((item): item is PromptPrefixBlockInput => isPromptBlockInput(item))
+        .map((item) => ({ ...item }));
+    }
+  }
+  return undefined;
+}
+
 function resolveRequestCacheControl(request: ModelRequest): ModelRequestCacheControl | undefined {
   const structural = request as ModelRequest & { cacheControl?: ModelRequestCacheControl };
   const direct = structural.cacheControl;
@@ -273,6 +319,12 @@ function isStreamingRequest(request: ModelRequest): boolean {
   return Boolean(request.metadata?.streaming || input?.stream || options?.stream);
 }
 
+function isPromptBlockInput(value: unknown): value is PromptPrefixBlockInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string' && typeof record.type === 'string';
+}
+
 function attachServingCacheMetadata(
   response: ModelResponse,
   servingCache: Record<string, unknown>
@@ -283,6 +335,33 @@ function attachServingCacheMetadata(
       ...response.metadata,
       servingCache,
     },
+  };
+}
+
+function providerPrefixCacheUsage(response: ModelResponse): ProviderPrefixCacheUsage {
+  const inputTokens = response.usage?.inputTokens;
+  const hitTokens = response.usage?.cacheHitTokens;
+  const missTokens =
+    response.usage?.cacheMissTokens ??
+    (typeof inputTokens === 'number' && typeof hitTokens === 'number'
+      ? Math.max(0, inputTokens - hitTokens)
+      : undefined);
+  const denominator =
+    typeof hitTokens === 'number' && typeof missTokens === 'number'
+      ? hitTokens + missTokens
+      : inputTokens;
+  return {
+    source:
+      typeof hitTokens === 'number' || typeof missTokens === 'number'
+        ? 'provider-usage'
+        : 'unknown',
+    inputTokens,
+    hitTokens,
+    missTokens,
+    hitRate:
+      typeof denominator === 'number' && denominator > 0 && typeof hitTokens === 'number'
+        ? hitTokens / denominator
+        : undefined,
   };
 }
 

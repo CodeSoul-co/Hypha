@@ -12,6 +12,7 @@ export interface TokenUsageRecord {
    *  Cost is computed at the discounted cacheHit rate; the remaining
    *  (promptTokens - cacheHitTokens) is charged at the regular input rate. */
   cacheHitTokens?: number;
+  cacheMissTokens?: number;
   completionTokens: number;
   totalTokens: number;
   endpoint: string;

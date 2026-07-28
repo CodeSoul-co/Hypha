@@ -270,6 +270,7 @@ export function getServerMemoryComposition(): ServerMemoryComposition {
   if (!productionComposition) {
     productionComposition = new ServerMemoryComposition({
       bootstrap: createProductionMemoryRuntime,
+      operationalMetrics: serverMemoryOperationalMetrics,
     });
   }
   return productionComposition;
@@ -398,7 +399,7 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
       agentId: request.scope.agentId,
     }),
     telemetry,
-
+    operationalMetrics: serverMemoryOperationalMetrics,
     providerCostEstimator: (operation, request) =>
       estimateServerMemoryOperation(operation, request, activeProviderType()),
   });
