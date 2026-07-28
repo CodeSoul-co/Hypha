@@ -24,6 +24,7 @@ describe('DockerSandboxLifecycle', () => {
       revision: 0,
       providerId: 'provider.docker',
       providerSandboxRef: expect.stringMatching(/^docker:[a-f0-9]{16}:[a-f0-9]{16}$/),
+      imageDigest: `sha256:${'a'.repeat(64)}`,
       metadata: { isolation: 'docker' },
     });
 

@@ -25,6 +25,7 @@ export interface InMemorySandboxLifecycleOptions {
   providerName: string;
   sandboxId: (request: SandboxCreateRequest) => string;
   providerSandboxRef: (request: SandboxCreateRequest, sandboxId: string) => string;
+  imageDigest?: (request: SandboxCreateRequest) => string | undefined;
   now?: () => string;
 }
 
@@ -40,6 +41,7 @@ export class InMemorySandboxLifecycle {
   private readonly now: () => string;
   private readonly sandboxId: (request: SandboxCreateRequest) => string;
   private readonly providerSandboxRef: (request: SandboxCreateRequest, sandboxId: string) => string;
+  private readonly imageDigest?: (request: SandboxCreateRequest) => string | undefined;
   private readonly sandboxes = new Map<string, InMemorySandboxState>();
 
   constructor(options: InMemorySandboxLifecycleOptions) {
@@ -48,6 +50,7 @@ export class InMemorySandboxLifecycle {
     this.now = options.now ?? (() => new Date().toISOString());
     this.sandboxId = options.sandboxId;
     this.providerSandboxRef = options.providerSandboxRef;
+    this.imageDigest = options.imageDigest;
   }
 
   create(input: SandboxCreateRequest, metadata: Record<string, unknown>): SandboxRecord {
@@ -60,6 +63,7 @@ export class InMemorySandboxLifecycle {
         false
       );
     }
+    const imageDigest = this.imageDigest?.(request);
     const record = validateSandboxRecord({
       id,
       revision: 0,
@@ -78,6 +82,7 @@ export class InMemorySandboxLifecycle {
       ...(request.agentId ? { agentId: request.agentId } : {}),
       status: 'created',
       providerSandboxRef: this.providerSandboxRef(request, id),
+      ...(imageDigest ? { imageDigest } : {}),
       activeExecutionIds: [],
       resourceLimits: request.environment.resources,
       networkPolicyHash: hashExecutionValue(request.environment.network),

@@ -23,6 +23,7 @@ export class DockerSandboxLifecycle extends InMemorySandboxLifecycle {
         ((request) => `sandbox.docker.${shortExecutionHash(request.operationId)}`),
       providerSandboxRef: (_request, sandboxId) =>
         `docker:${shortExecutionHash(options.engineScopeId)}:${shortExecutionHash(sandboxId)}`,
+      imageDigest: (request) => request.environment.image?.digest,
       ...(options.now ? { now: options.now } : {}),
     } satisfies InMemorySandboxLifecycleOptions);
   }
