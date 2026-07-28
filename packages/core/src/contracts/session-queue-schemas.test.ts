@@ -45,6 +45,46 @@ describe('Session Queue contracts', () => {
     ).toThrow(/claimedBy/u);
   });
 
+  it('accepts bounded lease recovery evidence without exposing claim credentials', () => {
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    const recovered = {
+      ...sessionCommandRecordExample,
+      attempts: 1,
+      leaseEpoch: 1,
+      leaseRecoveries: [
+        {
+          version: '1.0.0' as const,
+          previousWorkerId: 'worker.expired',
+          previousLeaseEpoch: 1,
+          leaseExpiredAt: '2026-07-18T05:00:01.000Z',
+          recoveredAt: '2026-07-18T05:00:02.000Z',
+          disposition: 'requeued' as const,
+        },
+      ],
+    };
+    expect(sessionCommandRecordSchema.parse(recovered)).toEqual(recovered);
+    expect(ajv.validate(sessionCommandRecordJsonSchema, recovered)).toBe(true);
+    expect(() =>
+      sessionCommandRecordSchema.parse({
+        ...recovered,
+        leaseRecoveries: [{ ...recovered.leaseRecoveries[0], claimToken: 'secret' }],
+      })
+    ).toThrow();
+    expect(
+      ajv.validate(sessionCommandRecordJsonSchema, {
+        ...recovered,
+        leaseRecoveries: [{ ...recovered.leaseRecoveries[0], claimToken: 'secret' }],
+      })
+    ).toBe(false);
+    expect(() =>
+      sessionCommandRecordSchema.parse({
+        ...recovered,
+        leaseRecoveries: [{ ...recovered.leaseRecoveries[0], previousLeaseEpoch: 2 }],
+      })
+    ).toThrow(/lease epoch/u);
+  });
+
   it('exports strict, versioned Run-scoped cancellation request and result contracts', () => {
     expect(
       cancelSessionCommandsRequestSchema.parse(cancelSessionCommandsRequestDefinition.example)

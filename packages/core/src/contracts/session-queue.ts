@@ -51,6 +51,15 @@ export interface SessionCommandDeadLetterResolution {
   redriveCommandId?: string;
 }
 
+export interface SessionCommandLeaseRecovery {
+  version: '1.0.0';
+  previousWorkerId: string;
+  previousLeaseEpoch: number;
+  leaseExpiredAt: string;
+  recoveredAt: string;
+  disposition: 'requeued' | 'dead_lettered';
+}
+
 export interface SessionCommandRecord {
   id: string;
   commandType: SessionCommandType;
@@ -80,6 +89,7 @@ export interface SessionCommandRecord {
   completedAt?: string;
   redrive?: SessionCommandRedrive;
   deadLetterResolution?: SessionCommandDeadLetterResolution;
+  leaseRecoveries?: SessionCommandLeaseRecovery[];
 }
 
 export interface EnqueueSessionCommandRequest {
@@ -224,5 +234,6 @@ export interface SessionQueueHealthSnapshot extends Record<string, unknown> {
   retryingCommands: number;
   redeliveredCommands: number;
   recoveredExpiredLeases: number;
+  leaseRecoveryCount: number;
   oldestPendingAgeMs?: number;
 }

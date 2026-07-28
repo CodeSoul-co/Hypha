@@ -354,6 +354,15 @@ describe('SQLiteSessionQueue', () => {
         attempts: 1,
         maxAttempts: 1,
         rejectionCode: 'claim_lease_expired_after_attempt_budget',
+        leaseRecoveries: [
+          {
+            previousWorkerId: 'worker.stale',
+            previousLeaseEpoch: 1,
+            leaseExpiredAt: '2026-07-22T06:00:01.000Z',
+            recoveredAt: '2026-07-22T06:00:02.000Z',
+            disposition: 'dead_lettered',
+          },
+        ],
       },
     ]);
   });
@@ -627,6 +636,85 @@ describe('SQLiteSessionQueue', () => {
     ).resolves.toEqual([]);
   });
 
+  it('serializes competing lease renewal and takeover requests across connections', async () => {
+    for (const renewalFirst of [true, false]) {
+      const filename = temporaryDatabase();
+      const owner = openQueue(filename);
+      const competitor = openQueue(filename);
+      const commandId = `command.lease-race.${renewalFirst ? 'renew' : 'takeover'}`;
+      await owner.enqueue(command(commandId));
+      const original = await owner.claim({
+        workerId: 'worker.original',
+        now: initialTime,
+        leaseMs: 1_000,
+      });
+      const renew = () =>
+        owner.renew({
+          commandId,
+          workerId: 'worker.original',
+          ...claimIdentity(original!),
+          renewedAt: '2026-07-22T06:00:00.999Z',
+          leaseMs: 1_000,
+        });
+      const takeover = () =>
+        competitor.claim({
+          workerId: 'worker.takeover',
+          now: '2026-07-22T06:00:01.000Z',
+          leaseMs: 1_000,
+        });
+
+      const outcomes = renewalFirst
+        ? await Promise.allSettled([renew(), takeover()])
+        : await Promise.allSettled([takeover(), renew()]);
+      const records = await owner.list({ scope });
+      if (renewalFirst) {
+        expect(outcomes).toMatchObject([
+          { status: 'fulfilled' },
+          { status: 'fulfilled', value: null },
+        ]);
+        expect(records).toMatchObject([
+          {
+            id: commandId,
+            status: 'claimed',
+            claimedBy: 'worker.original',
+            leaseEpoch: 1,
+            leaseExpiresAt: '2026-07-22T06:00:01.999Z',
+          },
+        ]);
+      } else {
+        expect(outcomes).toMatchObject([
+          {
+            status: 'fulfilled',
+            value: {
+              id: commandId,
+              status: 'claimed',
+              claimedBy: 'worker.takeover',
+              leaseEpoch: 2,
+            },
+          },
+          { status: 'rejected', reason: { code: 'RUNTIME_SESSION_QUEUE_CONFLICT' } },
+        ]);
+        expect(records).toMatchObject([
+          {
+            id: commandId,
+            status: 'claimed',
+            claimedBy: 'worker.takeover',
+            leaseEpoch: 2,
+            leaseRecoveries: [
+              {
+                previousWorkerId: 'worker.original',
+                previousLeaseEpoch: 1,
+                leaseExpiredAt: '2026-07-22T06:00:01.000Z',
+                recoveredAt: '2026-07-22T06:00:01.000Z',
+                disposition: 'requeued',
+              },
+            ],
+          },
+        ]);
+      }
+    }
+  });
+
   it('persists lease renewal and fences an older same-worker claim after restart', async () => {
     const filename = temporaryDatabase();
     const firstQueue = openQueue(filename);
@@ -657,7 +745,18 @@ describe('SQLiteSessionQueue', () => {
       now: '2026-07-22T06:00:02.000Z',
       leaseMs: 1_000,
     });
-    expect(secondClaim?.leaseEpoch).toBe(2);
+    expect(secondClaim).toMatchObject({
+      leaseEpoch: 2,
+      leaseRecoveries: [
+        {
+          previousWorkerId: 'worker.same',
+          previousLeaseEpoch: 1,
+          leaseExpiredAt: '2026-07-22T06:00:01.500Z',
+          recoveredAt: '2026-07-22T06:00:02.000Z',
+          disposition: 'requeued',
+        },
+      ],
+    });
     await expect(
       reopened.complete({
         commandId: firstClaim!.id,
@@ -765,6 +864,7 @@ describe('SQLiteSessionQueue', () => {
         retryingCommands: 1,
         redeliveredCommands: 0,
         recoveredExpiredLeases: 1,
+        leaseRecoveryCount: 1,
         oldestPendingAgeMs: 2_000,
       },
     });
@@ -795,6 +895,7 @@ describe('SQLiteSessionQueue', () => {
       deadLetterCommands: 1,
       redeliveredCommands: 1,
       recoveredExpiredLeases: 0,
+      leaseRecoveryCount: 1,
     });
     expect(health.details).not.toHaveProperty('oldestPendingAgeMs');
   });

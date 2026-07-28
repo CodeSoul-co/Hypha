@@ -620,6 +620,17 @@ export class InMemorySessionQueue implements SessionQueue {
       ) {
         recoveredExpiredLeases += 1;
         const exhausted = record.attempts >= record.maxAttempts;
+        record.leaseRecoveries = [
+          ...(record.leaseRecoveries ?? []),
+          {
+            version: '1.0.0',
+            previousWorkerId: record.claimedBy!,
+            previousLeaseEpoch: record.leaseEpoch,
+            leaseExpiredAt: record.leaseExpiresAt,
+            recoveredAt: now,
+            disposition: exhausted ? 'dead_lettered' : 'requeued',
+          },
+        ];
         record.status = exhausted ? 'dead_letter' : 'queued';
         if (exhausted) {
           record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
@@ -629,6 +640,7 @@ export class InMemorySessionQueue implements SessionQueue {
         delete record.claimedBy;
         delete record.claimToken;
         delete record.leaseExpiresAt;
+        validateSessionCommandRecord(record);
       }
       if (
         record.status === 'queued' &&
@@ -684,6 +696,10 @@ export function createSessionQueueHealthSnapshot(
     retryingCommands: pending.filter((record) => record.attempts > 0).length,
     redeliveredCommands: records.filter((record) => record.leaseEpoch > 1).length,
     recoveredExpiredLeases,
+    leaseRecoveryCount: records.reduce(
+      (count, record) => count + (record.leaseRecoveries?.length ?? 0),
+      0
+    ),
     ...(oldestCreatedAtMs === undefined
       ? {}
       : { oldestPendingAgeMs: Math.max(0, Date.parse(checkedAt) - oldestCreatedAtMs) }),

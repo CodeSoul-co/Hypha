@@ -219,7 +219,21 @@ describe('InMemorySessionQueue', () => {
       now: '2026-07-18T06:00:02.000Z',
       leaseMs: 1_000,
     });
-    expect(recovered).toMatchObject({ id: 'command.recover', claimedBy: 'worker.recovery' });
+    expect(recovered).toMatchObject({
+      id: 'command.recover',
+      claimedBy: 'worker.recovery',
+      leaseEpoch: 2,
+      leaseRecoveries: [
+        {
+          version: '1.0.0',
+          previousWorkerId: 'worker.stale',
+          previousLeaseEpoch: 1,
+          leaseExpiredAt: '2026-07-18T06:00:01.000Z',
+          recoveredAt: '2026-07-18T06:00:02.000Z',
+          disposition: 'requeued',
+        },
+      ],
+    });
     expect(recovered?.attempts).toBe(2);
     await expect(
       queue.complete({
@@ -346,6 +360,15 @@ describe('InMemorySessionQueue', () => {
         attempts: 1,
         maxAttempts: 1,
         rejectionCode: 'claim_lease_expired_after_attempt_budget',
+        leaseRecoveries: [
+          {
+            previousWorkerId: 'worker.stale',
+            previousLeaseEpoch: 1,
+            leaseExpiredAt: '2026-07-18T06:00:01.000Z',
+            recoveredAt: '2026-07-18T06:00:02.000Z',
+            disposition: 'dead_lettered',
+          },
+        ],
       },
     ]);
   });
@@ -729,6 +752,7 @@ describe('InMemorySessionQueue', () => {
         retryingCommands: 1,
         redeliveredCommands: 0,
         recoveredExpiredLeases: 1,
+        leaseRecoveryCount: 1,
         oldestPendingAgeMs: 2_000,
       },
     });
@@ -746,6 +770,7 @@ describe('InMemorySessionQueue', () => {
         claimedCommands: 1,
         redeliveredCommands: 1,
         recoveredExpiredLeases: 0,
+        leaseRecoveryCount: 1,
         oldestPendingAgeMs: 2_500,
       },
     });
@@ -764,6 +789,7 @@ describe('InMemorySessionQueue', () => {
       pendingCommands: 0,
       deadLetterCommands: 1,
       redeliveredCommands: 1,
+      leaseRecoveryCount: 1,
     });
     expect(terminalHealth.details).not.toHaveProperty('oldestPendingAgeMs');
     await expect(

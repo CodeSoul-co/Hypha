@@ -12,6 +12,7 @@ import {
   type ListStuckSessionCommandsRequest,
   type RedriveDeadLetterSessionCommandRequest,
   type SessionCommandDeadLetterResolution,
+  type SessionCommandLeaseRecovery,
   type SessionCommandRedrive,
   type SessionCommandRecord,
   type SessionQueueScope,
@@ -71,6 +72,17 @@ export const sessionCommandDeadLetterResolutionSchema = z
     }
   }) satisfies ZodType<SessionCommandDeadLetterResolution>;
 
+export const sessionCommandLeaseRecoverySchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    previousWorkerId: nonEmptyStringSchema,
+    previousLeaseEpoch: z.number().int().positive(),
+    leaseExpiredAt: timestampSchema,
+    recoveredAt: timestampSchema,
+    disposition: z.enum(['requeued', 'dead_lettered']),
+  })
+  .strict() satisfies ZodType<SessionCommandLeaseRecovery>;
+
 export const sessionCommandRecordSchema = z
   .object({
     id: nonEmptyStringSchema,
@@ -101,6 +113,10 @@ export const sessionCommandRecordSchema = z
     completedAt: timestampSchema.optional(),
     redrive: sessionCommandRedriveSchema.optional(),
     deadLetterResolution: sessionCommandDeadLetterResolutionSchema.optional(),
+    leaseRecoveries: z
+      .array(sessionCommandLeaseRecoverySchema)
+      .max(SESSION_COMMAND_MAX_ATTEMPTS_LIMIT)
+      .optional(),
   })
   .strict()
   .superRefine((record, context) => {
@@ -153,6 +169,42 @@ export const sessionCommandRecordSchema = z
         path: ['attempts'],
         message: 'attempts must not exceed maxAttempts',
       });
+    }
+    if ((record.leaseRecoveries?.length ?? 0) > record.attempts) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['leaseRecoveries'],
+        message: 'leaseRecoveries must not exceed attempts',
+      });
+    }
+    for (let index = 0; index < (record.leaseRecoveries?.length ?? 0); index += 1) {
+      const recovery = record.leaseRecoveries![index];
+      const previous = record.leaseRecoveries![index - 1];
+      if (recovery.previousLeaseEpoch > record.leaseEpoch) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['leaseRecoveries', index, 'previousLeaseEpoch'],
+          message: 'recovered lease epoch must not exceed the command lease epoch',
+        });
+      }
+      if (
+        previous &&
+        (recovery.previousLeaseEpoch <= previous.previousLeaseEpoch ||
+          Date.parse(recovery.recoveredAt) < Date.parse(previous.recoveredAt))
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['leaseRecoveries', index],
+          message: 'leaseRecoveries must use increasing epochs and recovery times',
+        });
+      }
+      if (Date.parse(recovery.recoveredAt) < Date.parse(recovery.leaseExpiredAt)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['leaseRecoveries', index, 'recoveredAt'],
+          message: 'recoveredAt must not precede leaseExpiredAt',
+        });
+      }
     }
     if (
       ['applied', 'rejected', 'expired', 'failed', 'dead_letter', 'dead_letter_resolved'].includes(
@@ -232,6 +284,26 @@ const sessionCommandDeadLetterResolutionJsonSchema: JsonSchema = {
     },
   ],
 };
+const sessionCommandLeaseRecoveryJsonSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'version',
+    'previousWorkerId',
+    'previousLeaseEpoch',
+    'leaseExpiredAt',
+    'recoveredAt',
+    'disposition',
+  ],
+  properties: {
+    version: { const: '1.0.0' },
+    previousWorkerId: stringProperty,
+    previousLeaseEpoch: { type: 'integer', minimum: 1 },
+    leaseExpiredAt: timestampProperty,
+    recoveredAt: timestampProperty,
+    disposition: { type: 'string', enum: ['requeued', 'dead_lettered'] },
+  },
+  additionalProperties: false,
+};
 
 export const sessionCommandRecordJsonSchema: JsonSchema = {
   type: 'object',
@@ -280,6 +352,11 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     completedAt: timestampProperty,
     redrive: sessionCommandRedriveJsonSchema,
     deadLetterResolution: sessionCommandDeadLetterResolutionJsonSchema,
+    leaseRecoveries: {
+      type: 'array',
+      items: sessionCommandLeaseRecoveryJsonSchema,
+      maxItems: SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
+    },
   },
   additionalProperties: false,
   allOf: [
@@ -583,6 +660,7 @@ export const sessionQueueHealthSnapshotSchema = z
     retryingCommands: z.number().int().min(0),
     redeliveredCommands: z.number().int().min(0),
     recoveredExpiredLeases: z.number().int().min(0),
+    leaseRecoveryCount: z.number().int().min(0),
     oldestPendingAgeMs: z.number().int().min(0).optional(),
   })
   .strict()
@@ -634,6 +712,7 @@ export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueu
       'retryingCommands',
       'redeliveredCommands',
       'recoveredExpiredLeases',
+      'leaseRecoveryCount',
     ],
     properties: {
       version: { const: '1.0.0' },
@@ -646,6 +725,7 @@ export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueu
       retryingCommands: { type: 'integer', minimum: 0 },
       redeliveredCommands: { type: 'integer', minimum: 0 },
       recoveredExpiredLeases: { type: 'integer', minimum: 0 },
+      leaseRecoveryCount: { type: 'integer', minimum: 0 },
       oldestPendingAgeMs: { type: 'integer', minimum: 0 },
     },
     additionalProperties: false,
@@ -661,6 +741,7 @@ export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueu
     retryingCommands: 1,
     redeliveredCommands: 1,
     recoveredExpiredLeases: 0,
+    leaseRecoveryCount: 1,
     oldestPendingAgeMs: 15_000,
   },
 });

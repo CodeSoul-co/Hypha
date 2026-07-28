@@ -611,6 +611,17 @@ export class SQLiteSessionQueue implements SessionQueue {
       ) {
         recoveredExpiredLeases += 1;
         const exhausted = record.attempts >= record.maxAttempts;
+        record.leaseRecoveries = [
+          ...(record.leaseRecoveries ?? []),
+          {
+            version: '1.0.0',
+            previousWorkerId: record.claimedBy!,
+            previousLeaseEpoch: record.leaseEpoch,
+            leaseExpiredAt: record.leaseExpiresAt,
+            recoveredAt: now,
+            disposition: exhausted ? 'dead_lettered' : 'requeued',
+          },
+        ];
         record.status = exhausted ? 'dead_letter' : 'queued';
         if (exhausted) {
           record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
