@@ -4,6 +4,7 @@ import type {
   MemoryPrincipal,
   MemoryProvenance,
 } from './contracts';
+import type { ContextArtifactRef } from './context-artifacts';
 
 export type ContextSourceType =
   | 'system'
@@ -24,6 +25,7 @@ export interface ContextSourceSpec {
   priority: number;
   maxItems?: number;
   maxTokens?: number;
+  overflowPolicy?: ContextSourceBudget['overflowPolicy'];
   filters?: Record<string, unknown>;
 }
 
@@ -64,6 +66,7 @@ export interface ContextProfileSpec {
   sources: ContextSourceSpec[];
   maxItems?: number;
   maxCharacters?: number;
+  maxSerializedBytes?: number;
   maxTokens: number;
   reservedOutputTokens?: number;
   reservedSystemTokens?: number;
@@ -94,6 +97,7 @@ export interface ContextItem {
   provenance?: MemoryProvenance | Record<string, unknown>;
   conflictGroupId?: string;
   metadata?: Record<string, unknown>;
+  artifactRef?: ContextArtifactRef;
 }
 
 export interface ContextRejectedItem {
@@ -130,6 +134,7 @@ export interface ContextBundle {
   contextHash: string;
   createdAt: string;
   metadata?: Record<string, unknown>;
+  artifactRefs?: ContextArtifactRef[];
 }
 
 export interface ContextSourceBudget {
@@ -158,6 +163,7 @@ export interface PromptSegment {
   trustLevel: 'trusted_instruction' | 'trusted_data' | 'untrusted_data';
   sourceRefs: string[];
   required?: boolean;
+  artifactRefs?: ContextArtifactRef[];
 }
 
 export interface ContextProvenanceLabel {
@@ -174,7 +180,7 @@ export interface ContextTruncationRecord {
   itemId: string;
   originalTokens: number;
   retainedTokens: number;
-  method: 'drop' | 'truncate' | 'summarize';
+  method: 'drop' | 'truncate' | 'summarize' | 'spill_to_artifact';
   reason: string;
 }
 
@@ -195,6 +201,7 @@ export interface ContextEnvelope {
   conflicts: ContextConflict[];
   totalTokens: number;
   createdAt: string;
+  artifactRefs?: ContextArtifactRef[];
 }
 
 export interface ContextBuildRequest {

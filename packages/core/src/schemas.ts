@@ -125,6 +125,9 @@ export const timeoutPolicySpecSchema = z.object({
 export const retryPolicySpecSchema = z.object({
   maxAttempts: z.number().int().positive(),
   backoffMs: z.number().int().nonnegative().optional(),
+  maxBackoffMs: z.number().int().nonnegative().optional(),
+  jitterRatio: z.number().min(0).max(1).optional(),
+  maxElapsedMs: z.number().int().positive().optional(),
   retryableCodes: z.array(z.string()).optional(),
 }) satisfies ZodType<RetryPolicySpec>;
 
