@@ -21,7 +21,7 @@ import type {
 } from './local-process-output-artifacts';
 
 const dockerPath = process.env.HYPHA_REAL_DOCKER_PATH ?? 'docker';
-const image = process.env.HYPHA_REAL_DOCKER_IMAGE ?? 'redis:latest';
+const image = process.env.HYPHA_REAL_DOCKER_IMAGE ?? 'redis';
 const imageDigest =
   process.env.HYPHA_REAL_DOCKER_DIGEST ??
   'sha256:77cb4599f0121142e25139cea1aafaf45fe765c74a0a41b38f4a4ea9fc8cb846';
