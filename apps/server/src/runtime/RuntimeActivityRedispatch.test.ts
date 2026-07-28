@@ -743,6 +743,118 @@ describe('RuntimeActivityRedispatchService', () => {
     ).toHaveLength(0);
   });
 
+  it('allows a replacement worker to reclaim an expired redispatch without accepting stale output', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    let clock = now;
+    const runLeases = new InMemoryRunLeaseStore({ now: () => clock });
+    const recorder = new InMemoryTelemetryRecorder();
+    const operationalTelemetry = new RuntimeOperationalTelemetry({ recorder });
+    let releaseHeartbeat: (() => void) | undefined;
+    const heartbeatBarrier = new Promise<void>((resolve) => {
+      releaseHeartbeat = resolve;
+    });
+    let markWorkerAStarted: (() => void) | undefined;
+    const workerAStarted = new Promise<void>((resolve) => {
+      markWorkerAStarted = resolve;
+    });
+    const workerADispatch = jest.fn(
+      async (input: Parameters<RuntimeActivityRedispatchPort['dispatch']>[0]) => {
+        markWorkerAStarted?.();
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return { commandId: 'activity-command.worker-a-late', reused: false };
+      }
+    );
+    const workerA = service({
+      events,
+      descriptors,
+      runLeases,
+      dispatch: workerADispatch,
+      ids: ['lease.worker-a.expired', 'event.worker-a.intent'],
+      renewalIntervalMs: 25,
+      wait: async (_delayMs, signal) => {
+        await Promise.race([
+          heartbeatBarrier,
+          new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              resolve();
+              return;
+            }
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          }),
+        ]);
+      },
+      now: () => clock,
+      operationalTelemetry,
+      monotonicNow: jest.fn().mockReturnValueOnce(10).mockReturnValueOnce(14),
+    });
+    const workerAResult = workerA.redispatch({
+      ...redispatchCommand(reference),
+      leaseTtlMs: 100,
+    });
+    await workerAStarted;
+
+    clock = '2026-07-24T07:00:00.200Z';
+    const workerBReconcile = jest.fn(async () => ({ status: 'safe_to_dispatch' as const }));
+    const workerBDispatch = jest.fn(async () => ({
+      commandId: 'activity-command.worker-b',
+      reused: false,
+    }));
+    const workerB = service({
+      events,
+      descriptors,
+      runLeases,
+      dispatch: workerBDispatch,
+      reconcile: workerBReconcile,
+      ids: ['lease.worker-b.replacement'],
+      now: () => clock,
+    });
+
+    await expect(
+      workerB.redispatch({
+        ...redispatchCommand(reference),
+        commandId: 'command.redispatch.worker-b',
+        ownerId: 'worker.redispatch.b',
+        leaseTtlMs: 100,
+      })
+    ).resolves.toMatchObject({
+      activityCommandId: 'activity-command.worker-b',
+      eventReused: true,
+      receiptReused: false,
+      reconciled: false,
+    });
+    releaseHeartbeat?.();
+    await expect(workerAResult).rejects.toMatchObject({ code: 'RUNTIME_FENCING_REJECTED' });
+
+    expect(workerADispatch).toHaveBeenCalledWith(expect.objectContaining({ fencingToken: 1 }));
+    expect(workerBReconcile).toHaveBeenCalledWith(expect.objectContaining({ fencingToken: 2 }));
+    expect(workerBDispatch).toHaveBeenCalledWith(expect.objectContaining({ fencingToken: 2 }));
+    const receipts = await events.read({
+      scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+      types: ['activity.redispatch.accepted'],
+    });
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      payload: {
+        activityCommandId: 'activity-command.worker-b',
+        commandReused: false,
+        source: 'dispatch',
+      },
+    });
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalLatencyMs)).toEqual([
+      expect.objectContaining({
+        value: 4,
+        attributes: { resource: 'run', outcome: 'failed' },
+      }),
+    ]);
+  });
+
   it('rejects a late dispatcher result after another worker fences the lease', async () => {
     const events = await eventRuntime();
     const descriptors = new ArtifactRuntimeActivityDescriptorStore({
@@ -788,6 +900,8 @@ function service(input: {
   reconcile?: jest.Mock;
   ids: string[];
   renewalIntervalMs?: number;
+  wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  now?: () => string;
   onLeaseRenewalFailure?: (error: unknown, commandId: string) => void;
   operationalTelemetry?: RuntimeOperationalTelemetry;
   monotonicNow?: () => number;
@@ -802,6 +916,7 @@ function service(input: {
     ...(input.renewalIntervalMs === undefined
       ? {}
       : { renewalIntervalMs: input.renewalIntervalMs }),
+    ...(input.wait === undefined ? {} : { wait: input.wait }),
     ...(input.onLeaseRenewalFailure === undefined
       ? {}
       : { onLeaseRenewalFailure: input.onLeaseRenewalFailure }),
@@ -809,7 +924,7 @@ function service(input: {
       ? {}
       : { operationalTelemetry: input.operationalTelemetry }),
     ...(input.monotonicNow === undefined ? {} : { monotonicNow: input.monotonicNow }),
-    now: () => now,
+    now: input.now ?? (() => now),
     nextId: (namespace) => ids.shift() ?? `${namespace}.fallback`,
   });
 }
