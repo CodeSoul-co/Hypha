@@ -176,7 +176,9 @@ profiles:
       connectionRef: memory.connection.mem0-oss
       config:
         protocol: mem0-oss-rest
+        expectedProviderVersion: b357a5a1b03c299ec8229c268e63cfac0f7c6566
         mappingStoreRef: memory.mapping.durable
+        operationStoreRef: memory.operation.durable
       capabilities: &mem0-oss-capabilities
         add: true
         search: true
@@ -229,6 +231,8 @@ profiles:
         baseUrl: https://api.mem0.ai
         credentialRef: credential:mem0-platform
         protocol: mem0-platform-v3
+        providerVersion: mem0-platform-v3
+        expectedProviderVersion: mem0-platform-v3
         mappingStoreRef: memory.mapping.durable
         operationStoreRef: memory.operation.durable
       capabilities: &mem0-platform-capabilities
