@@ -124,6 +124,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
         processCount: expect.any(Number),
       },
     });
+    expect(outputs.content('stdout')).toEqual(Buffer.from('artifact-output'));
     await expect(fs.readFile(path.join(workspace, 'result.txt'), 'utf8')).resolves.not.toBe('');
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
@@ -225,8 +226,10 @@ describe('DockerExecutionCoordinator real daemon', () => {
         },
       },
     });
-    expect(outputs.content('stdout')).toEqual(Buffer.from('artifact-output'));
-    expect(outputs.content('stdout').byteLength).toBeGreaterThan(0);
+    const streamedStdout = outputs.content('stdout');
+    const inlineStdout = requiredString(result.stdout, 'Docker bounded stdout');
+    expect(streamedStdout.toString('utf8')).toContain('hypha\n');
+    expect(streamedStdout.byteLength).toBeGreaterThan(Buffer.byteLength(inlineStdout));
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
 
