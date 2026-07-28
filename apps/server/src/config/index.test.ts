@@ -4,8 +4,9 @@ import {
   inferenceConfig,
   redisConfig,
   reloadConfig,
+  runtimeConfig,
   storageConfig,
-  workCacheConfig,
+  toolResultCacheConfig,
 } from './index';
 
 const trackedEnv = [
@@ -32,9 +33,6 @@ const trackedEnv = [
   'VLLM_BASE_URL',
   'LLAMA_CPP_BASE_URL',
   'OPENAI_INFERENCE_BASE_URL',
-  'HYPHA_WORKCACHE',
-  'HYPHA_WORKCACHE_SQLITE_PATH',
-  'HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS',
   'HYPHA_FILESYSTEM_WORKING_DIRECTORY',
   'HYPHA_FILESYSTEM_READ_PATHS',
   'HYPHA_FILESYSTEM_WRITE_PATHS',
@@ -42,7 +40,17 @@ const trackedEnv = [
   'HYPHA_FILESYSTEM_EXECUTION_ENABLED',
   'HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS',
   'HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES',
+  'HYPHA_TOOL_RESULT_CACHE',
+  'HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE',
+  'HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS',
+  'HYPHA_TOOL_RESULT_CACHE_MAX_ENTRIES',
+  'HYPHA_TOOL_RESULT_CACHE_MAX_ENTRY_BYTES',
+  'HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS',
+  'HYPHA_TOOL_RESULT_CACHE_NAMESPACE',
   'FILESYSTEM_TOOL_ROOT',
+  'NODE_ENV',
+  'JWT_SECRET',
+  'HYPHA_OWNER_PASSWORD',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -117,6 +125,17 @@ describe('configuration storage taxonomy', () => {
     expect(profiles).toContain('storage.local-vector.semantic');
   });
 
+  it('loads bounded canonical Runtime startup limits', () => {
+    expect(runtimeConfig().canonical).toEqual({
+      auditPageSize: 250,
+      auditPageMaxBytes: 4 * 1024 * 1024,
+      auditMaxEvents: 100_000,
+      auditMaxBytes: 256 * 1024 * 1024,
+      auditMaxDurationMs: 30_000,
+      maxLegacyEvents: 100_000,
+    });
+  });
+
   it('loads inference backend configuration with SGLang as default', () => {
     process.env.HYPHA_INFERENCE_DEFAULT_BACKEND = 'sglang';
     process.env.SGLANG_BASE_URL = 'http://sglang.local:30000';
@@ -137,23 +156,30 @@ describe('configuration storage taxonomy', () => {
     });
   });
 
-  it('keeps WorkCache enabled by default on cache-base and switches configured stores from env', () => {
-    reloadConfig();
-    expect(workCacheConfig()).toMatchObject({
-      enabled: true,
-      store: 'memory',
-      promptBudgetTokens: 4096,
+  it('configures bounded local or shared Tool result caching without changing the default', () => {
+    expect(toolResultCacheConfig()).toMatchObject({
+      store: 'off',
+      failureMode: 'bypass',
+      operationTimeoutMs: 250,
     });
 
-    process.env.HYPHA_WORKCACHE = 'sqlite';
-    process.env.HYPHA_WORKCACHE_SQLITE_PATH = './data/runtime/cache/test-workcache.sqlite';
-    process.env.HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS = '2048';
+    process.env.HYPHA_TOOL_RESULT_CACHE = 'redis';
+    process.env.HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE = 'strict';
+    process.env.HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS = '500';
+    process.env.HYPHA_TOOL_RESULT_CACHE_MAX_ENTRIES = '64';
+    process.env.HYPHA_TOOL_RESULT_CACHE_MAX_ENTRY_BYTES = '4096';
+    process.env.HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS = '60000';
+    process.env.HYPHA_TOOL_RESULT_CACHE_NAMESPACE = 'tools:test:v1';
+    reloadConfig();
 
-    expect(workCacheConfig()).toMatchObject({
-      enabled: true,
-      store: 'sqlite',
-      promptBudgetTokens: 2048,
-      sqlite: { path: './data/runtime/cache/test-workcache.sqlite' },
+    expect(toolResultCacheConfig()).toEqual({
+      store: 'redis',
+      failureMode: 'strict',
+      operationTimeoutMs: 500,
+      maxEntries: 64,
+      maxEntryBytes: 4096,
+      redisDefaultTtlMs: 60000,
+      namespace: 'tools:test:v1',
     });
   });
 
@@ -184,7 +210,6 @@ describe('configuration storage taxonomy', () => {
       },
     });
   });
-
   it('loads separate filesystem read, write, and execute path policies', () => {
     process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY = './workspace';
     process.env.HYPHA_FILESYSTEM_READ_PATHS = './workspace,./shared';
@@ -218,6 +243,28 @@ describe('configuration storage taxonomy', () => {
       workingDirectory: './legacy-workspace',
       readPaths: ['./legacy-workspace'],
       writePaths: ['./legacy-workspace'],
+    });
+  });
+
+  it('rejects development authentication credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+
+    expect(() => reloadConfig()).toThrow('Invalid configuration');
+  });
+
+  it('accepts explicit strong authentication credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'production-jwt-secret-with-32-plus-characters';
+    process.env.HYPHA_OWNER_PASSWORD = 'production-owner-password';
+
+    expect(reloadConfig()).toMatchObject({
+      app: { env: 'production' },
+      auth: {
+        enabled: true,
+        mode: 'single-user',
+        jwt: { secret: 'production-jwt-secret-with-32-plus-characters' },
+        singleUser: { password: 'production-owner-password' },
+      },
     });
   });
 });
