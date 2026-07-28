@@ -6,6 +6,7 @@ export interface VersionedSpec {
 export interface SpecRef {
   id: string;
   version?: string;
+  revision?: string;
 }
 
 export interface SpecMetadata {
@@ -39,6 +40,9 @@ export interface TimeoutPolicySpec {
 export interface RetryPolicySpec {
   maxAttempts: number;
   backoffMs?: number;
+  maxBackoffMs?: number;
+  jitterRatio?: number;
+  maxElapsedMs?: number;
   retryableCodes?: string[];
 }
 

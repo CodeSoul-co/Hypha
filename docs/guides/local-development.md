@@ -158,6 +158,21 @@ same governed `/tools/execute` path as remote or stdio MCP servers. Replace
 `mode: "remote"` plus `endpoint` and optional `authToken` for deployment MCP
 servers.
 
+Tool result caching is disabled by default. Use the bounded in-process Store for one process, or
+the configured Redis connection for multi-process/local/cloud deployments:
+
+```bash
+HYPHA_TOOL_RESULT_CACHE=memory
+# or
+HYPHA_TOOL_RESULT_CACHE=redis
+HYPHA_TOOL_RESULT_CACHE_FAILURE_MODE=bypass
+HYPHA_TOOL_RESULT_CACHE_TIMEOUT_MS=250
+```
+
+Only Tool contracts with an explicit result-cache policy participate. A `read` Tool call must also
+supply a stable `externalStateVersion`; this prevents TTL alone from being treated as proof that an
+external resource is unchanged.
+
 ```bash
 npm run dev
 npm run cli -- tools

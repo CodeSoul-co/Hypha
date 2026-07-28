@@ -2,39 +2,23 @@ import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import rateLimit from 'express-rate-limit';
 import http from 'http';
 
-import { getConfig } from './config';
+import { getConfig, runtimeConfig } from './config';
 import { logger } from './utils/logger';
+import { initializeDatabases, closeDatabases, checkStorageHealth } from './services/database';
+import { initializeLLM, destroyLLM, getLLMManager } from './core/llm/LLMFactory';
+import { initializeSkillManager, destroySkillManager } from './core/skills/SkillManager';
+import { initializeToolManager, destroyToolManager } from './core/tools/ToolManager';
+import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow/WorkflowEngine';
+import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
 import {
-  initializeDatabases,
-  closeDatabases,
-  checkStorageHealth,
-} from './services/database';
-import {
-  initializeLLM,
-  destroyLLM,
-  getLLMManager,
-} from './core/llm/LLMFactory';
-import {
-  initializeSkillManager,
-  destroySkillManager,
-} from './core/skills/SkillManager';
-import {
-  initializeToolManager,
-  destroyToolManager,
-} from './core/tools/ToolManager';
-import {
-  initializeWorkflowEngine,
-  destroyWorkflowEngine,
-} from './core/workflow/WorkflowEngine';
-import {
-  initializePromptManager,
-  destroyPromptManager,
-} from './core/prompts/PromptManager';
-import { getTemporaryMemory } from './core/memory/TemporaryMemory';
-import { getPermanentMemory } from './core/memory/PermanentMemory';
+  closeServerMemoryComposition,
+  getMemoryApplicationService,
+  getServerMemoryComposition,
+  initializeServerMemoryComposition,
+  sanitizeServerMemoryOperationalError,
+} from './services/ServerMemoryComposition';
 import {
   initSingleUserOwner,
   getSingleUserToken,
@@ -43,18 +27,26 @@ import {
   getDevTestToken,
 } from './services/DevAuth';
 import routes from './routes';
-import {
-  errorHandler,
-  notFoundHandler,
-  requestLogger,
-  rateLimitHandler,
-} from './middleware/errorHandler';
+import { errorHandler, notFoundHandler, requestLogger } from './middleware/errorHandler';
+import { createApiRateLimiter } from './middleware/rateLimiter';
 import { HTTP_STATUS } from './constants';
+import {
+  createServerCompatibilityEventStore,
+  destroyEventRuntime,
+  getEventRuntime,
+  initializeEventRuntime,
+  serverRuntimeEventDatabasePath,
+} from './services/EventRuntime';
+import { formatLocalHealthBaseUrl } from './utils/serverAddress';
+import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
+import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 
 class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
-  private server: any = null;
+  private server: http.Server | null = null;
+  private canonicalRuntime: ServerCanonicalRuntime | null = null;
+  private shutdownCoordinator: ServerShutdownCoordinator | null = null;
 
   constructor() {
     this.app = express();
@@ -82,7 +74,7 @@ class Application {
     this.app.use(
       helmet({
         contentSecurityPolicy: false, // Disable for API
-      }),
+      })
     );
 
     // CORS
@@ -91,7 +83,7 @@ class Application {
         origin: '*', // Configure for production
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
-      }),
+      })
     );
 
     // Compression
@@ -103,6 +95,11 @@ class Application {
 
     // Request logging
     this.app.use(requestLogger);
+
+    // Rate limiting must run before routes; middleware registered after the
+    // terminal 404/error handlers can never protect successful requests.
+    const limiter = createApiRateLimiter(this.config.rateLimit);
+    if (limiter) this.app.use(limiter);
   }
 
   private setupRoutes(): void {
@@ -123,19 +120,6 @@ class Application {
 
     // Global error handler
     this.app.use(errorHandler);
-
-    // Rate limiting
-    if (this.config.rateLimit.enabled) {
-      const limiter = rateLimit({
-        windowMs: this.config.rateLimit.windowMs,
-        max: this.config.rateLimit.max,
-        handler: rateLimitHandler,
-        standardHeaders: true,
-        legacyHeaders: false,
-      });
-
-      this.app.use(limiter);
-    }
   }
 
   private async initializeServices(): Promise<void> {
@@ -157,15 +141,27 @@ class Application {
     // previous behaviour was to silently boot with a broken default.
     await this.ensureDefaultProviderAvailable();
 
-    // Initialize Memory
-    const tempMemory = getTemporaryMemory();
-    await tempMemory.startCleanup();
+    // Initialize the unique canonical Memory application service after its
+    // MongoDB and Redis dependencies are ready.
+    await initializeServerMemoryComposition();
+
+    // Bind every Memory-capable Server subsystem to that same service instance.
+    getMemoryApplicationService('tool');
+    getMemoryApplicationService('workflow');
+    getMemoryApplicationService('harness');
 
     // Initialize Skill Manager
     await initializeSkillManager();
 
     // Initialize Tool Manager
     await initializeToolManager();
+
+    // Cut legacy Runtime Events over to the schema-backed canonical store only
+    // after migration and bounded replay have passed.
+    await this.initializeCanonicalRuntime();
+
+    // Recover persisted Tool invocations after their adapters are available.
+    await getEventRuntime().recoverToolInvocations();
 
     // Initialize Workflow Engine
     await initializeWorkflowEngine();
@@ -174,6 +170,39 @@ class Application {
     await initializePromptManager();
 
     logger.info('All services initialized');
+  }
+
+  private async initializeCanonicalRuntime(): Promise<void> {
+    const legacyEvents = createServerCompatibilityEventStore();
+    const limits = runtimeConfig().canonical;
+    const runtime = new ServerCanonicalRuntime({
+      filename: serverRuntimeEventDatabasePath(),
+      legacyEvents,
+      maxLegacyEvents: limits.maxLegacyEvents,
+      auditLimits: {
+        pageSize: limits.auditPageSize,
+        pageMaxBytes: limits.auditPageMaxBytes,
+        maxEvents: limits.auditMaxEvents,
+        maxBytes: limits.auditMaxBytes,
+        maxDurationMs: limits.auditMaxDurationMs,
+      },
+    });
+    try {
+      const composition = await runtime.initialize();
+      initializeEventRuntime({
+        events: composition.events,
+        eventDbPath: serverRuntimeEventDatabasePath(),
+        humanWaits: composition.humanWaits,
+      });
+      this.canonicalRuntime = runtime;
+      logger.info('Canonical Runtime initialized', {
+        migratedEvents: composition.migration.migratedEvents,
+        alreadyCanonicalEvents: composition.migration.alreadyCanonicalEvents,
+      });
+    } catch (error) {
+      await runtime.close();
+      throw error;
+    }
   }
 
   private async initializeLocalUsers(): Promise<void> {
@@ -199,7 +228,7 @@ class Application {
 
     if (available.length === 0) {
       logger.warn(
-        'No LLM providers initialized — chat endpoints will fail until an API key is configured.',
+        'No LLM providers initialized — chat endpoints will fail until an API key is configured.'
       );
       return;
     }
@@ -208,7 +237,7 @@ class Application {
       const fallback = available[0];
       logger.warn(
         `Configured defaultProvider="${wanted}" is not initialized (missing API key?). ` +
-          `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`,
+          `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`
       );
       await llm.setDefaultProvider(fallback);
     }
@@ -235,10 +264,9 @@ class Application {
   }
 
   private async startupHealthCheck(host: string, port: number): Promise<void> {
-    const baseUrl = `http://${host}:${port}`;
+    const baseUrl = formatLocalHealthBaseUrl(host, port);
     const apiBase = `${baseUrl}${this.config.app.apiPrefix}`;
-    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] =
-      [];
+    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] = [];
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     logger.info('🔍  Starting health checks...');
@@ -290,7 +318,47 @@ class Application {
       logger.error('  ❌ Messaging  │ Error:', err);
     }
 
-    // 3. Check API /health endpoint
+    // 3. Check canonical Memory composition and its active provider.
+    try {
+      const memoryReadiness = await getServerMemoryComposition().readiness();
+      checks.push({
+        name: 'Memory',
+        status: memoryReadiness.ready ? 'pass' : 'fail',
+        detail:
+          memoryReadiness.message ??
+          `${memoryReadiness.state}/${memoryReadiness.providerStatus ?? 'unavailable'}`,
+      });
+      if (memoryReadiness.ready) {
+        logger.info(`  Memory      | ${memoryReadiness.providerStatus}`);
+      } else {
+        logger.error(`  Memory      | ${memoryReadiness.state}`);
+      }
+    } catch (err) {
+      const safeError = sanitizeServerMemoryOperationalError(err);
+      checks.push({ name: 'Memory', status: 'fail', detail: safeError });
+      logger.error('  Memory      | Error:', safeError);
+    }
+
+    // 4. Check canonical Runtime Event authority.
+    try {
+      const runtimeHealth = await this.canonicalRuntime?.get().backbone.eventStore.health();
+      const healthy = runtimeHealth?.status === 'healthy';
+      checks.push({
+        name: 'Runtime',
+        status: healthy ? 'pass' : 'fail',
+        detail: runtimeHealth?.message ?? runtimeHealth?.status ?? 'not initialized',
+      });
+      if (healthy) {
+        logger.info('  ✅ Runtime     │ Canonical Event store ready');
+      } else {
+        logger.error('  ❌ Runtime     │ Canonical Event store unavailable');
+      }
+    } catch (err) {
+      checks.push({ name: 'Runtime', status: 'fail', detail: String(err) });
+      logger.error('  ❌ Runtime     │ Error:', err);
+    }
+
+    // 5. Check API /health endpoint
     try {
       const response = await fetch(`${apiBase}/health`);
       if (response.ok) {
@@ -309,7 +377,7 @@ class Application {
       logger.error('  ❌ API Health │ Error:', err);
     }
 
-    // 4. Check LLM Providers
+    // 6. Check LLM Providers
     try {
       const llmManager = getLLMManager();
       const llmHealth = await llmManager.healthCheck();
@@ -330,9 +398,7 @@ class Application {
           status: 'fail',
           detail: 'No providers available',
         });
-        logger.warn(
-          '  ⚠️  LLM         │ No providers available (check API keys)',
-        );
+        logger.warn('  ⚠️  LLM         │ No providers available (check API keys)');
       }
     } catch (err) {
       checks.push({
@@ -349,9 +415,7 @@ class Application {
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     if (failed === 0) {
-      logger.info(
-        `🚀  All systems ready! (${passed}/${checks.length} checks passed)`,
-      );
+      logger.info(`🚀  All systems ready! (${passed}/${checks.length} checks passed)`);
       logger.info(`📖  API Docs: ${apiBase}/docs`);
       logger.info(`📊  Status:   ${apiBase}/status/page`);
       logger.info(`💰  Usage:    ${apiBase}/usage/page`);
@@ -367,9 +431,7 @@ class Application {
               const ownerToken = await getSingleUserToken();
               if (ownerToken) {
                 logger.info('');
-                logger.info(
-                  `    Client usage: POST ${apiBase}/dev/token returns token`,
-                );
+                logger.info(`    Client usage: POST ${apiBase}/dev/token returns token`);
                 logger.info('    Credentials and tokens are intentionally not printed.');
               }
             }
@@ -390,9 +452,7 @@ class Application {
               const devToken = await getDevTestToken();
               if (devToken) {
                 logger.info('');
-                logger.info(
-                  `    Client usage: POST ${apiBase}/dev/token returns token`,
-                );
+                logger.info(`    Client usage: POST ${apiBase}/dev/token returns token`);
                 logger.info('    Credentials and tokens are intentionally not printed.');
               }
             }
@@ -402,9 +462,7 @@ class Application {
         }
       }
     } else {
-      logger.warn(
-        `⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`,
-      );
+      logger.warn(`⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`);
       logger.warn(`🔧  Review logs above for details`);
     }
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -412,25 +470,33 @@ class Application {
 
   async stop(): Promise<void> {
     logger.info('Shutting down...');
-
-    // Stop accepting new connections
-    if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server.close(() => resolve());
+    if (!this.shutdownCoordinator) {
+      this.shutdownCoordinator = new ServerShutdownCoordinator({
+        stopIntake: async () => {
+          if (!this.server) return;
+          const server = this.server;
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+          this.server = null;
+        },
+        drainWorkersAndReleaseLeases: async () => {
+          destroyEventRuntime();
+          await this.canonicalRuntime?.close();
+          this.canonicalRuntime = null;
+          await closeServerMemoryComposition();
+        },
+        closeServicesAndConnections: async () => {
+          await destroyLLM();
+          await destroySkillManager();
+          await destroyToolManager();
+          await destroyWorkflowEngine();
+          await destroyPromptManager();
+          await closeDatabases();
+        },
       });
     }
-
-    // Cleanup services
-    await getTemporaryMemory().stopCleanup();
-    await destroyLLM();
-    await destroySkillManager();
-    await destroyToolManager();
-    await destroyWorkflowEngine();
-    await destroyPromptManager();
-
-    // Close databases
-    await closeDatabases();
-
+    await this.shutdownCoordinator.stop();
     logger.info('Shutdown complete');
   }
 

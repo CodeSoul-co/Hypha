@@ -1,0 +1,727 @@
+import { z, type ZodType } from 'zod';
+import type {
+  ManagedMemoryRecord,
+  ManagedMemoryScope,
+  MemoryContractSpecRef,
+  MemoryFallbackPolicySpec,
+  MemoryManagementCapabilities,
+  MemoryProvenance,
+  NormalizedMemoryError,
+} from './contracts';
+import type {
+  ManagedMemoryDeleteRequest,
+  ManagedMemoryDeleteResult,
+  ManagedMemorySearchRequest,
+  ManagedMemorySearchResult,
+  ManagedMemoryUpdateRequest,
+  ManagedMemoryWriteResult,
+  MemoryAddRequest,
+  MemoryGetRequest,
+  MemoryHistoryRequest,
+  MemoryListRequest,
+  MemoryListResult,
+  MemoryManagementProvider,
+  MemoryVersion,
+  ProviderHealth,
+} from './operations';
+import {
+  hashMemoryScope,
+  memoryError,
+  normalizeMemoryError,
+  stableStringify,
+} from './memory-utils';
+import { memoryManagementCapabilitiesSchema } from './profile-contract';
+
+export interface ExternalMemoryMappingBinding {
+  scopeHash: string;
+  profileRef?: MemoryContractSpecRef;
+  recordRevision: number;
+  provenance: MemoryProvenance;
+}
+
+export interface ExternalMemoryMapping {
+  memoryId: string;
+  providerId: string;
+  externalId: string;
+  externalVersion?: string;
+  binding: ExternalMemoryMappingBinding;
+  lastSyncedAt: string;
+  syncState: 'synced' | 'pending' | 'failed' | 'deleted';
+  metadata?: Record<string, unknown>;
+}
+
+export const externalMemoryMappingSchema: ZodType<ExternalMemoryMapping> = z
+  .object({
+    memoryId: z.string().min(1),
+    providerId: z.string().min(1),
+    externalId: z.string().min(1),
+    externalVersion: z.string().min(1).optional(),
+    binding: z
+      .object({
+        scopeHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        profileRef: z
+          .object({
+            id: z.string().min(1),
+            version: z.string().min(1).optional(),
+            revision: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        recordRevision: z.number().int().positive(),
+        provenance: z
+          .object({
+            createdBy: z.string().min(1),
+            providerId: z.string().min(1),
+            extractorVersion: z.string().optional(),
+            sourceEventIds: z.array(z.string()).optional(),
+            sourceMemoryIds: z.array(z.string()).optional(),
+            transformation: z.string().optional(),
+            humanDecisionId: z.string().optional(),
+            createdAt: z.string().datetime(),
+            metadata: z.record(z.unknown()).optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+    lastSyncedAt: z.string().datetime(),
+    syncState: z.enum(['synced', 'pending', 'failed', 'deleted']),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export type ExternalMemoryMappingStoreDurability = 'ephemeral' | 'durable';
+export type ExternalMemoryMappingRuntimeProfile = 'production' | 'test' | 'ephemeral';
+
+export interface ExternalMemoryMappingStore {
+  readonly durability: ExternalMemoryMappingStoreDurability;
+  get(providerId: string, memoryId: string): Promise<ExternalMemoryMapping | null>;
+  getByExternalId(providerId: string, externalId: string): Promise<ExternalMemoryMapping | null>;
+  set(mapping: ExternalMemoryMapping): Promise<void>;
+  list(providerId: string): Promise<ExternalMemoryMapping[]>;
+}
+
+export class InMemoryExternalMemoryMappingStore implements ExternalMemoryMappingStore {
+  readonly durability = 'ephemeral' as const;
+  private readonly values = new Map<string, ExternalMemoryMapping>();
+
+  async get(providerId: string, memoryId: string): Promise<ExternalMemoryMapping | null> {
+    const mapping = this.values.get(`${providerId}:${memoryId}`);
+    return mapping ? structuredClone(mapping) : null;
+  }
+
+  async getByExternalId(
+    providerId: string,
+    externalId: string
+  ): Promise<ExternalMemoryMapping | null> {
+    const mapping = Array.from(this.values.values()).find(
+      (value) => value.providerId === providerId && value.externalId === externalId
+    );
+    return mapping ? structuredClone(mapping) : null;
+  }
+
+  async set(mapping: ExternalMemoryMapping): Promise<void> {
+    const validated = externalMemoryMappingSchema.parse(mapping);
+    this.values.set(`${mapping.providerId}:${mapping.memoryId}`, structuredClone(validated));
+  }
+
+  async list(providerId: string): Promise<ExternalMemoryMapping[]> {
+    return Array.from(this.values.values())
+      .filter((mapping) => mapping.providerId === providerId)
+      .map((mapping) => structuredClone(mapping));
+  }
+}
+
+export function resolveExternalMemoryMappingStore(
+  store: ExternalMemoryMappingStore | undefined,
+  profile: ExternalMemoryMappingRuntimeProfile
+): ExternalMemoryMappingStore {
+  if (profile === 'production' && store?.durability !== 'durable') {
+    throw memoryError(
+      'MEMORY_INVALID_INPUT',
+      'Production external providers require a durable external identity mapping store.'
+    );
+  }
+  return store ?? new InMemoryExternalMemoryMappingStore();
+}
+export interface ExternalMemoryClient {
+  capabilities(signal?: AbortSignal): Promise<Partial<MemoryManagementCapabilities>>;
+  add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult>;
+  search(
+    request: ManagedMemorySearchRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemorySearchResult[]>;
+  get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null>;
+  list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult>;
+  update?(
+    request: ManagedMemoryUpdateRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult>;
+  delete(
+    request: ManagedMemoryDeleteRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult>;
+  history?(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]>;
+  health(signal?: AbortSignal): Promise<ProviderHealth>;
+  close?(): Promise<void>;
+}
+
+export interface ExternalMemoryAdapterOptions {
+  id: string;
+  client: ExternalMemoryClient;
+  fallback?: MemoryManagementProvider;
+  fallbackPolicy?: MemoryFallbackPolicySpec;
+  mappingStore?: ExternalMemoryMappingStore;
+  mappingProfile?: ExternalMemoryMappingRuntimeProfile;
+  timeoutMs?: number;
+  retryAttempts?: number;
+  circuitBreaker?: {
+    failureThreshold: number;
+    resetAfterMs: number;
+  };
+  now?: () => Date;
+  onStateChange?: (event: ExternalProviderStateChange) => void | Promise<void>;
+}
+
+export interface ExternalProviderStateChange {
+  type: 'degraded' | 'recovered' | 'circuit_opened' | 'quarantined';
+  providerId: string;
+  occurredAt: string;
+  error?: NormalizedMemoryError;
+}
+
+export const unsupportedMemoryManagementCapabilities: MemoryManagementCapabilities = {
+  add: false,
+  search: false,
+  get: false,
+  list: false,
+  update: false,
+  delete: false,
+  deleteByFilter: false,
+  history: false,
+  summarize: false,
+  consolidate: false,
+  decay: false,
+  reinforce: false,
+  conflictDetection: false,
+  hybridSearch: false,
+  graphRelations: false,
+  asyncWrite: false,
+  batchOperations: false,
+};
+
+export function negotiateMemoryManagementCapabilities(
+  value: unknown
+): MemoryManagementCapabilities {
+  const candidate =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? { ...unsupportedMemoryManagementCapabilities, ...(value as Record<string, unknown>) }
+      : value;
+  const parsed = memoryManagementCapabilitiesSchema.safeParse(candidate);
+  if (!parsed.success) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Memory provider capability response violates the protocol.',
+      false,
+      { schemaDrift: true, capabilityNegotiation: true }
+    );
+  }
+  return parsed.data;
+}
+
+type CapabilityName = keyof MemoryManagementCapabilities;
+
+export class ExternalMemoryManagementAdapter implements MemoryManagementProvider {
+  readonly id: string;
+  private negotiated?: MemoryManagementCapabilities;
+  private quarantineError?: NormalizedMemoryError;
+  private readonly tombstones = new Set<string>();
+  private readonly mappingStore: ExternalMemoryMappingStore;
+  private readonly now: () => Date;
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
+
+  constructor(protected readonly options: ExternalMemoryAdapterOptions) {
+    this.id = options.id;
+    this.mappingStore = resolveExternalMemoryMappingStore(
+      options.mappingStore,
+      options.mappingProfile ?? 'ephemeral'
+    );
+    this.now = options.now ?? (() => new Date());
+  }
+
+  async capabilities(): Promise<MemoryManagementCapabilities> {
+    if (this.quarantineError) throw this.quarantineError;
+    let negotiated: MemoryManagementCapabilities;
+    try {
+      const discovered = await this.callWithResilience(() => this.options.client.capabilities());
+      negotiated = negotiateMemoryManagementCapabilities(discovered);
+    } catch (error) {
+      const normalized = normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
+      if (normalized.details?.capabilityNegotiation === true) {
+        throw await this.quarantine(normalized);
+      }
+      throw normalized;
+    }
+    if (this.negotiated && stableStringify(this.negotiated) !== stableStringify(negotiated)) {
+      throw await this.quarantine(
+        memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          `Memory provider capability drift detected: ${this.id}`,
+          false,
+          { quarantined: true, capabilityDrift: true }
+        )
+      );
+    }
+    this.negotiated = negotiated;
+    return { ...negotiated };
+  }
+
+  async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
+    const result = await this.execute(
+      'add',
+      (operationSignal) => this.options.client.add(request, operationSignal),
+      (operationSignal) => this.options.fallback?.add(request, operationSignal),
+      'write',
+      signal
+    );
+    await Promise.all(
+      result.records.map((record) => this.captureMapping(record, request.scope, request.profileRef))
+    );
+    return result;
+  }
+
+  async search(
+    request: ManagedMemorySearchRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemorySearchResult[]> {
+    const results = await this.execute(
+      'search',
+      (operationSignal) => this.options.client.search(request, operationSignal),
+      (operationSignal) => this.options.fallback?.search(request, operationSignal),
+      'read',
+      signal
+    );
+    return results.filter(
+      (result) => !this.tombstones.has(tombstoneKey(request, result.record.id))
+    );
+  }
+
+  async get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null> {
+    if (this.tombstones.has(tombstoneKey(request, request.memoryId))) return null;
+    return this.execute(
+      'get',
+      (operationSignal) => this.options.client.get(request, operationSignal),
+      (operationSignal) => this.options.fallback?.get(request, operationSignal),
+      'read',
+      signal
+    );
+  }
+
+  async list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult> {
+    const result = await this.execute(
+      'list',
+      (operationSignal) => this.options.client.list(request, operationSignal),
+      (operationSignal) => this.options.fallback?.list(request, operationSignal),
+      'read',
+      signal
+    );
+    return {
+      ...result,
+      records: result.records.filter(
+        (record) => !this.tombstones.has(tombstoneKey(request, record.id))
+      ),
+    };
+  }
+
+  async update(
+    request: ManagedMemoryUpdateRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryWriteResult> {
+    const result = await this.execute(
+      'update',
+      (operationSignal) => {
+        if (!this.options.client.update) throw unsupportedError(this.id, 'update');
+        return this.options.client.update(request, operationSignal);
+      },
+      (operationSignal) => this.options.fallback?.update(request, operationSignal),
+      'write',
+      signal
+    );
+    await Promise.all(
+      result.records.map((record) =>
+        this.captureMapping(record, request.scope, undefined, request.expectedRevision)
+      )
+    );
+    return result;
+  }
+
+  async delete(
+    request: ManagedMemoryDeleteRequest,
+    signal?: AbortSignal
+  ): Promise<ManagedMemoryDeleteResult> {
+    for (const memoryId of request.memoryIds ?? []) {
+      this.tombstones.add(tombstoneKey(request, memoryId));
+      const mapping = await this.mappingStore.get(this.id, memoryId);
+      if (mapping) {
+        await this.mappingStore.set({
+          ...mapping,
+          syncState: 'pending',
+          lastSyncedAt: this.now().toISOString(),
+        });
+      }
+    }
+    try {
+      const result = await this.execute(
+        'delete',
+        (operationSignal) => this.options.client.delete(request, operationSignal),
+        (operationSignal) => this.options.fallback?.delete(request, operationSignal),
+        'write',
+        signal
+      );
+      await Promise.all(
+        result.deletedMemoryIds.map(async (memoryId) => {
+          const mapping = await this.mappingStore.get(this.id, memoryId);
+          if (mapping) {
+            await this.mappingStore.set({
+              ...mapping,
+              syncState: 'deleted',
+              lastSyncedAt: this.now().toISOString(),
+            });
+          }
+        })
+      );
+      return result;
+    } catch (error) {
+      const normalized = normalizeMemoryError(error, 'MEMORY_DELETE_PARTIAL');
+      return {
+        operationId: request.operationId,
+        status: 'partial',
+        deletedMemoryIds: request.memoryIds ?? [],
+        pendingProviderIds: [this.id],
+        warnings: [normalized.message],
+      };
+    }
+  }
+
+  async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
+    return this.execute(
+      'history',
+      (operationSignal) => {
+        if (!this.options.client.history) throw unsupportedError(this.id, 'history');
+        return this.options.client.history(request, operationSignal);
+      },
+      (operationSignal) => this.options.fallback?.history?.(request, operationSignal),
+      'read',
+      signal
+    );
+  }
+
+  async health(): Promise<ProviderHealth> {
+    if (this.quarantineError) {
+      return {
+        status: 'unhealthy',
+        checkedAt: this.now().toISOString(),
+        message: this.quarantineError.message,
+        details: { quarantined: true },
+      };
+    }
+    if (this.circuitOpenUntil > this.now().getTime()) {
+      return {
+        status: 'degraded',
+        checkedAt: this.now().toISOString(),
+        message: 'Circuit breaker is open.',
+        details: { circuitOpenUntil: new Date(this.circuitOpenUntil).toISOString() },
+      };
+    }
+    try {
+      return await this.withTimeout((signal) => this.options.client.health(signal));
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        checkedAt: this.now().toISOString(),
+        message: normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE').message,
+      };
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.options.client.close?.();
+    await this.options.fallback?.close?.();
+  }
+
+  protected async execute<T>(
+    capability: CapabilityName,
+    primary: (signal?: AbortSignal) => Promise<T>,
+    fallback: (signal?: AbortSignal) => Promise<T> | undefined,
+    mode: 'read' | 'write',
+    signal?: AbortSignal
+  ): Promise<T> {
+    let primaryStarted = false;
+    try {
+      const capabilities = await this.capabilities();
+      if (!capabilities[capability]) throw unsupportedError(this.id, capability);
+      primaryStarted = true;
+      return await this.callWithResilience(primary, mode === 'read', signal);
+    } catch (error) {
+      const normalized = normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
+      if (
+        normalized.details?.quarantined !== true &&
+        this.shouldFallback() &&
+        (mode === 'read' || !primaryStarted)
+      ) {
+        const alternative = fallback(signal);
+        if (alternative) return alternative;
+      }
+      throw normalized;
+    }
+  }
+
+  private async callWithResilience<T>(
+    call: (signal?: AbortSignal) => Promise<T>,
+    retryAllowed = true,
+    signal?: AbortSignal
+  ): Promise<T> {
+    if (this.circuitOpenUntil > this.now().getTime()) {
+      throw memoryError(
+        'MEMORY_PROVIDER_UNAVAILABLE',
+        `Memory provider circuit is open: ${this.id}`,
+        true
+      );
+    }
+    const attempts = retryAllowed ? Math.max(1, (this.options.retryAttempts ?? 1) + 1) : 1;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const value = await this.withTimeout(call, signal);
+        const recovered = this.consecutiveFailures > 0;
+        this.consecutiveFailures = 0;
+        this.circuitOpenUntil = 0;
+        if (recovered) {
+          await this.options.onStateChange?.({
+            type: 'recovered',
+            providerId: this.id,
+            occurredAt: this.now().toISOString(),
+          });
+        }
+        return value;
+      } catch (error) {
+        lastError = error;
+        this.consecutiveFailures += 1;
+        const breaker = this.options.circuitBreaker ?? {
+          failureThreshold: 3,
+          resetAfterMs: 30_000,
+        };
+        const normalized = normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
+        await this.options.onStateChange?.({
+          type: 'degraded',
+          providerId: this.id,
+          occurredAt: this.now().toISOString(),
+          error: normalized,
+        });
+        if (this.consecutiveFailures >= breaker.failureThreshold) {
+          this.circuitOpenUntil = this.now().getTime() + breaker.resetAfterMs;
+          await this.options.onStateChange?.({
+            type: 'circuit_opened',
+            providerId: this.id,
+            occurredAt: this.now().toISOString(),
+            error: normalized,
+          });
+          break;
+        }
+      }
+    }
+    throw normalizeMemoryError(lastError, 'MEMORY_PROVIDER_UNAVAILABLE');
+  }
+
+  private async withTimeout<T>(
+    call: (signal: AbortSignal) => Promise<T>,
+    parentSignal?: AbortSignal
+  ): Promise<T> {
+    if (parentSignal?.aborted) {
+      throw (
+        parentSignal.reason ??
+        memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Memory provider request was cancelled.')
+      );
+    }
+    const timeoutMs = this.options.timeoutMs ?? 5_000;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = (): void => controller.abort(parentSignal?.reason);
+    try {
+      if (parentSignal?.aborted) controller.abort(parentSignal.reason);
+      else parentSignal?.addEventListener('abort', onAbort, { once: true });
+      const value = await Promise.race([
+        call(controller.signal),
+        new Promise<T>((_resolve, reject) => {
+          controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
+            once: true,
+          });
+          timer = setTimeout(() => {
+            controller.abort(
+              memoryError(
+                'MEMORY_PROVIDER_TIMEOUT',
+                `Memory provider timed out after ${timeoutMs}ms: ${this.id}`,
+                true
+              )
+            );
+          }, timeoutMs);
+        }),
+      ]);
+      if (controller.signal.aborted) {
+        throw (
+          controller.signal.reason ??
+          memoryError('MEMORY_PROVIDER_UNAVAILABLE', 'Memory provider request was cancelled.')
+        );
+      }
+      return value;
+    } finally {
+      if (timer) clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  private async quarantine(error: NormalizedMemoryError): Promise<NormalizedMemoryError> {
+    this.quarantineError = {
+      ...error,
+      retryable: false,
+      details: { ...error.details, quarantined: true },
+    };
+    await this.options.onStateChange?.({
+      type: 'quarantined',
+      providerId: this.id,
+      occurredAt: this.now().toISOString(),
+      error: this.quarantineError,
+    });
+    return this.quarantineError;
+  }
+  private shouldFallback(): boolean {
+    return (
+      Boolean(this.options.fallback) &&
+      this.options.fallbackPolicy?.onProviderUnavailable !== 'fail'
+    );
+  }
+
+  private async captureMapping(
+    record: ManagedMemoryRecord,
+    scope: ManagedMemoryScope,
+    profileRef?: MemoryContractSpecRef,
+    expectedRevision?: number
+  ): Promise<void> {
+    const externalId = record.metadata?.providerExternalId;
+    const scopeHash = hashMemoryScope(scope);
+    if (
+      record.scopeHash !== scopeHash ||
+      stableStringify(record.scope) !== stableStringify(scope) ||
+      record.provenance.providerId !== this.id ||
+      typeof externalId !== 'string'
+    ) {
+      throw memoryError(
+        'MEMORY_PROVIDER_UNAVAILABLE',
+        'External provider mapping evidence is missing or belongs to another scope/provider.',
+        false,
+        { providerReturnEvidenceInvalid: true, staleMapping: true }
+      );
+    }
+    const current = await this.mappingStore.get(this.id, record.id);
+    if (
+      (expectedRevision !== undefined &&
+        (!current ||
+          current.binding.recordRevision !== expectedRevision ||
+          record.revision !== expectedRevision + 1)) ||
+      (current &&
+        (current.externalId !== externalId ||
+          current.binding.scopeHash !== scopeHash ||
+          current.binding.provenance.providerId !== this.id ||
+          record.revision < current.binding.recordRevision))
+    ) {
+      throw memoryError(
+        'MEMORY_PROVIDER_UNAVAILABLE',
+        'External provider returned stale mapping or wrong revision evidence.',
+        false,
+        {
+          providerReturnEvidenceInvalid: true,
+          staleMapping: true,
+          expectedRevision,
+          mappedRevision: current?.binding.recordRevision,
+          returnedRevision: record.revision,
+        }
+      );
+    }
+    await this.mappingStore.set({
+      memoryId: record.id,
+      providerId: this.id,
+      externalId,
+      binding: {
+        scopeHash: record.scopeHash,
+        profileRef,
+        recordRevision: record.revision,
+        provenance: record.provenance,
+      },
+      externalVersion:
+        typeof record.metadata?.providerExternalVersion === 'string'
+          ? record.metadata.providerExternalVersion
+          : undefined,
+      lastSyncedAt: this.now().toISOString(),
+      syncState: 'synced',
+    });
+  }
+}
+
+export interface Mem0MemoryManagementAdapterOptions extends Omit<
+  ExternalMemoryAdapterOptions,
+  'id'
+> {
+  id?: string;
+  deployment?: 'managed' | 'self_hosted';
+}
+
+export class Mem0MemoryManagementAdapter extends ExternalMemoryManagementAdapter {
+  readonly deployment: 'managed' | 'self_hosted';
+
+  constructor(options: Mem0MemoryManagementAdapterOptions) {
+    super({ ...options, id: options.id ?? 'memory.provider.mem0' });
+    this.deployment = options.deployment ?? 'managed';
+  }
+}
+
+export interface MemoryBankPolicySpec {
+  extractionProfileRef?: import('./contracts').MemoryContractSpecRef;
+  importanceThreshold?: number;
+  reinforcementFactor?: number;
+  decayFunction?: 'exponential' | 'linear' | 'custom';
+  decayHalfLifeSeconds?: number;
+  consolidationThreshold?: number;
+  consolidationMinItems?: number;
+  preserveOriginals?: boolean;
+}
+
+export interface MemoryBankMemoryManagementAdapterOptions extends Omit<
+  ExternalMemoryAdapterOptions,
+  'id'
+> {
+  id?: string;
+  policy: MemoryBankPolicySpec;
+}
+
+export class MemoryBankMemoryManagementAdapter extends ExternalMemoryManagementAdapter {
+  readonly policy: MemoryBankPolicySpec;
+
+  constructor(options: MemoryBankMemoryManagementAdapterOptions) {
+    super({ ...options, id: options.id ?? 'memory.provider.memorybank' });
+    this.policy = options.policy;
+  }
+}
+
+function tombstoneKey(
+  request: { scope: import('./contracts').ManagedMemoryScope },
+  memoryId: string
+): string {
+  return `${hashMemoryScope(request.scope)}:${memoryId}`;
+}
+
+function unsupportedError(providerId: string, capability: CapabilityName): NormalizedMemoryError {
+  return memoryError(
+    'MEMORY_PROVIDER_UNAVAILABLE',
+    `Provider ${providerId} does not support ${capability}.`
+  );
+}

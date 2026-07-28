@@ -56,7 +56,9 @@ export class HybridMemoryProvider implements MemoryProvider {
         filter: { ...scope, ...(query.type ? { type: query.type } : {}) },
       });
       const records = await Promise.all(
-        vectorResults.map((result) => this.options.structured.get<MemoryRecord>(this.tableName, result.id))
+        vectorResults.map((result) =>
+          this.options.structured.get<MemoryRecord>(this.tableName, result.id)
+        )
       );
       records.forEach((record, index) => {
         if (!record) return;

@@ -4,10 +4,21 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { getToolManager } from '../core/tools/ToolManager';
 import { HTTP_STATUS } from '../constants';
 import { getEventRuntime } from '../services/EventRuntime';
+import { commonToolCatalogSpecs, governedToolFamilySpecs } from '@hypha/tools';
 
 const router = Router();
 
 router.use(authMiddleware(true));
+
+router.get(
+  '/catalog',
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: [...commonToolCatalogSpecs, ...governedToolFamilySpecs],
+    });
+  })
+);
 
 // List all tools
 router.get(
@@ -44,25 +55,17 @@ router.get(
     const { id } = req.params;
 
     const toolManager = getToolManager();
-    const client = toolManager.getMCPClient(id);
-
-    if (!client) {
+    const status = await toolManager.getMCPServerStatus(id);
+    if (!status) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
         error: { code: 'SERVER_NOT_FOUND', message: 'MCP server not found' },
       });
     }
 
-    const health = await client.healthCheck();
-
     res.json({
       success: true,
-      data: {
-        id,
-        name: client.name,
-        status: client.status,
-        healthy: health,
-      },
+      data: status,
     });
   })
 );
@@ -75,16 +78,14 @@ router.post(
     const { id } = req.params;
 
     const toolManager = getToolManager();
-    const client = toolManager.getMCPClient(id);
-
-    if (!client) {
+    if (!toolManager.hasMCPServer(id)) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
         error: { code: 'SERVER_NOT_FOUND', message: 'MCP server not found' },
       });
     }
 
-    await client.connect();
+    await toolManager.connectMCPServer(id);
 
     res.json({
       success: true,
@@ -180,36 +181,32 @@ router.post(
               ? { serverId: descriptor.serverId, capabilityId: descriptor.capabilityId }
               : undefined,
         },
-        handler: async () => {
-          const result = await toolManager.executeTool(name, toolParams);
-          if (!result.success) {
-            throw new Error(result.error || `Tool failed: ${name}`);
-          }
-          return result.output;
-        },
       });
       if (result.status === 'human_review_required') {
+        const reason = toolErrorMessage(result.error, `Approval required for Tool: ${name}`);
         await runtime.transition(runId, 'HumanReview', {
           tool: name,
-          reason: result.error,
+          reason,
         });
         await runtime.waitForHumanReview(runId, {
+          invocationId: result.invocationId,
           tool: name,
-          reason: result.error,
+          reason,
           status: result.status,
         });
         return res.status(HTTP_STATUS.ACCEPTED).json({
           success: true,
           runId,
+          invocationId: result.invocationId,
           data: {
             tool: name,
             status: result.status,
-            reason: result.error,
+            reason,
           },
         });
       }
       if (result.status !== 'completed') {
-        throw new Error(typeof result.error === 'string' ? result.error : `Tool failed: ${name}`);
+        throw new Error(toolErrorMessage(result.error, `Tool failed: ${name}`));
       }
       const output = result.output;
       await runtime.transition(runId, 'ObservationRecorded', { tool: name });
@@ -220,6 +217,7 @@ router.post(
       res.json({
         success: true,
         runId,
+        invocationId: result.invocationId,
         data: output,
       });
     } catch (error) {
@@ -235,6 +233,14 @@ router.post(
     }
   })
 );
+
+function toolErrorMessage(
+  error: string | { message?: string } | undefined,
+  fallback: string
+): string {
+  if (typeof error === 'string') return error;
+  return error?.message || fallback;
+}
 
 function inferToolSideEffect(
   name: string,
@@ -259,6 +265,20 @@ router.get(
       success: true,
       data: allTools,
     });
+  })
+);
+
+router.get(
+  '/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const descriptor = getToolManager().describeTool(req.params.id);
+    if (!descriptor) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        error: { code: 'TOOL_NOT_FOUND', message: 'Tool not found' },
+      });
+    }
+    res.json({ success: true, data: descriptor });
   })
 );
 

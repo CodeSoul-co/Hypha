@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RecoveryFailure } from '@hypha/core';
 import {
   createDefaultInferenceBackendRegistry,
   LlamaCppInferenceBackend,
@@ -12,11 +13,17 @@ import { HyphaInferencePipeline } from './pipeline';
 import { InMemoryPlasmodHotLayer } from './plasmod';
 import { DefaultPrefixSegmenter } from './prefix';
 import { DefaultPromptCompiler } from './prompt';
-import { AgentPromptRegistry } from './agent-prompts';
+import { AgentPromptRegistry, agentPromptSubjectHash } from './agent-prompts';
 import { ReasoningOrchestrator } from './reasoning';
 import { ReasoningStrategyRegistry } from './reasoning-registry';
 import { REACT_OFFICIAL_REFERENCES } from './reasoning-sources';
-import type { InferenceBackendRequest, InferenceProvider } from './types';
+import type {
+  InferenceBackendRequest,
+  InferenceProvider,
+  KvCacheProvider,
+  PrefixSegmentationResult,
+  PrefixCacheProvider,
+} from './types';
 
 class RecordingTransport {
   readonly calls: Array<{
@@ -179,8 +186,11 @@ describe('@hypha/inference', () => {
     });
 
     const resolved = registry.resolve([{ id: 'agent.base', required: true }], {
-      agent_name: 'Hypha',
-      user_id: 'user-1',
+      variables: {
+        agent_name: 'Hypha',
+        user_id: 'user-1',
+      },
+      principal: { principalId: 'user-1', agentId: 'agent.base' },
     });
     expect(resolved.instructions).toBe('Act as Hypha for user-1.');
     expect(resolved.blocks[0]).toMatchObject({
@@ -204,8 +214,147 @@ describe('@hypha/inference', () => {
     });
 
     expect(() =>
-      registry.resolve([{ id: 'agent.invalid', required: true }], { known: 'value' })
+      registry.resolve([{ id: 'agent.invalid', required: true }], {
+        variables: { known: 'value' },
+        principal: { principalId: 'user-1' },
+      })
     ).toThrow('Undeclared agent prompt variables: agent.invalid.unknown');
+  });
+
+  it('enforces prompt tenant, owner, agent, domain, and exact untrusted approval scope', () => {
+    const registry = new AgentPromptRegistry();
+    const stored = registry.register({
+      id: 'agent.scoped',
+      version: '1.0.0',
+      name: 'Scoped prompt',
+      role: 'developer',
+      template: 'Scoped instructions.',
+      scope: 'tenant',
+      tenantId: 'tenant-a',
+      ownerId: 'owner-a',
+      trustLevel: 'untrusted',
+      agentIds: ['agent-a'],
+      domainIds: ['domain-a'],
+      provenance: { source: 'remote-package', signer: 'vendor-a' },
+    });
+    const ref = [{ id: stored.id, version: stored.version, required: true }];
+    const principal = {
+      principalId: 'owner-a',
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      domainId: 'domain-a',
+    };
+
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, tenantId: 'tenant-b' },
+      })
+    ).toThrow(/access denied/);
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, agentId: 'agent-b' },
+      })
+    ).toThrow(/agent binding/);
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal: { ...principal, domainId: 'domain-b' },
+      })
+    ).toThrow(/domain binding/);
+    expect(() => registry.resolve(ref, { variables: {}, principal })).toThrow(
+      /exact, unexpired approval/
+    );
+    expect(() =>
+      registry.resolve(ref, {
+        variables: {},
+        principal,
+        approvals: [
+          {
+            taskId: 'prompt-review:wrong',
+            subjectType: 'agent_prompt',
+            subjectHash: '0'.repeat(64),
+            promptId: stored.id,
+            promptVersion: stored.version,
+            promptRevision: stored.revision!,
+            contentHash: '0'.repeat(64),
+            approvedBy: 'reviewer-a',
+            status: 'approved',
+          },
+        ],
+      })
+    ).toThrow(/exact, unexpired approval/);
+
+    const resolved = registry.resolve(ref, {
+      variables: {},
+      principal,
+      approvals: [
+        {
+          taskId: 'prompt-review:approved',
+          subjectType: 'agent_prompt',
+          subjectHash: agentPromptSubjectHash(stored),
+          promptId: stored.id,
+          promptVersion: stored.version,
+          promptRevision: stored.revision!,
+          contentHash: stored.contentHash!,
+          approvedBy: 'reviewer-a',
+          tenantId: 'tenant-a',
+          agentId: 'agent-a',
+          domainId: 'domain-a',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          status: 'approved',
+        },
+      ],
+    });
+    expect(resolved.blocks[0]).toMatchObject({
+      templateRevision: stored.revision,
+      templateContentHash: stored.contentHash,
+      scope: 'tenant',
+      trustLevel: 'untrusted',
+      tenantId: 'tenant-a',
+      provenance: { source: 'remote-package', signer: 'vendor-a' },
+    });
+
+    registry.register({
+      id: 'agent.owner',
+      version: '1.0.0',
+      name: 'Owner prompt',
+      role: 'system',
+      template: 'Owner instructions.',
+      scope: 'owner',
+      ownerId: 'owner-a',
+    });
+    expect(() =>
+      registry.resolve([{ id: 'agent.owner', required: true }], {
+        variables: {},
+        principal: { principalId: 'owner-b' },
+      })
+    ).toThrow(/owner scope/);
+  });
+
+  it('enforces compare-and-swap revisions for agent prompt updates', () => {
+    const registry = new AgentPromptRegistry();
+    const created = registry.register({
+      id: 'agent.cas',
+      version: '1.0.0',
+      name: 'CAS prompt',
+      role: 'system',
+      template: 'First.',
+    });
+    expect(created.revision).toBe(1);
+    expect(() =>
+      registry.register(
+        { ...created, template: 'Conflict.' },
+        { replace: true, expectedRevision: 2 }
+      )
+    ).toThrow(/revision conflict/);
+    const updated = registry.register(
+      { ...created, template: 'Second.' },
+      { replace: true, expectedRevision: 1 }
+    );
+    expect(updated).toMatchObject({ revision: 2, template: 'Second.' });
+    expect(updated.contentHash).not.toBe(created.contentHash);
   });
   it('routes inference requests through registered providers', async () => {
     const manager = new InferenceManager();
@@ -340,6 +489,87 @@ describe('@hypha/inference', () => {
       now: () => new Date('2026-07-02T00:00:01.000Z'),
     });
     await expect(expiredManager.getKv(kv)).resolves.toBeNull();
+  });
+
+  it('bounds in-memory prefix and KV providers with LRU eviction', async () => {
+    const prefixCache = new InMemoryPrefixCacheProvider({
+      maxEntries: 2,
+      maxEntryBytes: 64,
+      maxTotalBytes: 64,
+    });
+    const manager = new InferenceCacheManager({
+      prefixCache,
+      kvCache: new InMemoryKvCacheProvider(),
+    });
+    const first = await manager.putPrefix({ id: 'first', version: '1', content: 'first' });
+    const second = await manager.putPrefix({ id: 'second', version: '1', content: 'second' });
+    await expect(manager.getPrefix(first)).resolves.toBe('first');
+    const third = await manager.putPrefix({ id: 'third', version: '1', content: 'third' });
+    await expect(manager.getPrefix(second)).resolves.toBeNull();
+    await expect(manager.getPrefix(first)).resolves.toBe('first');
+    await expect(manager.getPrefix(third)).resolves.toBe('third');
+    expect(prefixCache.stats()).toEqual({ entries: 2, totalBytes: 10 });
+    await expect(
+      manager.putPrefix({ id: 'oversized', version: '1', content: 'x'.repeat(65) })
+    ).rejects.toMatchObject({ code: 'INFERENCE_CACHE_CAPACITY_EXCEEDED' });
+
+    const kvCache = new InMemoryKvCacheProvider({ maxEntries: 2 });
+    const refs = [0, 1, 2].map((index) => ({
+      id: `kv-${index}`,
+      provider: 'fixture',
+      modelAlias: 'default',
+      scope: 'run' as const,
+    }));
+    await kvCache.put(refs[0], { value: 0 });
+    await kvCache.put(refs[1], { value: 1 });
+    await expect(kvCache.get(refs[0])).resolves.toEqual({ value: 0 });
+    await kvCache.put(refs[2], { value: 2 });
+    expect(kvCache.size()).toBe(2);
+    await expect(kvCache.get(refs[1])).resolves.toBeNull();
+  });
+
+  it('separates identical inference cache references by user scope', async () => {
+    const prefixCache = new InMemoryPrefixCacheProvider();
+    const prefixBase = { id: 'shared', version: '1', contentHash: 'a'.repeat(64) };
+    const prefixA = { ...prefixBase, cacheScope: { userId: 'user-a' } };
+    const prefixB = { ...prefixBase, cacheScope: { userId: 'user-b' } };
+    await prefixCache.put(prefixA, 'content-a');
+    await prefixCache.put(prefixB, 'content-b');
+    await expect(prefixCache.get(prefixA)).resolves.toBe('content-a');
+    await expect(prefixCache.get(prefixB)).resolves.toBe('content-b');
+
+    const kvCache = new InMemoryKvCacheProvider();
+    const kvBase = {
+      id: 'shared',
+      provider: 'fixture',
+      modelAlias: 'default',
+      scope: 'session' as const,
+    };
+    const kvA = { ...kvBase, cacheScope: { userId: 'user-a' } };
+    const kvB = { ...kvBase, cacheScope: { userId: 'user-b' } };
+    await kvCache.put(kvA, { owner: 'a' });
+    await kvCache.put(kvB, { owner: 'b' });
+    await expect(kvCache.get(kvA)).resolves.toEqual({ owner: 'a' });
+    await expect(kvCache.get(kvB)).resolves.toEqual({ owner: 'b' });
+  });
+
+  it('time-bounds direct inference cache manager operations', async () => {
+    const pending = () => new Promise<never>(() => undefined);
+    const manager = new InferenceCacheManager({
+      prefixCache: {
+        get: pending,
+        put: pending,
+        invalidate: async () => undefined,
+      },
+      kvCache: new InMemoryKvCacheProvider(),
+      operationTimeoutMs: 5,
+    });
+    await expect(
+      manager.getPrefix({ id: 'pending', version: '1', contentHash: 'a'.repeat(64) })
+    ).rejects.toMatchObject({
+      code: 'INFERENCE_CACHE_OPERATION_TIMEOUT',
+      operation: 'prefix_read',
+    });
   });
 
   it('enforces KV cache expiry on inference manager reads', async () => {
@@ -505,6 +735,160 @@ describe('@hypha/inference', () => {
     await expect(kvCache.get(kv)).resolves.toEqual({ handle: 'existing' });
   });
 
+  it('bypasses failed optional caches while preserving normalized recovery evidence', async () => {
+    const failures: RecoveryFailure[] = [];
+    const prefixCache: PrefixCacheProvider = {
+      get: async () => {
+        throw Object.assign(new Error('prefix cache offline'), { code: 'ECONNREFUSED' });
+      },
+      put: async () => {},
+      invalidate: async () => {},
+    };
+    const kvCache: KvCacheProvider = {
+      get: async () => {
+        throw Object.assign(new Error('kv cache offline'), { code: 'ECONNREFUSED' });
+      },
+      put: async () => {
+        throw Object.assign(new Error('kv cache write failed'), { code: 'ENOSPC' });
+      },
+      invalidate: async () => {},
+    };
+    const manager = new InferenceManager({
+      prefixCache,
+      kvCache,
+      onRecoveryFailure: (failure) => {
+        failures.push(failure);
+      },
+    });
+    manager.register({
+      id: 'mock',
+      infer: async (request) => ({
+        id: 'response_cache_bypass',
+        output: { metadata: request.metadata },
+        nextKvCacheValue: { handle: 'new' },
+      }),
+    });
+    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
+    const kv = { id: 'kv_failed', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_cache_bypass',
+        stepId: 'step_cache_bypass',
+        modelAlias: 'default',
+        input: 'hello',
+        cachePolicy: {
+          prefix,
+          kvCache: kv,
+          writeKvCache: { ref: kv },
+        },
+      })
+    ).resolves.toMatchObject({
+      id: 'response_cache_bypass',
+      cache: {
+        prefixHit: false,
+        kvCacheHit: false,
+        kvCacheMissReason: 'error',
+        kvCacheWritten: false,
+        bypassed: true,
+        issues: [
+          { operation: 'prefix_read', bypassed: true },
+          { operation: 'kv_read', bypassed: true },
+          { operation: 'kv_write', bypassed: true },
+        ],
+      },
+    });
+    expect(failures).toHaveLength(3);
+    expect(failures.every((failure) => failure.module === 'cache')).toBe(true);
+  });
+
+  it('time-bounds hanging cache providers before fail-open inference continues', async () => {
+    const pending = () => new Promise<never>(() => undefined);
+    const failures: RecoveryFailure[] = [];
+    const manager = new InferenceManager({
+      prefixCache: { get: pending, put: pending, invalidate: pending },
+      kvCache: { get: pending, put: pending, invalidate: pending },
+      cacheOperationTimeoutMs: 5,
+      onRecoveryFailure: (failure) => {
+        failures.push(failure);
+      },
+    });
+    manager.register({
+      id: 'mock',
+      infer: async () => ({
+        id: 'response_timeout_bypass',
+        output: 'completed',
+        nextKvCacheValue: { handle: 'next' },
+      }),
+    });
+    const kv = { id: 'kv-timeout', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+    const startedAt = Date.now();
+    const response = await manager.infer('mock', {
+      runId: 'run_cache_timeout',
+      stepId: 'step_cache_timeout',
+      modelAlias: 'default',
+      input: 'hello',
+      cachePolicy: {
+        prefix: { id: 'prefix-timeout', version: '1', contentHash: 'hash' },
+        kvCache: kv,
+        writeKvCache: { ref: kv },
+      },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(response).toMatchObject({
+      id: 'response_timeout_bypass',
+      output: 'completed',
+      cache: {
+        bypassed: true,
+        issues: [
+          { operation: 'prefix_read', code: 'INFERENCE_CACHE_OPERATION_TIMEOUT' },
+          { operation: 'kv_read', code: 'INFERENCE_CACHE_OPERATION_TIMEOUT' },
+          { operation: 'kv_write', code: 'INFERENCE_CACHE_OPERATION_TIMEOUT' },
+        ],
+      },
+    });
+    expect(failures).toHaveLength(3);
+  });
+
+  it('reports provider failures without hiding the original inference error', async () => {
+    const failures: RecoveryFailure[] = [];
+    const manager = new InferenceManager({
+      providerRevision: 'provider-v1',
+      onRecoveryFailure: (failure) => {
+        failures.push(failure);
+      },
+    });
+    const providerError = Object.assign(new Error('provider overloaded'), {
+      status: 429,
+      retryAfterMs: 500,
+    });
+    manager.register({
+      id: 'mock',
+      infer: async () => {
+        throw providerError;
+      },
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run_provider_failure',
+        stepId: 'step_provider_failure',
+        modelAlias: 'default',
+        input: 'hello',
+      })
+    ).rejects.toBe(providerError);
+    expect(failures).toMatchObject([
+      {
+        module: 'inference',
+        category: 'rate_limit',
+        retryable: true,
+        retryAfterMs: 500,
+        evidence: { providerRevision: 'provider-v1' },
+      },
+    ]);
+  });
+
   it('runs CoT and ToT reasoning strategies through provider abstraction', async () => {
     const calls: unknown[] = [];
     const provider: InferenceProvider = {
@@ -603,6 +987,7 @@ describe('@hypha/inference', () => {
       agentId: 'agent_plasmod',
       modelAlias: 'default-chat',
       backendId: 'sglang',
+      cacheScope: { userId: 'user-plasmod' },
       segmentation: segmented,
     });
     const second = await hotLayer.prepare({
@@ -612,6 +997,7 @@ describe('@hypha/inference', () => {
       agentId: 'agent_plasmod',
       modelAlias: 'default-chat',
       backendId: 'sglang',
+      cacheScope: { userId: 'user-plasmod' },
       segmentation: segmented,
     });
 
@@ -638,6 +1024,97 @@ describe('@hypha/inference', () => {
 
     await hotLayer.invalidateSegment(ref.id, 'test');
     expect(hotLayer.getCacheMetadata(ref.id)).toBeNull();
+  });
+
+  it('keeps Plasmod reuse inside the hard user scope even when cross-session reuse is enabled', async () => {
+    const compiled = await new DefaultPromptCompiler().compile({
+      runId: 'run_scope_a1',
+      stepId: 'step_scope',
+      sessionId: 'session_a1',
+      agentId: 'agent_scope',
+      modelAlias: 'default-chat',
+      instructions: 'Stable scoped prefix.',
+      input: 'Dynamic input.',
+    });
+    const segmented = await new DefaultPrefixSegmenter().segment(compiled);
+    const hotLayer = new InMemoryPlasmodHotLayer();
+    const prepare = (userId: string, sessionId: string, runId: string) =>
+      hotLayer.prepare({
+        runId,
+        stepId: 'step_scope',
+        sessionId,
+        agentId: 'agent_scope',
+        modelAlias: 'default-chat',
+        backendId: 'sglang',
+        cacheScope: { userId },
+        segmentation: segmented,
+        reusePolicy: { allowCrossSession: true, allowCrossAgent: true },
+      });
+
+    const userAFirst = await prepare('user-a', 'session-a1', 'run-a1');
+    const userB = await prepare('user-b', 'session-b1', 'run-b1');
+    const userASecond = await prepare('user-a', 'session-a2', 'run-a2');
+
+    expect(userAFirst.reusedSegmentIds).toHaveLength(0);
+    expect(userB.reusedSegmentIds).toHaveLength(0);
+    expect(userB.prefixRefs[0]?.id).not.toBe(userAFirst.prefixRefs[0]?.id);
+    expect(userASecond.reusedSegmentIds).toEqual([userAFirst.prefixRefs[0]?.id]);
+  });
+
+  it('bounds Plasmod segments, states, aliases, reuse keys, and dependency fan-out', async () => {
+    const hotLayer = new InMemoryPlasmodHotLayer({
+      maxSegments: 1,
+      maxSessionStates: 1,
+      maxAliases: 1,
+      maxReuseKeys: 1,
+      maxDependenciesPerSegment: 1,
+    });
+    const segmentation = (
+      id: string,
+      contentHash: string,
+      dependencies: string[] = []
+    ): PrefixSegmentationResult => ({
+      compiled: { id: `compiled-${id}`, messages: [], text: id },
+      segments: [
+        {
+          id,
+          kind: 'system',
+          scope: 'agent',
+          content: id,
+          contentHash,
+          tokenCount: 4,
+          cacheable: true,
+          dependencies,
+        },
+      ],
+      stablePrefix: id,
+      dynamicPrompt: '',
+    });
+    const prepare = (id: string, hash: string, dependencies: string[] = []) =>
+      hotLayer.prepare({
+        runId: `run-${id}`,
+        stepId: 'step-bounded',
+        sessionId: `session-${id}`,
+        agentId: 'agent-bounded',
+        modelAlias: 'default-chat',
+        backendId: 'sglang',
+        cacheScope: { userId: 'user-bounded' },
+        segmentation: segmentation(id, hash, dependencies),
+      });
+
+    const first = await prepare('first', 'a'.repeat(64));
+    const second = await prepare('second', 'b'.repeat(64));
+    expect(second.invalidatedSegmentIds).toContain(first.prefixRefs[0]?.id);
+    expect(hotLayer.snapshot()).toMatchObject({
+      prefixRegistrySize: 1,
+      cacheMetadataSize: 1,
+      sessionStateSize: 1,
+      segmentAliasSize: 1,
+      reuseKeySize: 1,
+    });
+    const skipped = await prepare('fan-out', 'c'.repeat(64), ['dep-1', 'dep-2']);
+    expect(skipped.prefixRefs).toHaveLength(0);
+    expect(hotLayer.snapshot().invalidationGraphSize).toBeLessThanOrEqual(1);
   });
 
   it('registers all inference backends and defaults to SGLang', () => {

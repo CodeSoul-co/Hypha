@@ -13,6 +13,7 @@ import {
   getAllowedTransitions,
   parseFSMProcessSpec,
   REACT_FSM_STATE_PATH,
+  validateFSMSnapshot,
   validateFSMProcessSpec,
   type FSMProcessSpec,
 } from './index';
@@ -51,6 +52,33 @@ describe('@hypha/fsm runtime contracts', () => {
     );
   });
 
+  it('rejects duplicate topology and inconsistent persisted snapshots', () => {
+    expect(() =>
+      validateFSMProcessSpec({
+        ...processSpec,
+        states: [...processSpec.states, processSpec.states[0]],
+      })
+    ).toThrow(/state ids must be unique/);
+    expect(() =>
+      validateFSMProcessSpec({
+        ...processSpec,
+        transitions: [...processSpec.transitions, processSpec.transitions[0]],
+      })
+    ).toThrow(/transitions.*must be unique/);
+
+    const snapshot = createInitialSnapshot(processSpec, 'run_snapshot');
+    expect(() =>
+      validateFSMSnapshot(
+        processSpec,
+        { ...snapshot, currentState: 'Reasoning', status: 'running' },
+        'run_snapshot'
+      )
+    ).toThrow(/snapshot path is not consistent/);
+    expect(() => new FSMRuntime(processSpec, 'other_run', {}, snapshot)).toThrow(
+      /snapshot identity does not match/
+    );
+  });
+
   it('evaluates deterministic transition guards without eval', () => {
     const guarded: FSMProcessSpec = {
       ...processSpec,
@@ -86,9 +114,32 @@ describe('@hypha/fsm runtime contracts', () => {
         variables: { owner: 'owner' },
       })
     ).toBe(true);
-    expect(
-      evaluateGuardExpression('!exists(variables.blocked)', { variables: {} })
-    ).toBe(true);
+    expect(evaluateGuardExpression('!exists(variables.blocked)', { variables: {} })).toBe(true);
+    expect(evaluateGuardExpression('exists(variables.constructor)', { variables: {} })).toBe(false);
+    expect(() =>
+      evaluateGuardExpression("matches(metadata.intent, '(a+)+$')", {
+        metadata: { intent: 'a'.repeat(100) },
+      })
+    ).toThrow(/nested quantifiers/);
+    expect(() => evaluateGuardExpression("matches(metadata.intent, '[')")).toThrow(
+      /Invalid regular expression/
+    );
+  });
+
+  it('derives terminal status from state kind and rejects invalid timestamps', () => {
+    const failedInitial: FSMProcessSpec = {
+      id: 'failed-initial',
+      version: '0.0.0',
+      initialState: 'Rejected',
+      states: [{ id: 'Rejected', kind: 'failed' }],
+      transitions: [],
+      terminalStates: ['Rejected'],
+    };
+
+    expect(createInitialSnapshot(failedInitial, 'run_failed').status).toBe('failed');
+    expect(() => createInitialSnapshot(processSpec, 'run_invalid_time', 'not-a-date')).toThrow(
+      /Invalid timestamp/
+    );
   });
 
   it('enforces transition policy and human review state semantics', async () => {
@@ -98,12 +149,13 @@ describe('@hypha/fsm runtime contracts', () => {
         ...processSpec.states,
         { id: 'HumanReview', kind: 'human_review', humanReviewPolicy: { required: true } },
       ],
-      transitions: [
-        ...processSpec.transitions,
-        { from: 'Reasoning', to: 'HumanReview' },
-      ],
+      transitions: [...processSpec.transitions, { from: 'Reasoning', to: 'HumanReview' }],
     };
-    const initial = applyTransition(reviewProcess, createInitialSnapshot(reviewProcess, 'run_1'), 'Reasoning');
+    const initial = applyTransition(
+      reviewProcess,
+      createInitialSnapshot(reviewProcess, 'run_1'),
+      'Reasoning'
+    );
 
     await expect(
       applyTransitionWithRuntimePolicy(reviewProcess, initial, 'HumanReview')
@@ -124,7 +176,12 @@ describe('@hypha/fsm runtime contracts', () => {
     const timed: FSMProcessSpec = {
       ...processSpec,
       states: [
-        { id: 'Idle', kind: 'idle', timeoutPolicy: { timeoutMs: 100, onTimeout: 'retry' }, retryPolicy: { maxAttempts: 2 } },
+        {
+          id: 'Idle',
+          kind: 'idle',
+          timeoutPolicy: { timeoutMs: 100, onTimeout: 'retry' },
+          retryPolicy: { maxAttempts: 2 },
+        },
         { id: 'Reasoning', kind: 'reasoning' },
         { id: 'Completed', kind: 'completed' },
       ],
@@ -145,7 +202,7 @@ describe('@hypha/fsm runtime contracts', () => {
     const entered: string[] = [];
     const transitions: string[] = [];
     const runtime = new FSMRuntime(defaultReActFSMProcessSpec, 'run_react_fsm', {
-      now: () => `2026-07-03T00:00:0${entered.length}.000Z`,
+      now: () => new Date(Date.UTC(2026, 6, 3, 0, 0, entered.length)).toISOString(),
       onStateEntered(record) {
         entered.push(record.stateId);
       },

@@ -1,6 +1,8 @@
 # HTTP API
 
-The HTTP API is mounted under `/api/v1`. All protected endpoints accept either `Authorization: Bearer <jwt>` or `X-API-Key: <key>`.
+The HTTP API is mounted under `/api/v1`. Protected endpoints currently require
+`Authorization: Bearer <jwt>`. API key records can be managed through the authentication routes,
+but `X-API-Key` request authentication is not enabled by the default Express middleware.
 
 Responses use a common envelope:
 
@@ -158,12 +160,13 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 | Method | Path                                | Description                                       |
 | ------ | ----------------------------------- | ------------------------------------------------- |
 | `GET`  | `/tools`                            | List registered tools.                            |
+| `GET`  | `/tools/:id`                        | Read one normalized Tool descriptor.              |
 | `POST` | `/tools/execute`                    | Execute a tool through the governed runtime path. |
-| `GET`  | `/tools/mcp/servers`                | List MCP servers.                                 |
+| `GET`  | `/tools/mcp/servers`                | List MCP servers through the compatibility route. |
 | `GET`  | `/tools/mcp/servers/:id/health`     | Read one MCP server health record.                |
 | `POST` | `/tools/mcp/servers/:id/connect`    | Connect an MCP server. Admin only.                |
 | `POST` | `/tools/mcp/servers/:id/disconnect` | Disconnect an MCP server. Admin only.             |
-| `GET`  | `/tools/mcp/tools`                  | List tools exposed by connected MCP servers.      |
+| `GET`  | `/tools/mcp/tools`                  | List normalized tools from connected MCP servers. |
 
 `POST /tools/execute` request:
 
@@ -175,7 +178,8 @@ Temporary memory is session-scoped. Permanent memory is user-scoped and supports
 }
 ```
 
-Successful tool execution returns top-level `runId` plus `data`.
+Tool execution returns top-level `runId`, `invocationId`, and `data`. A Tool that requires human
+approval returns HTTP `202`; use its `invocationId` with the approval routes below.
 
 MCP tools use the same endpoint. Connected MCP tools are listed with stable
 fully qualified names such as `filesystem.read_file`:
@@ -217,6 +221,28 @@ per-call overrides.
 Tools that require human approval return HTTP `202` with `data.status` set to
 `human_review_required`. The run remains queryable through `/runtime/runs/:runId`
 and projects as `waiting_human` from `run.waiting_human` events.
+
+### Invocation and Approval Operations
+
+| Method | Path                           | Description                                                        |
+| ------ | ------------------------------ | ------------------------------------------------------------------ |
+| `GET`  | `/tool-invocations/:id`        | Read an Invocation owned by the current user; admins may read any. |
+| `POST` | `/tool-invocations/:id/cancel` | Cancel an owned Invocation.                                        |
+| `POST` | `/tool-approvals/:id/approve`  | Approve and resume a waiting Invocation. Admin only.               |
+| `POST` | `/tool-approvals/:id/reject`   | Reject a waiting Invocation and fail its active Run. Admin only.   |
+
+Approval completion projects `ObservationRecorded`, `Verifying`, `MemorySync`, and
+`run.completed` events. Rejection projects the Run to `Failed` and records `run.failed`.
+
+### MCP Catalog Operations
+
+| Method | Path                          | Description                                     |
+| ------ | ----------------------------- | ----------------------------------------------- |
+| `GET`  | `/mcp/servers`                | List configured MCP connection records.         |
+| `POST` | `/mcp/servers/:id/connect`    | Connect a configured MCP server. Admin only.    |
+| `POST` | `/mcp/servers/:id/disconnect` | Disconnect a configured MCP server. Admin only. |
+| `GET`  | `/mcp/capabilities`           | List normalized capability catalog records.     |
+| `GET`  | `/mcp/drifts`                 | List detected capability drift records.         |
 
 ## Workflows
 

@@ -1,0 +1,183 @@
+import { describe, expect, it } from 'vitest';
+import type { EventCreateInput } from '../../events';
+import { hashCanonicalJson } from './canonical-json';
+import { InMemoryEventSchemaRegistry } from './event-schema-registry';
+import {
+  RUNTIME_ORCHESTRATION_EVENT_TYPES,
+  RUNTIME_CANONICAL_EVENT_TYPES,
+  RUNTIME_RUN_MANAGER_EVENT_TYPES,
+  RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+  assertRuntimeEventCatalogComplete,
+  registerRuntimeOrchestrationEventSchemas,
+  runtimeEventSchemaDefinitions,
+  runtimeOrchestrationEventSchemaDefinitions,
+} from './orchestration-event-schemas';
+
+describe('Runtime orchestration Event schemas', () => {
+  it('publishes one hash-verified definition per canonical Event type', () => {
+    expect(runtimeOrchestrationEventSchemaDefinitions).toHaveLength(
+      RUNTIME_ORCHESTRATION_EVENT_TYPES.length
+    );
+    expect(new Set(RUNTIME_ORCHESTRATION_EVENT_TYPES).size).toBe(
+      RUNTIME_ORCHESTRATION_EVENT_TYPES.length
+    );
+    for (const definition of runtimeOrchestrationEventSchemaDefinitions) {
+      expect(definition.schemaHash).toBe(hashCanonicalJson(definition.schema));
+    }
+  });
+
+  it('publishes exactly one versioned schema for every canonical Runtime Event', () => {
+    expect(runtimeEventSchemaDefinitions).toHaveLength(RUNTIME_CANONICAL_EVENT_TYPES.length);
+    expect(RUNTIME_CANONICAL_EVENT_TYPES).toEqual(
+      expect.arrayContaining([
+        ...RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES,
+        ...RUNTIME_RUN_MANAGER_EVENT_TYPES,
+      ])
+    );
+    expect(() => assertRuntimeEventCatalogComplete()).not.toThrow();
+
+    const withoutRecoveryOpened = runtimeEventSchemaDefinitions.filter(
+      (definition) => definition.eventType !== 'recovery.case.opened'
+    );
+    expect(() => assertRuntimeEventCatalogComplete(withoutRecoveryOpened)).toThrow(
+      'missing=recovery.case.opened'
+    );
+  });
+
+  it('registers idempotently and validates concrete lifecycle payloads', async () => {
+    const registry = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(registry);
+    await registerRuntimeOrchestrationEventSchemas(registry);
+
+    await expect(registry.validate(event('run.created', { runId: 'run.schema' }))).resolves.toEqual(
+      expect.objectContaining({ valid: true })
+    );
+    await expect(
+      registry.validate(
+        event('session.created', {
+          id: 'session.schema',
+          userId: 'user.schema',
+          metadata: {},
+          status: 'active',
+          createdAt: '2026-07-21T09:00:00.000Z',
+          updatedAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('context.build.completed', {
+          tokenCount: 42,
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('runtime.wait.created', {
+          waitId: 'wait.schema',
+          stateId: 'HumanReview',
+          stateAttempt: 1,
+          wait: { type: 'human', reason: 'approval required' },
+          createdAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('recovery.case.resolved', {
+          caseId: 'recovery.run.schema',
+          rootFingerprint: 'sha256:root',
+          status: 'recovered',
+          cycles: 1,
+          candidateId: 'candidate.schema',
+          candidateHash: 'sha256:candidate',
+          reason: 'PROJECTION_BEHIND',
+          safeAction: 'rebuild_projection',
+          disposition: 'recovered',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('human.review.requested', {
+          taskId: 'human-task.schema',
+          subjectRef: 'tool-invocation.schema',
+          subjectHash: 'sha256:subject',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('runtime.checkpoint.failed', {
+          checkpointId: 'checkpoint.schema',
+          error: 'projection unavailable',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
+        event('react.continuation.checkpointed', {
+          checkpointVersion: '1.0.0',
+          stepId: 'react',
+          scopeHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          stepSequence: 12,
+          nextPhase: 'reason',
+          iterations: 2,
+          modelCalls: 3,
+          toolCalls: 2,
+          totalTokens: 120,
+          consecutiveNoProgress: 0,
+          checkpointHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          updatedAt: '2026-07-21T09:00:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+  });
+
+  it('rejects missing orchestration evidence and unregistered Event types', async () => {
+    const registry = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(registry);
+
+    const missingRunId = await registry.validate(event('run.created', {}));
+    expect(missingRunId).toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ path: '$.runId', code: 'required' })],
+    });
+    await expect(
+      registry.validate(event('inference.requested', { requestId: 'request.schema' }))
+    ).resolves.toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ code: 'schema_not_registered' })],
+    });
+    await expect(
+      registry.validate(
+        event('react.continuation.suspended', {
+          stepId: 'react',
+          scopeHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          stepSequence: 12,
+          reason: 'quantum_exhausted',
+          retryable: true,
+          requiresHumanReview: false,
+          checkpointHash: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          leakedMessages: [],
+        })
+      )
+    ).resolves.toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ path: '$', code: 'additionalProperties' })],
+    });
+  });
+});
+
+function event(type: EventCreateInput['type'], payload: unknown): EventCreateInput {
+  return {
+    id: `event.${type}`,
+    type,
+    version: '1.0.0',
+    tenantId: 'tenant.schema',
+    userId: 'user.schema',
+    runId: 'run.schema',
+    timestamp: '2026-07-21T09:00:00.000Z',
+    payload,
+  };
+}
