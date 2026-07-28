@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { EventCreateInput, FrameworkEventType } from '../../events';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type { JsonSchema } from '../../specs';
+import { InMemoryTelemetryRecorder } from '../../telemetry';
 import { hashCanonicalJson } from './canonical-json';
 import { InMemoryEventSchemaRegistry } from './event-schema-registry';
 import { DurableEventRuntime } from './event-runtime';
@@ -9,7 +10,14 @@ import { InMemoryDurableEventStore, type EventStreamScope } from './event-store'
 import { createRuntimeOrchestrationProjectionDefinition } from './orchestration-projection';
 import { InMemoryProjectionStore, ProjectionEngine } from './projection';
 import { InMemoryRunLeaseStore } from './run-lease-store';
-import { DurableRuntimeTimerWorker } from './runtime-timer-worker';
+import {
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
+} from './runtime-operational-telemetry';
+import {
+  DurableRuntimeTimerWorker,
+  type DurableRuntimeTimerWorkerOptions,
+} from './runtime-timer-worker';
 
 const timerEventTypes: FrameworkEventType[] = [
   'run.created',
@@ -27,9 +35,12 @@ const timerEventTypes: FrameworkEventType[] = [
 const payloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
 
 async function fixture() {
-  let milliseconds = 0;
+  let currentTime = Date.UTC(2026, 6, 18, 9, 0, 0);
   let idSequence = 0;
-  const now = () => new Date(Date.UTC(2026, 6, 18, 9, 0, 0, milliseconds++)).toISOString();
+  const now = () => new Date(currentTime++).toISOString();
+  const setNow = (value: string) => {
+    currentTime = Date.parse(value);
+  };
   const nextId = (namespace: string) => `${namespace}.${++idSequence}`;
   const schemas = new InMemoryEventSchemaRegistry();
   for (const eventType of timerEventTypes) {
@@ -43,7 +54,7 @@ async function fixture() {
   const eventStore = new InMemoryDurableEventStore({ schemaRegistry: schemas, now });
   const events = new DurableEventRuntime({ store: eventStore, now });
   const runLeases = new InMemoryRunLeaseStore({ now });
-  return { events, runLeases, now, nextId };
+  return { events, runLeases, now, setNow, nextId };
 }
 
 function scope(runId: string): EventStreamScope {
@@ -125,7 +136,17 @@ function event(
 
 function worker(
   target: Awaited<ReturnType<typeof fixture>>,
-  projectionStore = new InMemoryProjectionStore<RuntimeOrchestrationProjection>()
+  projectionStore = new InMemoryProjectionStore<RuntimeOrchestrationProjection>(),
+  options: Partial<
+    Pick<
+      DurableRuntimeTimerWorkerOptions,
+      | 'renewalIntervalMs'
+      | 'wait'
+      | 'onLeaseRenewalFailure'
+      | 'operationalTelemetry'
+      | 'monotonicNow'
+    >
+  > = {}
 ) {
   const projections = new ProjectionEngine({ events: target.events, now: target.now });
   return {
@@ -138,6 +159,7 @@ function worker(
       runLeases: target.runLeases,
       now: target.now,
       nextId: target.nextId,
+      ...options,
     }),
   };
 }
@@ -258,5 +280,128 @@ describe('DurableRuntimeTimerWorker', () => {
       sweep('2026-07-18T09:00:00.000Z', 1, first.nextCursor)
     );
     expect(second).toMatchObject({ scanned: 1, fired: 1 });
+  });
+
+  it('renews the Run lease while a slow Timer firing remains in progress', async () => {
+    const target = await fixture();
+    await seedTimer(target, 'run.timer.slow', '2026-07-18T08:00:00.000Z');
+    const recorder = new InMemoryTelemetryRecorder();
+    const operationalTelemetry = new RuntimeOperationalTelemetry({ recorder });
+    let monotonicNow = 0;
+    const active = worker(target, undefined, {
+      renewalIntervalMs: 2,
+      operationalTelemetry,
+      monotonicNow: () => monotonicNow++ * 3,
+    });
+    const heartbeat = vi.spyOn(target.runLeases, 'heartbeat');
+    const getStreamHead = target.events.getStreamHead.bind(target.events);
+    vi.spyOn(target.events, 'getStreamHead').mockImplementation(async (stream) => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return getStreamHead(stream);
+    });
+
+    await expect(
+      active.worker.sweep({
+        ...sweep('2026-07-18T09:00:00.000Z'),
+        leaseTtlMs: 100,
+      })
+    ).resolves.toMatchObject({ fired: 1 });
+
+    expect(heartbeat).toHaveBeenCalled();
+    expect(heartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ttlMs: 100,
+        guard: expect.objectContaining({ fencingToken: 1 }),
+      })
+    );
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalLatencyMs)[0]).toMatchObject({
+      value: 3,
+      attributes: { resource: 'run', outcome: 'succeeded' },
+    });
+  });
+
+  it('fences a paused Timer worker after another instance takes over the expired lease', async () => {
+    const target = await fixture();
+    const runId = 'run.timer.takeover';
+    await seedTimer(target, runId, '2026-07-18T08:00:00.000Z');
+    const recorder = new InMemoryTelemetryRecorder();
+    const operationalTelemetry = new RuntimeOperationalTelemetry({ recorder });
+    let releaseHeartbeat: (() => void) | undefined;
+    const heartbeatBarrier = new Promise<void>((resolve) => {
+      releaseHeartbeat = resolve;
+    });
+    let releaseHead: (() => void) | undefined;
+    const headBarrier = new Promise<void>((resolve) => {
+      releaseHead = resolve;
+    });
+    let markHeadBlocked: (() => void) | undefined;
+    const headBlocked = new Promise<void>((resolve) => {
+      markHeadBlocked = resolve;
+    });
+    let markLeaseFailure: (() => void) | undefined;
+    const leaseFailure = new Promise<void>((resolve) => {
+      markLeaseFailure = resolve;
+    });
+    const getStreamHead = target.events.getStreamHead.bind(target.events);
+    vi.spyOn(target.events, 'getStreamHead').mockImplementationOnce(async (stream) => {
+      markHeadBlocked?.();
+      await headBarrier;
+      return getStreamHead(stream);
+    });
+    const assertCurrent = vi.spyOn(target.runLeases, 'assertCurrent');
+    const paused = worker(target, undefined, {
+      renewalIntervalMs: 25,
+      wait: async (_delayMs, signal) => {
+        await Promise.race([
+          heartbeatBarrier,
+          new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              resolve();
+              return;
+            }
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          }),
+        ]);
+      },
+      onLeaseRenewalFailure: () => markLeaseFailure?.(),
+      operationalTelemetry,
+      monotonicNow: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(14),
+    });
+    const pausedResult = paused.worker.sweep({
+      ...sweep('2026-07-18T09:00:00.000Z'),
+      ownerId: 'timer-worker.a',
+      leaseTtlMs: 100,
+    });
+    await headBlocked;
+
+    target.setNow('2026-07-18T09:00:00.200Z');
+    const replacement = worker(target);
+    await expect(
+      replacement.worker.sweep({
+        ...sweep('2026-07-18T09:00:00.000Z'),
+        ownerId: 'timer-worker.b',
+        leaseTtlMs: 100,
+      })
+    ).resolves.toMatchObject({ fired: 1 });
+    releaseHeartbeat?.();
+    await leaseFailure;
+    releaseHead?.();
+
+    await expect(pausedResult).rejects.toMatchObject({ code: 'RUNTIME_FENCING_REJECTED' });
+    expect(assertCurrent).toHaveBeenCalledWith(
+      expect.objectContaining({ guard: expect.objectContaining({ fencingToken: 2 }) })
+    );
+    expect(assertCurrent).toHaveBeenCalledWith(
+      expect.objectContaining({ guard: expect.objectContaining({ fencingToken: 1 }) })
+    );
+    await expect(
+      target.events.read({ scope: scope(runId), types: ['runtime.timer.fired'] })
+    ).resolves.toHaveLength(1);
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalLatencyMs)).toEqual([
+      expect.objectContaining({
+        value: 4,
+        attributes: { resource: 'run', outcome: 'failed' },
+      }),
+    ]);
   });
 });

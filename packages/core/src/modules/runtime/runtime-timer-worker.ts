@@ -16,17 +16,23 @@ import {
   validateRuntimeTimerSweepRequest,
   validateRuntimeTimerSweepResult,
 } from '../../contracts/runtime-timer-schemas';
-import { FrameworkError } from '../../errors';
+import { FrameworkError, isFrameworkError } from '../../errors';
 import type { EventRuntime } from './event-runtime';
 import type { EventStreamScope } from './event-store';
 import { createRuntimeOrchestrationProjectionDefinition } from './orchestration-projection';
 import type { ProjectionEngine, ProjectionStore } from './projection';
+import type { RuntimeOperationalTelemetry } from './runtime-operational-telemetry';
 
 export interface DurableRuntimeTimerWorkerOptions {
   events: EventRuntime;
   projections: ProjectionEngine;
   projectionStore: ProjectionStore<RuntimeOrchestrationProjection>;
   runLeases: RunLeaseStore;
+  renewalIntervalMs?: number;
+  wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  onLeaseRenewalFailure?: (error: unknown, runId: string) => void;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
   now?: () => string;
   nextId?: (namespace: string) => string;
 }
@@ -34,15 +40,30 @@ export interface DurableRuntimeTimerWorkerOptions {
 export class DurableRuntimeTimerWorker {
   private readonly now: () => string;
   private readonly nextId: (namespace: string) => string;
+  private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  private readonly monotonicNow: () => number;
 
   constructor(private readonly options: DurableRuntimeTimerWorkerOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.wait = options.wait ?? abortableDelay;
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     let sequence = 0;
     this.nextId = options.nextId ?? ((namespace) => `${namespace}.${++sequence}`);
+    if (
+      options.renewalIntervalMs !== undefined &&
+      (!Number.isInteger(options.renewalIntervalMs) || options.renewalIntervalMs <= 0)
+    ) {
+      invalid('renewalIntervalMs must be a positive integer');
+    }
   }
 
   async sweep(input: RuntimeTimerSweepRequest): Promise<RuntimeTimerSweepResult> {
     const request = validateRuntimeTimerSweepRequest(input);
+    const renewalIntervalMs =
+      this.options.renewalIntervalMs ?? Math.max(1, Math.floor(request.leaseTtlMs / 3));
+    if (renewalIntervalMs >= request.leaseTtlMs) {
+      invalid('renewalIntervalMs must be shorter than leaseTtlMs');
+    }
     const page = await this.options.events.listStreamHeads({
       limit: request.limit,
       ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
@@ -54,7 +75,7 @@ export class DurableRuntimeTimerWorker {
         results.push(result(head.scope, 'not_due'));
         continue;
       }
-      results.push(await this.fire(head.scope, request));
+      results.push(await this.fire(head.scope, request, renewalIntervalMs));
     }
     return validateRuntimeTimerSweepResult({
       scanned: results.length,
@@ -69,13 +90,25 @@ export class DurableRuntimeTimerWorker {
 
   private async fire(
     scope: EventStreamScope,
-    request: RuntimeTimerSweepRequest
+    request: RuntimeTimerSweepRequest,
+    renewalIntervalMs: number
   ): Promise<RuntimeTimerSweepRunResult> {
     const lease = await this.acquireRunLease(scope, request);
     if (!lease) return result(scope, 'lease_unavailable');
     const authorization = authorizationFor(lease);
+    const operationController = new AbortController();
+    const heartbeatController = new AbortController();
+    const heartbeat = this.maintainLease({
+      scope,
+      authorization,
+      leaseTtlMs: request.leaseTtlMs,
+      renewalIntervalMs,
+      stopSignal: heartbeatController.signal,
+      operationController,
+    });
     try {
       const projection = await this.project(scope);
+      assertActive(operationController.signal);
       if (projection.runStatus !== 'waiting_timer' || projection.pendingWait?.type !== 'timer') {
         return result(scope, 'already_resolved');
       }
@@ -96,6 +129,8 @@ export class DurableRuntimeTimerWorker {
           message: `Timer Run Event stream does not exist: ${scope.runId}`,
         });
       }
+      await this.assertLeaseCurrent(authorization);
+      assertActive(operationController.signal);
       const appended = await this.options.events.append({
         scope,
         events,
@@ -105,18 +140,91 @@ export class DurableRuntimeTimerWorker {
         idempotencyKey: `runtime-timer-fire:${pendingWait.waitId}`,
         transactionGroupId: `runtime-timer-fire:${pendingWait.waitId}`,
       });
+      assertActive(operationController.signal);
+      await this.assertLeaseCurrent(authorization);
       await this.project(scope);
+      assertActive(operationController.signal);
       return result(
         scope,
         appended.reused ? 'already_resolved' : 'fired',
         appended.events.map((event) => event.id)
       );
     } finally {
+      heartbeatController.abort();
+      await heartbeat;
+      await this.release(authorization);
+    }
+  }
+
+  private async maintainLease(input: {
+    scope: EventStreamScope;
+    authorization: RunLeaseAuthorization;
+    leaseTtlMs: number;
+    renewalIntervalMs: number;
+    stopSignal: AbortSignal;
+    operationController: AbortController;
+  }): Promise<void> {
+    while (!input.stopSignal.aborted) {
+      await this.wait(input.renewalIntervalMs, input.stopSignal);
+      if (input.stopSignal.aborted) return;
+      try {
+        await this.renewLease({
+          scope: input.authorization.scope,
+          guard: input.authorization.guard,
+          ttlMs: input.leaseTtlMs,
+          heartbeatAt: this.timestamp('Timer Worker Lease renewal'),
+        });
+      } catch (error) {
+        try {
+          this.options.onLeaseRenewalFailure?.(error, input.scope.runId);
+        } catch {
+          // Observer failures cannot hide lease loss.
+        }
+        input.operationController.abort(error);
+        return;
+      }
+    }
+  }
+
+  private async renewLease(
+    request: Parameters<RunLeaseStore['heartbeat']>[0]
+  ): Promise<Awaited<ReturnType<RunLeaseStore['heartbeat']>>> {
+    const startedAt = this.monotonicNow();
+    try {
+      const renewed = await this.options.runLeases.heartbeat(request);
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'run',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'succeeded',
+      });
+      return renewed;
+    } catch (error) {
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'run',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'failed',
+      });
+      throw error;
+    }
+  }
+
+  private assertLeaseCurrent(authorization: RunLeaseAuthorization): Promise<FencedRunLease> {
+    return this.options.runLeases.assertCurrent({
+      scope: authorization.scope,
+      guard: authorization.guard,
+      checkedAt: this.timestamp('Timer Worker Lease assertion'),
+    });
+  }
+
+  private async release(authorization: RunLeaseAuthorization): Promise<void> {
+    try {
       await this.options.runLeases.release({
         scope: authorization.scope,
         guard: authorization.guard,
         releasedAt: this.timestamp('Timer Worker Lease release'),
       });
+    } catch (error) {
+      if (!isFrameworkError(error) || error.code !== 'RUNTIME_FENCING_REJECTED') throw error;
     }
   }
 
@@ -296,6 +404,34 @@ function count(
   disposition: RuntimeTimerSweepDisposition
 ): number {
   return results.filter((item) => item.disposition === disposition).length;
+}
+
+function assertActive(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (isFrameworkError(signal.reason)) throw signal.reason;
+  throw new FrameworkError({
+    code: 'RUNTIME_FENCING_REJECTED',
+    message: 'Timer Worker lost its Run lease',
+  });
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function invalid(message: string): never {
+  throw new FrameworkError({ code: 'RUNTIME_INVALID_INPUT', message });
 }
 
 function authorizationFor(lease: FencedRunLease): RunLeaseAuthorization {
