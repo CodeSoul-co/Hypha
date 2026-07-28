@@ -23,6 +23,7 @@ import {
   type MemoryApplicationService,
 } from './memory-application-service';
 import type { MemoryEventContext } from './memory-events';
+
 import { memoryError, sha256 } from './memory-utils';
 import type { MemoryManagementProvider } from './operations';
 import {
@@ -283,6 +284,7 @@ export class MemoryRuntimeFactory {
           estimate: this.options.providerCostEstimator,
         })
       : installedProvider;
+
     try {
       const capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
       const errors = [
@@ -325,6 +327,7 @@ export class MemoryRuntimeFactory {
       };
       const manager = new GovernedMemoryManager({
         activities,
+        providerId: provider.id,
         profileRef,
         eventContext: (request) => this.options.eventContext(request),
         timeoutMs: selected.management.timeoutPolicy?.timeoutMs,
