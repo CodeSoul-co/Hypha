@@ -201,8 +201,10 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const result = await coordinator(outputs).execute(
       executionInput(name, workspace, 'output-limit', {
-        executable: 'yes',
-        args: ['hypha'],
+        // A finite burst still exceeds every configured limit while avoiding
+        // an unbounded producer during Windows Docker CLI process teardown.
+        executable: 'perl',
+        args: ['-e', 'print "hypha\\n" x 1024'],
         timeoutMs: 5_000,
         maxStdoutBytes: 128,
         maxCombinedOutputBytes: 256,
