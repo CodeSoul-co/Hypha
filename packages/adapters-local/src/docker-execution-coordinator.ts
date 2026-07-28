@@ -17,6 +17,7 @@ import type {
   DockerResourceAccounting,
   DockerResourceSnapshot,
 } from './docker-resource-accounting';
+import type { LocalProcessOutputEvent } from './local-process-supervisor';
 import {
   buildDockerTerminalResult,
   type DockerEvidenceFailureCode,
@@ -37,12 +38,21 @@ export interface DockerExecutionCollectedOutputs {
   stderrArtifactRef?: string;
 }
 
-export interface DockerExecutionOutputCollector {
+export interface DockerExecutionOutputSession {
+  onOutput(event: LocalProcessOutputEvent): void | Promise<void>;
   collect(input: {
     executionId: string;
     containerReference: string;
     processResult: DockerCliResult;
   }): Promise<DockerExecutionCollectedOutputs>;
+  abort(error: unknown): Promise<void>;
+}
+
+export interface DockerExecutionOutputCollector {
+  prepare(input: {
+    executionId: string;
+    workspaceRoot: string;
+  }): Promise<DockerExecutionOutputSession>;
 }
 
 export interface DockerExecutionCoordinatorInput {
@@ -57,11 +67,14 @@ export interface DockerExecutionCoordinatorInput {
 }
 
 export type DockerExecutionCoordinatorPhase =
+  | 'prepare'
   | 'create'
   | 'start'
   | 'execute'
   | 'inspect'
+  | 'quiesce'
   | 'collect'
+  | 'remove'
   | 'terminal';
 
 export class DockerExecutionCoordinatorError extends Error {
@@ -90,12 +103,19 @@ export class DockerExecutionCoordinator {
 
   async execute(input: DockerExecutionCoordinatorInput): Promise<CommandExecutionResult> {
     validateCoordinatorInput(input);
-    let phase: DockerExecutionCoordinatorPhase = 'create';
+    let phase: DockerExecutionCoordinatorPhase = 'prepare';
     let containerReference: string | undefined;
     let inspection: DockerContainerInspection | undefined;
     let cleanupEvidence: DockerExecutionCleanupEvidence | undefined;
+    let outputSession: DockerExecutionOutputSession | undefined;
+    let outputSessionSettled = false;
 
     try {
+      outputSession = await this.outputs.prepare({
+        executionId: input.executionId,
+        workspaceRoot: input.createInput.workspaceMount.source,
+      });
+      phase = 'create';
       const createdReference = validContainerReference(
         await this.engine.createContainer(withManagedLabels(input))
       );
@@ -109,6 +129,10 @@ export class DockerExecutionCoordinator {
           this.io.execute({
             ...input.execInput,
             containerReference: createdReference,
+            onOutput: async (event) => {
+              await outputSession?.onOutput(event);
+              await input.execInput.onOutput?.(event);
+            },
           })
         ),
         captureResource(this.accounting, createdReference, input.execInput.signal),
@@ -125,18 +149,28 @@ export class DockerExecutionCoordinator {
         );
       }
 
-      phase = 'collect';
-      const outputEvidence = await this.outputs.collect({
-        executionId: input.executionId,
-        containerReference: createdReference,
-        processResult: processEvidence.value,
-      });
-
-      cleanupEvidence = await cleanupContainer(
+      phase = 'quiesce';
+      const quiesced = await quiesceContainer(
         this.engine,
         createdReference,
         inspection,
         input.cleanupStopTimeoutSeconds
+      );
+      inspection = quiesced.inspection;
+
+      phase = 'collect';
+      const outputEvidence = await outputSession.collect({
+        executionId: input.executionId,
+        containerReference: createdReference,
+        processResult: processEvidence.value,
+      });
+      outputSessionSettled = true;
+
+      phase = 'remove';
+      cleanupEvidence = await removeQuiescedContainer(
+        this.engine,
+        createdReference,
+        quiesced.stopAttempted
       );
       phase = 'terminal';
       return buildDockerTerminalResult({
@@ -152,6 +186,9 @@ export class DockerExecutionCoordinator {
         ...outputEvidence,
       });
     } catch (error) {
+      if (outputSession && !outputSessionSettled) {
+        await outputSession.abort(error).catch(() => undefined);
+      }
       cleanupEvidence ??=
         containerReference !== undefined
           ? await cleanupContainer(
@@ -163,6 +200,62 @@ export class DockerExecutionCoordinator {
           : undefined;
       throw new DockerExecutionCoordinatorError(phase, failureCode(error), cleanupEvidence);
     }
+  }
+}
+
+interface QuiescedContainer {
+  inspection: DockerContainerInspection;
+  stopAttempted: boolean;
+}
+
+async function quiesceContainer(
+  engine: DockerEngineClient,
+  containerReference: string,
+  inspection: DockerContainerInspection,
+  stopTimeoutSeconds: number
+): Promise<QuiescedContainer> {
+  if (inspection.id !== containerReference) {
+    throw new DockerEngineClientError(
+      'Docker container inspection identity does not match the execution container.',
+      'DOCKER_INVALID_RESPONSE',
+      'container inspect'
+    );
+  }
+  if (inspection.running) {
+    await engine.stopContainer(containerReference, stopTimeoutSeconds);
+  }
+  const finalInspection = await engine.inspectContainer(containerReference);
+  if (!finalInspection || finalInspection.id !== containerReference || finalInspection.running) {
+    throw new DockerEngineClientError(
+      'Docker execution container was not quiescent before output collection.',
+      'DOCKER_INVALID_RESPONSE',
+      'container inspect'
+    );
+  }
+  return { inspection: finalInspection, stopAttempted: inspection.running };
+}
+
+async function removeQuiescedContainer(
+  engine: DockerEngineClient,
+  containerReference: string,
+  stopAttempted: boolean
+): Promise<DockerExecutionCleanupEvidence> {
+  try {
+    await engine.removeContainer(containerReference);
+    if ((await engine.inspectContainer(containerReference)) !== null) {
+      return cleanupFailure(
+        'remove',
+        new DockerEngineClientError(
+          'Docker execution container remained after removal.',
+          'DOCKER_INVALID_RESPONSE',
+          'container inspect'
+        ),
+        stopAttempted
+      );
+    }
+    return { complete: true, containerAbsent: true, stopAttempted };
+  } catch (error) {
+    return cleanupFailure('remove', error, stopAttempted);
   }
 }
 

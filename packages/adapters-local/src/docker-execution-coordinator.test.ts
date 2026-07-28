@@ -6,6 +6,7 @@ import {
   type DockerExecutionCollectedOutputs,
   type DockerExecutionCoordinatorInput,
   type DockerExecutionOutputCollector,
+  type DockerExecutionOutputSession,
 } from './docker-execution-coordinator';
 import {
   DockerEngineClientError,
@@ -18,6 +19,7 @@ import type {
   DockerResourceAccounting,
   DockerResourceSnapshot,
 } from './docker-resource-accounting';
+import type { LocalProcessOutputEvent } from './local-process-supervisor';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 
@@ -45,14 +47,17 @@ describe('DockerExecutionCoordinator', () => {
       },
     });
     expect(events).toEqual([
+      'prepare',
       'create',
       'start:container123',
       'execute:container123',
       'stats:container123',
       'inspect:container123',
-      'collect:container123',
       'stop:container123:5',
+      'inspect:container123',
+      'collect:container123',
       'remove:container123',
+      'inspect:container123',
     ]);
     expect(engine.created?.labels).toEqual({
       custom: 'value',
@@ -81,6 +86,37 @@ describe('DockerExecutionCoordinator', () => {
     expect(result.externalReceipt?.receiptHash).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
+  it('streams output into the prepared session before caller observation and collects only after quiescence', async () => {
+    const events: string[] = [];
+    const outputEvent: LocalProcessOutputEvent = {
+      stream: 'stdout',
+      chunk: new TextEncoder().encode('streamed'),
+      truncated: false,
+    };
+    const input = coordinatorInput({
+      execInput: {
+        ...execInput(),
+        onOutput: (event) => {
+          events.push(`caller-output:${event.stream}`);
+        },
+      },
+    });
+
+    await createCoordinator(events, {
+      io: new FakeIo(events, processResult(), undefined, outputEvent),
+    }).execute(input);
+
+    expect(events.indexOf('output-session:stdout')).toBeLessThan(
+      events.indexOf('caller-output:stdout')
+    );
+    expect(events.indexOf('stop:container123:5')).toBeLessThan(
+      events.indexOf('collect:container123')
+    );
+    expect(events.indexOf('collect:container123')).toBeLessThan(
+      events.indexOf('remove:container123')
+    );
+  });
+
   it('cleans a created container when start fails and returns bounded phase evidence', async () => {
     const events: string[] = [];
     const engine = new FakeEngine(events, {
@@ -103,8 +139,10 @@ describe('DockerExecutionCoordinator', () => {
       },
     });
     expect(events).toEqual([
+      'prepare',
       'create',
       'start:container123',
+      'abort',
       'inspect:container123',
       'remove:container123',
     ]);
@@ -129,10 +167,12 @@ describe('DockerExecutionCoordinator', () => {
     });
     expect(String(failure)).not.toContain('private exec detail');
     expect(events).toEqual([
+      'prepare',
       'create',
       'start:container123',
       'execute:container123',
       'stats:container123',
+      'abort',
       'inspect:container123',
       'stop:container123:5',
       'remove:container123',
@@ -153,7 +193,7 @@ describe('DockerExecutionCoordinator', () => {
       cleanup: { complete: true },
     });
     expect(String(failure)).not.toContain('private Artifact detail');
-    expect(events.slice(-2)).toEqual(['stop:container123:5', 'remove:container123']);
+    expect(events.slice(-3)).toEqual(['collect:container123', 'abort', 'remove:container123']);
   });
 
   it('turns cleanup failure into a terminal cleanup result without retrying cleanup', async () => {
@@ -306,6 +346,8 @@ interface FakeEngineOptions {
 
 class FakeEngine implements DockerEngineClient {
   created?: DockerContainerCreateInput;
+  private running = false;
+  private removed = false;
 
   constructor(
     private readonly events: string[],
@@ -315,27 +357,35 @@ class FakeEngine implements DockerEngineClient {
   async createContainer(input: DockerContainerCreateInput): Promise<string> {
     this.events.push('create');
     this.created = input;
+    this.removed = false;
     return 'container123';
   }
 
   async startContainer(reference: string): Promise<void> {
     this.events.push(`start:${reference}`);
     if (this.options.startError) throw this.options.startError;
+    this.running = true;
   }
 
   async inspectContainer(reference: string): Promise<DockerContainerInspection | null> {
     this.events.push(`inspect:${reference}`);
-    return this.options.inspection === undefined ? inspection() : this.options.inspection;
+    if (this.removed) return null;
+    const configured =
+      this.options.inspection === undefined ? inspection({ running: this.running }) : this.options.inspection;
+    return configured;
   }
 
   async stopContainer(reference: string, timeoutSeconds: number): Promise<void> {
     this.events.push(`stop:${reference}:${timeoutSeconds}`);
     if (this.options.stopError) throw this.options.stopError;
+    this.running = false;
   }
 
   async removeContainer(reference: string): Promise<void> {
     this.events.push(`remove:${reference}`);
     if (this.options.removeError) throw this.options.removeError;
+    this.removed = true;
+    this.running = false;
   }
 }
 
@@ -343,12 +393,14 @@ class FakeIo implements DockerContainerIo {
   constructor(
     private readonly events: string[],
     private readonly value: DockerCliResult = processResult(),
-    private readonly error?: Error
+    private readonly error?: Error,
+    private readonly outputEvent?: LocalProcessOutputEvent
   ) {}
 
   async execute(input: DockerContainerExecInput): Promise<DockerCliResult> {
     this.events.push(`execute:${input.containerReference}`);
     if (this.error) throw this.error;
+    if (this.outputEvent) await input.onOutput?.(this.outputEvent);
     return this.value;
   }
 }
@@ -370,7 +422,7 @@ class FakeAccounting implements DockerResourceAccounting {
   }
 }
 
-class FakeOutputs implements DockerExecutionOutputCollector {
+class FakeOutputs implements DockerExecutionOutputCollector, DockerExecutionOutputSession {
   constructor(
     private readonly events: string[],
     private readonly value: DockerExecutionCollectedOutputs = {
@@ -380,6 +432,18 @@ class FakeOutputs implements DockerExecutionOutputCollector {
     private readonly error?: Error
   ) {}
 
+  async prepare(_input: {
+    executionId: string;
+    workspaceRoot: string;
+  }): Promise<DockerExecutionOutputSession> {
+    this.events.push('prepare');
+    return this;
+  }
+
+  async onOutput(event: LocalProcessOutputEvent): Promise<void> {
+    this.events.push(`output-session:${event.stream}`);
+  }
+
   async collect(input: {
     executionId: string;
     containerReference: string;
@@ -388,6 +452,10 @@ class FakeOutputs implements DockerExecutionOutputCollector {
     this.events.push(`collect:${input.containerReference}`);
     if (this.error) throw this.error;
     return this.value;
+  }
+
+  async abort(_error: unknown): Promise<void> {
+    this.events.push('abort');
   }
 }
 

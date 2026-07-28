@@ -9,8 +9,10 @@ import {
   DockerExecutionCoordinator,
   DockerExecutionCoordinatorError,
   type DockerExecutionOutputCollector,
+  type DockerExecutionOutputSession,
 } from './docker-execution-coordinator';
 import { DockerStatsResourceAccounting } from './docker-resource-accounting';
+import type { LocalProcessOutputEvent } from './local-process-supervisor';
 import {
   captureLocalWorkspaceSnapshot,
   diffLocalWorkspaceSnapshots,
@@ -371,12 +373,22 @@ describe('DockerExecutionCoordinator real daemon', () => {
   }, 60_000);
 });
 
-class RealWorkspaceOutputs implements DockerExecutionOutputCollector {
+class RealWorkspaceOutputs implements DockerExecutionOutputCollector, DockerExecutionOutputSession {
   constructor(
     private readonly workspace: string,
     private readonly before: LocalWorkspaceSnapshot,
     private readonly inspect?: (containerReference: string) => Promise<void>
   ) {}
+
+  async prepare(input: {
+    executionId: string;
+    workspaceRoot: string;
+  }): Promise<DockerExecutionOutputSession> {
+    expect(path.resolve(input.workspaceRoot)).toBe(path.resolve(this.workspace));
+    return this;
+  }
+
+  async onOutput(_event: LocalProcessOutputEvent): Promise<void> {}
 
   async collect(input: {
     executionId: string;
@@ -394,6 +406,8 @@ class RealWorkspaceOutputs implements DockerExecutionOutputCollector {
       generatedArtifactRefs: [],
     };
   }
+
+  async abort(_error: unknown): Promise<void> {}
 }
 
 function coordinator(outputs: DockerExecutionOutputCollector): DockerExecutionCoordinator {
