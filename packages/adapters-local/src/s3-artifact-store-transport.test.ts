@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
+import { CopyDestinationOptions, CopySourceOptions } from 'minio';
 import { describe, expect, it, vi } from 'vitest';
 import { readArtifactStream } from './artifact-content-io';
 import {
@@ -40,6 +41,11 @@ function client(overrides: Record<string, unknown> = {}) {
     statObject: vi.fn().mockResolvedValue(objectStat()),
     getObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes])),
     getPartialObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes.subarray(1, 3)])),
+    removeObject: vi.fn().mockResolvedValue(undefined),
+    copyObject: vi.fn().mockResolvedValue({
+      Etag: 'opaque-multipart-etag-2',
+      VersionId: 'version-1',
+    }),
     ...overrides,
   };
 }
@@ -479,6 +485,205 @@ describe('MinioS3ArtifactTransport', () => {
       transport.head({ bucket: 'hypha-artifacts', key: 'tenant/run/output.bin' })
     ).rejects.toMatchObject({
       normalizedError: { code: 'ARTIFACT_VALIDATION_FAILED' },
+    });
+  });
+
+  it('deletes only the exact pinned object version and verifies its removal', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expectedEtag: 'opaque-multipart-etag-2',
+      })
+    ).resolves.toBe(true);
+    expect(minioClient.removeObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'version-1' }
+    );
+    expect(minioClient.statObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps version-pinned delete idempotent when the version is already absent', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).resolves.toBe(false);
+    expect(minioClient.removeObject).not.toHaveBeenCalled();
+  });
+
+  it('refuses unpinned or stale deletes before issuing a mutation', async () => {
+    const minioClient = client();
+    const clientFactory = vi.fn(() => minioClient);
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: '',
+      })
+    ).rejects.toThrow('versionId must not be empty');
+    expect(clientFactory).not.toHaveBeenCalled();
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expectedEtag: 'stale-etag',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    expect(minioClient.removeObject).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a supposedly deleted version remains visible', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_DELETE_PARTIAL', retryable: true },
+    });
+  });
+
+  it('copies a pinned source with atomic target creation and verifies the result', async () => {
+    const targetState = objectStat({
+      etag: 'copied-etag',
+      versionId: 'copied-version',
+    });
+    const minioClient = client({
+      statObject: vi.fn().mockResolvedValueOnce(objectStat()).mockResolvedValueOnce(targetState),
+      copyObject: vi.fn().mockResolvedValue({
+        Etag: 'copied-etag',
+        VersionId: 'copied-version',
+      }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.copy({
+        sourceBucket: 'hypha-artifacts',
+        sourceKey: 'tenant/run/output.bin',
+        sourceVersionId: 'version-1',
+        expectedSourceEtag: 'opaque-multipart-etag-2',
+        targetBucket: 'hypha-artifacts',
+        targetKey: 'tenant/run/copied.bin',
+        ifAbsent: true,
+      })
+    ).resolves.toMatchObject({
+      etag: 'copied-etag',
+      versionId: 'copied-version',
+      state: {
+        etag: 'copied-etag',
+        versionId: 'copied-version',
+        sizeBytes: artifactBytes.byteLength,
+      },
+    });
+
+    const [source, destination] = minioClient.copyObject.mock.calls[0] as [
+      CopySourceOptions,
+      CopyDestinationOptions,
+    ];
+    expect(source).toBeInstanceOf(CopySourceOptions);
+    expect(source.getHeaders()).toMatchObject({
+      'x-amz-copy-source': 'hypha-artifacts/tenant/run/output.bin?versionId=version-1',
+      'x-amz-copy-source-if-match': '"opaque-multipart-etag-2"',
+    });
+    expect(destination).toBeInstanceOf(CopyDestinationOptions);
+    expect(destination.getHeaders()).toMatchObject({
+      'If-None-Match': '*',
+      'X-Amz-Metadata-Directive': 'COPY',
+    });
+    expect(minioClient.statObject).toHaveBeenLastCalledWith(
+      'hypha-artifacts',
+      'tenant/run/copied.bin',
+      { versionId: 'copied-version' }
+    );
+  });
+
+  it('requires an atomic source identity before copying', async () => {
+    const clientFactory = vi.fn(() => client());
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.copy({
+        sourceBucket: 'hypha-artifacts',
+        sourceKey: 'tenant/run/output.bin',
+        targetBucket: 'hypha-artifacts',
+        targetKey: 'tenant/run/copied.bin',
+        ifAbsent: false,
+      })
+    ).rejects.toThrow('requires a sourceVersionId or expectedSourceEtag');
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when copied metadata or bytes do not match the source', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(
+          objectStat({
+            etag: 'copied-etag',
+            versionId: 'copied-version',
+            size: artifactBytes.byteLength + 1,
+          })
+        ),
+      copyObject: vi.fn().mockResolvedValue({
+        Etag: 'copied-etag',
+        VersionId: 'copied-version',
+      }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.copy({
+        sourceBucket: 'hypha-artifacts',
+        sourceKey: 'tenant/run/output.bin',
+        sourceVersionId: 'version-1',
+        targetBucket: 'hypha-artifacts',
+        targetKey: 'tenant/run/copied.bin',
+        ifAbsent: false,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_HASH_MISMATCH' },
     });
   });
 });

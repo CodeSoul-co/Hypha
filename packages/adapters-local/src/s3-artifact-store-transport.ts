@@ -1,6 +1,6 @@
 import type { Readable } from 'node:stream';
 import type { ArtifactByteRange } from '@hypha/core';
-import { Client } from 'minio';
+import { Client, CopyDestinationOptions, CopySourceOptions } from 'minio';
 import {
   normalizeS3ArtifactClientConfig,
   S3ArtifactConfigurationError,
@@ -12,6 +12,7 @@ import { artifactStoreError } from './artifact-store-adapter-error';
 import {
   normalizeS3ArtifactRange,
   normalizeS3Etag,
+  quoteS3Etag,
   requireS3ContentHash,
   type S3ArtifactObjectState,
   verifyS3ArtifactStream,
@@ -29,6 +30,10 @@ export interface S3ArtifactReadResult {
   state: S3ArtifactObjectState;
   stream: AsyncIterable<Uint8Array>;
   range?: ArtifactByteRange;
+}
+
+export interface S3ArtifactCopyResult extends S3ArtifactWriteResult {
+  state: S3ArtifactObjectState;
 }
 
 export interface S3ArtifactTransport {
@@ -56,6 +61,21 @@ export interface S3ArtifactTransport {
     range?: ArtifactByteRange;
     abortSignal?: AbortSignal;
   }): Promise<S3ArtifactReadResult>;
+  delete(input: {
+    bucket: string;
+    key: string;
+    versionId: string;
+    expectedEtag?: string;
+  }): Promise<boolean>;
+  copy(input: {
+    sourceBucket: string;
+    sourceKey: string;
+    sourceVersionId?: string;
+    expectedSourceEtag?: string;
+    targetBucket: string;
+    targetKey: string;
+    ifAbsent: boolean;
+  }): Promise<S3ArtifactCopyResult>;
   checkBucket(bucket: string): Promise<void>;
   close(): void;
 }
@@ -91,6 +111,17 @@ interface MinioArtifactClient {
     length?: number,
     options?: { versionId?: string }
   ): Promise<Readable>;
+  removeObject(bucket: string, key: string, options?: { versionId?: string }): Promise<void>;
+  copyObject(
+    source: CopySourceOptions,
+    destination: CopyDestinationOptions
+  ): Promise<MinioCopyResult>;
+}
+
+interface MinioCopyResult {
+  etag?: string;
+  Etag?: string;
+  VersionId?: string | null;
 }
 
 interface MinioClientOptions {
@@ -289,6 +320,91 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     };
   }
 
+  async delete(input: Parameters<S3ArtifactTransport['delete']>[0]): Promise<boolean> {
+    this.assertOpen();
+    assertBucketAndKey(input.bucket, input.key);
+    const versionId = requireMutationVersion(input.versionId, 'delete');
+    const client = await this.createClient();
+    let current: S3ArtifactObjectState;
+    try {
+      current = s3StateFromStat(await client.statObject(input.bucket, input.key, { versionId }));
+    } catch (error) {
+      if (isMissingObject(error)) return false;
+      throw error;
+    }
+    assertExpectedObjectIdentity(current, input.expectedEtag, undefined);
+
+    await client.removeObject(input.bucket, input.key, { versionId });
+    try {
+      await client.statObject(input.bucket, input.key, { versionId });
+    } catch (error) {
+      if (isMissingObject(error)) return true;
+      throw error;
+    }
+    throw artifactStoreError(
+      'ARTIFACT_DELETE_PARTIAL',
+      'S3 reported a successful delete but the pinned object version still exists.',
+      true
+    );
+  }
+
+  async copy(input: Parameters<S3ArtifactTransport['copy']>[0]): Promise<S3ArtifactCopyResult> {
+    this.assertOpen();
+    assertBucketAndKey(input.sourceBucket, input.sourceKey);
+    assertBucketAndKey(input.targetBucket, input.targetKey);
+    const sourceVersionId = optionalNonEmpty(input.sourceVersionId, 'sourceVersionId');
+    const sourceEtag = normalizeS3Etag(input.expectedSourceEtag);
+    if (!sourceVersionId && !sourceEtag) {
+      throw new TypeError('S3 copy requires a sourceVersionId or expectedSourceEtag.');
+    }
+
+    const client = await this.createClient();
+    const sourceState = s3StateFromStat(
+      await client.statObject(input.sourceBucket, input.sourceKey, versionOptions(sourceVersionId))
+    );
+    assertExpectedObjectIdentity(sourceState, sourceEtag, undefined);
+    const sourceContentHash = requireS3ContentHash(sourceState);
+    const result = await client.copyObject(
+      new CopySourceOptions({
+        Bucket: input.sourceBucket,
+        Object: input.sourceKey,
+        ...(sourceVersionId ? { VersionID: sourceVersionId } : {}),
+        ...(sourceEtag ? { MatchETag: quoteS3Etag(sourceEtag) } : {}),
+      }),
+      new CopyDestinationOptions({
+        Bucket: input.targetBucket,
+        Object: input.targetKey,
+        MetadataDirective: 'COPY',
+        ...(input.ifAbsent ? { Headers: { 'If-None-Match': '*' } } : {}),
+      })
+    );
+    const copiedVersionId = optionalNonEmpty(
+      result.VersionId ?? undefined,
+      'copiedVersionId'
+    );
+    const copiedEtag = requireNonEmpty(result.Etag ?? result.etag, 'copiedEtag');
+    const targetState = s3StateFromStat(
+      await client.statObject(input.targetBucket, input.targetKey, versionOptions(copiedVersionId))
+    );
+    assertExpectedObjectIdentity(targetState, copiedEtag, sourceContentHash);
+    if (targetState.sizeBytes !== sourceState.sizeBytes) {
+      throw artifactStoreError(
+        'ARTIFACT_HASH_MISMATCH',
+        'Copied S3 Artifact size does not match its source.',
+        false,
+        {
+          expectedSizeBytes: sourceState.sizeBytes,
+          actualSizeBytes: targetState.sizeBytes,
+        }
+      );
+    }
+    return {
+      etag: normalizeS3Etag(copiedEtag),
+      ...(copiedVersionId ? { versionId: copiedVersionId } : {}),
+      state: targetState,
+    };
+  }
+
   async checkBucket(bucket: string): Promise<void> {
     this.assertOpen();
     assertBucketAndKey(bucket, 'health-check');
@@ -405,6 +521,24 @@ function versionOptions(versionId: string | undefined): { versionId?: string } |
     throw new TypeError('versionId must not be empty.');
   }
   return versionId ? { versionId } : undefined;
+}
+
+function requireMutationVersion(versionId: string, operation: string): string {
+  const value = optionalNonEmpty(versionId, 'versionId');
+  if (!value) {
+    throw new TypeError(`S3 ${operation} requires a version-pinned object reference.`);
+  }
+  return value;
+}
+
+function optionalNonEmpty(value: string | undefined, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  return requireNonEmpty(value, name);
+}
+
+function requireNonEmpty(value: string | undefined, name: string): string {
+  if (!value?.trim()) throw new TypeError(`${name} must not be empty.`);
+  return value;
 }
 
 function assertExpectedObjectIdentity(
