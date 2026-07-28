@@ -5,12 +5,14 @@ import {
   MemoryManagementProviderRegistry,
   MemoryRuntimeFactory,
   NativeMemoryManagementProvider,
+  InMemoryMemorySearchCacheStore,
   memoryManagementProviderSpecExample,
   memoryProfileSpecExample,
   type ContextProfileSpec,
   type MemoryAddRequest,
   type MemoryEventType,
   type MemoryRuntimeConfig,
+  type ManagedMemorySearchRequest,
 } from './index';
 
 function runtimeConfig(): MemoryRuntimeConfig {
@@ -149,5 +151,79 @@ describe('public Memory consumer composition', () => {
           contextBuilder: new DefaultMemoryContextBuilder(),
         })
     ).toThrow('contextBuilder and contextGateway must be installed together');
+  });
+  it('derives required cache scope from the Profile and reauthorizes every hit', async () => {
+    const cache = new InMemoryMemorySearchCacheStore();
+    const authorize = vi.fn(async () => ({
+      allowed: true,
+      policyRevision: 'policy:cache:r1',
+    }));
+    let searchCalls = 0;
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'consumer-cached-native',
+      supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
+      create: async ({ profile }) => {
+        const provider = new NativeMemoryManagementProvider({ profile });
+        const search = provider.search.bind(provider);
+        provider.search = async (request) => {
+          searchCalls += 1;
+          return search(request);
+        };
+        return provider;
+      },
+    });
+    const config = runtimeConfig();
+    config.profiles[memoryProfileSpecExample.id] = {
+      ...config.profiles[memoryProfileSpecExample.id]!,
+      profile: {
+        ...memoryProfileSpecExample,
+        scopePolicy: {
+          ...memoryProfileSpecExample.scopePolicy,
+          requiredDimensions: ['userId', 'workspaceId'],
+        },
+      },
+    };
+    const runtime = await new MemoryRuntimeFactory({
+      registry,
+      activities: {
+        policy: { authorize },
+        events: { publish: async () => 'event' },
+        harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
+      },
+      eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+      searchCache: { cache },
+    }).create(config);
+    const request: ManagedMemorySearchRequest = {
+      operationId: 'consumer:cache:incomplete-one',
+      principal,
+      scope: { userId: principal.userId! },
+      profileRef: memoryProfileSpecExample,
+      query: 'cache scope acceptance',
+      topK: 5,
+      updateAccessStats: false,
+    };
+
+    await runtime.service.search(request);
+    await runtime.service.search({
+      ...request,
+      operationId: 'consumer:cache:incomplete-two',
+    });
+    expect(cache.stats().entries).toBe(0);
+
+    const complete = {
+      ...request,
+      operationId: 'consumer:cache:complete-one',
+      scope: { userId: principal.userId!, workspaceId: 'workspace:cache' },
+    };
+    await runtime.service.search(complete);
+    await runtime.service.search({
+      ...complete,
+      operationId: 'consumer:cache:complete-two',
+    });
+
+    expect(searchCalls).toBe(3);
+    expect(cache.stats().entries).toBe(1);
+    expect(authorize).toHaveBeenCalledTimes(6);
+    await runtime.close();
   });
 });

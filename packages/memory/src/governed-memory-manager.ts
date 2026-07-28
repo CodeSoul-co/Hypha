@@ -12,6 +12,7 @@ import type {
 } from './integration-contracts';
 import type { MemoryEventContext } from './memory-events';
 import { memoryError } from './memory-utils';
+import type { MemoryProjectionInvalidationPort } from './memory-projection-invalidation';
 import {
   createMemoryProviderReturnEvidence,
   verifyMemoryProviderReturnEvidence,
@@ -51,6 +52,7 @@ export interface GovernedMemoryManagerOptions {
   eventContext: MemoryEventContext | ((request: GovernedMemoryRequest) => MemoryEventContext);
   timeoutMs?: number;
   reconciliationStore?: MemoryLifecycleTaskStore;
+  projectionInvalidation?: MemoryProjectionInvalidationPort;
   now?: () => string;
 }
 
@@ -80,11 +82,21 @@ export class GovernedMemoryManager {
     return this.execute('list', request, signal);
   }
 
-  update(
+  async update(
     request: ManagedMemoryUpdateRequest,
     signal?: AbortSignal
   ): Promise<ManagedMemoryWriteResult> {
-    return this.execute('update', request, signal);
+    const result = await this.execute<ManagedMemoryWriteResult>('update', request, signal);
+    if (result.status === 'committed') {
+      await this.options.projectionInvalidation?.invalidate({
+        operationId: request.operationId,
+        scope: request.scope,
+        reason: 'updated',
+        memoryIds: result.records.map((record) => record.id),
+        memoryVersionIds: result.records.map((record) => record.versionId),
+      });
+    }
+    return result;
   }
 
   async delete(
@@ -92,7 +104,14 @@ export class GovernedMemoryManager {
     signal?: AbortSignal
   ): Promise<ManagedMemoryDeleteResult> {
     const result = await this.execute<ManagedMemoryDeleteResult>('delete', request, signal);
-
+    if (result.status === 'completed') {
+      await this.options.projectionInvalidation?.invalidate({
+        operationId: request.operationId,
+        scope: request.scope,
+        reason: 'deleted',
+        memoryIds: result.deletedMemoryIds,
+      });
+    }
     if (result.pendingProviderIds?.length && this.options.reconciliationStore) {
       await enqueueProviderDeleteReconciliation(
         request,
