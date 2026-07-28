@@ -4,6 +4,7 @@ import { Client, CopyDestinationOptions, CopySourceOptions } from 'minio';
 import {
   normalizeS3ArtifactClientConfig,
   S3ArtifactConfigurationError,
+  S3ArtifactCredentialError,
   type NormalizedS3ArtifactClientConfig,
   type S3ArtifactClientConfigInput,
   type S3ArtifactCredentials,
@@ -20,6 +21,7 @@ import {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const MIN_MULTIPART_PART_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_SIGNED_DOWNLOAD_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export interface S3ArtifactWriteResult {
   etag?: string;
@@ -34,6 +36,12 @@ export interface S3ArtifactReadResult {
 
 export interface S3ArtifactCopyResult extends S3ArtifactWriteResult {
   state: S3ArtifactObjectState;
+}
+
+export interface S3ArtifactDownloadAccess {
+  method: 'GET';
+  url: string;
+  expiresAt: string;
 }
 
 export interface S3ArtifactTransport {
@@ -76,6 +84,16 @@ export interface S3ArtifactTransport {
     targetKey: string;
     ifAbsent: boolean;
   }): Promise<S3ArtifactCopyResult>;
+  createDownloadAccess(input: {
+    bucket: string;
+    key: string;
+    versionId: string;
+    expectedEtag?: string;
+    expectedContentHash?: string;
+    expiresInSeconds: number;
+    responseMimeType?: string;
+    responseFilename?: string;
+  }): Promise<S3ArtifactDownloadAccess>;
   checkBucket(bucket: string): Promise<void>;
   close(): void;
 }
@@ -116,6 +134,14 @@ interface MinioArtifactClient {
     source: CopySourceOptions,
     destination: CopyDestinationOptions
   ): Promise<MinioCopyResult>;
+  presignedUrl(
+    method: string,
+    bucket: string,
+    key: string,
+    expiresInSeconds: number,
+    requestParameters?: Record<string, string>,
+    requestDate?: Date
+  ): Promise<string>;
 }
 
 interface MinioCopyResult {
@@ -146,6 +172,7 @@ export interface MinioS3ArtifactTransportOptions extends S3ArtifactClientConfigI
   requestTimeoutMs?: number;
   maximumRetryCount?: number;
   clientFactory?: MinioClientFactory;
+  now?: () => Date;
 }
 
 export class S3ArtifactTransferAbortedError extends Error {
@@ -187,6 +214,7 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
   private readonly requestTimeoutMs: number;
   private readonly maximumRetryCount: number;
   private readonly clientFactory: MinioClientFactory;
+  private readonly now: () => Date;
   private closed = false;
 
   constructor(options: MinioS3ArtifactTransportOptions) {
@@ -207,6 +235,7 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     assertPositiveSafeInteger(this.requestTimeoutMs, 'requestTimeoutMs');
     assertNonNegativeSafeInteger(this.maximumRetryCount, 'maximumRetryCount');
     this.clientFactory = options.clientFactory ?? defaultMinioClientFactory;
+    this.now = options.now ?? (() => new Date());
   }
 
   async upload(
@@ -378,10 +407,7 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
         ...(input.ifAbsent ? { Headers: { 'If-None-Match': '*' } } : {}),
       })
     );
-    const copiedVersionId = optionalNonEmpty(
-      result.VersionId ?? undefined,
-      'copiedVersionId'
-    );
+    const copiedVersionId = optionalNonEmpty(result.VersionId ?? undefined, 'copiedVersionId');
     const copiedEtag = requireNonEmpty(result.Etag ?? result.etag, 'copiedEtag');
     const targetState = s3StateFromStat(
       await client.statObject(input.targetBucket, input.targetKey, versionOptions(copiedVersionId))
@@ -405,6 +431,48 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     };
   }
 
+  async createDownloadAccess(
+    input: Parameters<S3ArtifactTransport['createDownloadAccess']>[0]
+  ): Promise<S3ArtifactDownloadAccess> {
+    this.assertOpen();
+    assertBucketAndKey(input.bucket, input.key);
+    const versionId = requireMutationVersion(input.versionId, 'signed download');
+    assertPositiveSafeInteger(input.expiresInSeconds, 'expiresInSeconds');
+    if (input.expiresInSeconds > MAX_SIGNED_DOWNLOAD_TTL_SECONDS) {
+      throw new TypeError(`expiresInSeconds must not exceed ${MAX_SIGNED_DOWNLOAD_TTL_SECONDS}.`);
+    }
+    const responseMimeType = safeResponseMimeType(input.responseMimeType);
+    const responseFilename = safeResponseFilename(input.responseFilename);
+    const requestDate = validDate(this.now(), 'now');
+    const expiresAt = new Date(requestDate.getTime() + input.expiresInSeconds * 1_000);
+    const { client } = await this.createSigningClient(expiresAt);
+    const state = s3StateFromStat(await client.statObject(input.bucket, input.key, { versionId }));
+    assertExpectedObjectIdentity(state, input.expectedEtag, input.expectedContentHash);
+
+    const requestParameters = {
+      versionId,
+      ...(responseMimeType ? { 'response-content-type': responseMimeType } : {}),
+      ...(responseFilename
+        ? {
+            'response-content-disposition': contentDispositionFor(responseFilename),
+          }
+        : {}),
+    };
+    const signedUrl = await client.presignedUrl(
+      'GET',
+      input.bucket,
+      input.key,
+      input.expiresInSeconds,
+      requestParameters,
+      requestDate
+    );
+    return {
+      method: 'GET',
+      url: validateSignedDownloadUrl(signedUrl, this.config, versionId, input.expiresInSeconds),
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
   async checkBucket(bucket: string): Promise<void> {
     this.assertOpen();
     assertBucketAndKey(bucket, 'health-check');
@@ -421,13 +489,7 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
   }
 
   private async createClient(): Promise<MinioArtifactClient> {
-    const credentialProvider = this.config.credentialProvider;
-    if (!credentialProvider) {
-      throw new S3ArtifactConfigurationError(
-        'S3 upload transport requires an explicit credential provider.'
-      );
-    }
-    const credentials = await credentialProvider();
+    const credentials = await this.resolveCredentials();
     return this.clientFactory(
       minioClientOptions(
         this.config,
@@ -436,6 +498,37 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
         this.maximumRetryCount
       )
     );
+  }
+
+  private async createSigningClient(
+    requestedExpiry: Date
+  ): Promise<{ client: MinioArtifactClient }> {
+    const credentials = await this.resolveCredentials();
+    if (credentials.expiration && credentials.expiration.getTime() < requestedExpiry.getTime()) {
+      throw new S3ArtifactCredentialError(
+        'S3 credentials expire before the requested signed download access.'
+      );
+    }
+    return {
+      client: this.clientFactory(
+        minioClientOptions(
+          this.config,
+          credentials,
+          this.multipartPartSizeBytes,
+          this.maximumRetryCount
+        )
+      ),
+    };
+  }
+
+  private async resolveCredentials(): Promise<S3ArtifactCredentials> {
+    const credentialProvider = this.config.credentialProvider;
+    if (!credentialProvider) {
+      throw new S3ArtifactConfigurationError(
+        'S3 upload transport requires an explicit credential provider.'
+      );
+    }
+    return credentialProvider();
   }
 
   private assertOpen(): void {
@@ -539,6 +632,103 @@ function optionalNonEmpty(value: string | undefined, name: string): string | und
 function requireNonEmpty(value: string | undefined, name: string): string {
   if (!value?.trim()) throw new TypeError(`${name} must not be empty.`);
   return value;
+}
+
+function safeResponseMimeType(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (
+    normalized !== value ||
+    normalized.length === 0 ||
+    normalized.length > 255 ||
+    hasControlCharacters(normalized)
+  ) {
+    throw new TypeError('responseMimeType is invalid.');
+  }
+  return normalized;
+}
+
+function safeResponseFilename(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (
+    normalized !== value ||
+    normalized.length === 0 ||
+    normalized.length > 255 ||
+    normalized.includes('/') ||
+    normalized.includes('\\') ||
+    hasControlCharacters(normalized)
+  ) {
+    throw new TypeError('responseFilename must be a safe filename without path separators.');
+  }
+  return normalized;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint === undefined || codePoint <= 31 || codePoint === 127;
+  });
+}
+
+function contentDispositionFor(filename: string): string {
+  const encoded = encodeURIComponent(filename).replace(/[!'()*]/gu, (character) => {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) throw new TypeError('responseFilename is invalid.');
+    return `%${codePoint.toString(16).toUpperCase()}`;
+  });
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
+
+function validDate(value: Date, name: string): Date {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw new TypeError(`${name} must return a valid Date.`);
+  }
+  return new Date(value.getTime());
+}
+
+function validateSignedDownloadUrl(
+  value: string,
+  config: NormalizedS3ArtifactClientConfig,
+  expectedVersionId: string,
+  expectedTtlSeconds: number
+): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw invalidSignedDownloadUrl();
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) {
+    throw invalidSignedDownloadUrl();
+  }
+  if (config.endpoint) {
+    if (url.origin !== config.endpoint) throw invalidSignedDownloadUrl();
+  } else {
+    const hostname = url.hostname.toLowerCase();
+    if (hostname !== 's3.amazonaws.com' && !hostname.endsWith('.amazonaws.com')) {
+      throw invalidSignedDownloadUrl();
+    }
+  }
+  const versions = url.searchParams.getAll('versionId');
+  const expiries = url.searchParams.getAll('X-Amz-Expires');
+  if (
+    versions.length !== 1 ||
+    versions[0] !== expectedVersionId ||
+    expiries.length !== 1 ||
+    expiries[0] !== String(expectedTtlSeconds)
+  ) {
+    throw invalidSignedDownloadUrl();
+  }
+  return value;
+}
+
+function invalidSignedDownloadUrl(): Error {
+  return artifactStoreError(
+    'ARTIFACT_DOWNLOAD_FAILED',
+    'S3 returned an invalid or insufficiently constrained signed download URL.',
+    false
+  );
 }
 
 function assertExpectedObjectIdentity(

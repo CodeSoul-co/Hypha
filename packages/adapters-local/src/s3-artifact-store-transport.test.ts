@@ -46,6 +46,24 @@ function client(overrides: Record<string, unknown> = {}) {
       Etag: 'opaque-multipart-etag-2',
       VersionId: 'version-1',
     }),
+    presignedUrl: vi.fn(
+      async (
+        _method: string,
+        bucket: string,
+        key: string,
+        expiresInSeconds: number,
+        requestParameters: Record<string, string> = {}
+      ) => {
+        const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+        const url = new URL(`http://127.0.0.1:9000/${encodeURIComponent(bucket)}/${encodedKey}`);
+        for (const [name, value] of Object.entries(requestParameters)) {
+          url.searchParams.set(name, value);
+        }
+        url.searchParams.set('X-Amz-Expires', String(expiresInSeconds));
+        url.searchParams.set('X-Amz-Signature', 'test-signature');
+        return url.toString();
+      }
+    ),
     ...overrides,
   };
 }
@@ -485,6 +503,186 @@ describe('MinioS3ArtifactTransport', () => {
       transport.head({ bucket: 'hypha-artifacts', key: 'tenant/run/output.bin' })
     ).rejects.toMatchObject({
       normalizedError: { code: 'ARTIFACT_VALIDATION_FAILED' },
+    });
+  });
+
+  it('creates version-pinned signed download access with bounded response overrides', async () => {
+    const now = new Date('2026-07-28T08:00:00.000Z');
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        now: () => now,
+      })
+    );
+
+    const access = await transport.createDownloadAccess({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      versionId: 'version-1',
+      expectedEtag: '"opaque-multipart-etag-2"',
+      expectedContentHash: artifactContentHash,
+      expiresInSeconds: 120,
+      responseMimeType: 'application/octet-stream',
+      responseFilename: 'execution output (final).bin',
+    });
+
+    expect(access).toMatchObject({
+      method: 'GET',
+      expiresAt: '2026-07-28T08:02:00.000Z',
+    });
+    const url = new URL(access.url);
+    expect(url.origin).toBe('http://127.0.0.1:9000');
+    expect(url.searchParams.get('versionId')).toBe('version-1');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('120');
+    expect(url.searchParams.get('response-content-type')).toBe('application/octet-stream');
+    expect(url.searchParams.get('response-content-disposition')).toBe(
+      "attachment; filename*=UTF-8''execution%20output%20%28final%29.bin"
+    );
+    expect(minioClient.statObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'version-1' }
+    );
+    expect(minioClient.presignedUrl).toHaveBeenCalledWith(
+      'GET',
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      120,
+      expect.objectContaining({ versionId: 'version-1' }),
+      now
+    );
+  });
+
+  it('refuses unversioned signed access before resolving credentials', async () => {
+    const credentialProvider = vi.fn();
+    const transport = new MinioS3ArtifactTransport(transportOptions({ credentialProvider }));
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: '',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toThrow('versionId must not be empty');
+    expect(credentialProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'zero TTL',
+      input: { expiresInSeconds: 0 },
+      message: 'positive safe integer',
+    },
+    {
+      name: 'TTL beyond the S3 signature limit',
+      input: { expiresInSeconds: 604_801 },
+      message: 'must not exceed 604800',
+    },
+    {
+      name: 'response header injection',
+      input: { responseMimeType: 'text/plain\r\nx-unsafe: true' },
+      message: 'responseMimeType is invalid',
+    },
+    {
+      name: 'path-shaped download filename',
+      input: { responseFilename: '../secret.txt' },
+      message: 'safe filename',
+    },
+  ])('rejects unsafe signed access input: $name', async ({ input, message }) => {
+    const clientFactory = vi.fn(() => client());
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expiresInSeconds: 120,
+        ...input,
+      })
+    ).rejects.toThrow(message);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('refuses to outlive temporary signing credentials', async () => {
+    const clientFactory = vi.fn(() => client());
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory,
+        now: () => new Date('2026-07-28T08:00:00.000Z'),
+        credentialProvider: () => ({
+          accessKeyId: 'temporary-access',
+          secretAccessKey: 'temporary-secret',
+          expiration: new Date('2026-07-28T08:01:59.000Z'),
+        }),
+      })
+    );
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toMatchObject({
+      code: 'S3_ARTIFACT_CREDENTIAL_INVALID',
+    });
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('checks the pinned object identity before creating signed access', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expectedEtag: 'replacement-etag',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    expect(minioClient.presignedUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'does not bind the requested version',
+      url: 'http://127.0.0.1:9000/hypha-artifacts/output.bin?X-Amz-Expires=120',
+    },
+    {
+      name: 'changes the configured endpoint',
+      url: 'https://attacker.example/output.bin?versionId=version-1&X-Amz-Expires=120',
+    },
+    {
+      name: 'changes the requested lifetime',
+      url: 'http://127.0.0.1:9000/hypha-artifacts/output.bin?versionId=version-1&X-Amz-Expires=600',
+    },
+  ])('rejects a signed URL that $name', async ({ url }) => {
+    const minioClient = client({
+      presignedUrl: vi.fn().mockResolvedValue(url),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_DOWNLOAD_FAILED' },
     });
   });
 
