@@ -54,19 +54,31 @@ export async function stageS3ArtifactContent(
   }
 
   let cleaned = false;
+  const streams = new Set<fs.ReadStream>();
   return {
     contentHash: `sha256:${hash.digest('hex')}`,
     sizeBytes,
     createReadStream: () => {
       if (cleaned) throw new Error('Staged S3 Artifact content is already cleaned.');
-      return fs.createReadStream(filename);
+      const stream = fs.createReadStream(filename);
+      streams.add(stream);
+      stream.once('close', () => streams.delete(stream));
+      return stream;
     },
     cleanup: async () => {
       if (cleaned) return;
       cleaned = true;
+      await Promise.all([...streams].map(closeReadStream));
       await fsPromises.rm(directory, { recursive: true, force: true });
     },
   };
+}
+
+async function closeReadStream(stream: fs.ReadStream): Promise<void> {
+  if (stream.closed) return;
+  const closed = new Promise<void>((resolve) => stream.once('close', resolve));
+  stream.destroy();
+  if (!stream.closed) await closed;
 }
 
 async function* toAsyncChunks(source: ArtifactByteSource): AsyncIterable<Uint8Array> {

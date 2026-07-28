@@ -38,6 +38,7 @@ function client(overrides: Record<string, unknown> = {}) {
     }),
     removeIncompleteUpload: vi.fn().mockResolvedValue(undefined),
     bucketExists: vi.fn().mockResolvedValue(true),
+    getBucketVersioning: vi.fn().mockResolvedValue({ Status: 'Enabled' }),
     statObject: vi.fn().mockResolvedValue(objectStat()),
     getObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes])),
     getPartialObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes.subarray(1, 3)])),
@@ -298,6 +299,19 @@ describe('MinioS3ArtifactTransport', () => {
     transport.close();
     transport.close();
     await expect(transport.upload(uploadInput())).rejects.toThrow('S3 upload transport is closed.');
+  });
+
+  it('fails bucket readiness when immutable object versioning is not enabled', async () => {
+    const minioClient = client({
+      getBucketVersioning: vi.fn().mockResolvedValue({ Status: 'Suspended' }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(transport.checkBucket('hypha-artifacts')).rejects.toMatchObject({
+      name: 'InvalidBucketState',
+    });
   });
 
   it.each([{ multipartPartSizeBytes: 1024 }, { requestTimeoutMs: 0 }, { maximumRetryCount: -1 }])(

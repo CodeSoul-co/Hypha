@@ -116,6 +116,7 @@ interface MinioArtifactClient {
   ): Promise<{ etag: string; versionId: string | null }>;
   removeIncompleteUpload(bucket: string, key: string): Promise<void>;
   bucketExists(bucket: string): Promise<boolean>;
+  getBucketVersioning(bucket: string): Promise<{ Status?: string }>;
   statObject(
     bucket: string,
     key: string,
@@ -480,6 +481,12 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     if (!(await client.bucketExists(bucket))) {
       const error = new Error('The configured S3 Artifact bucket does not exist.');
       error.name = 'NoSuchBucket';
+      throw error;
+    }
+    const versioning = await client.getBucketVersioning(bucket);
+    if (versioning.Status !== 'Enabled') {
+      const error = new Error('The configured S3 Artifact bucket must enable versioning.');
+      error.name = 'InvalidBucketState';
       throw error;
     }
   }

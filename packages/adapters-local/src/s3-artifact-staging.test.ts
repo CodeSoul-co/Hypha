@@ -57,6 +57,17 @@ describe('stageS3ArtifactContent', () => {
     await expect(stagingDirectories()).resolves.toEqual(before);
   });
 
+  it('closes an outstanding staged read stream before removing its directory', async () => {
+    const before = await stagingDirectories();
+    const staged = await stageS3ArtifactContent(Uint8Array.from([1, 2, 3]), 3);
+    const stream = staged.createReadStream();
+
+    await staged.cleanup();
+
+    expect(stream.closed).toBe(true);
+    await expect(stagingDirectories()).resolves.toEqual(before);
+  });
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects an invalid maxObjectBytes value: %s',
     async (maxObjectBytes) => {
