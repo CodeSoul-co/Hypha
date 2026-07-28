@@ -108,6 +108,9 @@ export function buildDockerTerminalResult(
     stderrContentHash,
     oomKilled: input.inspection.oomKilled,
     cleanup: input.cleanup,
+    generatedArtifactRefs,
+    ...(input.stdoutArtifactRef ? { stdoutArtifactRef: input.stdoutArtifactRef } : {}),
+    ...(input.stderrArtifactRef ? { stderrArtifactRef: input.stderrArtifactRef } : {}),
     ...(input.resourceSnapshot ? { resourceSnapshot: input.resourceSnapshot } : {}),
     ...(input.resourceFailureCode ? { resourceFailureCode: input.resourceFailureCode } : {}),
   };
@@ -160,6 +163,7 @@ export function buildDockerTerminalResult(
       metadata: {
         cleanupComplete: input.cleanup.complete,
         oomKilled: input.inspection.oomKilled,
+        generatedArtifactCount: generatedArtifactRefs.length,
       },
     },
     startedAt: input.processResult.startedAt,

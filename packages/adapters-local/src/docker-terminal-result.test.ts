@@ -319,10 +319,10 @@ describe('buildDockerTerminalResult', () => {
     expect(JSON.stringify(result.externalReceipt)).not.toContain(secret);
   });
 
-  it('binds the deterministic receipt hash to resource and cleanup evidence', () => {
+  it('binds the deterministic receipt hash to resource, cleanup, and Artifact evidence', () => {
     const baseline = buildDockerTerminalResult(terminalInput());
     const repeated = buildDockerTerminalResult(terminalInput());
-    const changed = buildDockerTerminalResult(
+    const changedResource = buildDockerTerminalResult(
       terminalInput({
         resourceSnapshot: {
           cpuPercent: 1,
@@ -335,9 +335,30 @@ describe('buildDockerTerminalResult', () => {
         },
       })
     );
+    const changedArtifact = buildDockerTerminalResult(
+      terminalInput({
+        stdoutArtifactRef: 'artifact:stdout',
+      })
+    );
+    const replacedArtifact = buildDockerTerminalResult(
+      terminalInput({
+        stdoutArtifactRef: 'artifact:replacement',
+      })
+    );
 
     expect(repeated.externalReceipt?.receiptHash).toBe(baseline.externalReceipt?.receiptHash);
-    expect(changed.externalReceipt?.receiptHash).not.toBe(baseline.externalReceipt?.receiptHash);
+    expect(changedResource.externalReceipt?.receiptHash).not.toBe(
+      baseline.externalReceipt?.receiptHash
+    );
+    expect(changedArtifact.externalReceipt?.receiptHash).not.toBe(
+      baseline.externalReceipt?.receiptHash
+    );
+    expect(replacedArtifact.externalReceipt?.receiptHash).not.toBe(
+      changedArtifact.externalReceipt?.receiptHash
+    );
+    expect(changedArtifact.externalReceipt?.metadata).toMatchObject({
+      generatedArtifactCount: 1,
+    });
   });
 });
 
