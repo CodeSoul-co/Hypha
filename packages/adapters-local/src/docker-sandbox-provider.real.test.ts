@@ -1,23 +1,18 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type {
-  CommandExecutionRequest,
-  ExecutionEnvironmentSpec,
-  SandboxCreateRequest,
+import {
+  SandboxProviderRegistry,
+  type SandboxProvider,
+  type CommandExecutionRequest,
+  type ExecutionEnvironmentSpec,
+  type SandboxCreateRequest,
 } from '@hypha/core';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import { DockerEngineCliClient } from './docker-engine-client';
-import { DockerExecIo } from './docker-exec-io';
-import { DockerExecutionCoordinator } from './docker-execution-coordinator';
-import {
-  LocalDockerExecutionOutputCollector,
-  type DockerExecutionArtifactStreamPort,
-} from './docker-execution-output-collector';
-import { DockerExecutionPolicyResolver } from './docker-execution-policy';
-import { DockerStatsResourceAccounting } from './docker-resource-accounting';
-import { DockerSandboxProvider } from './docker-sandbox-provider';
+import { type DockerExecutionArtifactStreamPort } from './docker-execution-output-collector';
+import { DockerSandboxProviderFactory } from './docker-sandbox-provider-factory';
 import { shortExecutionHash } from './execution-provider-values';
 import type {
   LocalProcessArtifactStream,
@@ -66,14 +61,14 @@ describe('DockerSandboxProvider real daemon', () => {
     const containerName = providerContainerName(executionId);
     containerNames.push(containerName);
     const artifacts = new RecordingArtifactPort();
-    const provider = createProvider(workspace, artifacts, executionId);
+    const provider = await createProvider(workspace, artifacts);
     const ready = await createAndStart(provider, 'success');
 
     await expect(provider.health()).resolves.toMatchObject({
       status: 'healthy',
       details: {
         isolation: 'docker',
-        factoryRegistered: false,
+        factoryRegistered: true,
       },
     });
     const result = await provider.execute(
@@ -122,10 +117,11 @@ describe('DockerSandboxProvider real daemon', () => {
       principal,
       expectedRevision: terminated.revision,
     });
-    await expect(
-      provider.status({ sandboxId: terminated.id, principal })
-    ).resolves.toMatchObject({ status: 'cleaned', activeExecutionIds: [] });
-    await provider.close();
+    await expect(provider.status({ sandboxId: terminated.id, principal })).resolves.toMatchObject({
+      status: 'cleaned',
+      activeExecutionIds: [],
+    });
+    await provider.close?.();
   }, 60_000);
 
   it('cancels a real Provider execution and removes the execution container', async () => {
@@ -133,7 +129,7 @@ describe('DockerSandboxProvider real daemon', () => {
     const executionId = 'execution.docker.provider.real.cancel';
     const containerName = providerContainerName(executionId);
     containerNames.push(containerName);
-    const provider = createProvider(workspace, new RecordingArtifactPort(), executionId);
+    const provider = await createProvider(workspace, new RecordingArtifactPort());
     const ready = await createAndStart(provider, 'cancel');
 
     const execution = provider.execute(command(ready.id, executionId, 'sleep', ['30']));
@@ -160,53 +156,43 @@ describe('DockerSandboxProvider real daemon', () => {
     });
     await expect(cancellation).resolves.toBeUndefined();
     await expect(engine.inspectContainer(containerName)).resolves.toBeNull();
-    await expect(
-      provider.status({ sandboxId: ready.id, principal })
-    ).resolves.toMatchObject({ status: 'ready', activeExecutionIds: [] });
-    await provider.close();
+    await expect(provider.status({ sandboxId: ready.id, principal })).resolves.toMatchObject({
+      status: 'ready',
+      activeExecutionIds: [],
+    });
+    await provider.close?.();
   }, 60_000);
 });
 
-function createProvider(
+async function createProvider(
   workspaceRoot: string,
-  artifacts: DockerExecutionArtifactStreamPort,
-  executionId: string
-): DockerSandboxProvider {
-  return new DockerSandboxProvider({
-    id: 'provider.docker.real',
-    engineScopeId: 'desktop-linux.real-provider',
-    executionId: () => executionId,
-    policy: new DockerExecutionPolicyResolver({
-      workspaceRoot,
-      containerCommand: ['sleep', 'infinity'],
-      maxCpuCores: 0.25,
-      maxMemoryBytes: 64 * 1024 * 1024,
-      maxPidsLimit: 32,
-      maxTempBytes: 4 * 1024 * 1024,
-      maxCleanupStopTimeoutSeconds: 1,
-    }),
-    coordinator: new DockerExecutionCoordinator(
-      engine,
-      new DockerExecIo(transport),
-      new DockerStatsResourceAccounting(transport),
-      new LocalDockerExecutionOutputCollector({
+  artifacts: DockerExecutionArtifactStreamPort
+): Promise<SandboxProvider> {
+  const registry = new SandboxProviderRegistry();
+  registry.register(
+    new DockerSandboxProviderFactory({
+      providerId: 'provider.docker.real',
+      engineScopeId: 'desktop-linux.real-provider',
+      policy: {
         workspaceRoot,
-        outputArtifacts: artifacts,
-      })
-    ),
-    assertAvailable: async () => {
-      const result = await runDocker(['version', '--format', '{{.Server.Version}}']);
-      if (result.outcome !== 'exited' || result.exitCode !== 0 || !result.stdout.trim()) {
-        throw new Error('Docker daemon is unavailable for Provider acceptance.');
-      }
-    },
+        containerCommand: ['sleep', 'infinity'],
+        maxCpuCores: 0.25,
+        maxMemoryBytes: 64 * 1024 * 1024,
+        maxPidsLimit: 32,
+        maxTempBytes: 4 * 1024 * 1024,
+        maxCleanupStopTimeoutSeconds: 1,
+      },
+      outputArtifacts: artifacts,
+      transport,
+    })
+  );
+  return registry.create({
+    provider: 'docker',
+    providerRef: 'provider.docker.real',
   });
 }
 
-async function createAndStart(
-  provider: DockerSandboxProvider,
-  caseName: string
-) {
+async function createAndStart(provider: SandboxProvider, caseName: string) {
   const created = await provider.create(createRequest(caseName));
   expect(created).toMatchObject({
     status: 'created',
@@ -247,9 +233,7 @@ function command(
     tenantId: 'tenant.docker.real',
     userId: 'user.docker.real',
     workspaceId: 'workspace.docker.real',
-    runId: executionId.endsWith('.success')
-      ? 'run.docker.real.success'
-      : 'run.docker.real.cancel',
+    runId: executionId.endsWith('.success') ? 'run.docker.real.success' : 'run.docker.real.cancel',
     sandboxId,
     environmentRef: {
       id: 'execution-environment.docker.real',

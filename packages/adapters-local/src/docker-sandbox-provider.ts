@@ -40,6 +40,7 @@ export interface DockerSandboxProviderOptions {
   now?: () => string;
   sandboxId?: (request: SandboxCreateRequest) => string;
   executionId?: (request: CommandExecutionRequest) => string;
+  factoryRegistered?: boolean;
 }
 
 const capabilities: SandboxProviderCapabilities = {
@@ -69,6 +70,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   private readonly engineScopeId: string;
   private readonly now: () => string;
   private readonly executionId: (request: CommandExecutionRequest) => string;
+  private readonly factoryRegistered: boolean;
   private readonly lifecycle: DockerSandboxLifecycle;
   private readonly active = new InMemoryActiveExecutionRegistry();
   private readonly results = new Map<string, CommandExecutionResult>();
@@ -85,6 +87,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     this.executionId =
       options.executionId ??
       ((request) => `execution.docker.${shortExecutionHash(request.operationId)}`);
+    this.factoryRegistered = options.factoryRegistered ?? false;
     this.lifecycle = new DockerSandboxLifecycle({
       providerId: this.id,
       engineScopeId: this.engineScopeId,
@@ -225,7 +228,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         details: {
           isolation: 'docker',
           engineScopeHash: shortExecutionHash(this.engineScopeId),
-          factoryRegistered: false,
+          factoryRegistered: this.factoryRegistered,
         },
       };
     } catch (error) {
