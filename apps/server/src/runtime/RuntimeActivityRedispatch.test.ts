@@ -6,7 +6,10 @@ import {
   InMemoryDurableEventStore,
   InMemoryEventSchemaRegistry,
   InMemoryRunLeaseStore,
+  InMemoryTelemetryRecorder,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
   RuntimeActivityRedispatchService,
+  RuntimeOperationalTelemetry,
   registerRuntimeOrchestrationEventSchemas,
   type EventRuntime,
   type RuntimeActivityDescriptor,
@@ -597,6 +600,9 @@ describe('RuntimeActivityRedispatchService', () => {
     await appendApprovedTask(events, reference);
     const runLeases = new InMemoryRunLeaseStore({ now: () => now });
     const heartbeat = jest.spyOn(runLeases, 'heartbeat');
+    const recorder = new InMemoryTelemetryRecorder();
+    const operationalTelemetry = new RuntimeOperationalTelemetry({ recorder });
+    let monotonicNow = 0;
     const dispatch = jest.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       return { commandId: 'activity-command.long-running', reused: false };
@@ -610,6 +616,8 @@ describe('RuntimeActivityRedispatchService', () => {
         dispatch,
         ids: ['lease.long-running', 'event.long-running'],
         renewalIntervalMs: 5,
+        operationalTelemetry,
+        monotonicNow: () => monotonicNow++ * 2,
       }).redispatch({
         ...redispatchCommand(reference),
         leaseTtlMs: 100,
@@ -625,6 +633,10 @@ describe('RuntimeActivityRedispatchService', () => {
         guard: expect.objectContaining({ fencingToken: 1 }),
       })
     );
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalLatencyMs)[0]).toMatchObject({
+      value: 2,
+      attributes: { resource: 'run', outcome: 'succeeded' },
+    });
   });
 
   it('aborts an in-flight dispatch and rejects its late result after lease renewal fails', async () => {
@@ -640,6 +652,8 @@ describe('RuntimeActivityRedispatchService', () => {
       message: 'replacement worker owns the Run lease',
     });
     jest.spyOn(runLeases, 'heartbeat').mockRejectedValue(leaseFailure);
+    const recorder = new InMemoryTelemetryRecorder();
+    const operationalTelemetry = new RuntimeOperationalTelemetry({ recorder });
     const observedSignals: AbortSignal[] = [];
     const dispatch = jest.fn(
       async (input: Parameters<RuntimeActivityRedispatchPort['dispatch']>[0]) => {
@@ -661,6 +675,8 @@ describe('RuntimeActivityRedispatchService', () => {
         ids: ['lease.renewal-fails', 'event.renewal-fails'],
         renewalIntervalMs: 1,
         onLeaseRenewalFailure,
+        operationalTelemetry,
+        monotonicNow: jest.fn().mockReturnValueOnce(10).mockReturnValueOnce(13),
       }).redispatch({
         ...redispatchCommand(reference),
         leaseTtlMs: 100,
@@ -670,6 +686,10 @@ describe('RuntimeActivityRedispatchService', () => {
     expect(observedSignals).toHaveLength(1);
     expect(observedSignals[0].aborted).toBe(true);
     expect(onLeaseRenewalFailure).toHaveBeenCalledWith(leaseFailure, 'command.redispatch');
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalLatencyMs)[0]).toMatchObject({
+      value: 3,
+      attributes: { resource: 'run', outcome: 'failed' },
+    });
     expect(
       await events.read({
         scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
@@ -769,6 +789,8 @@ function service(input: {
   ids: string[];
   renewalIntervalMs?: number;
   onLeaseRenewalFailure?: (error: unknown, commandId: string) => void;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
 }): RuntimeActivityRedispatchService {
   const ids = [...input.ids];
   return new RuntimeActivityRedispatchService({
@@ -783,6 +805,10 @@ function service(input: {
     ...(input.onLeaseRenewalFailure === undefined
       ? {}
       : { onLeaseRenewalFailure: input.onLeaseRenewalFailure }),
+    ...(input.operationalTelemetry === undefined
+      ? {}
+      : { operationalTelemetry: input.operationalTelemetry }),
+    ...(input.monotonicNow === undefined ? {} : { monotonicNow: input.monotonicNow }),
     now: () => now,
     nextId: (namespace) => ids.shift() ?? `${namespace}.fallback`,
   });

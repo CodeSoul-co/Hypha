@@ -17,6 +17,7 @@ import {
   type RuntimeActivityDescriptorReference,
 } from './runtime-activity-descriptor-store';
 import { assertRuntimeHumanTaskResume, projectRuntimeHumanTasks } from './runtime-human-task';
+import type { RuntimeOperationalTelemetry } from './runtime-operational-telemetry';
 
 export interface RuntimeActivityRedispatchCommand extends RuntimeActivityDescriptorReference {
   commandId: string;
@@ -86,6 +87,8 @@ export interface RuntimeActivityRedispatchServiceOptions {
   renewalIntervalMs?: number;
   wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   onLeaseRenewalFailure?: (error: unknown, commandId: string) => void;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
   nextId?: (namespace: string) => string;
   now?: () => string;
 }
@@ -110,11 +113,13 @@ export class RuntimeActivityRedispatchService {
   private readonly nextId: (namespace: string) => string;
   private readonly now: () => string;
   private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  private readonly monotonicNow: () => number;
 
   constructor(private readonly options: RuntimeActivityRedispatchServiceOptions) {
     this.nextId = options.nextId ?? ((namespace) => `${namespace}.${randomUUID()}`);
     this.now = options.now ?? (() => new Date().toISOString());
     this.wait = options.wait ?? abortableDelay;
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     if (
       options.renewalIntervalMs !== undefined &&
       (!Number.isInteger(options.renewalIntervalMs) || options.renewalIntervalMs <= 0)
@@ -311,7 +316,7 @@ export class RuntimeActivityRedispatchService {
       await this.wait(input.renewalIntervalMs, input.stopSignal);
       if (input.stopSignal.aborted) return;
       try {
-        await this.options.runLeases.heartbeat({
+        await this.renewLease({
           scope: input.authorization.scope,
           guard: input.authorization.guard,
           ttlMs: input.command.leaseTtlMs,
@@ -326,6 +331,28 @@ export class RuntimeActivityRedispatchService {
         input.operationController.abort(error);
         return;
       }
+    }
+  }
+
+  private async renewLease(
+    request: Parameters<RunLeaseStore['heartbeat']>[0]
+  ): Promise<Awaited<ReturnType<RunLeaseStore['heartbeat']>>> {
+    const startedAt = this.monotonicNow();
+    try {
+      const renewed = await this.options.runLeases.heartbeat(request);
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'run',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'succeeded',
+      });
+      return renewed;
+    } catch (error) {
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'run',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'failed',
+      });
+      throw error;
     }
   }
 
