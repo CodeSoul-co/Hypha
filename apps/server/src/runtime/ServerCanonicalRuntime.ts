@@ -1,12 +1,14 @@
 import {
   FrameworkError,
   InMemoryEventSchemaRegistry,
+  RuntimeHumanWaitService,
   hashCanonicalJson,
   registerRuntimeOrchestrationEventSchemas,
   runtimeEventSchemaDefinitions,
   type EventStore,
 } from '@hypha/core';
 import { DurableEventStoreBridge } from '@hypha/harness';
+import { randomUUID } from 'crypto';
 import {
   BoundedCanonicalRuntimeAudit,
   type CanonicalRuntimeAuditLimits,
@@ -34,6 +36,7 @@ export interface ServerCanonicalRuntimeOptions {
 export interface ServerCanonicalRuntimeComposition {
   backbone: RuntimeBackbone;
   events: OrchestrationEventStore;
+  humanWaits: RuntimeHumanWaitService;
   migration: CanonicalEventFamilyMigrationReport;
 }
 
@@ -44,6 +47,8 @@ export interface ServerCanonicalRuntimeComposition {
  */
 export class ServerCanonicalRuntime {
   private readonly lifecycle: RuntimeBackboneLifecycle;
+  private readonly runtimeInstanceId = randomUUID();
+  private bridgeLeaseSequence = 0;
   private bridge?: DurableEventStoreBridge;
   private migration?: CanonicalEventFamilyMigrationReport;
   private composition?: Readonly<ServerCanonicalRuntimeComposition>;
@@ -81,7 +86,17 @@ export class ServerCanonicalRuntime {
             );
           }
 
-          const bridge = new DurableEventStoreBridge({ events: backbone.events });
+          const bridge = new DurableEventStoreBridge({
+            events: backbone.events,
+            coordination: {
+              runLeases: backbone.runLeases,
+              ownerId: `server-canonical-runtime:${process.pid}`,
+              leaseTtlMs: 30_000,
+              nextId: (namespace) =>
+                `${namespace}:${this.runtimeInstanceId}:${++this.bridgeLeaseSequence}`,
+              ...(options.now === undefined ? {} : { now: options.now }),
+            },
+          });
           const migrationResult = await migrateCanonicalEventFamilies({
             sourceEvents: legacyEvents,
             canonical: bridge,
@@ -127,12 +142,22 @@ export class ServerCanonicalRuntime {
         'Canonical Runtime startup completed without migration and audit evidence'
       );
     }
+    const humanWaits = new RuntimeHumanWaitService({
+      events: backbone.events,
+      projections: backbone.projections,
+      projectionStore: backbone.projectionStore,
+      runLeases: backbone.runLeases,
+      nextId: (namespace) =>
+        `${namespace}:${this.runtimeInstanceId}:${++this.bridgeLeaseSequence}`,
+      ...(this.options.now === undefined ? {} : { now: this.options.now }),
+    });
     this.composition = Object.freeze({
       backbone,
       events: new OrchestrationEventStore({
         legacy: this.options.legacyEvents,
         canonical: () => this.requireBridge(),
       }),
+      humanWaits,
       migration: this.migration,
     });
     return this.composition;

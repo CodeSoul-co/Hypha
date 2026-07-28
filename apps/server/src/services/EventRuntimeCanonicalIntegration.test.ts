@@ -32,13 +32,35 @@ describe('Server EventRuntime canonical integration', () => {
     const runtime = initializeEventRuntime({
       events: composition.events,
       eventDbPath: path.join(root, 'runtime.sqlite'),
+      humanWaits: composition.humanWaits,
     });
 
     const run = await runtime.startRun({
       userId: 'user.integration',
       sessionId: 'session.integration',
     });
-    await runtime.waitForHumanReview(run.runId);
+    await runtime.waitForHumanReview(run.runId, {
+      waitId: 'wait.integration',
+      pendingActionRef: 'tool.integration',
+      reason: 'Integration approval required',
+    });
+    await composition.humanWaits.resolve({
+      commandId: 'resolve.integration',
+      scope: {
+        userId: 'user.integration',
+        sessionId: run.runtimeSessionId,
+        runId: run.runId,
+      },
+      ownerId: 'test.review-worker',
+      leaseTtlMs: 30_000,
+      waitId: 'wait.integration',
+      pendingActionRef: 'tool.integration',
+      principalId: 'reviewer.integration',
+      decision: 'approved',
+      resolvedAt: '2026-07-26T00:00:01.000Z',
+      idempotencyKey: 'resolve.integration',
+    });
+    await runtime.transition(run.runId, 'ContextBuilt', { approval: 'approved' });
     await runtime.record(run.runId, 'model.call.completed', { output: 'observed' }, 'model-1');
     const cacheFailure: RecoveryFailure = {
       id: 'cache-failure.integration',
@@ -80,7 +102,19 @@ describe('Server EventRuntime canonical integration', () => {
     ).resolves.toEqual([
       expect.objectContaining({
         payload: expect.objectContaining({
-          waitId: expect.stringMatching(/^human-review:/),
+          waitId: 'wait.integration',
+        }),
+      }),
+    ]);
+    await expect(
+      composition.events.list({ runId: run.runId, type: 'run.resumed' })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          resume: expect.objectContaining({
+            waitId: 'wait.integration',
+            principalId: 'reviewer.integration',
+          }),
         }),
       }),
     ]);
@@ -115,5 +149,40 @@ describe('Server EventRuntime canonical integration', () => {
         }),
       }),
     ]);
+
+    destroyEventRuntime();
+    const restarted = initializeEventRuntime({
+      events: composition.events,
+      eventDbPath: path.join(root, 'runtime.sqlite'),
+      humanWaits: composition.humanWaits,
+    });
+    await restarted.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.integration',
+    });
+    await expect(
+      composition.events.list({
+        userId: 'user.integration',
+        sessionId: 'user:user.integration:session:session.integration',
+        type: 'session.created',
+      })
+    ).resolves.toHaveLength(1);
+
+    destroyEventRuntime();
+    await canonicalRuntime.close();
+    canonicalRuntime = new ServerCanonicalRuntime({
+      filename: path.join(root, 'runtime.sqlite'),
+      legacyEvents,
+      auditLimits: {
+        pageSize: 25,
+        pageMaxBytes: 1024 * 1024,
+        maxEvents: 100,
+        maxBytes: 4 * 1024 * 1024,
+        maxDurationMs: 5_000,
+      },
+    });
+    await expect(canonicalRuntime.initialize()).resolves.toMatchObject({
+      migration: expect.objectContaining({ quarantinedEvents: 0 }),
+    });
   });
 });

@@ -726,6 +726,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
           'tool.policy.checked',
           'human.review.requested',
           'fsm.state.entered',
+          'runtime.wait.created',
           'run.waiting_human',
         ])
       );
@@ -792,8 +793,13 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       const completedEvents = await request(app)
         .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
         .set('Authorization', `Bearer ${devToken}`);
-      expect((completedEvents.body.data || []).map((event: any) => event.type)).toContain(
-        'run.completed'
+      expect((completedEvents.body.data || []).map((event: any) => event.type)).toEqual(
+        expect.arrayContaining([
+          'run.resume.requested',
+          'runtime.wait.resolved',
+          'run.resumed',
+          'run.completed',
+        ])
       );
     } finally {
       await getToolManager().unregister('approval-test-tool');

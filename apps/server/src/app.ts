@@ -189,6 +189,7 @@ class Application {
       initializeEventRuntime({
         events: composition.events,
         eventDbPath: serverRuntimeEventDatabasePath(),
+        humanWaits: composition.humanWaits,
       });
       this.canonicalRuntime = runtime;
       logger.info('Canonical Runtime initialized', {
