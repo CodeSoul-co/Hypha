@@ -17,6 +17,7 @@ import {
   getMemoryApplicationService,
   getServerMemoryComposition,
   initializeServerMemoryComposition,
+  sanitizeServerMemoryOperationalError,
 } from './services/ServerMemoryComposition';
 import {
   initSingleUserOwner,
@@ -38,12 +39,14 @@ import {
 } from './services/EventRuntime';
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
+import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 
 class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
   private server: http.Server | null = null;
   private canonicalRuntime: ServerCanonicalRuntime | null = null;
+  private shutdownCoordinator: ServerShutdownCoordinator | null = null;
 
   constructor() {
     this.app = express();
@@ -331,8 +334,9 @@ class Application {
         logger.error(`  Memory      | ${memoryReadiness.state}`);
       }
     } catch (err) {
-      checks.push({ name: 'Memory', status: 'fail', detail: String(err) });
-      logger.error('  Memory      | Error:', err);
+      const safeError = sanitizeServerMemoryOperationalError(err);
+      checks.push({ name: 'Memory', status: 'fail', detail: safeError });
+      logger.error('  Memory      | Error:', safeError);
     }
 
     // 4. Check canonical Runtime Event authority.
@@ -466,30 +470,33 @@ class Application {
 
   async stop(): Promise<void> {
     logger.info('Shutting down...');
-
-    // Stop accepting new connections
-    if (this.server) {
-      const server = this.server;
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+    if (!this.shutdownCoordinator) {
+      this.shutdownCoordinator = new ServerShutdownCoordinator({
+        stopIntake: async () => {
+          if (!this.server) return;
+          const server = this.server;
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+          this.server = null;
+        },
+        drainWorkersAndReleaseLeases: async () => {
+          destroyEventRuntime();
+          await this.canonicalRuntime?.close();
+          this.canonicalRuntime = null;
+          await closeServerMemoryComposition();
+        },
+        closeServicesAndConnections: async () => {
+          await destroyLLM();
+          await destroySkillManager();
+          await destroyToolManager();
+          await destroyWorkflowEngine();
+          await destroyPromptManager();
+          await closeDatabases();
+        },
       });
-      this.server = null;
     }
-
-    // Cleanup services
-    destroyEventRuntime();
-    await this.canonicalRuntime?.close();
-    this.canonicalRuntime = null;
-    await closeServerMemoryComposition();
-    await destroyLLM();
-    await destroySkillManager();
-    await destroyToolManager();
-    await destroyWorkflowEngine();
-    await destroyPromptManager();
-
-    // Close databases
-    await closeDatabases();
-
+    await this.shutdownCoordinator.stop();
     logger.info('Shutdown complete');
   }
 
