@@ -93,12 +93,21 @@ export class DockerEngineCliClient implements DockerEngineClient {
     containerReference: string
   ): Promise<DockerContainerInspection | null> {
     const safeReference = validContainerReference(containerReference);
-    const result = await this.transport.run(defaultRequest(['container', 'inspect', safeReference]));
-    if (successful(result)) {
-      return parseContainerInspection(result.stdout);
+    const initial = await this.inspect(safeReference);
+    if (successful(initial)) {
+      return parseContainerInspection(initial.stdout);
     }
     if (await this.containerIsMissing(safeReference)) return null;
-    throw dockerFailure('Docker container inspection failed.', 'container inspect', result);
+
+    // A create can become visible to `container ls` immediately after the
+    // initial inspect reported it missing. Re-inspect once to reconcile that
+    // boundary race; persistent failures still fail closed below.
+    const reconciled = await this.inspect(safeReference);
+    if (successful(reconciled)) {
+      return parseContainerInspection(reconciled.stdout);
+    }
+    if (await this.containerIsMissing(safeReference)) return null;
+    throw dockerFailure('Docker container inspection failed.', 'container inspect', reconciled);
   }
 
   async stopContainer(containerReference: string, timeoutSeconds: number): Promise<void> {
@@ -143,6 +152,12 @@ export class DockerEngineCliClient implements DockerEngineClient {
         id === containerReference ||
         id.startsWith(containerReference) ||
         name === containerReference
+    );
+  }
+
+  private inspect(containerReference: string): Promise<DockerCliResult> {
+    return this.transport.run(
+      defaultRequest(['container', 'inspect', containerReference])
     );
   }
 

@@ -152,6 +152,25 @@ describe('DockerEngineCliClient', () => {
     expect(transport.requests.map(({ args }) => args[1])).toEqual(['inspect', 'ls']);
   });
 
+  it('re-inspects when container creation races the absence reconciliation', async () => {
+    const transport = new FakeTransport([
+      result('', 'No such container', 1),
+      result(JSON.stringify({ ID: 'container123', Names: 'hypha-sandbox-1' })),
+      result(inspection()),
+    ]);
+    const client = new DockerEngineCliClient(transport);
+
+    await expect(client.inspectContainer('hypha-sandbox-1')).resolves.toMatchObject({
+      id: 'container123',
+      running: true,
+    });
+    expect(transport.requests.map(({ args }) => args.slice(0, 2))).toEqual([
+      ['container', 'inspect'],
+      ['container', 'ls'],
+      ['container', 'inspect'],
+    ]);
+  });
+
   it('does not treat daemon or listing failure as a missing container', async () => {
     const secret = 'daemon-secret-that-must-not-leak';
     const client = new DockerEngineCliClient(
