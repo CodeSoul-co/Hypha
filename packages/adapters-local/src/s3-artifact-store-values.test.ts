@@ -155,6 +155,26 @@ describe('S3 Artifact Store values', () => {
     }
   );
 
+  it.each(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'])(
+    'normalizes S3 network outage %s as retryable Store unavailability',
+    (providerCode) => {
+      const secret = 'network-detail-must-not-leak';
+      const normalized = normalizeS3ArtifactStoreError(
+        Object.assign(new Error(secret), {
+          code: providerCode,
+        }),
+        'head'
+      );
+
+      expect(normalized.normalizedError).toMatchObject({
+        code: 'ARTIFACT_STORE_UNAVAILABLE',
+        retryable: true,
+        details: { operation: 'head', providerCode },
+      });
+      expect(JSON.stringify(normalized.normalizedError)).not.toContain(secret);
+    }
+  );
+
   it('bounds untrusted provider error names before adding diagnostics', () => {
     const secret = 'SecretProviderCode';
     const normalized = normalizeS3ArtifactStoreError(

@@ -5,6 +5,17 @@ import { ArtifactStoreAdapterError, artifactStoreError } from './artifact-store-
 export const HYPHA_CONTENT_HASH_METADATA_KEY = 'hypha-content-hash';
 export const HYPHA_USER_METADATA_KEY = 'hypha-user-metadata';
 
+const RETRYABLE_S3_NETWORK_CODES = new Set([
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EPIPE',
+  'ETIMEDOUT',
+]);
+
 export interface S3ArtifactObjectState {
   sizeBytes: number;
   mimeType?: string;
@@ -211,7 +222,11 @@ export function normalizeS3ArtifactStoreError(
       { operation, providerCode }
     );
   }
-  if (status === 429 || (status !== undefined && status >= 500)) {
+  if (
+    status === 429 ||
+    (status !== undefined && status >= 500) ||
+    RETRYABLE_S3_NETWORK_CODES.has(providerCode)
+  ) {
     return artifactStoreError(
       'ARTIFACT_STORE_UNAVAILABLE',
       'S3 Artifact Store is temporarily unavailable.',

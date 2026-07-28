@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createServer } from 'node:net';
 import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'minio';
@@ -29,6 +30,7 @@ let containerCreated = false;
 
 beforeAll(async () => {
   const image = `${minioImage}@${minioDigest}`;
+  const port = await findAvailableLoopbackPort();
   await requireDocker(['image', 'inspect', image]);
   await requireDocker([
     'run',
@@ -36,7 +38,7 @@ beforeAll(async () => {
     '--name',
     containerName,
     '-p',
-    '127.0.0.1::9000',
+    `127.0.0.1:${port}:9000`,
     '-e',
     `MINIO_ROOT_USER=${accessKey}`,
     '-e',
@@ -51,8 +53,6 @@ beforeAll(async () => {
   ]);
   containerCreated = true;
 
-  const portResult = await requireDocker(['port', containerName, '9000/tcp']);
-  const port = parsePublishedPort(portResult.stdout);
   const client = new Client({
     endPoint: '127.0.0.1',
     port,
@@ -244,6 +244,40 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
     }
   }, 30_000);
 
+  it('reports a real MinIO outage as retryable and recovers through the same Store', async () => {
+    const { client, store } = requireFixture();
+    const ref = await store.put(
+      putRequest('objects/provider-outage.bin', Uint8Array.from([10, 11, 12]))
+    );
+    let containerRunning = true;
+
+    try {
+      await requireDocker(['stop', containerName]);
+      containerRunning = false;
+
+      await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
+      await expect(store.head(ref)).rejects.toMatchObject({
+        normalizedError: {
+          code: 'ARTIFACT_STORE_UNAVAILABLE',
+          retryable: true,
+        },
+      });
+
+      await requireDocker(['start', containerName]);
+      containerRunning = true;
+      await waitForStoreHealthy(store);
+
+      await expect(store.head(ref)).resolves.toMatchObject({ sizeBytes: 3 });
+    } finally {
+      if (!containerRunning) {
+        await requireDocker(['start', containerName]);
+      }
+      await waitForMinio(client);
+      await waitForStoreHealthy(store);
+      await store.delete(ref);
+    }
+  }, 60_000);
+
   it('fails readiness closed when the real bucket suspends versioning', async () => {
     const { client, port } = requireFixture();
     await client.setBucketVersioning(bucket, { Status: 'Suspended' });
@@ -335,6 +369,15 @@ async function waitForMinio(client: Client): Promise<void> {
   throw lastError instanceof Error ? lastError : new Error('MinIO did not become ready.');
 }
 
+async function waitForStoreHealthy(store: S3ExecutionArtifactStore): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const health = await store.health();
+    if (health.status === 'healthy') return;
+    await delay(250);
+  }
+  throw new Error('S3 Artifact Store did not recover after MinIO restarted.');
+}
+
 async function requireDocker(args: string[]): Promise<DockerCliResult> {
   const result = await runDocker(args);
   expect(result.outcome).toBe('exited');
@@ -351,15 +394,6 @@ function runDocker(args: string[]): Promise<DockerCliResult> {
     maxCombinedOutputBytes: 2 * 1024 * 1024,
     signal: new AbortController().signal,
   });
-}
-
-function parsePublishedPort(output: string): number {
-  const match = /127\.0\.0\.1:(\d+)/u.exec(output);
-  const port = match ? Number(match[1]) : Number.NaN;
-  if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error('Docker did not publish the MinIO API on a valid loopback port.');
-  }
-  return port;
 }
 
 function putRequest(objectKey: string, content: Uint8Array) {
@@ -461,4 +495,24 @@ function contentHash(bytes: Uint8Array): string {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function findAvailableLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('Could not reserve a loopback port for the MinIO fixture.'));
+        return;
+      }
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve(address.port);
+      });
+    });
+  });
 }
