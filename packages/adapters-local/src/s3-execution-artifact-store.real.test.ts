@@ -196,6 +196,54 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
     }
   }, 30_000);
 
+  it('recovers health and operations after real credential invalidation and rotation', async () => {
+    const { port } = requireFixture();
+    let credentials = {
+      accessKeyId: accessKey,
+      secretAccessKey: secretKey,
+    };
+    let credentialResolutions = 0;
+    const rotatingStore = createStore(port, {
+      credentialProvider: () => {
+        credentialResolutions += 1;
+        return credentials;
+      },
+    });
+    let ref: ArtifactStorageRef | undefined;
+
+    try {
+      await expect(rotatingStore.health()).resolves.toMatchObject({ status: 'healthy' });
+      ref = await rotatingStore.put(
+        putRequest('objects/credential-rotation.bin', Uint8Array.from([7, 8, 9]))
+      );
+      const resolutionsBeforeInvalidation = credentialResolutions;
+
+      credentials = {
+        accessKeyId: 'invalid-access-key',
+        secretAccessKey: 'invalid-secret-key',
+      };
+      await expect(rotatingStore.health()).resolves.toMatchObject({ status: 'unhealthy' });
+      await expect(rotatingStore.head(ref)).rejects.toMatchObject({
+        normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' },
+      });
+      expect(credentialResolutions).toBeGreaterThan(resolutionsBeforeInvalidation);
+
+      credentials = {
+        accessKeyId: accessKey,
+        secretAccessKey: secretKey,
+      };
+      await expect(rotatingStore.health()).resolves.toMatchObject({ status: 'healthy' });
+      await expect(rotatingStore.head(ref)).resolves.toMatchObject({ sizeBytes: 3 });
+    } finally {
+      credentials = {
+        accessKeyId: accessKey,
+        secretAccessKey: secretKey,
+      };
+      if (ref) await rotatingStore.delete(ref);
+      await rotatingStore.close();
+    }
+  }, 30_000);
+
   it('fails readiness closed when the real bucket suspends versioning', async () => {
     const { client, port } = requireFixture();
     await client.setBucketVersioning(bucket, { Status: 'Suspended' });
@@ -225,14 +273,17 @@ interface RealMinioFixture {
   port: number;
 }
 
-function createStore(port: number): S3ExecutionArtifactStore {
+function createStore(
+  port: number,
+  transportOverrides: Partial<MinioS3ArtifactTransportOptions> = {}
+): S3ExecutionArtifactStore {
   return new S3ExecutionArtifactStore({
     id: 'artifact-store.s3.minio-real',
     bucket,
     region,
     maxObjectBytes: 16 * 1024 * 1024,
     maxMetadataBytes: 2 * 1024,
-    transportOptions: transportOptions(port),
+    transportOptions: transportOptions(port, transportOverrides),
   });
 }
 

@@ -133,6 +133,28 @@ describe('S3 Artifact Store values', () => {
     expect(JSON.stringify(normalized.normalizedError)).not.toContain(secret);
   });
 
+  it.each(['InvalidAccessKeyId', 'SignatureDoesNotMatch'])(
+    'normalizes MinIO %s errors using the provider code and top-level status',
+    (providerCode) => {
+      const secret = 'provider-message-must-not-leak';
+      const normalized = normalizeS3ArtifactStoreError(
+        Object.assign(new Error(secret), {
+          name: 'S3Error',
+          code: providerCode,
+          statusCode: 403,
+        }),
+        'head'
+      );
+
+      expect(normalized.normalizedError).toMatchObject({
+        code: 'ARTIFACT_PERMISSION_DENIED',
+        retryable: false,
+        details: { operation: 'head', providerCode },
+      });
+      expect(JSON.stringify(normalized.normalizedError)).not.toContain(secret);
+    }
+  );
+
   it('bounds untrusted provider error names before adding diagnostics', () => {
     const secret = 'SecretProviderCode';
     const normalized = normalizeS3ArtifactStoreError(

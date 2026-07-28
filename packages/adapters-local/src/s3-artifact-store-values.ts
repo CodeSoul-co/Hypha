@@ -186,7 +186,7 @@ export function normalizeS3ArtifactStoreError(
   if (
     status === 401 ||
     status === 403 ||
-    ['AccessDenied', 'InvalidAccessKeyId'].includes(providerCode)
+    ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch'].includes(providerCode)
   ) {
     return artifactStoreError(
       'ARTIFACT_PERMISSION_DENIED',
@@ -295,14 +295,20 @@ function requireContentHash(value: string | undefined): string {
 
 function s3StatusCode(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
-  const metadata = (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata;
-  return typeof metadata?.httpStatusCode === 'number' ? metadata.httpStatusCode : undefined;
+  const candidate = error as {
+    $metadata?: { httpStatusCode?: unknown };
+    statusCode?: unknown;
+  };
+  const status = candidate.$metadata?.httpStatusCode ?? candidate.statusCode;
+  return typeof status === 'number' ? status : undefined;
 }
 
 function s3ErrorName(error: unknown): string {
   if (!error || typeof error !== 'object') return 'UnknownError';
   const candidate = error as { name?: unknown; Code?: unknown; code?: unknown };
-  for (const value of [candidate.name, candidate.Code, candidate.code]) {
+  // AWS SDK errors expose the provider code as `name`; MinIO uses the more
+  // specific `Code`/`code` fields and leaves `name` as the generic `S3Error`.
+  for (const value of [candidate.Code, candidate.code, candidate.name]) {
     if (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(value)) {
       return value;
     }

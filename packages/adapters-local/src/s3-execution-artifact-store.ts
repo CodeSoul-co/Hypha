@@ -277,7 +277,9 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       };
     }
     try {
-      await this.ensureReady();
+      // Health must reflect the current credential and bucket state rather
+      // than a previously cached successful startup check.
+      await this.transport.checkBucket(this.bucket);
       return {
         status: 'healthy',
         checkedAt: this.now(),
@@ -320,8 +322,14 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
   }
 
   private ensureReady(): Promise<void> {
-    this.readiness ??= this.transport.checkBucket(this.bucket);
-    return this.readiness;
+    const readiness = this.readiness ?? this.transport.checkBucket(this.bucket);
+    this.readiness = readiness;
+    return readiness.catch((error: unknown) => {
+      // A rotated credential can recover after a transient authentication
+      // failure; do not permanently poison the Store with a rejected Promise.
+      if (this.readiness === readiness) this.readiness = undefined;
+      throw error;
+    });
   }
 
   private assertOwnedVersionedRef(ref: ArtifactStorageRef): asserts ref is ArtifactStorageRef & {

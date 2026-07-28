@@ -253,6 +253,28 @@ describe('S3ExecutionArtifactStore', () => {
       store.put(request('objects/closed.bin', Uint8Array.from([1])))
     ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_STORE_UNAVAILABLE' } });
   });
+
+  it('rechecks health and retries readiness after credential recovery', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport);
+    transport.checkBucketError = providerError('AccessDenied', 403);
+
+    await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
+    await expect(
+      store.put(request('objects/recovered.bin', Uint8Array.from([1])))
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' },
+    });
+
+    transport.checkBucketError = undefined;
+    const ref = await store.put(request('objects/recovered.bin', Uint8Array.from([1])));
+    await expect(store.health()).resolves.toMatchObject({ status: 'healthy' });
+
+    transport.checkBucketError = providerError('AccessDenied', 403);
+    await expect(store.health()).resolves.toMatchObject({ status: 'unhealthy' });
+    transport.checkBucketError = undefined;
+    await expect(store.head(ref)).resolves.toMatchObject({ sizeBytes: 1 });
+  });
 });
 
 interface FakeObject extends S3ArtifactObjectState {
@@ -271,6 +293,7 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
   readonly versions = new Map<string, Map<string, FakeObject>>();
   readonly currentVersions = new Map<string, string>();
   versioningEnabled = true;
+  checkBucketError?: unknown;
   omitVersionOnWrite = false;
   corruptPublishedState = false;
   nextError?: unknown;
@@ -397,6 +420,7 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
   }
 
   private async checkBucketState(_bucket: string): Promise<void> {
+    if (this.checkBucketError) throw this.checkBucketError;
     if (!this.versioningEnabled) throw providerError('InvalidBucketState', 400);
   }
 
