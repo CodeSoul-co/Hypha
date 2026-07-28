@@ -8,8 +8,10 @@ import {
   SESSION_COMMAND_TYPES,
   type CancelSessionCommandsRequest,
   type CancelSessionCommandsResult,
+  type CloseDeadLetterSessionCommandRequest,
   type ListStuckSessionCommandsRequest,
   type RedriveDeadLetterSessionCommandRequest,
+  type SessionCommandDeadLetterResolution,
   type SessionCommandRedrive,
   type SessionCommandRecord,
   type SessionQueueScope,
@@ -42,6 +44,33 @@ export const sessionCommandRedriveSchema = z
   })
   .strict() satisfies ZodType<SessionCommandRedrive>;
 
+export const sessionCommandDeadLetterResolutionSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    disposition: z.enum(['redriven', 'closed']),
+    operatorId: nonEmptyStringSchema,
+    reason: nonEmptyStringSchema,
+    resolvedAt: timestampSchema,
+    redriveCommandId: nonEmptyStringSchema.optional(),
+  })
+  .strict()
+  .superRefine((resolution, context) => {
+    if (resolution.disposition === 'redriven' && !resolution.redriveCommandId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['redriveCommandId'],
+        message: 'redriveCommandId is required for redriven dead letters',
+      });
+    }
+    if (resolution.disposition === 'closed' && resolution.redriveCommandId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['redriveCommandId'],
+        message: 'redriveCommandId is only valid for redriven dead letters',
+      });
+    }
+  }) satisfies ZodType<SessionCommandDeadLetterResolution>;
+
 export const sessionCommandRecordSchema = z
   .object({
     id: nonEmptyStringSchema,
@@ -71,6 +100,7 @@ export const sessionCommandRecordSchema = z
     expiresAt: timestampSchema.optional(),
     completedAt: timestampSchema.optional(),
     redrive: sessionCommandRedriveSchema.optional(),
+    deadLetterResolution: sessionCommandDeadLetterResolutionSchema.optional(),
   })
   .strict()
   .superRefine((record, context) => {
@@ -125,7 +155,9 @@ export const sessionCommandRecordSchema = z
       });
     }
     if (
-      ['applied', 'rejected', 'expired', 'failed', 'dead_letter'].includes(record.status) &&
+      ['applied', 'rejected', 'expired', 'failed', 'dead_letter', 'dead_letter_resolved'].includes(
+        record.status
+      ) &&
       !record.completedAt
     ) {
       context.addIssue({
@@ -134,11 +166,28 @@ export const sessionCommandRecordSchema = z
         message: 'completedAt is required for terminal commands',
       });
     }
-    if (['rejected', 'failed', 'dead_letter'].includes(record.status) && !record.rejectionCode) {
+    if (
+      ['rejected', 'failed', 'dead_letter', 'dead_letter_resolved'].includes(record.status) &&
+      !record.rejectionCode
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['rejectionCode'],
         message: 'rejectionCode is required for rejected commands',
+      });
+    }
+    if (record.status === 'dead_letter_resolved' && !record.deadLetterResolution) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['deadLetterResolution'],
+        message: 'deadLetterResolution is required for resolved dead letters',
+      });
+    }
+    if (record.status !== 'dead_letter_resolved' && record.deadLetterResolution) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['deadLetterResolution'],
+        message: 'deadLetterResolution is only valid for resolved dead letters',
       });
     }
   }) satisfies ZodType<SessionCommandRecord>;
@@ -156,6 +205,32 @@ const sessionCommandRedriveJsonSchema: JsonSchema = {
     requestedAt: timestampProperty,
   },
   additionalProperties: false,
+};
+const sessionCommandDeadLetterResolutionJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['version', 'disposition', 'operatorId', 'reason', 'resolvedAt'],
+  properties: {
+    version: { const: '1.0.0' },
+    disposition: { type: 'string', enum: ['redriven', 'closed'] },
+    operatorId: stringProperty,
+    reason: stringProperty,
+    resolvedAt: timestampProperty,
+    redriveCommandId: stringProperty,
+  },
+  additionalProperties: false,
+  allOf: [
+    {
+      if: { properties: { disposition: { const: 'redriven' } }, required: ['disposition'] },
+      then: {
+        properties: { redriveCommandId: stringProperty },
+        required: ['redriveCommandId'],
+      },
+    },
+    {
+      if: { properties: { disposition: { const: 'closed' } }, required: ['disposition'] },
+      then: { not: { required: ['redriveCommandId'] } },
+    },
+  ],
 };
 
 export const sessionCommandRecordJsonSchema: JsonSchema = {
@@ -204,6 +279,7 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     expiresAt: timestampProperty,
     completedAt: timestampProperty,
     redrive: sessionCommandRedriveJsonSchema,
+    deadLetterResolution: sessionCommandDeadLetterResolutionJsonSchema,
   },
   additionalProperties: false,
   allOf: [
@@ -222,7 +298,16 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     {
       if: {
         properties: {
-          status: { enum: ['applied', 'rejected', 'expired', 'failed', 'dead_letter'] },
+          status: {
+            enum: [
+              'applied',
+              'rejected',
+              'expired',
+              'failed',
+              'dead_letter',
+              'dead_letter_resolved',
+            ],
+          },
         },
         required: ['status'],
       },
@@ -230,10 +315,20 @@ export const sessionCommandRecordJsonSchema: JsonSchema = {
     },
     {
       if: {
-        properties: { status: { enum: ['rejected', 'failed', 'dead_letter'] } },
+        properties: {
+          status: { enum: ['rejected', 'failed', 'dead_letter', 'dead_letter_resolved'] },
+        },
         required: ['status'],
       },
       then: { properties: { rejectionCode: stringProperty }, required: ['rejectionCode'] },
+    },
+    {
+      if: { properties: { status: { const: 'dead_letter_resolved' } }, required: ['status'] },
+      then: {
+        properties: { deadLetterResolution: sessionCommandDeadLetterResolutionJsonSchema },
+        required: ['deadLetterResolution'],
+      },
+      else: { not: { required: ['deadLetterResolution'] } },
     },
   ],
 };
@@ -421,6 +516,44 @@ export const redriveDeadLetterSessionCommandRequestDefinition =
     },
   });
 
+export const closeDeadLetterSessionCommandRequestSchema = z
+  .object({
+    version: z.literal('1.0.0'),
+    scope: sessionQueueScopeSchema,
+    commandId: nonEmptyStringSchema,
+    operatorId: nonEmptyStringSchema,
+    reason: nonEmptyStringSchema,
+    closedAt: timestampSchema,
+  })
+  .strict() satisfies ZodType<CloseDeadLetterSessionCommandRequest>;
+
+export const closeDeadLetterSessionCommandRequestDefinition =
+  defineSpecSchema<CloseDeadLetterSessionCommandRequest>({
+    id: 'CloseDeadLetterSessionCommandRequest',
+    zod: closeDeadLetterSessionCommandRequestSchema,
+    jsonSchema: {
+      type: 'object',
+      required: ['version', 'scope', 'commandId', 'operatorId', 'reason', 'closedAt'],
+      properties: {
+        version: { const: '1.0.0' },
+        scope: sessionQueueScopeJsonSchema,
+        commandId: stringProperty,
+        operatorId: stringProperty,
+        reason: stringProperty,
+        closedAt: timestampProperty,
+      },
+      additionalProperties: false,
+    },
+    example: {
+      version: '1.0.0',
+      scope: { userId: 'user.example', sessionId: 'session.example' },
+      commandId: 'command.session.failed',
+      operatorId: 'operator.example',
+      reason: 'Failure was inspected and requires no replay',
+      closedAt: '2026-07-18T06:00:00.000Z',
+    },
+  });
+
 export const listStuckSessionCommandsRequestSchema = z
   .object({
     scope: sessionQueueScopeSchema,
@@ -446,6 +579,7 @@ export const sessionQueueHealthSnapshotSchema = z
     queuedCommands: z.number().int().min(0),
     claimedCommands: z.number().int().min(0),
     deadLetterCommands: z.number().int().min(0),
+    resolvedDeadLetterCommands: z.number().int().min(0),
     retryingCommands: z.number().int().min(0),
     redeliveredCommands: z.number().int().min(0),
     recoveredExpiredLeases: z.number().int().min(0),
@@ -463,6 +597,7 @@ export const sessionQueueHealthSnapshotSchema = z
     if (
       snapshot.pendingCommands > snapshot.totalCommands ||
       snapshot.deadLetterCommands > snapshot.totalCommands ||
+      snapshot.resolvedDeadLetterCommands > snapshot.totalCommands ||
       snapshot.retryingCommands > snapshot.pendingCommands ||
       snapshot.redeliveredCommands > snapshot.totalCommands
     ) {
@@ -495,6 +630,7 @@ export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueu
       'queuedCommands',
       'claimedCommands',
       'deadLetterCommands',
+      'resolvedDeadLetterCommands',
       'retryingCommands',
       'redeliveredCommands',
       'recoveredExpiredLeases',
@@ -506,6 +642,7 @@ export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueu
       queuedCommands: { type: 'integer', minimum: 0 },
       claimedCommands: { type: 'integer', minimum: 0 },
       deadLetterCommands: { type: 'integer', minimum: 0 },
+      resolvedDeadLetterCommands: { type: 'integer', minimum: 0 },
       retryingCommands: { type: 'integer', minimum: 0 },
       redeliveredCommands: { type: 'integer', minimum: 0 },
       recoveredExpiredLeases: { type: 'integer', minimum: 0 },
@@ -520,6 +657,7 @@ export const sessionQueueHealthSnapshotDefinition = defineSpecSchema<SessionQueu
     queuedCommands: 1,
     claimedCommands: 1,
     deadLetterCommands: 1,
+    resolvedDeadLetterCommands: 0,
     retryingCommands: 1,
     redeliveredCommands: 1,
     recoveredExpiredLeases: 0,
@@ -532,6 +670,7 @@ export const sessionQueueContractDefinitions = [
   cancelSessionCommandsRequestDefinition,
   cancelSessionCommandsResultDefinition,
   redriveDeadLetterSessionCommandRequestDefinition,
+  closeDeadLetterSessionCommandRequestDefinition,
   sessionQueueHealthSnapshotDefinition,
 ] as const;
 export const sessionQueueContractJsonSchemas = exportSpecJsonSchemas(
@@ -554,6 +693,12 @@ export function validateRedriveDeadLetterSessionCommandRequest(
   input: unknown
 ): RedriveDeadLetterSessionCommandRequest {
   return redriveDeadLetterSessionCommandRequestDefinition.parse(input);
+}
+
+export function validateCloseDeadLetterSessionCommandRequest(
+  input: unknown
+): CloseDeadLetterSessionCommandRequest {
+  return closeDeadLetterSessionCommandRequestDefinition.parse(input);
 }
 
 export function validateListStuckSessionCommandsRequest(

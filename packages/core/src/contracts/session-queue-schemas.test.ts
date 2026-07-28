@@ -6,6 +6,10 @@ import {
   cancelSessionCommandsRequestSchema,
   cancelSessionCommandsResultDefinition,
   cancelSessionCommandsResultSchema,
+  closeDeadLetterSessionCommandRequestDefinition,
+  closeDeadLetterSessionCommandRequestSchema,
+  redriveDeadLetterSessionCommandRequestDefinition,
+  redriveDeadLetterSessionCommandRequestSchema,
   sessionQueueContractJsonSchemas,
   sessionCommandRecordDefinition,
   sessionCommandRecordExample,
@@ -60,6 +64,29 @@ describe('Session Queue contracts', () => {
       cancelSessionCommandsRequestSchema.parse({
         ...cancelSessionCommandsRequestDefinition.example,
         scope: { userId: 'user.example', sessionId: 'session.example', runId: 'run.leaked' },
+      })
+    ).toThrow();
+  });
+
+  it('exports strict, versioned dead-letter redrive and close contracts', () => {
+    expect(
+      redriveDeadLetterSessionCommandRequestSchema.parse(
+        redriveDeadLetterSessionCommandRequestDefinition.example
+      )
+    ).toEqual(redriveDeadLetterSessionCommandRequestDefinition.example);
+    expect(
+      closeDeadLetterSessionCommandRequestSchema.parse(
+        closeDeadLetterSessionCommandRequestDefinition.example
+      )
+    ).toEqual(closeDeadLetterSessionCommandRequestDefinition.example);
+    expect(sessionQueueContractJsonSchemas).toHaveProperty(
+      'RedriveDeadLetterSessionCommandRequest'
+    );
+    expect(sessionQueueContractJsonSchemas).toHaveProperty('CloseDeadLetterSessionCommandRequest');
+    expect(() =>
+      closeDeadLetterSessionCommandRequestSchema.parse({
+        ...closeDeadLetterSessionCommandRequestDefinition.example,
+        reason: '',
       })
     ).toThrow();
   });

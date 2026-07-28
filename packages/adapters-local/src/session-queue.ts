@@ -9,12 +9,14 @@ import {
   hashCanonicalJson,
   validateCancelSessionCommandsRequest,
   validateCancelSessionCommandsResult,
+  validateCloseDeadLetterSessionCommandRequest,
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
   type CancelSessionCommandsRequest,
   type CancelSessionCommandsResult,
   type ClaimSessionCommandRequest,
+  type CloseDeadLetterSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
@@ -441,6 +443,20 @@ export class SQLiteSessionQueue implements SessionQueue {
           requestedAt,
         },
       });
+      this.updateRecord(
+        validateSessionCommandRecord({
+          ...source,
+          status: 'dead_letter_resolved',
+          deadLetterResolution: {
+            version: '1.0.0',
+            disposition: 'redriven',
+            operatorId: validated.operatorId,
+            reason: validated.reason,
+            resolvedAt: requestedAt,
+            redriveCommandId: record.id,
+          },
+        })
+      );
       this.insertRecord(scopeKey, record);
       this.db
         .prepare(
@@ -449,6 +465,50 @@ export class SQLiteSessionQueue implements SessionQueue {
         )
         .run(scopeKey, validated.idempotencyKey, validated.id, fingerprint);
       return structuredClone(record);
+    });
+  }
+
+  async closeDeadLetter(
+    request: CloseDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateCloseDeadLetterSessionCommandRequest(request);
+    const scopeKey = sessionKey(validated.scope);
+    return this.transaction('close dead letter', () => {
+      const record = this.readRecord(validated.commandId);
+      const resolution = {
+        version: '1.0.0' as const,
+        disposition: 'closed' as const,
+        operatorId: validated.operatorId,
+        reason: validated.reason,
+        resolvedAt: validated.closedAt,
+      };
+      if (
+        record &&
+        sessionKey(scopeFromCommand(record)) === scopeKey &&
+        record.status === 'dead_letter_resolved' &&
+        record.deadLetterResolution?.disposition === 'closed' &&
+        hashCanonicalJson(record.deadLetterResolution) === hashCanonicalJson(resolution)
+      ) {
+        return structuredClone(record);
+      }
+      if (
+        !record ||
+        sessionKey(scopeFromCommand(record)) !== scopeKey ||
+        record.status !== 'dead_letter'
+      ) {
+        conflict(
+          'RUNTIME_SESSION_QUEUE_CONFLICT',
+          'Only an unresolved dead-letter command in the requested scope can be closed',
+          { commandId: validated.commandId }
+        );
+      }
+      const updated = validateSessionCommandRecord({
+        ...record,
+        status: 'dead_letter_resolved',
+        deadLetterResolution: resolution,
+      });
+      this.updateRecord(updated);
+      return structuredClone(updated);
     });
   }
 

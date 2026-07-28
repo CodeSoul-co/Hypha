@@ -434,9 +434,90 @@ describe('InMemorySessionQueue', () => {
       queue.redriveDeadLetter({ ...request, reason: 'Different operator decision' })
     ).rejects.toMatchObject({ code: 'RUNTIME_IDEMPOTENCY_CONFLICT' });
     await expect(queue.list({ scope })).resolves.toMatchObject([
-      { id: 'command.dead', status: 'dead_letter', rejectionCode: 'provider_outage' },
+      {
+        id: 'command.dead',
+        status: 'dead_letter_resolved',
+        rejectionCode: 'provider_outage',
+        deadLetterResolution: {
+          disposition: 'redriven',
+          operatorId: 'operator.1',
+          reason: 'Provider outage resolved',
+          resolvedAt: '2026-07-18T06:01:00.000Z',
+          redriveCommandId: 'command.redrive',
+        },
+      },
       { id: 'command.redrive', status: 'queued' },
     ]);
+    await expect(
+      queue.redriveDeadLetter({
+        ...request,
+        id: 'command.redrive.again',
+        idempotencyKey: 'redrive.command.dead.2',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+  });
+
+  it('closes inspected dead-letter work idempotently and prevents later redrive', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.dead.close'));
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await queue.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-18T06:00:00.500Z',
+      rejectionCode: 'invalid_payload',
+      deadLetter: true,
+    });
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      commandId: 'command.dead.close',
+      operatorId: 'operator.1',
+      reason: 'Payload inspected; no replay is safe',
+      closedAt: '2026-07-18T06:01:00.000Z',
+    };
+
+    await expect(queue.closeDeadLetter(request)).resolves.toMatchObject({
+      id: 'command.dead.close',
+      status: 'dead_letter_resolved',
+      rejectionCode: 'invalid_payload',
+      deadLetterResolution: {
+        version: '1.0.0',
+        disposition: 'closed',
+        operatorId: 'operator.1',
+        reason: 'Payload inspected; no replay is safe',
+        resolvedAt: '2026-07-18T06:01:00.000Z',
+      },
+    });
+    await expect(queue.closeDeadLetter(request)).resolves.toMatchObject({
+      status: 'dead_letter_resolved',
+    });
+    await expect(
+      queue.closeDeadLetter({ ...request, reason: 'Conflicting operator decision' })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(
+      queue.redriveDeadLetter({
+        version: '1.0.0',
+        scope,
+        sourceCommandId: 'command.dead.close',
+        id: 'command.closed.redrive',
+        idempotencyKey: 'redrive.closed',
+        operatorId: 'operator.2',
+        reason: 'Try to replay a closed item',
+        requestedAt: '2026-07-18T06:02:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(queue.health()).resolves.toMatchObject({
+      details: {
+        deadLetterCommands: 0,
+        resolvedDeadLetterCommands: 1,
+      },
+    });
   });
 
   it('rejects operator redrive for a command that is not a dead letter', async () => {

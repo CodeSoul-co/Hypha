@@ -439,9 +439,27 @@ describe('SQLiteSessionQueue', () => {
       reopened.redriveDeadLetter({ ...request, reason: 'Different operator decision' })
     ).rejects.toMatchObject({ code: 'RUNTIME_IDEMPOTENCY_CONFLICT' });
     await expect(reopened.list({ scope })).resolves.toMatchObject([
-      { id: 'command.dead', status: 'dead_letter', rejectionCode: 'provider_outage' },
+      {
+        id: 'command.dead',
+        status: 'dead_letter_resolved',
+        rejectionCode: 'provider_outage',
+        deadLetterResolution: {
+          disposition: 'redriven',
+          operatorId: 'operator.1',
+          reason: 'Provider outage resolved',
+          resolvedAt: '2026-07-22T06:01:00.000Z',
+          redriveCommandId: 'command.redrive',
+        },
+      },
       { id: 'command.redrive', status: 'queued' },
     ]);
+    await expect(
+      reopened.redriveDeadLetter({
+        ...request,
+        id: 'command.redrive.again',
+        idempotencyKey: 'redrive.command.dead.2',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
   });
 
   it('atomically converges concurrent redrive requests from separate connections', async () => {
@@ -479,6 +497,108 @@ describe('SQLiteSessionQueue', () => {
     ]);
     expect(outcomes.map((record) => record.status).sort()).toEqual(['queued', 'reused']);
     await expect(first.list({ scope })).resolves.toHaveLength(2);
+  });
+
+  it('persists an idempotent dead-letter closure across restart', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    await first.enqueue(command('command.dead.close'));
+    const claimed = await first.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await first.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-22T06:00:00.500Z',
+      rejectionCode: 'invalid_payload',
+      deadLetter: true,
+    });
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      commandId: 'command.dead.close',
+      operatorId: 'operator.1',
+      reason: 'Payload inspected; no replay is safe',
+      closedAt: '2026-07-22T06:01:00.000Z',
+    };
+    await expect(first.closeDeadLetter(request)).resolves.toMatchObject({
+      status: 'dead_letter_resolved',
+      deadLetterResolution: {
+        disposition: 'closed',
+        operatorId: 'operator.1',
+        reason: 'Payload inspected; no replay is safe',
+      },
+    });
+    first.close();
+    queues.splice(queues.indexOf(first), 1);
+
+    const reopened = openQueue(filename);
+    await expect(reopened.closeDeadLetter(request)).resolves.toMatchObject({
+      status: 'dead_letter_resolved',
+      deadLetterResolution: { disposition: 'closed' },
+    });
+    await expect(
+      reopened.closeDeadLetter({ ...request, operatorId: 'operator.2' })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(reopened.health()).resolves.toMatchObject({
+      details: {
+        deadLetterCommands: 0,
+        resolvedDeadLetterCommands: 1,
+      },
+    });
+  });
+
+  it('serializes competing dead-letter close and redrive decisions across connections', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    const second = openQueue(filename);
+    await first.enqueue(command('command.dead.decision'));
+    const claimed = await first.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await first.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-22T06:00:00.500Z',
+      rejectionCode: 'provider_outage',
+      deadLetter: true,
+    });
+
+    const outcomes = await Promise.allSettled([
+      first.closeDeadLetter({
+        version: '1.0.0',
+        scope,
+        commandId: 'command.dead.decision',
+        operatorId: 'operator.close',
+        reason: 'Close after inspection',
+        closedAt: '2026-07-22T06:01:00.000Z',
+      }),
+      second.redriveDeadLetter({
+        version: '1.0.0',
+        scope,
+        sourceCommandId: 'command.dead.decision',
+        id: 'command.dead.decision.redrive',
+        idempotencyKey: 'redrive.command.dead.decision',
+        operatorId: 'operator.redrive',
+        reason: 'Dependency recovered',
+        requestedAt: '2026-07-22T06:01:00.000Z',
+      }),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const records = await first.list({ scope });
+    const source = records.find((record) => record.id === 'command.dead.decision');
+    expect(source).toMatchObject({ status: 'dead_letter_resolved' });
+    expect(['closed', 'redriven']).toContain(source?.deadLetterResolution?.disposition);
+    expect(records.filter((record) => record.redrive?.sourceCommandId === source?.id)).toHaveLength(
+      source?.deadLetterResolution?.disposition === 'redriven' ? 1 : 0
+    );
   });
 
   it('detects overdue durable claims without changing their persisted status', async () => {

@@ -18,6 +18,7 @@ export const SESSION_COMMAND_STATUSES = [
   'expired',
   'failed',
   'dead_letter',
+  'dead_letter_resolved',
 ] as const;
 
 export const DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS = 5;
@@ -39,6 +40,15 @@ export interface SessionCommandRedrive {
   operatorId: string;
   reason: string;
   requestedAt: string;
+}
+
+export interface SessionCommandDeadLetterResolution {
+  version: '1.0.0';
+  disposition: 'redriven' | 'closed';
+  operatorId: string;
+  reason: string;
+  resolvedAt: string;
+  redriveCommandId?: string;
 }
 
 export interface SessionCommandRecord {
@@ -69,6 +79,7 @@ export interface SessionCommandRecord {
   expiresAt?: string;
   completedAt?: string;
   redrive?: SessionCommandRedrive;
+  deadLetterResolution?: SessionCommandDeadLetterResolution;
 }
 
 export interface EnqueueSessionCommandRequest {
@@ -180,6 +191,15 @@ export interface RedriveDeadLetterSessionCommandRequest {
   maxAttempts?: number;
 }
 
+export interface CloseDeadLetterSessionCommandRequest {
+  version: '1.0.0';
+  scope: SessionQueueScope;
+  commandId: string;
+  operatorId: string;
+  reason: string;
+  closedAt: string;
+}
+
 export interface ListStuckSessionCommandsRequest {
   scope: SessionQueueScope;
   checkedAt: string;
@@ -200,6 +220,7 @@ export interface SessionQueueHealthSnapshot extends Record<string, unknown> {
   queuedCommands: number;
   claimedCommands: number;
   deadLetterCommands: number;
+  resolvedDeadLetterCommands: number;
   retryingCommands: number;
   redeliveredCommands: number;
   recoveredExpiredLeases: number;

@@ -8,6 +8,7 @@ import {
   type CancelSessionCommandsRequest,
   type CancelSessionCommandsResult,
   type ClaimSessionCommandRequest,
+  type CloseDeadLetterSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
@@ -25,6 +26,7 @@ import {
 import {
   validateCancelSessionCommandsRequest,
   validateCancelSessionCommandsResult,
+  validateCloseDeadLetterSessionCommandRequest,
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
@@ -44,6 +46,7 @@ export interface SessionQueue {
   list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]>;
   cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult>;
   redriveDeadLetter(request: RedriveDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
+  closeDeadLetter(request: CloseDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
   listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]>;
   drain(scope: SessionQueueScope): Promise<void>;
   health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }>;
@@ -439,10 +442,64 @@ export class InMemorySessionQueue implements SessionQueue {
         requestedAt,
       },
     });
+    const resolvedSource = validateSessionCommandRecord({
+      ...source,
+      status: 'dead_letter_resolved',
+      deadLetterResolution: {
+        version: '1.0.0',
+        disposition: 'redriven',
+        operatorId: validated.operatorId,
+        reason: validated.reason,
+        resolvedAt: requestedAt,
+        redriveCommandId: record.id,
+      },
+    });
+    this.records.set(resolvedSource.id, resolvedSource);
     this.records.set(record.id, record);
     this.idempotency.set(idempotencyKey, { commandId: record.id, fingerprint });
     this.sessionSequences.set(key, enqueueSequence);
     return structuredClone(record);
+  }
+
+  async closeDeadLetter(
+    request: CloseDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateCloseDeadLetterSessionCommandRequest(request);
+    const record = this.records.get(validated.commandId);
+    const resolution = {
+      version: '1.0.0' as const,
+      disposition: 'closed' as const,
+      operatorId: validated.operatorId,
+      reason: validated.reason,
+      resolvedAt: validated.closedAt,
+    };
+    if (
+      record &&
+      sameScope(scopeFromCommand(record), validated.scope) &&
+      record.status === 'dead_letter_resolved' &&
+      record.deadLetterResolution?.disposition === 'closed' &&
+      hashCanonicalJson(record.deadLetterResolution) === hashCanonicalJson(resolution)
+    ) {
+      return structuredClone(record);
+    }
+    if (
+      !record ||
+      !sameScope(scopeFromCommand(record), validated.scope) ||
+      record.status !== 'dead_letter'
+    ) {
+      throw busError(
+        'RUNTIME_SESSION_QUEUE_CONFLICT',
+        'Only an unresolved dead-letter command in the requested scope can be closed',
+        { commandId: validated.commandId }
+      );
+    }
+    const updated = validateSessionCommandRecord({
+      ...record,
+      status: 'dead_letter_resolved',
+      deadLetterResolution: resolution,
+    });
+    this.records.set(updated.id, updated);
+    return structuredClone(updated);
   }
 
   async listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]> {
@@ -622,6 +679,8 @@ export function createSessionQueueHealthSnapshot(
     queuedCommands: pending.filter((record) => record.status === 'queued').length,
     claimedCommands: pending.filter((record) => record.status === 'claimed').length,
     deadLetterCommands: records.filter((record) => record.status === 'dead_letter').length,
+    resolvedDeadLetterCommands: records.filter((record) => record.status === 'dead_letter_resolved')
+      .length,
     retryingCommands: pending.filter((record) => record.attempts > 0).length,
     redeliveredCommands: records.filter((record) => record.leaseEpoch > 1).length,
     recoveredExpiredLeases,
