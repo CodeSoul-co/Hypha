@@ -10,6 +10,7 @@ import { InMemoryDurableEventStore } from './event-store';
 import { InMemoryProjectionStore, ProjectionEngine } from './projection';
 import { InMemoryRunLeaseStore } from './run-lease-store';
 import { RuntimeHumanWaitService } from './runtime-human-wait-service';
+import { projectRuntimeHumanTasks } from './runtime-human-task';
 
 const scope: RuntimeScope = {
   tenantId: 'tenant.review',
@@ -32,6 +33,7 @@ const eventTypes: FrameworkEventType[] = [
   'human.review.rejected',
   'human.review.expired',
   'human.review.cancelled',
+  'human.review.superseded',
 ];
 
 async function fixture() {
@@ -274,6 +276,125 @@ describe('RuntimeHumanWaitService', () => {
       });
     }
   );
+
+  it('atomically supersedes a task after restart without resolving its Human Wait', async () => {
+    const target = await fixture();
+    const original = {
+      taskId: 'human-task.tool-old',
+      kind: 'tool' as const,
+      subjectRef: 'tool:filesystem.write@revision-7',
+      subjectHash: `sha256:${'b'.repeat(64)}`,
+      requestedBy: scope.userId,
+      allowedDecisionScopes: ['runtime.human-task.decide'],
+      requestedAt: '2026-07-23T08:00:30.000Z',
+      expiresAt: '2026-07-24T08:00:30.000Z',
+    };
+    await target.service.create({
+      ...createCommand(),
+      commandId: 'create.tool-supersede',
+      waitId: 'wait.tool-supersede',
+      pendingActionRef: 'invocation.write',
+      humanTasks: [original],
+    });
+    const restarted = new RuntimeHumanWaitService({
+      events: target.events,
+      projections: new ProjectionEngine({ events: target.events, now: target.now }),
+      projectionStore: new InMemoryProjectionStore<RuntimeOrchestrationProjection>(),
+      runLeases: target.runLeases,
+      now: target.now,
+      nextId: target.nextId,
+    });
+    const replacement = {
+      ...original,
+      taskId: 'human-task.tool-new',
+      subjectRef: 'tool:filesystem.write@revision-8',
+      subjectHash: `sha256:${'c'.repeat(64)}`,
+      requestedAt: '2026-07-23T08:01:00.000Z',
+    };
+    const command = {
+      commandId: 'supersede.tool-review',
+      scope,
+      ownerId: 'worker.review.restarted',
+      leaseTtlMs: 30_000,
+      waitId: 'wait.tool-supersede',
+      pendingActionRef: 'invocation.write',
+      principalId: 'admin-1',
+      supersededAt: '2026-07-23T08:01:00.000Z',
+      humanTaskDecision: {
+        commandId: 'human-task.tool-supersede',
+        scope,
+        principal: {
+          principalId: 'admin-1',
+          type: 'user' as const,
+          userId: 'admin-1',
+          tenantId: scope.tenantId,
+          permissionScopes: ['runtime.human-task.decide'],
+        },
+        taskId: original.taskId,
+        expectedRevision: 1,
+        expectedSubjectHash: original.subjectHash,
+        decision: 'superseded' as const,
+        decidedAt: '2026-07-23T08:01:00.000Z',
+        supersededByTaskId: replacement.taskId,
+      },
+      replacementTask: replacement,
+    };
+
+    await expect(
+      restarted.supersede({
+        ...command,
+        commandId: 'supersede.tool-review.changed-activity',
+        humanTaskDecision: {
+          ...command.humanTaskDecision,
+          supersededByTaskId: 'human-task.tool-other-activity',
+        },
+        replacementTask: {
+          ...replacement,
+          taskId: 'human-task.tool-other-activity',
+          activityDescriptorRef: 'artifact-ref:activity.other',
+          activityDescriptorHash: `sha256:${'d'.repeat(64)}`,
+        },
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_RUN_CONFLICT' });
+
+    const superseded = await restarted.supersede(command);
+    expect(superseded).toMatchObject({
+      disposition: 'applied',
+      projection: {
+        runStatus: 'waiting_human',
+        pendingWait: {
+          waitId: 'wait.tool-supersede',
+          pendingActionRef: 'invocation.write',
+          stateAttempt: 1,
+        },
+      },
+    });
+    expect(superseded.eventIds).toHaveLength(2);
+    await expect(restarted.supersede(command)).resolves.toMatchObject({
+      disposition: 'reused',
+      eventIds: superseded.eventIds,
+    });
+
+    const written = await target.events.read({ scope: streamScope() });
+    expect(
+      written.filter((candidate) => candidate.type === 'human.review.superseded')
+    ).toHaveLength(1);
+    expect(written.some((candidate) => candidate.type === 'runtime.wait.resolved')).toBe(false);
+    expect(written.some((candidate) => candidate.type === 'run.resumed')).toBe(false);
+    expect(projectRuntimeHumanTasks(written)).toEqual([
+      expect.objectContaining({
+        taskId: original.taskId,
+        status: 'superseded',
+        revision: 2,
+        supersededByTaskId: replacement.taskId,
+      }),
+      expect.objectContaining({
+        taskId: replacement.taskId,
+        status: 'pending',
+        revision: 1,
+      }),
+    ]);
+  });
 
   it('rejects a decision for a different pending action', async () => {
     const target = await fixture();

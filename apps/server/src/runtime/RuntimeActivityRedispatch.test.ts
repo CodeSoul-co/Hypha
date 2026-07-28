@@ -182,7 +182,12 @@ describe('RuntimeActivityRedispatchService', () => {
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['human.review.rejected', 'human.review.cancelled', 'human.review.expired'] as const)(
+  it.each([
+    'human.review.rejected',
+    'human.review.cancelled',
+    'human.review.expired',
+    'human.review.superseded',
+  ] as const)(
     'does not invoke the dispatcher for %s HumanTask evidence',
     async (resolution) => {
       const events = await eventRuntime();
@@ -547,7 +552,8 @@ async function appendApprovedTask(
     | 'human.review.approved'
     | 'human.review.rejected'
     | 'human.review.cancelled'
-    | 'human.review.expired' = 'human.review.approved',
+    | 'human.review.expired'
+    | 'human.review.superseded' = 'human.review.approved',
   options: {
     taskKind?: RuntimeHumanTaskKind;
     runId?: string;
@@ -606,6 +612,9 @@ async function appendApprovedTask(
           expectedSubjectHash: subjectHash,
           decidedBy: 'reviewer.redispatch',
           decidedAt: now,
+          ...(resolution === 'human.review.superseded'
+            ? { supersededByTaskId: 'task.redispatch.replacement' }
+            : {}),
         },
       },
       ...(options.competingResolution === undefined

@@ -144,6 +144,48 @@ describe('Generic Runtime HumanTask', () => {
     ).not.toBe(first);
   });
 
+  it('rebuilds supersession provenance after restart', () => {
+    const tasks = projectRuntimeHumanTasks([
+      event('human.review.requested', requested, 1),
+      event(
+        'human.review.superseded',
+        {
+          taskId: requested.taskId,
+          expectedRevision: 1,
+          decidedBy: reviewer.principalId,
+          decidedAt: '2026-07-23T10:02:00.000Z',
+          supersededByTaskId: 'human-task-2',
+        },
+        2
+      ),
+      event(
+        'human.review.requested',
+        {
+          ...requested,
+          taskId: 'human-task-2',
+          subjectRef: 'tool:filesystem.write@1.0.1',
+          subjectHash: `sha256:${'b'.repeat(64)}`,
+          requestedAt: '2026-07-23T10:02:00.000Z',
+        },
+        3
+      ),
+    ]);
+
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        taskId: requested.taskId,
+        status: 'superseded',
+        revision: 2,
+        supersededByTaskId: 'human-task-2',
+      }),
+      expect.objectContaining({
+        taskId: 'human-task-2',
+        status: 'pending',
+        revision: 1,
+      }),
+    ]);
+  });
+
   it('revalidates durable resume evidence after restart', () => {
     const approved = projectRuntimeHumanTasks([
       event(

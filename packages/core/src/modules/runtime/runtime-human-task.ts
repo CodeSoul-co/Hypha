@@ -34,6 +34,9 @@ export function projectRuntimeHumanTasks(events: readonly FrameworkEvent[]): Run
         revision: current.revision + 1,
         ...(text(payload?.decidedBy) === undefined ? {} : { decidedBy: text(payload?.decidedBy) }),
         decidedAt: text(payload?.decidedAt) ?? event.timestamp,
+        ...(text(payload?.supersededByTaskId) === undefined
+          ? {}
+          : { supersededByTaskId: text(payload?.supersededByTaskId) }),
         ...(text(payload?.reason) === undefined ? {} : { reason: text(payload?.reason) }),
       })
     );
@@ -254,6 +257,7 @@ function statusFromEvent(type: FrameworkEvent['type']): RuntimeHumanTaskStatus |
   if (type === 'human.review.rejected') return 'rejected';
   if (type === 'human.review.expired') return 'expired';
   if (type === 'human.review.cancelled') return 'cancelled';
+  if (type === 'human.review.superseded') return 'superseded';
   return undefined;
 }
 

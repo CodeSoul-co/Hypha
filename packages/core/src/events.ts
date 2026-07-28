@@ -221,6 +221,7 @@ export type FrameworkEventType =
   | 'human.review.rejected'
   | 'human.review.expired'
   | 'human.review.cancelled'
+  | 'human.review.superseded'
   | 'human.review.resume.started'
   | 'human.review.resume.revalidated'
   | 'human.review.resume.failed'
