@@ -172,7 +172,7 @@ describe('MinioS3ArtifactTransport', () => {
     expect(minioClient.putObject).toHaveBeenCalledWith(
       'hypha-artifacts',
       'tenant/run/output.bin',
-      input.body,
+      expect.any(Readable),
       8,
       {
         'hypha-content-hash': `sha256:${'a'.repeat(64)}`,
@@ -216,6 +216,66 @@ describe('MinioS3ArtifactTransport', () => {
       'hypha-artifacts',
       'tenant/run/output.bin'
     );
+  });
+
+  it('removes the exact completed version when cancellation races with upload completion', async () => {
+    const abortController = new AbortController();
+    const minioClient = client({
+      putObject: vi.fn(async () => {
+        abortController.abort();
+        return {
+          etag: 'interrupted-etag',
+          versionId: 'interrupted-version',
+        };
+      }),
+      statObject: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.upload(uploadInput({ abortSignal: abortController.signal }))
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    expect(minioClient.removeObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'interrupted-version' }
+    );
+    expect(minioClient.statObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'interrupted-version' }
+    );
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when a completed version survives cancellation cleanup', async () => {
+    const abortController = new AbortController();
+    const minioClient = client({
+      putObject: vi.fn(async () => {
+        abortController.abort();
+        return {
+          etag: 'interrupted-etag',
+          versionId: 'interrupted-version',
+        };
+      }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.upload(uploadInput({ abortSignal: abortController.signal }))
+    ).rejects.toBeInstanceOf(S3ArtifactUploadCleanupError);
+    expect(minioClient.removeObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'interrupted-version' }
+    );
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
   });
 
   it('cleans incomplete multipart state after a provider upload failure', async () => {

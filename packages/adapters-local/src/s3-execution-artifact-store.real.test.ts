@@ -1,9 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'minio';
 import type { ArtifactStorageRef } from '@hypha/core';
 import { readArtifactStream } from './artifact-content-io';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
+import {
+  MinioS3ArtifactTransport,
+  S3ArtifactTransferAbortedError,
+  S3ArtifactTransferTimeoutError,
+  type MinioS3ArtifactTransportOptions,
+} from './s3-artifact-store-transport';
 import { S3ExecutionArtifactStore } from './s3-execution-artifact-store';
 
 const dockerPath = process.env.HYPHA_REAL_DOCKER_PATH ?? 'docker';
@@ -148,6 +155,47 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
     await store.delete(source);
   }, 60_000);
 
+  it('aborts a real multipart upload and removes its incomplete provider state', async () => {
+    const { client, port } = requireFixture();
+    const key = 'objects/aborted-multipart.bin';
+    const abortController = new AbortController();
+    const transport = createTransport(port, { requestTimeoutMs: 20_000 });
+    const upload = transport.upload(
+      multipartUploadRequest(key, stalledMultipartBody(), abortController.signal)
+    );
+    const rejection = expect(upload).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+
+    try {
+      await waitForIncompleteUpload(client, key, true);
+      abortController.abort();
+      await rejection;
+      await waitForIncompleteUpload(client, key, false);
+      await expectObjectAbsent(client, key);
+    } finally {
+      abortController.abort();
+      await upload.catch(() => undefined);
+      transport.close();
+    }
+  }, 30_000);
+
+  it('times out a stalled real multipart upload and removes its incomplete provider state', async () => {
+    const { client, port } = requireFixture();
+    const key = 'objects/timed-out-multipart.bin';
+    const transport = createTransport(port, { requestTimeoutMs: 4_000 });
+    const upload = transport.upload(multipartUploadRequest(key, stalledMultipartBody()));
+    const rejection = expect(upload).rejects.toBeInstanceOf(S3ArtifactTransferTimeoutError);
+
+    try {
+      await waitForIncompleteUpload(client, key, true);
+      await rejection;
+      await waitForIncompleteUpload(client, key, false);
+      await expectObjectAbsent(client, key);
+    } finally {
+      await upload.catch(() => undefined);
+      transport.close();
+    }
+  }, 30_000);
+
   it('fails readiness closed when the real bucket suspends versioning', async () => {
     const { client, port } = requireFixture();
     await client.setBucketVersioning(bucket, { Status: 'Suspended' });
@@ -184,22 +232,37 @@ function createStore(port: number): S3ExecutionArtifactStore {
     region,
     maxObjectBytes: 16 * 1024 * 1024,
     maxMetadataBytes: 2 * 1024,
-    transportOptions: {
-      endpoint: `http://127.0.0.1:${port}`,
-      region,
-      forcePathStyle: true,
-      allowedEndpointHosts: ['127.0.0.1'],
-      allowInsecureHttp: true,
-      allowPrivateNetwork: true,
-      multipartPartSizeBytes: 5 * 1024 * 1024,
-      requestTimeoutMs: 20_000,
-      maximumRetryCount: 1,
-      credentialProvider: () => ({
-        accessKeyId: accessKey,
-        secretAccessKey: secretKey,
-      }),
-    },
+    transportOptions: transportOptions(port),
   });
+}
+
+function createTransport(
+  port: number,
+  overrides: Partial<MinioS3ArtifactTransportOptions> = {}
+): MinioS3ArtifactTransport {
+  return new MinioS3ArtifactTransport(transportOptions(port, overrides));
+}
+
+function transportOptions(
+  port: number,
+  overrides: Partial<MinioS3ArtifactTransportOptions> = {}
+): MinioS3ArtifactTransportOptions {
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    region,
+    forcePathStyle: true,
+    allowedEndpointHosts: ['127.0.0.1'],
+    allowInsecureHttp: true,
+    allowPrivateNetwork: true,
+    multipartPartSizeBytes: 5 * 1024 * 1024,
+    requestTimeoutMs: 20_000,
+    maximumRetryCount: 1,
+    credentialProvider: () => ({
+      accessKeyId: accessKey,
+      secretAccessKey: secretKey,
+    }),
+    ...overrides,
+  };
 }
 
 function requireFixture(): RealMinioFixture {
@@ -269,6 +332,76 @@ async function readRef(
 
 function deterministicBytes(size: number): Uint8Array {
   return Uint8Array.from({ length: size }, (_, index) => index % 251);
+}
+
+function stalledMultipartBody(): Readable {
+  let pushed = false;
+  return new Readable({
+    read() {
+      if (pushed) return;
+      pushed = true;
+      this.push(Buffer.alloc(6 * 1024 * 1024, 0x61));
+    },
+  });
+}
+
+function multipartUploadRequest(key: string, body: Readable, abortSignal?: AbortSignal) {
+  return {
+    bucket,
+    key,
+    body,
+    contentLength: 12 * 1024 * 1024,
+    contentType: 'application/octet-stream',
+    metadata: { 'hypha-content-hash': `sha256:${'0'.repeat(64)}` },
+    ifAbsent: true,
+    ...(abortSignal ? { abortSignal } : {}),
+  };
+}
+
+async function waitForIncompleteUpload(
+  client: Client,
+  key: string,
+  expected: boolean
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const uploads = await listIncompleteUploads(client, key);
+    if ((uploads.length > 0) === expected) return;
+    await delay(100);
+  }
+  throw new Error(
+    expected
+      ? 'MinIO did not expose the expected incomplete multipart upload.'
+      : 'MinIO retained an incomplete multipart upload after cleanup.'
+  );
+}
+
+function listIncompleteUploads(client: Client, key: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const uploadIds: string[] = [];
+    const stream = client.listIncompleteUploads(bucket, key, true);
+    stream.on('data', (item) => {
+      if (item.key === key) uploadIds.push(item.uploadId);
+    });
+    stream.on('error', reject);
+    stream.on('end', () => resolve(uploadIds));
+  });
+}
+
+async function expectObjectAbsent(client: Client, key: string): Promise<void> {
+  try {
+    await client.statObject(bucket, key);
+  } catch (error) {
+    expect(providerErrorCode(error)).toMatch(/^(?:NoSuchKey|NotFound)$/u);
+    return;
+  }
+  throw new Error('MinIO published an object for an interrupted multipart upload.');
+}
+
+function providerErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const code = Reflect.get(error, 'code');
+  return typeof code === 'string' ? code : undefined;
 }
 
 function contentHash(bytes: Uint8Array): string {

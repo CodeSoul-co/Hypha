@@ -1,4 +1,4 @@
-import type { Readable } from 'node:stream';
+import { PassThrough, type Readable } from 'node:stream';
 import type { ArtifactByteRange } from '@hypha/core';
 import { Client, CopyDestinationOptions, CopySourceOptions } from 'minio';
 import {
@@ -204,6 +204,60 @@ export class S3ArtifactUploadCleanupError extends Error {
 }
 
 /**
+ * The MinIO multipart implementation observes errors from its internal
+ * BlockStream, but not errors emitted by the caller's source stream. Capture
+ * that downstream stream so cancellation and timeouts reject the SDK promise
+ * instead of becoming unhandled source errors.
+ */
+class InterruptibleS3UploadBody extends PassThrough {
+  private readonly source: Readable;
+  private destination?: NodeJS.WritableStream & { destroy(error?: Error): void };
+  private interruption?: Error;
+  private readonly sourceError = (error: Error): void => {
+    this.interrupt(error);
+  };
+
+  constructor(source: Readable) {
+    super();
+    this.source = source;
+    // The operation still fails through the captured SDK destination. This
+    // listener only prevents the mirrored source error from being unhandled.
+    this.on('error', () => undefined);
+    source.once('error', this.sourceError);
+    source.pipe(this);
+  }
+
+  override pipe<T extends NodeJS.WritableStream>(
+    destination: T,
+    options?: { end?: boolean }
+  ): T {
+    if (isDestroyableWritable(destination)) {
+      this.destination = destination;
+      if (this.interruption) {
+        const error = this.interruption;
+        queueMicrotask(() => destination.destroy(error));
+      }
+    }
+    return super.pipe(destination, options);
+  }
+
+  interrupt(error: Error): void {
+    if (this.interruption) return;
+    this.interruption = error;
+    this.destination?.destroy(error);
+    this.destroy(error);
+    this.source.destroy();
+  }
+
+  dispose(): void {
+    this.source.removeListener('error', this.sourceError);
+    this.source.unpipe(this);
+    if (!this.destroyed) this.destroy();
+    if (!this.source.destroyed) this.source.destroy();
+  }
+}
+
+/**
  * S3 transport boundary used while the concrete Store is rebuilt.
  * A client is created per operation so the configured credential provider is
  * resolved each time; this keeps short-lived credentials rotatable without
@@ -250,6 +304,7 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     if (input.abortSignal?.aborted) throw new S3ArtifactTransferAbortedError();
 
     const client = await this.createClient();
+    const uploadBody = new InterruptibleS3UploadBody(input.body);
     const metadata = {
       ...input.metadata,
       ...(input.contentType ? { 'Content-Type': input.contentType } : {}),
@@ -258,32 +313,38 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     let interruption: S3ArtifactTransferAbortedError | S3ArtifactTransferTimeoutError | undefined;
     const abort = (): void => {
       interruption ??= new S3ArtifactTransferAbortedError();
-      input.body.destroy(interruption);
+      uploadBody.interrupt(interruption);
     };
     input.abortSignal?.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(() => {
       interruption ??= new S3ArtifactTransferTimeoutError();
-      input.body.destroy(interruption);
+      uploadBody.interrupt(interruption);
     }, this.requestTimeoutMs);
 
     try {
       const result = await client.putObject(
         input.bucket,
         input.key,
-        input.body,
+        uploadBody,
         input.contentLength,
         metadata
       );
+      if (interruption) {
+        await cleanupCompletedInterruptedUpload(client, input.bucket, input.key, result);
+        throw interruption;
+      }
       return {
         ...(result.etag ? { etag: result.etag } : {}),
         ...(result.versionId ? { versionId: result.versionId } : {}),
       };
     } catch (error) {
       await cleanupIncompleteUpload(client, input.bucket, input.key);
+      if (error instanceof S3ArtifactUploadCleanupError) throw error;
       throw interruption ?? error;
     } finally {
       clearTimeout(timeout);
       input.abortSignal?.removeEventListener('abort', abort);
+      uploadBody.dispose();
     }
   }
 
@@ -581,6 +642,34 @@ async function cleanupIncompleteUpload(
     if (isMissingIncompleteUpload(error)) return;
     throw new S3ArtifactUploadCleanupError();
   }
+}
+
+async function cleanupCompletedInterruptedUpload(
+  client: MinioArtifactClient,
+  bucket: string,
+  key: string,
+  result: { versionId: string | null }
+): Promise<void> {
+  if (!result.versionId) throw new S3ArtifactUploadCleanupError();
+  try {
+    await client.removeObject(bucket, key, { versionId: result.versionId });
+    try {
+      await client.statObject(bucket, key, { versionId: result.versionId });
+      throw new S3ArtifactUploadCleanupError();
+    } catch (error) {
+      if (isMissingObject(error)) return;
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof S3ArtifactUploadCleanupError) throw error;
+    throw new S3ArtifactUploadCleanupError();
+  }
+}
+
+function isDestroyableWritable(
+  value: NodeJS.WritableStream
+): value is NodeJS.WritableStream & { destroy(error?: Error): void } {
+  return typeof Reflect.get(value, 'destroy') === 'function';
 }
 
 function s3StateFromStat(stat: MinioObjectStat): S3ArtifactObjectState {
