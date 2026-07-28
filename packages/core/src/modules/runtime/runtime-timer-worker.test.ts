@@ -282,6 +282,45 @@ describe('DurableRuntimeTimerWorker', () => {
     expect(second).toMatchObject({ scanned: 1, fired: 1 });
   });
 
+  it('fires a large same-tick Timer set in stable pages without omissions or duplicates', async () => {
+    const target = await fixture();
+    const runIds = Array.from(
+      { length: 64 },
+      (_, index) => `run.timer.bulk.${index.toString().padStart(3, '0')}`
+    );
+    for (const runId of [...runIds].reverse()) {
+      await seedTimer(target, runId, '2026-07-18T08:00:00.000Z');
+    }
+    const active = worker(target);
+    const firedRunIds: string[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const page = await active.worker.sweep(sweep('2026-07-18T09:00:00.000Z', 7, cursor));
+      expect(page.scanned).toBeLessThanOrEqual(7);
+      expect(page.results.every((item) => item.disposition === 'fired')).toBe(true);
+      firedRunIds.push(...page.results.map((item) => item.scope.runId));
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+
+    expect(firedRunIds).toEqual(runIds);
+    expect(new Set(firedRunIds).size).toBe(runIds.length);
+    for (const runId of runIds) {
+      await expect(
+        target.events.read({ scope: scope(runId), types: ['runtime.timer.fired'] })
+      ).resolves.toHaveLength(1);
+    }
+
+    cursor = undefined;
+    let refired = 0;
+    do {
+      const page = await active.worker.sweep(sweep('2026-07-18T09:01:00.000Z', 7, cursor));
+      refired += page.fired;
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    expect(refired).toBe(0);
+  });
+
   it('renews the Run lease while a slow Timer firing remains in progress', async () => {
     const target = await fixture();
     await seedTimer(target, 'run.timer.slow', '2026-07-18T08:00:00.000Z');
