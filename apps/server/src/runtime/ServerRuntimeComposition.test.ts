@@ -75,6 +75,11 @@ describe('createServerRuntimeComposition', () => {
           throw new Error('not configured');
         },
       },
+      recoveryRedispatches: {
+        redispatch: async () => {
+          throw new Error('not configured');
+        },
+      },
       recoveryCancellations: {
         cancel: async () => ({}) as RuntimeCancelResult,
       },

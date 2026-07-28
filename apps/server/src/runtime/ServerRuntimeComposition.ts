@@ -2,6 +2,7 @@ import {
   DurableRuntimeTimerWorker,
   RuntimeRecoveryService,
   type EventStore,
+  type RuntimeActivityRedispatchRecoveryPort,
   type RuntimeActivityReconciliationPort,
   type RuntimeCancellationRecoveryPort,
   type RuntimeRecoveryRequeuePort,
@@ -30,6 +31,7 @@ export interface ServerRuntimeCompositionOptions {
   fsmSpec: FSMProcessSpec;
   executeState: FencedBoundedFSMDriverOptions['executeState'];
   recoveryActivities: RuntimeActivityReconciliationPort;
+  recoveryRedispatches: RuntimeActivityRedispatchRecoveryPort;
   recoveryCancellations: RuntimeCancellationRecoveryPort;
   recoveryRequeue: RuntimeRecoveryRequeuePort;
   nextId?: FencedBoundedFSMDriverOptions['nextId'];
@@ -81,6 +83,7 @@ export function createServerRuntimeComposition(
           runLeases,
           stateClaims,
           activities: options.recoveryActivities,
+          redispatches: options.recoveryRedispatches,
           cancellations: options.recoveryCancellations,
           requeue: options.recoveryRequeue,
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
