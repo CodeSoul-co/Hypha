@@ -7,17 +7,18 @@ import { DockerEngineCliClient } from './docker-engine-client';
 import { DockerExecIo } from './docker-exec-io';
 import {
   DockerExecutionCoordinator,
-  DockerExecutionCoordinatorError,
   type DockerExecutionOutputCollector,
   type DockerExecutionOutputSession,
 } from './docker-execution-coordinator';
-import { DockerStatsResourceAccounting } from './docker-resource-accounting';
-import type { LocalProcessOutputEvent } from './local-process-supervisor';
 import {
-  captureLocalWorkspaceSnapshot,
-  diffLocalWorkspaceSnapshots,
-  type LocalWorkspaceSnapshot,
-} from './local-workspace-mutations';
+  LocalDockerExecutionOutputCollector,
+  type DockerExecutionArtifactStreamPort,
+} from './docker-execution-output-collector';
+import { DockerStatsResourceAccounting } from './docker-resource-accounting';
+import type {
+  LocalProcessArtifactStream,
+  LocalProcessOutputArtifactStream,
+} from './local-process-output-artifacts';
 
 const dockerPath = process.env.HYPHA_REAL_DOCKER_PATH ?? 'docker';
 const image = process.env.HYPHA_REAL_DOCKER_IMAGE ?? 'redis:latest';
@@ -50,10 +51,9 @@ afterEach(async () => {
 describe('DockerExecutionCoordinator real daemon', () => {
   it('executes in a hardened container, captures workspace and resource evidence, and cleans up', async () => {
     const workspace = await temporaryWorkspace('success');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('success');
     let observedContainerReference: string | undefined;
-    const outputs = new RealWorkspaceOutputs(workspace, before, async (containerReference) => {
+    const outputs = realOutputs(workspace, async (containerReference) => {
       observedContainerReference = containerReference;
       const inspected = await inspectRawContainer(containerReference);
       const config = requiredRecord(inspected.Config, 'Docker Config');
@@ -86,8 +86,11 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const result = await coordinator(outputs).execute(
       executionInput(name, workspace, 'success', {
-        executable: 'cp',
-        args: ['/etc/hostname', '/workspace/result.txt'],
+        executable: 'sh',
+        args: [
+          '-c',
+          'cp /etc/hostname /workspace/result.txt && printf artifact-output',
+        ],
         timeoutMs: 5_000,
       })
     );
@@ -95,6 +98,8 @@ describe('DockerExecutionCoordinator real daemon', () => {
     expect(result).toMatchObject({
       status: 'completed',
       exitCode: 0,
+      stdoutArtifactRef: 'artifact.execution.docker.real.success.stdout',
+      generatedArtifactRefs: ['artifact.execution.docker.real.success.stdout'],
       changedFiles: [{ path: 'result.txt', operation: 'created' }],
       externalReceipt: {
         providerId: 'docker.real',
@@ -125,10 +130,9 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
   it('normalizes a real timeout and removes the still-running container', async () => {
     const workspace = await temporaryWorkspace('timeout');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('timeout');
 
-    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'timeout', {
         executable: 'sleep',
         args: ['30'],
@@ -154,12 +158,11 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
   it('propagates real cancellation and removes the container process tree', async () => {
     const workspace = await temporaryWorkspace('cancel');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('cancel');
     const cancellation = new AbortController();
     const startedMarker = path.join(workspace, 'cancel.started');
 
-    const execution = coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const execution = coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'cancel', {
         executable: 'perl',
         args: [
@@ -191,45 +194,45 @@ describe('DockerExecutionCoordinator real daemon', () => {
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
 
-  it('fails closed after a real output limit without an Artifact and still removes the container', async () => {
+  it('persists truncated real output as an Artifact and still removes the container', async () => {
     const workspace = await temporaryWorkspace('output-limit');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('output-limit');
-    let failure: unknown;
+    const outputs = realOutputs(workspace);
 
-    try {
-      await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
-        executionInput(name, workspace, 'output-limit', {
-          executable: 'yes',
-          args: ['hypha'],
-          timeoutMs: 5_000,
-          maxStdoutBytes: 128,
-          maxCombinedOutputBytes: 256,
-        })
-      );
-    } catch (error) {
-      failure = error;
-    }
+    const result = await coordinator(outputs).execute(
+      executionInput(name, workspace, 'output-limit', {
+        executable: 'yes',
+        args: ['hypha'],
+        timeoutMs: 5_000,
+        maxStdoutBytes: 128,
+        maxCombinedOutputBytes: 256,
+      })
+    );
 
-    expect(failure).toBeInstanceOf(DockerExecutionCoordinatorError);
-    expect(failure).toMatchObject({
-      phase: 'terminal',
-      code: 'DOCKER_INVALID_RESPONSE',
-      cleanup: {
-        complete: true,
-        containerAbsent: true,
-        stopAttempted: true,
+    expect(result).toMatchObject({
+      status: 'resource_exceeded',
+      stdoutTruncated: true,
+      stdoutArtifactRef: 'artifact.execution.docker.real.output-limit.stdout',
+      generatedArtifactRefs: ['artifact.execution.docker.real.output-limit.stdout'],
+      error: { code: 'EXECUTION_OUTPUT_LIMIT' },
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
       },
     });
+    expect(outputs.content('stdout')).toEqual(Buffer.from('artifact-output'));
+    expect(outputs.content('stdout').byteLength).toBeGreaterThan(0);
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
 
   it('enforces CPU, memory, and process limits through the real container cgroup', async () => {
     const workspace = await temporaryWorkspace('cgroup');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('cgroup');
 
-    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'cgroup', {
         executable: 'cat',
         args: ['/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/pids.max'],
@@ -255,10 +258,9 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
   it('blocks direct-IP network access in the real container and cleans up', async () => {
     const workspace = await temporaryWorkspace('network');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('network');
 
-    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'network', {
         executable: 'redis-cli',
         args: ['-h', '1.1.1.1', '-p', '6379', 'PING'],
@@ -283,10 +285,9 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
   it('normalizes real memory-limit enforcement as OOM killed and cleans up', async () => {
     const workspace = await temporaryWorkspace('oom');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('oom');
 
-    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'oom', {
         executable: 'perl',
         args: ['-e', '$value = "x" x (256 * 1024 * 1024); sleep 30'],
@@ -312,10 +313,9 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
   it('keeps protected paths read-only and does not expose the Docker socket', async () => {
     const workspace = await temporaryWorkspace('filesystem');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('filesystem');
 
-    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'filesystem', {
         executable: 'perl',
         args: [
@@ -342,10 +342,9 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
   it('enforces the real PID limit and removes the forked process tree', async () => {
     const workspace = await temporaryWorkspace('pids');
-    const before = await captureLocalWorkspaceSnapshot(workspace);
     const name = uniqueContainerName('pids');
 
-    const result = await coordinator(new RealWorkspaceOutputs(workspace, before)).execute(
+    const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'pids', {
         executable: 'perl',
         args: [
@@ -373,41 +372,87 @@ describe('DockerExecutionCoordinator real daemon', () => {
   }, 60_000);
 });
 
-class RealWorkspaceOutputs implements DockerExecutionOutputCollector, DockerExecutionOutputSession {
+class RealDockerOutputs implements DockerExecutionOutputCollector {
+  private readonly artifacts = new RecordingArtifactPort();
+  private readonly collector: LocalDockerExecutionOutputCollector;
+
   constructor(
     private readonly workspace: string,
-    private readonly before: LocalWorkspaceSnapshot,
     private readonly inspect?: (containerReference: string) => Promise<void>
-  ) {}
+  ) {
+    this.collector = new LocalDockerExecutionOutputCollector({
+      workspaceRoot: workspace,
+      outputArtifacts: this.artifacts,
+    });
+  }
 
   async prepare(input: {
     executionId: string;
     workspaceRoot: string;
   }): Promise<DockerExecutionOutputSession> {
     expect(path.resolve(input.workspaceRoot)).toBe(path.resolve(this.workspace));
-    return this;
-  }
-
-  async onOutput(_event: LocalProcessOutputEvent): Promise<void> {}
-
-  async collect(input: {
-    executionId: string;
-    containerReference: string;
-    processResult: DockerCliResult;
-  }) {
-    await this.inspect?.(input.containerReference);
-    const after = await captureLocalWorkspaceSnapshot(this.workspace);
+    const session = await this.collector.prepare(input);
     return {
-      changedFiles: diffLocalWorkspaceSnapshots(
-        this.before,
-        after,
-        input.processResult.completedAt
-      ),
-      generatedArtifactRefs: [],
+      onOutput: (event) => session.onOutput(event),
+      collect: async (collectInput) => {
+        await this.inspect?.(collectInput.containerReference);
+        return session.collect(collectInput);
+      },
+      abort: (error) => session.abort(error),
     };
   }
 
-  async abort(_error: unknown): Promise<void> {}
+  content(stream: LocalProcessArtifactStream): Buffer {
+    return this.artifacts.content(stream);
+  }
+}
+
+function realOutputs(
+  workspace: string,
+  inspect?: (containerReference: string) => Promise<void>
+): RealDockerOutputs {
+  return new RealDockerOutputs(workspace, inspect);
+}
+
+class RecordingArtifactPort implements DockerExecutionArtifactStreamPort {
+  private readonly streams = new Map<LocalProcessArtifactStream, RecordingArtifactStream>();
+
+  openStream(input: {
+    executionId: string;
+    stream: LocalProcessArtifactStream;
+  }): LocalProcessOutputArtifactStream {
+    if (this.streams.has(input.stream)) throw new Error('Artifact stream was opened twice.');
+    const stream = new RecordingArtifactStream(
+      `artifact.${input.executionId}.${input.stream}`
+    );
+    this.streams.set(input.stream, stream);
+    return stream;
+  }
+
+  content(stream: LocalProcessArtifactStream): Buffer {
+    return Buffer.concat(this.streams.get(stream)?.chunks ?? []);
+  }
+}
+
+class RecordingArtifactStream implements LocalProcessOutputArtifactStream {
+  readonly chunks: Buffer[] = [];
+  private closed = false;
+
+  constructor(private readonly reference: string) {}
+
+  async append(chunk: Uint8Array): Promise<void> {
+    if (this.closed) throw new Error('Artifact stream is closed.');
+    this.chunks.push(Buffer.from(chunk));
+  }
+
+  async complete(): Promise<string> {
+    this.closed = true;
+    return this.reference;
+  }
+
+  async abort(_error: unknown): Promise<void> {
+    this.closed = true;
+  }
 }
 
 function coordinator(outputs: DockerExecutionOutputCollector): DockerExecutionCoordinator {
