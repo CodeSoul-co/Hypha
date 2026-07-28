@@ -1,11 +1,17 @@
 import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { readArtifactStream } from './artifact-content-io';
 import {
-  MinioS3ArtifactUploadTransport,
-  S3ArtifactUploadAbortedError,
+  MinioS3ArtifactTransport,
   S3ArtifactUploadCleanupError,
-  S3ArtifactUploadTimeoutError,
+  S3ArtifactTransferAbortedError,
+  S3ArtifactTransferTimeoutError,
 } from './s3-artifact-store-transport';
+import {
+  HYPHA_CONTENT_HASH_METADATA_KEY,
+  HYPHA_USER_METADATA_KEY,
+} from './s3-artifact-store-values';
 
 function transportOptions(overrides: Record<string, unknown> = {}) {
   return {
@@ -31,6 +37,28 @@ function client(overrides: Record<string, unknown> = {}) {
     }),
     removeIncompleteUpload: vi.fn().mockResolvedValue(undefined),
     bucketExists: vi.fn().mockResolvedValue(true),
+    statObject: vi.fn().mockResolvedValue(objectStat()),
+    getObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes])),
+    getPartialObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes.subarray(1, 3)])),
+    ...overrides,
+  };
+}
+
+const artifactBytes = Buffer.from('artifact');
+const artifactContentHash = `sha256:${createHash('sha256').update(artifactBytes).digest('hex')}`;
+
+function objectStat(overrides: Record<string, unknown> = {}) {
+  return {
+    size: artifactBytes.byteLength,
+    etag: 'opaque-multipart-etag-2',
+    lastModified: new Date('2026-07-28T00:00:00.000Z'),
+    metaData: {
+      [HYPHA_CONTENT_HASH_METADATA_KEY]: artifactContentHash,
+      [HYPHA_USER_METADATA_KEY]: Buffer.from('{"source":"execution"}').toString('base64'),
+      'content-type': 'application/octet-stream',
+      'x-amz-server-side-encryption': 'AES256',
+    },
+    versionId: 'version-1',
     ...overrides,
   };
 }
@@ -48,7 +76,7 @@ function uploadInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('MinioS3ArtifactUploadTransport', () => {
+describe('MinioS3ArtifactTransport', () => {
   it('creates a client with the trusted endpoint and fresh credentials for every operation', async () => {
     const firstClient = client();
     const secondClient = client();
@@ -66,7 +94,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
         accessKeyId: 'second-access',
         secretAccessKey: 'second-secret',
       });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({ clientFactory, credentialProvider })
     );
 
@@ -97,7 +125,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
   it('uploads with bounded multipart settings, metadata, and create-only precondition', async () => {
     const minioClient = client();
     const clientFactory = vi.fn(() => minioClient);
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({
         clientFactory,
         multipartPartSizeBytes: 5 * 1024 * 1024,
@@ -133,11 +161,11 @@ describe('MinioS3ArtifactUploadTransport', () => {
     const clientFactory = vi.fn(() => client());
     const abortController = new AbortController();
     abortController.abort();
-    const transport = new MinioS3ArtifactUploadTransport(transportOptions({ clientFactory }));
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
 
     await expect(
       transport.upload(uploadInput({ abortSignal: abortController.signal }))
-    ).rejects.toBeInstanceOf(S3ArtifactUploadAbortedError);
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
     expect(clientFactory).not.toHaveBeenCalled();
   });
 
@@ -152,13 +180,13 @@ describe('MinioS3ArtifactUploadTransport', () => {
           })
       ),
     });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({ clientFactory: () => minioClient })
     );
 
     await expect(
       transport.upload(uploadInput({ abortSignal: abortController.signal }))
-    ).rejects.toBeInstanceOf(S3ArtifactUploadAbortedError);
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
     expect(minioClient.removeIncompleteUpload).toHaveBeenCalledWith(
       'hypha-artifacts',
       'tenant/run/output.bin'
@@ -172,7 +200,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
     const minioClient = client({
       putObject: vi.fn().mockRejectedValue(providerError),
     });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({ clientFactory: () => minioClient })
     );
 
@@ -189,7 +217,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
           })
       ),
     });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({
         clientFactory: () => minioClient,
         requestTimeoutMs: 10,
@@ -197,7 +225,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
     );
 
     await expect(transport.upload(uploadInput())).rejects.toBeInstanceOf(
-      S3ArtifactUploadTimeoutError
+      S3ArtifactTransferTimeoutError
     );
     expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
   });
@@ -207,7 +235,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
       putObject: vi.fn().mockRejectedValue(new Error('upload failed')),
       removeIncompleteUpload: vi.fn().mockRejectedValue(new Error('cleanup failed')),
     });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({ clientFactory: () => minioClient })
     );
 
@@ -225,7 +253,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
       putObject: vi.fn().mockRejectedValue(providerError),
       removeIncompleteUpload: vi.fn().mockRejectedValue(missingUpload),
     });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({ clientFactory: () => minioClient })
     );
 
@@ -236,7 +264,7 @@ describe('MinioS3ArtifactUploadTransport', () => {
     const minioClient = client({
       bucketExists: vi.fn().mockResolvedValue(false),
     });
-    const transport = new MinioS3ArtifactUploadTransport(
+    const transport = new MinioS3ArtifactTransport(
       transportOptions({ clientFactory: () => minioClient })
     );
 
@@ -251,7 +279,206 @@ describe('MinioS3ArtifactUploadTransport', () => {
   it.each([{ multipartPartSizeBytes: 1024 }, { requestTimeoutMs: 0 }, { maximumRetryCount: -1 }])(
     'rejects invalid bounded transport option %o',
     (option) => {
-      expect(() => new MinioS3ArtifactUploadTransport(transportOptions(option))).toThrow(TypeError);
+      expect(() => new MinioS3ArtifactTransport(transportOptions(option))).toThrow(TypeError);
     }
   );
+
+  it('maps object stat values and returns null only for missing objects', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.head({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).resolves.toEqual({
+      sizeBytes: artifactBytes.byteLength,
+      etag: 'opaque-multipart-etag-2',
+      versionId: 'version-1',
+      lastModifiedAt: '2026-07-28T00:00:00.000Z',
+      mimeType: 'application/octet-stream',
+      encrypted: true,
+      metadata: objectStat().metaData,
+    });
+    expect(minioClient.statObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'version-1' }
+    );
+
+    minioClient.statObject.mockRejectedValueOnce(
+      Object.assign(new Error('provider detail'), { code: 'NoSuchKey' })
+    );
+    await expect(
+      transport.head({ bucket: 'hypha-artifacts', key: 'missing.bin' })
+    ).resolves.toBeNull();
+    minioClient.statObject.mockRejectedValueOnce(
+      Object.assign(new Error('provider detail'), { code: 'AccessDenied' })
+    );
+    await expect(
+      transport.head({ bucket: 'hypha-artifacts', key: 'denied.bin' })
+    ).rejects.toMatchObject({ code: 'AccessDenied' });
+  });
+
+  it('downloads a pinned full object and verifies size, hash, and final identity', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      versionId: 'version-1',
+      expectedEtag: '"opaque-multipart-etag-2"',
+      expectedContentHash: artifactContentHash,
+    });
+
+    await expect(readArtifactStream(result.stream)).resolves.toEqual(
+      Uint8Array.from(artifactBytes)
+    );
+    expect(result.range).toBeUndefined();
+    expect(result.state.versionId).toBe('version-1');
+    expect(minioClient.getObject).toHaveBeenCalledWith('hypha-artifacts', 'tenant/run/output.bin', {
+      versionId: 'version-1',
+    });
+    expect(minioClient.statObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('downloads a bounded range and verifies the object identity after streaming', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      range: { start: 1, endInclusive: 2 },
+    });
+
+    await expect(readArtifactStream(result.stream)).resolves.toEqual(
+      Uint8Array.from(artifactBytes.subarray(1, 3))
+    );
+    expect(result.range).toEqual({ start: 1, endInclusive: 2 });
+    expect(minioClient.getPartialObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      1,
+      2,
+      undefined
+    );
+    expect(minioClient.statObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects expected hash and ETag mismatches before downloading bytes', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.get({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        expectedContentHash: `sha256:${'0'.repeat(64)}`,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_HASH_MISMATCH' },
+    });
+    await expect(
+      transport.get({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        expectedEtag: 'different-etag',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    expect(minioClient.getObject).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the object identity changes during a ranged download', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(objectStat({ etag: 'replacement-etag' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      range: { start: 1, endInclusive: 2 },
+    });
+
+    await expect(readArtifactStream(result.stream)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT', retryable: true },
+    });
+  });
+
+  it('destroys an active download when cancellation is requested', async () => {
+    const abortController = new AbortController();
+    const stalled = new Readable({ read: () => undefined });
+    const minioClient = client({
+      getObject: vi.fn().mockResolvedValue(stalled),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      abortSignal: abortController.signal,
+    });
+
+    const read = readArtifactStream(result.stream);
+    abortController.abort();
+
+    await expect(read).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    expect(stalled.destroyed).toBe(true);
+  });
+
+  it('times out and destroys a stalled download', async () => {
+    const stalled = new Readable({ read: () => undefined });
+    const minioClient = client({
+      getObject: vi.fn().mockResolvedValue(stalled),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        requestTimeoutMs: 10,
+      })
+    );
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+    });
+
+    await expect(readArtifactStream(result.stream)).rejects.toBeInstanceOf(
+      S3ArtifactTransferTimeoutError
+    );
+    expect(stalled.destroyed).toBe(true);
+  });
+
+  it('rejects invalid provider metadata instead of casting it into trusted state', async () => {
+    const minioClient = client({
+      statObject: vi.fn().mockResolvedValue(objectStat({ metaData: { unsafe: 1 } })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.head({ bucket: 'hypha-artifacts', key: 'tenant/run/output.bin' })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VALIDATION_FAILED' },
+    });
+  });
 });

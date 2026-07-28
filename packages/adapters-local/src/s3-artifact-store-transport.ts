@@ -1,4 +1,5 @@
 import type { Readable } from 'node:stream';
+import type { ArtifactByteRange } from '@hypha/core';
 import { Client } from 'minio';
 import {
   normalizeS3ArtifactClientConfig,
@@ -7,6 +8,14 @@ import {
   type S3ArtifactClientConfigInput,
   type S3ArtifactCredentials,
 } from './s3-artifact-store-config';
+import { artifactStoreError } from './artifact-store-adapter-error';
+import {
+  normalizeS3ArtifactRange,
+  normalizeS3Etag,
+  requireS3ContentHash,
+  type S3ArtifactObjectState,
+  verifyS3ArtifactStream,
+} from './s3-artifact-store-values';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const MIN_MULTIPART_PART_SIZE_BYTES = 5 * 1024 * 1024;
@@ -16,7 +25,13 @@ export interface S3ArtifactWriteResult {
   versionId?: string;
 }
 
-export interface S3ArtifactUploadTransport {
+export interface S3ArtifactReadResult {
+  state: S3ArtifactObjectState;
+  stream: AsyncIterable<Uint8Array>;
+  range?: ArtifactByteRange;
+}
+
+export interface S3ArtifactTransport {
   upload(input: {
     bucket: string;
     key: string;
@@ -27,11 +42,33 @@ export interface S3ArtifactUploadTransport {
     ifAbsent: boolean;
     abortSignal?: AbortSignal;
   }): Promise<S3ArtifactWriteResult>;
+  head(input: {
+    bucket: string;
+    key: string;
+    versionId?: string;
+  }): Promise<S3ArtifactObjectState | null>;
+  get(input: {
+    bucket: string;
+    key: string;
+    versionId?: string;
+    expectedEtag?: string;
+    expectedContentHash?: string;
+    range?: ArtifactByteRange;
+    abortSignal?: AbortSignal;
+  }): Promise<S3ArtifactReadResult>;
   checkBucket(bucket: string): Promise<void>;
   close(): void;
 }
 
-interface MinioUploadClient {
+interface MinioObjectStat {
+  size: number;
+  etag: string;
+  lastModified: Date;
+  metaData: unknown;
+  versionId?: string | null;
+}
+
+interface MinioArtifactClient {
   putObject(
     bucket: string,
     key: string,
@@ -41,6 +78,19 @@ interface MinioUploadClient {
   ): Promise<{ etag: string; versionId: string | null }>;
   removeIncompleteUpload(bucket: string, key: string): Promise<void>;
   bucketExists(bucket: string): Promise<boolean>;
+  statObject(
+    bucket: string,
+    key: string,
+    options?: { versionId?: string }
+  ): Promise<MinioObjectStat>;
+  getObject(bucket: string, key: string, options?: { versionId?: string }): Promise<Readable>;
+  getPartialObject(
+    bucket: string,
+    key: string,
+    offset: number,
+    length?: number,
+    options?: { versionId?: string }
+  ): Promise<Readable>;
 }
 
 interface MinioClientOptions {
@@ -58,30 +108,30 @@ interface MinioClientOptions {
   };
 }
 
-type MinioClientFactory = (options: MinioClientOptions) => MinioUploadClient;
+type MinioClientFactory = (options: MinioClientOptions) => MinioArtifactClient;
 
-export interface MinioS3ArtifactUploadTransportOptions extends S3ArtifactClientConfigInput {
+export interface MinioS3ArtifactTransportOptions extends S3ArtifactClientConfigInput {
   multipartPartSizeBytes?: number;
   requestTimeoutMs?: number;
   maximumRetryCount?: number;
   clientFactory?: MinioClientFactory;
 }
 
-export class S3ArtifactUploadAbortedError extends Error {
-  readonly code = 'S3_ARTIFACT_UPLOAD_ABORTED';
+export class S3ArtifactTransferAbortedError extends Error {
+  readonly code = 'S3_ARTIFACT_TRANSFER_ABORTED';
 
   constructor() {
-    super('S3 Artifact upload was aborted.');
-    this.name = 'S3ArtifactUploadAbortedError';
+    super('S3 Artifact transfer was aborted.');
+    this.name = 'S3ArtifactTransferAbortedError';
   }
 }
 
-export class S3ArtifactUploadTimeoutError extends Error {
-  readonly code = 'S3_ARTIFACT_UPLOAD_TIMEOUT';
+export class S3ArtifactTransferTimeoutError extends Error {
+  readonly code = 'S3_ARTIFACT_TRANSFER_TIMEOUT';
 
   constructor() {
-    super('S3 Artifact upload timed out.');
-    this.name = 'S3ArtifactUploadTimeoutError';
+    super('S3 Artifact transfer timed out.');
+    this.name = 'S3ArtifactTransferTimeoutError';
   }
 }
 
@@ -95,12 +145,12 @@ export class S3ArtifactUploadCleanupError extends Error {
 }
 
 /**
- * Upload-only transport boundary used while the concrete Store is rebuilt.
+ * S3 transport boundary used while the concrete Store is rebuilt.
  * A client is created per operation so the configured credential provider is
  * resolved each time; this keeps short-lived credentials rotatable without
  * storing them in long-lived adapter state.
  */
-export class MinioS3ArtifactUploadTransport implements S3ArtifactUploadTransport {
+export class MinioS3ArtifactTransport implements S3ArtifactTransport {
   private readonly config: NormalizedS3ArtifactClientConfig;
   private readonly multipartPartSizeBytes: number;
   private readonly requestTimeoutMs: number;
@@ -108,7 +158,7 @@ export class MinioS3ArtifactUploadTransport implements S3ArtifactUploadTransport
   private readonly clientFactory: MinioClientFactory;
   private closed = false;
 
-  constructor(options: MinioS3ArtifactUploadTransportOptions) {
+  constructor(options: MinioS3ArtifactTransportOptions) {
     this.config = normalizeS3ArtifactClientConfig(options);
     if (!this.config.credentialProvider) {
       throw new S3ArtifactConfigurationError(
@@ -129,14 +179,14 @@ export class MinioS3ArtifactUploadTransport implements S3ArtifactUploadTransport
   }
 
   async upload(
-    input: Parameters<S3ArtifactUploadTransport['upload']>[0]
+    input: Parameters<S3ArtifactTransport['upload']>[0]
   ): Promise<S3ArtifactWriteResult> {
     this.assertOpen();
     assertBucketAndKey(input.bucket, input.key);
     if (!Number.isSafeInteger(input.contentLength) || input.contentLength < 0) {
       throw new TypeError('contentLength must be a non-negative safe integer.');
     }
-    if (input.abortSignal?.aborted) throw new S3ArtifactUploadAbortedError();
+    if (input.abortSignal?.aborted) throw new S3ArtifactTransferAbortedError();
 
     const client = await this.createClient();
     const metadata = {
@@ -144,14 +194,14 @@ export class MinioS3ArtifactUploadTransport implements S3ArtifactUploadTransport
       ...(input.contentType ? { 'Content-Type': input.contentType } : {}),
       ...(input.ifAbsent ? { 'If-None-Match': '*' } : {}),
     };
-    let interruption: S3ArtifactUploadAbortedError | S3ArtifactUploadTimeoutError | undefined;
+    let interruption: S3ArtifactTransferAbortedError | S3ArtifactTransferTimeoutError | undefined;
     const abort = (): void => {
-      interruption ??= new S3ArtifactUploadAbortedError();
+      interruption ??= new S3ArtifactTransferAbortedError();
       input.body.destroy(interruption);
     };
     input.abortSignal?.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(() => {
-      interruption ??= new S3ArtifactUploadTimeoutError();
+      interruption ??= new S3ArtifactTransferTimeoutError();
       input.body.destroy(interruption);
     }, this.requestTimeoutMs);
 
@@ -176,6 +226,69 @@ export class MinioS3ArtifactUploadTransport implements S3ArtifactUploadTransport
     }
   }
 
+  async head(
+    input: Parameters<S3ArtifactTransport['head']>[0]
+  ): Promise<S3ArtifactObjectState | null> {
+    this.assertOpen();
+    assertBucketAndKey(input.bucket, input.key);
+    const client = await this.createClient();
+    try {
+      return s3StateFromStat(
+        await client.statObject(input.bucket, input.key, versionOptions(input.versionId))
+      );
+    } catch (error) {
+      if (isMissingObject(error)) return null;
+      throw error;
+    }
+  }
+
+  async get(input: Parameters<S3ArtifactTransport['get']>[0]): Promise<S3ArtifactReadResult> {
+    this.assertOpen();
+    assertBucketAndKey(input.bucket, input.key);
+    if (input.abortSignal?.aborted) throw new S3ArtifactTransferAbortedError();
+
+    const client = await this.createClient();
+    const options = versionOptions(input.versionId);
+    const initialState = s3StateFromStat(await client.statObject(input.bucket, input.key, options));
+    assertExpectedObjectIdentity(initialState, input.expectedEtag, input.expectedContentHash);
+    const contentHash = requireS3ContentHash(initialState);
+    const normalizedRange = normalizeS3ArtifactRange(input.range, initialState.sizeBytes);
+    const stream = normalizedRange.range
+      ? await client.getPartialObject(
+          input.bucket,
+          input.key,
+          normalizedRange.range.start,
+          normalizedRange.sizeBytes,
+          options
+        )
+      : await client.getObject(input.bucket, input.key, options);
+
+    return {
+      state: initialState,
+      stream: guardS3Download({
+        stream,
+        expectedContentHash: contentHash,
+        expectedSizeBytes: normalizedRange.sizeBytes,
+        verifyHash: normalizedRange.range === undefined,
+        abortSignal: input.abortSignal,
+        requestTimeoutMs: this.requestTimeoutMs,
+        verifyUnchanged: async () => {
+          const finalState = s3StateFromStat(
+            await client.statObject(input.bucket, input.key, options)
+          );
+          if (!sameS3ObjectIdentity(initialState, finalState)) {
+            throw artifactStoreError(
+              'ARTIFACT_VERSION_CONFLICT',
+              'S3 Artifact object changed during download.',
+              true
+            );
+          }
+        },
+      }),
+      ...(normalizedRange.range ? { range: normalizedRange.range } : {}),
+    };
+  }
+
   async checkBucket(bucket: string): Promise<void> {
     this.assertOpen();
     assertBucketAndKey(bucket, 'health-check');
@@ -191,7 +304,7 @@ export class MinioS3ArtifactUploadTransport implements S3ArtifactUploadTransport
     this.closed = true;
   }
 
-  private async createClient(): Promise<MinioUploadClient> {
+  private async createClient(): Promise<MinioArtifactClient> {
     const credentialProvider = this.config.credentialProvider;
     if (!credentialProvider) {
       throw new S3ArtifactConfigurationError(
@@ -237,12 +350,12 @@ function minioClientOptions(
   };
 }
 
-function defaultMinioClientFactory(options: MinioClientOptions): MinioUploadClient {
+function defaultMinioClientFactory(options: MinioClientOptions): MinioArtifactClient {
   return new Client(options);
 }
 
 async function cleanupIncompleteUpload(
-  client: MinioUploadClient,
+  client: MinioArtifactClient,
   bucket: string,
   key: string
 ): Promise<void> {
@@ -252,6 +365,139 @@ async function cleanupIncompleteUpload(
     if (isMissingIncompleteUpload(error)) return;
     throw new S3ArtifactUploadCleanupError();
   }
+}
+
+function s3StateFromStat(stat: MinioObjectStat): S3ArtifactObjectState {
+  if (!(stat.lastModified instanceof Date) || !Number.isFinite(stat.lastModified.getTime())) {
+    throw artifactStoreError(
+      'ARTIFACT_VALIDATION_FAILED',
+      'S3 object timestamp metadata is invalid.',
+      false
+    );
+  }
+  const metadata = stringMetadata(stat.metaData);
+  return {
+    sizeBytes: stat.size,
+    etag: stat.etag,
+    lastModifiedAt: stat.lastModified.toISOString(),
+    metadata,
+    ...(stat.versionId ? { versionId: stat.versionId } : {}),
+    ...(metadata['content-type'] ? { mimeType: metadata['content-type'] } : {}),
+    encrypted:
+      metadata['x-amz-server-side-encryption'] !== undefined ||
+      metadata['x-amz-server-side-encryption-customer-algorithm'] !== undefined,
+  };
+}
+
+function stringMetadata(value: unknown): Record<string, string> {
+  if (!value || Array.isArray(value) || typeof value !== 'object') {
+    throw artifactStoreError('ARTIFACT_VALIDATION_FAILED', 'S3 object metadata is invalid.', false);
+  }
+  const entries = Object.entries(value);
+  if (entries.some(([, entry]) => typeof entry !== 'string')) {
+    throw artifactStoreError('ARTIFACT_VALIDATION_FAILED', 'S3 object metadata is invalid.', false);
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function versionOptions(versionId: string | undefined): { versionId?: string } | undefined {
+  if (versionId !== undefined && !versionId.trim()) {
+    throw new TypeError('versionId must not be empty.');
+  }
+  return versionId ? { versionId } : undefined;
+}
+
+function assertExpectedObjectIdentity(
+  state: S3ArtifactObjectState,
+  expectedEtag: string | undefined,
+  expectedContentHash: string | undefined
+): void {
+  const actualEtag = normalizeS3Etag(state.etag);
+  const normalizedExpectedEtag = normalizeS3Etag(expectedEtag);
+  if (normalizedExpectedEtag && normalizedExpectedEtag !== actualEtag) {
+    throw artifactStoreError(
+      'ARTIFACT_VERSION_CONFLICT',
+      'S3 Artifact ETag does not match the requested version.',
+      false,
+      { expectedEtag: normalizedExpectedEtag, actualEtag }
+    );
+  }
+  const actualContentHash = requireS3ContentHash(state);
+  if (expectedContentHash && expectedContentHash !== actualContentHash) {
+    throw artifactStoreError(
+      'ARTIFACT_HASH_MISMATCH',
+      'S3 Artifact does not match expectedContentHash.',
+      false,
+      { expectedContentHash, actualContentHash }
+    );
+  }
+}
+
+function sameS3ObjectIdentity(
+  before: S3ArtifactObjectState,
+  after: S3ArtifactObjectState
+): boolean {
+  return (
+    before.sizeBytes === after.sizeBytes &&
+    normalizeS3Etag(before.etag) === normalizeS3Etag(after.etag) &&
+    before.versionId === after.versionId &&
+    before.lastModifiedAt === after.lastModifiedAt &&
+    requireS3ContentHash(before) === requireS3ContentHash(after)
+  );
+}
+
+function guardS3Download(input: {
+  stream: Readable;
+  expectedContentHash: string;
+  expectedSizeBytes: number;
+  verifyHash: boolean;
+  abortSignal?: AbortSignal;
+  requestTimeoutMs: number;
+  verifyUnchanged(): Promise<void>;
+}): AsyncIterable<Uint8Array> {
+  let interruption: S3ArtifactTransferAbortedError | S3ArtifactTransferTimeoutError | undefined;
+  const abort = (): void => {
+    interruption ??= new S3ArtifactTransferAbortedError();
+    input.stream.destroy();
+  };
+  input.abortSignal?.addEventListener('abort', abort, { once: true });
+  const timeout = setTimeout(() => {
+    interruption ??= new S3ArtifactTransferTimeoutError();
+    input.stream.destroy();
+  }, input.requestTimeoutMs);
+  const verified = verifyS3ArtifactStream(
+    input.stream,
+    input.expectedContentHash,
+    input.expectedSizeBytes,
+    input.verifyHash
+  );
+
+  return (async function* guarded(): AsyncIterable<Uint8Array> {
+    let completed = false;
+    try {
+      yield* verified;
+      if (interruption) throw interruption;
+      await input.verifyUnchanged();
+      completed = true;
+    } catch (error) {
+      throw interruption ?? error;
+    } finally {
+      clearTimeout(timeout);
+      input.abortSignal?.removeEventListener('abort', abort);
+      if (!completed && !input.stream.destroyed) input.stream.destroy();
+    }
+  })();
+}
+
+function isMissingObject(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; name?: unknown; statusCode?: unknown };
+  return (
+    candidate.statusCode === 404 ||
+    [candidate.code, candidate.name].some(
+      (value) => typeof value === 'string' && ['NoSuchKey', 'NotFound'].includes(value)
+    )
+  );
 }
 
 function isMissingIncompleteUpload(error: unknown): boolean {
