@@ -770,7 +770,12 @@ const SQLITE_STORE_CHILD_SOURCE = String.raw`
 const Module = require('node:module');
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch {
+  DatabaseSync = require('better-sqlite3');
+}
 const originalResolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (request, parent, isMain, options) {
   if (request === '@hypha/core') {

@@ -1289,10 +1289,18 @@ function storeError(
 }
 
 function sqlitePrimaryResultCode(error: unknown): number | undefined {
+  if (error instanceof AggregateError) {
+    for (const nestedError of error.errors) {
+      const nestedResultCode = sqlitePrimaryResultCode(nestedError);
+      if (nestedResultCode !== undefined) return nestedResultCode;
+    }
+  }
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return undefined;
+  }
+  if (error.code === 'SQLITE_CORRUPT') return SQLITE_CORRUPT_RESULT_CODE;
+  if (error.code === 'SQLITE_NOTADB') return SQLITE_NOT_A_DATABASE_RESULT_CODE;
   if (
-    typeof error !== 'object' ||
-    error === null ||
-    !('code' in error) ||
     error.code !== 'ERR_SQLITE_ERROR' ||
     !('errcode' in error) ||
     typeof error.errcode !== 'number' ||
