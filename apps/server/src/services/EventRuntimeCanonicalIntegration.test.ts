@@ -123,6 +123,14 @@ describe('Server EventRuntime canonical integration', () => {
         type: 'model.call.completed',
         payload: { output: 'observed' },
       }),
+      expect.objectContaining({
+        type: 'workcache.bypass',
+        payload: expect.objectContaining({
+          sourceEventType: 'model.call.completed',
+          treeType: 'ComputationTree',
+          reason: 'not_reusable',
+        }),
+      }),
     ]);
     await expect(
       composition.events.list({ runId: run.runId, type: 'recovery.case.opened' })

@@ -144,9 +144,10 @@ export const domainMemoryDependencySnapshotJsonSchema: JsonSchema = {
 
 export const memoryCacheValidityInputJsonSchema: JsonSchema = {
   type: 'object',
-  required: ['memoryProfileRevision', 'scopeHash'],
+  required: ['memoryProfileRevision', 'mutationGeneration', 'scopeHash'],
   properties: {
     memoryProfileRevision: nonEmptyStringJsonSchema,
+    mutationGeneration: nonEmptyStringJsonSchema,
     contextProfileRevision: nonEmptyStringJsonSchema,
     scopeHash: nonEmptyStringJsonSchema,
     queryHash: nonEmptyStringJsonSchema,
@@ -161,7 +162,14 @@ export const memoryCacheValidityInputJsonSchema: JsonSchema = {
 
 export const memoryCacheInvalidationJsonSchema: JsonSchema = {
   type: 'object',
-  required: ['operationId', 'scopeHash', 'reason', 'memoryIds', 'validityHash'],
+  required: [
+    'operationId',
+    'scopeHash',
+    'reason',
+    'memoryIds',
+    'mutationGeneration',
+    'validityHash',
+  ],
   properties: {
     operationId: nonEmptyStringJsonSchema,
     scopeHash: nonEmptyStringJsonSchema,
@@ -171,6 +179,7 @@ export const memoryCacheInvalidationJsonSchema: JsonSchema = {
     },
     memoryIds: nonEmptyStringArrayJsonSchema,
     memoryVersionIds: nonEmptyStringArrayJsonSchema,
+    mutationGeneration: nonEmptyStringJsonSchema,
     validityHash: nonEmptyStringJsonSchema,
   },
   additionalProperties: false,
@@ -238,6 +247,7 @@ export const memoryCacheInvalidationExample: MemoryCacheInvalidation = {
   reason: 'updated',
   memoryIds: ['memory:preference'],
   memoryVersionIds: ['memory:preference:v3'],
+  mutationGeneration: '3',
   validityHash: 'sha256:validity',
 };
 
