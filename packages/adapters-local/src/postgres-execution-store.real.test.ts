@@ -31,6 +31,7 @@ const postgresDigest =
 const database = 'hypha_execution';
 const username = 'hypha_execution';
 const password = 'hypha-execution-real-test';
+const postgresStartupTimeoutMs = 45_000;
 const containerName = `hypha-postgres-real-${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const docker = new DockerCliTransport({ dockerPath });
 let port = 0;
@@ -61,7 +62,7 @@ beforeAll(async () => {
   ]);
   containerCreated = true;
   await waitForPostgres();
-}, 60_000);
+}, 90_000);
 
 afterAll(async () => {
   const removal = await runDocker(['rm', '-f', '-v', containerName]);
@@ -1392,7 +1393,8 @@ function createRealStore(
 
 async function waitForPostgres(): Promise<void> {
   let lastErrorCode: string | undefined;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  const deadline = Date.now() + postgresStartupTimeoutMs;
+  while (Date.now() < deadline) {
     const client = new Client({
       connectionString: postgresConnectionString(),
       ssl: false,
