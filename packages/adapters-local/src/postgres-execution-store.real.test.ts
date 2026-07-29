@@ -799,6 +799,81 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await Promise.all([workerA.store.close(), workerB.store.close()]);
     }
   }, 30_000);
+
+  it('quarantines a corrupt real record while healthy records remain readable', async () => {
+    const corruptRequest = structuredClone(executionRecordCreateRequestExample);
+    corruptRequest.operationId = 'operation.execution.create.real-corrupt';
+    corruptRequest.idempotencyKey = 'execution-create:execution.real.corrupt';
+    corruptRequest.record.id = 'execution.real.corrupt';
+    corruptRequest.record.request.executionId = corruptRequest.record.id;
+    corruptRequest.record.request.operationId = 'operation.command.real.corrupt';
+    corruptRequest.record.request.idempotencyKey = 'command:run.real:corrupt';
+
+    const healthyRequest = structuredClone(executionRecordCreateRequestExample);
+    healthyRequest.operationId = 'operation.execution.create.real-healthy';
+    healthyRequest.idempotencyKey = 'execution-create:execution.real.healthy';
+    healthyRequest.record.id = 'execution.real.healthy';
+    healthyRequest.record.request.executionId = healthyRequest.record.id;
+    healthyRequest.record.request.operationId = 'operation.command.real.healthy';
+    healthyRequest.record.request.idempotencyKey = 'command:run.real:healthy';
+
+    const { connection, store } = createRealStore('corrupt-record');
+
+    try {
+      await connection.initialize();
+      const corruptRecord = await store.create(corruptRequest);
+      const healthyRecord = await store.create(healthyRequest);
+
+      await connection.withClient((client) =>
+        client.query(
+          `UPDATE execution_records
+              SET status = 'completed'
+            WHERE execution_id = $1`,
+          [corruptRecord.id]
+        )
+      );
+
+      await expect(store.get(corruptRecord.id)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_CORRUPT',
+        message: 'Postgres Execution store contains an invalid record.',
+        details: { executionId: corruptRecord.id },
+      });
+      await expect(store.get(corruptRecord.id)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_CORRUPT',
+        message: 'Execution record is quarantined.',
+        details: { executionId: corruptRecord.id },
+      });
+
+      await expect(store.get(healthyRecord.id)).resolves.toEqual(healthyRecord);
+      await expect(store.health()).resolves.toMatchObject({
+        status: 'degraded',
+        message: 'Postgres Execution store contains quarantined records.',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+          quarantinedRecords: 1,
+        },
+      });
+
+      const evidence = await connection.withClient((client) =>
+        client.query(
+          `SELECT reason_code, record_hash, detected_at
+             FROM execution_record_quarantine
+            WHERE execution_id = $1`,
+          [corruptRecord.id]
+        )
+      );
+      expect(evidence.rows).toHaveLength(1);
+      expect(evidence.rows[0]).toMatchObject({
+        reason_code: 'invalid_record',
+        record_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+        detected_at: expect.any(Date),
+      });
+    } finally {
+      await store.close();
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
