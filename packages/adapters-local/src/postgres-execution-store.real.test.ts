@@ -587,6 +587,104 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await Promise.all([workerA.store.close(), workerB.store.close()]);
     }
   }, 30_000);
+
+  it('preserves a real lease across worker restart and reclaims it only after expiry', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-restart-lease';
+    createRequest.idempotencyKey = 'execution-create:execution.real.restart-lease';
+    createRequest.record.id = 'execution.real.restart-lease';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.restart-lease';
+    createRequest.record.request.idempotencyKey = 'command:run.real:restart-lease';
+    const acquireRequest = structuredClone(executionLeaseAcquireRequestExample);
+    acquireRequest.operationId = 'operation.lease.acquire.real-restart-a';
+    acquireRequest.executionId = createRequest.record.id;
+    acquireRequest.expectedRevision = 0;
+    acquireRequest.requestedLeaseId = 'lease.execution.real.restart.a';
+    acquireRequest.ownerId = 'runtime-worker.real.restart.a';
+    acquireRequest.acquiredAt = '2026-07-16T00:00:02.000Z';
+    acquireRequest.idempotencyKey = 'lease-acquire:execution.real.restart:a';
+    const crashedWorker = createRealStore('restart-worker-a');
+    let recoveredWorker: ReturnType<typeof createRealStore> | undefined;
+
+    try {
+      await crashedWorker.connection.initialize();
+      await crashedWorker.store.create(createRequest);
+      const persistedClaim = await crashedWorker.store.acquireLease(acquireRequest);
+      if (!persistedClaim.lease) {
+        throw new Error('Real Postgres restart claim did not return a lease.');
+      }
+      const crashedLease = persistedClaim.lease;
+      await crashedWorker.store.close();
+
+      recoveredWorker = createRealStore('restart-worker-b');
+      await recoveredWorker.connection.initialize();
+      await expect(recoveredWorker.store.get(createRequest.record.id)).resolves.toEqual(
+        persistedClaim
+      );
+
+      const earlyTakeover = structuredClone(acquireRequest);
+      earlyTakeover.operationId = 'operation.lease.acquire.real-restart-early';
+      earlyTakeover.expectedRevision = persistedClaim.revision;
+      earlyTakeover.requestedLeaseId = 'lease.execution.real.restart.early';
+      earlyTakeover.ownerId = 'runtime-worker.real.restart.early';
+      earlyTakeover.acquiredAt = '2026-07-16T00:00:31.999Z';
+      earlyTakeover.idempotencyKey = 'lease-acquire:execution.real.restart:early';
+      await expect(recoveredWorker.store.acquireLease(earlyTakeover)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_LEASE_HELD',
+        details: {
+          executionId: createRequest.record.id,
+          leaseId: crashedLease.id,
+          expiresAt: crashedLease.expiresAt,
+        },
+      });
+
+      const takeoverRequest = structuredClone(earlyTakeover);
+      takeoverRequest.operationId = 'operation.lease.acquire.real-restart-b';
+      takeoverRequest.requestedLeaseId = 'lease.execution.real.restart.b';
+      takeoverRequest.ownerId = 'runtime-worker.real.restart.b';
+      takeoverRequest.acquiredAt = crashedLease.expiresAt;
+      takeoverRequest.idempotencyKey = 'lease-acquire:execution.real.restart:b';
+      const takeover = await recoveredWorker.store.acquireLease(takeoverRequest);
+
+      expect(takeover).toMatchObject({
+        id: createRequest.record.id,
+        revision: persistedClaim.revision + 1,
+        lease: {
+          id: takeoverRequest.requestedLeaseId,
+          ownerId: takeoverRequest.ownerId,
+          fencingToken: crashedLease.fencingToken + 1,
+          acquiredAt: crashedLease.expiresAt,
+        },
+      });
+      const evidence = await recoveredWorker.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             records.revision,
+             records.last_fencing_token,
+             COUNT(history.lease_id) AS lease_count,
+             COUNT(history.released_at) AS released_lease_count
+           FROM execution_records AS records
+           JOIN execution_lease_history AS history
+             ON history.execution_id = records.execution_id
+          WHERE records.execution_id = $1
+          GROUP BY records.revision, records.last_fencing_token`,
+          [createRequest.record.id]
+        )
+      );
+      expect(evidence.rows).toEqual([
+        {
+          revision: '2',
+          last_fencing_token: '2',
+          lease_count: '2',
+          released_lease_count: '1',
+        },
+      ]);
+    } finally {
+      await crashedWorker.store.close();
+      await recoveredWorker?.store.close();
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
