@@ -87,6 +87,124 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     }
   );
 
+  it('rejects Workspace executables that have a hardlink alias', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-exec-hardlink-'));
+    const executableRoot = path.join(root, 'bin');
+    const executablePath = path.join(executableRoot, 'command.js');
+    await fs.mkdir(executableRoot, { recursive: true });
+    await fs.writeFile(executablePath, 'process.stdout.write("run");\n', 'utf8');
+    await fs.link(executablePath, path.join(executableRoot, 'alias.js'));
+    if (process.platform !== 'win32') await fs.chmod(executablePath, 0o700);
+    const runtime = createRuntime(root, executableRoot, true);
+    await runtime.initialize();
+
+    await expect(runtime.execute({ operation: 'execute', path: 'bin/command.js' })).rejects.toThrow(
+      'Workspace executable must be a single-link regular file'
+    );
+  });
+
+  it('rejects an executable replaced between validation and opening without running it', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-exec-replace-'));
+    const executableRoot = path.join(root, 'bin');
+    const executablePath = path.join(executableRoot, 'command.js');
+    const displacedPath = path.join(executableRoot, 'original.js');
+    const markerPath = path.join(root, 'forged-ran.txt');
+    await fs.mkdir(executableRoot, { recursive: true });
+    await fs.writeFile(executablePath, 'process.stdout.write("trusted");\n', 'utf8');
+    if (process.platform !== 'win32') await fs.chmod(executablePath, 0o700);
+    const runtime = createRuntime(root, executableRoot, true);
+    await runtime.initialize();
+
+    const originalOpen = fs.open.bind(fs);
+    let replaced = false;
+    const openReplacement = async () => {
+      await fs.rename(executablePath, displacedPath);
+      await fs.writeFile(
+        executablePath,
+        `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran');\n`,
+        'utf8'
+      );
+      if (process.platform !== 'win32') await fs.chmod(executablePath, 0o700);
+      replaced = true;
+      return originalOpen(executablePath, 'r');
+    };
+    const openSpy = vi
+      .spyOn(fs, 'open')
+      .mockImplementation(openReplacement as unknown as typeof fs.open);
+    try {
+      await expect(
+        runtime.execute({ operation: 'execute', path: 'bin/command.js' })
+      ).rejects.toThrow('Workspace executable changed during execution');
+      expect(replaced).toBe(true);
+      await expect(fs.access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('rejects a cwd replaced before process launch without running the executable', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-cwd-replace-'));
+    const executableRoot = path.join(root, 'bin');
+    const executablePath = path.join(executableRoot, 'command.js');
+    const cwd = path.join(root, 'work');
+    const displacedCwd = path.join(root, 'displaced-work');
+    const markerPath = path.join(root, 'command-ran.txt');
+    await Promise.all([
+      fs.mkdir(executableRoot, { recursive: true }),
+      fs.mkdir(cwd, { recursive: true }),
+    ]);
+    await fs.writeFile(
+      executablePath,
+      `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran');\n`,
+      'utf8'
+    );
+    if (process.platform !== 'win32') await fs.chmod(executablePath, 0o700);
+    const runtime = createRuntime(root, executableRoot, true);
+    await runtime.initialize();
+
+    const originalOpen = fs.open.bind(fs);
+    let replaced = false;
+    const openThenReplaceCwd = async () => {
+      const handle = await originalOpen(executablePath, 'r');
+      await fs.rename(cwd, displacedCwd);
+      await fs.mkdir(cwd);
+      replaced = true;
+      return handle;
+    };
+    const openSpy = vi
+      .spyOn(fs, 'open')
+      .mockImplementation(openThenReplaceCwd as unknown as typeof fs.open);
+    try {
+      await expect(
+        runtime.execute({ operation: 'execute', path: 'bin/command.js', cwd: 'work' })
+      ).rejects.toThrow('Workspace execution cwd changed');
+      expect(replaced).toBe(true);
+      await expect(fs.access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('rejects a successful process result when its executable changes during execution', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-exec-mutation-'));
+    const executableRoot = path.join(root, 'bin');
+    const executablePath = path.join(executableRoot, 'command.js');
+    await fs.mkdir(executableRoot, { recursive: true });
+    await fs.writeFile(
+      executablePath,
+      "require('node:fs').appendFileSync(__filename, '\\n// changed');\nprocess.stdout.write('run');\n",
+      'utf8'
+    );
+    if (process.platform !== 'win32') await fs.chmod(executablePath, 0o700);
+    const runtime = createRuntime(root, executableRoot, true);
+    await runtime.initialize();
+
+    await expect(runtime.execute({ operation: 'execute', path: 'bin/command.js' })).rejects.toThrow(
+      'Workspace executable changed during execution'
+    );
+    await expect(fs.readFile(executablePath, 'utf8')).resolves.toContain('// changed');
+  });
+
   it('reports the trusted-only boundary and keeps command execution disabled', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-health-'));
     const executableRoot = path.join(root, 'bin');

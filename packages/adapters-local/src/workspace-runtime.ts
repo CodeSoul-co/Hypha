@@ -232,6 +232,11 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     if (!this.config.execution.enabled) throw new Error('Workspace execution is disabled');
     await this.assertExistingPathAllowed(absolutePath, this.executeRoots, 'execute');
     if (process.platform !== 'win32') await fs.access(absolutePath, fsConstants.X_OK);
+    const executableBefore = await fs.lstat(absolutePath, { bigint: true });
+    if (!hasSingleLinkRegularFileIdentity(executableBefore)) {
+      throw new Error('Workspace executable must be a single-link regular file');
+    }
+    const executableCanonical = await fs.realpath(absolutePath);
     const args = request.args ?? [];
     if (args.some((arg) => typeof arg !== 'string')) {
       throw new Error('args must be an array of strings');
@@ -242,20 +247,54 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
       [...this.readRoots, ...this.writeRoots],
       'use as cwd'
     );
+    const cwdBefore = await this.workspaceDirectoryIdentity(
+      cwd,
+      'Workspace execution cwd must be a stable directory'
+    );
     const requestedTimeout =
       typeof request.timeoutMs === 'number' && Number.isFinite(request.timeoutMs)
         ? Math.max(1, Math.floor(request.timeoutMs))
         : this.config.execution.timeoutMs;
     const timeoutMs = Math.min(requestedTimeout, this.config.execution.timeoutMs);
     const invocation = this.resolveExecutable(absolutePath, args);
-    const result = await this.runExecutable(
-      invocation.command,
-      invocation.args,
-      cwd,
-      timeoutMs,
-      request.signal
-    );
-    return { path: request.path, ...result, timeoutMs };
+    const executableHandle = await fs.open(absolutePath, 'r');
+    try {
+      await this.assertWorkspaceExecutableIdentity(
+        absolutePath,
+        executableCanonical,
+        executableBefore,
+        executableHandle
+      );
+      await this.assertWorkspaceDirectoryObjectIdentity(
+        cwd,
+        cwdBefore,
+        'Workspace execution cwd changed before launch'
+      );
+      const result = await this.runExecutable(
+        invocation.command,
+        invocation.args,
+        cwd,
+        timeoutMs,
+        request.signal
+      );
+      return { path: request.path, ...result, timeoutMs };
+    } finally {
+      try {
+        await this.assertWorkspaceExecutableIdentity(
+          absolutePath,
+          executableCanonical,
+          executableBefore,
+          executableHandle
+        );
+        await this.assertWorkspaceDirectoryObjectIdentity(
+          cwd,
+          cwdBefore,
+          'Workspace execution cwd changed during execution'
+        );
+      } finally {
+        await executableHandle.close().catch(() => undefined);
+      }
+    }
   }
 
   private resolveExecutable(
@@ -388,16 +427,45 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     directory: string,
     expected: BigIntStats
   ): Promise<void> {
-    const current = await this.workspaceDirectoryIdentity(
+    await this.assertWorkspaceDirectoryObjectIdentity(
       directory,
-      'Workspace write parent must be a stable directory'
+      expected,
+      'Workspace write parent changed during publish'
     );
+  }
+
+  private async assertWorkspaceDirectoryObjectIdentity(
+    directory: string,
+    expected: BigIntStats,
+    changedMessage: string
+  ): Promise<void> {
+    const current = await this.workspaceDirectoryIdentity(directory, changedMessage);
     if (
       current.dev !== expected.dev ||
       current.ino !== expected.ino ||
       current.mode !== expected.mode
     ) {
-      throw new Error('Workspace write parent changed during publish');
+      throw new Error(changedMessage);
+    }
+  }
+
+  private async assertWorkspaceExecutableIdentity(
+    executablePath: string,
+    expectedCanonical: string,
+    expected: BigIntStats,
+    handle: fs.FileHandle
+  ): Promise<void> {
+    const [opened, current, canonical] = await Promise.all([
+      handle.stat({ bigint: true }),
+      fs.lstat(executablePath, { bigint: true }),
+      fs.realpath(executablePath),
+    ]);
+    if (
+      canonical !== expectedCanonical ||
+      !sameSingleLinkRegularFileIdentity(expected, opened) ||
+      !sameSingleLinkRegularFileIdentity(expected, current)
+    ) {
+      throw new Error('Workspace executable changed during execution');
     }
   }
 

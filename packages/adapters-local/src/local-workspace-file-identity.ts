@@ -1,8 +1,8 @@
 import type { BigIntStats } from 'node:fs';
 
 /**
- * Workspace output files must remain single-link regular files so bytes cannot
- * be changed through a hardlink alias outside the governed path.
+ * Governed Workspace files must remain single-link regular files so bytes
+ * cannot be changed through a hardlink alias outside the governed path.
  */
 export function hasSingleLinkRegularFileIdentity(stat: BigIntStats): boolean {
   return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1n;
