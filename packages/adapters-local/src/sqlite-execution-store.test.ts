@@ -41,47 +41,50 @@ describe('SQLiteExecutionStore public adapter', () => {
     await reopened.close?.();
   });
 
-  it('allows only one compare-and-set across independent processes', async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
-    const first = new SQLiteExecutionStore({ rootPath: root });
-    const queued = await first.create(structuredClone(executionRecordCreateRequestExample));
-    const mutation = {
-      operationId: 'operation.execution.update.first',
-      executionId: queued.id,
-      expectedRevision: queued.revision,
-      next: {
-        ...queued,
-        revision: queued.revision + 1,
-        status: 'starting' as const,
-        attempt: 1,
-        updatedAt: '2026-07-16T00:00:01.000Z',
-      },
-      idempotencyKey: 'execution-update:first',
-    };
-    const competing = structuredClone(mutation);
-    competing.operationId = 'operation.execution.update.competing';
-    competing.idempotencyKey = 'execution-update:competing';
+  it.each([2, 4, 8])(
+    'allows only one compare-and-set across %i independent processes',
+    async (processCount) => {
+      const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
+      root = testRoot;
+      const seed = new SQLiteExecutionStore({ rootPath: testRoot });
+      const queued = await seed
+        .create(structuredClone(executionRecordCreateRequestExample))
+        .finally(() => seed.close());
+      const mutations = Array.from({ length: processCount }, (_, index) =>
+        startingMutation(
+          queued,
+          `operation.execution.update.competing-${processCount}-${index}`,
+          `execution-update:competing-${processCount}-${index}`
+        )
+      );
 
-    try {
-      const results = await Promise.allSettled([
-        first.compareAndSet(mutation),
-        runStoreOperationInChild(root, 'compareAndSet', competing),
-      ]);
+      const results = await Promise.allSettled(
+        mutations.map((mutation) =>
+          runStoreOperationInChild<ExecutionRecord>(testRoot, 'compareAndSet', mutation)
+        )
+      );
 
       expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-      const rejected = results.find(
+      const rejected = results.filter(
         (result): result is PromiseRejectedResult => result.status === 'rejected'
       );
-      expect(rejected?.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
-      await expect(first.get(queued.id)).resolves.toMatchObject({
-        revision: 1,
-        status: 'starting',
-      });
-    } finally {
-      await first.close();
-    }
-  }, 60_000);
+      expect(rejected).toHaveLength(processCount - 1);
+      for (const result of rejected) {
+        expect(result.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+      }
+
+      const reopened = new SQLiteExecutionStore({ rootPath: testRoot });
+      try {
+        await expect(reopened.get(queued.id)).resolves.toMatchObject({
+          revision: 1,
+          status: 'starting',
+        });
+      } finally {
+        await reopened.close();
+      }
+    },
+    120_000
+  );
 
   it('fences an expired lease takeover across independent processes', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-lease-'));
@@ -345,33 +348,39 @@ async function runStoreOperationInChild<T>(
     }
   );
   let stderr = '';
-  let settled = false;
+  let completed = false;
+  let response: ChildStoreResponse<T> | undefined;
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
     stderr += chunk;
   });
 
   return new Promise<T>((resolve, reject) => {
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (completed) return;
+      completed = true;
+      reject(error);
+    });
     child.on('message', (message: ChildStoreResponse<T>) => {
       if (message.ready) {
         child.send({ rootPath, operation, request });
         return;
       }
-      settled = true;
-      if (message.ok) {
-        resolve(message.result as T);
-        return;
-      }
-      reject(
-        Object.assign(new Error(message.error?.message ?? 'SQLite child operation failed.'), {
-          code: message.error?.code,
-        })
-      );
+      response = message;
     });
-    child.on('exit', (code) => {
-      if (!settled) {
+    child.on('close', (code) => {
+      if (completed) return;
+      completed = true;
+      if (!response) {
         reject(new Error(`SQLite child exited with code ${code}: ${stderr.trim()}`));
+      } else if (response.ok) {
+        resolve(response.result as T);
+      } else {
+        reject(
+          Object.assign(new Error(response.error?.message ?? 'SQLite child operation failed.'), {
+            code: response.error?.code,
+          })
+        );
       }
     });
   });
