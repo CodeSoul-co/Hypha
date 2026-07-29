@@ -44,6 +44,8 @@ import {
 const DEFAULT_MAX_OBJECT_BYTES = 5 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_METADATA_BYTES = 2 * 1024;
 
+export const S3_EXECUTION_ARTIFACT_STORE_ID = 'artifact-store.s3.execution';
+
 export interface S3ExecutionArtifactStoreOptions {
   id?: string;
   bucket: string;
@@ -58,8 +60,8 @@ export interface S3ExecutionArtifactStoreOptions {
 /**
  * Concrete, version-pinned S3 Artifact Store adapter.
  *
- * The adapter deliberately remains outside the public Factory/Registry until
- * its real MinIO acceptance suite is complete with zero skipped tests.
+ * The adapter is composed through an explicit Factory/Registry path. Product
+ * composition remains opt-in and must retain real MinIO acceptance evidence.
  */
 export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
   readonly id: string;
@@ -80,7 +82,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       throw new TypeError('transport or transportOptions is required.');
     }
 
-    this.id = options.id ?? 'artifact-store.s3.execution';
+    this.id = options.id ?? S3_EXECUTION_ARTIFACT_STORE_ID;
     this.bucket = bucket;
     this.region = optionalNonEmpty(options.region, 'region');
     this.maxObjectBytes = options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES;

@@ -3,7 +3,11 @@ import { createServer } from 'node:net';
 import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'minio';
-import type { ArtifactStorageRef } from '@hypha/core';
+import {
+  ArtifactStoreProviderRegistry,
+  type ArtifactStorageRef,
+  type ArtifactStoreProvider,
+} from '@hypha/core';
 import { readArtifactStream } from './artifact-content-io';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import {
@@ -12,7 +16,7 @@ import {
   S3ArtifactTransferTimeoutError,
   type MinioS3ArtifactTransportOptions,
 } from './s3-artifact-store-transport';
-import { S3ExecutionArtifactStore } from './s3-execution-artifact-store';
+import { S3ExecutionArtifactStoreFactory } from './s3-execution-artifact-store-factory';
 
 const dockerPath = process.env.HYPHA_REAL_DOCKER_PATH ?? 'docker';
 const minioImage = process.env.HYPHA_REAL_MINIO_IMAGE ?? 'quay.io/minio/minio';
@@ -71,7 +75,7 @@ beforeAll(async () => {
 
   fixture = {
     client,
-    store: createStore(port),
+    store: await createStore(port),
     port,
   };
 }, 60_000);
@@ -203,7 +207,7 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
       secretAccessKey: secretKey,
     };
     let credentialResolutions = 0;
-    const rotatingStore = createStore(port, {
+    const rotatingStore = await createStore(port, {
       credentialProvider: () => {
         credentialResolutions += 1;
         return credentials;
@@ -281,7 +285,7 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
   it('fails readiness closed when the real bucket suspends versioning', async () => {
     const { client, port } = requireFixture();
     await client.setBucketVersioning(bucket, { Status: 'Suspended' });
-    const suspendedStore = createStore(port);
+    const suspendedStore = await createStore(port);
     try {
       await expect(suspendedStore.health()).resolves.toMatchObject({
         status: 'unhealthy',
@@ -303,22 +307,34 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
 
 interface RealMinioFixture {
   client: Client;
-  store: S3ExecutionArtifactStore;
+  store: AcceptedS3ArtifactStore;
   port: number;
 }
 
-function createStore(
+type AcceptedS3ArtifactStore = ArtifactStoreProvider & {
+  createDownloadAccess: NonNullable<ArtifactStoreProvider['createDownloadAccess']>;
+  close: NonNullable<ArtifactStoreProvider['close']>;
+};
+
+async function createStore(
   port: number,
   transportOverrides: Partial<MinioS3ArtifactTransportOptions> = {}
-): S3ExecutionArtifactStore {
-  return new S3ExecutionArtifactStore({
-    id: 'artifact-store.s3.minio-real',
-    bucket,
-    region,
-    maxObjectBytes: 16 * 1024 * 1024,
-    maxMetadataBytes: 2 * 1024,
-    transportOptions: transportOptions(port, transportOverrides),
-  });
+): Promise<AcceptedS3ArtifactStore> {
+  const providerId = 'artifact-store.s3.minio-real';
+  const registry = new ArtifactStoreProviderRegistry();
+  registry.register(
+    new S3ExecutionArtifactStoreFactory({
+      providerId,
+      bucket,
+      region,
+      maxObjectBytes: 16 * 1024 * 1024,
+      maxMetadataBytes: 2 * 1024,
+      transportOptions: transportOptions(port, transportOverrides),
+    })
+  );
+  const store = await registry.create(providerId);
+  assertAcceptedS3ArtifactStore(store);
+  return store;
 }
 
 function createTransport(
@@ -369,7 +385,15 @@ async function waitForMinio(client: Client): Promise<void> {
   throw lastError instanceof Error ? lastError : new Error('MinIO did not become ready.');
 }
 
-async function waitForStoreHealthy(store: S3ExecutionArtifactStore): Promise<void> {
+function assertAcceptedS3ArtifactStore(
+  store: ArtifactStoreProvider
+): asserts store is AcceptedS3ArtifactStore {
+  if (typeof store.createDownloadAccess !== 'function' || typeof store.close !== 'function') {
+    throw new Error('S3 Factory created a Store without required lifecycle capabilities.');
+  }
+}
+
+async function waitForStoreHealthy(store: AcceptedS3ArtifactStore): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const health = await store.health();
     if (health.status === 'healthy') return;
@@ -408,7 +432,7 @@ function putRequest(objectKey: string, content: Uint8Array) {
 }
 
 async function readRef(
-  store: S3ExecutionArtifactStore,
+  store: AcceptedS3ArtifactStore,
   ref: ArtifactStorageRef
 ): Promise<Uint8Array> {
   const content = await store.get({ ref });

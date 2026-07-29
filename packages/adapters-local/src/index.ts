@@ -57,6 +57,7 @@ export * from './local-active-execution-registry';
 export * from './local-process-result';
 export * from './local-process-execution-provider';
 export * from './docker-sandbox-provider-factory';
+export * from './s3-execution-artifact-store-factory';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
 export * from './runtime-event-store';
