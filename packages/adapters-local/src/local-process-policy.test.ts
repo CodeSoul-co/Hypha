@@ -75,6 +75,48 @@ describe('LocalProcessPolicyResolver', () => {
     });
   });
 
+  it('enforces the host direct-executable contract without treating Node scripts as executables', async () => {
+    const workspace = await temporaryWorkspace();
+    const script = path.join(workspace, 'task.js');
+    await fs.writeFile(script, 'process.stdout.write("ok");');
+
+    const interpreter = createResolver(workspace);
+    await expect(
+      interpreter.resolve(environment(), command({ args: [script] }))
+    ).resolves.toMatchObject({
+      executable: await fs.realpath(process.execPath),
+    });
+
+    const directScript = createResolver(workspace, script);
+    await expect(directScript.resolve(environment(), command())).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_PATH_DENIED' },
+    });
+
+    if (process.platform !== 'win32') {
+      await fs.chmod(script, 0o700);
+      await expect(directScript.resolve(environment(), command())).resolves.toMatchObject({
+        executable: await fs.realpath(script),
+      });
+    } else {
+      const comExecutable = path.join(workspace, 'node-copy.COM');
+      await copyExecutable(comExecutable);
+      await expect(
+        createResolver(workspace, comExecutable).resolve(environment(), command())
+      ).resolves.toMatchObject({
+        executable: await fs.realpath(comExecutable),
+      });
+    }
+  });
+
+  it('rejects mapped directories as direct executables during health checks', async () => {
+    const workspace = await temporaryWorkspace();
+    const resolver = createResolver(workspace, workspace);
+
+    await expect(resolver.assertSurfaceAvailable()).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_PATH_DENIED' },
+    });
+  });
+
   it('rejects traversal, absolute outside paths, and symlink escapes', async () => {
     const workspace = await temporaryWorkspace();
     const outside = await temporaryWorkspace();

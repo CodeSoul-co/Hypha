@@ -253,11 +253,7 @@ export class LocalProcessPolicyResolver {
 
   async assertSurfaceAvailable(): Promise<void> {
     await fs.access(this.workspaceRoot, fsConstants.R_OK | fsConstants.W_OK);
-    await Promise.all(
-      Object.values(this.executables).map((executable) =>
-        fs.access(executable, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK)
-      )
-    );
+    await Promise.all(Object.values(this.executables).map(resolveHostExecutable));
   }
 
   private async resolveExecutable(
@@ -308,12 +304,7 @@ export class LocalProcessPolicyResolver {
         false
       );
     }
-    const realExecutable = await fs.realpath(configuredPath);
-    await fs.access(
-      realExecutable,
-      process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK
-    );
-    return realExecutable;
+    return resolveHostExecutable(configuredPath);
   }
 
   private async resolveWorkingDirectory(requested?: string): Promise<string> {
@@ -465,4 +456,33 @@ function surfaceChanged() {
     'Local Process executable or working directory changed after policy resolution.',
     false
   );
+}
+
+async function resolveHostExecutable(candidate: string): Promise<string> {
+  try {
+    const realExecutable = await fs.realpath(candidate);
+    const stat = await fs.lstat(realExecutable);
+    if (!stat.isFile()) throw new Error('Configured executable is not a regular file.');
+
+    if (process.platform === 'win32') {
+      const extension = path.extname(realExecutable).toLowerCase();
+      // Batch and script files require an interpreter or shell. Local Process only launches
+      // directly executable Windows images and never enables a shell implicitly.
+      if (extension !== '.exe' && extension !== '.com') {
+        throw new Error('Configured executable has no supported Windows executable extension.');
+      }
+      await fs.access(realExecutable, fsConstants.F_OK);
+    } else {
+      // POSIX direct execution requires an executable regular file. Interpreter scripts remain
+      // ordinary argv inputs to an independently allowlisted interpreter.
+      await fs.access(realExecutable, fsConstants.X_OK);
+    }
+    return realExecutable;
+  } catch {
+    throw executionProviderError(
+      'EXECUTION_PATH_DENIED',
+      'Configured Local Process executable is unavailable or not directly executable.',
+      false
+    );
+  }
 }
