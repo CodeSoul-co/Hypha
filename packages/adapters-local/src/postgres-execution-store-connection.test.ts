@@ -107,6 +107,42 @@ describe('PostgresExecutionStoreConnection', () => {
     await connection.close();
   });
 
+  it('runs Store operations on one transaction client and releases it', async () => {
+    const pool = new FakePool();
+    const connection = createConnection(pool);
+    await connection.initialize();
+
+    await expect(
+      connection.transaction(async (client) => {
+        await client.query('SELECT operation_result');
+        return 'completed';
+      })
+    ).resolves.toBe('completed');
+
+    const transactionClient = pool.clients.at(-1);
+    expect(transactionClient?.commands).toEqual(['BEGIN', 'SELECT operation_result', 'COMMIT']);
+    expect(transactionClient?.released).toBe(true);
+    await connection.close();
+  });
+
+  it('rolls back failed Store operations and preserves the original error', async () => {
+    const pool = new FakePool();
+    const connection = createConnection(pool);
+    await connection.initialize();
+    const operationFailure = new Error('operation failed');
+
+    await expect(
+      connection.transaction(async () => {
+        throw operationFailure;
+      })
+    ).rejects.toBe(operationFailure);
+
+    const transactionClient = pool.clients.at(-1);
+    expect(transactionClient?.commands).toEqual(['BEGIN', 'ROLLBACK']);
+    expect(transactionClient?.released).toBe(true);
+    await connection.close();
+  });
+
   it('closes the pool exactly once and rejects later initialization', async () => {
     const pool = new FakePool();
     const connection = createConnection(pool);

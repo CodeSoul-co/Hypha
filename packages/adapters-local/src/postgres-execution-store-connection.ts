@@ -139,6 +139,38 @@ export class PostgresExecutionStoreConnection {
     }
   }
 
+  async withClient<T>(
+    operation: (client: PostgresExecutionStorePoolClient) => Promise<T>
+  ): Promise<T> {
+    this.assertReady();
+    const client = await this.pool.connect();
+    try {
+      return await operation(client);
+    } finally {
+      client.release();
+    }
+  }
+
+  async transaction<T>(
+    operation: (client: PostgresExecutionStorePoolClient) => Promise<T>
+  ): Promise<T> {
+    return this.withClient(async (client) => {
+      await client.query('BEGIN');
+      try {
+        const result = await operation(client);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Preserve the original transaction failure.
+        }
+        throw error;
+      }
+    });
+  }
+
   async close(): Promise<void> {
     if (this.closing) return this.closing;
     const attempt = this.closeOnce();
@@ -187,6 +219,16 @@ export class PostgresExecutionStoreConnection {
     if (this.poolEnded) return;
     await this.pool.end();
     this.poolEnded = true;
+  }
+
+  private assertReady(): void {
+    if (this.state === 'closed') throw closedError();
+    if (this.state !== 'ready') {
+      throw new PostgresExecutionStoreConnectionError(
+        'POSTGRES_EXECUTION_STORE_INITIALIZATION_FAILED',
+        'Postgres Execution store is not ready.'
+      );
+    }
   }
 }
 
