@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   commandExecutionResultExample,
+  ExecutionStoreRegistry,
   executionLeaseAcquireRequestExample,
   executionLeaseReleaseRequestExample,
   executionLeaseRenewRequestExample,
@@ -12,6 +13,10 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import { PostgresExecutionStoreConnection } from './postgres-execution-store-connection';
+import {
+  POSTGRES_EXECUTION_STORE_ID,
+  PostgresExecutionStoreFactory,
+} from './postgres-execution-store-factory';
 import { PostgresExecutionStoreFoundation } from './postgres-execution-store-foundation';
 import { POSTGRES_EXECUTION_STORE_SCHEMA_VERSION } from './postgres-execution-store-schema';
 
@@ -68,6 +73,35 @@ afterAll(async () => {
 }, 60_000);
 
 describe('PostgresExecutionStoreFoundation real database', () => {
+  it('creates an initialized real Store through the Core registry', async () => {
+    const registry = new ExecutionStoreRegistry();
+    registry.register(
+      new PostgresExecutionStoreFactory({
+        connectionString: postgresConnectionString(),
+        tls: { mode: 'disable' },
+        applicationName: 'hypha-postgres-real-factory',
+        maxConnections: 2,
+        connectionTimeoutMs: 5_000,
+        idleTimeoutMs: 5_000,
+        statementTimeoutMs: 5_000,
+      })
+    );
+
+    const store = await registry.create(POSTGRES_EXECUTION_STORE_ID);
+    try {
+      await expect(store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+        },
+      });
+    } finally {
+      await store.close?.();
+    }
+  }, 30_000);
+
   it('migrates an empty database, reports healthy, and closes cleanly', async () => {
     const { connection, store } = createRealStore('lifecycle');
 

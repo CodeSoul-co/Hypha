@@ -80,6 +80,7 @@ export * from './legacy-tool-artifact-migration-executor';
 export * from './legacy-tool-artifact-migration-rollback';
 export * from './sqlite-execution-store';
 export * from './sqlite-execution-store-factory';
+export * from './postgres-execution-store-factory';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
 export * from './local-artifact-manifest';

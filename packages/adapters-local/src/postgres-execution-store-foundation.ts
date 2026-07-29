@@ -69,8 +69,8 @@ export class PostgresExecutionStoreFoundationError extends Error {
 }
 
 /**
- * Postgres persistence mechanics. This remains internal until every
- * ExecutionStore operation and real Postgres acceptance test is complete.
+ * Postgres persistence mechanics behind the public factory boundary.
+ * Composition code depends on ExecutionStore rather than this concrete class.
  */
 export class PostgresExecutionStoreFoundation implements ExecutionStore {
   constructor(private readonly connection: PostgresExecutionStoreTransactionPort) {}
