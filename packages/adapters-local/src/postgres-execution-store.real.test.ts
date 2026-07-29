@@ -993,6 +993,89 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     }
   }, 30_000);
 
+  it('fails an empty read-only database migration closed and initializes after write access returns', async () => {
+    const temporaryDatabase = `hypha_read_only_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const databaseIdentifier = postgresDatabaseIdentifier(temporaryDatabase);
+    const administrator = new Client({
+      connectionString: postgresConnectionString('postgres'),
+      ssl: false,
+      connectionTimeoutMillis: 1_000,
+      application_name: 'hypha-postgres-read-only-controller',
+    });
+    const rejected = createRealStore('read-only-rejected', 5_000, temporaryDatabase);
+    let recovered: ReturnType<typeof createRealStore> | undefined;
+    let observer: Client | undefined;
+    let administratorConnected = false;
+    let databaseCreated = false;
+
+    try {
+      await administrator.connect();
+      administratorConnected = true;
+      await administrator.query(`CREATE DATABASE ${databaseIdentifier}`);
+      databaseCreated = true;
+      await administrator.query(
+        `ALTER DATABASE ${databaseIdentifier} SET default_transaction_read_only = on`
+      );
+
+      await expect(rejected.connection.initialize()).rejects.toMatchObject({
+        code: 'POSTGRES_EXECUTION_STORE_INITIALIZATION_FAILED',
+        message: 'Postgres Execution store initialization failed.',
+      });
+      await expect(rejected.store.health()).resolves.toMatchObject({
+        status: 'unhealthy',
+        message: 'Postgres Execution store is not ready.',
+        details: { provider: 'postgres', ready: false },
+      });
+
+      observer = new Client({
+        connectionString: postgresConnectionString(temporaryDatabase),
+        ssl: false,
+        connectionTimeoutMillis: 1_000,
+        application_name: 'hypha-postgres-read-only-observer',
+      });
+      await observer.connect();
+      const failedMigrationEvidence = await observer.query(
+        `SELECT
+           to_regclass('public.hypha_execution_store_schema') AS schema_table,
+           to_regclass('public.execution_records') AS records_table`
+      );
+      expect(failedMigrationEvidence.rows).toEqual([{ schema_table: null, records_table: null }]);
+      await observer.end();
+      observer = undefined;
+
+      await administrator.query(
+        `ALTER DATABASE ${databaseIdentifier} RESET default_transaction_read_only`
+      );
+      recovered = createRealStore('read-only-restored', 5_000, temporaryDatabase);
+      await recovered.connection.initialize();
+
+      const createRequest = structuredClone(executionRecordCreateRequestExample);
+      createRequest.operationId = 'operation.execution.create.real-read-only-recovered';
+      createRequest.idempotencyKey = 'execution-create:execution.real.read-only-recovered';
+      createRequest.record.id = 'execution.real.read-only-recovered';
+      createRequest.record.request.executionId = createRequest.record.id;
+      createRequest.record.request.operationId = 'operation.command.real.read-only-recovered';
+      createRequest.record.request.idempotencyKey = 'command:run.real:read-only-recovered';
+
+      await expect(recovered.store.create(createRequest)).resolves.toEqual(createRequest.record);
+      await expect(recovered.store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+        },
+      });
+    } finally {
+      await observer?.end().catch(() => undefined);
+      await Promise.all([rejected.store.close(), recovered?.store.close()]);
+      if (administratorConnected && databaseCreated) {
+        await administrator.query(`DROP DATABASE ${databaseIdentifier} WITH (FORCE)`);
+      }
+      if (administratorConnected) await administrator.end();
+    }
+  }, 30_000);
+
   it('quarantines a corrupt real record while healthy records remain readable', async () => {
     const corruptRequest = structuredClone(executionRecordCreateRequestExample);
     corruptRequest.operationId = 'operation.execution.create.real-corrupt';
@@ -1071,13 +1154,14 @@ describe('PostgresExecutionStoreFoundation real database', () => {
 
 function createRealStore(
   applicationRole: string,
-  statementTimeoutMs = 5_000
+  statementTimeoutMs = 5_000,
+  databaseName = database
 ): {
   connection: PostgresExecutionStoreConnection;
   store: PostgresExecutionStoreFoundation;
 } {
   const connection = new PostgresExecutionStoreConnection({
-    connectionString: postgresConnectionString(),
+    connectionString: postgresConnectionString(databaseName),
     tls: { mode: 'disable' },
     applicationName: `hypha-postgres-real-${applicationRole}`,
     maxConnections: 2,
@@ -1194,8 +1278,15 @@ function findAvailableLoopbackPort(): Promise<number> {
   });
 }
 
-function postgresConnectionString(): string {
-  return `postgresql://${username}:${password}@127.0.0.1:${port}/${database}`;
+function postgresConnectionString(databaseName = database): string {
+  return `postgresql://${username}:${password}@127.0.0.1:${port}/${databaseName}`;
+}
+
+function postgresDatabaseIdentifier(databaseName: string): string {
+  if (!/^[a-z][a-z0-9_]{0,62}$/u.test(databaseName)) {
+    throw new Error('Real Postgres test database name is invalid.');
+  }
+  return `"${databaseName}"`;
 }
 
 function pinnedImageReference(image: string, digest: string): string {
