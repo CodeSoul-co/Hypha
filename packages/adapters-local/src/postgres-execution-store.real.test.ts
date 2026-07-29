@@ -111,6 +111,86 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     });
   }, 30_000);
 
+  it('serializes two real concurrent migrations and shares one durable schema', async () => {
+    const temporaryDatabase = `hypha_concurrent_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const databaseIdentifier = postgresDatabaseIdentifier(temporaryDatabase);
+    const administrator = new Client({
+      connectionString: postgresConnectionString('postgres'),
+      ssl: false,
+      connectionTimeoutMillis: 1_000,
+      application_name: 'hypha-postgres-concurrent-migration-controller',
+    });
+    const first = createRealStore('concurrent-migration-a', 5_000, temporaryDatabase);
+    const second = createRealStore('concurrent-migration-b', 5_000, temporaryDatabase);
+    let administratorConnected = false;
+    let databaseCreated = false;
+
+    try {
+      await administrator.connect();
+      administratorConnected = true;
+      await administrator.query(`CREATE DATABASE ${databaseIdentifier}`);
+      databaseCreated = true;
+
+      await Promise.all([first.connection.initialize(), second.connection.initialize()]);
+      await expect(first.store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+        },
+      });
+      await expect(second.store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+        },
+      });
+
+      const schemaEvidence = await first.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             (SELECT COUNT(*) FROM hypha_execution_store_schema) AS schema_row_count,
+             (SELECT version FROM hypha_execution_store_schema WHERE singleton_id = TRUE)
+               AS schema_version,
+             to_regclass('public.execution_records') AS records_table,
+             to_regclass('public.execution_records_owner_status_updated') AS records_index,
+             to_regclass('public.execution_lease_history') AS lease_history_table`
+        )
+      );
+      expect(schemaEvidence.rows).toEqual([
+        {
+          schema_row_count: '1',
+          schema_version: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+          records_table: 'execution_records',
+          records_index: 'execution_records_owner_status_updated',
+          lease_history_table: 'execution_lease_history',
+        },
+      ]);
+
+      const createRequest = structuredClone(executionRecordCreateRequestExample);
+      createRequest.operationId = 'operation.execution.create.real-concurrent-migration';
+      createRequest.idempotencyKey = 'execution-create:execution.real.concurrent-migration';
+      createRequest.record.id = 'execution.real.concurrent-migration';
+      createRequest.record.request.executionId = createRequest.record.id;
+      createRequest.record.request.operationId = 'operation.command.real.concurrent-migration';
+      createRequest.record.request.idempotencyKey = 'command:run.real:concurrent-migration';
+
+      await expect(first.store.create(createRequest)).resolves.toEqual(createRequest.record);
+      await expect(second.store.get(createRequest.record.id)).resolves.toEqual(
+        createRequest.record
+      );
+    } finally {
+      await Promise.all([first.store.close(), second.store.close()]);
+      if (administratorConnected && databaseCreated) {
+        await administrator.query(`DROP DATABASE ${databaseIdentifier} WITH (FORCE)`);
+      }
+      if (administratorConnected) await administrator.end();
+    }
+  }, 30_000);
+
   it('persists a Runtime Schema-validated record across a real connection restart', async () => {
     const request = structuredClone(executionRecordCreateRequestExample);
     const first = createRealStore('persistence-write');
