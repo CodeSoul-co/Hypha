@@ -284,6 +284,50 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     );
   });
 
+  it('rejects a Workspace root containing the canonical target of an aliased control-plane store', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-store-alias-'));
+    const controlPlaneRoot = path.join(root, 'control-plane');
+    const controlPlaneAlias = path.join(root, 'control-plane-alias');
+    await fs.mkdir(controlPlaneRoot);
+    await fs.symlink(
+      controlPlaneRoot,
+      controlPlaneAlias,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    setEnvironment(
+      'HYPHA_RUNTIME_EVENT_DB',
+      path.join(controlPlaneAlias, 'pending', 'events.sqlite')
+    );
+    const runtime = createRuntime(controlPlaneRoot, controlPlaneRoot, false);
+
+    await expect(runtime.initialize()).rejects.toThrow(
+      'Workspace root overlaps the framework control-plane'
+    );
+  });
+
+  it('allows a Workspace sibling of an aliased control-plane store', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-store-sibling-'));
+    const workspaceRoot = path.join(root, 'workspace');
+    const controlPlaneRoot = path.join(root, 'control-plane');
+    const controlPlaneAlias = path.join(root, 'control-plane-alias');
+    await Promise.all([fs.mkdir(workspaceRoot), fs.mkdir(controlPlaneRoot)]);
+    await fs.symlink(
+      controlPlaneRoot,
+      controlPlaneAlias,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    setEnvironment(
+      'HYPHA_RUNTIME_EVENT_DB',
+      path.join(controlPlaneAlias, 'pending', 'events.sqlite')
+    );
+    const runtime = createRuntime(workspaceRoot, workspaceRoot, false);
+
+    await runtime.initialize();
+    await expect(
+      runtime.execute({ operation: 'write', path: 'result.txt', content: 'allowed' })
+    ).resolves.toMatchObject({ bytesWritten: 7 });
+  });
+
   it('rejects encoded, Unicode-confusable, NUL, and portable traversal variants', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-encoding-'));
     const runtime = createRuntime(root, root, false);

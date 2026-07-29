@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -156,7 +157,27 @@ export class WorkspaceControlPlaneGuard {
   }
 
   private uniqueResolvedRoots(roots: string[]): string[] {
-    return Array.from(new Set(roots.filter(Boolean).map((root) => path.resolve(root))));
+    return Array.from(
+      new Set(roots.filter(Boolean).flatMap((root) => this.resolvedAndCanonicalRoot(root)))
+    );
+  }
+
+  private resolvedAndCanonicalRoot(root: string): string[] {
+    const resolved = path.resolve(root);
+    let existingAncestor = resolved;
+    const missingSegments: string[] = [];
+    while (existingAncestor.length > 0) {
+      try {
+        const canonicalAncestor = fs.realpathSync.native(existingAncestor);
+        return [resolved, path.resolve(canonicalAncestor, ...missingSegments.reverse())];
+      } catch {
+        const parent = path.dirname(existingAncestor);
+        if (parent === existingAncestor) break;
+        missingSegments.push(path.basename(existingAncestor));
+        existingAncestor = parent;
+      }
+    }
+    return [resolved];
   }
 
   private systemRoots(): string[] {
