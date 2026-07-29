@@ -118,6 +118,36 @@ describe('MemoryRuntimeFactory', () => {
     });
   });
 
+  it('keeps an unhealthy optional external Profile available for degraded Server startup', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    vi.spyOn(provider, 'health').mockResolvedValue({
+      status: 'unhealthy',
+      checkedAt: '2026-07-28T00:00:00.000Z',
+      message: 'optional external provider offline',
+    });
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'optional-external',
+      supports: () => true,
+      create: async () => provider,
+    });
+    const optional = config();
+    optional.profiles[memoryProfileSpecExample.id] = {
+      profile: memoryProfileSpecExample,
+      management: {
+        ...optional.profiles[memoryProfileSpecExample.id].management,
+        type: 'mem0',
+        deployment: 'remote',
+        connectionRef: 'memory.connection.optional-external',
+        metadata: { startupRequirement: 'optional' },
+      },
+    };
+
+    const runtime = await runtimeFactory(registry).create(optional);
+    await expect(runtime.service.providerHealth()).resolves.toMatchObject({
+      status: 'unhealthy',
+    });
+    await runtime.close();
+  });
   it('changes the real service provider when the active profile changes', async () => {
     const registry = new MemoryManagementProviderRegistry().register({
       id: 'switchable-native',
