@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type {
   ArtifactManager,
   ArtifactRecord,
@@ -29,6 +30,7 @@ export interface RestoreLocalWorkspaceSnapshotOptions {
   maxManifestBytes: number;
   maxRestoreBytes: number;
   maxRestoreEntries: number;
+  maxRestoreStagingDurationMs: number;
 }
 
 export type LocalWorkspaceRestoreRecoveryResult = 'none' | 'finalized' | 'rolled_back';
@@ -66,7 +68,19 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
   assertManifestPaths(manifest, root, guard);
 
   const parent = path.dirname(root);
+  const stagingStartedAt = performance.now();
+  const assertStagingTimeBudget = (): void => {
+    if (performance.now() - stagingStartedAt > options.maxRestoreStagingDurationMs) {
+      throw executionProviderError(
+        'EXECUTION_RESOURCE_EXCEEDED',
+        'Workspace restore staging exceeded its configured duration limit.',
+        false,
+        { maxRestoreStagingDurationMs: options.maxRestoreStagingDurationMs }
+      );
+    }
+  };
   const staging = await fs.mkdtemp(path.join(parent, `.${path.basename(root)}.restore-`));
+  assertStagingTimeBudget();
   const backup = `${staging}.previous`;
   let stagingExists = true;
   let journalCreated = false;
@@ -82,7 +96,8 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
       targetTreeHash: manifest.sourceTreeHash,
     });
     journalCreated = true;
-    await populateStagingDirectory(staging, manifest, options, guard);
+    await populateStagingDirectory(staging, manifest, options, guard, assertStagingTimeBudget);
+    assertStagingTimeBudget();
     const beforeSwap = await options.capture();
     if (beforeSwap.sourceTreeHash !== initial.sourceTreeHash) {
       throw revisionConflict(
@@ -385,18 +400,22 @@ async function populateStagingDirectory(
   staging: string,
   manifest: WorkspaceSnapshotManifest,
   options: RestoreLocalWorkspaceSnapshotOptions,
-  guard: WorkspaceControlPlaneGuard
+  guard: WorkspaceControlPlaneGuard,
+  assertTimeBudget: () => void
 ): Promise<void> {
   const directories = manifest.entries
     .filter((entry) => entry.kind === 'directory')
     .sort((left, right) => pathDepth(left.path) - pathDepth(right.path));
   for (const entry of directories) {
+    assertTimeBudget();
     await fs.mkdir(resolveManifestPath(staging, entry.path));
+    assertTimeBudget();
   }
 
   let restoredBytes = 0;
   for (const entry of manifest.entries.filter((candidate) => candidate.kind === 'file')) {
-    restoredBytes += await restoreFile(staging, entry, options, guard);
+    assertTimeBudget();
+    restoredBytes += await restoreFile(staging, entry, options, guard, assertTimeBudget);
     if (restoredBytes > options.maxRestoreBytes) {
       throw executionProviderError(
         'EXECUTION_RESOURCE_EXCEEDED',
@@ -408,20 +427,26 @@ async function populateStagingDirectory(
   }
 
   for (const entry of manifest.entries.filter((candidate) => candidate.kind === 'symlink')) {
+    assertTimeBudget();
     await restoreSymlink(staging, entry, manifest.entries, guard);
+    assertTimeBudget();
   }
 
   for (const entry of manifest.entries.filter((candidate) => candidate.kind === 'file')) {
+    assertTimeBudget();
     if (entry.mode !== undefined) {
       await fs.chmod(resolveManifestPath(staging, entry.path), entry.mode & 0o777);
     }
+    assertTimeBudget();
   }
   for (const entry of [...directories].sort(
     (left, right) => pathDepth(right.path) - pathDepth(left.path)
   )) {
+    assertTimeBudget();
     if (entry.mode !== undefined) {
       await fs.chmod(resolveManifestPath(staging, entry.path), entry.mode & 0o777);
     }
+    assertTimeBudget();
   }
 }
 
@@ -429,7 +454,8 @@ async function restoreFile(
   staging: string,
   entry: WorkspaceSnapshotEntry,
   options: RestoreLocalWorkspaceSnapshotOptions,
-  guard: WorkspaceControlPlaneGuard
+  guard: WorkspaceControlPlaneGuard,
+  assertTimeBudget: () => void
 ): Promise<number> {
   if (!entry.artifactRef || !entry.contentHash || entry.sizeBytes === undefined) {
     throw executionProviderError(
@@ -438,11 +464,13 @@ async function restoreFile(
       false
     );
   }
+  assertTimeBudget();
   const result = await options.artifacts.read({
     principal: options.request.principal,
     artifactId: entry.artifactRef,
     expectedContentHash: entry.contentHash,
   });
+  assertTimeBudget();
   assertFinalSnapshotArtifact(result.record, options.request.workspaceId);
   if (
     result.record.contentHash !== entry.contentHash ||
@@ -460,10 +488,12 @@ async function restoreFile(
   const destination = resolveManifestPath(staging, entry.path);
   guard.assertResolvedPath(destination);
   const handle = await fs.open(destination, 'wx', 0o600);
+  assertTimeBudget();
   const hash = createHash('sha256');
   let sizeBytes = 0;
   try {
     for await (const chunk of result.content.stream) {
+      assertTimeBudget();
       if (!(chunk instanceof Uint8Array)) {
         throw executionProviderError(
           'EXECUTION_INVALID_REQUEST',
@@ -480,7 +510,8 @@ async function restoreFile(
         );
       }
       hash.update(chunk);
-      await writeAll(handle, chunk);
+      await writeAll(handle, chunk, assertTimeBudget);
+      assertTimeBudget();
     }
   } finally {
     await handle.close();
@@ -526,10 +557,16 @@ async function restoreSymlink(
   await fs.symlink(relativeTarget, destination, type);
 }
 
-async function writeAll(handle: FileHandle, chunk: Uint8Array): Promise<void> {
+async function writeAll(
+  handle: FileHandle,
+  chunk: Uint8Array,
+  assertTimeBudget: () => void
+): Promise<void> {
   let offset = 0;
   while (offset < chunk.byteLength) {
+    assertTimeBudget();
     const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset);
+    assertTimeBudget();
     if (bytesWritten <= 0) {
       throw executionProviderError(
         'EXECUTION_INTERNAL_ERROR',

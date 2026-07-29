@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import {
   DefaultArtifactManager,
   type ArtifactProfileSpec,
@@ -195,6 +196,54 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     });
     await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
     await expect(fs.readFile(path.join(root, 'late.txt'), 'utf8')).resolves.toBe('late');
+  });
+
+  it('fails closed and preserves the current Workspace when restore staging exceeds its duration budget', async () => {
+    const root = await workspaceRoot('restore-duration');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const snapshot = await createService(workspace, fixture.manager).createFullSnapshot(
+      snapshotRequest()
+    );
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const current = await workspace.capture();
+    const readArtifact = fixture.manager.read.bind(fixture.manager);
+    let artifactReads = 0;
+    let expired = false;
+    const read = vi.spyOn(fixture.manager, 'read').mockImplementation(async (request) => {
+      const result = await readArtifact(request);
+      artifactReads += 1;
+      if (artifactReads === 2) expired = true;
+      return result;
+    });
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (expired ? 2 : 0));
+
+    try {
+      const service = createService(workspace, fixture.manager, {
+        maxRestoreStagingDurationMs: 1,
+      });
+      await expect(
+        service.restoreFullSnapshot(restoreRequest(snapshot.id, current.sourceTreeHash))
+      ).rejects.toMatchObject({
+        normalizedError: {
+          code: 'EXECUTION_RESOURCE_EXCEEDED',
+          details: { maxRestoreStagingDurationMs: 1 },
+        },
+      });
+    } finally {
+      now.mockRestore();
+      read.mockRestore();
+    }
+
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+    await expect(fs.access(workspaceRestoreJournalPath(root))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    const restoreEvidence = (await fs.readdir(path.dirname(root))).filter((candidate) =>
+      candidate.startsWith(`.${path.basename(root)}.restore-`)
+    );
+    expect(restoreEvidence).toEqual([]);
   });
 
   it('rejects protected control-plane paths from a validly hashed manifest', async () => {
@@ -463,7 +512,11 @@ function restoreRequest(snapshotRef: string, expectedWorkspaceSnapshotHash: stri
 
 function createService(
   workspace: ConstructorParameters<typeof LocalWorkspaceSnapshotArtifactService>[0]['workspace'],
-  manager: DefaultArtifactManager
+  manager: DefaultArtifactManager,
+  options: Pick<
+    ConstructorParameters<typeof LocalWorkspaceSnapshotArtifactService>[0],
+    'maxRestoreStagingDurationMs'
+  > = {}
 ): LocalWorkspaceSnapshotArtifactService {
   return new LocalWorkspaceSnapshotArtifactService({
     workspace,
@@ -475,6 +528,7 @@ function createService(
       workspaceId: 'workspace.snapshot',
     },
     now: () => '2026-07-27T00:00:00.000Z',
+    ...options,
   });
 }
 

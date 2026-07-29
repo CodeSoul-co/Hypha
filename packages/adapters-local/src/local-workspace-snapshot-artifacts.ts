@@ -44,6 +44,7 @@ export interface LocalWorkspaceSnapshotArtifactServiceOptions {
   maxManifestBytes?: number;
   maxRestoreBytes?: number;
   maxRestoreEntries?: number;
+  maxRestoreStagingDurationMs?: number;
 }
 
 /**
@@ -59,6 +60,7 @@ export class LocalWorkspaceSnapshotArtifactService {
   private readonly maxManifestBytes: number;
   private readonly maxRestoreBytes: number;
   private readonly maxRestoreEntries: number;
+  private readonly maxRestoreStagingDurationMs: number;
 
   constructor(options: LocalWorkspaceSnapshotArtifactServiceOptions) {
     this.workspace = options.workspace;
@@ -76,6 +78,10 @@ export class LocalWorkspaceSnapshotArtifactService {
     this.maxRestoreEntries = positiveInteger(
       options.maxRestoreEntries ?? 10_000,
       'maxRestoreEntries'
+    );
+    this.maxRestoreStagingDurationMs = positiveInteger(
+      options.maxRestoreStagingDurationMs ?? 30_000,
+      'maxRestoreStagingDurationMs'
     );
   }
 
@@ -175,6 +181,7 @@ export class LocalWorkspaceSnapshotArtifactService {
         maxManifestBytes: this.maxManifestBytes,
         maxRestoreBytes: this.maxRestoreBytes,
         maxRestoreEntries: this.maxRestoreEntries,
+        maxRestoreStagingDurationMs: this.maxRestoreStagingDurationMs,
       });
     } catch (error) {
       if (hasNormalizedError(error)) throw error;
