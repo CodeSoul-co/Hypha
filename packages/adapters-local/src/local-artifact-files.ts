@@ -125,7 +125,8 @@ export function streamLocalArtifactFile(
 export async function writeJsonAtomically(
   root: string,
   filename: string,
-  value: unknown
+  value: unknown,
+  options: { ifAbsent?: boolean } = {}
 ): Promise<void> {
   await ensureSafeLocalArtifactDirectory(root, path.dirname(filename));
   const temporaryPath = `${filename}.${randomUUID()}.tmp`;
@@ -134,11 +135,18 @@ export async function writeJsonAtomically(
     await handle.writeFile(`${JSON.stringify(value)}\n`, 'utf8');
     await handle.sync();
     await handle.close();
-    await fs.rename(temporaryPath, filename);
+    if (options.ifAbsent) {
+      // A hard-link publish is atomic across Store instances and fails with
+      // EEXIST when another writer has already claimed the object key.
+      await fs.link(temporaryPath, filename);
+    } else {
+      await fs.rename(temporaryPath, filename);
+    }
   } catch (error) {
     await handle.close().catch(() => undefined);
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
   }
 }
 

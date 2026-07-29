@@ -27,6 +27,7 @@ import {
   type LocalArtifactStorePaths,
   ensureSafeLocalArtifactDirectory,
   hashLocalArtifactFile,
+  isNodeError,
   listLocalArtifactFiles,
   localArtifactBlobPath,
   pathExists,
@@ -166,7 +167,21 @@ export class LocalFilesystemExecutionArtifactStore implements ArtifactStoreProvi
             metadata: cloneLocalArtifactMetadata(request.metadata),
             lastModifiedAt: this.now(),
           };
-          await writeLocalArtifactManifest(paths, manifest);
+          try {
+            await writeLocalArtifactManifest(paths, manifest, {
+              ifAbsent: request.ifAbsent,
+            });
+          } catch (error) {
+            if (request.ifAbsent && isNodeError(error, 'EEXIST')) {
+              await this.deleteBlobWhenUnreferenced(paths, temporary.contentHash);
+              throw artifactStoreError(
+                'ARTIFACT_VERSION_CONFLICT',
+                `Artifact object ${request.objectKey} already exists.`,
+                false
+              );
+            }
+            throw error;
+          }
           if (existing && existing.contentHash !== manifest.contentHash) {
             await this.deleteBlobWhenUnreferenced(paths, existing.contentHash);
           }
@@ -285,7 +300,20 @@ export class LocalFilesystemExecutionArtifactStore implements ArtifactStoreProvi
           metadata: cloneLocalArtifactMetadata(source.metadata),
           lastModifiedAt: this.now(),
         };
-        await writeLocalArtifactManifest(paths, target);
+        try {
+          await writeLocalArtifactManifest(paths, target, {
+            ifAbsent: request.ifAbsent,
+          });
+        } catch (error) {
+          if (request.ifAbsent && isNodeError(error, 'EEXIST')) {
+            throw artifactStoreError(
+              'ARTIFACT_VERSION_CONFLICT',
+              `Artifact object ${request.targetObjectKey} already exists.`,
+              false
+            );
+          }
+          throw error;
+        }
         if (existing && existing.contentHash !== target.contentHash) {
           await this.deleteBlobWhenUnreferenced(paths, existing.contentHash);
         }

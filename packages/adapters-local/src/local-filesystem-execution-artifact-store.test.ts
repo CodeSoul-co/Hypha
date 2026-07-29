@@ -126,6 +126,28 @@ describe('LocalFilesystemExecutionArtifactStore', () => {
     await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
   });
 
+  it('publishes only one concurrent ifAbsent writer across Store instances', async () => {
+    const root = await createRoot();
+    const first = createStore(root);
+    const second = createStore(root);
+    const writes = await Promise.allSettled([
+      first.put({ ...request('objects/cross-instance.bin', Uint8Array.from([1])), ifAbsent: true }),
+      second.put({
+        ...request('objects/cross-instance.bin', Uint8Array.from([2])),
+        ifAbsent: true,
+      }),
+    ]);
+
+    expect(writes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = writes.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: { normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' } },
+    });
+    await expect(first.stats()).resolves.toEqual({ objects: 1, blobs: 1, storedBytes: 1 });
+    const paths = await prepareLocalArtifactStore(root);
+    await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
+  });
+
   it('fails closed when persisted Blob bytes are modified outside the Store', async () => {
     const root = await createRoot();
     const store = createStore(root);
