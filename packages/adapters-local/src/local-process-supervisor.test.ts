@@ -1,8 +1,43 @@
 import os from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { LocalProcessSupervisor } from './local-process-supervisor';
+import { LocalProcessSupervisor, terminatePosixProcessGroup } from './local-process-supervisor';
 
 describe('LocalProcessSupervisor', () => {
+  it('stops POSIX termination escalation after SIGTERM removes the process group', async () => {
+    const signals: string[] = [];
+
+    await expect(
+      terminatePosixProcessGroup(25, {
+        signal: (signal) => signals.push(signal),
+        isAlive: () => false,
+        waitForExit: async () => {
+          throw new Error('SIGKILL wait must not run after graceful termination');
+        },
+        delay: async () => undefined,
+      })
+    ).resolves.toBe(true);
+    expect(signals).toEqual(['SIGTERM']);
+  });
+
+  it('escalates a surviving POSIX process group from SIGTERM to SIGKILL', async () => {
+    const signals: string[] = [];
+    const waits: number[] = [];
+
+    await expect(
+      terminatePosixProcessGroup(25, {
+        signal: (signal) => signals.push(signal),
+        isAlive: () => true,
+        waitForExit: async (maximumWaitMs) => {
+          waits.push(maximumWaitMs);
+          return true;
+        },
+        delay: async () => undefined,
+      })
+    ).resolves.toBe(true);
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(waits).toEqual([250]);
+  });
+
   it('executes without a shell and captures bounded stdout and stderr', async () => {
     const supervisor = new LocalProcessSupervisor();
     const result = await supervisor.run(
@@ -125,6 +160,36 @@ describe('LocalProcessSupervisor', () => {
       expect(denied).toBe(true);
       expect(result).toMatchObject({
         outcome: 'timed_out',
+        processTreeTerminationVerified: true,
+      });
+    }
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'escalates to SIGKILL when a real child ignores SIGTERM and verifies process-group cleanup',
+    async () => {
+      const result = await new LocalProcessSupervisor().run(
+        request(
+          [
+            '-e',
+            [
+              "process.on('SIGTERM', () => {});",
+              "process.stdout.write('ready');",
+              'setInterval(() => {}, 1_000);',
+            ].join('\n'),
+          ],
+          {
+            timeoutMs: 1_500,
+            gracefulTerminationMs: 100,
+          }
+        )
+      );
+
+      expect(result).toMatchObject({
+        outcome: 'timed_out',
+        signal: 'SIGKILL',
+        stdout: 'ready',
+        terminationMechanism: 'posix_process_group',
         processTreeTerminationVerified: true,
       });
     }

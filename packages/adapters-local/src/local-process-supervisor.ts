@@ -62,6 +62,25 @@ export interface LocalProcessSupervisorOptions {
   kill?: (pid: number, signal: NodeJS.Signals | 0) => void;
 }
 
+interface PosixProcessGroupTerminationOperations {
+  signal(signal: 'SIGTERM' | 'SIGKILL'): void;
+  isAlive(): boolean;
+  waitForExit(maximumWaitMs: number): Promise<boolean>;
+  delay(milliseconds: number): Promise<void>;
+}
+
+export async function terminatePosixProcessGroup(
+  gracefulTerminationMs: number,
+  operations: PosixProcessGroupTerminationOperations
+): Promise<boolean> {
+  operations.signal('SIGTERM');
+  await operations.delay(gracefulTerminationMs);
+  if (!operations.isAlive()) return true;
+
+  operations.signal('SIGKILL');
+  return operations.waitForExit(Math.min(1_000, Math.max(250, gracefulTerminationMs)));
+}
+
 export class LocalProcessSupervisor {
   readonly terminationMechanism =
     process.platform === 'win32' ? 'windows_taskkill' : 'posix_process_group';
@@ -263,13 +282,12 @@ export class LocalProcessSupervisor {
   }
 
   private async terminatePosixScope(pid: number, gracefulTerminationMs: number): Promise<boolean> {
-    this.signalPosixScope(pid, 'SIGTERM');
-    await delay(gracefulTerminationMs);
-    if (this.isPosixScopeAlive(pid)) {
-      this.signalPosixScope(pid, 'SIGKILL');
-      return this.waitForPosixScopeExit(pid, Math.min(1_000, Math.max(250, gracefulTerminationMs)));
-    }
-    return true;
+    return terminatePosixProcessGroup(gracefulTerminationMs, {
+      signal: (signal) => this.signalPosixScope(pid, signal),
+      isAlive: () => this.isPosixScopeAlive(pid),
+      waitForExit: (maximumWaitMs) => this.waitForPosixScopeExit(pid, maximumWaitMs),
+      delay,
+    });
   }
 
   private async waitForPosixScopeExit(pid: number, maximumWaitMs: number): Promise<boolean> {
