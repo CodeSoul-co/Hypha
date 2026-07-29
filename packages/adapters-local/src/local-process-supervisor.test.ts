@@ -195,6 +195,36 @@ describe('LocalProcessSupervisor', () => {
     }
   );
 
+  it('removes a real descendant that ignores SIGTERM instead of leaving an orphan', async () => {
+    const descendantProgram = [
+      "process.on('SIGTERM', () => {});",
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+    const parentProgram = [
+      "const { spawn } = require('node:child_process');",
+      `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendantProgram)}], { stdio: 'ignore' });`,
+      'process.stdout.write(String(descendant.pid));',
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+
+    const result = await new LocalProcessSupervisor().run(
+      request(['-e', parentProgram], {
+        timeoutMs: 1_500,
+        gracefulTerminationMs: 100,
+      })
+    );
+    const descendantPid = Number.parseInt(result.stdout, 10);
+
+    expect(result).toMatchObject({
+      outcome: 'timed_out',
+      terminationMechanism:
+        process.platform === 'win32' ? 'windows_taskkill' : 'posix_process_group',
+      processTreeTerminationVerified: process.platform !== 'win32',
+    });
+    expect(Number.isSafeInteger(descendantPid)).toBe(true);
+    await expect(waitForProcessExit(descendantPid, 2_000)).resolves.toBe(true);
+  });
+
   it('stops and bounds a process that exceeds an output limit', async () => {
     const result = await new LocalProcessSupervisor().run(
       request(['-e', "process.stdout.write('x'.repeat(4096)); setInterval(() => {}, 1000)"], {
@@ -311,4 +341,25 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
     resolve = settle;
   });
   return { promise, resolve };
+}
+
+async function waitForProcessExit(pid: number, maximumWaitMs: number): Promise<boolean> {
+  const deadline = Date.now() + maximumWaitMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !isProcessAlive(pid);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    throw error;
+  }
 }
