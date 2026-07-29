@@ -19,6 +19,14 @@ import {
 import { assertRuntimeHumanTaskResume, projectRuntimeHumanTasks } from './runtime-human-task';
 import type { RuntimeOperationalTelemetry } from './runtime-operational-telemetry';
 
+const REDISPATCH_BLOCKING_RUN_EVENT_TYPES = new Set([
+  'run.cancel.requested',
+  'run.cancelling',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+]);
+
 export interface RuntimeActivityRedispatchCommand extends RuntimeActivityDescriptorReference {
   commandId: string;
   scope: RuntimeScope;
@@ -172,6 +180,7 @@ export class RuntimeActivityRedispatchService {
       assertActive(signal);
       const requestEventId = prior?.id ?? this.nextId('activity-redispatch-event');
       if (!prior) {
+        this.assertDispatchEvidence(evidence, startedAt, 'intent');
         const scope = streamScope(command.scope);
         const head = await this.options.events.getStreamHead(scope);
         if (!head) corrupt('Run Event stream does not exist');
@@ -262,14 +271,21 @@ export class RuntimeActivityRedispatchService {
           source = 'reconcile';
         } else {
           assertActive(signal);
+          await this.revalidateDispatchEvidence(command, evidence.approvalEventId, 'redispatch');
+          await this.assertLeaseCurrent(authorization);
           accepted = await awaitWithAbort(this.options.dispatcher.dispatch(attempt), signal);
           assertActive(signal);
           validateDispatchResult(accepted);
         }
       } else {
+        await this.revalidateDispatchEvidence(command, evidence.approvalEventId, 'dispatch');
+        await this.assertLeaseCurrent(authorization);
         accepted = await awaitWithAbort(this.options.dispatcher.dispatch(attempt), signal);
         assertActive(signal);
         validateDispatchResult(accepted);
+      }
+      if (source === 'dispatch') {
+        await this.revalidateDispatchEvidence(command, evidence.approvalEventId, 'receipt');
       }
       await this.options.runLeases.assertCurrent({
         scope: authorization.scope,
@@ -363,6 +379,7 @@ export class RuntimeActivityRedispatchService {
     task: RuntimeHumanTask;
     descriptor: RuntimeActivityDescriptor;
     approvalEventId: string;
+    blockingRunEvent?: { id: string; type: string };
   }> {
     const events = await this.options.events.read({ scope: streamScope(command.scope) });
     const task = projectRuntimeHumanTasks(events).find(
@@ -387,9 +404,55 @@ export class RuntimeActivityRedispatchService {
       activityDescriptorRef: command.activityDescriptorRef,
       activityDescriptorHash: command.activityDescriptorHash,
     });
-    assertDescriptorIdentity(task, descriptor, command, checkedAt);
+    assertDescriptorIdentity(task, descriptor, command);
     const approvalEventId = approvedEventId(events, command);
-    return { task, descriptor, approvalEventId };
+    const blocker = events.find((event) => REDISPATCH_BLOCKING_RUN_EVENT_TYPES.has(event.type));
+    return {
+      task,
+      descriptor,
+      approvalEventId,
+      ...(blocker === undefined
+        ? {}
+        : { blockingRunEvent: { id: blocker.id, type: blocker.type } }),
+    };
+  }
+
+  private assertDispatchEvidence(
+    evidence: {
+      descriptor: RuntimeActivityDescriptor;
+      blockingRunEvent?: { id: string; type: string };
+    },
+    checkedAt: string,
+    phase: 'intent' | 'dispatch' | 'redispatch' | 'receipt'
+  ): void {
+    assertDescriptorDispatchWindow(evidence.descriptor, checkedAt);
+    if (!evidence.blockingRunEvent) return;
+    throw new FrameworkError({
+      code: 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED',
+      message: `Activity redispatch is blocked by ${evidence.blockingRunEvent.type}`,
+      context: {
+        phase,
+        eventId: evidence.blockingRunEvent.id,
+        eventType: evidence.blockingRunEvent.type,
+      },
+    });
+  }
+
+  private async revalidateDispatchEvidence(
+    command: RuntimeActivityRedispatchCommand,
+    expectedApprovalEventId: string,
+    phase: 'dispatch' | 'redispatch' | 'receipt'
+  ): Promise<void> {
+    const checkedAt = this.now();
+    validTimestamp(checkedAt, 'Activity redispatch revalidation clock');
+    const evidence = await this.loadEvidence(command, checkedAt);
+    if (evidence.approvalEventId !== expectedApprovalEventId) {
+      humanTaskError(
+        'HUMAN_TASK_RESUME_REVALIDATION_FAILED',
+        'Approved HumanTask decision changed before Activity redispatch'
+      );
+    }
+    this.assertDispatchEvidence(evidence, checkedAt, phase);
   }
 
   private async findPrior(command: RuntimeActivityRedispatchCommand) {
@@ -780,8 +843,7 @@ function redispatchEvidenceMetadata(
 function assertDescriptorIdentity(
   task: RuntimeHumanTask,
   descriptor: RuntimeActivityDescriptor,
-  command: RuntimeActivityRedispatchCommand,
-  checkedAt: string
+  command: RuntimeActivityRedispatchCommand
 ): void {
   if (
     descriptor.runId !== command.scope.runId ||
@@ -794,6 +856,12 @@ function assertDescriptorIdentity(
       'Activity descriptor no longer matches approved HumanTask evidence'
     );
   }
+}
+
+function assertDescriptorDispatchWindow(
+  descriptor: RuntimeActivityDescriptor,
+  checkedAt: string
+): void {
   if (
     descriptor.deadlineAt !== undefined &&
     Date.parse(descriptor.deadlineAt) <= Date.parse(checkedAt)

@@ -41,6 +41,7 @@ const recoveryEventTypes: FrameworkEventType[] = [
   'run.started',
   'run.cancel.requested',
   'run.cancelling',
+  'run.failed',
   'run.cancelled',
   'fsm.state.entered',
   'runtime.activity.requested',
@@ -570,6 +571,45 @@ describe('RuntimeRecoveryService', () => {
       (await scan(target)).candidates.some((item) => item.candidateId === candidate.candidateId)
     ).toBe(true);
     expect(target.redispatchCalls).toHaveLength(1);
+  });
+
+  it('does not recover an incomplete redispatch after cancellation starts', async () => {
+    const target = await fixture();
+    await appendRedispatchRequest(target);
+    const head = await target.events.getStreamHead(streamScope());
+    await target.events.append({
+      scope: streamScope(),
+      events: [
+        event(
+          'seed.cancel.requested',
+          'run.cancel.requested',
+          {
+            commandId: 'cancel.blocks-redispatch',
+            principalId: 'operator.recovery',
+            reason: 'operator cancelled the Run',
+            requestedAt: target.now(),
+          },
+          target.now()
+        ),
+        event(
+          'seed.run.cancelling',
+          'run.cancelling',
+          { commandId: 'cancel.blocks-redispatch' },
+          target.now()
+        ),
+      ],
+      expectedLastSequence: head!.lastSequence,
+      expectedRunRevision: head!.runRevision,
+      idempotencyKey: 'seed.cancel.blocks-redispatch',
+    });
+    await project(target);
+
+    expect(
+      (await scan(target)).candidates.some(
+        (item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE'
+      )
+    ).toBe(false);
+    expect(target.redispatchCalls).toHaveLength(0);
   });
 
   it('reports lease contention without dispatching a second recovery action', async () => {

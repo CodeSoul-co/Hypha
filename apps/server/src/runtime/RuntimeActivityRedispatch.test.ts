@@ -348,6 +348,177 @@ describe('RuntimeActivityRedispatchService', () => {
     });
   });
 
+  it('blocks a new redispatch intent after the Run becomes terminal', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    await appendRunTerminalEvent(events, 'run.failed');
+    const dispatch = jest.fn();
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases: new InMemoryRunLeaseStore({ now: () => now }),
+        dispatch,
+        ids: ['lease.terminal-run'],
+      }).redispatch(redispatchCommand(reference))
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED',
+      context: { phase: 'intent', eventType: 'run.failed' },
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(
+      await events.read({
+        scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+        types: ['activity.redispatch.requested'],
+      })
+    ).toHaveLength(0);
+  });
+
+  it('reconciles an orphaned intent but does not redispatch after Run termination', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const command = redispatchCommand(reference);
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: jest.fn(async () => {
+          throw new Error('worker stopped after durable intent');
+        }),
+        ids: ['lease.before-terminal', 'event.before-terminal'],
+      }).redispatch(command)
+    ).rejects.toThrow('worker stopped after durable intent');
+    await appendRunTerminalEvent(events, 'run.cancelled');
+
+    const dispatch = jest.fn();
+    const reconcile = jest.fn(async () => ({ status: 'safe_to_dispatch' as const }));
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch,
+        reconcile,
+        ids: ['lease.after-terminal'],
+      }).redispatch(command)
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED',
+      context: { phase: 'redispatch', eventType: 'run.cancelled' },
+    });
+
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(
+      await events.read({
+        scope: { userId: 'user.redispatch', runId: 'run.redispatch' },
+        types: ['activity.redispatch.accepted'],
+      })
+    ).toHaveLength(0);
+  });
+
+  it('persists an accepted reconciliation after Run termination without dispatching again', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put(descriptor());
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const command = redispatchCommand(reference);
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: jest.fn(async () => {
+          throw new Error('connection closed after provider acceptance');
+        }),
+        ids: ['lease.before-accepted-terminal', 'event.before-accepted-terminal'],
+      }).redispatch(command)
+    ).rejects.toThrow('connection closed after provider acceptance');
+    await appendRunTerminalEvent(events, 'run.cancelled');
+
+    const dispatch = jest.fn();
+    const reconcile = jest.fn(async () => ({
+      status: 'accepted' as const,
+      commandId: 'activity-command.accepted-before-cancellation',
+    }));
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch,
+        reconcile,
+        ids: ['lease.reconcile-after-terminal'],
+      }).redispatch(command)
+    ).resolves.toMatchObject({
+      activityCommandId: 'activity-command.accepted-before-cancellation',
+      reconciled: true,
+      receiptReused: false,
+    });
+
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not redispatch an orphaned intent after its Activity deadline', async () => {
+    const events = await eventRuntime();
+    const descriptors = new ArtifactRuntimeActivityDescriptorStore({
+      artifacts: new InMemoryExecutionArtifactStore(),
+    });
+    const reference = await descriptors.put({
+      ...descriptor(),
+      deadlineAt: '2026-07-24T07:00:30.000Z',
+    });
+    await appendApprovedTask(events, reference);
+    const runLeases = new InMemoryRunLeaseStore({ now: () => now });
+    const command = redispatchCommand(reference);
+
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch: jest.fn(async () => {
+          throw new Error('worker stopped after durable intent');
+        }),
+        ids: ['lease.before-deadline', 'event.before-deadline'],
+      }).redispatch(command)
+    ).rejects.toThrow('worker stopped after durable intent');
+
+    const dispatch = jest.fn();
+    const reconcile = jest.fn(async () => ({ status: 'safe_to_dispatch' as const }));
+    await expect(
+      service({
+        events,
+        descriptors,
+        runLeases,
+        dispatch,
+        reconcile,
+        ids: ['lease.after-deadline'],
+        now: () => '2026-07-24T07:01:00.000Z',
+      }).redispatch(command)
+    ).rejects.toMatchObject({ code: 'HUMAN_TASK_EXPIRED' });
+
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('records an unknown outcome and blocks blind redispatch after restart', async () => {
     const events = await eventRuntime();
     const descriptors = new ArtifactRuntimeActivityDescriptorStore({
@@ -1067,4 +1238,36 @@ async function appendApprovedTask(
     idempotencyKey: `append.${resolution}`,
   });
   expect(reference.activityDescriptorHash).toMatch(/^sha256:/u);
+}
+
+async function appendRunTerminalEvent(
+  events: EventRuntime,
+  type: 'run.failed' | 'run.cancelled'
+): Promise<void> {
+  const scope = { userId: 'user.redispatch', runId: 'run.redispatch' };
+  const head = await events.getStreamHead(scope);
+  if (!head) throw new Error('Redispatch test stream is missing');
+  await events.append({
+    scope,
+    events: [
+      {
+        id: `event.${type}`,
+        type,
+        version: '1.0.0',
+        userId: scope.userId,
+        sessionId: 'session.redispatch',
+        runId: scope.runId,
+        fsmState: 'Execute',
+        timestamp: now,
+        payload: {
+          terminalState: 'Execute',
+          reason: 'test terminal gate',
+        },
+      },
+    ],
+    expectedLastSequence: head.lastSequence,
+    expectedRunRevision: head.runRevision,
+    fencingToken: 1,
+    idempotencyKey: `append.${type}`,
+  });
 }

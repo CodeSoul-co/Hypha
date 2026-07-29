@@ -64,6 +64,13 @@ const REQUEUE_STATUSES = new Set([
   'recovering',
 ]);
 const TERMINAL_ACTIVITY_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const REDISPATCH_BLOCKED_RUN_STATUSES = new Set([
+  'cancelling',
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+]);
 
 export interface RuntimeRecoveryServiceOptions {
   events: EventRuntime;
@@ -134,21 +141,23 @@ export class RuntimeRecoveryService {
       const addCandidate = (input: RuntimeRecoveryCandidate): void => {
         if (!completedCandidates.has(input.candidateId)) candidates.push(input);
       };
-      for (const requestEvent of incompleteRedispatchRequests(streamEvents)) {
-        const payload = payloadRecord(requestEvent);
-        addCandidate(
-          candidate({
-            scope: head.scope,
-            reason: 'ACTIVITY_REDISPATCH_INCOMPLETE',
-            safeAction: 'reconcile_redispatch',
-            eventHeadSequence: head.lastSequence,
-            projectionSequence: record.lastSequence,
-            activityId: requiredString(payload.activityId, 'Redispatch Activity id'),
-            redispatchRequestEventId: requestEvent.id,
-            ...(currentLease === null ? {} : { currentLease }),
-            detectedAt: request.checkedAt,
-          })
-        );
+      if (!REDISPATCH_BLOCKED_RUN_STATUSES.has(projection.runStatus)) {
+        for (const requestEvent of incompleteRedispatchRequests(streamEvents)) {
+          const payload = payloadRecord(requestEvent);
+          addCandidate(
+            candidate({
+              scope: head.scope,
+              reason: 'ACTIVITY_REDISPATCH_INCOMPLETE',
+              safeAction: 'reconcile_redispatch',
+              eventHeadSequence: head.lastSequence,
+              projectionSequence: record.lastSequence,
+              activityId: requiredString(payload.activityId, 'Redispatch Activity id'),
+              redispatchRequestEventId: requestEvent.id,
+              ...(currentLease === null ? {} : { currentLease }),
+              detectedAt: request.checkedAt,
+            })
+          );
+        }
       }
       for (const activityId of projection.pendingActivityIds) {
         addCandidate(
@@ -338,6 +347,9 @@ export class RuntimeRecoveryService {
       if (!isFrameworkError(error)) throw error;
       if (error.code === 'RUNTIME_LEASE_UNAVAILABLE') {
         return result(command, 'lease_unavailable');
+      }
+      if (error.code === 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED') {
+        return result(command, 'stale');
       }
       if (error.code !== 'RUNTIME_ACTIVITY_OUTCOME_UNKNOWN') throw error;
       const outcome = await this.redispatchOutcomeUnknown(command.candidate, request.id);
