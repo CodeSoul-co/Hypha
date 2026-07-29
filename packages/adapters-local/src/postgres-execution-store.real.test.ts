@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
+  executionLeaseReleaseRequestExample,
   executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
@@ -683,6 +684,119 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     } finally {
       await crashedWorker.store.close();
       await recoveredWorker?.store.close();
+    }
+  }, 30_000);
+
+  it('releases a real lease with its owner and allows a fenced successor claim', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-release';
+    createRequest.idempotencyKey = 'execution-create:execution.real.release';
+    createRequest.record.id = 'execution.real.release';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.release';
+    createRequest.record.request.idempotencyKey = 'command:run.real:release';
+    const acquireRequest = structuredClone(executionLeaseAcquireRequestExample);
+    acquireRequest.operationId = 'operation.lease.acquire.real-release-a';
+    acquireRequest.executionId = createRequest.record.id;
+    acquireRequest.expectedRevision = 0;
+    acquireRequest.requestedLeaseId = 'lease.execution.real.release.a';
+    acquireRequest.ownerId = 'runtime-worker.real.release.a';
+    acquireRequest.acquiredAt = '2026-07-16T00:00:02.000Z';
+    acquireRequest.idempotencyKey = 'lease-acquire:execution.real.release:a';
+    const workerA = createRealStore('release-worker-a');
+    const workerB = createRealStore('release-worker-b');
+
+    try {
+      await Promise.all([workerA.connection.initialize(), workerB.connection.initialize()]);
+      await workerA.store.create(createRequest);
+      const claimed = await workerA.store.acquireLease(acquireRequest);
+      if (!claimed.lease) throw new Error('Real Postgres release claim did not return a lease.');
+      const lease = claimed.lease;
+
+      const forgedRelease = structuredClone(executionLeaseReleaseRequestExample);
+      forgedRelease.operationId = 'operation.lease.release.real-forged';
+      forgedRelease.executionId = createRequest.record.id;
+      forgedRelease.expectedRevision = claimed.revision;
+      forgedRelease.leaseGuard = {
+        leaseId: lease.id,
+        ownerId: 'runtime-worker.real.release.attacker',
+        fencingToken: lease.fencingToken,
+      };
+      forgedRelease.releasedAt = '2026-07-16T00:00:10.000Z';
+      forgedRelease.reason = 'forged handoff';
+      forgedRelease.idempotencyKey = 'lease-release:execution.real.release:forged';
+      await expect(workerB.store.releaseLease(forgedRelease)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_FENCING_REJECTED',
+        details: {
+          executionId: createRequest.record.id,
+          fencingToken: lease.fencingToken,
+        },
+      });
+
+      const validRelease = structuredClone(forgedRelease);
+      validRelease.operationId = 'operation.lease.release.real-valid';
+      validRelease.leaseGuard.ownerId = lease.ownerId;
+      validRelease.reason = 'worker handoff';
+      validRelease.idempotencyKey = 'lease-release:execution.real.release:valid';
+      const released = await workerA.store.releaseLease(validRelease);
+      expect(released).toMatchObject({
+        id: createRequest.record.id,
+        revision: 2,
+        status: 'starting',
+        lease: undefined,
+        updatedAt: validRelease.releasedAt,
+      });
+
+      const successorAcquire = structuredClone(acquireRequest);
+      successorAcquire.operationId = 'operation.lease.acquire.real-release-b';
+      successorAcquire.expectedRevision = released.revision;
+      successorAcquire.requestedLeaseId = 'lease.execution.real.release.b';
+      successorAcquire.ownerId = 'runtime-worker.real.release.b';
+      successorAcquire.acquiredAt = '2026-07-16T00:00:11.000Z';
+      successorAcquire.idempotencyKey = 'lease-acquire:execution.real.release:b';
+      const successor = await workerB.store.acquireLease(successorAcquire);
+      expect(successor).toMatchObject({
+        id: createRequest.record.id,
+        revision: 3,
+        lease: {
+          id: successorAcquire.requestedLeaseId,
+          ownerId: successorAcquire.ownerId,
+          fencingToken: lease.fencingToken + 1,
+          acquiredAt: successorAcquire.acquiredAt,
+        },
+      });
+
+      const evidence = await workerA.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             records.revision,
+             records.last_fencing_token,
+             COUNT(history.lease_id) AS lease_count,
+             COUNT(history.released_at) AS released_lease_count,
+             MAX(history.release_reason)
+               FILTER (WHERE history.lease_id = $2) AS release_reason,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count
+           FROM execution_records AS records
+           JOIN execution_lease_history AS history
+             ON history.execution_id = records.execution_id
+          WHERE records.execution_id = $1
+          GROUP BY records.revision, records.last_fencing_token`,
+          [createRequest.record.id, lease.id]
+        )
+      );
+      expect(evidence.rows).toEqual([
+        {
+          revision: '3',
+          last_fencing_token: '2',
+          lease_count: '2',
+          released_lease_count: '1',
+          release_reason: validRelease.reason,
+          mutation_count: '3',
+        },
+      ]);
+    } finally {
+      await Promise.all([workerA.store.close(), workerB.store.close()]);
     }
   }, 30_000);
 });
