@@ -1,6 +1,7 @@
 import type {
   ArtifactByteSource,
   ArtifactObjectMetadata,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
   ArtifactStorageRef,
   ArtifactStoreProvider,
@@ -32,7 +33,8 @@ interface PromotedArtifactObject {
 }
 
 export async function persistArtifactContent(
-  request: PersistArtifactContentRequest
+  request: PersistArtifactContentRequest,
+  options: ArtifactOperationOptions = {}
 ): Promise<PersistedArtifactContent> {
   if (request.profile.contentAddressing.hashAlgorithm !== 'sha256') {
     throw artifactManagerError(
@@ -43,16 +45,19 @@ export async function persistArtifactContent(
   const stagingKey = `staging/${safeObjectSegment(request.operationId)}/${safeObjectSegment(
     request.nonce
   )}`;
-  const stagingRef = await request.store.put({
-    operationId: request.operationId,
-    objectKey: stagingKey,
-    content: request.content,
-    expectedContentHash: request.expectedContentHash,
-    sizeBytes: request.expectedSizeBytes,
-    mimeType: request.mimeType,
-    metadata: { 'hypha-operation-id': request.operationId },
-    ifAbsent: true,
-  });
+  const stagingRef = await request.store.put(
+    {
+      operationId: request.operationId,
+      objectKey: stagingKey,
+      content: request.content,
+      expectedContentHash: request.expectedContentHash,
+      sizeBytes: request.expectedSizeBytes,
+      mimeType: request.mimeType,
+      metadata: { 'hypha-operation-id': request.operationId },
+      ifAbsent: true,
+    },
+    options
+  );
 
   try {
     const staged = await requireObjectMetadata(request.store, stagingRef);

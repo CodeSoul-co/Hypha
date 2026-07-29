@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type {
   ArtifactEventPublication,
   ArtifactEventPublisher,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
+  ArtifactPutRequest,
+  ArtifactStorageRef,
   ExecutionPrincipal,
 } from '@hypha/core';
 import {
@@ -77,6 +80,17 @@ describe('Artifact Event publication decorators', () => {
     expect(JSON.stringify(fixture.publisher.publications)).not.toMatch(
       /event-content|storageRef|relativePath/u
     );
+  });
+
+  it('preserves cancellation context through the eventing decorator', async () => {
+    const fixture = createFixture();
+    const controller = new AbortController();
+
+    await fixture.manager.create(createRequest('operation.cancel-context', 'cancel-context'), {
+      abortSignal: controller.signal,
+    });
+
+    expect(fixture.store.operationOptions.at(-1)?.abortSignal).toBe(controller.signal);
   });
 
   it('publishes normalized create failure and delete-blocked evidence', async () => {
@@ -316,7 +330,7 @@ class CapturingArtifactEventPublisher implements ArtifactEventPublisher {
 }
 
 function createFixture() {
-  const store = new InMemoryExecutionArtifactStore({ id: 'artifact-store.event-test' });
+  const store = new CapturingArtifactOperationStore({ id: 'artifact-store.event-test' });
   const repository = new InMemoryArtifactRecordRepository();
   const publisher = new CapturingArtifactEventPublisher();
   const profile: ArtifactProfileSpec = {
@@ -391,6 +405,18 @@ function createFixture() {
     repository,
     store,
   };
+}
+
+class CapturingArtifactOperationStore extends InMemoryExecutionArtifactStore {
+  readonly operationOptions: Array<ArtifactOperationOptions | undefined> = [];
+
+  override async put(
+    request: ArtifactPutRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactStorageRef> {
+    this.operationOptions.push(options);
+    return super.put(request);
+  }
 }
 
 function createRequest(

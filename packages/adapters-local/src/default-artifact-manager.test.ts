@@ -3,7 +3,10 @@ import type {
   ArtifactCreateRequest,
   ArtifactDownloadAccess,
   ArtifactDownloadAccessRequest,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
+  ArtifactPutRequest,
+  ArtifactStorageRef,
   ArtifactStoreCapabilities,
   ExecutionPrincipal,
 } from '@hypha/core';
@@ -283,6 +286,85 @@ describe('DefaultArtifactManager', () => {
     ]);
   });
 
+  it('propagates cancellation context through every content-producing entry point', async () => {
+    const workspaceBytes = new TextEncoder().encode('workspace-cancellation');
+    const fixture = createFixture({
+      workspaceReader: {
+        async read() {
+          return {
+            content: workspaceBytes,
+            contentHash: hashArtifactBytes(workspaceBytes),
+            sizeBytes: workspaceBytes.byteLength,
+            mimeType: 'text/plain',
+          };
+        },
+      },
+    });
+    const createController = new AbortController();
+    const versionController = new AbortController();
+    const workspaceController = new AbortController();
+    const created = await fixture.manager.create(
+      createRequest('cancel-context-create', new TextEncoder().encode('create-cancellation')),
+      { abortSignal: createController.signal }
+    );
+    const versionBytes = new TextEncoder().encode('version-cancellation');
+
+    await fixture.manager.createVersion(
+      {
+        operationId: 'cancel-context-version',
+        principal: owner,
+        artifactId: created.id,
+        expectedRevision: created.revision,
+        content: versionBytes,
+        expectedContentHash: hashArtifactBytes(versionBytes),
+        expectedSizeBytes: versionBytes.byteLength,
+        provenance: {
+          sourceType: 'derived',
+          createdBy: owner.principalId,
+          sourceArtifactIds: [created.id],
+          transformation: 'verify cancellation propagation',
+        },
+      },
+      { abortSignal: versionController.signal }
+    );
+    await fixture.manager.createFromWorkspace(
+      {
+        operationId: 'cancel-context-workspace',
+        principal: owner,
+        profileRef: { id: fixture.profile.id, version: fixture.profile.version },
+        userId: owner.userId!,
+        tenantId: owner.tenantId,
+        workspaceId: 'workspace.example',
+        relativePath: 'outputs/cancel.txt',
+        kind: 'report',
+        provenance: { sourceType: 'command_generated', createdBy: owner.principalId },
+      },
+      { abortSignal: workspaceController.signal }
+    );
+
+    expect(fixture.store.operationOptions.map((options) => options?.abortSignal)).toEqual([
+      createController.signal,
+      versionController.signal,
+      workspaceController.signal,
+    ]);
+  });
+
+  it('does not commit an Artifact when the Store rejects a pre-cancelled upload', async () => {
+    const fixture = createFixture();
+    const controller = new AbortController();
+    controller.abort(new Error('cancel before Artifact upload'));
+
+    await expect(
+      fixture.manager.create(
+        createRequest('pre-cancelled-create', new TextEncoder().encode('cancelled')),
+        { abortSignal: controller.signal }
+      )
+    ).rejects.toThrow('cancel before Artifact upload');
+
+    await expect(fixture.repository.list()).resolves.toEqual([]);
+    expect(fixture.store.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+  });
+
   it('rejects Workspace output that changed after collection was planned', async () => {
     const bytes = new TextEncoder().encode('changed-output');
     const fixture = createFixture({
@@ -459,6 +541,7 @@ function createFixture(
 
 class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
   readonly downloadRequests: ArtifactDownloadAccessRequest[] = [];
+  readonly operationOptions: Array<ArtifactOperationOptions | undefined> = [];
   private readonly signedAccess: boolean;
 
   constructor(options: { id: string; signedAccess: boolean }) {
@@ -468,6 +551,19 @@ class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
 
   override async capabilities(): Promise<ArtifactStoreCapabilities> {
     return { ...(await super.capabilities()), signedAccess: this.signedAccess };
+  }
+
+  override async put(
+    request: ArtifactPutRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactStorageRef> {
+    this.operationOptions.push(options);
+    if (options?.abortSignal?.aborted) {
+      throw options.abortSignal.reason instanceof Error
+        ? options.abortSignal.reason
+        : new Error('Artifact upload aborted.');
+    }
+    return super.put(request);
   }
 
   async createDownloadAccess(

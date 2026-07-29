@@ -15,6 +15,7 @@ import type {
   ArtifactListRequest,
   ArtifactManager,
   ArtifactMutationRequest,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
   ArtifactPreviousRequest,
   ArtifactReadRequest,
@@ -105,15 +106,21 @@ export class DefaultArtifactManager implements ArtifactManager {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  async create(input: ArtifactCreateRequest): Promise<ArtifactRecord> {
+  async create(
+    input: ArtifactCreateRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactCreateRequest(input));
     const lockKey = request.idempotencyKey
       ? `idempotency:${request.operationId}:${request.idempotencyKey}`
       : `create:${this.nextId('lock')}`;
-    return this.withLock(lockKey, () => this.createUnlocked(request, false));
+    return this.withLock(lockKey, () => this.createUnlocked(request, false, options));
   }
 
-  async createFromWorkspace(input: ArtifactFromWorkspaceRequest): Promise<ArtifactRecord> {
+  async createFromWorkspace(
+    input: ArtifactFromWorkspaceRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactFromWorkspaceRequest(input));
     const lockKey = request.idempotencyKey
       ? `idempotency:${request.operationId}:${request.idempotencyKey}`
@@ -153,12 +160,16 @@ export class DefaultArtifactManager implements ArtifactManager {
             request.expectedContentHash ?? qualifiedContentHash(source.contentHash),
           expectedSizeBytes: request.expectedSizeBytes ?? source.sizeBytes,
         },
-        true
+        true,
+        options
       );
     });
   }
 
-  async createVersion(input: ArtifactVersionRequest): Promise<ArtifactRecord> {
+  async createVersion(
+    input: ArtifactVersionRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactVersionRequest(input));
     return this.withLock(`artifact:${request.artifactId}`, async () => {
       const idempotent = await this.findIdempotent(request.operationId, request.idempotencyKey);
@@ -198,12 +209,15 @@ export class DefaultArtifactManager implements ArtifactManager {
         );
       }
       this.assertContentPolicy(profile, previous.record.kind, previous.record.mimeType, request);
-      const persisted = await persistArtifactContent({
-        ...request,
-        profile,
-        store: this.requireStore(profile),
-        nonce: this.nextId('content'),
-      });
+      const persisted = await persistArtifactContent(
+        {
+          ...request,
+          profile,
+          store: this.requireStore(profile),
+          nonce: this.nextId('content'),
+        },
+        options
+      );
       const timestamp = this.timestamp();
       const versionNumber = previous.record.versionNumber + 1;
       const versionId = artifactVersionId(
@@ -571,7 +585,8 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   private async createUnlocked(
     request: ArtifactCreateRequest,
-    trustedWorkspaceSource: boolean
+    trustedWorkspaceSource: boolean,
+    options: ArtifactOperationOptions
   ): Promise<ArtifactRecord> {
     const idempotent = await this.findIdempotent(request.operationId, request.idempotencyKey);
     if (idempotent) {
@@ -599,12 +614,15 @@ export class DefaultArtifactManager implements ArtifactManager {
     };
     assertCreateAccess(access, request.principal, request.workspaceId, request.tenantId);
     const retention = this.retentionRecord(profile, request.retention);
-    const persisted = await persistArtifactContent({
-      ...request,
-      profile,
-      store: this.requireStore(profile),
-      nonce: this.nextId('content'),
-    });
+    const persisted = await persistArtifactContent(
+      {
+        ...request,
+        profile,
+        store: this.requireStore(profile),
+        nonce: this.nextId('content'),
+      },
+      options
+    );
     const artifactId = this.nextId('artifact');
     const logicalArtifactId = request.logicalArtifactId ?? artifactId;
     const timestamp = this.timestamp();
