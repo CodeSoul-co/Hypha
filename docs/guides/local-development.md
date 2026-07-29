@@ -212,7 +212,11 @@ REDIS_DEPLOYMENT=cloud
 REDIS_TLS=true
 ```
 
-Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` but disabled by default. Enable them through `.env` only when a concrete adapter is available for the deployment.
+Kafka, Postgres, Qdrant, Chroma, and Pinecone are declared in `config.yaml` but disabled by
+default until a concrete deployment adapter is available. The S3-compatible Artifact Store has an
+explicit Factory, but it also remains disabled by default: selecting it requires deployment
+composition plus a versioned bucket, trusted endpoint policy, credentials, and real-provider
+acceptance evidence.
 
 Do not commit `.env`, `data/`, root `logs/`, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 

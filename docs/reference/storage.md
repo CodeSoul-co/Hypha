@@ -106,6 +106,14 @@ Runtime configuration is grouped by function before provider:
 
 Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
 
+Execution provides a concrete `S3ExecutionArtifactStore` and an explicit
+`S3ExecutionArtifactStoreFactory`. The Factory can be added to
+`ArtifactStoreProviderRegistry`, but it is not registered or selected by default and is not yet
+wired into Server composition. Its capability contract reports versioning, range reads, signed
+access, server-side copy, multipart upload, and content addressing; encryption remains `false`.
+Deployment requires a bucket with object versioning enabled, explicit endpoint policy, and current
+real MinIO/S3 acceptance evidence.
+
 Local defaults are organized under `data/`: events in `data/runtime/events/`, structured records in `data/runtime/structured/`, vector indexes in `data/storage/vector/`, artifacts in `data/storage/artifacts/`, and system logs in `data/logs/system.log`.
 
 ## Document Storage
