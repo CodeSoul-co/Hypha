@@ -60,6 +60,9 @@ interface SQLiteModule {
   DatabaseSync: new (filename: string) => SQLiteDatabase;
 }
 
+const SQLITE_CORRUPT_RESULT_CODE = 11;
+const SQLITE_NOT_A_DATABASE_RESULT_CODE = 26;
+
 export type SQLiteExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_UNAVAILABLE'
   | 'EXECUTION_STORE_CLOSED'
@@ -152,6 +155,18 @@ export class SQLiteExecutionStoreFoundation {
           current: error.current,
           supported: error.supported,
         });
+      }
+      const sqliteResultCode = sqlitePrimaryResultCode(error);
+      if (
+        sqliteResultCode === SQLITE_CORRUPT_RESULT_CODE ||
+        sqliteResultCode === SQLITE_NOT_A_DATABASE_RESULT_CODE
+      ) {
+        throw storeError(
+          'EXECUTION_STORE_CORRUPT',
+          'SQLite Execution store is corrupt.',
+          { sqliteResultCode },
+          error
+        );
       }
       throw storeError(
         'EXECUTION_STORE_UNAVAILABLE',
@@ -1268,4 +1283,19 @@ function storeError(
   _cause?: unknown
 ): SQLiteExecutionStoreFoundationError {
   return new SQLiteExecutionStoreFoundationError(code, message, details);
+}
+
+function sqlitePrimaryResultCode(error: unknown): number | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('code' in error) ||
+    error.code !== 'ERR_SQLITE_ERROR' ||
+    !('errcode' in error) ||
+    typeof error.errcode !== 'number' ||
+    !Number.isInteger(error.errcode)
+  ) {
+    return undefined;
+  }
+  return error.errcode & 0xff;
 }

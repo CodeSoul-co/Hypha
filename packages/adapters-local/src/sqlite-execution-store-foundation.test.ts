@@ -1144,6 +1144,30 @@ describe('SQLiteExecutionStoreFoundation', () => {
     }
   });
 
+  it('fails closed on a corrupt database header without rewriting operator evidence', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const corruptHeader = Buffer.from('not-a-sqlite-database-header', 'utf8');
+    await fs.writeFile(filename, corruptHeader);
+
+    expect(() => new SQLiteExecutionStoreFoundation({ rootPath: root })).toThrowError(
+      expect.objectContaining({
+        code: 'EXECUTION_STORE_CORRUPT',
+        message: 'SQLite Execution store is corrupt.',
+        details: { sqliteResultCode: 26 },
+      })
+    );
+    await expect(fs.readFile(filename)).resolves.toEqual(corruptHeader);
+
+    await fs.rm(filename);
+    const repaired = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(repaired.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: SQLiteExecutionStoreFoundation.schemaVersion },
+    });
+    await repaired.close();
+  });
+
   it('rejects aliased store roots and hard-linked database files', async () => {
     const container = await temporaryRoot();
     const canonicalRoot = path.join(container, 'canonical-root');
