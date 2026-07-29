@@ -922,6 +922,77 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     }
   }, 45_000);
 
+  it('rejects a real future schema without rewriting it and initializes after restoration', async () => {
+    const administrator = new Client({
+      connectionString: postgresConnectionString(),
+      ssl: false,
+      connectionTimeoutMillis: 1_000,
+      application_name: 'hypha-postgres-future-schema-controller',
+    });
+    const futureVersion = POSTGRES_EXECUTION_STORE_SCHEMA_VERSION + 1;
+    const rejected = createRealStore('future-schema-rejected');
+    let recovered: ReturnType<typeof createRealStore> | undefined;
+    let administratorConnected = false;
+    let futureVersionInstalled = false;
+
+    try {
+      await administrator.connect();
+      administratorConnected = true;
+      await administrator.query(
+        'UPDATE hypha_execution_store_schema SET version = $1 WHERE singleton_id = TRUE',
+        [futureVersion]
+      );
+      futureVersionInstalled = true;
+
+      await expect(rejected.connection.initialize()).rejects.toMatchObject({
+        name: 'PostgresExecutionStoreSchemaVersionError',
+        current: futureVersion,
+        supported: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+      });
+      await expect(rejected.store.health()).resolves.toMatchObject({
+        status: 'unhealthy',
+        message: 'Postgres Execution store is not ready.',
+        details: { provider: 'postgres', ready: false },
+      });
+      await expect(rejected.store.get('execution.real.future-schema')).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_UNAVAILABLE',
+        message: 'Postgres Execution store is unavailable.',
+      });
+
+      const rejectedEvidence = await administrator.query(
+        'SELECT version FROM hypha_execution_store_schema WHERE singleton_id = TRUE'
+      );
+      expect(rejectedEvidence.rows).toEqual([{ version: futureVersion }]);
+
+      await administrator.query(
+        'UPDATE hypha_execution_store_schema SET version = $1 WHERE singleton_id = TRUE',
+        [POSTGRES_EXECUTION_STORE_SCHEMA_VERSION]
+      );
+      futureVersionInstalled = false;
+
+      recovered = createRealStore('future-schema-restored');
+      await recovered.connection.initialize();
+      await expect(recovered.store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+        },
+      });
+    } finally {
+      if (futureVersionInstalled && administratorConnected) {
+        await administrator
+          .query('UPDATE hypha_execution_store_schema SET version = $1 WHERE singleton_id = TRUE', [
+            POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+          ])
+          .catch(() => undefined);
+      }
+      await Promise.all([rejected.store.close(), recovered?.store.close()]);
+      if (administratorConnected) await administrator.end().catch(() => undefined);
+    }
+  }, 30_000);
+
   it('quarantines a corrupt real record while healthy records remain readable', async () => {
     const corruptRequest = structuredClone(executionRecordCreateRequestExample);
     corruptRequest.operationId = 'operation.execution.create.real-corrupt';
