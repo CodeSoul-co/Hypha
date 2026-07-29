@@ -12,6 +12,7 @@ import type {
   ExecutionRecordCreateRequest,
   ExecutionRecordPage,
   ExecutionRecordQuery,
+  ProviderHealth,
 } from '@hypha/core';
 import {
   validateExecutionIdempotencyQuery,
@@ -37,6 +38,7 @@ import {
 
 export interface PostgresExecutionStoreTransactionPort {
   transaction<T>(operation: (client: PostgresExecutionStorePoolClient) => Promise<T>): Promise<T>;
+  health(): Promise<ProviderHealth>;
 }
 
 export type PostgresExecutionStoreFoundationErrorCode =
@@ -598,6 +600,10 @@ export class PostgresExecutionStoreFoundation {
     });
     if (!result.ok) throw result.error;
     return result.value;
+  }
+
+  async health(): Promise<ProviderHealth> {
+    return this.connection.health();
   }
 
   private async writeOperation<T>(

@@ -6,6 +6,7 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ProviderHealth,
 } from '@hypha/core';
 import {
   commandExecutionResultExample,
@@ -1057,6 +1058,26 @@ describe('PostgresExecutionStoreFoundation persistence', () => {
     expect(client.sql()).toContain('UPDATE execution_lease_history');
     expect(client.sql()).toContain('UPDATE execution_records');
   });
+
+  it('exposes normalized connection health without opening a Store transaction', async () => {
+    const health: ProviderHealth = {
+      status: 'degraded',
+      checkedAt: '2026-07-29T00:00:00.000Z',
+      message: 'Postgres Execution store contains quarantined records.',
+      details: {
+        provider: 'postgres',
+        ready: true,
+        schemaVersion: 1,
+        quarantinedRecords: 2,
+      },
+    };
+    const connection = new ScriptedTransactionPort([], health);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    await expect(store.health()).resolves.toEqual(health);
+    expect(connection.healthCalls).toBe(1);
+    expect(connection.transactions).toBe(0);
+  });
 });
 
 interface ScriptedCommand {
@@ -1067,8 +1088,16 @@ interface ScriptedCommand {
 class ScriptedTransactionPort implements PostgresExecutionStoreTransactionPort {
   private readonly clients: ScriptedClient[];
   transactions = 0;
+  healthCalls = 0;
 
-  constructor(clients: ScriptedClient[]) {
+  constructor(
+    clients: ScriptedClient[],
+    private readonly healthEvidence: ProviderHealth = {
+      status: 'healthy',
+      checkedAt: '2026-07-29T00:00:00.000Z',
+      details: { provider: 'postgres', ready: true },
+    }
+  ) {
     this.clients = [...clients];
   }
 
@@ -1083,6 +1112,11 @@ class ScriptedTransactionPort implements PostgresExecutionStoreTransactionPort {
     const client = this.clients.shift();
     if (!client) throw new Error('No scripted transaction client configured.');
     return operation(client);
+  }
+
+  async health(): Promise<ProviderHealth> {
+    this.healthCalls += 1;
+    return structuredClone(this.healthEvidence);
   }
 }
 

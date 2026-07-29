@@ -72,6 +72,24 @@ describe('PostgresExecutionStoreConnection', () => {
     await connection.close();
   });
 
+  it('fails health closed when the persisted schema version drifts after initialization', async () => {
+    const pool = new FakePool();
+    const connection = createConnection(pool);
+    await connection.initialize();
+    pool.schemaVersion = POSTGRES_EXECUTION_STORE_SCHEMA_VERSION + 1;
+
+    await expect(connection.health()).resolves.toMatchObject({
+      status: 'unhealthy',
+      message: 'Postgres Execution store schema version is not supported.',
+      details: {
+        provider: 'postgres',
+        ready: false,
+        schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION + 1,
+      },
+    });
+    await connection.close();
+  });
+
   it('fails initialization closed, releases the client, and does not leak credentials', async () => {
     const pool = new FakePool({ failWhen: (text) => text === 'BEGIN' });
     const connection = createConnection(pool);
@@ -255,6 +273,7 @@ class FakePool implements PostgresExecutionStorePool {
   readonly clients: FakePoolClient[] = [];
   endCalls = 0;
   quarantinedRecords = 0;
+  schemaVersion = POSTGRES_EXECUTION_STORE_SCHEMA_VERSION;
   connectFailure?: Error;
 
   constructor(private readonly options: FakePoolOptions = {}) {}
@@ -290,7 +309,7 @@ class FakePoolClient implements PostgresExecutionStorePoolClient {
       return {
         rows: [
           {
-            schema_version: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+            schema_version: this.pool.schemaVersion,
             quarantined_records: this.pool.quarantinedRecords,
           },
         ],

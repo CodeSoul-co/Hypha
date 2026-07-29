@@ -110,17 +110,20 @@ export class PostgresExecutionStoreConnection {
       const client = await this.pool.connect();
       try {
         const evidence = await inspectStore(client);
+        const schemaSupported = evidence.schemaVersion === POSTGRES_EXECUTION_STORE_SCHEMA_VERSION;
         const hasQuarantinedRecords = evidence.quarantinedRecords > 0;
         return {
-          status: hasQuarantinedRecords ? 'degraded' : 'healthy',
+          status: !schemaSupported ? 'unhealthy' : hasQuarantinedRecords ? 'degraded' : 'healthy',
           checkedAt: this.now(),
           latencyMs: Date.now() - startedAt,
-          message: hasQuarantinedRecords
-            ? 'Postgres Execution store contains quarantined records.'
-            : 'Postgres Execution store is available.',
+          message: !schemaSupported
+            ? 'Postgres Execution store schema version is not supported.'
+            : hasQuarantinedRecords
+              ? 'Postgres Execution store contains quarantined records.'
+              : 'Postgres Execution store is available.',
           details: {
             provider: 'postgres',
-            ready: true,
+            ready: schemaSupported,
             schemaVersion: evidence.schemaVersion,
             quarantinedRecords: evidence.quarantinedRecords,
           },
