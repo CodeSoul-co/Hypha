@@ -8,7 +8,7 @@ import {
 } from './postgres-execution-store-foundation';
 import type { PostgresExecutionStoreSchemaQueryResult } from './postgres-execution-store-schema';
 
-describe('PostgresExecutionStoreFoundation create/get', () => {
+describe('PostgresExecutionStoreFoundation persistence', () => {
   it('creates and reads a Runtime Schema-validated Execution record', async () => {
     const request = structuredClone(executionRecordCreateRequestExample);
     const createClient = new ScriptedClient([
@@ -195,6 +195,140 @@ describe('PostgresExecutionStoreFoundation create/get', () => {
     ).rejects.toThrow();
     expect(connection.transactions).toBe(0);
   });
+
+  it('lists records with stable pagination and no duplicate boundary record', async () => {
+    const newest = recordWithIdentity('execution.page.c', '2026-07-29T03:00:00.000Z');
+    const middle = recordWithIdentity('execution.page.b', '2026-07-29T03:00:00.000Z');
+    const oldest = recordWithIdentity('execution.page.a', '2026-07-29T02:00:00.000Z');
+    const firstClient = new ScriptedClient([
+      rows(recordRow(newest), recordRow(middle), recordRow(oldest)),
+    ]);
+    const secondClient = new ScriptedClient([rows(recordRow(oldest))]);
+    const connection = new ScriptedTransactionPort([firstClient, secondClient]);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    const first = await store.list({ userId: newest.request.userId, limit: 2 });
+    expect(first.records.map(({ id }) => id)).toEqual([newest.id, middle.id]);
+    expect(first.cursor).toEqual(expect.any(String));
+
+    const second = await store.list({
+      userId: newest.request.userId,
+      limit: 2,
+      cursor: first.cursor,
+    });
+    expect(second).toEqual({ records: [oldest] });
+    expect([...first.records, ...second.records].map(({ id }) => id)).toEqual([
+      newest.id,
+      middle.id,
+      oldest.id,
+    ]);
+    expect(secondClient.commands[0]?.values).toEqual([
+      newest.request.userId,
+      middle.updatedAt,
+      middle.id,
+      3,
+    ]);
+  });
+
+  it('rejects invalid or query-mismatched list cursors before issuing SQL', async () => {
+    const connection = new ScriptedTransactionPort([]);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    await expect(store.list({ cursor: 'not+a+cursor' })).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_INVALID_CURSOR',
+    });
+    await expect(store.list({ limit: 0 })).rejects.toThrow();
+    expect(connection.transactions).toBe(0);
+  });
+
+  it('quarantines a corrupt record returned by list before failing closed', async () => {
+    const record = recordWithIdentity('execution.list.corrupt', '2026-07-29T03:00:00.000Z');
+    const client = new ScriptedClient([
+      rows({ ...recordRow(record), workspace_id: 'workspace.corrupt' }),
+      rows(),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.list()).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      details: { executionId: record.id },
+    });
+    expect(client.sql()).toContain('INSERT INTO execution_record_quarantine');
+  });
+
+  it('resolves scoped idempotency as miss, match, or conflict', async () => {
+    const record = recordWithIdentity('execution.idempotency.owner', '2026-07-29T03:00:00.000Z');
+    record.request.tenantId = 'tenant.idempotency';
+    record.request.idempotencyKey = 'command:idempotency:shared';
+    record.idempotencyFingerprint = 'sha256:fingerprint.owner';
+    const query = {
+      tenantId: record.request.tenantId,
+      userId: record.request.userId,
+      workspaceId: record.request.workspaceId,
+      idempotencyKey: record.request.idempotencyKey,
+      fingerprint: record.idempotencyFingerprint,
+    };
+    const missClient = new ScriptedClient([rows()]);
+    const matchClient = new ScriptedClient([rows(recordRow(record))]);
+    const conflictClient = new ScriptedClient([rows(recordRow(record))]);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([missClient, matchClient, conflictClient])
+    );
+
+    await expect(store.resolveIdempotency(query)).resolves.toEqual({ status: 'miss' });
+    await expect(store.resolveIdempotency(query)).resolves.toEqual({
+      status: 'match',
+      record,
+    });
+    await expect(
+      store.resolveIdempotency({ ...query, fingerprint: 'sha256:fingerprint.changed' })
+    ).resolves.toEqual({
+      status: 'conflict',
+      recordId: record.id,
+      existingFingerprint: record.idempotencyFingerprint,
+    });
+
+    expect(matchClient.commands[0]?.values).toEqual([
+      query.tenantId,
+      query.userId,
+      query.workspaceId,
+      query.idempotencyKey,
+    ]);
+    expect(matchClient.sql()).toContain('records.tenant_id IS NOT DISTINCT FROM $1');
+    expect(matchClient.sql()).toContain('LIMIT 2');
+  });
+
+  it('fails closed for corrupt or duplicate scoped idempotency evidence', async () => {
+    const record = recordWithIdentity('execution.idempotency.corrupt', '2026-07-29T03:00:00.000Z');
+    record.request.idempotencyKey = 'command:idempotency:corrupt';
+    record.idempotencyFingerprint = 'sha256:fingerprint.corrupt';
+    const query = {
+      userId: record.request.userId,
+      workspaceId: record.request.workspaceId,
+      idempotencyKey: record.request.idempotencyKey,
+      fingerprint: record.idempotencyFingerprint,
+    };
+    const corruptClient = new ScriptedClient([
+      rows({ ...recordRow(record), status: 'completed' }),
+      rows(),
+    ]);
+    const duplicateClient = new ScriptedClient([rows(recordRow(record), recordRow(record))]);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([corruptClient, duplicateClient])
+    );
+
+    await expect(store.resolveIdempotency(query)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      details: { executionId: record.id },
+    });
+    expect(corruptClient.sql()).toContain('INSERT INTO execution_record_quarantine');
+    expect(corruptClient.commands[0]?.values?.[0]).toBeNull();
+
+    await expect(store.resolveIdempotency(query)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      message: 'Postgres Execution store contains duplicate scoped idempotency records.',
+    });
+  });
 });
 
 interface ScriptedCommand {
@@ -284,4 +418,12 @@ function withoutIdempotency(input: ExecutionRecordCreateRequest): ExecutionRecor
   request.record.request.idempotencyKey = undefined;
   request.record.idempotencyFingerprint = undefined;
   return request;
+}
+
+function recordWithIdentity(id: string, updatedAt: string): ExecutionRecord {
+  const record = structuredClone(executionRecordCreateRequestExample.record);
+  record.id = id;
+  record.request.executionId = id;
+  record.updatedAt = updatedAt;
+  return record;
 }

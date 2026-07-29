@@ -1,10 +1,29 @@
 import { createHash } from 'node:crypto';
-import type { ExecutionRecord, ExecutionRecordCreateRequest } from '@hypha/core';
-import { validateExecutionRecord, validateExecutionRecordCreateRequest } from '@hypha/core';
+import type {
+  ExecutionIdempotencyQuery,
+  ExecutionIdempotencyResolution,
+  ExecutionRecord,
+  ExecutionRecordCreateRequest,
+  ExecutionRecordPage,
+  ExecutionRecordQuery,
+} from '@hypha/core';
+import {
+  validateExecutionIdempotencyQuery,
+  validateExecutionIdempotencyResolution,
+  validateExecutionRecord,
+  validateExecutionRecordCreateRequest,
+  validateExecutionRecordQuery,
+} from '@hypha/core';
 import {
   PostgresExecutionStoreConnectionError,
   type PostgresExecutionStorePoolClient,
 } from './postgres-execution-store-connection';
+import {
+  nextPostgresExecutionListCursor,
+  planPostgresExecutionList,
+  POSTGRES_EXECUTION_RECORD_COLUMNS,
+  PostgresExecutionListCursorError,
+} from './postgres-execution-store-query';
 
 export interface PostgresExecutionStoreTransactionPort {
   transaction<T>(operation: (client: PostgresExecutionStorePoolClient) => Promise<T>): Promise<T>;
@@ -14,7 +33,8 @@ export type PostgresExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_UNAVAILABLE'
   | 'EXECUTION_STORE_CORRUPT'
   | 'EXECUTION_STORE_CONFLICT'
-  | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT';
+  | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT'
+  | 'EXECUTION_STORE_INVALID_CURSOR';
 
 export class PostgresExecutionStoreFoundationError extends Error {
   constructor(
@@ -102,6 +122,89 @@ export class PostgresExecutionStoreFoundation {
       if (selected.rows.length === 0) return success<ExecutionRecord | null>(null);
       return loadRecord(client, selected.rows[0]!);
     });
+    if (!result.ok) throw result.error;
+    return result.value;
+  }
+
+  async list(input: ExecutionRecordQuery = {}): Promise<ExecutionRecordPage> {
+    const query = validateExecutionRecordQuery(input);
+    let plan;
+    try {
+      plan = planPostgresExecutionList(query);
+    } catch (error) {
+      if (error instanceof PostgresExecutionListCursorError) {
+        throw storeError('EXECUTION_STORE_INVALID_CURSOR', error.message);
+      }
+      throw error;
+    }
+
+    const result = await this.writeOperation<OperationResult<ExecutionRecordPage>>(
+      async (client) => {
+        const selected = await client.query(plan.sql, plan.parameters);
+        const records: ExecutionRecord[] = [];
+        for (const row of selected.rows.slice(0, plan.limit)) {
+          const loaded = await loadRecord(client, row);
+          if (!loaded.ok) return loaded;
+          records.push(loaded.value);
+        }
+        if (selected.rows.length <= plan.limit) return success({ records });
+        const last = records.at(-1);
+        return success({
+          records,
+          ...(last ? { cursor: nextPostgresExecutionListCursor(last, plan.queryHash) } : undefined),
+        });
+      }
+    );
+    if (!result.ok) throw result.error;
+    return result.value;
+  }
+
+  async resolveIdempotency(
+    input: ExecutionIdempotencyQuery
+  ): Promise<ExecutionIdempotencyResolution> {
+    const query = validateExecutionIdempotencyQuery(input);
+    const result = await this.writeOperation<OperationResult<ExecutionIdempotencyResolution>>(
+      async (client) => {
+        const selected = await client.query(
+          `${SELECT_RECORD_COLUMNS}
+             FROM execution_records AS records
+             LEFT JOIN execution_record_quarantine AS quarantine
+               ON quarantine.execution_id = records.execution_id
+            WHERE records.tenant_id IS NOT DISTINCT FROM $1
+              AND records.user_id = $2
+              AND records.workspace_id = $3
+              AND records.execution_idempotency_key = $4
+              AND records.idempotency_fingerprint IS NOT NULL
+            LIMIT 2`,
+          [query.tenantId ?? null, query.userId, query.workspaceId, query.idempotencyKey]
+        );
+        if (selected.rows.length > 1) {
+          throw storeError(
+            'EXECUTION_STORE_CORRUPT',
+            'Postgres Execution store contains duplicate scoped idempotency records.'
+          );
+        }
+        const row = selected.rows[0];
+        if (!row) {
+          return success(validateExecutionIdempotencyResolution({ status: 'miss' }));
+        }
+        const loaded = await loadRecord(client, row);
+        if (!loaded.ok) return loaded;
+        const existingFingerprint = String(row.idempotency_fingerprint);
+        return success(
+          existingFingerprint === query.fingerprint
+            ? validateExecutionIdempotencyResolution({
+                status: 'match',
+                record: loaded.value,
+              })
+            : validateExecutionIdempotencyResolution({
+                status: 'conflict',
+                recordId: loaded.value.id,
+                existingFingerprint,
+              })
+        );
+      }
+    );
     if (!result.ok) throw result.error;
     return result.value;
   }
@@ -206,9 +309,11 @@ async function selectRecord(
   );
 }
 
-type RecordLoadResult =
-  | { ok: true; value: ExecutionRecord }
+type OperationResult<T> =
+  | { ok: true; value: T }
   | { ok: false; error: PostgresExecutionStoreFoundationError };
+
+type RecordLoadResult = OperationResult<ExecutionRecord>;
 
 async function loadRecord(
   client: PostgresExecutionStorePoolClient,
@@ -345,24 +450,7 @@ function storeError(
   return new PostgresExecutionStoreFoundationError(code, message, details);
 }
 
-const SELECT_RECORD_COLUMNS = `
-SELECT
-  records.execution_id,
-  records.revision,
-  records.status,
-  records.tenant_id,
-  records.user_id,
-  records.workspace_id,
-  records.run_id,
-  records.provider_id,
-  records.created_at,
-  records.updated_at,
-  records.lease_expires_at,
-  records.execution_idempotency_key,
-  records.idempotency_fingerprint,
-  records.last_fencing_token,
-  records.record_json,
-  quarantine.reason_code AS quarantine_reason`;
+const SELECT_RECORD_COLUMNS = `SELECT ${POSTGRES_EXECUTION_RECORD_COLUMNS}`;
 
 const INSERT_RECORD_SQL = `
 INSERT INTO execution_records (
