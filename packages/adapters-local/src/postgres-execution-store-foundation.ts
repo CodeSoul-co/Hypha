@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ExecutionIdempotencyQuery,
   ExecutionIdempotencyResolution,
   ExecutionRecord,
+  ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
   ExecutionRecordPage,
   ExecutionRecordQuery,
@@ -11,6 +13,7 @@ import {
   validateExecutionIdempotencyQuery,
   validateExecutionIdempotencyResolution,
   validateExecutionRecord,
+  validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
   validateExecutionRecordQuery,
 } from '@hypha/core';
@@ -34,7 +37,11 @@ export type PostgresExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_CORRUPT'
   | 'EXECUTION_STORE_CONFLICT'
   | 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT'
-  | 'EXECUTION_STORE_INVALID_CURSOR';
+  | 'EXECUTION_STORE_INVALID_CURSOR'
+  | 'EXECUTION_STORE_NOT_FOUND'
+  | 'EXECUTION_STORE_REVISION_CONFLICT'
+  | 'EXECUTION_STORE_FENCING_REJECTED'
+  | 'EXECUTION_STORE_TERMINAL';
 
 export class PostgresExecutionStoreFoundationError extends Error {
   constructor(
@@ -209,6 +216,109 @@ export class PostgresExecutionStoreFoundation {
     return result.value;
   }
 
+  async compareAndSet(input: ExecutionRecordCompareAndSetRequest): Promise<ExecutionRecord> {
+    const request = validateExecutionRecordCompareAndSetRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    const result = await this.writeOperation<RecordLoadResult>(async (client) => {
+      if (request.idempotencyKey) {
+        await lockMutationIdempotency(client, request.operationId, request.idempotencyKey);
+        const replay = await resolveMutationReplay(client, request, requestHash);
+        if (replay) return replay;
+      }
+
+      const selected = await selectRecordForUpdate(client, request.executionId);
+      if (selected.rows.length === 0) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const loaded = await loadRecord(client, selected.rows[0]!);
+      if (!loaded.ok) return loaded;
+      const current = loaded.value;
+      if (current.revision !== request.expectedRevision) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
+        );
+      }
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw storeError('EXECUTION_STORE_TERMINAL', 'Terminal Execution records are immutable.', {
+          executionId: request.executionId,
+          status: current.status,
+        });
+      }
+      assertLeaseContinuity(current, request);
+      assertRecordIdentityContinuity(current, request.next);
+      assertTerminalReceiptContinuity(current, request.next);
+
+      const lastFencingToken = nonNegativeSafeInteger(
+        Number(selected.rows[0]!.last_fencing_token),
+        'lastFencingToken'
+      );
+      const updated = await client.query(UPDATE_RECORD_SQL, [
+        request.next.revision,
+        request.next.status,
+        request.next.request.tenantId ?? null,
+        request.next.request.userId,
+        request.next.request.workspaceId,
+        request.next.request.runId ?? null,
+        request.next.providerId,
+        request.next.createdAt,
+        request.next.updatedAt,
+        request.next.lease?.expiresAt ?? null,
+        request.next.request.idempotencyKey ?? null,
+        request.next.idempotencyFingerprint ?? null,
+        lastFencingToken,
+        JSON.stringify(request.next),
+        request.executionId,
+        request.expectedRevision,
+        lastFencingToken,
+      ]);
+      if (updated.rows.length !== 1) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record changed during compare-and-set.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+          }
+        );
+      }
+
+      if (request.idempotencyKey) {
+        const remembered = await client.query(
+          `INSERT INTO execution_mutation_idempotency
+             (operation_id, idempotency_key, execution_id, request_hash, result_json)
+           VALUES ($1, $2, $3, $4, $5::jsonb)
+           ON CONFLICT (operation_id, idempotency_key) DO NOTHING
+           RETURNING execution_id`,
+          [
+            request.operationId,
+            request.idempotencyKey,
+            request.executionId,
+            requestHash,
+            JSON.stringify(request.next),
+          ]
+        );
+        if (remembered.rows.length !== 1) {
+          throw storeError(
+            'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+            'Execution mutation idempotency key was reused with different input.',
+            { executionId: request.executionId }
+          );
+        }
+      }
+      return success(structuredClone(request.next));
+    });
+    if (!result.ok) throw result.error;
+    return result.value;
+  }
+
   private async writeOperation<T>(
     operation: (client: PostgresExecutionStorePoolClient) => Promise<T>
   ): Promise<T> {
@@ -295,6 +405,54 @@ async function resolveSemanticIdempotency(
   return loaded;
 }
 
+async function lockMutationIdempotency(
+  client: PostgresExecutionStorePoolClient,
+  operationId: string,
+  idempotencyKey: string
+): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+    operationId,
+    idempotencyKey,
+  ]);
+}
+
+async function resolveMutationReplay(
+  client: PostgresExecutionStorePoolClient,
+  request: ExecutionRecordCompareAndSetRequest,
+  requestHash: string
+): Promise<RecordLoadResult | null> {
+  if (!request.idempotencyKey) return null;
+  const selected = await client.query(
+    `SELECT execution_id, request_hash, result_json
+       FROM execution_mutation_idempotency
+      WHERE operation_id = $1 AND idempotency_key = $2`,
+    [request.operationId, request.idempotencyKey]
+  );
+  const row = selected.rows[0];
+  if (!row) return null;
+  if (
+    String(row.request_hash) !== requestHash ||
+    String(row.execution_id) !== request.executionId
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+      'Execution mutation idempotency key was reused with different input.',
+      { executionId: request.executionId }
+    );
+  }
+  try {
+    const record = validateExecutionRecord(parseRecordJson(row.result_json));
+    if (record.id !== request.executionId) throw new Error();
+    return success(record);
+  } catch {
+    throw storeError(
+      'EXECUTION_STORE_CORRUPT',
+      'Execution mutation idempotency record contains an invalid result.',
+      { executionId: request.executionId }
+    );
+  }
+}
+
 async function selectRecord(
   client: PostgresExecutionStorePoolClient,
   executionId: string
@@ -305,6 +463,21 @@ async function selectRecord(
        LEFT JOIN execution_record_quarantine AS quarantine
          ON quarantine.execution_id = records.execution_id
       WHERE records.execution_id = $1`,
+    [executionId]
+  );
+}
+
+async function selectRecordForUpdate(
+  client: PostgresExecutionStorePoolClient,
+  executionId: string
+): Promise<{ rows: ReadonlyArray<Record<string, unknown>> }> {
+  return client.query(
+    `${SELECT_RECORD_COLUMNS}
+       FROM execution_records AS records
+       LEFT JOIN execution_record_quarantine AS quarantine
+         ON quarantine.execution_id = records.execution_id
+      WHERE records.execution_id = $1
+      FOR UPDATE OF records`,
     [executionId]
   );
 }
@@ -407,6 +580,67 @@ function nonNegativeSafeInteger(value: number, name: string): number {
   return value;
 }
 
+function assertLeaseContinuity(
+  current: ExecutionRecord,
+  request: ExecutionRecordCompareAndSetRequest
+): void {
+  const currentLease = current.lease;
+  const nextLease = request.next.lease;
+  const guard = request.leaseGuard;
+  if (!currentLease) {
+    if (guard || nextLease) {
+      throw storeError(
+        'EXECUTION_STORE_FENCING_REJECTED',
+        'compareAndSet cannot create a lease; acquireLease is required.',
+        { executionId: current.id }
+      );
+    }
+    return;
+  }
+  const matchesCurrent =
+    guard?.leaseId === currentLease.id &&
+    guard.ownerId === currentLease.ownerId &&
+    guard.fencingToken === currentLease.fencingToken;
+  const preservesLease =
+    nextLease?.id === currentLease.id &&
+    nextLease.ownerId === currentLease.ownerId &&
+    nextLease.fencingToken === currentLease.fencingToken;
+  if (!matchesCurrent || !preservesLease) {
+    throw storeError(
+      'EXECUTION_STORE_FENCING_REJECTED',
+      'Execution lease or fencing token is stale.',
+      { executionId: current.id, fencingToken: currentLease.fencingToken }
+    );
+  }
+}
+
+function assertRecordIdentityContinuity(current: ExecutionRecord, next: ExecutionRecord): void {
+  if (
+    current.createdAt !== next.createdAt ||
+    current.idempotencyFingerprint !== next.idempotencyFingerprint ||
+    !isDeepStrictEqual(current.request, next.request)
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_CONFLICT',
+      'Execution request identity and idempotency evidence are immutable.',
+      { executionId: current.id }
+    );
+  }
+}
+
+function assertTerminalReceiptContinuity(current: ExecutionRecord, next: ExecutionRecord): void {
+  if (
+    current.terminalReceipt &&
+    !isDeepStrictEqual(current.terminalReceipt, next.terminalReceipt)
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_CONFLICT',
+      'Provider terminal receipt checkpoint is immutable.',
+      { executionId: current.id }
+    );
+  }
+}
+
 function recordParameters(record: ExecutionRecord): readonly unknown[] {
   return [
     record.id,
@@ -452,6 +686,16 @@ function storeError(
 
 const SELECT_RECORD_COLUMNS = `SELECT ${POSTGRES_EXECUTION_RECORD_COLUMNS}`;
 
+const TERMINAL_STATUSES = new Set<ExecutionRecord['status']>([
+  'cancelled',
+  'completed',
+  'failed',
+  'timed_out',
+  'oom_killed',
+  'resource_exceeded',
+  'quarantined',
+]);
+
 const INSERT_RECORD_SQL = `
 INSERT INTO execution_records (
   execution_id,
@@ -472,4 +716,30 @@ INSERT INTO execution_records (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT DO NOTHING
+RETURNING execution_id`;
+
+const UPDATE_RECORD_SQL = `
+UPDATE execution_records
+   SET revision = $1,
+       status = $2,
+       tenant_id = $3,
+       user_id = $4,
+       workspace_id = $5,
+       run_id = $6,
+       provider_id = $7,
+       created_at = $8,
+       updated_at = $9,
+       lease_expires_at = $10,
+       execution_idempotency_key = $11,
+       idempotency_fingerprint = $12,
+       last_fencing_token = $13,
+       record_json = $14::jsonb
+ WHERE execution_id = $15
+   AND revision = $16
+   AND last_fencing_token = $17
+   AND NOT EXISTS (
+     SELECT 1
+       FROM execution_record_quarantine AS quarantine
+      WHERE quarantine.execution_id = execution_records.execution_id
+   )
 RETURNING execution_id`;

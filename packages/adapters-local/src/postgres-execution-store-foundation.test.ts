@@ -1,5 +1,16 @@
-import type { ExecutionRecord, ExecutionRecordCreateRequest } from '@hypha/core';
-import { executionRecordCreateRequestExample } from '@hypha/core';
+import { createHash } from 'node:crypto';
+import type {
+  ExecutionRecord,
+  ExecutionRecordCompareAndSetRequest,
+  ExecutionRecordCreateRequest,
+} from '@hypha/core';
+import {
+  commandExecutionResultExample,
+  executionLeaseGuardExample,
+  executionRecordCompareAndSetRequestExample,
+  executionRecordCreateRequestExample,
+  executionRecordExample,
+} from '@hypha/core';
 import { describe, expect, it } from 'vitest';
 import type { PostgresExecutionStorePoolClient } from './postgres-execution-store-connection';
 import {
@@ -329,6 +340,215 @@ describe('PostgresExecutionStoreFoundation persistence', () => {
       message: 'Postgres Execution store contains duplicate scoped idempotency records.',
     });
   });
+
+  it('atomically advances a revision and replays the persisted mutation result', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const request = compareAndSetRequestFor(current, 'cas:starting');
+    const firstClient = new ScriptedClient([
+      rows(),
+      rows(),
+      rows(recordRow(current)),
+      rows({ execution_id: current.id }),
+      rows({ execution_id: current.id }),
+    ]);
+    const connection = new ScriptedTransactionPort([firstClient]);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    await expect(store.compareAndSet(request)).resolves.toEqual(request.next);
+    const update = firstClient.commands.find(({ text }) =>
+      text.includes('UPDATE execution_records')
+    );
+    expect(update?.text).toContain('revision = $16');
+    expect(update?.text).toContain('last_fencing_token = $17');
+    expect(update?.text).toContain('NOT EXISTS');
+    expect(update?.values?.slice(-3)).toEqual([current.id, current.revision, 0]);
+
+    const remembered = firstClient.commands.find(({ text }) =>
+      text.includes('INSERT INTO execution_mutation_idempotency')
+    );
+    const requestHash = String(remembered?.values?.[3]);
+    const replayClient = new ScriptedClient([
+      rows(),
+      rows({
+        execution_id: current.id,
+        request_hash: requestHash,
+        result_json: structuredClone(request.next),
+      }),
+    ]);
+    connection.push(replayClient);
+
+    await expect(store.compareAndSet(request)).resolves.toEqual(request.next);
+    expect(replayClient.sql()).not.toContain('FOR UPDATE');
+    expect(replayClient.sql()).not.toContain('UPDATE execution_records');
+  });
+
+  it('serializes mutation idempotency and rejects a reused key with different input', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const request = compareAndSetRequestFor(current, 'cas:conflict');
+    const client = new ScriptedClient([
+      rows(),
+      rows({
+        execution_id: current.id,
+        request_hash: 'sha256:different',
+        result_json: structuredClone(request.next),
+      }),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.compareAndSet(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+      details: { executionId: current.id },
+    });
+    expect(client.commands[0]?.text).toContain('pg_advisory_xact_lock');
+    expect(client.commands[0]?.values).toEqual([request.operationId, request.idempotencyKey]);
+    expect(client.sql()).not.toContain('UPDATE execution_records');
+  });
+
+  it('rejects missing, stale, terminal, and concurrently changed records', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const missing = compareAndSetRequestFor(current, undefined);
+    missing.executionId = 'execution.missing';
+    missing.next.id = missing.executionId;
+    missing.next.request.executionId = missing.executionId;
+
+    const stale = compareAndSetRequestFor(current, undefined, 1, 'running');
+    const terminal = terminalRecord();
+    const afterTerminal = compareAndSetRequestFor(
+      terminal,
+      undefined,
+      terminal.revision,
+      'running'
+    );
+    afterTerminal.next.result = undefined;
+    afterTerminal.next.terminalReceipt = undefined;
+
+    const raced = compareAndSetRequestFor(current, undefined);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows()]),
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(terminal))]),
+        new ScriptedClient([rows(recordRow(current)), rows()]),
+      ])
+    );
+
+    await expect(store.compareAndSet(missing)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_NOT_FOUND',
+    });
+    await expect(store.compareAndSet(stale)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+      details: { expectedRevision: 1, actualRevision: 0 },
+    });
+    await expect(store.compareAndSet(afterTerminal)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_TERMINAL',
+      details: { status: 'completed' },
+    });
+    await expect(store.compareAndSet(raced)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+      message: 'Execution record changed during compare-and-set.',
+    });
+  });
+
+  it('prevents compare-and-set from moving owner identity or idempotency evidence', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const moved = compareAndSetRequestFor(current, undefined);
+    moved.next.request.workspaceId = 'workspace.moved';
+    const refingerprinted = compareAndSetRequestFor(current, undefined);
+    refingerprinted.next.idempotencyFingerprint = 'sha256:fingerprint.changed';
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current))]),
+      ])
+    );
+
+    await expect(store.compareAndSet(moved)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+    });
+    await expect(store.compareAndSet(refingerprinted)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+    });
+  });
+
+  it('enforces lease ownership and fencing while allowing the current worker', async () => {
+    const current = structuredClone(executionRecordExample);
+    if (!current.lease) throw new Error('Execution fixture must include a lease.');
+    const stale = structuredClone(executionRecordCompareAndSetRequestExample);
+    stale.leaseGuard = { ...executionLeaseGuardExample, fencingToken: 2 };
+    stale.next.lease = { ...current.lease, fencingToken: 2 };
+    const valid = structuredClone(executionRecordCompareAndSetRequestExample);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(), rows(), rows(recordRow(current))]),
+        new ScriptedClient([
+          rows(),
+          rows(),
+          rows(recordRow(current)),
+          rows({ execution_id: current.id }),
+          rows({ execution_id: current.id }),
+        ]),
+      ])
+    );
+
+    await expect(store.compareAndSet(stale)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_FENCING_REJECTED',
+      details: { fencingToken: 1 },
+    });
+    await expect(store.compareAndSet(valid)).resolves.toEqual(valid.next);
+  });
+
+  it('preserves an existing Provider terminal receipt checkpoint', async () => {
+    const current = structuredClone(executionRecordExample);
+    current.terminalReceipt = {
+      id: 'receipt.execution.example',
+      providerId: current.providerId,
+      executionId: current.id,
+      status: 'completed',
+      issuedAt: current.updatedAt,
+      receiptHash: 'sha256:receipt.example',
+    };
+    const request = structuredClone(executionRecordCompareAndSetRequestExample);
+    request.next.terminalReceipt = undefined;
+    const client = new ScriptedClient([rows(), rows(), rows(recordRow(current))]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.compareAndSet(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+      message: 'Provider terminal receipt checkpoint is immutable.',
+    });
+  });
+
+  it('quarantines a corrupt CAS source and rejects an invalid mutation replay', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const request = compareAndSetRequestFor(current, undefined);
+    const corruptSource = new ScriptedClient([
+      rows({ ...recordRow(current), provider_id: 'provider.corrupt' }),
+      rows(),
+    ]);
+    const replayRequest = compareAndSetRequestFor(current, 'cas:corrupt-replay');
+    const corruptReplay = new ScriptedClient([
+      rows(),
+      rows({
+        execution_id: current.id,
+        request_hash: hashFromRememberedRequest(replayRequest),
+        result_json: { invalid: true },
+      }),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([corruptSource, corruptReplay])
+    );
+
+    await expect(store.compareAndSet(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      details: { executionId: current.id },
+    });
+    expect(corruptSource.sql()).toContain('INSERT INTO execution_record_quarantine');
+
+    await expect(store.compareAndSet(replayRequest)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      message: 'Execution mutation idempotency record contains an invalid result.',
+    });
+  });
 });
 
 interface ScriptedCommand {
@@ -426,4 +646,47 @@ function recordWithIdentity(id: string, updatedAt: string): ExecutionRecord {
   record.request.executionId = id;
   record.updatedAt = updatedAt;
   return record;
+}
+
+function compareAndSetRequestFor(
+  current: ExecutionRecord,
+  idempotencyKey: string | undefined,
+  expectedRevision = current.revision,
+  status: 'starting' | 'running' = 'starting'
+): ExecutionRecordCompareAndSetRequest {
+  return {
+    operationId: `operation.${idempotencyKey ?? `cas:${current.id}:${expectedRevision}`}`,
+    executionId: current.id,
+    expectedRevision,
+    next: {
+      ...structuredClone(current),
+      revision: expectedRevision + 1,
+      status,
+      attempt: status === 'starting' ? Math.max(1, current.attempt) : current.attempt,
+      updatedAt: new Date(Date.parse(current.updatedAt) + 1_000).toISOString(),
+    },
+    ...(idempotencyKey ? { idempotencyKey } : undefined),
+  };
+}
+
+function terminalRecord(): ExecutionRecord {
+  const current = structuredClone(executionRecordCreateRequestExample.record);
+  return {
+    ...current,
+    revision: 1,
+    status: 'completed',
+    sandboxId: commandExecutionResultExample.sandboxId,
+    attempt: 1,
+    result: {
+      ...structuredClone(commandExecutionResultExample),
+      executionId: current.id,
+      revision: 1,
+      status: 'completed',
+    },
+    updatedAt: '2026-07-16T00:00:02.000Z',
+  };
+}
+
+function hashFromRememberedRequest(request: ExecutionRecordCompareAndSetRequest): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`;
 }
