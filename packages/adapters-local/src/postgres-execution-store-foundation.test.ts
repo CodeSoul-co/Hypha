@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import type {
+  ExecutionLeaseAcquireRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
 } from '@hypha/core';
 import {
   commandExecutionResultExample,
+  executionLeaseAcquireRequestExample,
   executionLeaseGuardExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
@@ -549,6 +551,215 @@ describe('PostgresExecutionStoreFoundation persistence', () => {
       message: 'Execution mutation idempotency record contains an invalid result.',
     });
   });
+
+  it('acquires a durable lease with monotonic fencing and replays the result', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const request = acquireLeaseRequestFor(current, 'lease-acquire:first');
+    const firstClient = new ScriptedClient([
+      rows(),
+      rows(),
+      rows(recordRow(current)),
+      rows(),
+      rows({ lease_id: request.requestedLeaseId }),
+      rows({ execution_id: current.id }),
+      rows({ execution_id: current.id }),
+    ]);
+    const connection = new ScriptedTransactionPort([firstClient]);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    const acquired = await store.acquireLease(request);
+    expect(acquired).toMatchObject({
+      revision: 1,
+      status: 'starting',
+      attempt: 1,
+      lease: {
+        id: request.requestedLeaseId,
+        ownerId: request.ownerId,
+        fencingToken: 1,
+        acquiredAt: request.acquiredAt,
+        heartbeatAt: request.acquiredAt,
+        expiresAt: '2026-07-16T00:00:30.000Z',
+      },
+    });
+    const historyInsert = firstClient.commands.find(({ text }) =>
+      text.includes('INSERT INTO execution_lease_history')
+    );
+    expect(historyInsert?.values).toEqual([
+      request.requestedLeaseId,
+      request.executionId,
+      1,
+      request.ownerId,
+      request.acquiredAt,
+    ]);
+
+    const remembered = firstClient.commands.find(({ text }) =>
+      text.includes('INSERT INTO execution_mutation_idempotency')
+    );
+    const requestHash = String(remembered?.values?.[3]);
+    const replayClient = new ScriptedClient([
+      rows(),
+      rows({
+        execution_id: request.executionId,
+        request_hash: requestHash,
+        result_json: structuredClone(acquired),
+      }),
+    ]);
+    connection.push(replayClient);
+
+    await expect(store.acquireLease(request)).resolves.toEqual(acquired);
+    expect(replayClient.sql()).not.toContain('INSERT INTO execution_lease_history');
+    expect(replayClient.sql()).not.toContain('UPDATE execution_records');
+  });
+
+  it('rejects stale revisions, old timestamps, active leases, and terminal records', async () => {
+    const queued = structuredClone(executionRecordCreateRequestExample.record);
+    const stale = acquireLeaseRequestFor(queued, undefined);
+    stale.expectedRevision = 1;
+    const oldTimestamp = acquireLeaseRequestFor(queued, undefined);
+    oldTimestamp.acquiredAt = '2026-07-15T23:59:59.999Z';
+    const leased = structuredClone(executionRecordExample);
+    const active = acquireLeaseRequestFor(leased, undefined);
+    active.acquiredAt = '2026-07-16T00:00:29.999Z';
+    const terminal = terminalRecord();
+    const terminalRequest = acquireLeaseRequestFor(terminal, undefined);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(queued))]),
+        new ScriptedClient([rows(recordRow(queued))]),
+        new ScriptedClient([rows(recordRow(leased))]),
+        new ScriptedClient([rows(recordRow(terminal))]),
+      ])
+    );
+
+    await expect(store.acquireLease(stale)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+    });
+    await expect(store.acquireLease(oldTimestamp)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+      message: 'Lease acquisition time cannot precede the current Execution revision.',
+    });
+    await expect(store.acquireLease(active)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_LEASE_HELD',
+    });
+    await expect(store.acquireLease(terminalRequest)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_TERMINAL',
+    });
+  });
+
+  it('takes over an expired lease, closes its history, and increments fencing', async () => {
+    const current = structuredClone(executionRecordExample);
+    if (!current.lease) throw new Error('Execution fixture must include a lease.');
+    const request = acquireLeaseRequestFor(current, undefined);
+    request.requestedLeaseId = 'lease.execution.example.takeover';
+    request.ownerId = 'worker.takeover';
+    request.acquiredAt = current.lease.expiresAt;
+    const client = new ScriptedClient([
+      rows(recordRow(current)),
+      rows(),
+      rows({ lease_id: current.lease.id }),
+      rows({ lease_id: request.requestedLeaseId }),
+      rows({ execution_id: current.id }),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.acquireLease(request)).resolves.toMatchObject({
+      revision: 2,
+      status: current.status,
+      attempt: current.attempt,
+      lease: {
+        id: request.requestedLeaseId,
+        ownerId: request.ownerId,
+        fencingToken: 2,
+      },
+    });
+    const closeHistory = client.commands.find(({ text }) =>
+      text.includes('UPDATE execution_lease_history')
+    );
+    expect(closeHistory?.values).toEqual([
+      request.acquiredAt,
+      'expired_and_replaced',
+      current.lease.id,
+      current.id,
+      current.lease.fencingToken,
+    ]);
+    const recordUpdate = client.commands.find(({ text }) =>
+      text.includes('UPDATE execution_records')
+    );
+    expect(recordUpdate?.values?.slice(-3)).toEqual([current.id, current.revision, 1]);
+    expect(recordUpdate?.values?.[12]).toBe(2);
+  });
+
+  it('rejects reused lease identities and an insert race before updating the record', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const reused = acquireLeaseRequestFor(current, undefined);
+    const raced = acquireLeaseRequestFor(current, undefined);
+    raced.requestedLeaseId = 'lease.execution.example.raced';
+    const reusedClient = new ScriptedClient([
+      rows(recordRow(current)),
+      rows({ lease_id: reused.requestedLeaseId }),
+    ]);
+    const racedClient = new ScriptedClient([rows(recordRow(current)), rows(), rows()]);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([reusedClient, racedClient])
+    );
+
+    await expect(store.acquireLease(reused)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_LEASE_ID_CONFLICT',
+    });
+    await expect(store.acquireLease(raced)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_LEASE_ID_CONFLICT',
+    });
+    expect(reusedClient.sql()).not.toContain('UPDATE execution_records');
+    expect(racedClient.sql()).not.toContain('UPDATE execution_records');
+  });
+
+  it('rejects when the fenced record update loses a race after staging lease evidence', async () => {
+    const current = structuredClone(executionRecordCreateRequestExample.record);
+    const request = acquireLeaseRequestFor(current, undefined);
+    const client = new ScriptedClient([
+      rows(recordRow(current)),
+      rows(),
+      rows({ lease_id: request.requestedLeaseId }),
+      rows(),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.acquireLease(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+      message: 'Execution record changed during lease acquisition.',
+    });
+    expect(client.sql()).toContain('INSERT INTO execution_lease_history');
+    expect(client.sql()).toContain('UPDATE execution_records');
+  });
+
+  it('rejects fencing overflow and missing expired-lease history', async () => {
+    const queued = structuredClone(executionRecordCreateRequestExample.record);
+    const overflowRow = {
+      ...recordRow(queued),
+      last_fencing_token: String(Number.MAX_SAFE_INTEGER),
+    };
+    const overflow = acquireLeaseRequestFor(queued, undefined);
+    const leased = structuredClone(executionRecordExample);
+    if (!leased.lease) throw new Error('Execution fixture must include a lease.');
+    const missingHistory = acquireLeaseRequestFor(leased, undefined);
+    missingHistory.requestedLeaseId = 'lease.execution.example.after-missing-history';
+    missingHistory.acquiredAt = leased.lease.expiresAt;
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(overflowRow), rows()]),
+        new ScriptedClient([rows(recordRow(leased)), rows(), rows()]),
+      ])
+    );
+
+    await expect(store.acquireLease(overflow)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+      message: 'Execution fencing token cannot be incremented safely.',
+    });
+    await expect(store.acquireLease(missingHistory)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      message: 'Execution lease history is missing or already closed.',
+    });
+  });
 });
 
 interface ScriptedCommand {
@@ -667,6 +878,26 @@ function compareAndSetRequestFor(
     },
     ...(idempotencyKey ? { idempotencyKey } : undefined),
   };
+}
+
+function acquireLeaseRequestFor(
+  current: ExecutionRecord,
+  idempotencyKey: string | undefined
+): ExecutionLeaseAcquireRequest {
+  const request = structuredClone(executionLeaseAcquireRequestExample);
+  request.executionId = current.id;
+  request.expectedRevision = current.revision;
+  request.acquiredAt = current.updatedAt;
+  request.requestedLeaseId = `lease.${current.id}.next`;
+  request.ownerId = 'worker.postgres.next';
+  if (idempotencyKey) {
+    request.operationId = `operation.${idempotencyKey}`;
+    request.idempotencyKey = idempotencyKey;
+  } else {
+    request.operationId = `operation.lease.acquire.${current.id}.${current.revision}`;
+    request.idempotencyKey = undefined;
+  }
+  return request;
 }
 
 function terminalRecord(): ExecutionRecord {

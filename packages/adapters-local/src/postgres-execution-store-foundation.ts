@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type {
   ExecutionIdempotencyQuery,
   ExecutionIdempotencyResolution,
+  ExecutionLeaseAcquireRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
@@ -12,6 +13,7 @@ import type {
 import {
   validateExecutionIdempotencyQuery,
   validateExecutionIdempotencyResolution,
+  validateExecutionLeaseAcquireRequest,
   validateExecutionRecord,
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
@@ -41,7 +43,9 @@ export type PostgresExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_NOT_FOUND'
   | 'EXECUTION_STORE_REVISION_CONFLICT'
   | 'EXECUTION_STORE_FENCING_REJECTED'
-  | 'EXECUTION_STORE_TERMINAL';
+  | 'EXECUTION_STORE_TERMINAL'
+  | 'EXECUTION_STORE_LEASE_HELD'
+  | 'EXECUTION_STORE_LEASE_ID_CONFLICT';
 
 export class PostgresExecutionStoreFoundationError extends Error {
   constructor(
@@ -260,60 +264,175 @@ export class PostgresExecutionStoreFoundation {
         Number(selected.rows[0]!.last_fencing_token),
         'lastFencingToken'
       );
-      const updated = await client.query(UPDATE_RECORD_SQL, [
-        request.next.revision,
-        request.next.status,
-        request.next.request.tenantId ?? null,
-        request.next.request.userId,
-        request.next.request.workspaceId,
-        request.next.request.runId ?? null,
-        request.next.providerId,
-        request.next.createdAt,
-        request.next.updatedAt,
-        request.next.lease?.expiresAt ?? null,
-        request.next.request.idempotencyKey ?? null,
-        request.next.idempotencyFingerprint ?? null,
-        lastFencingToken,
-        JSON.stringify(request.next),
-        request.executionId,
+      await replaceRecord(
+        client,
+        request.next,
         request.expectedRevision,
         lastFencingToken,
-      ]);
-      if (updated.rows.length !== 1) {
+        lastFencingToken,
+        'Execution record changed during compare-and-set.'
+      );
+      await rememberMutation(client, request, requestHash, request.next);
+      return success(structuredClone(request.next));
+    });
+    if (!result.ok) throw result.error;
+    return result.value;
+  }
+
+  async acquireLease(input: ExecutionLeaseAcquireRequest): Promise<ExecutionRecord> {
+    const request = validateExecutionLeaseAcquireRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    const result = await this.writeOperation<RecordLoadResult>(async (client) => {
+      if (request.idempotencyKey) {
+        await lockMutationIdempotency(client, request.operationId, request.idempotencyKey);
+        const replay = await resolveMutationReplay(client, request, requestHash);
+        if (replay) return replay;
+      }
+
+      const selected = await selectRecordForUpdate(client, request.executionId);
+      if (selected.rows.length === 0) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const loaded = await loadRecord(client, selected.rows[0]!);
+      if (!loaded.ok) return loaded;
+      const current = loaded.value;
+      if (current.revision !== request.expectedRevision) {
         throw storeError(
           'EXECUTION_STORE_REVISION_CONFLICT',
-          'Execution record changed during compare-and-set.',
+          'Execution record revision does not match the expected revision.',
           {
             executionId: request.executionId,
             expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
           }
         );
       }
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw storeError('EXECUTION_STORE_TERMINAL', 'Terminal Execution records are immutable.', {
+          executionId: request.executionId,
+          status: current.status,
+        });
+      }
+      if (Date.parse(request.acquiredAt) < Date.parse(current.updatedAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease acquisition time cannot precede the current Execution revision.',
+          {
+            executionId: request.executionId,
+            acquiredAt: request.acquiredAt,
+            updatedAt: current.updatedAt,
+          }
+        );
+      }
+      if (current.lease && Date.parse(current.lease.expiresAt) > Date.parse(request.acquiredAt)) {
+        throw storeError('EXECUTION_STORE_LEASE_HELD', 'Execution lease is still active.', {
+          executionId: request.executionId,
+          leaseId: current.lease.id,
+          expiresAt: current.lease.expiresAt,
+        });
+      }
+      const existingLease = await client.query(
+        `SELECT lease_id
+           FROM execution_lease_history
+          WHERE lease_id = $1`,
+        [request.requestedLeaseId]
+      );
+      if (existingLease.rows.length > 0) {
+        throw storeError(
+          'EXECUTION_STORE_LEASE_ID_CONFLICT',
+          'Execution lease id has already been used.',
+          { executionId: request.executionId, leaseId: request.requestedLeaseId }
+        );
+      }
 
-      if (request.idempotencyKey) {
-        const remembered = await client.query(
-          `INSERT INTO execution_mutation_idempotency
-             (operation_id, idempotency_key, execution_id, request_hash, result_json)
-           VALUES ($1, $2, $3, $4, $5::jsonb)
-           ON CONFLICT (operation_id, idempotency_key) DO NOTHING
-           RETURNING execution_id`,
+      const previousFencingToken = nonNegativeSafeInteger(
+        Number(selected.rows[0]!.last_fencing_token),
+        'lastFencingToken'
+      );
+      const fencingToken = previousFencingToken + 1;
+      if (!Number.isSafeInteger(fencingToken)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Execution fencing token cannot be incremented safely.',
+          { executionId: request.executionId, previousFencingToken }
+        );
+      }
+      const next = validateExecutionRecord({
+        ...current,
+        revision: current.revision + 1,
+        status: current.status === 'queued' ? 'starting' : current.status,
+        attempt: current.status === 'queued' ? current.attempt + 1 : current.attempt,
+        lease: {
+          id: request.requestedLeaseId,
+          executionId: request.executionId,
+          ownerId: request.ownerId,
+          fencingToken,
+          acquiredAt: request.acquiredAt,
+          heartbeatAt: request.acquiredAt,
+          expiresAt: leaseExpiry(request.acquiredAt, request.ttlMs),
+        },
+        updatedAt: request.acquiredAt,
+      });
+
+      if (current.lease) {
+        const closed = await client.query(
+          `UPDATE execution_lease_history
+              SET released_at = $1,
+                  release_reason = $2
+            WHERE lease_id = $3
+              AND execution_id = $4
+              AND fencing_token = $5
+              AND released_at IS NULL
+          RETURNING lease_id`,
           [
-            request.operationId,
-            request.idempotencyKey,
-            request.executionId,
-            requestHash,
-            JSON.stringify(request.next),
+            request.acquiredAt,
+            'expired_and_replaced',
+            current.lease.id,
+            current.lease.executionId,
+            current.lease.fencingToken,
           ]
         );
-        if (remembered.rows.length !== 1) {
+        if (closed.rows.length !== 1) {
           throw storeError(
-            'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
-            'Execution mutation idempotency key was reused with different input.',
-            { executionId: request.executionId }
+            'EXECUTION_STORE_CORRUPT',
+            'Execution lease history is missing or already closed.',
+            { executionId: request.executionId, leaseId: current.lease.id }
           );
         }
       }
-      return success(structuredClone(request.next));
+      const insertedLease = await client.query(
+        `INSERT INTO execution_lease_history
+           (lease_id, execution_id, fencing_token, owner_id, acquired_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (lease_id) DO NOTHING
+         RETURNING lease_id`,
+        [
+          request.requestedLeaseId,
+          request.executionId,
+          fencingToken,
+          request.ownerId,
+          request.acquiredAt,
+        ]
+      );
+      if (insertedLease.rows.length !== 1) {
+        throw storeError(
+          'EXECUTION_STORE_LEASE_ID_CONFLICT',
+          'Execution lease id has already been used.',
+          { executionId: request.executionId, leaseId: request.requestedLeaseId }
+        );
+      }
+      await replaceRecord(
+        client,
+        next,
+        request.expectedRevision,
+        previousFencingToken,
+        fencingToken,
+        'Execution record changed during lease acquisition.'
+      );
+      await rememberMutation(client, request, requestHash, next);
+      return success(structuredClone(next));
     });
     if (!result.ok) throw result.error;
     return result.value;
@@ -418,7 +537,7 @@ async function lockMutationIdempotency(
 
 async function resolveMutationReplay(
   client: PostgresExecutionStorePoolClient,
-  request: ExecutionRecordCompareAndSetRequest,
+  request: MutationRequestIdentity,
   requestHash: string
 ): Promise<RecordLoadResult | null> {
   if (!request.idempotencyKey) return null;
@@ -451,6 +570,12 @@ async function resolveMutationReplay(
       { executionId: request.executionId }
     );
   }
+}
+
+interface MutationRequestIdentity {
+  operationId: string;
+  executionId: string;
+  idempotencyKey?: string;
 }
 
 async function selectRecord(
@@ -639,6 +764,80 @@ function assertTerminalReceiptContinuity(current: ExecutionRecord, next: Executi
       { executionId: current.id }
     );
   }
+}
+
+async function replaceRecord(
+  client: PostgresExecutionStorePoolClient,
+  next: ExecutionRecord,
+  expectedRevision: number,
+  expectedFencingToken: number,
+  nextFencingToken: number,
+  conflictMessage: string
+): Promise<void> {
+  const updated = await client.query(UPDATE_RECORD_SQL, [
+    next.revision,
+    next.status,
+    next.request.tenantId ?? null,
+    next.request.userId,
+    next.request.workspaceId,
+    next.request.runId ?? null,
+    next.providerId,
+    next.createdAt,
+    next.updatedAt,
+    next.lease?.expiresAt ?? null,
+    next.request.idempotencyKey ?? null,
+    next.idempotencyFingerprint ?? null,
+    nextFencingToken,
+    JSON.stringify(next),
+    next.id,
+    expectedRevision,
+    expectedFencingToken,
+  ]);
+  if (updated.rows.length !== 1) {
+    throw storeError('EXECUTION_STORE_REVISION_CONFLICT', conflictMessage, {
+      executionId: next.id,
+      expectedRevision,
+    });
+  }
+}
+
+async function rememberMutation(
+  client: PostgresExecutionStorePoolClient,
+  request: MutationRequestIdentity,
+  requestHash: string,
+  result: ExecutionRecord
+): Promise<void> {
+  if (!request.idempotencyKey) return;
+  const remembered = await client.query(
+    `INSERT INTO execution_mutation_idempotency
+       (operation_id, idempotency_key, execution_id, request_hash, result_json)
+     VALUES ($1, $2, $3, $4, $5::jsonb)
+     ON CONFLICT (operation_id, idempotency_key) DO NOTHING
+     RETURNING execution_id`,
+    [
+      request.operationId,
+      request.idempotencyKey,
+      request.executionId,
+      requestHash,
+      JSON.stringify(result),
+    ]
+  );
+  if (remembered.rows.length !== 1) {
+    throw storeError(
+      'EXECUTION_STORE_IDEMPOTENCY_CONFLICT',
+      'Execution mutation idempotency key was reused with different input.',
+      { executionId: request.executionId }
+    );
+  }
+}
+
+function leaseExpiry(acquiredAt: string, ttlMs: number): string {
+  const expiry = Date.parse(acquiredAt) + ttlMs;
+  const date = new Date(expiry);
+  if (!Number.isSafeInteger(expiry) || Number.isNaN(date.getTime())) {
+    throw storeError('EXECUTION_STORE_CONFLICT', 'Lease expiry must be a safe timestamp.');
+  }
+  return date.toISOString();
 }
 
 function recordParameters(record: ExecutionRecord): readonly unknown[] {
