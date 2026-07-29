@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   executionLeaseAcquireRequestExample,
+  executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
 } from '@hypha/core';
@@ -13,6 +14,9 @@ import { PostgresExecutionStoreFoundation } from './postgres-execution-store-fou
 import { POSTGRES_EXECUTION_STORE_SCHEMA_VERSION } from './postgres-execution-store-schema';
 
 const dockerPath = process.env.HYPHA_REAL_DOCKER_PATH ?? 'docker';
+const dockerHost =
+  process.env.HYPHA_REAL_DOCKER_HOST ??
+  (process.platform === 'win32' ? 'npipe:////./pipe/dockerDesktopLinuxEngine' : undefined);
 const postgresImage = process.env.HYPHA_REAL_POSTGRES_IMAGE ?? 'postgres:16-alpine';
 const postgresDigest =
   process.env.HYPHA_REAL_POSTGRES_DIGEST ??
@@ -28,7 +32,7 @@ let containerCreated = false;
 beforeAll(async () => {
   const image = pinnedImageReference(postgresImage, postgresDigest);
   port = await findAvailableLoopbackPort();
-  await requireDocker(['image', 'inspect', image]);
+  await requireDockerImage(image);
   await requireDocker([
     'run',
     '-d',
@@ -327,6 +331,97 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await Promise.all([workerA.store.close(), workerB.store.close()]);
     }
   }, 30_000);
+
+  it('renews a real lease while rejecting a forged owner guard', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-renew';
+    createRequest.idempotencyKey = 'execution-create:execution.real.renew';
+    createRequest.record.id = 'execution.real.renew';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.renew';
+    createRequest.record.request.idempotencyKey = 'command:run.real:renew';
+    const acquireRequest = structuredClone(executionLeaseAcquireRequestExample);
+    acquireRequest.operationId = 'operation.lease.acquire.real-renew';
+    acquireRequest.executionId = createRequest.record.id;
+    acquireRequest.expectedRevision = 0;
+    acquireRequest.requestedLeaseId = 'lease.execution.real.renew.1';
+    acquireRequest.ownerId = 'runtime-worker.real.renew';
+    acquireRequest.acquiredAt = '2026-07-16T00:00:02.000Z';
+    acquireRequest.idempotencyKey = 'lease-acquire:execution.real.renew:1';
+    const fixture = createRealStore('lease-renew');
+
+    try {
+      await fixture.connection.initialize();
+      await fixture.store.create(createRequest);
+      const claimed = await fixture.store.acquireLease(acquireRequest);
+      if (!claimed.lease) throw new Error('Real Postgres claim did not return a lease.');
+      const lease = claimed.lease;
+
+      const forgedRenew = structuredClone(executionLeaseRenewRequestExample);
+      forgedRenew.operationId = 'operation.lease.renew.real-forged';
+      forgedRenew.executionId = createRequest.record.id;
+      forgedRenew.expectedRevision = claimed.revision;
+      forgedRenew.leaseGuard = {
+        leaseId: lease.id,
+        ownerId: 'runtime-worker.real.attacker',
+        fencingToken: lease.fencingToken,
+      };
+      forgedRenew.heartbeatAt = '2026-07-16T00:00:10.000Z';
+      forgedRenew.idempotencyKey = 'lease-renew:execution.real.renew:forged';
+      await expect(fixture.store.renewLease(forgedRenew)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_FENCING_REJECTED',
+        details: {
+          executionId: createRequest.record.id,
+          fencingToken: lease.fencingToken,
+        },
+      });
+
+      const validRenew = structuredClone(forgedRenew);
+      validRenew.operationId = 'operation.lease.renew.real-valid';
+      validRenew.leaseGuard.ownerId = lease.ownerId;
+      validRenew.idempotencyKey = 'lease-renew:execution.real.renew:valid';
+      const renewed = await fixture.store.renewLease(validRenew);
+
+      expect(renewed).toMatchObject({
+        id: createRequest.record.id,
+        revision: 2,
+        lease: {
+          id: lease.id,
+          ownerId: lease.ownerId,
+          fencingToken: lease.fencingToken,
+          heartbeatAt: validRenew.heartbeatAt,
+          expiresAt: '2026-07-16T00:00:40.000Z',
+        },
+        updatedAt: validRenew.heartbeatAt,
+      });
+      const evidence = await fixture.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             records.revision,
+             records.last_fencing_token,
+             history.released_at,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count
+           FROM execution_records AS records
+           JOIN execution_lease_history AS history
+             ON history.execution_id = records.execution_id
+            AND history.lease_id = $2
+          WHERE records.execution_id = $1`,
+          [createRequest.record.id, lease.id]
+        )
+      );
+      expect(evidence.rows).toEqual([
+        {
+          revision: '2',
+          last_fencing_token: '1',
+          released_at: null,
+          mutation_count: '2',
+        },
+      ]);
+    } finally {
+      await fixture.store.close();
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
@@ -375,14 +470,41 @@ async function waitForPostgres(): Promise<void> {
 
 async function requireDocker(args: string[]): Promise<DockerCliResult> {
   const result = await runDocker(args);
-  expect(result.outcome).toBe('exited');
-  expect(result.exitCode).toBe(0);
+  assertDockerSuccess(result);
   return result;
+}
+
+async function requireDockerImage(image: string): Promise<void> {
+  let result: DockerCliResult | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    result = await runDocker(['image', 'inspect', image]);
+    if (result.outcome === 'exited' && result.exitCode === 0) return;
+    if (attempt < 4) await delay(500);
+  }
+  if (!result) throw new Error('Docker image inspection did not run.');
+  assertDockerSuccess(result);
+}
+
+function assertDockerSuccess(result: DockerCliResult): void {
+  const diagnostic = dockerDiagnostic(result);
+  expect(result.outcome, diagnostic).toBe('exited');
+  expect(result.exitCode, diagnostic).toBe(0);
+}
+
+function dockerDiagnostic(result: DockerCliResult): string {
+  const stderr = result.stderr.replaceAll(password, '[redacted]').trim().slice(0, 1_024);
+  return [
+    'Docker fixture command failed.',
+    `outcome=${result.outcome}`,
+    `exitCode=${String(result.exitCode)}`,
+    ...(result.startErrorCode ? [`startErrorCode=${result.startErrorCode}`] : []),
+    ...(stderr ? [`stderr=${stderr}`] : []),
+  ].join(' ');
 }
 
 function runDocker(args: string[]): Promise<DockerCliResult> {
   return docker.run({
-    args,
+    args: dockerHost ? ['--host', dockerHost, ...args] : args,
     timeoutMs: 30_000,
     maxStdoutBytes: 1024 * 1024,
     maxStderrBytes: 1024 * 1024,
