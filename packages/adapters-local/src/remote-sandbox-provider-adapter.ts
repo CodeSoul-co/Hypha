@@ -8,6 +8,8 @@ import {
   validateRemoteArtifactDownloadRequest,
   validateRemoteArtifactTransferReceipt,
   validateRemoteArtifactUploadRequest,
+  validateRemoteExecutionReconciliationRequest,
+  validateRemoteExecutionReconciliationResult,
   validateRemoteOutputStreamRequest,
   validateRemoteSandboxProviderCapabilities,
   validateSandboxCleanupRequest,
@@ -24,6 +26,8 @@ import {
   type RemoteArtifactDownloadRequest,
   type RemoteArtifactTransferReceipt,
   type RemoteArtifactUploadRequest,
+  type RemoteExecutionReconciliationRequest,
+  type RemoteExecutionReconciliationResult,
   type RemoteOutputStreamRequest,
   type RemoteSandboxProvider,
   type RemoteSandboxProviderCapabilities,
@@ -46,6 +50,7 @@ export interface RemoteSandboxTransport {
   create(request: SandboxCreateRequest): Promise<unknown>;
   start(request: SandboxStartRequest): Promise<unknown>;
   execute(request: CommandExecutionRequest): Promise<unknown>;
+  reconcileExecution(request: RemoteExecutionReconciliationRequest): Promise<unknown>;
   cancel(request: ExecutionCancelRequest): Promise<void>;
   terminate(request: SandboxTerminateRequest): Promise<void>;
   status(request: SandboxStatusRequest): Promise<unknown>;
@@ -112,6 +117,7 @@ type RemoteOperationPhase =
   | 'create'
   | 'start'
   | 'execute'
+  | 'reconcileExecution'
   | 'cancel'
   | 'terminate'
   | 'status'
@@ -191,6 +197,37 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
     }
     if (request.sandboxId !== undefined && result.sandboxId !== request.sandboxId) {
       throw this.invalidResponse('execute', 'sandboxId does not match the request.');
+    }
+    return result;
+  }
+
+  async reconcileExecution(
+    input: RemoteExecutionReconciliationRequest
+  ): Promise<RemoteExecutionReconciliationResult> {
+    this.assertOpen();
+    const request = validateRemoteExecutionReconciliationRequest(input);
+    const result = await this.parseResponse('reconcileExecution', async () =>
+      validateRemoteExecutionReconciliationResult(
+        await this.transport.reconcileExecution(request)
+      )
+    );
+    if (
+      result.executionId !== request.executionId ||
+      result.sandboxId !== request.sandboxId ||
+      (request.providerExecutionRef !== undefined &&
+        result.providerExecutionRef !== undefined &&
+        result.providerExecutionRef !== request.providerExecutionRef)
+    ) {
+      throw this.invalidResponse(
+        'reconcileExecution',
+        'Remote execution reconciliation identity does not match the request.'
+      );
+    }
+    if (result.receipt && result.receipt.providerId !== this.id) {
+      throw this.invalidResponse(
+        'reconcileExecution',
+        'Remote execution reconciliation receipt does not match the Provider.'
+      );
     }
     return result;
   }
@@ -499,6 +536,7 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
 function isReadOnlyPhase(phase: RemoteOperationPhase): boolean {
   return (
     phase === 'capabilities' ||
+    phase === 'reconcileExecution' ||
     phase === 'status' ||
     phase === 'health' ||
     phase === 'streamOutput' ||

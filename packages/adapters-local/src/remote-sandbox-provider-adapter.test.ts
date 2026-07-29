@@ -8,6 +8,8 @@ import {
   remoteArtifactDownloadRequestExample,
   remoteArtifactTransferReceiptExample,
   remoteArtifactUploadRequestExample,
+  remoteExecutionReconciliationRequestExample,
+  remoteExecutionReconciliationResultExample,
   remoteOutputStreamRequestExample,
   remoteSandboxProviderCapabilitiesExample,
   sandboxCreateRequestExample,
@@ -249,6 +251,79 @@ describe('RemoteSandboxProviderAdapter', () => {
     });
   });
 
+  it('validates remote reconciliation identity and Provider receipt evidence', async () => {
+    const transport = createTransport();
+    const provider = new RemoteSandboxProviderAdapter({ id: providerId, transport });
+    const request = {
+      ...remoteExecutionReconciliationRequestExample,
+      sandboxId: sandboxRecordExample.id,
+    };
+    transport.reconcileExecution.mockResolvedValueOnce({
+      ...remoteExecutionReconciliationResultExample,
+      executionId: request.executionId,
+      sandboxId: request.sandboxId,
+      providerExecutionRef: request.providerExecutionRef,
+      result: {
+        ...remoteExecutionReconciliationResultExample.result,
+        executionId: request.executionId,
+        sandboxId: request.sandboxId,
+      },
+      receipt: {
+        ...remoteExecutionReconciliationResultExample.receipt,
+        providerId,
+        executionId: request.executionId,
+        providerExecutionRef: request.providerExecutionRef,
+      },
+    });
+
+    await expect(provider.reconcileExecution(request)).resolves.toMatchObject({
+      state: 'completed',
+      executionId: request.executionId,
+      sandboxId: request.sandboxId,
+    });
+
+    transport.reconcileExecution.mockResolvedValueOnce({
+      ...remoteExecutionReconciliationResultExample,
+      executionId: 'execution.other',
+    });
+    await expect(provider.reconcileExecution(request)).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_INTERNAL_ERROR',
+        details: {
+          phase: 'reconcileExecution',
+          evidenceCode: 'REMOTE_PROVIDER_RESPONSE_INVALID',
+        },
+      },
+    });
+
+    transport.reconcileExecution.mockResolvedValueOnce({
+      ...remoteExecutionReconciliationResultExample,
+      executionId: request.executionId,
+      sandboxId: request.sandboxId,
+      providerExecutionRef: request.providerExecutionRef,
+      result: {
+        ...remoteExecutionReconciliationResultExample.result,
+        executionId: request.executionId,
+        sandboxId: request.sandboxId,
+      },
+      receipt: {
+        ...remoteExecutionReconciliationResultExample.receipt,
+        providerId: 'provider.remote.other',
+        executionId: request.executionId,
+        providerExecutionRef: request.providerExecutionRef,
+      },
+    });
+    await expect(provider.reconcileExecution(request)).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_INTERNAL_ERROR',
+        details: {
+          phase: 'reconcileExecution',
+          evidenceCode: 'REMOTE_PROVIDER_RESPONSE_INVALID',
+        },
+      },
+    });
+  });
+
   it('treats unclassified mutating failures as unknown instead of replayable', async () => {
     const transport = createTransport();
     const provider = new RemoteSandboxProviderAdapter({ id: providerId, transport });
@@ -279,6 +354,7 @@ function createTransport() {
     create: vi.fn().mockImplementation(async (request) => remoteRecord(request)),
     start: vi.fn().mockResolvedValue({ ...sandboxRecordExample, providerId }),
     execute: vi.fn().mockResolvedValue(commandExecutionResultExample),
+    reconcileExecution: vi.fn().mockResolvedValue(remoteExecutionReconciliationResultExample),
     cancel: vi.fn().mockResolvedValue(undefined),
     terminate: vi.fn().mockResolvedValue(undefined),
     status: vi.fn().mockResolvedValue({ ...sandboxRecordExample, providerId }),
