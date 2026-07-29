@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
@@ -10,6 +11,7 @@ import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionLeaseGuardExample,
+  executionLeaseReleaseRequestExample,
   executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
@@ -911,6 +913,150 @@ describe('PostgresExecutionStoreFoundation persistence', () => {
     expect(client.sql()).toContain('FOR UPDATE OF records');
     expect(client.sql()).toContain('UPDATE execution_records');
   });
+
+  it('releases a fenced lease, closes its history, and replays the result', async () => {
+    const current = structuredClone(executionRecordExample);
+    const request = releaseLeaseRequestFor(current, 'lease-release:first');
+    const firstClient = new ScriptedClient([
+      rows(),
+      rows(),
+      rows(recordRow(current)),
+      rows({ lease_id: request.leaseGuard.leaseId }),
+      rows({ execution_id: current.id }),
+      rows({ execution_id: current.id }),
+    ]);
+    const connection = new ScriptedTransactionPort([firstClient]);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    const released = await store.releaseLease(request);
+    expect(released).toEqual({
+      ...current,
+      revision: current.revision + 1,
+      lease: undefined,
+      updatedAt: request.releasedAt,
+    });
+    const historyUpdate = firstClient.commands.find(({ text }) =>
+      text.includes('UPDATE execution_lease_history')
+    );
+    expect(historyUpdate?.values).toEqual([
+      request.releasedAt,
+      request.reason,
+      request.leaseGuard.leaseId,
+      request.executionId,
+      request.leaseGuard.fencingToken,
+    ]);
+    const recordUpdate = firstClient.commands.find(({ text }) =>
+      text.includes('UPDATE execution_records')
+    );
+    expect(recordUpdate?.values?.slice(-3)).toEqual([current.id, current.revision, 1]);
+    expect(recordUpdate?.values?.[12]).toBe(1);
+
+    const remembered = firstClient.commands.find(({ text }) =>
+      text.includes('INSERT INTO execution_mutation_idempotency')
+    );
+    const replayClient = new ScriptedClient([
+      rows(),
+      rows({
+        execution_id: current.id,
+        request_hash: String(remembered?.values?.[3]),
+        result_json: structuredClone(released),
+      }),
+    ]);
+    connection.push(replayClient);
+
+    await expect(store.releaseLease(request)).resolves.toEqual(released);
+    expect(replayClient.sql()).not.toContain('UPDATE execution_lease_history');
+    expect(replayClient.sql()).not.toContain('UPDATE execution_records');
+  });
+
+  it('releases a terminal lease without changing its terminal result', async () => {
+    const current = terminalLeasedRecord();
+    const request = releaseLeaseRequestFor(current, undefined);
+    request.reason = undefined;
+    const client = new ScriptedClient([
+      rows(recordRow(current)),
+      rows({ lease_id: request.leaseGuard.leaseId }),
+      rows({ execution_id: current.id }),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    const released = await store.releaseLease(request);
+    expect(released.status).toBe('completed');
+    expect(released.result).toEqual(current.result);
+    expect(released.terminalReceipt).toEqual(current.terminalReceipt);
+    expect(released.lease).toBeUndefined();
+    const historyUpdate = client.commands.find(({ text }) =>
+      text.includes('UPDATE execution_lease_history')
+    );
+    expect(historyUpdate?.values?.[1]).toBeNull();
+  });
+
+  it('rejects releases for missing leases, stale revisions, and stale fencing', async () => {
+    const queued = structuredClone(executionRecordCreateRequestExample.record);
+    const missingLease = releaseLeaseRequestFor(queued, undefined);
+    const current = structuredClone(executionRecordExample);
+    const staleRevision = releaseLeaseRequestFor(current, undefined);
+    staleRevision.expectedRevision = current.revision - 1;
+    const staleFencing = releaseLeaseRequestFor(current, undefined);
+    staleFencing.leaseGuard.fencingToken += 1;
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(queued))]),
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current))]),
+      ])
+    );
+
+    await expect(store.releaseLease(missingLease)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_LEASE_LOST',
+    });
+    await expect(store.releaseLease(staleRevision)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+    });
+    await expect(store.releaseLease(staleFencing)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_FENCING_REJECTED',
+    });
+  });
+
+  it('rejects time-regressing releases and missing lease history', async () => {
+    const current = structuredClone(executionRecordExample);
+    const timeRegression = releaseLeaseRequestFor(current, undefined);
+    timeRegression.releasedAt = '2026-07-16T00:00:00.999Z';
+    const missingHistory = releaseLeaseRequestFor(current, undefined);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current)), rows()]),
+      ])
+    );
+
+    await expect(store.releaseLease(timeRegression)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+      message: 'Lease release time cannot precede the current Execution revision.',
+    });
+    await expect(store.releaseLease(missingHistory)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CORRUPT',
+      message: 'Execution lease history is missing or already closed.',
+    });
+  });
+
+  it('rejects release when the fenced record update loses a race after closing history', async () => {
+    const current = structuredClone(executionRecordExample);
+    const request = releaseLeaseRequestFor(current, undefined);
+    const client = new ScriptedClient([
+      rows(recordRow(current)),
+      rows({ lease_id: request.leaseGuard.leaseId }),
+      rows(),
+    ]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.releaseLease(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+      message: 'Execution record changed during lease release.',
+    });
+    expect(client.sql()).toContain('UPDATE execution_lease_history');
+    expect(client.sql()).toContain('UPDATE execution_records');
+  });
 });
 
 interface ScriptedCommand {
@@ -1075,6 +1221,30 @@ function renewLeaseRequestFor(
   return request;
 }
 
+function releaseLeaseRequestFor(
+  current: ExecutionRecord,
+  idempotencyKey: string | undefined
+): ExecutionLeaseReleaseRequest {
+  const request = structuredClone(executionLeaseReleaseRequestExample);
+  request.executionId = current.id;
+  request.expectedRevision = current.revision;
+  request.leaseGuard = current.lease
+    ? {
+        leaseId: current.lease.id,
+        ownerId: current.lease.ownerId,
+        fencingToken: current.lease.fencingToken,
+      }
+    : structuredClone(executionLeaseGuardExample);
+  if (idempotencyKey) {
+    request.operationId = `operation.${idempotencyKey}`;
+    request.idempotencyKey = idempotencyKey;
+  } else {
+    request.operationId = `operation.lease.release.${current.id}.${current.revision}`;
+    request.idempotencyKey = undefined;
+  }
+  return request;
+}
+
 function terminalRecord(): ExecutionRecord {
   const current = structuredClone(executionRecordCreateRequestExample.record);
   return {
@@ -1090,6 +1260,28 @@ function terminalRecord(): ExecutionRecord {
       status: 'completed',
     },
     updatedAt: '2026-07-16T00:00:02.000Z',
+  };
+}
+
+function terminalLeasedRecord(): ExecutionRecord {
+  const current = structuredClone(executionRecordExample);
+  return {
+    ...current,
+    status: 'completed',
+    result: {
+      ...structuredClone(commandExecutionResultExample),
+      executionId: current.id,
+      revision: current.revision,
+      status: 'completed',
+    },
+    terminalReceipt: {
+      id: 'receipt.execution.example',
+      providerId: current.providerId,
+      executionId: current.id,
+      status: 'completed',
+      issuedAt: current.updatedAt,
+      receiptHash: 'sha256:receipt.example',
+    },
   };
 }
 

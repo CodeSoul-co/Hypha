@@ -5,6 +5,7 @@ import type {
   ExecutionIdempotencyResolution,
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseGuard,
+  ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
@@ -16,6 +17,7 @@ import {
   validateExecutionIdempotencyQuery,
   validateExecutionIdempotencyResolution,
   validateExecutionLeaseAcquireRequest,
+  validateExecutionLeaseReleaseRequest,
   validateExecutionLeaseRenewRequest,
   validateExecutionRecord,
   validateExecutionRecordCompareAndSetRequest,
@@ -381,30 +383,7 @@ export class PostgresExecutionStoreFoundation {
       });
 
       if (current.lease) {
-        const closed = await client.query(
-          `UPDATE execution_lease_history
-              SET released_at = $1,
-                  release_reason = $2
-            WHERE lease_id = $3
-              AND execution_id = $4
-              AND fencing_token = $5
-              AND released_at IS NULL
-          RETURNING lease_id`,
-          [
-            request.acquiredAt,
-            'expired_and_replaced',
-            current.lease.id,
-            current.lease.executionId,
-            current.lease.fencingToken,
-          ]
-        );
-        if (closed.rows.length !== 1) {
-          throw storeError(
-            'EXECUTION_STORE_CORRUPT',
-            'Execution lease history is missing or already closed.',
-            { executionId: request.executionId, leaseId: current.lease.id }
-          );
-        }
+        await closeLeaseHistory(client, current.lease, request.acquiredAt, 'expired_and_replaced');
       }
       const insertedLease = await client.query(
         `INSERT INTO execution_lease_history
@@ -538,6 +517,81 @@ export class PostgresExecutionStoreFoundation {
         fencingToken,
         fencingToken,
         'Execution record changed during lease renewal.'
+      );
+      await rememberMutation(client, request, requestHash, next);
+      return success(structuredClone(next));
+    });
+    if (!result.ok) throw result.error;
+    return result.value;
+  }
+
+  async releaseLease(input: ExecutionLeaseReleaseRequest): Promise<ExecutionRecord> {
+    const request = validateExecutionLeaseReleaseRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    const result = await this.writeOperation<RecordLoadResult>(async (client) => {
+      if (request.idempotencyKey) {
+        await lockMutationIdempotency(client, request.operationId, request.idempotencyKey);
+        const replay = await resolveMutationReplay(client, request, requestHash);
+        if (replay) return replay;
+      }
+
+      const selected = await selectRecordForUpdate(client, request.executionId);
+      if (selected.rows.length === 0) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const loaded = await loadRecord(client, selected.rows[0]!);
+      if (!loaded.ok) return loaded;
+      const current = loaded.value;
+      if (current.revision !== request.expectedRevision) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
+        );
+      }
+      const lease = current.lease;
+      if (!lease) {
+        throw storeError('EXECUTION_STORE_LEASE_LOST', 'Execution has no active lease.', {
+          executionId: request.executionId,
+        });
+      }
+      assertLeaseGuard(lease, request.leaseGuard, request.executionId);
+      if (Date.parse(request.releasedAt) < Date.parse(current.updatedAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease release time cannot precede the current Execution revision.',
+          {
+            executionId: request.executionId,
+            releasedAt: request.releasedAt,
+            updatedAt: current.updatedAt,
+          }
+        );
+      }
+
+      const next = validateExecutionRecord({
+        ...current,
+        revision: current.revision + 1,
+        lease: undefined,
+        updatedAt: request.releasedAt,
+      });
+      await closeLeaseHistory(client, lease, request.releasedAt, request.reason ?? null);
+      const fencingToken = nonNegativeSafeInteger(
+        Number(selected.rows[0]!.last_fencing_token),
+        'lastFencingToken'
+      );
+      await replaceRecord(
+        client,
+        next,
+        request.expectedRevision,
+        fencingToken,
+        fencingToken,
+        'Execution record changed during lease release.'
       );
       await rememberMutation(client, request, requestHash, next);
       return success(structuredClone(next));
@@ -888,6 +942,32 @@ function assertLeaseGuard(
       'EXECUTION_STORE_FENCING_REJECTED',
       'Execution lease or fencing token is stale.',
       { executionId, fencingToken: lease.fencingToken }
+    );
+  }
+}
+
+async function closeLeaseHistory(
+  client: PostgresExecutionStorePoolClient,
+  lease: NonNullable<ExecutionRecord['lease']>,
+  releasedAt: string,
+  reason: string | null
+): Promise<void> {
+  const closed = await client.query(
+    `UPDATE execution_lease_history
+        SET released_at = $1,
+            release_reason = $2
+      WHERE lease_id = $3
+        AND execution_id = $4
+        AND fencing_token = $5
+        AND released_at IS NULL
+    RETURNING lease_id`,
+    [releasedAt, reason, lease.id, lease.executionId, lease.fencingToken]
+  );
+  if (closed.rows.length !== 1) {
+    throw storeError(
+      'EXECUTION_STORE_CORRUPT',
+      'Execution lease history is missing or already closed.',
+      { executionId: lease.executionId, leaseId: lease.id }
     );
   }
 }
