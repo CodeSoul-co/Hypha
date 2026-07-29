@@ -887,6 +887,7 @@ export * from './memory-server-permanent-migration-acceptance';
 export * from './provider-reconciliation';
 export * from './provider-operational-health';
 export * from './provider-governance';
+export * from './provider-return-evidence';
 export * from './provider-observability';
 export * from './memory-utils';
 export * from './external-provider-url';
@@ -932,6 +933,8 @@ export * from './integration-schema';
 export * from './integration-json-schema';
 export * from './managed-search-cache';
 export * from './context-cache-validity';
+export * from './memory-projection-invalidation';
+export * from './memory-operational-metrics';
 
 export * from './hybrid';
 export * from './memory-server-migration-rehearsal';

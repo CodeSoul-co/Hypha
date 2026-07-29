@@ -53,6 +53,9 @@ export function createMem0PlatformMemoryProviderFactory(
         operationStore,
         operationDeadlineMs: readNumber(config, 'operationDeadlineMs'),
         maxOperationAttempts: readNumber(config, 'maxOperationAttempts'),
+        providerVersion: readString(config, 'providerVersion'),
+        expectedProviderVersion: readString(config, 'expectedProviderVersion'),
+        expectedCapabilities: context.spec.capabilities,
       });
       return managedInstallation(
         new Mem0MemoryManagementAdapter({

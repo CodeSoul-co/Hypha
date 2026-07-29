@@ -23,6 +23,12 @@ import {
   type MemoryApplicationService,
 } from './memory-application-service';
 import type { MemoryEventContext } from './memory-events';
+import {
+  CachedMemoryManagementProvider,
+  type CachedMemoryManagementProviderOptions,
+} from './managed-search-cache';
+import type { MemoryOperationalMetrics } from './memory-operational-metrics';
+import type { MemoryProjectionInvalidationPort } from './memory-projection-invalidation';
 import { memoryError, sha256 } from './memory-utils';
 import type { MemoryManagementProvider } from './operations';
 import {
@@ -207,6 +213,15 @@ interface MemoryRuntimeRequestContext {
   scope: ManagedMemoryScope;
 }
 
+export type MemoryRuntimeSearchCacheOptions = Omit<
+  CachedMemoryManagementProviderOptions,
+  | 'provider'
+  | 'providerRevision'
+  | 'requiredScopeFields'
+  | 'cacheAuthorization'
+  | 'requireCacheAuthorization'
+>;
+
 export interface MemoryRuntimeFactoryOptions {
   registry: MemoryManagementProviderRegistry;
   activities: DefaultMemoryActivityPortOptions;
@@ -215,7 +230,10 @@ export interface MemoryRuntimeFactoryOptions {
   contextGateway?: ContextInjectionGateway;
   reconciliationStore?: MemoryLifecycleTaskStore;
   telemetry?: MemoryProviderTelemetry;
+  operationalMetrics?: MemoryOperationalMetrics;
   providerCostEstimator?: MemoryProviderCostEstimator;
+  searchCache?: MemoryRuntimeSearchCacheOptions;
+  projectionInvalidation?: MemoryProjectionInvalidationPort;
   now?: () => string;
 }
 
@@ -276,13 +294,48 @@ export class MemoryRuntimeFactory {
     const installedProvider: MemoryManagementProvider = installation
       ? installation.provider
       : (created as MemoryManagementProvider);
-    const provider: MemoryManagementProvider = this.options.telemetry
+    const observedProvider: MemoryManagementProvider = this.options.telemetry
       ? new ObservedMemoryManagementProvider({
           provider: installedProvider,
           telemetry: this.options.telemetry,
           estimate: this.options.providerCostEstimator,
         })
       : installedProvider;
+    const provider: MemoryManagementProvider = this.options.searchCache
+      ? new CachedMemoryManagementProvider({
+          ...this.options.searchCache,
+          provider: observedProvider,
+          providerRevision: selected.management.revision ?? selected.management.version,
+          requiredScopeFields: selected.profile.scopePolicy.requiredDimensions,
+          requireCacheAuthorization: true,
+          trace: async (event) => {
+            await this.options.searchCache?.trace?.(event);
+            this.options.operationalMetrics?.observeCacheEvent(event);
+          },
+          cacheAuthorization: {
+            authorize: async (request) => {
+              const decision = await this.options.activities.policy.authorize({
+                operationId: request.operationId,
+                operation: 'search',
+                principal: request.principal,
+                scope: request.scope,
+                profileRef: request.profileRef,
+                eventContext: this.options.eventContext(request),
+                payload: request,
+              });
+              return {
+                allowed: decision.allowed && Boolean(decision.policyRevision),
+                policyRevision: decision.policyRevision ?? 'policy:missing-revision',
+                reason:
+                  decision.reason ??
+                  (decision.policyRevision
+                    ? undefined
+                    : 'Cache authorization requires a policy revision.'),
+              };
+            },
+          },
+        })
+      : observedProvider;
     try {
       const capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
       const errors = [
@@ -298,7 +351,7 @@ export class MemoryRuntimeFactory {
         );
       }
       const health = await provider.health();
-      if (health.status === 'unhealthy') {
+      if (health.status === 'unhealthy' && !isOptionalExternalProvider(selected.management)) {
         throw memoryError(
           'MEMORY_PROVIDER_UNAVAILABLE',
           `Memory provider ${provider.id} is unhealthy during runtime composition.`,
@@ -325,10 +378,12 @@ export class MemoryRuntimeFactory {
       };
       const manager = new GovernedMemoryManager({
         activities,
+        providerId: provider.id,
         profileRef,
         eventContext: (request) => this.options.eventContext(request),
         timeoutMs: selected.management.timeoutPolicy?.timeoutMs,
         reconciliationStore: this.options.reconciliationStore ?? installation?.reconciliationStore,
+        projectionInvalidation: this.options.projectionInvalidation,
         now: this.options.now,
       });
       const service = new DefaultMemoryApplicationService({
@@ -409,6 +464,13 @@ async function closeMemoryRuntimeResources(
   }
 }
 
+function isOptionalExternalProvider(spec: MemoryManagementProviderSpec): boolean {
+  return (
+    spec.type !== 'native' &&
+    ['self_hosted', 'managed', 'remote'].includes(spec.deployment) &&
+    spec.metadata?.startupRequirement === 'optional'
+  );
+}
 function sameProviderRef(
   profile: MemoryProfileSpec,
   provider: MemoryManagementProviderSpec
