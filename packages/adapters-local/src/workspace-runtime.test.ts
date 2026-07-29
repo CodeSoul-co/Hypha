@@ -230,6 +230,70 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     );
   });
 
+  it('rejects a list source replaced with another directory during traversal', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-list-replace-'));
+    const listing = path.join(root, 'listing');
+    const displaced = path.join(root, 'displaced-listing');
+    await fs.mkdir(listing);
+    await fs.writeFile(path.join(listing, 'original.txt'), 'trusted', 'utf8');
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    const originalReaddir = fs.readdir.bind(fs);
+    let replaced = false;
+    const readdirAfterReplacement = async () => {
+      if (!replaced) {
+        await fs.rename(listing, displaced);
+        await fs.mkdir(listing);
+        await fs.writeFile(path.join(listing, 'forged.txt'), 'forged', 'utf8');
+        replaced = true;
+      }
+      return originalReaddir(listing, { withFileTypes: true });
+    };
+    const readdirSpy = vi
+      .spyOn(fs, 'readdir')
+      .mockImplementation(readdirAfterReplacement as unknown as typeof fs.readdir);
+    try {
+      await expect(runtime.execute({ operation: 'list', path: 'listing' })).rejects.toThrow(
+        'Workspace directory changed during list'
+      );
+      expect(replaced).toBe(true);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
+  it('rejects entries added between two directory traversal snapshots', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-list-mutation-'));
+    const listing = path.join(root, 'listing');
+    await fs.mkdir(listing);
+    await fs.writeFile(path.join(listing, 'first.txt'), 'first', 'utf8');
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    const originalReaddir = fs.readdir.bind(fs);
+    let calls = 0;
+    const readdirWithMutation = async () => {
+      const entries = await originalReaddir(listing, { withFileTypes: true });
+      calls += 1;
+      if (calls === 1) {
+        await fs.writeFile(path.join(listing, 'second.txt'), 'second', 'utf8');
+      }
+      return entries;
+    };
+    const readdirSpy = vi
+      .spyOn(fs, 'readdir')
+      .mockImplementation(readdirWithMutation as unknown as typeof fs.readdir);
+    try {
+      await expect(runtime.execute({ operation: 'list', path: 'listing' })).rejects.toThrow(
+        'Workspace directory changed during list'
+      );
+      expect(calls).toBe(2);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it('rejects writes through a directory link that escapes the write root', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-link-'));
     const workspaceRoot = path.join(root, 'workspace');

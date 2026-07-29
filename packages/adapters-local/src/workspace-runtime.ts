@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import { randomUUID } from 'node:crypto';
-import type { BigIntStats } from 'node:fs';
+import type { BigIntStats, Dirent } from 'node:fs';
 import { constants as fsConstants } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -58,22 +58,8 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     switch (request.operation) {
       case 'read':
         return this.readFile(absolutePath, request.path);
-      case 'list': {
-        await this.assertExistingPathAllowed(absolutePath, this.readRoots, 'read');
-        const entries = await fs.readdir(absolutePath, { withFileTypes: true });
-        return {
-          path: request.path,
-          entries: entries
-            .filter(
-              (entry) =>
-                !this.controlPlaneGuard.isProtectedResolvedPath(path.join(absolutePath, entry.name))
-            )
-            .map((entry) => ({
-              name: entry.name,
-              type: entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other',
-            })),
-        };
-      }
+      case 'list':
+        return this.listDirectory(absolutePath, request.path);
       case 'write':
         return this.writeFile(absolutePath, request);
       case 'execute':
@@ -114,7 +100,10 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     const parent = path.dirname(absolutePath);
     await fs.mkdir(parent, { recursive: true });
     await this.assertExistingPathAllowed(parent, this.writeRoots, 'write');
-    const parentIdentity = await this.workspaceDirectoryIdentity(parent);
+    const parentIdentity = await this.workspaceDirectoryIdentity(
+      parent,
+      'Workspace write parent must be a stable directory'
+    );
     const temporaryPath = path.join(
       parent,
       `.${path.basename(absolutePath)}.hypha-write-${randomUUID()}.tmp`
@@ -198,6 +187,42 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     } finally {
       await handle.close().catch(() => undefined);
     }
+  }
+
+  private async listDirectory(absolutePath: string, requestedPath: string): Promise<unknown> {
+    await this.assertExistingPathAllowed(absolutePath, this.readRoots, 'read');
+    const before = await this.workspaceDirectoryIdentity(
+      absolutePath,
+      'Workspace list source must be a stable directory'
+    );
+    const canonicalBefore = await fs.realpath(absolutePath);
+    const firstEntries = await fs.readdir(absolutePath, { withFileTypes: true });
+    const secondEntries = await fs.readdir(absolutePath, { withFileTypes: true });
+    const after = await this.workspaceDirectoryIdentity(
+      absolutePath,
+      'Workspace list source must be a stable directory'
+    );
+    const canonicalAfter = await fs.realpath(absolutePath);
+    if (
+      canonicalAfter !== canonicalBefore ||
+      !this.sameWorkspaceDirectorySnapshot(before, after) ||
+      this.workspaceDirectoryEntriesSignature(firstEntries) !==
+        this.workspaceDirectoryEntriesSignature(secondEntries)
+    ) {
+      throw new Error('Workspace directory changed during list');
+    }
+    return {
+      path: requestedPath,
+      entries: secondEntries
+        .filter(
+          (entry) =>
+            !this.controlPlaneGuard.isProtectedResolvedPath(path.join(absolutePath, entry.name))
+        )
+        .map((entry) => ({
+          name: entry.name,
+          type: entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other',
+        })),
+    };
   }
 
   private async executeFile(
@@ -348,10 +373,13 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     return false;
   }
 
-  private async workspaceDirectoryIdentity(directory: string): Promise<BigIntStats> {
+  private async workspaceDirectoryIdentity(
+    directory: string,
+    invalidMessage: string
+  ): Promise<BigIntStats> {
     const identity = await fs.lstat(directory, { bigint: true });
     if (!identity.isDirectory() || identity.isSymbolicLink()) {
-      throw new Error('Workspace write parent must be a stable directory');
+      throw new Error(invalidMessage);
     }
     return identity;
   }
@@ -360,7 +388,10 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     directory: string,
     expected: BigIntStats
   ): Promise<void> {
-    const current = await this.workspaceDirectoryIdentity(directory);
+    const current = await this.workspaceDirectoryIdentity(
+      directory,
+      'Workspace write parent must be a stable directory'
+    );
     if (
       current.dev !== expected.dev ||
       current.ino !== expected.ino ||
@@ -368,6 +399,40 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     ) {
       throw new Error('Workspace write parent changed during publish');
     }
+  }
+
+  private sameWorkspaceDirectorySnapshot(before: BigIntStats, after: BigIntStats): boolean {
+    return (
+      before.isDirectory() &&
+      after.isDirectory() &&
+      !before.isSymbolicLink() &&
+      !after.isSymbolicLink() &&
+      before.dev === after.dev &&
+      before.ino === after.ino &&
+      before.mode === after.mode &&
+      // Directory link counts are platform/filesystem-dependent; stability matters, not nlink === 1.
+      before.nlink === after.nlink &&
+      before.size === after.size &&
+      before.mtimeNs === after.mtimeNs &&
+      before.ctimeNs === after.ctimeNs
+    );
+  }
+
+  private workspaceDirectoryEntriesSignature(entries: Dirent[]): string {
+    return JSON.stringify(
+      entries
+        .map((entry) => ({
+          name: entry.name,
+          type: entry.isDirectory()
+            ? 'dir'
+            : entry.isFile()
+              ? 'file'
+              : entry.isSymbolicLink()
+                ? 'symlink'
+                : 'other',
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name))
+    );
   }
 
   private sameWorkspaceFileObjectIdentity(before: BigIntStats, after: BigIntStats): boolean {
