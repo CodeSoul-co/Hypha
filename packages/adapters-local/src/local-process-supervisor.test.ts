@@ -28,6 +28,46 @@ describe('LocalProcessSupervisor', () => {
     expect(result.processTreeTerminationVerified).toBe(process.platform !== 'win32');
   });
 
+  it('bounds simultaneous high-throughput stdout and stderr by stream and combined bytes', async () => {
+    const result = await new LocalProcessSupervisor().run(
+      request(
+        [
+          '-e',
+          [
+            "const chunk = 'x'.repeat(512);",
+            'let remaining = 1_000;',
+            'const write = () => {',
+            '  process.stdout.write(chunk);',
+            '  process.stderr.write(chunk);',
+            '  remaining -= 1;',
+            '  if (remaining > 0) setTimeout(write, 1);',
+            '};',
+            'write();',
+          ].join('\n'),
+        ],
+        {
+          maxStdoutBytes: 64 * 1024,
+          maxStderrBytes: 64 * 1024,
+          maxCombinedOutputBytes: 8 * 1024,
+          timeoutMs: 5_000,
+        }
+      )
+    );
+
+    const capturedStdoutBytes = Buffer.byteLength(result.stdout);
+    const capturedStderrBytes = Buffer.byteLength(result.stderr);
+    expect(result).toMatchObject({
+      outcome: 'output_limit',
+      outputLimitStream: 'combined',
+    });
+    expect(result.observedStdoutBytes).toBeGreaterThan(0);
+    expect(result.observedStderrBytes).toBeGreaterThan(0);
+    expect(result.observedStdoutBytes + result.observedStderrBytes).toBeGreaterThan(8 * 1024);
+    expect(capturedStdoutBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(capturedStderrBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(capturedStdoutBytes + capturedStderrBytes).toBeLessThanOrEqual(8 * 1024);
+  });
+
   it('terminates a long-running command after its total timeout', async () => {
     const result = await new LocalProcessSupervisor().run(
       request(['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 40 })
