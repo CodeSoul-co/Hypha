@@ -109,6 +109,39 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     expect(fixture.store.stats()).toEqual(storedObjects);
   });
 
+  it('stops starting new Artifact operations when snapshot persistence exceeds its budget', async () => {
+    const root = await workspaceRoot('persistence-budget');
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    let nowMs = 0;
+    const originalCreateFromWorkspace = fixture.manager.createFromWorkspace.bind(fixture.manager);
+    const createFromWorkspace = vi.spyOn(fixture.manager, 'createFromWorkspace');
+    createFromWorkspace.mockImplementationOnce(async (request) => {
+      const result = await originalCreateFromWorkspace(request);
+      nowMs = 2;
+      return result;
+    });
+    const finalize = vi.spyOn(fixture.manager, 'finalize');
+    const create = vi.spyOn(fixture.manager, 'create');
+    const service = createService(workspace, fixture.manager, {
+      maxSnapshotPersistenceDurationMs: 1,
+      nowMs: () => nowMs,
+    });
+
+    await expect(service.createFullSnapshot(snapshotRequest())).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_RESOURCE_EXCEEDED',
+        retryable: true,
+        details: { maxSnapshotPersistenceDurationMs: 1 },
+      },
+    });
+    expect(createFromWorkspace).toHaveBeenCalledTimes(1);
+    expect(finalize).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(fixture.store.stats().objects).toBe(1);
+  });
+
   it('restores a complete Workspace tree from finalized snapshot Artifacts', async () => {
     const root = await workspaceRoot('restore');
     await fs.mkdir(path.join(root, 'empty'));
@@ -515,7 +548,7 @@ function createService(
   manager: DefaultArtifactManager,
   options: Pick<
     ConstructorParameters<typeof LocalWorkspaceSnapshotArtifactService>[0],
-    'maxRestoreStagingDurationMs'
+    'maxRestoreStagingDurationMs' | 'maxSnapshotPersistenceDurationMs' | 'nowMs'
   > = {}
 ): LocalWorkspaceSnapshotArtifactService {
   return new LocalWorkspaceSnapshotArtifactService({

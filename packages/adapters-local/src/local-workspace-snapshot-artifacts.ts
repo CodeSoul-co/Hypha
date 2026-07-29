@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import type {
   ArtifactManager,
   ArtifactRecord,
@@ -41,7 +42,9 @@ export interface LocalWorkspaceSnapshotArtifactServiceOptions {
   artifacts: Pick<ArtifactManager, 'create' | 'createFromWorkspace' | 'finalize' | 'read'>;
   context: LocalWorkspaceSnapshotArtifactContext;
   now?: () => string;
+  nowMs?: () => number;
   maxManifestBytes?: number;
+  maxSnapshotPersistenceDurationMs?: number;
   maxRestoreBytes?: number;
   maxRestoreEntries?: number;
   maxRestoreLockWaitDurationMs?: number;
@@ -58,7 +61,9 @@ export class LocalWorkspaceSnapshotArtifactService {
   private readonly artifacts: LocalWorkspaceSnapshotArtifactServiceOptions['artifacts'];
   private readonly context: LocalWorkspaceSnapshotArtifactContext;
   private readonly now: () => string;
+  private readonly nowMs: () => number;
   private readonly maxManifestBytes: number;
+  private readonly maxSnapshotPersistenceDurationMs: number;
   private readonly maxRestoreBytes: number;
   private readonly maxRestoreEntries: number;
   private readonly maxRestoreLockWaitDurationMs: number;
@@ -69,9 +74,14 @@ export class LocalWorkspaceSnapshotArtifactService {
     this.artifacts = options.artifacts;
     this.context = options.context;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.nowMs = options.nowMs ?? (() => performance.now());
     this.maxManifestBytes = positiveInteger(
       options.maxManifestBytes ?? 8 * 1024 * 1024,
       'maxManifestBytes'
+    );
+    this.maxSnapshotPersistenceDurationMs = positiveInteger(
+      options.maxSnapshotPersistenceDurationMs ?? 30_000,
+      'maxSnapshotPersistenceDurationMs'
     );
     this.maxRestoreBytes = positiveInteger(
       options.maxRestoreBytes ?? 256 * 1024 * 1024,
@@ -98,7 +108,9 @@ export class LocalWorkspaceSnapshotArtifactService {
 
     const captured = await this.workspace.capture();
     this.assertRestorableLinks(captured);
-    const draftFiles = await this.createFileArtifacts(request, captured);
+    const persistenceStartedAt = this.nowMs();
+    const draftFiles = await this.createFileArtifacts(request, captured, persistenceStartedAt);
+    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
     const verified = await this.workspace.capture();
     if (verified.sourceTreeHash !== captured.sourceTreeHash) {
       throw executionProviderError(
@@ -111,9 +123,11 @@ export class LocalWorkspaceSnapshotArtifactService {
         }
       );
     }
+    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
 
     const finalizedFiles = new Map<string, ArtifactRecord>();
     for (const [entryPath, draft] of draftFiles) {
+      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
       finalizedFiles.set(
         entryPath,
         await this.artifacts.finalize({
@@ -127,10 +141,12 @@ export class LocalWorkspaceSnapshotArtifactService {
             : {}),
         })
       );
+      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
     }
 
     const manifest = this.createManifest(request, captured, finalizedFiles);
     const content = encodeWorkspaceSnapshotManifest(manifest);
+    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
     const draftManifest = await this.artifacts.create({
       ...this.artifactIdentity(request),
       operationId: operationId(request.operationId, 'manifest'),
@@ -163,6 +179,7 @@ export class LocalWorkspaceSnapshotArtifactService {
       },
     });
     this.assertArtifactContent(draftManifest, hashBytes(content), content.byteLength);
+    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
     return this.artifacts.finalize({
       operationId: operationId(request.operationId, 'finalize-manifest'),
       principal: request.principal,
@@ -223,12 +240,14 @@ export class LocalWorkspaceSnapshotArtifactService {
 
   private async createFileArtifacts(
     request: WorkspaceSnapshotRequest,
-    captured: LocalWorkspaceSnapshot
+    captured: LocalWorkspaceSnapshot,
+    persistenceStartedAt: number
   ): Promise<Map<string, ArtifactRecord>> {
     const drafts = new Map<string, ArtifactRecord>();
     for (const entry of [...captured.entries.values()]
       .filter((candidate) => candidate.kind === 'file')
       .sort((left, right) => left.path.localeCompare(right.path))) {
+      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
       const draft = await this.artifacts.createFromWorkspace({
         ...this.artifactIdentity(request),
         operationId: operationId(request.operationId, 'file', entry.path),
@@ -253,9 +272,21 @@ export class LocalWorkspaceSnapshotArtifactService {
           : {}),
       });
       this.assertArtifactContent(draft, entry.contentHash, entry.sizeBytes);
+      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
       drafts.set(entry.path, draft);
     }
     return drafts;
+  }
+
+  private assertSnapshotPersistenceBudget(startedAt: number): void {
+    if (this.nowMs() - startedAt > this.maxSnapshotPersistenceDurationMs) {
+      throw executionProviderError(
+        'EXECUTION_RESOURCE_EXCEEDED',
+        'Workspace snapshot Artifact persistence exceeded its configured duration limit.',
+        true,
+        { maxSnapshotPersistenceDurationMs: this.maxSnapshotPersistenceDurationMs }
+      );
+    }
   }
 
   private createManifest(
