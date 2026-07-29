@@ -1,4 +1,6 @@
 import {
+  adviseExecutionRecovery,
+  classifyExecutionFailure,
   commandExecutionRequestExample,
   commandExecutionResultExample,
   commandOutputChunkExample,
@@ -14,6 +16,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import {
   RemoteSandboxProviderAdapter,
+  RemoteSandboxTransportError,
   type RemoteSandboxTransport,
 } from './remote-sandbox-provider-adapter';
 
@@ -161,6 +164,111 @@ describe('RemoteSandboxProviderAdapter', () => {
       })
     ).rejects.toMatchObject({
       normalizedError: { code: 'EXECUTION_ENVIRONMENT_UNAVAILABLE' },
+    });
+  });
+
+  it('allows a bounded retry when the transport proves create was not dispatched', async () => {
+    const transport = createTransport();
+    const provider = new RemoteSandboxProviderAdapter({ id: providerId, transport });
+    const createRequest = {
+      ...sandboxCreateRequestExample,
+      environment: {
+        ...sandboxCreateRequestExample.environment,
+        provider: 'remote_sandbox' as const,
+        providerRef: providerId,
+      },
+    };
+    transport.create.mockRejectedValueOnce(
+      new RemoteSandboxTransportError('connection refused', {
+        kind: 'unavailable',
+        sideEffectState: 'not_started',
+        providerCode: 'ECONNREFUSED',
+      })
+    );
+
+    await expect(provider.create(createRequest)).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_SANDBOX_CREATE_FAILED',
+        retryable: true,
+        details: {
+          phase: 'create',
+          sideEffectState: 'not_started',
+          providerCode: 'ECONNREFUSED',
+        },
+      },
+    });
+  });
+
+  it('requires reconciliation when a timed-out execution may have reached remote', async () => {
+    const transport = createTransport();
+    const provider = new RemoteSandboxProviderAdapter({ id: providerId, transport });
+    const request = {
+      ...commandExecutionRequestExample,
+      executionId: 'execution.remote.ambiguous',
+      sandboxId: sandboxRecordExample.id,
+    };
+    transport.execute.mockRejectedValueOnce(
+      new RemoteSandboxTransportError('gateway timeout', {
+        kind: 'timeout',
+        sideEffectState: 'unknown',
+        providerCode: 504,
+        providerOperationRef: 'remote-job-123',
+      })
+    );
+
+    let failure: unknown;
+    try {
+      await provider.execute(request);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_RESULT_UNKNOWN',
+        retryable: false,
+        details: {
+          phase: 'execute',
+          sideEffectState: 'unknown',
+          providerCode: 504,
+          providerOperationRef: 'remote-job-123',
+        },
+      },
+    });
+
+    const classified = classifyExecutionFailure(failure, {
+      id: 'failure.remote.ambiguous',
+      operation: 'start',
+      request,
+      providerId,
+    });
+    expect(classified.sideEffectState).toBe('unknown');
+    expect(adviseExecutionRecovery(classified)).toMatchObject({
+      strategy: 'reconcile',
+      refreshRecordBeforeRetry: true,
+      requireReceiptReconciliation: true,
+    });
+  });
+
+  it('treats unclassified mutating failures as unknown instead of replayable', async () => {
+    const transport = createTransport();
+    const provider = new RemoteSandboxProviderAdapter({ id: providerId, transport });
+    const request = {
+      ...commandExecutionRequestExample,
+      executionId: 'execution.remote.unclassified',
+      sandboxId: sandboxRecordExample.id,
+    };
+    transport.execute.mockRejectedValueOnce(new Error('socket closed'));
+
+    await expect(provider.execute(request)).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_RESULT_UNKNOWN',
+        retryable: false,
+        details: {
+          phase: 'execute',
+          sideEffectState: 'unknown',
+          causeName: 'Error',
+        },
+      },
     });
   });
 });

@@ -65,6 +65,62 @@ export interface RemoteSandboxProviderAdapterOptions {
   transport: RemoteSandboxTransport;
 }
 
+export type RemoteSandboxTransportFailureKind =
+  | 'invalid_request'
+  | 'permission_denied'
+  | 'quota_exceeded'
+  | 'revision_conflict'
+  | 'unavailable'
+  | 'timeout'
+  | 'cancelled'
+  | 'unknown';
+
+export interface RemoteSandboxTransportErrorOptions {
+  kind: RemoteSandboxTransportFailureKind;
+  sideEffectState: 'not_started' | 'unknown';
+  providerCode?: string | number;
+  retryAfterMs?: number;
+  providerOperationRef?: string;
+  cause?: unknown;
+}
+
+/**
+ * Concrete transports must report whether a failed request definitely stayed
+ * local or may have reached the remote service. Unknown side effects are never
+ * safe for blind replay.
+ */
+export class RemoteSandboxTransportError extends Error {
+  readonly kind: RemoteSandboxTransportFailureKind;
+  readonly sideEffectState: 'not_started' | 'unknown';
+  readonly providerCode?: string | number;
+  readonly retryAfterMs?: number;
+  readonly providerOperationRef?: string;
+
+  constructor(message: string, options: RemoteSandboxTransportErrorOptions) {
+    super(message, { cause: options.cause });
+    this.name = 'RemoteSandboxTransportError';
+    this.kind = options.kind;
+    this.sideEffectState = options.sideEffectState;
+    this.providerCode = options.providerCode;
+    this.retryAfterMs = options.retryAfterMs;
+    this.providerOperationRef = options.providerOperationRef;
+  }
+}
+
+type RemoteOperationPhase =
+  | 'capabilities'
+  | 'create'
+  | 'start'
+  | 'execute'
+  | 'cancel'
+  | 'terminate'
+  | 'status'
+  | 'cleanup'
+  | 'health'
+  | 'streamOutput'
+  | 'uploadArtifact'
+  | 'downloadArtifact';
+
 const providerHealthSchema = z
   .object({
     status: z.enum(['healthy', 'degraded', 'unhealthy', 'unknown']),
@@ -141,12 +197,16 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
 
   async cancel(input: ExecutionCancelRequest): Promise<void> {
     this.assertOpen();
-    await this.transport.cancel(validateExecutionCancelRequest(input));
+    await this.invokeTransport('cancel', () =>
+      this.transport.cancel(validateExecutionCancelRequest(input))
+    );
   }
 
   async terminate(input: SandboxTerminateRequest): Promise<void> {
     this.assertOpen();
-    await this.transport.terminate(validateSandboxTerminateRequest(input));
+    await this.invokeTransport('terminate', () =>
+      this.transport.terminate(validateSandboxTerminateRequest(input))
+    );
   }
 
   async status(input: SandboxStatusRequest): Promise<SandboxRecord | null> {
@@ -161,7 +221,9 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
 
   async cleanup(input: SandboxCleanupRequest): Promise<void> {
     this.assertOpen();
-    await this.transport.cleanup(validateSandboxCleanupRequest(input));
+    await this.invokeTransport('cleanup', () =>
+      this.transport.cleanup(validateSandboxCleanupRequest(input))
+    );
   }
 
   async health(): Promise<ProviderHealth> {
@@ -182,22 +244,26 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
     const request = validateRemoteOutputStreamRequest(input);
     let nextSequence = request.fromSequence ?? 0;
     let emitted = 0;
-    for await (const raw of this.transport.streamOutput(request)) {
-      const chunk = await this.parseResponse('streamOutput', () =>
-        validateCommandOutputChunk(raw)
-      );
-      if (chunk.executionId !== request.executionId) {
-        throw this.invalidResponse('streamOutput', 'executionId does not match the request.');
+    try {
+      for await (const raw of this.transport.streamOutput(request)) {
+        const chunk = await this.parseResponse('streamOutput', () =>
+          validateCommandOutputChunk(raw)
+        );
+        if (chunk.executionId !== request.executionId) {
+          throw this.invalidResponse('streamOutput', 'executionId does not match the request.');
+        }
+        if (chunk.sequence !== nextSequence) {
+          throw this.invalidResponse('streamOutput', 'chunk sequence is not contiguous.');
+        }
+        emitted += 1;
+        if (request.maxChunks !== undefined && emitted > request.maxChunks) {
+          throw this.invalidResponse('streamOutput', 'transport exceeded maxChunks.');
+        }
+        nextSequence += 1;
+        yield chunk;
       }
-      if (chunk.sequence !== nextSequence) {
-        throw this.invalidResponse('streamOutput', 'chunk sequence is not contiguous.');
-      }
-      emitted += 1;
-      if (request.maxChunks !== undefined && emitted > request.maxChunks) {
-        throw this.invalidResponse('streamOutput', 'transport exceeded maxChunks.');
-      }
-      nextSequence += 1;
-      yield chunk;
+    } catch (error) {
+      throw this.normalizeTransportFailure('streamOutput', error);
     }
   }
 
@@ -242,32 +308,36 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
     let nextSequence = 0;
     let nextOffsetBytes = 0;
     let completed = false;
-    for await (const raw of this.transport.downloadArtifact(request)) {
-      if (completed) {
-        throw this.invalidResponse('downloadArtifact', 'received chunks after the final chunk.');
+    try {
+      for await (const raw of this.transport.downloadArtifact(request)) {
+        if (completed) {
+          throw this.invalidResponse('downloadArtifact', 'received chunks after the final chunk.');
+        }
+        const chunk = await this.parseResponse('downloadArtifact', () =>
+          validateRemoteArtifactChunk(raw)
+        );
+        transferId ??= chunk.transferId;
+        if (
+          chunk.transferId !== transferId ||
+          chunk.artifactRef !== request.artifactRef ||
+          chunk.sequence !== nextSequence ||
+          chunk.offsetBytes !== nextOffsetBytes
+        ) {
+          throw this.invalidResponse('downloadArtifact', 'chunk identity or ordering is invalid.');
+        }
+        nextOffsetBytes += chunk.byteLength;
+        if (nextOffsetBytes > request.maxBytes) {
+          throw this.invalidResponse('downloadArtifact', 'download exceeded maxBytes.');
+        }
+        nextSequence += 1;
+        completed = chunk.final;
+        yield chunk;
       }
-      const chunk = await this.parseResponse('downloadArtifact', () =>
-        validateRemoteArtifactChunk(raw)
-      );
-      transferId ??= chunk.transferId;
-      if (
-        chunk.transferId !== transferId ||
-        chunk.artifactRef !== request.artifactRef ||
-        chunk.sequence !== nextSequence ||
-        chunk.offsetBytes !== nextOffsetBytes
-      ) {
-        throw this.invalidResponse('downloadArtifact', 'chunk identity or ordering is invalid.');
+      if (!completed) {
+        throw this.invalidResponse('downloadArtifact', 'stream ended without a final chunk.');
       }
-      nextOffsetBytes += chunk.byteLength;
-      if (nextOffsetBytes > request.maxBytes) {
-        throw this.invalidResponse('downloadArtifact', 'download exceeded maxBytes.');
-      }
-      nextSequence += 1;
-      completed = chunk.final;
-      yield chunk;
-    }
-    if (!completed) {
-      throw this.invalidResponse('downloadArtifact', 'stream ended without a final chunk.');
+    } catch (error) {
+      throw this.normalizeTransportFailure('downloadArtifact', error);
     }
   }
 
@@ -288,7 +358,7 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
   }
 
   private assertRecordIdentity(
-    phase: string,
+    phase: RemoteOperationPhase,
     record: SandboxRecord,
     expected: {
       sandboxId?: string;
@@ -311,7 +381,7 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
   }
 
   private assertTransferReceipt(
-    phase: string,
+    phase: RemoteOperationPhase,
     receipt: RemoteArtifactTransferReceipt,
     request: RemoteArtifactUploadRequest,
     direction: RemoteArtifactTransferReceipt['direction']
@@ -327,20 +397,173 @@ export class RemoteSandboxProviderAdapter implements RemoteSandboxProvider {
     }
   }
 
-  private async parseResponse<T>(phase: string, parse: () => T | Promise<T>): Promise<T> {
+  private async parseResponse<T>(
+    phase: RemoteOperationPhase,
+    parse: () => T | Promise<T>
+  ): Promise<T> {
     try {
       return await parse();
     } catch (error) {
-      if (error instanceof Error && error.name === 'ExecutionProviderError') throw error;
-      throw this.invalidResponse(phase, 'Remote Provider returned an invalid response.', error);
+      if (error instanceof z.ZodError) {
+        throw this.invalidResponse(phase, 'Remote Provider returned an invalid response.', error);
+      }
+      throw this.normalizeTransportFailure(phase, error);
     }
   }
 
-  private invalidResponse(phase: string, message: string, cause?: unknown): Error {
+  private async invokeTransport<T>(
+    phase: RemoteOperationPhase,
+    invoke: () => T | Promise<T>
+  ): Promise<T> {
+    try {
+      return await invoke();
+    } catch (error) {
+      throw this.normalizeTransportFailure(phase, error);
+    }
+  }
+
+  private normalizeTransportFailure(phase: RemoteOperationPhase, error: unknown): Error {
+    if (
+      error instanceof Error &&
+      (error.name === 'ExecutionProviderError' || error.name === 'RemoteSandboxTransportError')
+    ) {
+      if (!(error instanceof RemoteSandboxTransportError)) return error;
+      if (error.sideEffectState === 'unknown') {
+        return this.transportFailure(
+          'EXECUTION_RESULT_UNKNOWN',
+          phase,
+          error,
+          false,
+          'Remote operation may have reached the Provider; reconcile before retry.'
+        );
+      }
+      const mapping = notStartedFailure(error.kind, phase);
+      return this.transportFailure(mapping.code, phase, error, mapping.retryable, mapping.message);
+    }
+
+    if (isReadOnlyPhase(phase)) {
+      return executionProviderError(
+        'EXECUTION_ENVIRONMENT_UNAVAILABLE',
+        'Remote Sandbox Provider is unavailable.',
+        true,
+        {
+          phase,
+          sideEffectState: 'not_started',
+          causeName: error instanceof Error ? error.name : typeof error,
+        }
+      );
+    }
+    return executionProviderError(
+      'EXECUTION_RESULT_UNKNOWN',
+      'Remote operation failed without dispatch evidence; reconcile before retry.',
+      false,
+      {
+        phase,
+        sideEffectState: 'unknown',
+        causeName: error instanceof Error ? error.name : typeof error,
+      }
+    );
+  }
+
+  private transportFailure(
+    code: Parameters<typeof executionProviderError>[0],
+    phase: RemoteOperationPhase,
+    error: RemoteSandboxTransportError,
+    retryable: boolean,
+    message: string
+  ): Error {
+    return executionProviderError(code, message, retryable, {
+      phase,
+      sideEffectState: error.sideEffectState,
+      ...(error.providerCode !== undefined ? { providerCode: error.providerCode } : {}),
+      ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
+      ...(error.providerOperationRef !== undefined
+        ? { providerOperationRef: error.providerOperationRef }
+        : {}),
+    });
+  }
+
+  private invalidResponse(
+    phase: RemoteOperationPhase,
+    message: string,
+    cause?: unknown
+  ): Error {
     return executionProviderError('EXECUTION_INTERNAL_ERROR', message, false, {
       phase,
       evidenceCode: 'REMOTE_PROVIDER_RESPONSE_INVALID',
       ...(cause instanceof Error ? { causeName: cause.name } : {}),
     });
+  }
+}
+
+function isReadOnlyPhase(phase: RemoteOperationPhase): boolean {
+  return (
+    phase === 'capabilities' ||
+    phase === 'status' ||
+    phase === 'health' ||
+    phase === 'streamOutput' ||
+    phase === 'downloadArtifact'
+  );
+}
+
+function notStartedFailure(
+  kind: RemoteSandboxTransportFailureKind,
+  phase: RemoteOperationPhase
+): {
+  code: Parameters<typeof executionProviderError>[0];
+  retryable: boolean;
+  message: string;
+} {
+  switch (kind) {
+    case 'invalid_request':
+      return {
+        code: 'EXECUTION_INVALID_REQUEST',
+        retryable: false,
+        message: 'Remote Provider rejected the request.',
+      };
+    case 'permission_denied':
+      return {
+        code: 'EXECUTION_PERMISSION_DENIED',
+        retryable: false,
+        message: 'Remote Provider denied the request.',
+      };
+    case 'quota_exceeded':
+      return {
+        code: 'EXECUTION_QUOTA_EXCEEDED',
+        retryable: true,
+        message: 'Remote Provider quota is temporarily exhausted.',
+      };
+    case 'revision_conflict':
+      return {
+        code: 'EXECUTION_REVISION_CONFLICT',
+        retryable: false,
+        message: 'Remote Provider rejected a stale revision.',
+      };
+    case 'cancelled':
+      return {
+        code: 'EXECUTION_CANCELLED',
+        retryable: false,
+        message: 'Remote operation was cancelled before dispatch.',
+      };
+    case 'unavailable':
+    case 'timeout':
+      return {
+        code:
+          phase === 'create'
+            ? 'EXECUTION_SANDBOX_CREATE_FAILED'
+            : phase === 'start'
+              ? 'EXECUTION_SANDBOX_START_FAILED'
+              : phase === 'execute'
+                ? 'EXECUTION_PROCESS_START_FAILED'
+                : 'EXECUTION_ENVIRONMENT_UNAVAILABLE',
+        retryable: true,
+        message: 'Remote Provider was unavailable before dispatch.',
+      };
+    case 'unknown':
+      return {
+        code: 'EXECUTION_INTERNAL_ERROR',
+        retryable: false,
+        message: 'Remote Provider failed before dispatch.',
+      };
   }
 }
