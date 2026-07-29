@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { executionRecordCreateRequestExample } from '@hypha/core';
+import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import { PostgresExecutionStoreConnection } from './postgres-execution-store-connection';
@@ -21,7 +22,7 @@ let port = 0;
 let containerCreated = false;
 
 beforeAll(async () => {
-  const image = `${postgresImage}@${postgresDigest}`;
+  const image = pinnedImageReference(postgresImage, postgresDigest);
   port = await findAvailableLoopbackPort();
   await requireDocker(['image', 'inspect', image]);
   await requireDocker([
@@ -48,7 +49,7 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  const removal = await runDocker(['rm', '-f', containerName]);
+  const removal = await runDocker(['rm', '-f', '-v', containerName]);
   if (containerCreated) {
     expect(removal).toMatchObject({ outcome: 'exited', exitCode: 0 });
     const inspection = await runDocker(['inspect', containerName]);
@@ -128,6 +129,44 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await reopened?.store.close();
     }
   }, 30_000);
+
+  it('replays an idempotent create after restart without duplicating the Execution', async () => {
+    const request = structuredClone(executionRecordCreateRequestExample);
+    request.operationId = 'operation.execution.create.real-idempotency';
+    request.idempotencyKey = 'execution-create:execution.real.idempotency';
+    request.record.id = 'execution.real.idempotency';
+    request.record.request.executionId = request.record.id;
+    request.record.request.operationId = 'operation.command.real.idempotency';
+    request.record.request.idempotencyKey = 'command:run.real:idempotency';
+    const first = createRealStore('idempotency-write');
+    let reopened: ReturnType<typeof createRealStore> | undefined;
+
+    try {
+      await first.connection.initialize();
+      await expect(first.store.create(request)).resolves.toEqual(request.record);
+      await first.store.close();
+
+      reopened = createRealStore('idempotency-replay');
+      await reopened.connection.initialize();
+      await expect(reopened.store.create(request)).resolves.toEqual(request.record);
+
+      const counts = await reopened.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             (SELECT COUNT(*) FROM execution_records WHERE execution_id = $1)
+               AS record_count,
+             (SELECT COUNT(*) FROM execution_create_idempotency
+               WHERE operation_id = $2 AND idempotency_key = $3)
+               AS idempotency_count`,
+          [request.record.id, request.operationId, request.idempotencyKey]
+        )
+      );
+      expect(counts.rows).toEqual([{ record_count: '1', idempotency_count: '1' }]);
+    } finally {
+      await first.store.close();
+      await reopened?.store.close();
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
@@ -135,7 +174,7 @@ function createRealStore(applicationRole: string): {
   store: PostgresExecutionStoreFoundation;
 } {
   const connection = new PostgresExecutionStoreConnection({
-    connectionString: `postgresql://${username}:${password}@127.0.0.1:${port}/${database}`,
+    connectionString: postgresConnectionString(),
     tls: { mode: 'disable' },
     applicationName: `hypha-postgres-real-${applicationRole}`,
     maxConnections: 2,
@@ -150,21 +189,28 @@ function createRealStore(applicationRole: string): {
 }
 
 async function waitForPostgres(): Promise<void> {
+  let lastErrorCode: string | undefined;
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const result = await runDocker([
-      'exec',
-      containerName,
-      'pg_isready',
-      '-q',
-      '-U',
-      username,
-      '-d',
-      database,
-    ]);
-    if (result.outcome === 'exited' && result.exitCode === 0) return;
+    const client = new Client({
+      connectionString: postgresConnectionString(),
+      ssl: false,
+      connectionTimeoutMillis: 1_000,
+      application_name: 'hypha-postgres-readiness',
+    });
+    try {
+      await client.connect();
+      await client.query('SELECT 1');
+      await client.end();
+      return;
+    } catch (error) {
+      lastErrorCode = postgresErrorCode(error);
+      await client.end().catch(() => undefined);
+    }
     await delay(250);
   }
-  throw new Error('Real Postgres fixture did not become ready.');
+  throw new Error(
+    `Real Postgres fixture did not become reachable${lastErrorCode ? ` (${lastErrorCode})` : ''}.`
+  );
 }
 
 async function requireDocker(args: string[]): Promise<DockerCliResult> {
@@ -207,4 +253,21 @@ function findAvailableLoopbackPort(): Promise<number> {
       });
     });
   });
+}
+
+function postgresConnectionString(): string {
+  return `postgresql://${username}:${password}@127.0.0.1:${port}/${database}`;
+}
+
+function pinnedImageReference(image: string, digest: string): string {
+  const lastSlash = image.lastIndexOf('/');
+  const lastColon = image.lastIndexOf(':');
+  const repository = lastColon > lastSlash ? image.slice(0, lastColon) : image;
+  return `${repository}@${digest}`;
+}
+
+function postgresErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
+  const code = Reflect.get(error, 'code');
+  return typeof code === 'string' && /^[A-Z0-9_]{1,32}$/u.test(code) ? code : undefined;
 }
