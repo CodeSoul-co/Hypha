@@ -9,6 +9,10 @@ export const POSTGRES_EXECUTION_STORE_ID = 'execution-store.postgres';
 
 export type PostgresExecutionStoreFactoryOptions = PostgresExecutionStoreConnectionOptions;
 
+/**
+ * Composition adapter for the accepted Postgres Execution Store. Registration
+ * remains explicit: callers add this factory to the Core ExecutionStoreRegistry.
+ */
 export class PostgresExecutionStoreFactory implements ExecutionStoreFactory {
   readonly storeId = POSTGRES_EXECUTION_STORE_ID;
 

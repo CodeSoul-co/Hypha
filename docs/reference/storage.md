@@ -114,6 +114,17 @@ access, server-side copy, multipart upload, and content addressing; encryption r
 Deployment requires a bucket with object versioning enabled, explicit endpoint policy, and current
 real MinIO/S3 acceptance evidence.
 
+Execution also exports `PostgresExecutionStoreFactory` with the stable
+`execution-store.postgres` identity. The Factory validates an explicit Postgres connection string,
+TLS mode, pool limits, and operation timeouts; initializes the versioned schema under an advisory
+lock before returning the Store; and closes its pool when initialization fails. It can be added to
+`ExecutionStoreRegistry`, but it is not registered or selected by default and is not wired into
+Server composition. Current adapter evidence covers runtime-schema-validated records, restart
+persistence, idempotency, CAS, lease renewal and fencing, concurrent migration, lock timeout,
+database outage and crash recovery, unsupported schema, read-only migration failure, corrupt-record
+quarantine, health, and close. These adapter guarantees do not by themselves make a deployment
+release-ready.
+
 Local defaults are organized under `data/`: events in `data/runtime/events/`, structured records in `data/runtime/structured/`, vector indexes in `data/storage/vector/`, artifacts in `data/storage/artifacts/`, and system logs in `data/logs/system.log`.
 
 ## Document Storage
