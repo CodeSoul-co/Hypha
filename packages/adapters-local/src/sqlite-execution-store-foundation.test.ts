@@ -5,6 +5,7 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ExecutionRecordQuery,
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
@@ -226,6 +227,95 @@ describe('SQLiteExecutionStoreFoundation', () => {
       code: 'EXECUTION_STORE_INVALID_CURSOR',
     });
     await reopened.close();
+  });
+
+  it('preserves cursor identity across concurrent inserts, deletes, and status changes', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const records = new Map<string, ExecutionRecord>();
+    for (const [suffix, updatedAt] of [
+      ['a', '2026-07-16T00:00:00.100Z'],
+      ['b', '2026-07-16T00:00:00.200Z'],
+      ['c', '2026-07-16T00:00:00.300Z'],
+      ['d', '2026-07-16T00:00:00.400Z'],
+    ] as const) {
+      const created = await store.create(
+        queuedCreateRequest(`execution.concurrent-page.${suffix}`, {
+          userId: 'user.concurrent-page',
+          workspaceId: 'workspace.concurrent-page',
+          updatedAt,
+        })
+      );
+      records.set(suffix, created);
+    }
+
+    const query: ExecutionRecordQuery = {
+      userId: 'user.concurrent-page',
+      workspaceId: 'workspace.concurrent-page',
+      statuses: ['queued'],
+      limit: 2,
+    };
+    const first = await store.list(query);
+    expect(first.records.map((record) => record.id)).toEqual([
+      'execution.concurrent-page.d',
+      'execution.concurrent-page.c',
+    ]);
+    expect(first.cursor).toEqual(expect.any(String));
+
+    await store.create(
+      queuedCreateRequest('execution.concurrent-page.newer', {
+        userId: 'user.concurrent-page',
+        workspaceId: 'workspace.concurrent-page',
+        updatedAt: '2026-07-16T00:00:00.500Z',
+      })
+    );
+    const recordB = records.get('b');
+    expect(recordB).toBeDefined();
+    await store.compareAndSet(
+      compareAndSetRequest(0, 'starting', 'cas:concurrent-page-b', recordB)
+    );
+    const concurrentDatabase = openTestDatabase(store.filename);
+    try {
+      concurrentDatabase.exec('BEGIN IMMEDIATE');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_create_idempotency WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_mutation_idempotency WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_lease_history WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_record_quarantine WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_records WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase.exec('COMMIT');
+    } catch (error) {
+      concurrentDatabase.exec('ROLLBACK');
+      throw error;
+    } finally {
+      concurrentDatabase.close();
+    }
+
+    const second = await store.list({ ...query, cursor: first.cursor });
+    expect(second).toEqual({ records: [] });
+    expect(
+      [...first.records, ...second.records].map((record) => record.id)
+    ).toEqual([
+      'execution.concurrent-page.d',
+      'execution.concurrent-page.c',
+    ]);
+    await expect(
+      store.list({
+        ...query,
+        statuses: ['starting'],
+        cursor: first.cursor,
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_INVALID_CURSOR' });
+    await store.close();
   });
 
   it('queries active leases by indexed expiry time', async () => {
