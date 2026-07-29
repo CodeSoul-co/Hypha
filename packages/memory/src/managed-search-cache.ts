@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { managedMemoryRecordSchema } from './record-contract';
 import { validateManagedMemorySearchRequest } from './operation-contract';
-import { hashMemoryScope, memoryError, sha256 } from './memory-utils';
+import { hashMemoryScope, sha256 } from './memory-utils';
 import type { ManagedMemoryScope } from './contracts';
 import type {
   ManagedMemoryDeleteRequest,
@@ -103,23 +103,12 @@ export interface MemorySearchCacheEvent {
     | 'revision_changed'
     | 'access_stats_requested'
     | 'profile_revision_missing'
-    | 'scope_incomplete'
     | 'invalidation_pending'
     | 'entry_oversized'
     | 'store_unavailable';
   ageMs?: number;
 }
 
-export interface MemorySearchCacheAuthorizationDecision {
-  allowed: boolean;
-  policyRevision: string;
-  expiresAt?: string;
-  reason?: string;
-}
-
-export interface MemorySearchCacheAuthorizationPort {
-  authorize(request: ManagedMemorySearchRequest): Promise<MemorySearchCacheAuthorizationDecision>;
-}
 export interface CachedMemoryManagementProviderOptions {
   provider: MemoryManagementProvider;
   cache: MemorySearchCacheStore;
@@ -130,9 +119,6 @@ export interface CachedMemoryManagementProviderOptions {
   maxEntryBytes?: number;
   singleflight?: boolean;
   maxScopeRevisionRetries?: number;
-  requiredScopeFields?: readonly (keyof ManagedMemoryScope)[];
-  cacheAuthorization?: MemorySearchCacheAuthorizationPort;
-  requireCacheAuthorization?: boolean;
   now?: () => number;
   trace?: (event: MemorySearchCacheEvent) => Promise<void> | void;
 }
@@ -176,7 +162,6 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
   private readonly maxEntryBytes: number;
   private readonly singleflight: boolean;
   private readonly maxScopeRevisionRetries: number;
-  private readonly requiredScopeFields: readonly (keyof ManagedMemoryScope)[];
   private readonly now: () => number;
   private readonly inFlight = new Map<string, Promise<ManagedMemorySearchResult[]>>();
   private readonly pendingInvalidationScopes = new Set<string>();
@@ -197,7 +182,6 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
       options.maxScopeRevisionRetries ?? 1,
       'maxScopeRevisionRetries'
     );
-    this.requiredScopeFields = [...(options.requiredScopeFields ?? ['userId'])];
     this.now = options.now ?? Date.now;
     this.id = `memory-search-cached:${this.provider.id}`;
   }
@@ -215,15 +199,6 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
   async search(rawRequest: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]> {
     const request = validateManagedMemorySearchRequest(rawRequest);
     const scopeHash = hashMemoryScope(request.scope);
-    if (!hasCompleteCacheScope(request.scope, this.requiredScopeFields)) {
-      await this.emit({
-        type: 'memory.cache.bypass',
-        providerId: this.provider.id,
-        scopeHash,
-        reason: 'scope_incomplete',
-      });
-      return this.provider.search(request);
-    }
     if (this.pendingInvalidationScopes.has(scopeHash)) {
       try {
         await this.cacheOperation('invalidateScope', this.cache.invalidateScope(scopeHash));
@@ -262,26 +237,6 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
       });
       return this.provider.search(request);
     }
-    const authorization = await this.options.cacheAuthorization?.authorize(request);
-    if (this.options.requireCacheAuthorization && !authorization) {
-      throw memoryError(
-        'MEMORY_POLICY_REJECTED',
-        'Memory Search Cache requires an authorization verifier before lookup.'
-      );
-    }
-    if (authorization && !authorization.allowed) {
-      throw memoryError(
-        'MEMORY_POLICY_REJECTED',
-        authorization.reason ?? 'Memory Search Cache access was denied by policy.'
-      );
-    }
-    if (authorization?.expiresAt && Date.parse(authorization.expiresAt) <= this.now()) {
-      throw memoryError(
-        'MEMORY_POLICY_REJECTED',
-        'Memory Search Cache authorization expired before lookup.'
-      );
-    }
-    const policyRevision = authorization?.policyRevision ?? profileRevision;
     let scopeRevision: string;
     let identity: ReturnType<typeof searchIdentity>;
     try {
@@ -289,13 +244,7 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
         'getScopeRevision',
         this.cache.getScopeRevision(scopeHash)
       );
-      identity = searchIdentity(
-        request,
-        this.providerRevision,
-        profileRevision,
-        policyRevision,
-        scopeRevision
-      );
+      identity = searchIdentity(request, this.providerRevision, profileRevision, scopeRevision);
       await this.emit({
         type: 'memory.cache.lookup',
         providerId: this.provider.id,
@@ -314,15 +263,7 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
       });
       return this.provider.search(request);
     }
-    return this.computeAndCache(
-      request,
-      identity,
-      scopeHash,
-      scopeRevision,
-      profileRevision,
-      policyRevision,
-      0
-    );
+    return this.computeAndCache(request, identity, scopeHash, scopeRevision, profileRevision, 0);
   }
 
   get(request: MemoryGetRequest) {
@@ -434,7 +375,6 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
     scopeHash: string,
     scopeRevision: string,
     profileRevision: string,
-    policyRevision: string,
     scopeRevisionRetry: number
   ): Promise<ManagedMemorySearchResult[]> {
     const pending = this.singleflight ? this.inFlight.get(identity.key) : undefined;
@@ -472,17 +412,10 @@ export class CachedMemoryManagementProvider implements MemoryManagementProvider 
         if (scopeRevisionRetry < this.maxScopeRevisionRetries) {
           return this.computeAndCache(
             request,
-            searchIdentity(
-              request,
-              this.providerRevision,
-              profileRevision,
-              policyRevision,
-              currentScopeRevision
-            ),
+            searchIdentity(request, this.providerRevision, profileRevision, currentScopeRevision),
             scopeHash,
             currentScopeRevision,
             profileRevision,
-            policyRevision,
             scopeRevisionRetry + 1
           );
         }
@@ -817,7 +750,6 @@ function searchIdentity(
   request: ManagedMemorySearchRequest,
   providerRevision: string,
   profileRevision: string,
-  policyRevision: string,
   scopeRevision: string
 ): { key: string; requestHash: string } {
   const requestHash = sha256({
@@ -851,7 +783,6 @@ function searchIdentity(
     rerank: request.rerank,
     pagination: request.pagination,
     providerRevision,
-    policyRevision,
     scopeRevision,
   });
   return { key: `memory-search-cache:v1:${requestHash}`, requestHash };
@@ -863,15 +794,6 @@ function sameHardMemoryBoundary(left: ManagedMemoryScope, right: ManagedMemorySc
   return true;
 }
 
-function hasCompleteCacheScope(
-  scope: ManagedMemoryScope,
-  requiredFields: readonly (keyof ManagedMemoryScope)[]
-): boolean {
-  return requiredFields.every((field) => {
-    const value = scope[field];
-    return typeof value === 'string' && value.length > 0;
-  });
-}
 function cacheRecordSize(record: MemorySearchCacheRecord): number {
   return record.sizeBytes ?? Buffer.byteLength(JSON.stringify(record), 'utf8');
 }
