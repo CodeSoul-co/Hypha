@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalWorkspaceRuntime } from './workspace-runtime';
 
 describe('LocalWorkspaceRuntime execution environment', () => {
@@ -273,6 +273,80 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     ).rejects.toThrow('cannot traverse symbolic links or junctions');
     await expect(fs.readFile(path.join(targetRoot, 'result.txt'), 'utf8')).resolves.toBe(
       'original'
+    );
+  });
+
+  it('rejects a source file replaced with a new inode between validation and open', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-read-race-'));
+    const source = path.join(root, 'result.txt');
+    await fs.writeFile(source, 'trusted', 'utf8');
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    const originalOpen = fs.open.bind(fs);
+    let replaced = false;
+    const openReplacement = async () => {
+      await fs.rename(source, path.join(root as string, 'original.txt'));
+      await fs.writeFile(source, 'forged!', 'utf8');
+      replaced = true;
+      return originalOpen(source, 'r');
+    };
+    const openSpy = vi
+      .spyOn(fs, 'open')
+      .mockImplementation(openReplacement as unknown as typeof fs.open);
+    try {
+      await expect(runtime.execute({ operation: 'read', path: 'result.txt' })).rejects.toThrow(
+        'Workspace source changed during read'
+      );
+      expect(replaced).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('rejects a source file modified through its path while the handle is being read', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-read-mutation-'));
+    const source = path.join(root, 'result.txt');
+    await fs.writeFile(source, 'trusted', 'utf8');
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    const originalOpen = fs.open.bind(fs);
+    const openWithMutation = async () => {
+      const handle = await originalOpen(source, 'r');
+      const originalReadFile = handle.readFile.bind(handle);
+      const readWithMutation = async () => {
+        const content = await originalReadFile({ encoding: 'utf-8' });
+        await fs.writeFile(source, 'mutated', 'utf8');
+        return content;
+      };
+      vi.spyOn(handle, 'readFile').mockImplementation(
+        readWithMutation as unknown as typeof handle.readFile
+      );
+      return handle;
+    };
+    const openSpy = vi
+      .spyOn(fs, 'open')
+      .mockImplementation(openWithMutation as unknown as typeof fs.open);
+    try {
+      await expect(runtime.execute({ operation: 'read', path: 'result.txt' })).rejects.toThrow(
+        'Workspace source changed during read'
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('rejects Workspace read sources that have a hardlink alias', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-hardlink-'));
+    const source = path.join(root, 'result.txt');
+    await fs.writeFile(source, 'trusted', 'utf8');
+    await fs.link(source, path.join(root, 'alias.txt'));
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    await expect(runtime.execute({ operation: 'read', path: 'result.txt' })).rejects.toThrow(
+      'Workspace read source must be a single-link regular file'
     );
   });
 

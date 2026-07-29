@@ -9,6 +9,10 @@ import type {
   WorkspaceRuntimeRequest,
 } from '@hypha/tools';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
+import {
+  hasSingleLinkRegularFileIdentity,
+  sameSingleLinkRegularFileIdentity,
+} from './local-workspace-file-identity';
 
 const executionEnvironmentAllowList = ['PATH', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL'] as const;
 const windowsIdentityEnvironmentVariables = [
@@ -51,8 +55,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     const absolutePath = this.resolvePath(request.path);
     switch (request.operation) {
       case 'read':
-        await this.assertExistingPathAllowed(absolutePath, this.readRoots, 'read');
-        return { path: request.path, content: await fs.readFile(absolutePath, 'utf-8') };
+        return this.readFile(absolutePath, request.path);
       case 'list': {
         await this.assertExistingPathAllowed(absolutePath, this.readRoots, 'read');
         const entries = await fs.readdir(absolutePath, { withFileTypes: true });
@@ -115,6 +118,41 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
       bytesWritten: Buffer.byteLength(request.content, 'utf-8'),
       executable: Boolean(request.executable),
     };
+  }
+
+  private async readFile(absolutePath: string, requestedPath: string): Promise<unknown> {
+    await this.assertExistingPathAllowed(absolutePath, this.readRoots, 'read');
+    const before = await fs.lstat(absolutePath, { bigint: true });
+    if (!hasSingleLinkRegularFileIdentity(before)) {
+      throw new Error('Workspace read source must be a single-link regular file');
+    }
+    const canonicalBefore = await fs.realpath(absolutePath);
+    const handle = await fs.open(absolutePath, 'r');
+    try {
+      const opened = await handle.stat({ bigint: true });
+      const pathAfterOpen = await fs.lstat(absolutePath, { bigint: true });
+      if (
+        !sameSingleLinkRegularFileIdentity(before, opened) ||
+        !sameSingleLinkRegularFileIdentity(before, pathAfterOpen)
+      ) {
+        throw new Error('Workspace source changed during read');
+      }
+
+      const content = await handle.readFile({ encoding: 'utf-8' });
+      const finalHandleStat = await handle.stat({ bigint: true });
+      const finalPathStat = await fs.lstat(absolutePath, { bigint: true });
+      const canonicalAfter = await fs.realpath(absolutePath);
+      if (
+        canonicalAfter !== canonicalBefore ||
+        !sameSingleLinkRegularFileIdentity(before, finalHandleStat) ||
+        !sameSingleLinkRegularFileIdentity(before, finalPathStat)
+      ) {
+        throw new Error('Workspace source changed during read');
+      }
+      return { path: requestedPath, content };
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
   }
 
   private async executeFile(
