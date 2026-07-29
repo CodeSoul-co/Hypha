@@ -800,6 +800,50 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     }
   }, 30_000);
 
+  it('fails closed during a real database outage and recovers through the same Store', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-outage';
+    createRequest.idempotencyKey = 'execution-create:execution.real.outage';
+    createRequest.record.id = 'execution.real.outage';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.outage';
+    createRequest.record.request.idempotencyKey = 'command:run.real:outage';
+
+    const { connection, store } = createRealStore('outage-recovery');
+    let postgresStopped = false;
+
+    try {
+      await connection.initialize();
+      const persisted = await store.create(createRequest);
+
+      await requireDocker(['stop', '--time', '1', containerName]);
+      postgresStopped = true;
+
+      await expect(store.get(persisted.id)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_UNAVAILABLE',
+        message: 'Postgres Execution store write failed.',
+      });
+      await expect(store.health()).resolves.toMatchObject({
+        status: 'unhealthy',
+        message: 'Postgres Execution store health check failed.',
+        details: { provider: 'postgres', ready: false },
+      });
+
+      await requireDocker(['start', containerName]);
+      postgresStopped = false;
+      await waitForPostgres();
+      await waitForStoreHealthy(store);
+
+      await expect(store.get(persisted.id)).resolves.toEqual(persisted);
+    } finally {
+      if (postgresStopped) {
+        await requireDocker(['start', containerName]);
+        await waitForPostgres();
+      }
+      await store.close();
+    }
+  }, 45_000);
+
   it('quarantines a corrupt real record while healthy records remain readable', async () => {
     const corruptRequest = structuredClone(executionRecordCreateRequestExample);
     corruptRequest.operationId = 'operation.execution.create.real-corrupt';
@@ -918,6 +962,15 @@ async function waitForPostgres(): Promise<void> {
   throw new Error(
     `Real Postgres fixture did not become reachable${lastErrorCode ? ` (${lastErrorCode})` : ''}.`
   );
+}
+
+async function waitForStoreHealthy(store: PostgresExecutionStoreFoundation): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const health = await store.health();
+    if (health.status === 'healthy' && health.details?.ready === true) return;
+    await delay(250);
+  }
+  throw new Error('Real Postgres Store did not recover after the database restarted.');
 }
 
 async function requireDocker(args: string[]): Promise<DockerCliResult> {

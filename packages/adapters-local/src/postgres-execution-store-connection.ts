@@ -373,6 +373,11 @@ class NodePostgresPool implements PostgresExecutionStorePool {
 
   constructor(config: PoolConfig) {
     this.pool = new Pool(config);
+    this.pool.on('error', () => {
+      // node-postgres evicts failed idle clients. The listener prevents an
+      // expected database outage from becoming an unhandled process error;
+      // health checks and Store operations still report the outage fail closed.
+    });
   }
 
   async connect(): Promise<PostgresExecutionStorePoolClient> {
