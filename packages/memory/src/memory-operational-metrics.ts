@@ -65,12 +65,6 @@ export class MemoryOperationalMetrics {
       providerId: event.providerId,
       reason: event.reason,
     });
-    if (event.reason === 'scope_incomplete') {
-      this.record('scope_rejection', 1, {
-        providerId: event.providerId,
-        reason: event.reason,
-      });
-    }
   }
 
   observeIndexEvent(event: IndexOutboxWorkerEvent): void {

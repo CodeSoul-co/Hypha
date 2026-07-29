@@ -106,7 +106,6 @@ export interface ModelUsage {
   outputTokens?: number;
   totalTokens?: number;
   cacheHitTokens?: number;
-  cacheMissTokens?: number;
 }
 
 export interface ModelResponse<TContent = string> {

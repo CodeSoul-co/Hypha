@@ -72,7 +72,6 @@ export const domainMemoryDependencySnapshotSchema: ZodType<DomainMemoryDependenc
 export const memoryCacheValidityInputSchema: ZodType<MemoryCacheValidityInput> = z
   .object({
     memoryProfileRevision: z.string().min(1),
-    mutationGeneration: z.string().min(1),
     contextProfileRevision: z.string().min(1).optional(),
     scopeHash: z.string().min(1),
     queryHash: z.string().min(1).optional(),
@@ -90,7 +89,6 @@ export const memoryCacheInvalidationSchema: ZodType<MemoryCacheInvalidation> = z
     scopeHash: z.string().min(1),
     reason: z.enum(['created', 'updated', 'invalidated', 'deleted', 'provider_revision']),
     memoryIds: z.array(z.string().min(1)),
-    mutationGeneration: z.string().min(1),
     memoryVersionIds: z.array(z.string().min(1)).optional(),
     validityHash: z.string().min(1),
   })
@@ -101,8 +99,8 @@ export const memoryReplayReferenceSchema: ZodType<MemoryReplayReference> = z
     operationId: z.string().min(1),
     profileRevision: z.string().min(1),
     scopeHash: z.string().min(1),
-    eventIds: z.array(z.string().min(1)).min(1),
-    memoryVersionIds: z.array(z.string().min(1)).min(1),
+    eventIds: z.array(z.string().min(1)),
+    memoryVersionIds: z.array(z.string().min(1)),
     retrievalSnapshotId: z.string().min(1).optional(),
     contextHash: z.string().min(1).optional(),
   })
@@ -150,7 +148,6 @@ export const sessionMemoryBindingExample: SessionMemoryBinding = {
 
 export const memoryCacheValidityInputExample: MemoryCacheValidityInput = {
   memoryProfileRevision: 'memory:v1',
-  mutationGeneration: '3',
   contextProfileRevision: 'context:v1',
   scopeHash: 'scope:sha256',
   selectedMemoryVersionIds: ['memory:preference:v3'],
