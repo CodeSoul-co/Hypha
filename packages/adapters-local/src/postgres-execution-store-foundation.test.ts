@@ -1078,6 +1078,17 @@ describe('PostgresExecutionStoreFoundation persistence', () => {
     expect(connection.healthCalls).toBe(1);
     expect(connection.transactions).toBe(0);
   });
+
+  it('delegates close errors and allows the connection lifecycle to retry', async () => {
+    const connection = new ScriptedTransactionPort([]);
+    connection.closeFailures = 1;
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    await expect(store.close()).rejects.toThrow('connection close failed');
+    await expect(store.close()).resolves.toBeUndefined();
+    expect(connection.closeCalls).toBe(2);
+    expect(connection.transactions).toBe(0);
+  });
 });
 
 interface ScriptedCommand {
@@ -1089,6 +1100,8 @@ class ScriptedTransactionPort implements PostgresExecutionStoreTransactionPort {
   private readonly clients: ScriptedClient[];
   transactions = 0;
   healthCalls = 0;
+  closeCalls = 0;
+  closeFailures = 0;
 
   constructor(
     clients: ScriptedClient[],
@@ -1117,6 +1130,14 @@ class ScriptedTransactionPort implements PostgresExecutionStoreTransactionPort {
   async health(): Promise<ProviderHealth> {
     this.healthCalls += 1;
     return structuredClone(this.healthEvidence);
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+    if (this.closeFailures > 0) {
+      this.closeFailures -= 1;
+      throw new Error('connection close failed');
+    }
   }
 }
 

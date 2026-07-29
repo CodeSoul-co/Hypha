@@ -39,6 +39,7 @@ import {
 export interface PostgresExecutionStoreTransactionPort {
   transaction<T>(operation: (client: PostgresExecutionStorePoolClient) => Promise<T>): Promise<T>;
   health(): Promise<ProviderHealth>;
+  close(): Promise<void>;
 }
 
 export type PostgresExecutionStoreFoundationErrorCode =
@@ -604,6 +605,10 @@ export class PostgresExecutionStoreFoundation {
 
   async health(): Promise<ProviderHealth> {
     return this.connection.health();
+  }
+
+  async close(): Promise<void> {
+    return this.connection.close();
   }
 
   private async writeOperation<T>(
