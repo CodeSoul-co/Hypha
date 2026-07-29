@@ -1162,7 +1162,10 @@ function secureSQLiteRuntimeFiles(filename: string): void {
     const runtimeFilename = `${filename}${suffix}`;
     rejectAliasedDatabaseFile(runtimeFilename);
     if (process.platform !== 'win32' && fs.existsSync(runtimeFilename)) {
-      fs.chmodSync(runtimeFilename, 0o600);
+      const currentMode = fs.statSync(runtimeFilename).mode & 0o777;
+      // Remove group/other access without silently making an operator-owned
+      // read-only database writable again.
+      fs.chmodSync(runtimeFilename, currentMode & 0o600);
     }
   }
 }

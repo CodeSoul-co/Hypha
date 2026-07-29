@@ -125,6 +125,52 @@ describe('SQLiteExecutionStoreFoundation', () => {
     await restored.close();
   });
 
+  it('fails closed on a read-only database and retries without a partial commit', async () => {
+    const root = await temporaryRoot();
+    const initial = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const filename = initial.filename;
+    const preservedRequest = queuedCreateRequest('execution.read-only.preserved');
+    const preserved = await initial.create(preservedRequest);
+    await initial.close();
+
+    const rejectedRequest = queuedCreateRequest('execution.read-only.rejected');
+    await fs.chmod(filename, 0o444);
+    let readOnlyStore: SQLiteExecutionStoreFoundation | undefined;
+    let openError: unknown;
+    try {
+      try {
+        readOnlyStore = new SQLiteExecutionStoreFoundation({ rootPath: root });
+      } catch (error) {
+        openError = error;
+      }
+
+      if (readOnlyStore) {
+        await expect(readOnlyStore.create(rejectedRequest)).rejects.toMatchObject({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'SQLite Execution store write failed.',
+        });
+        await expect(readOnlyStore.get(preserved.id)).resolves.toEqual(preserved);
+        await readOnlyStore.close();
+        readOnlyStore = undefined;
+      } else {
+        expect(openError).toMatchObject({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'Unable to open the SQLite Execution store.',
+        });
+      }
+    } finally {
+      await readOnlyStore?.close();
+      await fs.chmod(filename, 0o600);
+    }
+
+    const restored = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(restored.get(preserved.id)).resolves.toEqual(preserved);
+    await expect(restored.get(rejectedRequest.record.id)).resolves.toBeNull();
+    const created = await restored.create(rejectedRequest);
+    await expect(restored.create(rejectedRequest)).resolves.toEqual(created);
+    await restored.close();
+  });
+
   it('lists only records matching owner, provider, status, and time filters', async () => {
     const root = await temporaryRoot();
     const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
