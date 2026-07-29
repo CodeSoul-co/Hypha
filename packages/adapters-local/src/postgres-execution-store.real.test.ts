@@ -422,6 +422,137 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await fixture.store.close();
     }
   }, 30_000);
+
+  it('reclaims an expired real lease and fences the stale worker', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-reclaim';
+    createRequest.idempotencyKey = 'execution-create:execution.real.reclaim';
+    createRequest.record.id = 'execution.real.reclaim';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.reclaim';
+    createRequest.record.request.idempotencyKey = 'command:run.real:reclaim';
+    const firstAcquire = structuredClone(executionLeaseAcquireRequestExample);
+    firstAcquire.operationId = 'operation.lease.acquire.real-reclaim-a';
+    firstAcquire.executionId = createRequest.record.id;
+    firstAcquire.expectedRevision = 0;
+    firstAcquire.requestedLeaseId = 'lease.execution.real.reclaim.a';
+    firstAcquire.ownerId = 'runtime-worker.real.reclaim.a';
+    firstAcquire.acquiredAt = '2026-07-16T00:00:02.000Z';
+    firstAcquire.idempotencyKey = 'lease-acquire:execution.real.reclaim:a';
+    const workerA = createRealStore('reclaim-worker-a');
+    const workerB = createRealStore('reclaim-worker-b');
+
+    try {
+      await Promise.all([workerA.connection.initialize(), workerB.connection.initialize()]);
+      await workerA.store.create(createRequest);
+      const firstClaim = await workerA.store.acquireLease(firstAcquire);
+      if (!firstClaim.lease) throw new Error('Real Postgres claim did not return a lease.');
+      const staleLease = firstClaim.lease;
+
+      const earlyTakeover = structuredClone(firstAcquire);
+      earlyTakeover.operationId = 'operation.lease.acquire.real-reclaim-early';
+      earlyTakeover.expectedRevision = firstClaim.revision;
+      earlyTakeover.requestedLeaseId = 'lease.execution.real.reclaim.early';
+      earlyTakeover.ownerId = 'runtime-worker.real.reclaim.early';
+      earlyTakeover.acquiredAt = '2026-07-16T00:00:31.999Z';
+      earlyTakeover.idempotencyKey = 'lease-acquire:execution.real.reclaim:early';
+      await expect(workerB.store.acquireLease(earlyTakeover)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_LEASE_HELD',
+        details: {
+          executionId: createRequest.record.id,
+          leaseId: staleLease.id,
+          expiresAt: staleLease.expiresAt,
+        },
+      });
+
+      const takeoverRequest = structuredClone(earlyTakeover);
+      takeoverRequest.operationId = 'operation.lease.acquire.real-reclaim-b';
+      takeoverRequest.requestedLeaseId = 'lease.execution.real.reclaim.b';
+      takeoverRequest.ownerId = 'runtime-worker.real.reclaim.b';
+      takeoverRequest.acquiredAt = staleLease.expiresAt;
+      takeoverRequest.idempotencyKey = 'lease-acquire:execution.real.reclaim:b';
+      const takeover = await workerB.store.acquireLease(takeoverRequest);
+
+      expect(takeover).toMatchObject({
+        id: createRequest.record.id,
+        revision: 2,
+        status: 'starting',
+        attempt: 1,
+        lease: {
+          id: takeoverRequest.requestedLeaseId,
+          ownerId: takeoverRequest.ownerId,
+          fencingToken: staleLease.fencingToken + 1,
+          acquiredAt: takeoverRequest.acquiredAt,
+        },
+        updatedAt: takeoverRequest.acquiredAt,
+      });
+
+      const staleRenew = structuredClone(executionLeaseRenewRequestExample);
+      staleRenew.operationId = 'operation.lease.renew.real-reclaim-stale';
+      staleRenew.executionId = createRequest.record.id;
+      staleRenew.expectedRevision = takeover.revision;
+      staleRenew.leaseGuard = {
+        leaseId: staleLease.id,
+        ownerId: staleLease.ownerId,
+        fencingToken: staleLease.fencingToken,
+      };
+      staleRenew.heartbeatAt = '2026-07-16T00:00:33.000Z';
+      staleRenew.idempotencyKey = 'lease-renew:execution.real.reclaim:stale';
+      await expect(workerA.store.renewLease(staleRenew)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_FENCING_REJECTED',
+        details: {
+          executionId: createRequest.record.id,
+          fencingToken: staleLease.fencingToken + 1,
+        },
+      });
+      await expect(workerA.store.get(createRequest.record.id)).resolves.toEqual(takeover);
+
+      const evidence = await workerA.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             records.revision,
+             records.last_fencing_token,
+             history.lease_id,
+             history.fencing_token,
+             history.owner_id,
+             history.released_at,
+             history.release_reason,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count
+           FROM execution_records AS records
+           JOIN execution_lease_history AS history
+             ON history.execution_id = records.execution_id
+          WHERE records.execution_id = $1
+          ORDER BY history.fencing_token`,
+          [createRequest.record.id]
+        )
+      );
+      expect(evidence.rows).toEqual([
+        {
+          revision: '2',
+          last_fencing_token: '2',
+          lease_id: staleLease.id,
+          fencing_token: '1',
+          owner_id: staleLease.ownerId,
+          released_at: new Date(takeoverRequest.acquiredAt),
+          release_reason: 'expired_and_replaced',
+          mutation_count: '2',
+        },
+        {
+          revision: '2',
+          last_fencing_token: '2',
+          lease_id: takeoverRequest.requestedLeaseId,
+          fencing_token: '2',
+          owner_id: takeoverRequest.ownerId,
+          released_at: null,
+          release_reason: null,
+          mutation_count: '2',
+        },
+      ]);
+    } finally {
+      await Promise.all([workerA.store.close(), workerB.store.close()]);
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
