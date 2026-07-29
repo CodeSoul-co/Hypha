@@ -6,6 +6,7 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ExecutionStore,
   ProviderHealth,
 } from '@hypha/core';
 import {
@@ -27,6 +28,28 @@ import {
 import type { PostgresExecutionStoreSchemaQueryResult } from './postgres-execution-store-schema';
 
 describe('PostgresExecutionStoreFoundation persistence', () => {
+  it('implements every public ExecutionStore operation', () => {
+    const store: ExecutionStore = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([])
+    );
+    const operations: Array<keyof ExecutionStore> = [
+      'create',
+      'get',
+      'list',
+      'resolveIdempotency',
+      'compareAndSet',
+      'acquireLease',
+      'renewLease',
+      'releaseLease',
+      'health',
+      'close',
+    ];
+
+    for (const operation of operations) {
+      expect(store[operation]).toBeTypeOf('function');
+    }
+  });
+
   it('creates and reads a Runtime Schema-validated Execution record', async () => {
     const request = structuredClone(executionRecordCreateRequestExample);
     const createClient = new ScriptedClient([

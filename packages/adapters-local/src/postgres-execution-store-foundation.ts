@@ -12,6 +12,7 @@ import type {
   ExecutionRecordCreateRequest,
   ExecutionRecordPage,
   ExecutionRecordQuery,
+  ExecutionStore,
   ProviderHealth,
 } from '@hypha/core';
 import {
@@ -71,7 +72,7 @@ export class PostgresExecutionStoreFoundationError extends Error {
  * Postgres persistence mechanics. This remains internal until every
  * ExecutionStore operation and real Postgres acceptance test is complete.
  */
-export class PostgresExecutionStoreFoundation {
+export class PostgresExecutionStoreFoundation implements ExecutionStore {
   constructor(private readonly connection: PostgresExecutionStoreTransactionPort) {}
 
   async create(input: ExecutionRecordCreateRequest): Promise<ExecutionRecord> {
