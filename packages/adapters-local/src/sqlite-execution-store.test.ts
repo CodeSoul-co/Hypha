@@ -12,6 +12,7 @@ import type {
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
+  executionLeaseReleaseRequestExample,
   executionLeaseRenewRequestExample,
   executionRecordCreateRequestExample,
 } from '@hypha/core';
@@ -127,6 +128,79 @@ describe('SQLiteExecutionStore public adapter', () => {
       ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
     } finally {
       await first.close();
+    }
+  }, 60_000);
+
+  it('renews, releases, and reacquires a lease across independent processes', async () => {
+    const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-lease-lifecycle-'));
+    root = testRoot;
+    const seed = new SQLiteExecutionStore({ rootPath: testRoot });
+    await seed
+      .create(structuredClone(executionRecordCreateRequestExample))
+      .finally(() => seed.close());
+
+    const acquired = await runStoreOperationInChild<ExecutionRecord>(
+      testRoot,
+      'acquireLease',
+      structuredClone(executionLeaseAcquireRequestExample)
+    );
+    if (!acquired.lease) throw new Error('Expected the independent worker to acquire a lease.');
+
+    const renewed = await runStoreOperationInChild<ExecutionRecord>(testRoot, 'renewLease', {
+      ...structuredClone(executionLeaseRenewRequestExample),
+      expectedRevision: acquired.revision,
+      leaseGuard: leaseGuardFor(acquired.lease),
+    });
+    expect(renewed).toMatchObject({
+      revision: 2,
+      lease: {
+        id: acquired.lease.id,
+        ownerId: acquired.lease.ownerId,
+        fencingToken: 1,
+        heartbeatAt: executionLeaseRenewRequestExample.heartbeatAt,
+      },
+    });
+    if (!renewed.lease) throw new Error('Expected the renewed lease to remain present.');
+
+    const released = await runStoreOperationInChild<ExecutionRecord>(testRoot, 'releaseLease', {
+      ...structuredClone(executionLeaseReleaseRequestExample),
+      expectedRevision: renewed.revision,
+      leaseGuard: leaseGuardFor(renewed.lease),
+    });
+    expect(released).toMatchObject({ revision: 3 });
+    expect(released.lease).toBeUndefined();
+
+    const successor = await runStoreOperationInChild<ExecutionRecord>(testRoot, 'acquireLease', {
+      ...structuredClone(executionLeaseAcquireRequestExample),
+      operationId: 'operation.lease.acquire.after-release',
+      expectedRevision: released.revision,
+      requestedLeaseId: 'lease.execution.example.after-release',
+      ownerId: 'runtime-worker.after-release',
+      acquiredAt: '2026-07-16T00:00:21.000Z',
+      idempotencyKey: 'lease-acquire:after-release',
+    });
+    expect(successor.lease).toMatchObject({
+      id: 'lease.execution.example.after-release',
+      ownerId: 'runtime-worker.after-release',
+      fencingToken: 2,
+    });
+
+    await expect(
+      runStoreOperationInChild<ExecutionRecord>(testRoot, 'renewLease', {
+        ...structuredClone(executionLeaseRenewRequestExample),
+        operationId: 'operation.lease.renew.released-worker',
+        expectedRevision: successor.revision,
+        leaseGuard: leaseGuardFor(acquired.lease),
+        heartbeatAt: '2026-07-16T00:00:22.000Z',
+        idempotencyKey: 'lease-renew:released-worker',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+
+    const reopened = new SQLiteExecutionStore({ rootPath: testRoot });
+    try {
+      await expect(reopened.get(successor.id)).resolves.toEqual(successor);
+    } finally {
+      await reopened.close();
     }
   }, 60_000);
 
@@ -304,7 +378,7 @@ describe('SQLiteExecutionStore public adapter', () => {
   }, 60_000);
 });
 
-type ChildStoreOperation = 'acquireLease' | 'compareAndSet';
+type ChildStoreOperation = 'acquireLease' | 'compareAndSet' | 'releaseLease' | 'renewLease';
 type ChildStoreCrashOperation =
   | 'crashAfterAcquireLease'
   | 'crashAfterCompareAndSet'
@@ -465,6 +539,14 @@ function startingMutation(
       updatedAt: '2026-07-16T00:00:01.000Z',
     },
     idempotencyKey,
+  };
+}
+
+function leaseGuardFor(lease: NonNullable<ExecutionRecord['lease']>) {
+  return {
+    leaseId: lease.id,
+    ownerId: lease.ownerId,
+    fencingToken: lease.fencingToken,
   };
 }
 
