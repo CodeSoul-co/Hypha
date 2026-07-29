@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { executionRecordCreateRequestExample } from '@hypha/core';
+import {
+  executionRecordCompareAndSetRequestExample,
+  executionRecordCreateRequestExample,
+} from '@hypha/core';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
@@ -167,6 +170,74 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await reopened?.store.close();
     }
   }, 30_000);
+
+  it('allows only one real concurrent compare-and-set at the same revision', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-cas';
+    createRequest.idempotencyKey = 'execution-create:execution.real.cas';
+    createRequest.record.id = 'execution.real.cas';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.cas';
+    createRequest.record.request.idempotencyKey = 'command:run.real:cas';
+    const firstUpdate = structuredClone(executionRecordCompareAndSetRequestExample);
+    firstUpdate.operationId = 'operation.execution.cas.real.a';
+    firstUpdate.executionId = createRequest.record.id;
+    firstUpdate.expectedRevision = 0;
+    firstUpdate.leaseGuard = undefined;
+    firstUpdate.idempotencyKey = 'execution-cas:execution.real.cas:a';
+    firstUpdate.next = {
+      ...structuredClone(createRequest.record),
+      revision: 1,
+      status: 'starting',
+      updatedAt: '2026-07-16T00:00:01.000Z',
+    };
+    const secondUpdate = structuredClone(firstUpdate);
+    secondUpdate.operationId = 'operation.execution.cas.real.b';
+    secondUpdate.idempotencyKey = 'execution-cas:execution.real.cas:b';
+    const workerA = createRealStore('cas-worker-a');
+    const workerB = createRealStore('cas-worker-b');
+
+    try {
+      await Promise.all([workerA.connection.initialize(), workerB.connection.initialize()]);
+      await workerA.store.create(createRequest);
+      const outcomes = await Promise.all([
+        captureCompareAndSet(workerA.store, firstUpdate),
+        captureCompareAndSet(workerB.store, secondUpdate),
+      ]);
+      const successes = outcomes.filter((outcome) => outcome.ok);
+      const failures = outcomes.filter((outcome) => !outcome.ok);
+
+      expect(successes).toHaveLength(1);
+      expect(successes[0]).toMatchObject({ record: firstUpdate.next });
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        error: {
+          code: 'EXECUTION_STORE_REVISION_CONFLICT',
+          details: {
+            executionId: createRequest.record.id,
+            expectedRevision: 0,
+            actualRevision: 1,
+          },
+        },
+      });
+      await expect(workerA.store.get(createRequest.record.id)).resolves.toEqual(firstUpdate.next);
+
+      const evidence = await workerA.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             revision,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count
+           FROM execution_records
+           WHERE execution_id = $1`,
+          [createRequest.record.id]
+        )
+      );
+      expect(evidence.rows).toEqual([{ revision: '1', mutation_count: '1' }]);
+    } finally {
+      await Promise.all([workerA.store.close(), workerB.store.close()]);
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
@@ -270,4 +341,18 @@ function postgresErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
   const code = Reflect.get(error, 'code');
   return typeof code === 'string' && /^[A-Z0-9_]{1,32}$/u.test(code) ? code : undefined;
+}
+
+async function captureCompareAndSet(
+  store: PostgresExecutionStoreFoundation,
+  request: typeof executionRecordCompareAndSetRequestExample
+): Promise<
+  | { ok: true; record: Awaited<ReturnType<PostgresExecutionStoreFoundation['compareAndSet']>> }
+  | { ok: false; error: unknown }
+> {
+  try {
+    return { ok: true, record: await store.compareAndSet(request) };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
