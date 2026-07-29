@@ -11,6 +11,7 @@ import type {
 import { DefaultArtifactManager } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readArtifactStream } from './artifact-content-io';
+import { hashExecutionValue } from './execution-provider-values';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { LocalProcessExecutionProvider } from './local-process-execution-provider';
 import {
@@ -69,10 +70,42 @@ describe('LocalProcessExecutionProvider', () => {
         providerId: 'provider.local-process',
         executionId: 'execution.local.success',
         status: 'completed',
+        metadata: {
+          outcome: 'exited',
+          terminalStatus: 'completed',
+          exitCode: 0,
+          signal: null,
+          boundedOutput: {
+            stdoutContentHash:
+              'sha256:d42ef1497900bc6e542c641a896c88694d15069b8a11247f66ba7342b6c21cd9',
+            stderrContentHash:
+              'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            stdoutBytes: 7,
+            stderrBytes: 0,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          },
+          resourceUsage: { outputBytes: 7, processCountPeak: 1 },
+          cleanup: {
+            terminationMechanism:
+              process.platform === 'win32' ? 'windows_taskkill' : 'posix_process_group',
+            processTreeTerminationVerified: process.platform !== 'win32',
+          },
+        },
       },
       metadata: { accountingMode: 'local_observed_output_only' },
     });
-    expect(result.externalReceipt?.receiptHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const receipt = result.externalReceipt;
+    expect(receipt?.receiptHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    if (!receipt) throw new Error('Expected Local Process receipt evidence.');
+    const { receiptHash, ...receiptBody } = receipt;
+    expect(receiptHash).toBe(hashExecutionValue(receiptBody));
+    expect(receiptHash).not.toBe(
+      hashExecutionValue({
+        ...receiptBody,
+        metadata: { ...receiptBody.metadata, exitCode: 1 },
+      })
+    );
     await provider.close();
   });
 
@@ -87,7 +120,26 @@ describe('LocalProcessExecutionProvider', () => {
     expect(timedOut).toMatchObject({
       status: 'timed_out',
       error: { code: 'EXECUTION_TIMEOUT' },
+      externalReceipt: {
+        status: 'completed',
+        metadata: {
+          outcome: 'timed_out',
+          terminalStatus: 'timed_out',
+          exitCode: null,
+          boundedOutput: {
+            stdoutContentHash:
+              'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            stderrContentHash:
+              'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            stdoutBytes: 0,
+            stderrBytes: 0,
+          },
+          resourceUsage: { outputBytes: 0, processCountPeak: 1 },
+        },
+      },
     });
+    expect(timedOut.externalReceipt?.metadata).toHaveProperty('signal');
+    expect(timedOut.externalReceipt?.metadata).toHaveProperty('cleanup');
     const limited = await provider.execute(
       command(
         ready.id,
@@ -99,7 +151,23 @@ describe('LocalProcessExecutionProvider', () => {
     expect(limited).toMatchObject({
       status: 'resource_exceeded',
       error: { code: 'EXECUTION_OUTPUT_LIMIT' },
+      externalReceipt: {
+        status: 'completed',
+        metadata: {
+          outcome: 'output_limit',
+          terminalStatus: 'resource_exceeded',
+          exitCode: null,
+          boundedOutput: { stdoutTruncated: true },
+        },
+      },
     });
+    expect(limited.externalReceipt?.metadata?.boundedOutput).toEqual(
+      expect.objectContaining({
+        stdoutBytes: Buffer.byteLength(limited.stdout ?? ''),
+        stdoutContentHash: limited.stdoutContentHash,
+        stdoutTruncated: true,
+      })
+    );
     expect(limited.resourceUsage?.outputBytes).toBeGreaterThan(16);
     await provider.close();
   });
@@ -284,9 +352,7 @@ describe('LocalProcessExecutionProvider', () => {
       { sequence: 1, stream: 'stderr' },
     ]);
     expect(chunks.map(decodeChunk)).toEqual(['out', 'err']);
-    expect(chunks.every((chunk) => /^sha256:[0-9a-f]{64}$/u.test(chunk.contentHash))).toBe(
-      true
-    );
+    expect(chunks.every((chunk) => /^sha256:[0-9a-f]{64}$/u.test(chunk.contentHash))).toBe(true);
     await provider.close();
   });
 
