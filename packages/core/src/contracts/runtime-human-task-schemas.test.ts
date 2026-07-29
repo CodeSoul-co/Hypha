@@ -59,6 +59,9 @@ describe('Runtime HumanTask contracts', () => {
       ...runtimeHumanTaskExample,
       status: 'superseded' as const,
       revision: 2,
+      decisionEventId: 'event.human-task.superseded',
+      decisionCommandId: 'command.human-task.supersede',
+      decisionIdempotencyKey: 'human-task.supersede',
       decidedBy: 'reviewer.default',
       decidedAt: '2026-07-23T10:05:00.000Z',
       supersededByTaskId: 'human-task.replacement',
@@ -76,9 +79,7 @@ describe('Runtime HumanTask contracts', () => {
     const ajv = new Ajv({ strict: true, allErrors: true });
     addFormats(ajv);
     expect(ajv.validate(runtimeHumanTaskJsonSchema, supersededTask)).toBe(true);
-    expect(
-      ajv.validate(runtimeHumanTaskDecisionCommandJsonSchema, supersededDecision)
-    ).toBe(true);
+    expect(ajv.validate(runtimeHumanTaskDecisionCommandJsonSchema, supersededDecision)).toBe(true);
     expect(() =>
       runtimeHumanTaskSchema.parse({
         ...supersededTask,

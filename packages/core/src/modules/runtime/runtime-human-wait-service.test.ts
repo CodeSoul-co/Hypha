@@ -25,6 +25,8 @@ const eventTypes: FrameworkEventType[] = [
   'run.resume.requested',
   'run.resumed',
   'run.waiting_human',
+  'run.failed',
+  'run.cancelled',
   'runtime.wait.created',
   'runtime.wait.resolved',
   'fsm.state.entered',
@@ -151,6 +153,95 @@ describe('RuntimeHumanWaitService', () => {
     });
   });
 
+  it('fails closed when a pending HumanTask is resolved without decision evidence', async () => {
+    const target = await fixture();
+    await target.service.create({
+      ...createCommand(),
+      commandId: 'create.tool-with-required-decision',
+      humanTasks: [humanTaskRequest('human-task.required')],
+    });
+
+    await expect(
+      target.service.resolve({
+        commandId: 'resolve.tool-without-decision',
+        scope,
+        ownerId: 'worker.review',
+        leaseTtlMs: 30_000,
+        waitId: 'wait.tool-1',
+        pendingActionRef: 'tool-1',
+        principalId: 'admin-1',
+        decision: 'approved',
+        resolvedAt: '2026-07-23T08:01:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'HUMAN_TASK_DECISION_REQUIRED' });
+
+    const written = await target.events.read({ scope: streamScope() });
+    expect(projectRuntimeHumanTasks(written)).toEqual([
+      expect.objectContaining({ taskId: 'human-task.required', status: 'pending', revision: 1 }),
+    ]);
+    expect(written.some((candidate) => candidate.type === 'runtime.wait.resolved')).toBe(false);
+  });
+
+  it('binds the reviewer and decision time to the Human Wait resolution', async () => {
+    const target = await fixture();
+    const request = humanTaskRequest('human-task.bound-decision');
+    await target.service.create({
+      ...createCommand(),
+      commandId: 'create.tool-bound-decision',
+      humanTasks: [request],
+    });
+    const decision = {
+      commandId: 'human-task.bound-decision.approve',
+      scope,
+      principal: {
+        principalId: 'reviewer-1',
+        type: 'user' as const,
+        userId: 'reviewer-1',
+        tenantId: scope.tenantId,
+        permissionScopes: ['runtime.human-task.decide'],
+      },
+      taskId: request.taskId,
+      expectedRevision: 1,
+      expectedSubjectHash: request.subjectHash,
+      decision: 'approved' as const,
+      decidedAt: '2026-07-23T08:01:00.000Z',
+    };
+
+    expect(() =>
+      target.service.resolve({
+        commandId: 'resolve.tool-reviewer-mismatch',
+        scope,
+        ownerId: 'worker.review',
+        leaseTtlMs: 30_000,
+        waitId: 'wait.tool-1',
+        pendingActionRef: 'tool-1',
+        principalId: 'different-reviewer',
+        decision: 'approved',
+        resolvedAt: decision.decidedAt,
+        humanTaskDecision: decision,
+      })
+    ).toThrow(expect.objectContaining({ code: 'RUNTIME_INVALID_INPUT' }));
+    expect(() =>
+      target.service.resolve({
+        commandId: 'resolve.tool-time-mismatch',
+        scope,
+        ownerId: 'worker.review',
+        leaseTtlMs: 30_000,
+        waitId: 'wait.tool-1',
+        pendingActionRef: 'tool-1',
+        principalId: decision.principal.principalId,
+        decision: 'approved',
+        resolvedAt: '2026-07-23T08:02:00.000Z',
+        humanTaskDecision: decision,
+      })
+    ).toThrow(expect.objectContaining({ code: 'RUNTIME_INVALID_INPUT' }));
+
+    const written = await target.events.read({ scope: streamScope() });
+    expect(written.filter((candidate) => candidate.type === 'human.review.approved')).toHaveLength(
+      0
+    );
+  });
+
   it('resolves only the matching Human action and advances the State attempt', async () => {
     const target = await fixture();
     await target.service.create(createCommand());
@@ -186,13 +277,19 @@ describe('RuntimeHumanWaitService', () => {
   });
 
   it.each([
-    ['approved', 'human.review.approved', '2026-07-23T08:01:00.000Z'],
-    ['rejected', 'human.review.rejected', '2026-07-23T08:01:00.000Z'],
-    ['expired', 'human.review.expired', '2026-07-24T08:00:30.000Z'],
-    ['cancelled', 'human.review.cancelled', '2026-07-23T08:01:00.000Z'],
+    ['approved', 'human.review.approved', '2026-07-23T08:01:00.000Z', 'running', undefined],
+    ['rejected', 'human.review.rejected', '2026-07-23T08:01:00.000Z', 'failed', 'run.failed'],
+    ['expired', 'human.review.expired', '2026-07-24T08:00:30.000Z', 'failed', 'run.failed'],
+    [
+      'cancelled',
+      'human.review.cancelled',
+      '2026-07-23T08:01:00.000Z',
+      'cancelled',
+      'run.cancelled',
+    ],
   ] as const)(
     'restores an exact Tool Invocation after restart and records one %s terminal event',
-    async (decision, terminalType, decidedAt) => {
+    async (decision, terminalType, decidedAt, expectedRunStatus, terminalRunType) => {
       const target = await fixture();
       const request = {
         taskId: 'human-task.tool-restart',
@@ -213,6 +310,7 @@ describe('RuntimeHumanWaitService', () => {
           workspaceId: 'workspace.review',
         },
       };
+      const principalId = decision === 'expired' ? 'system.expiry' : 'admin-1';
       await target.service.create({
         ...createCommand(),
         commandId: `create.tool-restart.${decision}`,
@@ -236,14 +334,14 @@ describe('RuntimeHumanWaitService', () => {
         leaseTtlMs: 30_000,
         waitId: `wait.tool-restart.${decision}`,
         pendingActionRef: 'invocation.write',
-        principalId: 'admin-1',
+        principalId,
         decision,
         resolvedAt: decidedAt,
         humanTaskDecision: {
           commandId: `human-task.tool-restart.${decision}`,
           scope,
           principal: {
-            principalId: decision === 'expired' ? 'system.expiry' : 'admin-1',
+            principalId,
             type: decision === 'expired' ? ('system' as const) : ('user' as const),
             ...(decision === 'expired' ? {} : { userId: 'admin-1' }),
             tenantId: scope.tenantId,
@@ -254,10 +352,15 @@ describe('RuntimeHumanWaitService', () => {
           expectedSubjectHash: request.subjectHash,
           decision,
           decidedAt,
+          idempotencyKey: `decision.tool-restart.${decision}`,
         },
       };
       const resolved = await restarted.resolve(command);
-      expect(resolved.disposition).toBe('applied');
+      expect(resolved).toMatchObject({
+        disposition: 'applied',
+        projection: { runStatus: expectedRunStatus },
+      });
+      expect(resolved.eventIds).toHaveLength(decision === 'approved' ? 5 : 4);
 
       const repeated = await restarted.resolve(command);
       expect(repeated).toMatchObject({
@@ -266,14 +369,40 @@ describe('RuntimeHumanWaitService', () => {
       });
       const written = await target.events.read({ scope: streamScope() });
       expect(written.filter((event) => event.type === terminalType)).toHaveLength(1);
-      expect(written.filter((event) => event.type === 'fsm.state.entered')).toHaveLength(2);
+      expect(written.filter((event) => event.type === 'fsm.state.entered')).toHaveLength(
+        decision === 'approved' ? 2 : 1
+      );
+      if (terminalRunType === undefined) {
+        expect(written.filter((event) => event.type === 'run.failed')).toHaveLength(0);
+        expect(written.filter((event) => event.type === 'run.cancelled')).toHaveLength(0);
+      } else {
+        expect(written.filter((event) => event.type === terminalRunType)).toHaveLength(1);
+        expect(written.filter((event) => event.type === 'run.resumed')).toHaveLength(0);
+      }
       expect(written.find((event) => event.type === terminalType)?.payload).toMatchObject({
         taskId: request.taskId,
         subjectRef: request.subjectRef,
         subjectHash: request.subjectHash,
         expectedRevision: 1,
+        expectedSubjectHash: request.subjectHash,
+        approvalRevision: 2,
+        decisionCommandId: `human-task.tool-restart.${decision}`,
+        decisionIdempotencyKey: `decision.tool-restart.${decision}`,
+        waitId: `wait.tool-restart.${decision}`,
+        pendingActionRef: 'invocation.write',
         decision,
       });
+      expect(projectRuntimeHumanTasks(written)).toEqual([
+        expect.objectContaining({
+          taskId: request.taskId,
+          status: decision,
+          revision: 2,
+          decisionEventId: expect.any(String),
+          decisionCommandId: `human-task.tool-restart.${decision}`,
+          decisionIdempotencyKey: `decision.tool-restart.${decision}`,
+          decidedBy: principalId,
+        }),
+      ]);
     }
   );
 
@@ -443,6 +572,19 @@ function createCommand() {
     pendingActionRef: 'tool-1',
     reason: 'Tool execution requires approval',
     requestedAt: '2026-07-23T08:00:30.000Z',
+  };
+}
+
+function humanTaskRequest(taskId: string) {
+  return {
+    taskId,
+    kind: 'tool' as const,
+    subjectRef: 'tool:filesystem.write@1.0.0',
+    subjectHash: `sha256:${'a'.repeat(64)}`,
+    requestedBy: scope.userId,
+    allowedDecisionScopes: ['runtime.human-task.decide'],
+    requestedAt: '2026-07-23T08:00:30.000Z',
+    expiresAt: '2026-07-24T08:00:30.000Z',
   };
 }
 

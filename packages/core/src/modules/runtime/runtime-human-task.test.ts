@@ -56,6 +56,10 @@ describe('Generic Runtime HumanTask', () => {
           {
             taskId: requested.taskId,
             expectedRevision: 1,
+            expectedSubjectHash: requested.subjectHash,
+            decision: 'approved',
+            decisionCommandId: `decision-${kind}`,
+            decisionIdempotencyKey: `decision-${kind}`,
             decidedBy: reviewer.principalId,
             decidedAt: '2026-07-23T10:02:00.000Z',
           },
@@ -68,10 +72,46 @@ describe('Generic Runtime HumanTask', () => {
           kind,
           status: 'approved',
           revision: 2,
+          decisionEventId: 'event-2',
+          decisionCommandId: `decision-${kind}`,
+          decisionIdempotencyKey: `decision-${kind}`,
         }),
       ]);
     }
   );
+
+  it('fails closed when terminal Event evidence contradicts its type or subject', () => {
+    expect(() =>
+      projectRuntimeHumanTasks([
+        event('human.review.requested', requested, 1),
+        event(
+          'human.review.approved',
+          {
+            taskId: requested.taskId,
+            expectedRevision: 1,
+            expectedSubjectHash: requested.subjectHash,
+            decision: 'rejected',
+          },
+          2
+        ),
+      ])
+    ).toThrow(expect.objectContaining({ code: 'RUNTIME_EVENT_STREAM_CORRUPT' }));
+    expect(() =>
+      projectRuntimeHumanTasks([
+        event('human.review.requested', requested, 1),
+        event(
+          'human.review.approved',
+          {
+            taskId: requested.taskId,
+            expectedRevision: 1,
+            expectedSubjectHash: `sha256:${'b'.repeat(64)}`,
+            decision: 'approved',
+          },
+          2
+        ),
+      ])
+    ).toThrow(expect.objectContaining({ code: 'RUNTIME_EVENT_STREAM_CORRUPT' }));
+  });
 
   it('validates revision, subject hash, expiry, and decision scope', () => {
     const task = projectRuntimeHumanTasks([event('human.review.requested', requested, 1)])[0];

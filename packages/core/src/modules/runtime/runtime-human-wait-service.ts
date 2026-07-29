@@ -311,12 +311,30 @@ export class RuntimeHumanWaitService {
         commandId: command.commandId,
         commandHash,
         waitId,
-        resolution: 'manual',
+        resolution: humanWaitResolution(command.decision),
         resolvedAt: command.resolvedAt,
       },
       projection,
       command.resolvedAt
     );
+    if (command.decision !== 'approved') {
+      const terminal = this.event(
+        command,
+        'resolve',
+        command.decision === 'cancelled' ? 'run.cancelled' : 'run.failed',
+        {
+          commandId: command.commandId,
+          commandHash,
+          terminalState: projection.currentState,
+          reason: `human_review_${command.decision}`,
+          waitId,
+          pendingActionRef: command.pendingActionRef,
+        },
+        projection,
+        command.resolvedAt
+      );
+      return [...(taskResolution ? [taskResolution] : []), requested, resolved, terminal];
+    }
     const resumed = this.event(
       command,
       'resolve',
@@ -363,7 +381,24 @@ export class RuntimeHumanWaitService {
     commandHash: string
   ): EventCreateInput | undefined {
     const decision = command.humanTaskDecision;
-    if (!decision) return undefined;
+    const tasks = projectRuntimeHumanTasks(streamEvents);
+    const pendingTasks = tasks.filter(
+      (task) =>
+        task.status === 'pending' &&
+        task.stateId === projection.currentState &&
+        task.stateAttempt === projection.stateAttempt
+    );
+    if (!decision) {
+      if (pendingTasks.length > 0) {
+        conflict(
+          'HUMAN_TASK_DECISION_REQUIRED',
+          'Resolving a Human Wait with pending HumanTasks requires a terminal decision',
+          command,
+          { pendingTaskIds: pendingTasks.map((task) => task.taskId) }
+        );
+      }
+      return undefined;
+    }
     if (decision.decision !== command.decision) {
       conflict(
         'RUNTIME_RUN_CONFLICT',
@@ -372,11 +407,23 @@ export class RuntimeHumanWaitService {
       );
     }
     const task = assertRuntimeHumanTaskDecision(
-      projectRuntimeHumanTasks(streamEvents).find(
-        (candidate) => candidate.taskId === decision.taskId
-      ),
+      tasks.find((candidate) => candidate.taskId === decision.taskId),
       decision
     );
+    if (task.stateId !== projection.currentState || task.stateAttempt !== projection.stateAttempt) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task decision does not belong to the pending State attempt',
+        command,
+        {
+          taskId: task.taskId,
+          taskStateId: task.stateId,
+          taskStateAttempt: task.stateAttempt,
+          currentStateId: projection.currentState,
+          currentStateAttempt: projection.stateAttempt,
+        }
+      );
+    }
     if (!sameScope(command.scope, decision.scope)) {
       conflict('RUNTIME_RUN_CONFLICT', 'Human task decision scope does not match the Run', command);
     }
@@ -391,6 +438,15 @@ export class RuntimeHumanWaitService {
         subjectRef: task.subjectRef,
         subjectHash: task.subjectHash,
         expectedRevision: decision.expectedRevision,
+        expectedSubjectHash: decision.expectedSubjectHash,
+        approvalRevision: decision.expectedRevision + 1,
+        decisionCommandId: decision.commandId,
+        ...(decision.idempotencyKey === undefined
+          ? {}
+          : { decisionIdempotencyKey: decision.idempotencyKey }),
+        waitId: projection.pendingWait?.waitId,
+        pendingActionRef: command.pendingActionRef,
+        resolutionOperationId: humanWaitOperationId('resolve', command.commandId),
         decidedBy: decision.principal.principalId,
         decidedAt: decision.decidedAt,
         decision: decision.decision,
@@ -492,6 +548,15 @@ export class RuntimeHumanWaitService {
         subjectRef: task.subjectRef,
         subjectHash: task.subjectHash,
         expectedRevision: decision.expectedRevision,
+        expectedSubjectHash: decision.expectedSubjectHash,
+        approvalRevision: decision.expectedRevision + 1,
+        decisionCommandId: decision.commandId,
+        ...(decision.idempotencyKey === undefined
+          ? {}
+          : { decisionIdempotencyKey: decision.idempotencyKey }),
+        waitId: projection.pendingWait?.waitId,
+        pendingActionRef: command.pendingActionRef,
+        resolutionOperationId: humanWaitOperationId('supersede', command.commandId),
         decidedBy: decision.principal.principalId,
         decidedAt: decision.decidedAt,
         decision: decision.decision,
@@ -673,6 +738,12 @@ function validateResolve(command: RuntimeHumanWaitResolveCommand): void {
   validTimestamp(command.resolvedAt, 'resolvedAt');
   if (command.humanTaskDecision) {
     validateRuntimeHumanTaskDecisionCommand(command.humanTaskDecision);
+    if (command.humanTaskDecision.principal.principalId !== command.principalId) {
+      invalid('humanTaskDecision principal must match principalId');
+    }
+    if (command.humanTaskDecision.decidedAt !== command.resolvedAt) {
+      invalid('humanTaskDecision.decidedAt must equal resolvedAt');
+    }
   }
 }
 
@@ -752,6 +823,14 @@ function terminalHumanReviewEvent(
     case 'cancelled':
       return 'human.review.cancelled';
   }
+}
+
+function humanWaitResolution(
+  decision: RuntimeHumanWaitResolveCommand['decision']
+): 'manual' | 'cancelled' | 'expired' {
+  if (decision === 'cancelled') return 'cancelled';
+  if (decision === 'expired') return 'expired';
+  return 'manual';
 }
 
 function authorizationFor(lease: FencedRunLease): RunLeaseAuthorization {

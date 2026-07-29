@@ -24,14 +24,46 @@ export function projectRuntimeHumanTasks(events: readonly FrameworkEvent[]): Run
     if (!current) continue;
     const status = statusFromEvent(event.type);
     if (!status) continue;
+    const recordedDecision = text(payload?.decision);
+    if (recordedDecision !== undefined && recordedDecision !== status) {
+      humanTaskError(
+        'RUNTIME_EVENT_STREAM_CORRUPT',
+        'Human task terminal Event type and decision do not match.',
+        {
+          taskId,
+          eventId: event.id,
+          eventType: event.type,
+          recordedDecision,
+        }
+      );
+    }
+    const recordedSubjectHash = text(payload?.expectedSubjectHash) ?? text(payload?.subjectHash);
+    if (recordedSubjectHash !== undefined && recordedSubjectHash !== current.subjectHash) {
+      humanTaskError(
+        'RUNTIME_EVENT_STREAM_CORRUPT',
+        'Human task terminal Event subject hash does not match the request.',
+        {
+          taskId,
+          eventId: event.id,
+          expectedSubjectHash: current.subjectHash,
+          recordedSubjectHash,
+        }
+      );
+    }
     const expectedRevision = positiveInteger(payload?.expectedRevision) ?? current.revision;
     if (expectedRevision !== current.revision) continue;
+    const decisionCommandId = text(payload?.decisionCommandId) ?? text(payload?.commandId);
+    const decisionIdempotencyKey =
+      text(payload?.decisionIdempotencyKey) ?? text(event.idempotencyKey);
     tasks.set(
       taskId,
       validateRuntimeHumanTask({
         ...current,
         status,
         revision: current.revision + 1,
+        decisionEventId: event.id,
+        ...(decisionCommandId === undefined ? {} : { decisionCommandId }),
+        ...(decisionIdempotencyKey === undefined ? {} : { decisionIdempotencyKey }),
         ...(text(payload?.decidedBy) === undefined ? {} : { decidedBy: text(payload?.decidedBy) }),
         decidedAt: text(payload?.decidedAt) ?? event.timestamp,
         ...(text(payload?.supersededByTaskId) === undefined

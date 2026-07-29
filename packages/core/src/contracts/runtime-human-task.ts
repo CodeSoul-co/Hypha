@@ -50,6 +50,9 @@ export interface RuntimeHumanTask {
   providerRevision?: string;
   activityDescriptorRef?: string;
   activityDescriptorHash?: string;
+  decisionEventId?: string;
+  decisionCommandId?: string;
+  decisionIdempotencyKey?: string;
   decidedBy?: string;
   decidedAt?: string;
   supersededByTaskId?: string;
