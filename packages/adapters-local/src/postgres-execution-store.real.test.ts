@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
+  executionLeaseAcquireRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
 } from '@hypha/core';
@@ -238,6 +239,94 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       await Promise.all([workerA.store.close(), workerB.store.close()]);
     }
   }, 30_000);
+
+  it('allows only one real worker to claim the same queued Execution', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-claim';
+    createRequest.idempotencyKey = 'execution-create:execution.real.claim';
+    createRequest.record.id = 'execution.real.claim';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.claim';
+    createRequest.record.request.idempotencyKey = 'command:run.real:claim';
+    const firstClaim = structuredClone(executionLeaseAcquireRequestExample);
+    firstClaim.operationId = 'operation.lease.acquire.real.a';
+    firstClaim.executionId = createRequest.record.id;
+    firstClaim.expectedRevision = 0;
+    firstClaim.requestedLeaseId = 'lease.execution.real.claim.a';
+    firstClaim.ownerId = 'runtime-worker.real.a';
+    firstClaim.acquiredAt = '2026-07-16T00:00:02.000Z';
+    firstClaim.idempotencyKey = 'lease-acquire:execution.real.claim:a';
+    const secondClaim = structuredClone(firstClaim);
+    secondClaim.operationId = 'operation.lease.acquire.real.b';
+    secondClaim.requestedLeaseId = 'lease.execution.real.claim.b';
+    secondClaim.ownerId = 'runtime-worker.real.b';
+    secondClaim.idempotencyKey = 'lease-acquire:execution.real.claim:b';
+    const workerA = createRealStore('claim-worker-a');
+    const workerB = createRealStore('claim-worker-b');
+
+    try {
+      await Promise.all([workerA.connection.initialize(), workerB.connection.initialize()]);
+      await workerA.store.create(createRequest);
+      const outcomes = await Promise.all([
+        captureLeaseAcquire(workerA.store, firstClaim),
+        captureLeaseAcquire(workerB.store, secondClaim),
+      ]);
+      const successful = outcomes.find((outcome) => outcome.ok);
+      const failed = outcomes.find((outcome) => !outcome.ok);
+
+      expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+      expect(outcomes.filter((outcome) => !outcome.ok)).toHaveLength(1);
+      expect(successful).toMatchObject({
+        record: {
+          id: createRequest.record.id,
+          revision: 1,
+          status: 'starting',
+          attempt: 1,
+          lease: {
+            fencingToken: 1,
+            ownerId: expect.stringMatching(/^runtime-worker\.real\.[ab]$/u),
+          },
+        },
+      });
+      expect(failed).toMatchObject({
+        error: {
+          code: 'EXECUTION_STORE_REVISION_CONFLICT',
+          details: {
+            executionId: createRequest.record.id,
+            expectedRevision: 0,
+            actualRevision: 1,
+          },
+        },
+      });
+      if (!successful?.ok) throw new Error('Real Postgres claim did not produce one winner.');
+      await expect(workerA.store.get(createRequest.record.id)).resolves.toEqual(successful.record);
+
+      const evidence = await workerA.connection.withClient((client) =>
+        client.query(
+          `SELECT
+             revision,
+             last_fencing_token,
+             (SELECT COUNT(*) FROM execution_lease_history
+               WHERE execution_id = $1) AS lease_count,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count
+           FROM execution_records
+           WHERE execution_id = $1`,
+          [createRequest.record.id]
+        )
+      );
+      expect(evidence.rows).toEqual([
+        {
+          revision: '1',
+          last_fencing_token: '1',
+          lease_count: '1',
+          mutation_count: '1',
+        },
+      ]);
+    } finally {
+      await Promise.all([workerA.store.close(), workerB.store.close()]);
+    }
+  }, 30_000);
 });
 
 function createRealStore(applicationRole: string): {
@@ -352,6 +441,20 @@ async function captureCompareAndSet(
 > {
   try {
     return { ok: true, record: await store.compareAndSet(request) };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+async function captureLeaseAcquire(
+  store: PostgresExecutionStoreFoundation,
+  request: typeof executionLeaseAcquireRequestExample
+): Promise<
+  | { ok: true; record: Awaited<ReturnType<PostgresExecutionStoreFoundation['acquireLease']>> }
+  | { ok: false; error: unknown }
+> {
+  try {
+    return { ok: true, record: await store.acquireLease(request) };
   } catch (error) {
     return { ok: false, error };
   }
