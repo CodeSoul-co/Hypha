@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
+  commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
@@ -499,6 +500,39 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       staleRenew.heartbeatAt = '2026-07-16T00:00:33.000Z';
       staleRenew.idempotencyKey = 'lease-renew:execution.real.reclaim:stale';
       await expect(workerA.store.renewLease(staleRenew)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_FENCING_REJECTED',
+        details: {
+          executionId: createRequest.record.id,
+          fencingToken: staleLease.fencingToken + 1,
+        },
+      });
+
+      const staleTerminal = structuredClone(executionRecordCompareAndSetRequestExample);
+      const terminalRevision = takeover.revision + 1;
+      staleTerminal.operationId = 'operation.execution.complete.real-reclaim-stale';
+      staleTerminal.executionId = createRequest.record.id;
+      staleTerminal.expectedRevision = takeover.revision;
+      staleTerminal.leaseGuard = {
+        leaseId: staleLease.id,
+        ownerId: staleLease.ownerId,
+        fencingToken: staleLease.fencingToken,
+      };
+      staleTerminal.next = {
+        ...structuredClone(takeover),
+        revision: terminalRevision,
+        status: 'completed',
+        sandboxId: commandExecutionResultExample.sandboxId,
+        lease: structuredClone(staleLease),
+        result: {
+          ...structuredClone(commandExecutionResultExample),
+          executionId: createRequest.record.id,
+          revision: terminalRevision,
+          status: 'completed',
+        },
+        updatedAt: '2026-07-16T00:00:33.000Z',
+      };
+      staleTerminal.idempotencyKey = 'execution-complete:execution.real.reclaim:stale';
+      await expect(workerA.store.compareAndSet(staleTerminal)).rejects.toMatchObject({
         code: 'EXECUTION_STORE_FENCING_REJECTED',
         details: {
           executionId: createRequest.record.id,
