@@ -38,6 +38,41 @@ describe('LocalProcessPolicyResolver', () => {
       maxStdoutBytes: 128,
     });
     expect(resolved.environment.HYPHA_HIDDEN).toBeUndefined();
+    await expect(resolver.assertExecutionSurfaceUnchanged(resolved)).resolves.toBeUndefined();
+  });
+
+  it('rejects executable replacement after policy resolution', async () => {
+    const workspace = await temporaryWorkspace();
+    const executableRoot = await temporaryWorkspace();
+    const executable = path.join(
+      executableRoot,
+      process.platform === 'win32' ? 'node-copy.exe' : 'node-copy'
+    );
+    await copyExecutable(executable);
+    const resolver = createResolver(workspace, executable);
+    const resolved = await resolver.resolve(environment(), command());
+
+    await fs.rename(executable, `${executable}.original`);
+    await copyExecutable(executable);
+
+    await expect(resolver.assertExecutionSurfaceUnchanged(resolved)).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_PATH_DENIED' },
+    });
+  });
+
+  it('rejects working-directory replacement after policy resolution', async () => {
+    const workspace = await temporaryWorkspace();
+    const workingDirectory = path.join(workspace, 'nested');
+    await fs.mkdir(workingDirectory);
+    const resolver = createResolver(workspace);
+    const resolved = await resolver.resolve(environment(), command({ cwd: 'nested' }));
+
+    await fs.rename(workingDirectory, `${workingDirectory}.original`);
+    await fs.mkdir(workingDirectory);
+
+    await expect(resolver.assertExecutionSurfaceUnchanged(resolved)).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_PATH_DENIED' },
+    });
   });
 
   it('rejects traversal, absolute outside paths, and symlink escapes', async () => {
@@ -114,13 +149,21 @@ async function temporaryWorkspace(): Promise<string> {
   return root;
 }
 
-function createResolver(workspaceRoot: string): LocalProcessPolicyResolver {
+function createResolver(
+  workspaceRoot: string,
+  executable = process.execPath
+): LocalProcessPolicyResolver {
   return new LocalProcessPolicyResolver({
     workspaceRoot,
-    executables: { node: process.execPath },
+    executables: { node: executable },
     baseEnvironment: { HYPHA_ALLOWED: 'base', HYPHA_HIDDEN: 'hidden' },
     maxExecutionTimeoutMs: 1_000,
   });
+}
+
+async function copyExecutable(destination: string): Promise<void> {
+  await fs.copyFile(process.execPath, destination);
+  if (process.platform !== 'win32') await fs.chmod(destination, 0o700);
 }
 
 function environment(): ExecutionEnvironmentSpec {

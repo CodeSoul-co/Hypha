@@ -26,6 +26,17 @@ export interface ResolvedLocalProcessPolicy {
   maxCombinedOutputBytes: number;
 }
 
+interface LocalProcessSurfaceIdentity {
+  realPath: string;
+  kind: 'executable' | 'directory';
+  dev: bigint;
+  ino: bigint;
+  nlink: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}
+
 /** Resolves untrusted command input into an explicit, host-local execution policy. */
 export class LocalProcessPolicyResolver {
   readonly workspaceRoot: string;
@@ -36,6 +47,13 @@ export class LocalProcessPolicyResolver {
   private readonly maxStdoutBytes: number;
   private readonly maxStderrBytes: number;
   private readonly maxCombinedOutputBytes: number;
+  private readonly resolvedIdentities = new WeakMap<
+    ResolvedLocalProcessPolicy,
+    {
+      executable: LocalProcessSurfaceIdentity;
+      cwd: LocalProcessSurfaceIdentity;
+    }
+  >();
 
   constructor(options: LocalProcessPolicyResolverOptions) {
     if (!options.workspaceRoot.trim()) throw new Error('workspaceRoot is required.');
@@ -185,7 +203,7 @@ export class LocalProcessPolicyResolver {
       maxStdoutBytes + maxStderrBytes,
     ]);
 
-    return {
+    const resolved: ResolvedLocalProcessPolicy = {
       executable,
       cwd,
       environment: this.buildEnvironment(environment, request.env),
@@ -195,6 +213,42 @@ export class LocalProcessPolicyResolver {
       maxStderrBytes,
       maxCombinedOutputBytes,
     };
+    const [executableIdentity, cwdIdentity] = await Promise.all([
+      captureSurfaceIdentity(executable, 'executable'),
+      captureSurfaceIdentity(cwd, 'directory'),
+    ]);
+    this.resolvedIdentities.set(resolved, {
+      executable: executableIdentity,
+      cwd: cwdIdentity,
+    });
+    return resolved;
+  }
+
+  async assertExecutionSurfaceUnchanged(policy: ResolvedLocalProcessPolicy): Promise<void> {
+    const expected = this.resolvedIdentities.get(policy);
+    if (!expected) {
+      throw surfaceChanged();
+    }
+
+    let current: {
+      executable: LocalProcessSurfaceIdentity;
+      cwd: LocalProcessSurfaceIdentity;
+    };
+    try {
+      const [executable, cwd] = await Promise.all([
+        captureSurfaceIdentity(policy.executable, 'executable'),
+        captureSurfaceIdentity(policy.cwd, 'directory'),
+      ]);
+      current = { executable, cwd };
+    } catch {
+      throw surfaceChanged();
+    }
+    if (
+      !sameSurfaceIdentity(expected.executable, current.executable) ||
+      !sameSurfaceIdentity(expected.cwd, current.cwd)
+    ) {
+      throw surfaceChanged();
+    }
   }
 
   async assertSurfaceAvailable(): Promise<void> {
@@ -365,4 +419,50 @@ function positiveInteger(value: number, name: string): number {
     throw new Error(`${name} must be a positive integer.`);
   }
   return value;
+}
+
+async function captureSurfaceIdentity(
+  candidate: string,
+  kind: LocalProcessSurfaceIdentity['kind']
+): Promise<LocalProcessSurfaceIdentity> {
+  const realPath = await fs.realpath(candidate);
+  const stat = await fs.lstat(realPath, { bigint: true });
+  const validType = kind === 'executable' ? stat.isFile() : stat.isDirectory();
+  if (!validType) {
+    throw surfaceChanged();
+  }
+  return {
+    realPath,
+    kind,
+    dev: stat.dev,
+    ino: stat.ino,
+    nlink: stat.nlink,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+
+function sameSurfaceIdentity(
+  before: LocalProcessSurfaceIdentity,
+  after: LocalProcessSurfaceIdentity
+): boolean {
+  return (
+    before.kind === after.kind &&
+    samePath(before.realPath, after.realPath) &&
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.nlink === after.nlink &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  );
+}
+
+function surfaceChanged() {
+  return executionProviderError(
+    'EXECUTION_PATH_DENIED',
+    'Local Process executable or working directory changed after policy resolution.',
+    false
+  );
 }

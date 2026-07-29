@@ -207,6 +207,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
       }
       this.lifecycle.markBusy(request.sandboxId!, executionId);
       markedBusy = true;
+      await this.policy.assertExecutionSurfaceUnchanged(policy);
       const processResult = await this.supervisor.run({
         executable: policy.executable,
         args: request.args ?? [],
