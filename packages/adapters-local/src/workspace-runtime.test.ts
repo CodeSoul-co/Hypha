@@ -350,6 +350,90 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     );
   });
 
+  it('publishes Workspace writes atomically without leaving temporary files', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-atomic-write-'));
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    await expect(
+      runtime.execute({ operation: 'write', path: 'nested/result.txt', content: 'first' })
+    ).resolves.toMatchObject({ bytesWritten: 5 });
+    await expect(
+      runtime.execute({ operation: 'write', path: 'nested/result.txt', content: 'second' })
+    ).resolves.toMatchObject({ bytesWritten: 6 });
+
+    await expect(fs.readFile(path.join(root, 'nested', 'result.txt'), 'utf8')).resolves.toBe(
+      'second'
+    );
+    await expect(fs.readdir(path.join(root, 'nested'))).resolves.toEqual(['result.txt']);
+  });
+
+  it('fails closed and removes its temporary file when the write parent is replaced', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-write-race-'));
+    const workspaceRoot = path.join(root, 'workspace');
+    const parent = path.join(workspaceRoot, 'output');
+    const displacedParent = path.join(workspaceRoot, 'displaced-output');
+    const outsideRoot = path.join(root, 'outside');
+    await Promise.all([
+      fs.mkdir(parent, { recursive: true }),
+      fs.mkdir(outsideRoot, { recursive: true }),
+    ]);
+    const runtime = createRuntime(workspaceRoot, workspaceRoot, false);
+    await runtime.initialize();
+
+    const originalOpen = fs.open.bind(fs);
+    let replaced = false;
+    const openAfterParentReplacement = async (filename: string) => {
+      await fs.rename(parent, displacedParent);
+      await fs.symlink(outsideRoot, parent, process.platform === 'win32' ? 'junction' : 'dir');
+      replaced = true;
+      return originalOpen(filename, 'wx', 0o600);
+    };
+    const openSpy = vi
+      .spyOn(fs, 'open')
+      .mockImplementation(openAfterParentReplacement as unknown as typeof fs.open);
+    try {
+      await expect(
+        runtime.execute({ operation: 'write', path: 'output/result.txt', content: 'denied' })
+      ).rejects.toThrow('Workspace write parent');
+      expect(replaced).toBe(true);
+      await expect(fs.readdir(outsideRoot)).resolves.toEqual([]);
+      await expect(fs.readdir(displacedParent)).resolves.toEqual([]);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('rejects a final write target replaced immediately after atomic publish', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-publish-race-'));
+    const target = path.join(root, 'result.txt');
+    const displacedTarget = path.join(root, 'published-original.txt');
+    const runtime = createRuntime(root, root, false);
+    await runtime.initialize();
+
+    const originalRename = fs.rename.bind(fs);
+    let replaced = false;
+    const renameThenReplace = async (source: string, destination: string) => {
+      await originalRename(source, destination);
+      await originalRename(destination, displacedTarget);
+      await fs.writeFile(destination, 'forged!', 'utf8');
+      replaced = true;
+    };
+    const renameSpy = vi
+      .spyOn(fs, 'rename')
+      .mockImplementation(renameThenReplace as unknown as typeof fs.rename);
+    try {
+      await expect(
+        runtime.execute({ operation: 'write', path: 'result.txt', content: 'trusted' })
+      ).rejects.toThrow('Workspace write target changed during publish');
+      expect(replaced).toBe(true);
+      await expect(fs.readFile(target, 'utf8')).resolves.toBe('forged!');
+      await expect(fs.readFile(displacedTarget, 'utf8')).resolves.toBe('trusted');
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
   function setEnvironment(name: string, value: string): void {
     previousEnvironment.set(name, process.env[name]);
     process.env[name] = value;

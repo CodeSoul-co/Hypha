@@ -1,4 +1,6 @@
 import { execFile } from 'child_process';
+import { randomUUID } from 'node:crypto';
+import type { BigIntStats } from 'node:fs';
 import { constants as fsConstants } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -109,10 +111,53 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     if (request.executable) {
       await this.assertCandidateWithinRoots(absolutePath, this.executeRoots, 'execute');
     }
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, request.content, 'utf-8');
-    if (request.executable && process.platform !== 'win32') await fs.chmod(absolutePath, 0o700);
-    await this.assertExistingPathAllowed(absolutePath, this.writeRoots, 'write');
+    const parent = path.dirname(absolutePath);
+    await fs.mkdir(parent, { recursive: true });
+    await this.assertExistingPathAllowed(parent, this.writeRoots, 'write');
+    const parentIdentity = await this.workspaceDirectoryIdentity(parent);
+    const temporaryPath = path.join(
+      parent,
+      `.${path.basename(absolutePath)}.hypha-write-${randomUUID()}.tmp`
+    );
+    let handle: fs.FileHandle | undefined;
+    try {
+      handle = await fs.open(temporaryPath, 'wx', request.executable ? 0o700 : 0o600);
+      const opened = await handle.stat({ bigint: true });
+      const openedPath = await fs.lstat(temporaryPath, { bigint: true });
+      if (!sameSingleLinkRegularFileIdentity(opened, openedPath)) {
+        throw new Error('Workspace write target changed during preparation');
+      }
+
+      await handle.writeFile(request.content, { encoding: 'utf-8' });
+      if (request.executable && process.platform !== 'win32') await handle.chmod(0o700);
+      await handle.sync();
+      const writtenHandle = await handle.stat({ bigint: true });
+      const writtenPath = await fs.lstat(temporaryPath, { bigint: true });
+      if (
+        !sameSingleLinkRegularFileIdentity(writtenHandle, writtenPath) ||
+        writtenHandle.size !== BigInt(Buffer.byteLength(request.content, 'utf-8'))
+      ) {
+        throw new Error('Workspace write target changed during preparation');
+      }
+      await this.assertWorkspaceDirectoryIdentity(parent, parentIdentity);
+
+      await handle.close();
+      handle = undefined;
+      await fs.rename(temporaryPath, absolutePath);
+      await this.assertExistingPathAllowed(absolutePath, this.writeRoots, 'write');
+      const published = await fs.lstat(absolutePath, { bigint: true });
+      if (!this.sameWorkspaceFileObjectIdentity(writtenPath, published)) {
+        throw new Error('Workspace write target changed during publish');
+      }
+      const finalPublished = await fs.lstat(absolutePath, { bigint: true });
+      if (!sameSingleLinkRegularFileIdentity(published, finalPublished)) {
+        throw new Error('Workspace write target changed during publish');
+      }
+      await this.assertWorkspaceDirectoryIdentity(parent, parentIdentity);
+    } finally {
+      await handle?.close().catch(() => undefined);
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
     return {
       path: request.path,
       bytesWritten: Buffer.byteLength(request.content, 'utf-8'),
@@ -301,6 +346,39 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
       }
     }
     return false;
+  }
+
+  private async workspaceDirectoryIdentity(directory: string): Promise<BigIntStats> {
+    const identity = await fs.lstat(directory, { bigint: true });
+    if (!identity.isDirectory() || identity.isSymbolicLink()) {
+      throw new Error('Workspace write parent must be a stable directory');
+    }
+    return identity;
+  }
+
+  private async assertWorkspaceDirectoryIdentity(
+    directory: string,
+    expected: BigIntStats
+  ): Promise<void> {
+    const current = await this.workspaceDirectoryIdentity(directory);
+    if (
+      current.dev !== expected.dev ||
+      current.ino !== expected.ino ||
+      current.mode !== expected.mode
+    ) {
+      throw new Error('Workspace write parent changed during publish');
+    }
+  }
+
+  private sameWorkspaceFileObjectIdentity(before: BigIntStats, after: BigIntStats): boolean {
+    return (
+      hasSingleLinkRegularFileIdentity(before) &&
+      hasSingleLinkRegularFileIdentity(after) &&
+      before.dev === after.dev &&
+      before.ino === after.ino &&
+      before.size === after.size &&
+      before.mode === after.mode
+    );
   }
 
   private async existingRealRoots(roots: string[]): Promise<string[]> {
