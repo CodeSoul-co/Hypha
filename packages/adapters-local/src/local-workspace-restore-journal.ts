@@ -25,11 +25,20 @@ export type LocalWorkspaceRestoreJournalInput = Omit<
   'version' | 'ownerPid' | 'createdAt' | 'journalHash'
 >;
 
+export interface LocalWorkspaceRestoreLockOptions {
+  maxWaitDurationMs?: number;
+}
+
 export async function withLocalWorkspaceRestoreLock<T>(
   workspaceRoot: string,
-  task: () => Promise<T>
+  task: () => Promise<T>,
+  options: LocalWorkspaceRestoreLockOptions = {}
 ): Promise<T> {
   const key = platformPathKey(path.resolve(workspaceRoot));
+  const maxWaitDurationMs = options.maxWaitDurationMs ?? 30_000;
+  if (!positiveInteger(maxWaitDurationMs)) {
+    throw new TypeError('maxWaitDurationMs must be a positive safe integer.');
+  }
   const previous = restoreLocks.get(key) ?? Promise.resolve();
   let release: (() => void) | undefined;
   const current = new Promise<void>((resolve) => {
@@ -37,12 +46,19 @@ export async function withLocalWorkspaceRestoreLock<T>(
   });
   const queued = previous.then(() => current);
   restoreLocks.set(key, queued);
-  await previous;
+  void queued.then(() => {
+    if (restoreLocks.get(key) === queued) restoreLocks.delete(key);
+  });
+  try {
+    await waitForRestoreLock(previous, maxWaitDurationMs);
+  } catch (error) {
+    release?.();
+    throw error;
+  }
   try {
     return await task();
   } finally {
     release?.();
-    if (restoreLocks.get(key) === queued) restoreLocks.delete(key);
   }
 }
 
@@ -250,4 +266,30 @@ function nodeErrorCode(error: unknown): string | undefined {
 
 function platformPathKey(value: string): string {
   return process.platform === 'win32' ? value.toLocaleLowerCase('en-US') : value;
+}
+
+async function waitForRestoreLock(
+  previous: Promise<void>,
+  maxWaitDurationMs: number
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      previous,
+      new Promise<void>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            executionProviderError(
+              'EXECUTION_RESOURCE_EXCEEDED',
+              'Workspace restore lock wait exceeded its configured duration limit.',
+              true,
+              { maxRestoreLockWaitDurationMs: maxWaitDurationMs }
+            )
+          );
+        }, maxWaitDurationMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

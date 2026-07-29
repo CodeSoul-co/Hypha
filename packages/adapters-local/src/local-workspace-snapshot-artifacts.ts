@@ -44,6 +44,7 @@ export interface LocalWorkspaceSnapshotArtifactServiceOptions {
   maxManifestBytes?: number;
   maxRestoreBytes?: number;
   maxRestoreEntries?: number;
+  maxRestoreLockWaitDurationMs?: number;
   maxRestoreStagingDurationMs?: number;
 }
 
@@ -60,6 +61,7 @@ export class LocalWorkspaceSnapshotArtifactService {
   private readonly maxManifestBytes: number;
   private readonly maxRestoreBytes: number;
   private readonly maxRestoreEntries: number;
+  private readonly maxRestoreLockWaitDurationMs: number;
   private readonly maxRestoreStagingDurationMs: number;
 
   constructor(options: LocalWorkspaceSnapshotArtifactServiceOptions) {
@@ -78,6 +80,10 @@ export class LocalWorkspaceSnapshotArtifactService {
     this.maxRestoreEntries = positiveInteger(
       options.maxRestoreEntries ?? 10_000,
       'maxRestoreEntries'
+    );
+    this.maxRestoreLockWaitDurationMs = positiveInteger(
+      options.maxRestoreLockWaitDurationMs ?? 30_000,
+      'maxRestoreLockWaitDurationMs'
     );
     this.maxRestoreStagingDurationMs = positiveInteger(
       options.maxRestoreStagingDurationMs ?? 30_000,
@@ -181,6 +187,7 @@ export class LocalWorkspaceSnapshotArtifactService {
         maxManifestBytes: this.maxManifestBytes,
         maxRestoreBytes: this.maxRestoreBytes,
         maxRestoreEntries: this.maxRestoreEntries,
+        maxRestoreLockWaitDurationMs: this.maxRestoreLockWaitDurationMs,
         maxRestoreStagingDurationMs: this.maxRestoreStagingDurationMs,
       });
     } catch (error) {
@@ -197,8 +204,10 @@ export class LocalWorkspaceSnapshotArtifactService {
 
   async recoverInterruptedRestore(): Promise<LocalWorkspaceRestoreRecoveryResult> {
     try {
-      return await recoverInterruptedLocalWorkspaceRestore(this.workspace.workspaceRoot, () =>
-        this.workspace.capture()
+      return await recoverInterruptedLocalWorkspaceRestore(
+        this.workspace.workspaceRoot,
+        () => this.workspace.capture(),
+        this.maxRestoreLockWaitDurationMs
       );
     } catch (error) {
       if (hasNormalizedError(error)) throw error;

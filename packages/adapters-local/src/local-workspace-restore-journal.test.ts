@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createLocalWorkspaceRestoreJournal,
   readLocalWorkspaceRestoreJournal,
   removeLocalWorkspaceRestoreJournal,
   type LocalWorkspaceRestoreJournalInput,
+  withLocalWorkspaceRestoreLock,
 } from './local-workspace-restore-journal';
 
 describe('Local Workspace restore journal', () => {
@@ -58,6 +59,59 @@ describe('Local Workspace restore journal', () => {
       ownerPid: process.pid,
       journalHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
     });
+  });
+
+  it('bounds lock waiting without running the timed-out task or bypassing the holder', async () => {
+    vi.useFakeTimers();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-restore-lock-timeout-'));
+    roots.push(root);
+    let releaseHolder: (() => void) | undefined;
+    const holderReleased = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const holder = withLocalWorkspaceRestoreLock(root, async () => {
+      holderStarted?.();
+      await holderReleased;
+    });
+
+    try {
+      await started;
+      let timedOutTaskRan = false;
+      const timedOut = withLocalWorkspaceRestoreLock(
+        root,
+        async () => {
+          timedOutTaskRan = true;
+        },
+        { maxWaitDurationMs: 10 }
+      );
+      const timedOutExpectation = expect(timedOut).rejects.toMatchObject({
+        normalizedError: {
+          code: 'EXECUTION_RESOURCE_EXCEEDED',
+          retryable: true,
+          details: { maxRestoreLockWaitDurationMs: 10 },
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(11);
+      await timedOutExpectation;
+      expect(timedOutTaskRan).toBe(false);
+
+      releaseHolder?.();
+      await holder;
+      await expect(
+        withLocalWorkspaceRestoreLock(root, async () => 'acquired', {
+          maxWaitDurationMs: 10,
+        })
+      ).resolves.toBe('acquired');
+    } finally {
+      releaseHolder?.();
+      await holder;
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -30,6 +30,7 @@ export interface RestoreLocalWorkspaceSnapshotOptions {
   maxManifestBytes: number;
   maxRestoreBytes: number;
   maxRestoreEntries: number;
+  maxRestoreLockWaitDurationMs: number;
   maxRestoreStagingDurationMs: number;
 }
 
@@ -39,19 +40,26 @@ export async function restoreLocalWorkspaceSnapshot(
   options: RestoreLocalWorkspaceSnapshotOptions
 ): Promise<void> {
   const root = path.resolve(options.workspaceRoot);
-  await withLocalWorkspaceRestoreLock(root, async () => {
-    await recoverInterruptedRestoreUnlocked(root, options.capture);
-    await restoreLocalWorkspaceSnapshotUnlocked(root, options);
-  });
+  await withLocalWorkspaceRestoreLock(
+    root,
+    async () => {
+      await recoverInterruptedRestoreUnlocked(root, options.capture);
+      await restoreLocalWorkspaceSnapshotUnlocked(root, options);
+    },
+    { maxWaitDurationMs: options.maxRestoreLockWaitDurationMs }
+  );
 }
 
 export async function recoverInterruptedLocalWorkspaceRestore(
   workspaceRoot: string,
-  capture: () => Promise<LocalWorkspaceSnapshot>
+  capture: () => Promise<LocalWorkspaceSnapshot>,
+  maxWaitDurationMs = 30_000
 ): Promise<LocalWorkspaceRestoreRecoveryResult> {
   const root = path.resolve(workspaceRoot);
-  return withLocalWorkspaceRestoreLock(root, () =>
-    recoverInterruptedRestoreUnlocked(root, capture)
+  return withLocalWorkspaceRestoreLock(
+    root,
+    () => recoverInterruptedRestoreUnlocked(root, capture),
+    { maxWaitDurationMs }
   );
 }
 

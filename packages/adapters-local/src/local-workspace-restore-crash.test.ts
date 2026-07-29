@@ -94,6 +94,7 @@ describe('Local Workspace restore process crash recovery', () => {
         maxManifestBytes: 1024,
         maxRestoreBytes: 1024,
         maxRestoreEntries: 10,
+        maxRestoreLockWaitDurationMs: 1_000,
         maxRestoreStagingDurationMs: 1_000,
       })
     ).rejects.toMatchObject({
