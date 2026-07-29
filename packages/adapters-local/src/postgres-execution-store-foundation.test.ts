@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseRenewRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
@@ -9,6 +10,7 @@ import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionLeaseGuardExample,
+  executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
   executionRecordExample,
@@ -760,6 +762,155 @@ describe('PostgresExecutionStoreFoundation persistence', () => {
       message: 'Execution lease history is missing or already closed.',
     });
   });
+
+  it('renews a fenced lease without changing its identity and replays the result', async () => {
+    const current = structuredClone(executionRecordExample);
+    const request = renewLeaseRequestFor(current, 'lease-renew:first');
+    const firstClient = new ScriptedClient([
+      rows(),
+      rows(),
+      rows(recordRow(current)),
+      rows({ execution_id: current.id }),
+      rows({ execution_id: current.id }),
+    ]);
+    const connection = new ScriptedTransactionPort([firstClient]);
+    const store = new PostgresExecutionStoreFoundation(connection);
+
+    const renewed = await store.renewLease(request);
+    expect(renewed).toMatchObject({
+      revision: 2,
+      status: current.status,
+      attempt: current.attempt,
+      updatedAt: request.heartbeatAt,
+      lease: {
+        id: request.leaseGuard.leaseId,
+        ownerId: request.leaseGuard.ownerId,
+        fencingToken: request.leaseGuard.fencingToken,
+        acquiredAt: current.lease?.acquiredAt,
+        heartbeatAt: request.heartbeatAt,
+        expiresAt: '2026-07-16T00:00:40.000Z',
+      },
+    });
+    const recordUpdate = firstClient.commands.find(({ text }) =>
+      text.includes('UPDATE execution_records')
+    );
+    expect(recordUpdate?.values?.slice(-3)).toEqual([current.id, current.revision, 1]);
+    expect(recordUpdate?.values?.[12]).toBe(1);
+    expect(firstClient.sql()).not.toContain('execution_lease_history');
+
+    const remembered = firstClient.commands.find(({ text }) =>
+      text.includes('INSERT INTO execution_mutation_idempotency')
+    );
+    const replayClient = new ScriptedClient([
+      rows(),
+      rows({
+        execution_id: current.id,
+        request_hash: String(remembered?.values?.[3]),
+        result_json: structuredClone(renewed),
+      }),
+    ]);
+    connection.push(replayClient);
+
+    await expect(store.renewLease(request)).resolves.toEqual(renewed);
+    expect(replayClient.sql()).not.toContain('UPDATE execution_records');
+  });
+
+  it('rejects renewals for missing leases, stale revisions, and terminal records', async () => {
+    const queued = structuredClone(executionRecordCreateRequestExample.record);
+    const missingLease = renewLeaseRequestFor(queued, undefined);
+    const current = structuredClone(executionRecordExample);
+    const stale = renewLeaseRequestFor(current, undefined);
+    stale.expectedRevision = current.revision - 1;
+    const terminal = terminalRecord();
+    const terminalRequest = renewLeaseRequestFor(terminal, undefined);
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(queued))]),
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(terminal))]),
+      ])
+    );
+
+    await expect(store.renewLease(missingLease)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_LEASE_LOST',
+      message: 'Execution has no active lease.',
+    });
+    await expect(store.renewLease(stale)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+    });
+    await expect(store.renewLease(terminalRequest)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_TERMINAL',
+    });
+  });
+
+  it('rejects stale lease ids, owners, and fencing tokens', async () => {
+    const current = structuredClone(executionRecordExample);
+    const staleLease = renewLeaseRequestFor(current, undefined);
+    staleLease.leaseGuard.leaseId = 'lease.execution.example.stale';
+    const staleOwner = renewLeaseRequestFor(current, undefined);
+    staleOwner.leaseGuard.ownerId = 'worker.stale';
+    const staleFencing = renewLeaseRequestFor(current, undefined);
+    staleFencing.leaseGuard.fencingToken += 1;
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current))]),
+      ])
+    );
+
+    for (const request of [staleLease, staleOwner, staleFencing]) {
+      await expect(store.renewLease(request)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_FENCING_REJECTED',
+      });
+    }
+  });
+
+  it('rejects non-advancing heartbeats, expired leases, and non-extending renewals', async () => {
+    const current = structuredClone(executionRecordExample);
+    if (!current.lease) throw new Error('Execution fixture must include a lease.');
+    const sameHeartbeat = renewLeaseRequestFor(current, undefined);
+    sameHeartbeat.heartbeatAt = current.updatedAt;
+    const expired = renewLeaseRequestFor(current, undefined);
+    expired.heartbeatAt = current.lease.expiresAt;
+    const nonExtending = renewLeaseRequestFor(current, undefined);
+    nonExtending.heartbeatAt = '2026-07-16T00:00:02.000Z';
+    nonExtending.ttlMs = 1;
+    const store = new PostgresExecutionStoreFoundation(
+      new ScriptedTransactionPort([
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current))]),
+        new ScriptedClient([rows(recordRow(current))]),
+      ])
+    );
+
+    await expect(store.renewLease(sameHeartbeat)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+      message: 'Lease heartbeat must advance the current Execution revision.',
+    });
+    await expect(store.renewLease(expired)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_LEASE_LOST',
+      message: 'Execution lease has expired.',
+    });
+    await expect(store.renewLease(nonExtending)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_CONFLICT',
+      message: 'Lease renewal must extend the current expiry.',
+    });
+  });
+
+  it('rejects a renewal when the fenced record update loses a race', async () => {
+    const current = structuredClone(executionRecordExample);
+    const request = renewLeaseRequestFor(current, undefined);
+    const client = new ScriptedClient([rows(recordRow(current)), rows()]);
+    const store = new PostgresExecutionStoreFoundation(new ScriptedTransactionPort([client]));
+
+    await expect(store.renewLease(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_REVISION_CONFLICT',
+      message: 'Execution record changed during lease renewal.',
+    });
+    expect(client.sql()).toContain('FOR UPDATE OF records');
+    expect(client.sql()).toContain('UPDATE execution_records');
+  });
 });
 
 interface ScriptedCommand {
@@ -895,6 +1046,30 @@ function acquireLeaseRequestFor(
     request.idempotencyKey = idempotencyKey;
   } else {
     request.operationId = `operation.lease.acquire.${current.id}.${current.revision}`;
+    request.idempotencyKey = undefined;
+  }
+  return request;
+}
+
+function renewLeaseRequestFor(
+  current: ExecutionRecord,
+  idempotencyKey: string | undefined
+): ExecutionLeaseRenewRequest {
+  const request = structuredClone(executionLeaseRenewRequestExample);
+  request.executionId = current.id;
+  request.expectedRevision = current.revision;
+  request.leaseGuard = current.lease
+    ? {
+        leaseId: current.lease.id,
+        ownerId: current.lease.ownerId,
+        fencingToken: current.lease.fencingToken,
+      }
+    : structuredClone(executionLeaseGuardExample);
+  if (idempotencyKey) {
+    request.operationId = `operation.${idempotencyKey}`;
+    request.idempotencyKey = idempotencyKey;
+  } else {
+    request.operationId = `operation.lease.renew.${current.id}.${current.revision}`;
     request.idempotencyKey = undefined;
   }
   return request;

@@ -4,6 +4,8 @@ import type {
   ExecutionIdempotencyQuery,
   ExecutionIdempotencyResolution,
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseGuard,
+  ExecutionLeaseRenewRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
@@ -14,6 +16,7 @@ import {
   validateExecutionIdempotencyQuery,
   validateExecutionIdempotencyResolution,
   validateExecutionLeaseAcquireRequest,
+  validateExecutionLeaseRenewRequest,
   validateExecutionRecord,
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
@@ -45,7 +48,8 @@ export type PostgresExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_FENCING_REJECTED'
   | 'EXECUTION_STORE_TERMINAL'
   | 'EXECUTION_STORE_LEASE_HELD'
-  | 'EXECUTION_STORE_LEASE_ID_CONFLICT';
+  | 'EXECUTION_STORE_LEASE_ID_CONFLICT'
+  | 'EXECUTION_STORE_LEASE_LOST';
 
 export class PostgresExecutionStoreFoundationError extends Error {
   constructor(
@@ -438,6 +442,110 @@ export class PostgresExecutionStoreFoundation {
     return result.value;
   }
 
+  async renewLease(input: ExecutionLeaseRenewRequest): Promise<ExecutionRecord> {
+    const request = validateExecutionLeaseRenewRequest(input);
+    const requestHash = hash(JSON.stringify(request));
+    const result = await this.writeOperation<RecordLoadResult>(async (client) => {
+      if (request.idempotencyKey) {
+        await lockMutationIdempotency(client, request.operationId, request.idempotencyKey);
+        const replay = await resolveMutationReplay(client, request, requestHash);
+        if (replay) return replay;
+      }
+
+      const selected = await selectRecordForUpdate(client, request.executionId);
+      if (selected.rows.length === 0) {
+        throw storeError('EXECUTION_STORE_NOT_FOUND', 'Execution record does not exist.', {
+          executionId: request.executionId,
+        });
+      }
+      const loaded = await loadRecord(client, selected.rows[0]!);
+      if (!loaded.ok) return loaded;
+      const current = loaded.value;
+      if (current.revision !== request.expectedRevision) {
+        throw storeError(
+          'EXECUTION_STORE_REVISION_CONFLICT',
+          'Execution record revision does not match the expected revision.',
+          {
+            executionId: request.executionId,
+            expectedRevision: request.expectedRevision,
+            actualRevision: current.revision,
+          }
+        );
+      }
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw storeError('EXECUTION_STORE_TERMINAL', 'Terminal Execution records are immutable.', {
+          executionId: request.executionId,
+          status: current.status,
+        });
+      }
+      const lease = current.lease;
+      if (!lease) {
+        throw storeError('EXECUTION_STORE_LEASE_LOST', 'Execution has no active lease.', {
+          executionId: request.executionId,
+        });
+      }
+      assertLeaseGuard(lease, request.leaseGuard, request.executionId);
+      const heartbeatTime = Date.parse(request.heartbeatAt);
+      if (heartbeatTime <= Date.parse(current.updatedAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease heartbeat must advance the current Execution revision.',
+          {
+            executionId: request.executionId,
+            heartbeatAt: request.heartbeatAt,
+            updatedAt: current.updatedAt,
+          }
+        );
+      }
+      if (heartbeatTime >= Date.parse(lease.expiresAt)) {
+        throw storeError('EXECUTION_STORE_LEASE_LOST', 'Execution lease has expired.', {
+          executionId: request.executionId,
+          leaseId: lease.id,
+          expiresAt: lease.expiresAt,
+        });
+      }
+      const expiresAt = leaseExpiry(request.heartbeatAt, request.ttlMs);
+      if (Date.parse(expiresAt) <= Date.parse(lease.expiresAt)) {
+        throw storeError(
+          'EXECUTION_STORE_CONFLICT',
+          'Lease renewal must extend the current expiry.',
+          {
+            executionId: request.executionId,
+            currentExpiresAt: lease.expiresAt,
+            requestedExpiresAt: expiresAt,
+          }
+        );
+      }
+
+      const next = validateExecutionRecord({
+        ...current,
+        revision: current.revision + 1,
+        lease: {
+          ...lease,
+          heartbeatAt: request.heartbeatAt,
+          expiresAt,
+        },
+        updatedAt: request.heartbeatAt,
+      });
+      const fencingToken = nonNegativeSafeInteger(
+        Number(selected.rows[0]!.last_fencing_token),
+        'lastFencingToken'
+      );
+      await replaceRecord(
+        client,
+        next,
+        request.expectedRevision,
+        fencingToken,
+        fencingToken,
+        'Execution record changed during lease renewal.'
+      );
+      await rememberMutation(client, request, requestHash, next);
+      return success(structuredClone(next));
+    });
+    if (!result.ok) throw result.error;
+    return result.value;
+  }
+
   private async writeOperation<T>(
     operation: (client: PostgresExecutionStorePoolClient) => Promise<T>
   ): Promise<T> {
@@ -762,6 +870,24 @@ function assertTerminalReceiptContinuity(current: ExecutionRecord, next: Executi
       'EXECUTION_STORE_CONFLICT',
       'Provider terminal receipt checkpoint is immutable.',
       { executionId: current.id }
+    );
+  }
+}
+
+function assertLeaseGuard(
+  lease: NonNullable<ExecutionRecord['lease']>,
+  guard: ExecutionLeaseGuard,
+  executionId: string
+): void {
+  if (
+    guard.leaseId !== lease.id ||
+    guard.ownerId !== lease.ownerId ||
+    guard.fencingToken !== lease.fencingToken
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_FENCING_REJECTED',
+      'Execution lease or fencing token is stale.',
+      { executionId, fencingToken: lease.fencingToken }
     );
   }
 }
