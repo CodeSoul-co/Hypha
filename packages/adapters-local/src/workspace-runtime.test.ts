@@ -248,7 +248,32 @@ describe('LocalWorkspaceRuntime execution environment', () => {
 
     await expect(
       runtime.execute({ operation: 'write', path: 'redirect/escaped.txt', content: 'denied' })
-    ).rejects.toThrow('outside configured write paths');
+    ).rejects.toThrow('cannot traverse symbolic links or junctions');
+  });
+
+  it('rejects reads and writes through a directory link whose target remains inside the root', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-inner-link-'));
+    const workspaceRoot = path.join(root, 'workspace');
+    const targetRoot = path.join(workspaceRoot, 'target');
+    await fs.mkdir(targetRoot, { recursive: true });
+    await fs.writeFile(path.join(targetRoot, 'result.txt'), 'original', 'utf8');
+    await fs.symlink(
+      targetRoot,
+      path.join(workspaceRoot, 'redirect'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const runtime = createRuntime(workspaceRoot, workspaceRoot, false);
+    await runtime.initialize();
+
+    await expect(
+      runtime.execute({ operation: 'read', path: 'redirect/result.txt' })
+    ).rejects.toThrow('cannot traverse symbolic links or junctions');
+    await expect(
+      runtime.execute({ operation: 'write', path: 'redirect/result.txt', content: 'denied' })
+    ).rejects.toThrow('cannot traverse symbolic links or junctions');
+    await expect(fs.readFile(path.join(targetRoot, 'result.txt'), 'utf8')).resolves.toBe(
+      'original'
+    );
   });
 
   function setEnvironment(name: string, value: string): void {

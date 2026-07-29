@@ -205,6 +205,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
 
   private async assertWritablePath(candidate: string): Promise<void> {
     await this.assertCandidateWithinRoots(candidate, this.writeRoots, 'write');
+    await this.assertNoWorkspaceLink(candidate, this.writeRoots);
     const realAncestor = await fs.realpath(await this.findExistingAncestor(candidate));
     const realRoots = await this.existingRealRoots(this.writeRoots);
     if (!realRoots.some((root) => this.isWithin(realAncestor, root))) {
@@ -230,6 +231,7 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     permission: string
   ): Promise<void> {
     await this.assertCandidateWithinRoots(candidate, roots, permission);
+    await this.assertNoWorkspaceLink(candidate, roots);
     const realCandidate = await fs.realpath(candidate);
     const realRoots = await this.existingRealRoots(roots);
     if (!realRoots.some((root) => this.isWithin(realCandidate, root))) {
@@ -237,6 +239,30 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
     }
     this.controlPlaneGuard.assertResolvedPath(candidate);
     this.controlPlaneGuard.assertResolvedPath(realCandidate);
+  }
+
+  private async assertNoWorkspaceLink(candidate: string, roots: string[]): Promise<void> {
+    const matchingRoots = roots.filter((root) => this.isWithin(candidate, root));
+    for (const root of matchingRoots) {
+      if (!(await this.containsWorkspaceLink(root, candidate))) return;
+    }
+    throw new Error('Workspace paths cannot traverse symbolic links or junctions');
+  }
+
+  private async containsWorkspaceLink(root: string, candidate: string): Promise<boolean> {
+    const relative = path.relative(root, candidate);
+    const segments = relative ? relative.split(path.sep) : [];
+    let current = root;
+    for (const segment of ['', ...segments]) {
+      if (segment) current = path.join(current, segment);
+      try {
+        if ((await fs.lstat(current)).isSymbolicLink()) return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      }
+    }
+    return false;
   }
 
   private async existingRealRoots(roots: string[]): Promise<string[]> {
