@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { FileMutation } from '@hypha/core';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 import {
@@ -34,12 +35,13 @@ export interface LocalWorkspaceSnapshot {
 export interface LocalWorkspaceSnapshotOptions {
   maxFiles?: number;
   maxBytes?: number;
+  maxDurationMs?: number;
 }
 
 export class LocalWorkspaceSnapshotLimitError extends Error {
   constructor(
     message: string,
-    readonly details: { maxFiles: number; maxBytes: number }
+    readonly details: { maxFiles: number; maxBytes: number; maxDurationMs: number }
   ) {
     super(message);
     this.name = 'LocalWorkspaceSnapshotLimitError';
@@ -58,24 +60,35 @@ export async function captureLocalWorkspaceSnapshot(
   options: LocalWorkspaceSnapshotOptions = {}
 ): Promise<LocalWorkspaceSnapshot> {
   const root = path.resolve(rootPath);
+  const maxFiles = options.maxFiles ?? 10_000;
+  const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
+  const maxDurationMs = options.maxDurationMs ?? 30_000;
+  const startedAt = performance.now();
   const realRoot = await fs.realpath(root);
   const controlPlaneGuard = new WorkspaceControlPlaneGuard();
   controlPlaneGuard.assertWorkspaceRoot(root);
   controlPlaneGuard.assertWorkspaceRoot(realRoot);
-  const maxFiles = options.maxFiles ?? 10_000;
-  const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
   const entries = new Map<string, LocalWorkspaceEntry>();
   const directories = new Map<string, LocalWorkspaceDirectoryEntry>();
   let totalBytes = 0;
+  const assertTimeBudget = (): void => {
+    if (performance.now() - startedAt > maxDurationMs) {
+      throw snapshotLimitError(maxFiles, maxBytes, maxDurationMs);
+    }
+  };
 
   const walk = async (directory: string): Promise<void> => {
+    assertTimeBudget();
     const realDirectory = await fs.realpath(directory);
+    assertTimeBudget();
     assertWithinRoot(realDirectory, realRoot);
     controlPlaneGuard.assertResolvedPath(directory);
     controlPlaneGuard.assertResolvedPath(realDirectory);
     const children = await fs.readdir(directory, { withFileTypes: true });
+    assertTimeBudget();
     children.sort((left, right) => left.name.localeCompare(right.name));
     for (const child of children) {
+      assertTimeBudget();
       const absolutePath = path.join(directory, child.name);
       const relativePath = portableRelative(root, absolutePath);
       controlPlaneGuard.assertResolvedPath(absolutePath);
@@ -101,7 +114,8 @@ export async function captureLocalWorkspaceSnapshot(
           realRoot,
           controlPlaneGuard,
           maxBytes - totalBytes,
-          () => snapshotLimitError(maxFiles, maxBytes)
+          () => snapshotLimitError(maxFiles, maxBytes, maxDurationMs),
+          assertTimeBudget
         );
         addEntry({
           path: relativePath,
@@ -117,20 +131,20 @@ export async function captureLocalWorkspaceSnapshot(
   const addEntry = (entry: LocalWorkspaceEntry): void => {
     totalBytes += entry.sizeBytes;
     if (entries.size + directories.size + 1 > maxFiles || totalBytes > maxBytes) {
-      throw snapshotLimitError(maxFiles, maxBytes);
+      throw snapshotLimitError(maxFiles, maxBytes, maxDurationMs);
     }
     entries.set(entry.path, entry);
   };
 
   const assertEntryCapacity = (): void => {
     if (entries.size + directories.size + 1 > maxFiles) {
-      throw snapshotLimitError(maxFiles, maxBytes);
+      throw snapshotLimitError(maxFiles, maxBytes, maxDurationMs);
     }
   };
 
   const addDirectory = (entry: LocalWorkspaceDirectoryEntry): void => {
     if (entries.size + directories.size + 1 > maxFiles) {
-      throw snapshotLimitError(maxFiles, maxBytes);
+      throw snapshotLimitError(maxFiles, maxBytes, maxDurationMs);
     }
     directories.set(entry.path, entry);
   };
@@ -277,13 +291,17 @@ async function hashWorkspaceFile(
   realRoot: string,
   controlPlaneGuard: WorkspaceControlPlaneGuard,
   remainingBytes: number,
-  limitError: () => LocalWorkspaceSnapshotLimitError
+  limitError: () => LocalWorkspaceSnapshotLimitError,
+  assertTimeBudget: () => void
 ): Promise<{ contentHash: string; sizeBytes: number; mode: number }> {
+  assertTimeBudget();
   const before = await fs.lstat(filename, { bigint: true });
+  assertTimeBudget();
   assertSingleLinkRegularFile(before);
   const sizeBytes = safeSizeNumber(before.size, limitError);
   if (sizeBytes > remainingBytes) throw limitError();
   const canonicalBefore = await fs.realpath(filename);
+  assertTimeBudget();
   assertWithinRoot(canonicalBefore, realRoot);
   controlPlaneGuard.assertResolvedPath(canonicalBefore);
 
@@ -303,7 +321,9 @@ async function hashWorkspaceFile(
     const buffer = new Uint8Array(64 * 1024);
     let bytesRead = 0;
     do {
+      assertTimeBudget();
       ({ bytesRead } = await handle.read(buffer, 0, buffer.byteLength, null));
+      assertTimeBudget();
       if (bytesRead === 0) continue;
       bytesReadTotal += bytesRead;
       if (bytesReadTotal > remainingBytes || BigInt(bytesReadTotal) > before.size) {
@@ -315,6 +335,7 @@ async function hashWorkspaceFile(
     const finalHandleStat = await handle.stat({ bigint: true });
     const finalPathStat = await fs.lstat(filename, { bigint: true });
     const canonicalAfter = await fs.realpath(filename);
+    assertTimeBudget();
     if (
       bytesReadTotal !== sizeBytes ||
       canonicalAfter !== canonicalBefore ||
@@ -350,10 +371,14 @@ function safeSizeNumber(size: bigint, limitError: () => LocalWorkspaceSnapshotLi
   return Number(size);
 }
 
-function snapshotLimitError(maxFiles: number, maxBytes: number): LocalWorkspaceSnapshotLimitError {
+function snapshotLimitError(
+  maxFiles: number,
+  maxBytes: number,
+  maxDurationMs: number
+): LocalWorkspaceSnapshotLimitError {
   return new LocalWorkspaceSnapshotLimitError(
     'Workspace mutation capture exceeded its configured scan limits.',
-    { maxFiles, maxBytes }
+    { maxFiles, maxBytes, maxDurationMs }
   );
 }
 

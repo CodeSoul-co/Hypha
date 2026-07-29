@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { describe, expect, it, vi } from 'vitest';
 import {
   LocalWorkspaceSnapshotLimitError,
@@ -70,6 +71,28 @@ describe('local Workspace mutation capture', () => {
     await expect(captureLocalWorkspaceSnapshot(root, { maxBytes: 2 })).rejects.toMatchObject({
       details: { maxBytes: 2 },
     });
+  });
+
+  it('enforces a monotonic capture duration budget without rejecting an in-budget scan', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-duration-bounds-'));
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const now = vi.spyOn(performance, 'now');
+    try {
+      now.mockReturnValue(0);
+      await expect(
+        captureLocalWorkspaceSnapshot(root, { maxDurationMs: 1 })
+      ).resolves.toMatchObject({ totalBytes: 6 });
+
+      let calls = 0;
+      now.mockImplementation(() => (calls++ === 0 ? 0 : 2));
+      await expect(captureLocalWorkspaceSnapshot(root, { maxDurationMs: 1 })).rejects.toMatchObject(
+        {
+          details: { maxDurationMs: 1 },
+        }
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('hashes large files incrementally without using whole-file reads', async () => {

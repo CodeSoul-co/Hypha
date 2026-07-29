@@ -15,6 +15,7 @@ export interface LocalWorkspaceAdapterOptions {
   workspaceRoot: string;
   maxTrackedFiles?: number;
   maxTrackedBytes?: number;
+  maxCaptureDurationMs?: number;
 }
 
 /** Adapts a governed Workspace root to Local Process mutation evidence. */
@@ -22,6 +23,7 @@ export class LocalWorkspaceAdapter {
   readonly workspaceRoot: string;
   private readonly maxTrackedFiles: number;
   private readonly maxTrackedBytes: number;
+  private readonly maxCaptureDurationMs: number;
 
   constructor(options: LocalWorkspaceAdapterOptions) {
     if (!options.workspaceRoot.trim()) throw new Error('workspaceRoot is required.');
@@ -30,6 +32,10 @@ export class LocalWorkspaceAdapter {
     this.maxTrackedBytes = positiveInteger(
       options.maxTrackedBytes ?? 256 * 1024 * 1024,
       'maxTrackedBytes'
+    );
+    this.maxCaptureDurationMs = positiveInteger(
+      options.maxCaptureDurationMs ?? 30_000,
+      'maxCaptureDurationMs'
     );
   }
 
@@ -50,6 +56,7 @@ export class LocalWorkspaceAdapter {
       return await captureLocalWorkspaceSnapshot(this.workspaceRoot, {
         maxFiles: this.maxTrackedFiles,
         maxBytes: this.maxTrackedBytes,
+        maxDurationMs: this.maxCaptureDurationMs,
       });
     } catch (error) {
       if (error instanceof LocalWorkspaceSnapshotLimitError) {
