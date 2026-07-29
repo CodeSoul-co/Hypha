@@ -9,7 +9,7 @@ import type {
   SandboxCreateRequest,
 } from '@hypha/core';
 import { DefaultArtifactManager } from '@hypha/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { readArtifactStream } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { LocalProcessExecutionProvider } from './local-process-execution-provider';
@@ -26,6 +26,15 @@ const principal = {
   userId: 'user.local',
   permissionScopes: ['execution.run', 'artifact:read', 'artifact:write'],
 };
+const temporaryRoots = new Set<string>();
+
+afterEach(async () => {
+  for (const root of temporaryRoots) {
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    temporaryRoots.delete(root);
+    await expect(fs.access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  }
+});
 
 describe('LocalProcessExecutionProvider', () => {
   it('runs a governed command with output, mutation, resource, receipt, and revision evidence', async () => {
@@ -414,7 +423,9 @@ describe('LocalProcessExecutionProvider', () => {
 });
 
 async function temporaryWorkspace(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-provider-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-provider-'));
+  temporaryRoots.add(root);
+  return root;
 }
 
 function createProvider(

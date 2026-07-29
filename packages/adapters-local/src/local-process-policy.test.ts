@@ -2,8 +2,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@hypha/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { LocalProcessPolicyResolver } from './local-process-policy';
+
+const temporaryRoots = new Set<string>();
+
+afterEach(async () => {
+  for (const root of temporaryRoots) {
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    temporaryRoots.delete(root);
+    await expect(fs.access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  }
+});
 
 describe('LocalProcessPolicyResolver', () => {
   it('resolves only mapped executables, scoped paths, allowlisted environment, and lower limits', async () => {
@@ -99,7 +109,9 @@ describe('LocalProcessPolicyResolver', () => {
 });
 
 async function temporaryWorkspace(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-policy-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-policy-'));
+  temporaryRoots.add(root);
+  return root;
 }
 
 function createResolver(workspaceRoot: string): LocalProcessPolicyResolver {
