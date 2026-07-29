@@ -5,6 +5,7 @@ import type {
   ArtifactDownloadAccessRequest,
   ArtifactGetRequest,
   ArtifactObjectMetadata,
+  ArtifactOperationOptions,
   ArtifactPutRequest,
   ArtifactStorageRef,
   ArtifactStoreCapabilities,
@@ -27,6 +28,7 @@ import {
 import { stageS3ArtifactContent } from './s3-artifact-staging';
 import {
   MinioS3ArtifactTransport,
+  S3ArtifactTransferAbortedError,
   type MinioS3ArtifactTransportOptions,
   type S3ArtifactCopyResult,
   type S3ArtifactTransport,
@@ -107,58 +109,72 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     };
   }
 
-  async put(input: ArtifactPutRequest): Promise<ArtifactStorageRef> {
-    return this.operation('put', async () => {
-      const request = validateArtifactStoreInput(() => validateArtifactPutRequest(input));
-      let staged;
-      try {
-        staged = await stageS3ArtifactContent(request.content, this.maxObjectBytes);
-      } catch (error) {
-        if (error instanceof ArtifactContentLimitError) {
-          throw artifactStoreError('ARTIFACT_TOO_LARGE', error.message, false, {
-            maxObjectBytes: error.maxBytes,
-            observedBytes: error.observedBytes,
-          });
+  async put(
+    input: ArtifactPutRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactStorageRef> {
+    return this.operation(
+      'put',
+      async () => {
+        const request = validateArtifactStoreInput(() => validateArtifactPutRequest(input));
+        let staged;
+        try {
+          staged = await stageS3ArtifactContent(
+            request.content,
+            this.maxObjectBytes,
+            options.abortSignal
+          );
+        } catch (error) {
+          if (error instanceof ArtifactContentLimitError) {
+            throw artifactStoreError('ARTIFACT_TOO_LARGE', error.message, false, {
+              maxObjectBytes: error.maxBytes,
+              observedBytes: error.observedBytes,
+            });
+          }
+          throw error;
         }
-        throw error;
-      }
 
-      let writeResult: S3ArtifactWriteResult | undefined;
-      try {
-        this.assertOpen();
-        assertDeclaredContent(request, staged.sizeBytes, staged.contentHash);
-        writeResult = await this.transport.upload({
-          bucket: this.bucket,
-          key: request.objectKey,
-          body: staged.createReadStream(),
-          contentLength: staged.sizeBytes,
-          contentType: request.mimeType,
-          metadata: encodeS3ArtifactMetadata(
+        let writeResult: S3ArtifactWriteResult | undefined;
+        try {
+          this.assertOpen();
+          assertDeclaredContent(request, staged.sizeBytes, staged.contentHash);
+          writeResult = await this.transport.upload({
+            bucket: this.bucket,
+            key: request.objectKey,
+            body: staged.createReadStream(),
+            contentLength: staged.sizeBytes,
+            contentType: request.mimeType,
+            metadata: encodeS3ArtifactMetadata(
+              staged.contentHash,
+              request.metadata,
+              this.maxMetadataBytes
+            ),
+            ifAbsent: request.ifAbsent ?? false,
+            abortSignal: options.abortSignal,
+          });
+          assertNotAborted(options.abortSignal);
+          const versionId = requireProviderIdentity(writeResult.versionId, 'versionId');
+          const etag = requireProviderIdentity(normalizeS3Etag(writeResult.etag), 'etag');
+          const state = await this.requirePublishedState(
+            request.objectKey,
+            versionId,
+            etag,
             staged.contentHash,
-            request.metadata,
-            this.maxMetadataBytes
-          ),
-          ifAbsent: request.ifAbsent ?? false,
-        });
-        const versionId = requireProviderIdentity(writeResult.versionId, 'versionId');
-        const etag = requireProviderIdentity(normalizeS3Etag(writeResult.etag), 'etag');
-        const state = await this.requirePublishedState(
-          request.objectKey,
-          versionId,
-          etag,
-          staged.contentHash,
-          staged.sizeBytes
-        );
-        return this.storageRef(request.objectKey, state);
-      } catch (error) {
-        if (writeResult?.versionId) {
-          await this.rollbackFailedPut(request.objectKey, writeResult, error);
+            staged.sizeBytes
+          );
+          assertNotAborted(options.abortSignal);
+          return this.storageRef(request.objectKey, state);
+        } catch (error) {
+          if (writeResult?.versionId) {
+            await this.rollbackFailedPut(request.objectKey, writeResult, error);
+          }
+          throw error;
+        } finally {
+          await staged.cleanup();
         }
-        throw error;
-      } finally {
-        await staged.cleanup();
-      }
-    });
+      },
+      options.abortSignal
+    );
   }
 
   async get(input: ArtifactGetRequest): Promise<ArtifactContent> {
@@ -306,11 +322,17 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     this.transport.close();
   }
 
-  private async operation<T>(operation: string, action: () => Promise<T>): Promise<T> {
+  private async operation<T>(
+    operation: string,
+    action: () => Promise<T>,
+    abortSignal?: AbortSignal
+  ): Promise<T> {
     try {
       this.assertOpen();
+      assertNotAborted(abortSignal);
       await this.ensureReady();
       this.assertOpen();
+      assertNotAborted(abortSignal);
       return await action();
     } catch (error) {
       throw normalizeS3ArtifactStoreError(error, operation);
@@ -550,6 +572,10 @@ function assertPositiveSafeInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${name} must be a positive safe integer.`);
   }
+}
+
+function assertNotAborted(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) throw new S3ArtifactTransferAbortedError();
 }
 
 function requireTransportOptions(

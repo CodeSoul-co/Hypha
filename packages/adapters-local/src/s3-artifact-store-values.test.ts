@@ -175,6 +175,24 @@ describe('S3 Artifact Store values', () => {
     }
   );
 
+  it('preserves bounded internal transfer codes that contain underscores', () => {
+    const normalized = normalizeS3ArtifactStoreError(
+      Object.assign(new Error('hidden'), {
+        code: 'S3_ARTIFACT_TRANSFER_ABORTED',
+      }),
+      'put'
+    );
+
+    expect(normalized.normalizedError).toMatchObject({
+      code: 'ARTIFACT_UPLOAD_FAILED',
+      retryable: false,
+      details: {
+        operation: 'put',
+        providerCode: 'S3_ARTIFACT_TRANSFER_ABORTED',
+      },
+    });
+  });
+
   it('bounds untrusted provider error names before adding diagnostics', () => {
     const secret = 'SecretProviderCode';
     const normalized = normalizeS3ArtifactStoreError(

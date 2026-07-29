@@ -324,7 +324,7 @@ function s3ErrorName(error: unknown): string {
   // AWS SDK errors expose the provider code as `name`; MinIO uses the more
   // specific `Code`/`code` fields and leaves `name` as the generic `S3Error`.
   for (const value of [candidate.Code, candidate.code, candidate.name]) {
-    if (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(value)) {
+    if (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(value)) {
       return value;
     }
   }

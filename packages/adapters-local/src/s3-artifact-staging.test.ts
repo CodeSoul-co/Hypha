@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ArtifactContentLimitError, readArtifactStream } from './artifact-content-io';
 import { stageS3ArtifactContent } from './s3-artifact-staging';
+import { S3ArtifactTransferAbortedError } from './s3-artifact-store-transport';
 
 const prefix = 'hypha-s3-artifact-';
 
@@ -53,6 +54,32 @@ describe('stageS3ArtifactContent', () => {
 
     await expect(stageS3ArtifactContent(invalid, 10)).rejects.toThrow(
       'must yield Uint8Array chunks'
+    );
+    await expect(stagingDirectories()).resolves.toEqual(before);
+  });
+
+  it('rejects a pre-aborted staging operation without creating temporary state', async () => {
+    const before = await stagingDirectories();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      stageS3ArtifactContent(Uint8Array.from([1]), 1, controller.signal)
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    await expect(stagingDirectories()).resolves.toEqual(before);
+  });
+
+  it('removes partial staging state when cancellation arrives between chunks', async () => {
+    const before = await stagingDirectories();
+    const controller = new AbortController();
+    async function* source(): AsyncIterable<Uint8Array> {
+      yield Uint8Array.from([1]);
+      controller.abort();
+      yield Uint8Array.from([2]);
+    }
+
+    await expect(stageS3ArtifactContent(source(), 2, controller.signal)).rejects.toBeInstanceOf(
+      S3ArtifactTransferAbortedError
     );
     await expect(stagingDirectories()).resolves.toEqual(before);
   });

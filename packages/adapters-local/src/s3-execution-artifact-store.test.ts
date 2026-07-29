@@ -22,18 +22,22 @@ describe('S3ExecutionArtifactStore', () => {
   it('publishes staged content as a verified immutable S3 version', async () => {
     const transport = new FakeS3ArtifactTransport();
     const store = createStore(transport);
+    const controller = new AbortController();
     async function* chunks(): AsyncIterable<Uint8Array> {
       yield Uint8Array.from([1, 2]);
       yield Uint8Array.from([3, 4]);
     }
     const expectedHash = contentHash(Uint8Array.from([1, 2, 3, 4]));
 
-    const ref = await store.put({
-      ...request('objects/report.bin', chunks()),
-      expectedContentHash: expectedHash,
-      sizeBytes: 4,
-      metadata: { source: 'execution', label: '测试' },
-    });
+    const ref = await store.put(
+      {
+        ...request('objects/report.bin', chunks()),
+        expectedContentHash: expectedHash,
+        sizeBytes: 4,
+        metadata: { source: 'execution', label: '测试' },
+      },
+      { abortSignal: controller.signal }
+    );
 
     expect(ref).toEqual({
       storeId: 'artifact-store.s3.test',
@@ -45,6 +49,7 @@ describe('S3ExecutionArtifactStore', () => {
       encrypted: false,
     });
     expect(transport.lastUpload?.metadata[HYPHA_CONTENT_HASH_METADATA_KEY]).toBe(expectedHash);
+    expect(transport.lastUpload?.abortSignal).toBe(controller.signal);
     await expect(store.head(ref)).resolves.toMatchObject({
       contentHash: expectedHash,
       sizeBytes: 4,
@@ -52,6 +57,82 @@ describe('S3ExecutionArtifactStore', () => {
       metadata: { source: 'execution', label: '测试' },
     });
     expect(transport.checkBucket).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a pre-aborted put before readiness or remote upload', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      store.put(request('objects/aborted.bin', Uint8Array.from([1])), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        retryable: false,
+        details: {
+          operation: 'put',
+          providerCode: 'S3_ARTIFACT_TRANSFER_ABORTED',
+        },
+      },
+    });
+    expect(transport.checkBucket).not.toHaveBeenCalled();
+    expect(transport.upload).not.toHaveBeenCalled();
+  });
+
+  it('stops before remote upload when cancellation arrives during staging', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport);
+    const controller = new AbortController();
+    async function* content(): AsyncIterable<Uint8Array> {
+      yield Uint8Array.from([1]);
+      controller.abort();
+      yield Uint8Array.from([2]);
+    }
+
+    await expect(
+      store.put(request('objects/staging-aborted.bin', content()), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        retryable: false,
+        details: {
+          operation: 'put',
+          providerCode: 'S3_ARTIFACT_TRANSFER_ABORTED',
+        },
+      },
+    });
+    expect(transport.upload).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the uploaded version when cancellation arrives before publication', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport);
+    const controller = new AbortController();
+    transport.afterUpload = () => controller.abort();
+
+    await expect(
+      store.put(request('objects/post-upload-aborted.bin', Uint8Array.from([1])), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        details: { providerCode: 'S3_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+    expect(transport.delete).toHaveBeenCalledWith({
+      bucket: 'hypha-artifacts',
+      key: 'objects/post-upload-aborted.bin',
+      versionId: 'version-1',
+      expectedEtag: 'etag-1',
+    });
+    expect(transport.versions.get('objects/post-upload-aborted.bin')?.size ?? 0).toBe(0);
   });
 
   it('keeps overwritten object versions independently readable and deletable', async () => {
@@ -76,9 +157,7 @@ describe('S3ExecutionArtifactStore', () => {
   it('maps inclusive range reads while preserving the full object content hash', async () => {
     const transport = new FakeS3ArtifactTransport();
     const store = createStore(transport);
-    const ref = await store.put(
-      request('objects/range.bin', Uint8Array.from([0, 1, 2, 3, 4]))
-    );
+    const ref = await store.put(request('objects/range.bin', Uint8Array.from([0, 1, 2, 3, 4])));
 
     const content = await store.get({
       ref,
@@ -297,6 +376,7 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
   omitVersionOnWrite = false;
   corruptPublishedState = false;
   nextError?: unknown;
+  afterUpload?: () => void;
   lastUpload?: Parameters<S3ArtifactTransport['upload']>[0];
   lastGet?: Parameters<S3ArtifactTransport['get']>[0];
   lastDownloadAccess?: Parameters<S3ArtifactTransport['createDownloadAccess']>[0];
@@ -324,6 +404,7 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
       encrypted: false,
     };
     this.putVersion(input.key, state);
+    this.afterUpload?.();
     return {
       etag: state.etag,
       ...(this.omitVersionOnWrite ? {} : { versionId }),
