@@ -246,6 +246,84 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     }
   }, 30_000);
 
+  it('times out a real locked write without a partial commit and recovers after unlock', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-lock-timeout';
+    createRequest.idempotencyKey = 'execution-create:execution.real.lock-timeout';
+    createRequest.record.id = 'execution.real.lock-timeout';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.lock-timeout';
+    createRequest.record.request.idempotencyKey = 'command:run.real:lock-timeout';
+
+    const updateRequest = structuredClone(executionRecordCompareAndSetRequestExample);
+    updateRequest.operationId = 'operation.execution.cas.real-lock-timeout';
+    updateRequest.executionId = createRequest.record.id;
+    updateRequest.expectedRevision = 0;
+    updateRequest.leaseGuard = undefined;
+    updateRequest.idempotencyKey = 'execution-cas:execution.real.lock-timeout';
+    updateRequest.next = {
+      ...structuredClone(createRequest.record),
+      revision: 1,
+      status: 'starting',
+      updatedAt: '2026-07-16T00:00:01.000Z',
+    };
+
+    const { connection, store } = createRealStore('lock-timeout', 750);
+    const blocker = new Client({
+      connectionString: postgresConnectionString(),
+      ssl: false,
+      connectionTimeoutMillis: 1_000,
+      application_name: 'hypha-postgres-lock-blocker',
+    });
+    let blockerConnected = false;
+    let lockHeld = false;
+
+    try {
+      await connection.initialize();
+      const persisted = await store.create(createRequest);
+      await blocker.connect();
+      blockerConnected = true;
+      await blocker.query('BEGIN');
+      await blocker.query(
+        'SELECT execution_id FROM execution_records WHERE execution_id = $1 FOR UPDATE',
+        [persisted.id]
+      );
+      lockHeld = true;
+
+      await expect(store.compareAndSet(updateRequest)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_UNAVAILABLE',
+        message: 'Postgres Execution store write failed.',
+      });
+      await expect(store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: { provider: 'postgres', ready: true },
+      });
+
+      await blocker.query('ROLLBACK');
+      lockHeld = false;
+
+      await expect(store.get(persisted.id)).resolves.toEqual(persisted);
+      await expect(store.compareAndSet(updateRequest)).resolves.toEqual(updateRequest.next);
+
+      const evidence = await connection.withClient((client) =>
+        client.query(
+          `SELECT
+             revision,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count
+           FROM execution_records
+           WHERE execution_id = $1`,
+          [persisted.id]
+        )
+      );
+      expect(evidence.rows).toEqual([{ revision: '1', mutation_count: '1' }]);
+    } finally {
+      if (lockHeld) await blocker.query('ROLLBACK').catch(() => undefined);
+      if (blockerConnected) await blocker.end().catch(() => undefined);
+      await store.close();
+    }
+  }, 30_000);
+
   it('allows only one real worker to claim the same queued Execution', async () => {
     const createRequest = structuredClone(executionRecordCreateRequestExample);
     createRequest.operationId = 'operation.execution.create.real-claim';
@@ -920,7 +998,10 @@ describe('PostgresExecutionStoreFoundation real database', () => {
   }, 30_000);
 });
 
-function createRealStore(applicationRole: string): {
+function createRealStore(
+  applicationRole: string,
+  statementTimeoutMs = 5_000
+): {
   connection: PostgresExecutionStoreConnection;
   store: PostgresExecutionStoreFoundation;
 } {
@@ -931,7 +1012,7 @@ function createRealStore(applicationRole: string): {
     maxConnections: 2,
     connectionTimeoutMs: 5_000,
     idleTimeoutMs: 5_000,
-    statementTimeoutMs: 5_000,
+    statementTimeoutMs,
   });
   return {
     connection,
