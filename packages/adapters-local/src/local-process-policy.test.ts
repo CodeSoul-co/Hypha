@@ -3,7 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LocalProcessPolicyResolver } from './local-process-policy';
+import {
+  LocalProcessPolicyResolver,
+  type LocalProcessPolicyResolverOptions,
+} from './local-process-policy';
 
 const temporaryRoots = new Set<string>();
 
@@ -159,6 +162,80 @@ describe('LocalProcessPolicyResolver', () => {
     }
   });
 
+  it('preserves Unicode arguments and environment values in caller-independent snapshots', async () => {
+    const resolver = createResolver(await temporaryWorkspace());
+    const args = ['中文', 'e\u0301', '🙂'];
+    const resolved = await resolver.resolve(
+      environment(),
+      command({ args, env: { HYPHA_ALLOWED: '值🙂' } })
+    );
+
+    expect(resolved.args).toEqual(['中文', 'e\u0301', '🙂']);
+    expect(resolved.environment.HYPHA_ALLOWED).toBe('值🙂');
+    args[0] = 'mutated-after-resolution';
+    expect(resolved.args[0]).toBe('中文');
+    expect(() => (resolved.args as string[]).push('mutated')).toThrow();
+  });
+
+  it('rejects NUL characters in arguments and environment values', async () => {
+    const resolver = createResolver(await temporaryWorkspace());
+
+    await expect(
+      resolver.resolve(environment(), command({ args: ['safe', 'denied\u0000suffix'] }))
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+    await expect(
+      resolver.resolve(environment(), command({ env: { HYPHA_ALLOWED: 'denied\u0000suffix' } }))
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+  });
+
+  it('enforces argument count, per-argument, and total UTF-8 byte limits', async () => {
+    const workspace = await temporaryWorkspace();
+
+    await expect(
+      createResolver(workspace, process.execPath, { maxArgumentCount: 1 }).resolve(
+        environment(),
+        command({ args: ['one', 'two'] })
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+    await expect(
+      createResolver(workspace, process.execPath, { maxArgumentBytes: 3 }).resolve(
+        environment(),
+        command({ args: ['🙂'] })
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+    await expect(
+      createResolver(workspace, process.execPath, { maxTotalArgumentBytes: 5 }).resolve(
+        environment(),
+        command({ args: ['ab', 'cd'] })
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+  });
+
+  it('enforces environment count, value, and total UTF-8 byte limits', async () => {
+    const workspace = await temporaryWorkspace();
+    const twoVariableEnvironment = environment();
+    twoVariableEnvironment.process.environmentAllowList = ['HYPHA_ALLOWED', 'SECOND'];
+
+    await expect(
+      createResolver(workspace, process.execPath, { maxEnvironmentVariables: 1 }).resolve(
+        twoVariableEnvironment,
+        command({ env: { SECOND: 'value' } })
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+    await expect(
+      createResolver(workspace, process.execPath, { maxEnvironmentValueBytes: 3 }).resolve(
+        environment(),
+        command({ env: { HYPHA_ALLOWED: '🙂' } })
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+    await expect(
+      createResolver(workspace, process.execPath, { maxTotalEnvironmentBytes: 10 }).resolve(
+        environment(),
+        command()
+      )
+    ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+  });
+
   it('rejects shell, secret, snapshot, and unmapped executable bypasses', async () => {
     const resolver = createResolver(await temporaryWorkspace());
     await expect(resolver.resolve(environment(), command({ shell: true }))).rejects.toMatchObject({
@@ -193,13 +270,15 @@ async function temporaryWorkspace(): Promise<string> {
 
 function createResolver(
   workspaceRoot: string,
-  executable = process.execPath
+  executable = process.execPath,
+  limits: Partial<Omit<LocalProcessPolicyResolverOptions, 'workspaceRoot' | 'executables'>> = {}
 ): LocalProcessPolicyResolver {
   return new LocalProcessPolicyResolver({
     workspaceRoot,
     executables: { node: executable },
     baseEnvironment: { HYPHA_ALLOWED: 'base', HYPHA_HIDDEN: 'hidden' },
     maxExecutionTimeoutMs: 1_000,
+    ...limits,
   });
 }
 

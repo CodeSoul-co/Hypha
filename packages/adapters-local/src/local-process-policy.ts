@@ -13,10 +13,17 @@ export interface LocalProcessPolicyResolverOptions {
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   maxCombinedOutputBytes?: number;
+  maxArgumentCount?: number;
+  maxArgumentBytes?: number;
+  maxTotalArgumentBytes?: number;
+  maxEnvironmentVariables?: number;
+  maxEnvironmentValueBytes?: number;
+  maxTotalEnvironmentBytes?: number;
 }
 
 export interface ResolvedLocalProcessPolicy {
   executable: string;
+  args: readonly string[];
   cwd: string;
   environment: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -47,6 +54,12 @@ export class LocalProcessPolicyResolver {
   private readonly maxStdoutBytes: number;
   private readonly maxStderrBytes: number;
   private readonly maxCombinedOutputBytes: number;
+  private readonly maxArgumentCount: number;
+  private readonly maxArgumentBytes: number;
+  private readonly maxTotalArgumentBytes: number;
+  private readonly maxEnvironmentVariables: number;
+  private readonly maxEnvironmentValueBytes: number;
+  private readonly maxTotalEnvironmentBytes: number;
   private readonly resolvedIdentities = new WeakMap<
     ResolvedLocalProcessPolicy,
     {
@@ -97,6 +110,27 @@ export class LocalProcessPolicyResolver {
     this.maxCombinedOutputBytes = positiveInteger(
       options.maxCombinedOutputBytes ?? 8 * 1024 * 1024,
       'maxCombinedOutputBytes'
+    );
+    this.maxArgumentCount = positiveInteger(options.maxArgumentCount ?? 256, 'maxArgumentCount');
+    this.maxArgumentBytes = positiveInteger(
+      options.maxArgumentBytes ?? 8 * 1024,
+      'maxArgumentBytes'
+    );
+    this.maxTotalArgumentBytes = positiveInteger(
+      options.maxTotalArgumentBytes ?? 24 * 1024,
+      'maxTotalArgumentBytes'
+    );
+    this.maxEnvironmentVariables = positiveInteger(
+      options.maxEnvironmentVariables ?? 128,
+      'maxEnvironmentVariables'
+    );
+    this.maxEnvironmentValueBytes = positiveInteger(
+      options.maxEnvironmentValueBytes ?? 8 * 1024,
+      'maxEnvironmentValueBytes'
+    );
+    this.maxTotalEnvironmentBytes = positiveInteger(
+      options.maxTotalEnvironmentBytes ?? 24 * 1024,
+      'maxTotalEnvironmentBytes'
     );
   }
 
@@ -205,6 +239,7 @@ export class LocalProcessPolicyResolver {
 
     const resolved: ResolvedLocalProcessPolicy = {
       executable,
+      args: this.resolveArguments(request.args ?? []),
       cwd,
       environment: this.buildEnvironment(environment, request.env),
       timeoutMs,
@@ -354,7 +389,86 @@ export class LocalProcessPolicyResolver {
       }
       output[name] = value;
     }
-    return output;
+    return this.validateResolvedEnvironment(output);
+  }
+
+  private resolveArguments(requested: readonly string[]): readonly string[] {
+    if (requested.length > this.maxArgumentCount) {
+      throw executionProviderError(
+        'EXECUTION_POLICY_DENIED',
+        'Local Process command exceeds the configured argument count limit.',
+        false
+      );
+    }
+
+    let totalBytes = 0;
+    for (const argument of requested) {
+      if (argument.includes('\u0000')) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process command arguments cannot contain NUL characters.',
+          false
+        );
+      }
+      const argumentBytes = Buffer.byteLength(argument, 'utf8');
+      if (argumentBytes > this.maxArgumentBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process command exceeds the configured per-argument byte limit.',
+          false
+        );
+      }
+      totalBytes += argumentBytes + 1;
+      if (totalBytes > this.maxTotalArgumentBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process command exceeds the configured total argument byte limit.',
+          false
+        );
+      }
+    }
+    // Preserve exact Unicode semantics while severing the caller-owned mutable array.
+    return Object.freeze([...requested]);
+  }
+
+  private validateResolvedEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const entries = Object.entries(environment);
+    if (entries.length > this.maxEnvironmentVariables) {
+      throw executionProviderError(
+        'EXECUTION_POLICY_DENIED',
+        'Local Process environment exceeds the configured variable count limit.',
+        false
+      );
+    }
+
+    let totalBytes = 0;
+    for (const [name, value] of entries) {
+      if (value === undefined) continue;
+      if (value.includes('\u0000')) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          `Environment variable ${name} cannot contain NUL characters.`,
+          false
+        );
+      }
+      const valueBytes = Buffer.byteLength(value, 'utf8');
+      if (valueBytes > this.maxEnvironmentValueBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          `Environment variable ${name} exceeds the configured value byte limit.`,
+          false
+        );
+      }
+      totalBytes += Buffer.byteLength(name, 'utf8') + valueBytes + 2;
+      if (totalBytes > this.maxTotalEnvironmentBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process environment exceeds the configured total byte limit.',
+          false
+        );
+      }
+    }
+    return Object.freeze({ ...environment });
   }
 }
 

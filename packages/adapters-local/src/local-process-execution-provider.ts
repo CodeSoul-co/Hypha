@@ -210,7 +210,7 @@ export class LocalProcessExecutionProvider implements SandboxProvider {
       await this.policy.assertExecutionSurfaceUnchanged(policy);
       const processResult = await this.supervisor.run({
         executable: policy.executable,
-        args: request.args ?? [],
+        args: [...policy.args],
         cwd: policy.cwd,
         environment: policy.environment,
         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
