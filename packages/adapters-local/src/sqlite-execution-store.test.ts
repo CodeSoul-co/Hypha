@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
+  ExecutionReceipt,
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseRenewRequest,
   ExecutionRecord,
@@ -10,11 +11,13 @@ import type {
   ExecutionStore,
 } from '@hypha/core';
 import {
+  DurableExecutionWorker,
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
   executionLeaseReleaseRequestExample,
   executionLeaseRenewRequestExample,
   executionRecordCreateRequestExample,
+  validateExecutionRecord,
 } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
@@ -286,6 +289,113 @@ describe('SQLiteExecutionStore public adapter', () => {
     await afterCrashRecovery.close();
   }, 60_000);
 
+  it('preserves idempotency and terminal evidence across a real process restart', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-terminal-restart-'));
+    const seed = new SQLiteExecutionStore({ rootPath: root });
+    const queued = await seed
+      .create(structuredClone(executionRecordCreateRequestExample))
+      .finally(() => seed.close());
+    const receipt: ExecutionReceipt = {
+      id: `receipt:${queued.id}`,
+      providerId: queued.providerId,
+      executionId: queued.id,
+      providerExecutionRef: `provider-execution:${queued.id}`,
+      status: 'completed',
+      issuedAt: '2026-07-16T00:00:01.250Z',
+      receiptHash: 'sha256:provider-terminal-receipt',
+    };
+    const childRequest: ChildTerminalReceiptCrashRequest = {
+      workerId: 'worker.receipt-crash',
+      claimAt: '2026-07-16T00:00:01.000Z',
+      checkpointAt: '2026-07-16T00:00:01.500Z',
+      leaseTtlMs: 1_000,
+      receipt,
+    };
+
+    await runStoreCrashInChild(
+      root,
+      'crashAfterCheckpointTerminalReceipt',
+      childRequest,
+      CRASH_AFTER_TERMINAL_RECEIPT_EXIT_CODE
+    );
+    const evidence = parseTerminalCheckpointEvidence(
+      await fs.readFile(path.join(root, 'terminal-receipt-checkpoint.json'), 'utf8')
+    );
+    expect(evidence.checkpointed).toMatchObject({
+      revision: 2,
+      status: 'starting',
+      terminalReceipt: receipt,
+      lease: { ownerId: childRequest.workerId, fencingToken: 1 },
+    });
+
+    let now = childRequest.checkpointAt;
+    const recoveryEvidence = await (async () => {
+      const restarted = new SQLiteExecutionStore({ rootPath: root });
+      try {
+        const replayWorker = new DurableExecutionWorker({
+          store: restarted,
+          workerId: childRequest.workerId,
+          leaseTtlMs: childRequest.leaseTtlMs,
+          now: () => now,
+          leaseId: (executionId) => `lease:${childRequest.workerId}:${executionId}`,
+        });
+        await expect(
+          replayWorker.checkpointTerminalReceipt(evidence.claimed, receipt)
+        ).resolves.toEqual(evidence.checkpointed);
+        await expect(restarted.get(queued.id)).resolves.toEqual(evidence.checkpointed);
+
+        now = '2026-07-16T00:00:03.000Z';
+        const recoveryWorker = new DurableExecutionWorker({
+          store: restarted,
+          workerId: 'worker.receipt-recovery',
+          leaseTtlMs: 1_000,
+          now: () => now,
+          leaseId: (executionId) => `lease:worker.receipt-recovery:${executionId}`,
+        });
+        const recovered = await recoveryWorker.claimNext();
+        if (!recovered) throw new Error('Expected the recovery worker to claim the Execution.');
+        expect(recovered).toMatchObject({
+          terminalReceipt: receipt,
+          lease: { ownerId: 'worker.receipt-recovery', fencingToken: 2 },
+        });
+        now = '2026-07-16T00:00:03.500Z';
+        const result = {
+          ...structuredClone(commandExecutionResultExample),
+          executionId: recovered.id,
+          revision: recovered.revision + 1,
+          externalReceipt: receipt,
+        };
+        const completed = await recoveryWorker.commit(recovered, result);
+        expect(completed).toMatchObject({
+          status: 'completed',
+          terminalReceipt: receipt,
+          result: { externalReceipt: receipt },
+          lease: undefined,
+        });
+        return { completed, recovered, result };
+      } finally {
+        await restarted.close();
+      }
+    })();
+
+    const finalRestart = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      const replayedRecovery = new DurableExecutionWorker({
+        store: finalRestart,
+        workerId: 'worker.receipt-recovery',
+        leaseTtlMs: 1_000,
+        now: () => now,
+        leaseId: (executionId) => `lease:worker.receipt-recovery:${executionId}`,
+      });
+      await expect(
+        replayedRecovery.commit(recoveryEvidence.recovered, recoveryEvidence.result)
+      ).resolves.toEqual(recoveryEvidence.completed);
+      await expect(finalRestart.get(queued.id)).resolves.toEqual(recoveryEvidence.completed);
+    } finally {
+      await finalRestart.close();
+    }
+  }, 60_000);
+
   it('takes over an expired lease after its worker crashes and rejects the late result', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-lease-'));
     const store = new SQLiteExecutionStore({ rootPath: root });
@@ -421,6 +531,7 @@ type ChildStoreOperation = 'acquireLease' | 'compareAndSet' | 'releaseLease' | '
 type ChildStoreCrashOperation =
   | 'crashAfterAcquireLease'
   | 'crashAfterCompareAndSet'
+  | 'crashAfterCheckpointTerminalReceipt'
   | 'crashAfterRenewLease'
   | 'crashBeforeCompareAndSet'
   | 'crashDuringCompareAndSetTransaction';
@@ -430,10 +541,24 @@ const CRASH_AFTER_CAS_EXIT_CODE = 72;
 const CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE = 73;
 const CRASH_AFTER_LEASE_RENEW_EXIT_CODE = 74;
 const CRASH_DURING_CAS_TRANSACTION_EXIT_CODE = 75;
+const CRASH_AFTER_TERMINAL_RECEIPT_EXIT_CODE = 76;
 
 interface ChildLeaseRenewCrashRequest {
   acquire: ExecutionLeaseAcquireRequest;
   renew: ExecutionLeaseRenewRequest;
+}
+
+interface ChildTerminalReceiptCrashRequest {
+  workerId: string;
+  claimAt: string;
+  checkpointAt: string;
+  leaseTtlMs: number;
+  receipt: ExecutionReceipt;
+}
+
+interface TerminalCheckpointEvidence {
+  claimed: ExecutionRecord;
+  checkpointed: ExecutionRecord;
 }
 
 interface ChildStoreResponse<T> {
@@ -506,6 +631,7 @@ async function runStoreCrashInChild(
   operation: ChildStoreCrashOperation,
   request:
     | ChildLeaseRenewCrashRequest
+    | ChildTerminalReceiptCrashRequest
     | ExecutionLeaseAcquireRequest
     | ExecutionRecordCompareAndSetRequest,
   expectedExitCode: number
@@ -624,6 +750,22 @@ function terminalMutation(
   };
 }
 
+function parseTerminalCheckpointEvidence(value: string): TerminalCheckpointEvidence {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !('claimed' in parsed) ||
+    !('checkpointed' in parsed)
+  ) {
+    throw new TypeError('Terminal checkpoint evidence is invalid.');
+  }
+  return {
+    claimed: validateExecutionRecord(parsed.claimed),
+    checkpointed: validateExecutionRecord(parsed.checkpointed),
+  };
+}
+
 const SQLITE_STORE_CHILD_SOURCE = String.raw`
 const Module = require('node:module');
 const fs = require('node:fs');
@@ -642,6 +784,7 @@ const { SQLiteExecutionStore } = require(
     'packages/adapters-local/src/sqlite-execution-store.ts'
   )
 );
+const { DurableExecutionWorker } = require('@hypha/core');
 process.on('message', async ({ rootPath, operation, request }) => {
   const store = new SQLiteExecutionStore({ rootPath });
   try {
@@ -672,6 +815,25 @@ process.on('message', async ({ rootPath, operation, request }) => {
       await store.acquireLease(request.acquire);
       await store.renewLease(request.renew);
       process.exit(${CRASH_AFTER_LEASE_RENEW_EXIT_CODE});
+    }
+    if (operation === 'crashAfterCheckpointTerminalReceipt') {
+      let now = request.claimAt;
+      const worker = new DurableExecutionWorker({
+        store,
+        workerId: request.workerId,
+        leaseTtlMs: request.leaseTtlMs,
+        now: () => now,
+        leaseId: (executionId) => 'lease:' + request.workerId + ':' + executionId,
+      });
+      const claimed = await worker.claimNext();
+      if (!claimed) throw new Error('Expected the crash worker to claim the Execution.');
+      now = request.checkpointAt;
+      const checkpointed = await worker.checkpointTerminalReceipt(claimed, request.receipt);
+      fs.writeFileSync(
+        path.join(rootPath, 'terminal-receipt-checkpoint.json'),
+        JSON.stringify({ claimed, checkpointed })
+      );
+      process.exit(${CRASH_AFTER_TERMINAL_RECEIPT_EXIT_CODE});
     }
     const result = await store[operation](request);
     process.send({ ok: true, result });
