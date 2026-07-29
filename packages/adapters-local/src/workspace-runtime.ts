@@ -36,12 +36,18 @@ export class LocalWorkspaceRuntime implements WorkspaceRuntimePort {
   }
 
   async initialize(): Promise<void> {
-    this.writeRoots.forEach((root) => this.controlPlaneGuard.assertResolvedPath(root));
+    const workspaceRoots = Array.from(
+      new Set([this.workingDirectory, ...this.readRoots, ...this.writeRoots, ...this.executeRoots])
+    );
+    workspaceRoots.forEach((root) => this.controlPlaneGuard.assertWorkspaceRoot(root));
     await Promise.all(this.writeRoots.map((root) => fs.mkdir(root, { recursive: true })));
   }
 
   async execute(request: WorkspaceRuntimeRequest): Promise<unknown> {
     if (!request.path.trim()) throw new Error('path is required');
+    if (request.path === '.' && request.operation !== 'list') {
+      throw new Error('Workspace root marker is only valid for list operations');
+    }
     const absolutePath = this.resolvePath(request.path);
     switch (request.operation) {
       case 'read':

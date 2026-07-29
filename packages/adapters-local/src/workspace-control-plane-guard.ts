@@ -17,6 +17,8 @@ const protectedSocketNames = new Set(['containerd.sock', 'docker.sock', 'podman.
 const ambiguousSeparators = /[\u2044\u2215\u29f8\ufe68\uff0f\uff3c]/u;
 const urlEncodedOctet = /%[0-9a-f]{2}/iu;
 const windowsDriveAbsolutePath = /^[a-z]:[\\/]/iu;
+const repeatedPortableSeparator = /[\\/]{2,}/u;
+const windowsReservedDeviceName = /^(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$/iu;
 
 /**
  * Independent deny guard for framework control-plane, credential, package,
@@ -44,6 +46,9 @@ export class WorkspaceControlPlaneGuard {
   }
 
   assertInputPath(requestedPath: string): void {
+    if (!requestedPath.trim()) {
+      throw new Error('Workspace path is required');
+    }
     if (
       Array.from(requestedPath).some((character) => {
         const codePoint = character.codePointAt(0) ?? 0;
@@ -58,6 +63,9 @@ export class WorkspaceControlPlaneGuard {
     if (ambiguousSeparators.test(requestedPath)) {
       throw new Error('Workspace path contains an ambiguous Unicode separator');
     }
+    if (repeatedPortableSeparator.test(requestedPath)) {
+      throw new Error('Workspace path contains repeated separators');
+    }
     if (requestedPath.startsWith('\\\\')) {
       throw new Error('UNC and Windows device Workspace paths are not allowed');
     }
@@ -71,6 +79,9 @@ export class WorkspaceControlPlaneGuard {
     }
     if (this.hasTraversalSegment(requestedPath)) {
       throw new Error('Workspace path traversal is not allowed');
+    }
+    if (this.hasAmbiguousPortableSegment(requestedPath)) {
+      throw new Error('Workspace path contains an ambiguous portable segment');
     }
     if (this.hasProtectedLexicalShape(requestedPath)) {
       throw new Error('Workspace path is protected by the control-plane policy');
@@ -122,12 +133,26 @@ export class WorkspaceControlPlaneGuard {
     return this.portableSegments(candidate).some((segment) => segment === '..');
   }
 
+  private hasAmbiguousPortableSegment(candidate: string): boolean {
+    const segments = this.rawPortableSegments(candidate);
+    const driveQualified = windowsDriveAbsolutePath.test(candidate);
+    return segments.some((segment, index) => {
+      if (segment === '.') return candidate !== '.';
+      if (/[ .]$/u.test(segment)) return true;
+      if (windowsReservedDeviceName.test(segment.split('.')[0] ?? '')) return true;
+      if (segment.includes(':') && !(driveQualified && index === 0 && /^[a-z]:$/iu.test(segment))) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  private rawPortableSegments(candidate: string): string[] {
+    return candidate.replace(/[\\/]/gu, '/').split('/').filter(Boolean);
+  }
+
   private portableSegments(candidate: string): string[] {
-    return candidate
-      .replace(/[\\/]/gu, '/')
-      .split('/')
-      .filter(Boolean)
-      .map((segment) => segment.toLowerCase());
+    return this.rawPortableSegments(candidate).map((segment) => segment.toLowerCase());
   }
 
   private uniqueResolvedRoots(roots: string[]): string[] {

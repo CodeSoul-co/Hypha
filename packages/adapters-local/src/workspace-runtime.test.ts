@@ -155,16 +155,15 @@ describe('LocalWorkspaceRuntime execution environment', () => {
     }
   });
 
-  it('denies configured control-plane stores even inside a broad write allow-list', async () => {
+  it('rejects a Workspace root that contains a configured control-plane store', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-workspace-runtime-store-'));
     const eventStore = path.join(root, 'custom-state', 'events.sqlite');
     setEnvironment('HYPHA_RUNTIME_EVENT_DB', eventStore);
     const runtime = createRuntime(root, root, false);
-    await runtime.initialize();
 
-    await expect(
-      runtime.execute({ operation: 'write', path: eventStore, content: 'tampered' })
-    ).rejects.toThrow('protected by the control-plane policy');
+    await expect(runtime.initialize()).rejects.toThrow(
+      'Workspace root overlaps the framework control-plane'
+    );
   });
 
   it('rejects encoded, Unicode-confusable, NUL, and portable traversal variants', async () => {
@@ -179,6 +178,13 @@ describe('LocalWorkspaceRuntime execution environment', () => {
       '\uff0eenv',
       `safe\u2215..\u2215.env`,
       `safe\0file.txt`,
+      'safe//file.txt',
+      'safe/./file.txt',
+      'safe./file.txt',
+      'safe /file.txt',
+      'CON',
+      'nul.txt',
+      'file.txt:alternate',
       '\\\\.\\pipe\\docker_engine',
       '\\\\server\\share\\artifact.txt',
       'C:\\Windows\\System32\\drivers\\etc\\hosts',
@@ -188,6 +194,18 @@ describe('LocalWorkspaceRuntime execution environment', () => {
         runtime.execute({ operation: 'write', path: deniedPath, content: 'denied' })
       ).rejects.toThrow();
     }
+    await expect(
+      runtime.execute({ operation: 'write', path: '.', content: 'denied' })
+    ).rejects.toThrow('Workspace root marker is only valid for list operations');
+  });
+
+  it('rejects a Workspace root that contains protected host or framework paths', async () => {
+    const filesystemRoot = path.parse(process.cwd()).root;
+    const runtime = createRuntime(filesystemRoot, filesystemRoot, false);
+
+    await expect(runtime.initialize()).rejects.toThrow(
+      'Workspace root overlaps the framework control-plane'
+    );
   });
 
   it('filters protected entries while preserving ordinary Workspace access', async () => {
