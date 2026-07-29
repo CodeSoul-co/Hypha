@@ -4,6 +4,23 @@ import path from 'node:path';
 import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@hypha/core';
 import { executionProviderError } from './execution-provider-error';
 
+const hostControlPlaneEnvironmentNames = new Set([
+  'CONTAINERD_ADDRESS',
+  'CONTAINERD_NAMESPACE',
+  'CONTAINER_HOST',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'DBUS_SYSTEM_BUS_ADDRESS',
+  'DOCKER_CERT_PATH',
+  'DOCKER_CONFIG',
+  'DOCKER_CONTEXT',
+  'DOCKER_HOST',
+  'DOCKER_TLS_VERIFY',
+  'KUBECONFIG',
+  'KUBERNETES_MASTER',
+  'PODMAN_HOST',
+  'SSH_AUTH_SOCK',
+]);
+
 export interface LocalProcessPolicyResolverOptions {
   workspaceRoot: string;
   executables: Record<string, string>;
@@ -177,6 +194,7 @@ export class LocalProcessPolicyResolver {
         false
       );
     }
+    assertNoHostControlPlaneEnvironment(environment);
   }
 
   async resolve(
@@ -365,6 +383,7 @@ export class LocalProcessPolicyResolver {
     environment: ExecutionEnvironmentSpec,
     requested?: Record<string, string>
   ): NodeJS.ProcessEnv {
+    assertNoHostControlPlaneEnvironment(environment);
     const allowed = normalizedNameSet(environment.process.environmentAllowList ?? []);
     const denied = normalizedNameSet(environment.process.environmentDenyList ?? []);
     const output: NodeJS.ProcessEnv = {};
@@ -508,6 +527,20 @@ function normalizeEnvironmentName(value: string): string {
 function normalizedNameSet(values: readonly string[]): Set<string> {
   for (const value of values) validateEnvironmentName(value, 'Environment variable');
   return new Set(values.map(normalizeEnvironmentName));
+}
+
+function assertNoHostControlPlaneEnvironment(environment: ExecutionEnvironmentSpec): void {
+  const allowed = normalizedNameSet(environment.process.environmentAllowList ?? []);
+  for (const name of hostControlPlaneEnvironmentNames) {
+    if (!allowed.has(normalizeEnvironmentName(name))) continue;
+    // Local Process has no OS isolation. Ambient daemon, agent, bus, or cluster handles must
+    // never be delegated through its environment, including Windows named-pipe endpoints.
+    throw executionProviderError(
+      'EXECUTION_POLICY_DENIED',
+      `Local Process environment cannot expose host control-plane variable ${name}.`,
+      false
+    );
+  }
 }
 
 function minimumPositive(values: Array<number | undefined>): number {

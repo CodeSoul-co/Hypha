@@ -236,6 +236,46 @@ describe('LocalProcessPolicyResolver', () => {
     ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
   });
 
+  it('rejects host control-plane environment handles even when explicitly allowlisted', async () => {
+    const resolver = createResolver(await temporaryWorkspace());
+    const controlPlaneVariables = [
+      ['CONTAINERD_ADDRESS', '/run/containerd/containerd.sock'],
+      ['CONTAINERD_NAMESPACE', 'moby'],
+      ['CONTAINER_HOST', 'npipe:////./pipe/docker_engine'],
+      ['DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'],
+      ['DBUS_SYSTEM_BUS_ADDRESS', 'unix:path=/run/dbus/system_bus_socket'],
+      ['DOCKER_CERT_PATH', '/host/docker-certs'],
+      ['DOCKER_CONFIG', '/host/docker-config'],
+      ['DOCKER_CONTEXT', 'desktop-linux'],
+      ['DOCKER_HOST', 'unix:///var/run/docker.sock'],
+      ['DOCKER_TLS_VERIFY', '1'],
+      ['KUBECONFIG', '/host/kubeconfig'],
+      ['KUBERNETES_MASTER', 'https://127.0.0.1:6443'],
+      ['PODMAN_HOST', 'unix:///run/podman/podman.sock'],
+      ['SSH_AUTH_SOCK', '/run/user/1000/keyring/ssh'],
+    ] as const;
+
+    for (const [name, value] of controlPlaneVariables) {
+      const deniedEnvironment = environment();
+      deniedEnvironment.process.environmentAllowList = ['HYPHA_ALLOWED', name];
+
+      expect(() => resolver.validateEnvironment(deniedEnvironment)).toThrow(
+        `Local Process environment cannot expose host control-plane variable ${name}.`
+      );
+      await expect(
+        resolver.resolve(deniedEnvironment, command({ env: { [name]: value } }))
+      ).rejects.toMatchObject({ normalizedError: { code: 'EXECUTION_POLICY_DENIED' } });
+    }
+
+    if (process.platform === 'win32') {
+      const caseVariant = environment();
+      caseVariant.process.environmentAllowList = ['docker_host'];
+      expect(() => resolver.validateEnvironment(caseVariant)).toThrow(
+        'Local Process environment cannot expose host control-plane variable DOCKER_HOST.'
+      );
+    }
+  });
+
   it('rejects shell, secret, snapshot, and unmapped executable bypasses', async () => {
     const resolver = createResolver(await temporaryWorkspace());
     await expect(resolver.resolve(environment(), command({ shell: true }))).rejects.toMatchObject({
