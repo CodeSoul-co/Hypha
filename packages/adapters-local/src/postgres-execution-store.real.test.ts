@@ -1002,6 +1002,107 @@ describe('PostgresExecutionStoreFoundation real database', () => {
     }
   }, 45_000);
 
+  it('recovers committed data and rolls back an open transaction after a real crash', async () => {
+    const createRequest = structuredClone(executionRecordCreateRequestExample);
+    createRequest.operationId = 'operation.execution.create.real-crash-recovery';
+    createRequest.idempotencyKey = 'execution-create:execution.real.crash-recovery';
+    createRequest.record.id = 'execution.real.crash-recovery';
+    createRequest.record.request.executionId = createRequest.record.id;
+    createRequest.record.request.operationId = 'operation.command.real.crash-recovery';
+    createRequest.record.request.idempotencyKey = 'command:run.real:crash-recovery';
+
+    const { connection, store } = createRealStore('crash-recovery');
+    const uncommittedWriter = new Client({
+      connectionString: postgresConnectionString(),
+      ssl: false,
+      connectionTimeoutMillis: 1_000,
+      application_name: 'hypha-postgres-uncommitted-crash-writer',
+    });
+    uncommittedWriter.on('error', () => {
+      // The fixture is deliberately killed while this client owns a transaction.
+    });
+    let writerConnected = false;
+    let postgresKilled = false;
+
+    try {
+      await connection.initialize();
+      const persisted = await store.create(createRequest);
+      await uncommittedWriter.connect();
+      writerConnected = true;
+      await uncommittedWriter.query('BEGIN');
+      await uncommittedWriter.query(
+        `UPDATE execution_records
+            SET revision = 1,
+                status = 'completed'
+          WHERE execution_id = $1`,
+        [persisted.id]
+      );
+      await uncommittedWriter.query(
+        `INSERT INTO execution_mutation_idempotency
+           (operation_id, idempotency_key, execution_id, request_hash, result_json)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [
+          'operation.execution.crash-uncommitted',
+          'execution-crash:uncommitted',
+          persisted.id,
+          'sha256:uncommitted',
+          JSON.stringify(persisted),
+        ]
+      );
+      const uncommittedEvidence = await uncommittedWriter.query(
+        `SELECT
+           revision,
+           status,
+           (SELECT COUNT(*) FROM execution_mutation_idempotency
+             WHERE execution_id = $1) AS mutation_count
+         FROM execution_records
+         WHERE execution_id = $1`,
+        [persisted.id]
+      );
+      expect(uncommittedEvidence.rows).toEqual([
+        { revision: '1', status: 'completed', mutation_count: '1' },
+      ]);
+
+      await requireDocker(['kill', containerName]);
+      postgresKilled = true;
+      await requireDocker(['start', containerName]);
+      postgresKilled = false;
+      await waitForPostgres();
+      await waitForStoreHealthy(store);
+
+      await expect(store.get(persisted.id)).resolves.toEqual(persisted);
+      const recoveredEvidence = await connection.withClient((client) =>
+        client.query(
+          `SELECT
+             revision,
+             status,
+             (SELECT COUNT(*) FROM execution_mutation_idempotency
+               WHERE execution_id = $1) AS mutation_count,
+             (SELECT COUNT(*) FROM execution_record_quarantine
+               WHERE execution_id = $1) AS quarantine_count
+           FROM execution_records
+           WHERE execution_id = $1`,
+          [persisted.id]
+        )
+      );
+      expect(recoveredEvidence.rows).toEqual([
+        {
+          revision: '0',
+          status: persisted.status,
+          mutation_count: '0',
+          quarantine_count: '0',
+        },
+      ]);
+    } finally {
+      if (postgresKilled) {
+        await requireDocker(['start', containerName]);
+        await waitForPostgres();
+      }
+      if (writerConnected) await uncommittedWriter.end().catch(() => undefined);
+      await store.close();
+    }
+  }, 45_000);
+
   it('rejects a real future schema without rewriting it and initializes after restoration', async () => {
     const administrator = new Client({
       connectionString: postgresConnectionString(),
