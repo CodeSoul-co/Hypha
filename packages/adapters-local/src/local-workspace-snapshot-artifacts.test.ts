@@ -142,6 +142,92 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     expect(fixture.store.stats().objects).toBe(1);
   });
 
+  it('passes one live cancellation signal through file and manifest persistence', async () => {
+    const root = await workspaceRoot('persistence-signal');
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const createFromWorkspace = vi.spyOn(fixture.manager, 'createFromWorkspace');
+    const create = vi.spyOn(fixture.manager, 'create');
+    const service = createService(workspace, fixture.manager);
+
+    await expect(service.createFullSnapshot(snapshotRequest())).resolves.toMatchObject({
+      status: 'final',
+    });
+
+    const fileSignal = createFromWorkspace.mock.calls[0]?.[1]?.abortSignal;
+    const manifestSignal = create.mock.calls[0]?.[1]?.abortSignal;
+    expect(fileSignal).toBeInstanceOf(AbortSignal);
+    expect(manifestSignal).toBe(fileSignal);
+    expect(fileSignal?.aborted).toBe(false);
+  });
+
+  it('actively aborts an in-flight Artifact write when snapshot persistence times out', async () => {
+    const root = await workspaceRoot('persistence-active-timeout');
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(fixture.manager, 'createFromWorkspace').mockImplementation(
+      async (_request, options) => {
+        observedSignal = options?.abortSignal;
+        if (!observedSignal) throw new Error('Expected Workspace snapshot cancellation signal.');
+        await rejectWhenAborted(observedSignal);
+        throw new Error('unreachable');
+      }
+    );
+    const service = createService(workspace, fixture.manager, {
+      maxSnapshotPersistenceDurationMs: 20,
+    });
+
+    await expect(service.createFullSnapshot(snapshotRequest())).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_RESOURCE_EXCEEDED',
+        retryable: true,
+        details: { maxSnapshotPersistenceDurationMs: 20 },
+      },
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(fixture.repository.list()).resolves.toEqual([]);
+    expect(fixture.store.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+  });
+
+  it('propagates caller cancellation into an in-flight Artifact write', async () => {
+    const root = await workspaceRoot('persistence-caller-cancellation');
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const controller = new AbortController();
+    let signalReady: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      signalReady = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(fixture.manager, 'createFromWorkspace').mockImplementation(
+      async (_request, options) => {
+        observedSignal = options?.abortSignal;
+        if (!observedSignal) throw new Error('Expected Workspace snapshot cancellation signal.');
+        signalReady?.();
+        await rejectWhenAborted(observedSignal);
+        throw new Error('unreachable');
+      }
+    );
+    const service = createService(workspace, fixture.manager);
+    const pending = service.createFullSnapshot(snapshotRequest(), {
+      abortSignal: controller.signal,
+    });
+
+    await started;
+    controller.abort(new Error('cancel Workspace snapshot'));
+
+    await expect(pending).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_CANCELLED', retryable: false },
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(fixture.repository.list()).resolves.toEqual([]);
+    expect(fixture.store.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+  });
+
   it('restores a complete Workspace tree from finalized snapshot Artifacts', async () => {
     const root = await workspaceRoot('restore');
     await fs.mkdir(path.join(root, 'empty'));
@@ -663,6 +749,15 @@ async function createManifestArtifact(
 
 function nodeFailure(code: string): Error & { code: string } {
   return Object.assign(new Error(`Injected ${code}`), { code });
+}
+
+async function rejectWhenAborted(signal: AbortSignal): Promise<never> {
+  if (signal.aborted) throw new Error('Artifact write aborted.');
+  return new Promise<never>((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('Artifact write aborted.')), {
+      once: true,
+    });
+  });
 }
 
 async function cleanupWorkspaceRoot(root: string): Promise<void> {

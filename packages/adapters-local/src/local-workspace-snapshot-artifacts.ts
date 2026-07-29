@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type {
   ArtifactManager,
+  ArtifactOperationOptions,
   ArtifactRecord,
   SpecRef,
   WorkspaceRestoreRequest,
@@ -101,95 +102,133 @@ export class LocalWorkspaceSnapshotArtifactService {
     );
   }
 
-  async createFullSnapshot(input: WorkspaceSnapshotRequest): Promise<ArtifactRecord> {
+  async createFullSnapshot(
+    input: WorkspaceSnapshotRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateWorkspaceSnapshotRequest(input);
     this.assertSupportedRequest(request);
     this.assertScope(request);
+    assertSnapshotCallerActive(options.abortSignal);
 
     const captured = await this.workspace.capture();
+    assertSnapshotCallerActive(options.abortSignal);
     this.assertRestorableLinks(captured);
     const persistenceStartedAt = this.nowMs();
-    const draftFiles = await this.createFileArtifacts(request, captured, persistenceStartedAt);
-    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-    const verified = await this.workspace.capture();
-    if (verified.sourceTreeHash !== captured.sourceTreeHash) {
-      throw executionProviderError(
-        'EXECUTION_REVISION_CONFLICT',
-        'Workspace changed while the full snapshot was being persisted.',
-        true,
+    const cancellation = createSnapshotPersistenceCancellation(
+      options.abortSignal,
+      this.maxSnapshotPersistenceDurationMs
+    );
+    try {
+      const draftFiles = await this.createFileArtifacts(
+        request,
+        captured,
+        persistenceStartedAt,
+        cancellation
+      );
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      const verified = await this.workspace.capture();
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      if (verified.sourceTreeHash !== captured.sourceTreeHash) {
+        throw executionProviderError(
+          'EXECUTION_REVISION_CONFLICT',
+          'Workspace changed while the full snapshot was being persisted.',
+          true,
+          {
+            expectedWorkspaceSnapshotHash: captured.sourceTreeHash,
+            actualWorkspaceSnapshotHash: verified.sourceTreeHash,
+          }
+        );
+      }
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+
+      const finalizedFiles = new Map<string, ArtifactRecord>();
+      for (const [entryPath, draft] of draftFiles) {
+        this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+        finalizedFiles.set(
+          entryPath,
+          await this.artifacts.finalize({
+            operationId: operationId(request.operationId, 'finalize-file', entryPath),
+            principal: request.principal,
+            artifactId: draft.id,
+            expectedRevision: draft.revision,
+            reason: 'Workspace full snapshot content',
+            ...(request.idempotencyKey
+              ? {
+                  idempotencyKey: idempotencyKey(
+                    request.idempotencyKey,
+                    'finalize-file',
+                    entryPath
+                  ),
+                }
+              : {}),
+          })
+        );
+        this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      }
+
+      const manifest = this.createManifest(request, captured, finalizedFiles);
+      const content = encodeWorkspaceSnapshotManifest(manifest);
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      const draftManifest = await this.artifacts.create(
         {
-          expectedWorkspaceSnapshotHash: captured.sourceTreeHash,
-          actualWorkspaceSnapshotHash: verified.sourceTreeHash,
-        }
-      );
-    }
-    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-
-    const finalizedFiles = new Map<string, ArtifactRecord>();
-    for (const [entryPath, draft] of draftFiles) {
-      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-      finalizedFiles.set(
-        entryPath,
-        await this.artifacts.finalize({
-          operationId: operationId(request.operationId, 'finalize-file', entryPath),
-          principal: request.principal,
-          artifactId: draft.id,
-          expectedRevision: draft.revision,
-          reason: 'Workspace full snapshot content',
+          ...this.artifactIdentity(request),
+          operationId: operationId(request.operationId, 'manifest'),
+          name: `${manifest.id}.json`,
+          kind: 'snapshot',
+          mimeType: 'application/json',
+          encoding: 'utf-8',
+          content,
+          expectedContentHash: hashBytes(content),
+          expectedSizeBytes: content.byteLength,
+          logicalArtifactId: `workspace-snapshot:${request.workspaceId}:${manifest.id}`,
+          provenance: {
+            sourceType: 'snapshot',
+            createdBy: request.principal.principalId,
+            sourceArtifactIds: [...finalizedFiles.values()].map((artifact) => artifact.id),
+            metadata: {
+              snapshotType: 'full',
+              sourceTreeHash: manifest.sourceTreeHash,
+              manifestHash: manifest.manifestHash,
+            },
+          },
+          tags: ['workspace-snapshot', 'workspace-snapshot-manifest'],
           ...(request.idempotencyKey
-            ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'finalize-file', entryPath) }
+            ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'manifest') }
             : {}),
-        })
-      );
-      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-    }
-
-    const manifest = this.createManifest(request, captured, finalizedFiles);
-    const content = encodeWorkspaceSnapshotManifest(manifest);
-    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-    const draftManifest = await this.artifacts.create({
-      ...this.artifactIdentity(request),
-      operationId: operationId(request.operationId, 'manifest'),
-      name: `${manifest.id}.json`,
-      kind: 'snapshot',
-      mimeType: 'application/json',
-      encoding: 'utf-8',
-      content,
-      expectedContentHash: hashBytes(content),
-      expectedSizeBytes: content.byteLength,
-      logicalArtifactId: `workspace-snapshot:${request.workspaceId}:${manifest.id}`,
-      provenance: {
-        sourceType: 'snapshot',
-        createdBy: request.principal.principalId,
-        sourceArtifactIds: [...finalizedFiles.values()].map((artifact) => artifact.id),
-        metadata: {
-          snapshotType: 'full',
-          sourceTreeHash: manifest.sourceTreeHash,
-          manifestHash: manifest.manifestHash,
+          metadata: {
+            snapshotId: manifest.id,
+            sourceTreeHash: manifest.sourceTreeHash,
+            manifestHash: manifest.manifestHash,
+          },
         },
-      },
-      tags: ['workspace-snapshot', 'workspace-snapshot-manifest'],
-      ...(request.idempotencyKey
-        ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'manifest') }
-        : {}),
-      metadata: {
-        snapshotId: manifest.id,
-        sourceTreeHash: manifest.sourceTreeHash,
-        manifestHash: manifest.manifestHash,
-      },
-    });
-    this.assertArtifactContent(draftManifest, hashBytes(content), content.byteLength);
-    this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-    return this.artifacts.finalize({
-      operationId: operationId(request.operationId, 'finalize-manifest'),
-      principal: request.principal,
-      artifactId: draftManifest.id,
-      expectedRevision: draftManifest.revision,
-      reason: 'Workspace full snapshot manifest',
-      ...(request.idempotencyKey
-        ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'finalize-manifest') }
-        : {}),
-    });
+        { abortSignal: cancellation.signal }
+      );
+      this.assertArtifactContent(draftManifest, hashBytes(content), content.byteLength);
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      const finalizedManifest = await this.artifacts.finalize({
+        operationId: operationId(request.operationId, 'finalize-manifest'),
+        principal: request.principal,
+        artifactId: draftManifest.id,
+        expectedRevision: draftManifest.revision,
+        reason: 'Workspace full snapshot manifest',
+        ...(request.idempotencyKey
+          ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'finalize-manifest') }
+          : {}),
+      });
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      return finalizedManifest;
+    } catch (error) {
+      if (cancellation.source() === 'timeout') {
+        throw this.snapshotPersistenceTimeoutError();
+      }
+      if (cancellation.source() === 'caller') {
+        throw snapshotPersistenceCancelledError();
+      }
+      throw error;
+    } finally {
+      cancellation.dispose();
+    }
   }
 
   async restoreFullSnapshot(input: WorkspaceRestoreRequest): Promise<void> {
@@ -241,38 +280,42 @@ export class LocalWorkspaceSnapshotArtifactService {
   private async createFileArtifacts(
     request: WorkspaceSnapshotRequest,
     captured: LocalWorkspaceSnapshot,
-    persistenceStartedAt: number
+    persistenceStartedAt: number,
+    cancellation: SnapshotPersistenceCancellation
   ): Promise<Map<string, ArtifactRecord>> {
     const drafts = new Map<string, ArtifactRecord>();
     for (const entry of [...captured.entries.values()]
       .filter((candidate) => candidate.kind === 'file')
       .sort((left, right) => left.path.localeCompare(right.path))) {
-      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
-      const draft = await this.artifacts.createFromWorkspace({
-        ...this.artifactIdentity(request),
-        operationId: operationId(request.operationId, 'file', entry.path),
-        relativePath: entry.path,
-        name: entry.path,
-        kind: 'snapshot',
-        mimeType: 'application/octet-stream',
-        expectedContentHash: entry.contentHash,
-        expectedSizeBytes: entry.sizeBytes,
-        logicalArtifactId: `workspace-snapshot-file:${request.workspaceId}:${entry.path}`,
-        provenance: {
-          sourceType: 'snapshot',
-          createdBy: request.principal.principalId,
-          metadata: {
-            snapshotOperationId: request.operationId,
-            workspaceRelativePath: entry.path,
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      const draft = await this.artifacts.createFromWorkspace(
+        {
+          ...this.artifactIdentity(request),
+          operationId: operationId(request.operationId, 'file', entry.path),
+          relativePath: entry.path,
+          name: entry.path,
+          kind: 'snapshot',
+          mimeType: 'application/octet-stream',
+          expectedContentHash: entry.contentHash,
+          expectedSizeBytes: entry.sizeBytes,
+          logicalArtifactId: `workspace-snapshot-file:${request.workspaceId}:${entry.path}`,
+          provenance: {
+            sourceType: 'snapshot',
+            createdBy: request.principal.principalId,
+            metadata: {
+              snapshotOperationId: request.operationId,
+              workspaceRelativePath: entry.path,
+            },
           },
+          tags: ['workspace-snapshot', 'workspace-snapshot-file'],
+          ...(request.idempotencyKey
+            ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'file', entry.path) }
+            : {}),
         },
-        tags: ['workspace-snapshot', 'workspace-snapshot-file'],
-        ...(request.idempotencyKey
-          ? { idempotencyKey: idempotencyKey(request.idempotencyKey, 'file', entry.path) }
-          : {}),
-      });
+        { abortSignal: cancellation.signal }
+      );
       this.assertArtifactContent(draft, entry.contentHash, entry.sizeBytes);
-      this.assertSnapshotPersistenceBudget(persistenceStartedAt);
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
       drafts.set(entry.path, draft);
     }
     return drafts;
@@ -280,13 +323,26 @@ export class LocalWorkspaceSnapshotArtifactService {
 
   private assertSnapshotPersistenceBudget(startedAt: number): void {
     if (this.nowMs() - startedAt > this.maxSnapshotPersistenceDurationMs) {
-      throw executionProviderError(
-        'EXECUTION_RESOURCE_EXCEEDED',
-        'Workspace snapshot Artifact persistence exceeded its configured duration limit.',
-        true,
-        { maxSnapshotPersistenceDurationMs: this.maxSnapshotPersistenceDurationMs }
-      );
+      throw this.snapshotPersistenceTimeoutError();
     }
+  }
+
+  private assertSnapshotPersistenceActive(
+    startedAt: number,
+    cancellation: SnapshotPersistenceCancellation
+  ): void {
+    if (cancellation.source() === 'caller') throw snapshotPersistenceCancelledError();
+    if (cancellation.source() === 'timeout') throw this.snapshotPersistenceTimeoutError();
+    this.assertSnapshotPersistenceBudget(startedAt);
+  }
+
+  private snapshotPersistenceTimeoutError() {
+    return executionProviderError(
+      'EXECUTION_RESOURCE_EXCEEDED',
+      'Workspace snapshot Artifact persistence exceeded its configured duration limit.',
+      true,
+      { maxSnapshotPersistenceDurationMs: this.maxSnapshotPersistenceDurationMs }
+    );
   }
 
   private createManifest(
@@ -481,4 +537,56 @@ function nodeErrorCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
   const code = error.code;
   return typeof code === 'string' ? code : undefined;
+}
+
+type SnapshotPersistenceCancellationSource = 'caller' | 'timeout';
+
+interface SnapshotPersistenceCancellation {
+  readonly signal: AbortSignal;
+  source(): SnapshotPersistenceCancellationSource | undefined;
+  dispose(): void;
+}
+
+function createSnapshotPersistenceCancellation(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number
+): SnapshotPersistenceCancellation {
+  const controller = new AbortController();
+  let cancellationSource: SnapshotPersistenceCancellationSource | undefined;
+  const abort = (source: SnapshotPersistenceCancellationSource, reason?: unknown) => {
+    if (cancellationSource) return;
+    cancellationSource = source;
+    controller.abort(reason);
+  };
+  const abortFromCaller = () => abort('caller', callerSignal?.reason);
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
+  const timer = setTimeout(
+    () => abort('timeout', new Error('Workspace snapshot Artifact persistence timed out.')),
+    timeoutMs
+  );
+
+  return {
+    signal: controller.signal,
+    source: () => cancellationSource,
+    dispose() {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', abortFromCaller);
+    },
+  };
+}
+
+function assertSnapshotCallerActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) throw snapshotPersistenceCancelledError();
+}
+
+function snapshotPersistenceCancelledError() {
+  return executionProviderError(
+    'EXECUTION_CANCELLED',
+    'Workspace snapshot Artifact persistence was cancelled.',
+    false
+  );
 }
