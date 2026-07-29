@@ -204,6 +204,45 @@ describe('SQLiteExecutionStore public adapter', () => {
     }
   }, 60_000);
 
+  it('rolls back an uncommitted WAL transaction after its worker crashes', async () => {
+    const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-uncommitted-wal-'));
+    root = testRoot;
+    const store = new SQLiteExecutionStore({ rootPath: testRoot });
+    const queued = await store
+      .create(structuredClone(executionRecordCreateRequestExample))
+      .finally(() => store.close());
+    const mutation = startingMutation(
+      queued,
+      'operation.execution.update.uncommitted-wal',
+      'execution-update:uncommitted-wal'
+    );
+
+    await runStoreCrashInChild(
+      testRoot,
+      'crashDuringCompareAndSetTransaction',
+      mutation,
+      CRASH_DURING_CAS_TRANSACTION_EXIT_CODE
+    );
+    await expect(
+      fs.readFile(path.join(testRoot, 'uncommitted-transaction.marker'), 'utf8')
+    ).resolves.toBe('transaction-started');
+
+    const recovered = new SQLiteExecutionStore({ rootPath: testRoot });
+    try {
+      await expect(recovered.get(queued.id)).resolves.toEqual(queued);
+      await expect(recovered.compareAndSet(mutation)).resolves.toEqual(mutation.next);
+      await expect(recovered.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          schemaVersion: SQLiteExecutionStore.schemaVersion,
+          quarantinedRecords: 0,
+        },
+      });
+    } finally {
+      await recovered.close();
+    }
+  }, 60_000);
+
   it('recovers atomically from a committed WAL after a worker crashes at compare-and-set', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-cas-'));
     const store = new SQLiteExecutionStore({ rootPath: root });
@@ -383,12 +422,14 @@ type ChildStoreCrashOperation =
   | 'crashAfterAcquireLease'
   | 'crashAfterCompareAndSet'
   | 'crashAfterRenewLease'
-  | 'crashBeforeCompareAndSet';
+  | 'crashBeforeCompareAndSet'
+  | 'crashDuringCompareAndSetTransaction';
 
 const CRASH_BEFORE_CAS_EXIT_CODE = 71;
 const CRASH_AFTER_CAS_EXIT_CODE = 72;
 const CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE = 73;
 const CRASH_AFTER_LEASE_RENEW_EXIT_CODE = 74;
+const CRASH_DURING_CAS_TRANSACTION_EXIT_CODE = 75;
 
 interface ChildLeaseRenewCrashRequest {
   acquire: ExecutionLeaseAcquireRequest;
@@ -585,7 +626,9 @@ function terminalMutation(
 
 const SQLITE_STORE_CHILD_SOURCE = String.raw`
 const Module = require('node:module');
+const fs = require('node:fs');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 const originalResolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (request, parent, isMain, options) {
   if (request === '@hypha/core') {
@@ -604,6 +647,18 @@ process.on('message', async ({ rootPath, operation, request }) => {
   try {
     if (operation === 'crashBeforeCompareAndSet') {
       process.exit(${CRASH_BEFORE_CAS_EXIT_CODE});
+    }
+    if (operation === 'crashDuringCompareAndSetTransaction') {
+      const database = new DatabaseSync(path.join(rootPath, 'executions.sqlite'));
+      database.exec('BEGIN IMMEDIATE');
+      database
+        .prepare('UPDATE execution_records SET record_json = ? WHERE execution_id = ?')
+        .run(JSON.stringify(request.next), request.executionId);
+      fs.writeFileSync(
+        path.join(rootPath, 'uncommitted-transaction.marker'),
+        'transaction-started'
+      );
+      process.exit(${CRASH_DURING_CAS_TRANSACTION_EXIT_CODE});
     }
     if (operation === 'crashAfterCompareAndSet') {
       await store.compareAndSet(request);
