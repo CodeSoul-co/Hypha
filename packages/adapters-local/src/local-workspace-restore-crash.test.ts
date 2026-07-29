@@ -2,10 +2,22 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import type { ArtifactManager, ExecutionPrincipal } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
 import { workspaceRestoreJournalPath } from './local-workspace-restore-journal';
-import { recoverInterruptedLocalWorkspaceRestore } from './local-workspace-snapshot-restore';
+import {
+  recoverInterruptedLocalWorkspaceRestore,
+  restoreLocalWorkspaceSnapshot,
+} from './local-workspace-snapshot-restore';
+
+const principal: ExecutionPrincipal = {
+  principalId: 'user.restore-crash',
+  type: 'user',
+  tenantId: 'tenant.restore-crash',
+  userId: 'user.restore-crash',
+  permissionScopes: ['artifact:read'],
+};
 
 describe('Local Workspace restore process crash recovery', () => {
   const roots: string[] = [];
@@ -51,6 +63,63 @@ describe('Local Workspace restore process crash recovery', () => {
     });
   });
 
+  it('fences a concurrent restore while another process owns it and recovers after owner death', async () => {
+    const fixture = await createCrashFixture('after-journal');
+    const child = await startUntilCrashPoint(fixture.instructionPath, children);
+    let captureCalls = 0;
+    let artifactRead = false;
+    const artifacts: Pick<ArtifactManager, 'read'> = {
+      async read() {
+        artifactRead = true;
+        throw new Error('Artifact read must not run while another process owns restore.');
+      },
+    };
+
+    await expect(
+      restoreLocalWorkspaceSnapshot({
+        workspaceRoot: fixture.root,
+        async capture() {
+          captureCalls += 1;
+          return fixture.workspace.capture();
+        },
+        artifacts,
+        request: {
+          operationId: 'workspace.restore.fenced',
+          workspaceId: 'workspace.restore-crash',
+          principal,
+          snapshotRef: 'snapshot.restore-crash',
+          expectedWorkspaceSnapshotHash: 'sha256:not-reached',
+          idempotencyKey: 'workspace.restore.fenced',
+        },
+        maxManifestBytes: 1024,
+        maxRestoreBytes: 1024,
+        maxRestoreEntries: 10,
+        maxRestoreStagingDurationMs: 1_000,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_REVISION_CONFLICT', retryable: true },
+    });
+    expect(captureCalls).toBe(0);
+    expect(artifactRead).toBe(false);
+    await expect(fs.readFile(path.join(fixture.root, 'result.txt'), 'utf8')).resolves.toBe(
+      'current'
+    );
+    await expect(fs.access(workspaceRestoreJournalPath(fixture.root))).resolves.toBeUndefined();
+
+    await killAtCrashPoint(child, children);
+
+    await expect(
+      recoverInterruptedLocalWorkspaceRestore(fixture.root, () => fixture.workspace.capture())
+    ).resolves.toBe('rolled_back');
+    await expect(fs.readFile(path.join(fixture.root, 'result.txt'), 'utf8')).resolves.toBe(
+      'current'
+    );
+    await expect(fs.access(fixture.stagingPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(workspaceRestoreJournalPath(fixture.root))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   async function createCrashFixture(label: string) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), `hypha-restore-crash-${label}-`));
     roots.push(root);
@@ -77,7 +146,12 @@ describe('Local Workspace restore process crash recovery', () => {
         snapshotRef: `snapshot.crash.${label}`,
         initialTreeHash: initial.sourceTreeHash,
         targetTreeHash: target.sourceTreeHash,
-        crashPoint: label === 'after-swap' ? 'after_swap' : 'after_backup',
+        crashPoint:
+          label === 'after-swap'
+            ? 'after_swap'
+            : label === 'after-journal'
+              ? 'after_journal'
+              : 'after_backup',
       }),
       'utf8'
     );
@@ -89,6 +163,14 @@ async function runUntilCrashPoint(
   instructionPath: string,
   children: Set<ChildProcessWithoutNullStreams>
 ): Promise<void> {
+  const child = await startUntilCrashPoint(instructionPath, children);
+  await killAtCrashPoint(child, children);
+}
+
+async function startUntilCrashPoint(
+  instructionPath: string,
+  children: Set<ChildProcessWithoutNullStreams>
+): Promise<ChildProcessWithoutNullStreams> {
   const fixturePath = path.resolve(
     process.cwd(),
     'packages/adapters-local/fixtures/workspace-restore-crash.cjs'
@@ -114,6 +196,13 @@ async function runUntilCrashPoint(
     () => stdout,
     () => stderr
   );
+  return child;
+}
+
+async function killAtCrashPoint(
+  child: ChildProcessWithoutNullStreams,
+  children: Set<ChildProcessWithoutNullStreams>
+): Promise<void> {
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once('exit', (code, signal) => resolve({ code, signal }));
   });

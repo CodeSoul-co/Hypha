@@ -44,10 +44,18 @@ async function run() {
   }
   await syncParentDirectory(path.dirname(journalPath));
 
+  if (instruction.crashPoint === 'after_journal') {
+    signalCrashPoint();
+    return;
+  }
   await fs.rename(workspaceRoot, backupPath);
   if (instruction.crashPoint === 'after_swap') {
     await fs.rename(stagingPath, workspaceRoot);
   }
+  signalCrashPoint();
+}
+
+function signalCrashPoint() {
   process.stdout.write('RESTORE_CRASH_POINT_READY\n', () => {
     setInterval(() => undefined, 1_000);
   });
@@ -57,7 +65,7 @@ function assertInstruction(value) {
   if (
     !value ||
     typeof value !== 'object' ||
-    !['after_backup', 'after_swap'].includes(value.crashPoint)
+    !['after_journal', 'after_backup', 'after_swap'].includes(value.crashPoint)
   ) {
     throw new Error('invalid crash instruction');
   }
