@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
+import { executionRecordCreateRequestExample } from '@hypha/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import { PostgresExecutionStoreConnection } from './postgres-execution-store-connection';
@@ -57,16 +58,7 @@ afterAll(async () => {
 
 describe('PostgresExecutionStoreFoundation real database', () => {
   it('migrates an empty database, reports healthy, and closes cleanly', async () => {
-    const connection = new PostgresExecutionStoreConnection({
-      connectionString: `postgresql://${username}:${password}@127.0.0.1:${port}/${database}`,
-      tls: { mode: 'disable' },
-      applicationName: 'hypha-postgres-real-test',
-      maxConnections: 2,
-      connectionTimeoutMs: 5_000,
-      idleTimeoutMs: 5_000,
-      statementTimeoutMs: 5_000,
-    });
-    const store = new PostgresExecutionStoreFoundation(connection);
+    const { connection, store } = createRealStore('lifecycle');
 
     try {
       await connection.initialize();
@@ -107,7 +99,55 @@ describe('PostgresExecutionStoreFoundation real database', () => {
       details: { provider: 'postgres', ready: false },
     });
   }, 30_000);
+
+  it('persists a Runtime Schema-validated record across a real connection restart', async () => {
+    const request = structuredClone(executionRecordCreateRequestExample);
+    const first = createRealStore('persistence-write');
+    let reopened: ReturnType<typeof createRealStore> | undefined;
+
+    try {
+      await first.connection.initialize();
+      await expect(first.store.create(request)).resolves.toEqual(request.record);
+      await expect(first.store.get(request.record.id)).resolves.toEqual(request.record);
+
+      await first.store.close();
+      reopened = createRealStore('persistence-read');
+      await reopened.connection.initialize();
+
+      await expect(reopened.store.get(request.record.id)).resolves.toEqual(request.record);
+      await expect(reopened.store.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          provider: 'postgres',
+          ready: true,
+          schemaVersion: POSTGRES_EXECUTION_STORE_SCHEMA_VERSION,
+        },
+      });
+    } finally {
+      await first.store.close();
+      await reopened?.store.close();
+    }
+  }, 30_000);
 });
+
+function createRealStore(applicationRole: string): {
+  connection: PostgresExecutionStoreConnection;
+  store: PostgresExecutionStoreFoundation;
+} {
+  const connection = new PostgresExecutionStoreConnection({
+    connectionString: `postgresql://${username}:${password}@127.0.0.1:${port}/${database}`,
+    tls: { mode: 'disable' },
+    applicationName: `hypha-postgres-real-${applicationRole}`,
+    maxConnections: 2,
+    connectionTimeoutMs: 5_000,
+    idleTimeoutMs: 5_000,
+    statementTimeoutMs: 5_000,
+  });
+  return {
+    connection,
+    store: new PostgresExecutionStoreFoundation(connection),
+  };
+}
 
 async function waitForPostgres(): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
