@@ -90,6 +90,10 @@ const commandExecutionErrorCodesByStatus: Partial<
   oom_killed: ['EXECUTION_OOM_KILLED'],
   resource_exceeded: ['EXECUTION_RESOURCE_EXCEEDED', 'EXECUTION_OUTPUT_LIMIT'],
 } as const;
+// Events are durable control-plane records; recursive metadata and error details must remain bounded.
+const MAX_EXECUTION_EVENT_VALUE_DEPTH = 32;
+const MAX_EXECUTION_EVENT_VALUE_NODES = 4_096;
+const MAX_EXECUTION_EVENT_VALUE_BYTES = 64 * 1024;
 
 const executionEventPayloadBaseObjectSchema = z
   .object({
@@ -213,7 +217,7 @@ export const executionFrameworkEventEnvelopeSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    addSensitiveFieldIssues(value.metadata, context, ['metadata']);
+    addEventValueSecurityIssues(value.metadata, context, ['metadata']);
   });
 
 type EventRule = {
@@ -661,7 +665,7 @@ function addPayloadSecurityIssues(
       message: 'must not contain duplicate Artifact references',
     });
   }
-  addSensitiveFieldIssues(value, context, []);
+  addEventValueSecurityIssues(value, context, []);
 }
 
 const forbiddenEventFieldNames = new Set([
@@ -683,28 +687,164 @@ const forbiddenEventFieldNames = new Set([
   'rawenv',
 ]);
 
-function addSensitiveFieldIssues(
+function addEventValueSecurityIssues(
   value: unknown,
   context: z.RefinementCtx,
-  path: Array<string | number>
+  path: Array<string | number>,
+  state: EventValueTraversalState = createEventValueTraversalState(),
+  depth = 0
 ): void {
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => addSensitiveFieldIssues(item, context, [...path, index]));
+  if (state.halted) return;
+  state.nodes += 1;
+  if (state.nodes > MAX_EXECUTION_EVENT_VALUE_NODES) {
+    addEventValueTraversalIssue(
+      context,
+      path,
+      state,
+      `Execution event data exceeds the node limit of ${MAX_EXECUTION_EVENT_VALUE_NODES}`
+    );
     return;
   }
-  if (!value || typeof value !== 'object') return;
-  for (const [key, child] of Object.entries(value)) {
-    const normalized = key.replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
-    if (forbiddenEventFieldNames.has(normalized)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...path, key],
-        message: 'sensitive or unbounded content fields are forbidden in Execution events',
-      });
-      continue;
-    }
-    addSensitiveFieldIssues(child, context, [...path, key]);
+  if (depth > MAX_EXECUTION_EVENT_VALUE_DEPTH) {
+    addEventValueTraversalIssue(
+      context,
+      path,
+      state,
+      `Execution event data exceeds the maximum nesting depth of ${MAX_EXECUTION_EVENT_VALUE_DEPTH}`
+    );
+    return;
   }
+
+  if (value === undefined) return;
+  if (value === null) {
+    addEventValueBytes(4, context, path, state);
+    return;
+  }
+  if (typeof value === 'string') {
+    addEventValueStringBytes(value, context, path, state);
+    return;
+  }
+  if (typeof value === 'boolean') {
+    addEventValueBytes(value ? 4 : 5, context, path, state);
+    return;
+  }
+  if (typeof value === 'number') {
+    addEventValueBytes(String(Object.is(value, -0) ? 0 : value).length, context, path, state);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  if (state.ancestors.has(value)) {
+    addEventValueTraversalIssue(
+      context,
+      path,
+      state,
+      'Execution event data must not contain circular references'
+    );
+    return;
+  }
+
+  state.ancestors.add(value);
+  try {
+    addEventValueBytes(2, context, path, state);
+    if (state.halted) return;
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (index > 0) addEventValueBytes(1, context, path, state);
+        addEventValueSecurityIssues(value[index], context, [...path, index], state, depth + 1);
+        if (state.halted) return;
+      }
+      return;
+    }
+
+    let entryIndex = 0;
+    for (const [key, child] of Object.entries(value)) {
+      if (entryIndex > 0) addEventValueBytes(1, context, path, state);
+      addEventValueStringBytes(key, context, [...path, key], state);
+      addEventValueBytes(1, context, path, state);
+      if (state.halted) return;
+      entryIndex += 1;
+
+      const normalized = key.replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
+      if (forbiddenEventFieldNames.has(normalized)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...path, key],
+          message: 'sensitive or unbounded content fields are forbidden in Execution events',
+        });
+        continue;
+      }
+      addEventValueSecurityIssues(child, context, [...path, key], state, depth + 1);
+      if (state.halted) return;
+    }
+  } finally {
+    state.ancestors.delete(value);
+  }
+}
+
+type EventValueTraversalState = {
+  ancestors: Set<object>;
+  nodes: number;
+  serializedBytes: number;
+  halted: boolean;
+};
+
+function createEventValueTraversalState(): EventValueTraversalState {
+  return {
+    ancestors: new Set<object>(),
+    nodes: 0,
+    serializedBytes: 0,
+    halted: false,
+  };
+}
+
+function addEventValueStringBytes(
+  value: string,
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+  state: EventValueTraversalState
+): void {
+  const rawBytes = Buffer.byteLength(value, 'utf8') + 2;
+  if (state.serializedBytes + rawBytes > MAX_EXECUTION_EVENT_VALUE_BYTES) {
+    addEventValueTraversalIssue(
+      context,
+      path,
+      state,
+      `Execution event data exceeds the serialized size limit of ${MAX_EXECUTION_EVENT_VALUE_BYTES} bytes`
+    );
+    return;
+  }
+  addEventValueBytes(Buffer.byteLength(JSON.stringify(value), 'utf8'), context, path, state);
+}
+
+function addEventValueBytes(
+  bytes: number,
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+  state: EventValueTraversalState
+): void {
+  state.serializedBytes += bytes;
+  if (state.serializedBytes <= MAX_EXECUTION_EVENT_VALUE_BYTES) return;
+  addEventValueTraversalIssue(
+    context,
+    path,
+    state,
+    `Execution event data exceeds the serialized size limit of ${MAX_EXECUTION_EVENT_VALUE_BYTES} bytes`
+  );
+}
+
+function addEventValueTraversalIssue(
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+  state: EventValueTraversalState,
+  message: string
+): void {
+  if (state.halted) return;
+  state.halted = true;
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path,
+    message,
+  });
 }
 
 function isSandboxEventType(type: ExecutionFrameworkEventType): type is SandboxFrameworkEventType {

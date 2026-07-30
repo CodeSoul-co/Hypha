@@ -402,6 +402,64 @@ describe('Execution lifecycle Event contracts', () => {
     }
   });
 
+  it('accepts bounded nested metadata and shared non-cyclic values', () => {
+    const shared = { attempt: 1, outcome: 'retryable' };
+    expect(
+      validateExecutionEventPayload('command.execution.queued', {
+        executionId: 'execution.example',
+        status: 'queued',
+        metadata: {
+          scheduling: { queue: 'default', policy: { priority: 2 } },
+          first: shared,
+          second: shared,
+        },
+      })
+    ).toMatchObject({
+      metadata: {
+        scheduling: { queue: 'default', policy: { priority: 2 } },
+        first: shared,
+        second: shared,
+      },
+    });
+  });
+
+  it('rejects metadata that exceeds depth, node, or serialized-size limits', () => {
+    const deeplyNested: Record<string, unknown> = {};
+    let cursor = deeplyNested;
+    for (let depth = 0; depth < 40; depth += 1) {
+      const child: Record<string, unknown> = {};
+      cursor.next = child;
+      cursor = child;
+    }
+
+    for (const [metadata, message] of [
+      [deeplyNested, /nesting depth/u],
+      [{ values: Array.from({ length: 4_096 }, () => 0) }, /node limit/u],
+      [{ note: 'x'.repeat(65_536) }, /serialized size limit/u],
+    ] as const) {
+      expect(() =>
+        validateExecutionEventPayload('command.execution.queued', {
+          executionId: 'execution.example',
+          status: 'queued',
+          metadata,
+        })
+      ).toThrow(message);
+    }
+  });
+
+  it('rejects circular metadata deterministically', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() =>
+      validateExecutionEventPayload('command.execution.queued', {
+        executionId: 'execution.example',
+        status: 'queued',
+        metadata: circular,
+      })
+    ).toThrow(/circular references/u);
+  });
+
   it('rejects unknown top-level payload and envelope fields instead of silently stripping them', () => {
     expect(() =>
       validateExecutionEventPayload('command.execution.queued', {
@@ -431,6 +489,37 @@ describe('Execution lifecycle Event contracts', () => {
         },
       })
     ).toThrow(/forbidden/u);
+  });
+
+  it('applies traversal bounds to normalized error details and envelope metadata', () => {
+    const deeplyNested: Record<string, unknown> = {};
+    let cursor = deeplyNested;
+    for (let depth = 0; depth < 40; depth += 1) {
+      const child: Record<string, unknown> = {};
+      cursor.next = child;
+      cursor = child;
+    }
+    expect(() =>
+      validateExecutionEventPayload('command.execution.failed', {
+        executionId: 'execution.example',
+        status: 'failed',
+        error: {
+          code: 'EXECUTION_INTERNAL_ERROR',
+          message: 'provider failed',
+          retryable: false,
+          details: deeplyNested,
+        },
+      })
+    ).toThrow(/nesting depth/u);
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() =>
+      validateExecutionFrameworkEvent({
+        ...commandExecutionEventExample,
+        metadata: circular,
+      })
+    ).toThrow(/circular references/u);
   });
 
   it('keeps envelope and payload Workspace identity consistent', () => {
