@@ -3,6 +3,7 @@ import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '../../events';
 import {
+  commandExecutionEventPayloadSchema,
   commandExecutionEventExample,
   createExecutionFrameworkEvent,
   executionEventJsonSchemas,
@@ -175,6 +176,44 @@ describe('Execution lifecycle Event contracts', () => {
       }).status
     ).toBe('completed');
   });
+
+  it.each([
+    ['cancelled', 'EXECUTION_CANCELLED'],
+    ['failed', 'EXECUTION_INTERNAL_ERROR'],
+    ['timed_out', 'EXECUTION_TIMEOUT'],
+    ['oom_killed', 'EXECUTION_OOM_KILLED'],
+    ['resource_exceeded', 'EXECUTION_RESOURCE_EXCEEDED'],
+    ['quarantined', 'EXECUTION_INTERNAL_ERROR'],
+  ] as const)(
+    'requires error evidence in the public contract for %s status',
+    (status, errorCode) => {
+      const payload = {
+        executionId: 'execution.example',
+        status,
+      };
+
+      expect(commandExecutionEventPayloadSchema.safeParse(payload).success).toBe(false);
+
+      const ajv = new Ajv({ strict: true, allErrors: true });
+      addFormats(ajv);
+      expect(
+        ajv.validate(executionEventJsonSchemas.CommandExecutionEventPayload, payload)
+      ).toBe(false);
+
+      const withError = {
+        ...payload,
+        error: {
+          code: errorCode,
+          message: `execution ended as ${status}`,
+          retryable: false,
+        },
+      };
+      expect(commandExecutionEventPayloadSchema.safeParse(withError).success).toBe(true);
+      expect(
+        ajv.validate(executionEventJsonSchemas.CommandExecutionEventPayload, withError)
+      ).toBe(true);
+    }
+  );
 
   it('requires output truncation events to name the affected stream', () => {
     expect(() =>

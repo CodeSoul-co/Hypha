@@ -73,6 +73,14 @@ const nonEmptyString = z.string().min(1);
 const nonNegativeInteger = z.number().int().nonnegative();
 const nonNegativeNumber = z.number().nonnegative();
 const timestampSchema = z.string().datetime({ offset: true });
+const unsuccessfulCommandExecutionStatuses = [
+  'cancelled',
+  'failed',
+  'timed_out',
+  'oom_killed',
+  'resource_exceeded',
+  'quarantined',
+] as const;
 
 const executionEventPayloadBaseObjectSchema = z
   .object({
@@ -127,6 +135,17 @@ export const commandExecutionEventPayloadSchema = executionEventPayloadBaseObjec
         code: z.ZodIssueCode.custom,
         path: ['error'],
         message: 'must not be present for a completed command execution',
+      });
+    }
+    if (
+      value.status &&
+      unsuccessfulCommandExecutionStatuses.some((status) => status === value.status) &&
+      !value.error
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: 'is required for a non-success terminal command execution',
       });
     }
   }) satisfies ZodType<CommandExecutionEventPayload>;
@@ -324,6 +343,16 @@ export const commandExecutionEventPayloadJsonSchema: JsonSchema = {
     {
       if: { properties: { status: { const: 'completed' } }, required: ['status'] },
       then: { not: { properties: { error: {} }, required: ['error'] } },
+    },
+    {
+      if: {
+        properties: { status: { enum: unsuccessfulCommandExecutionStatuses } },
+        required: ['status'],
+      },
+      then: {
+        properties: { error: normalizedExecutionErrorJsonSchema },
+        required: ['error'],
+      },
     },
   ],
 };
