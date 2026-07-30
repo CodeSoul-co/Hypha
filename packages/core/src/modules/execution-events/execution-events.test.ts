@@ -1,3 +1,5 @@
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import { createFrameworkEvent } from '../../events';
 import {
@@ -111,6 +113,18 @@ describe('Execution lifecycle Event contracts', () => {
   });
 
   it('requires Command terminal evidence and matching normalized errors', () => {
+    const completedWithError = {
+      executionId: 'execution.example',
+      status: 'completed' as const,
+      exitCode: 0,
+      latencyMs: 10,
+      error: {
+        code: 'EXECUTION_INTERNAL_ERROR' as const,
+        message: 'a successful terminal cannot carry an error',
+        retryable: false,
+      },
+    };
+
     expect(() =>
       validateExecutionEventPayload('command.execution.completed', {
         executionId: 'execution.example',
@@ -140,6 +154,26 @@ describe('Execution lifecycle Event contracts', () => {
         },
       }).status
     ).toBe('timed_out');
+    expect(() =>
+      validateExecutionEventPayload('command.execution.completed', completedWithError)
+    ).toThrow(/must not be present/u);
+
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    expect(
+      ajv.validate(
+        executionEventJsonSchemas.CommandExecutionEventPayload,
+        completedWithError
+      )
+    ).toBe(false);
+    expect(
+      validateExecutionEventPayload('command.execution.completed', {
+        executionId: 'execution.example',
+        status: 'completed',
+        exitCode: 0,
+        latencyMs: 10,
+      }).status
+    ).toBe('completed');
   });
 
   it('requires output truncation events to name the affected stream', () => {

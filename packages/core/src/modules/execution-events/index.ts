@@ -120,7 +120,16 @@ export const commandExecutionEventPayloadSchema = executionEventPayloadBaseObjec
     approvalRef: nonEmptyString.optional(),
     recoveryDisposition: executionRecoveryDispositionSchema.optional(),
   })
-  .superRefine(addPayloadSecurityIssues) satisfies ZodType<CommandExecutionEventPayload>;
+  .superRefine((value, context) => {
+    addPayloadSecurityIssues(value, context);
+    if (value.status === 'completed' && value.error) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: 'must not be present for a completed command execution',
+      });
+    }
+  }) satisfies ZodType<CommandExecutionEventPayload>;
 
 export const networkAuthorizationEventPayloadSchema = executionEventPayloadBaseObjectSchema
   .extend({
@@ -311,6 +320,12 @@ export const commandExecutionEventPayloadJsonSchema: JsonSchema = {
     approvalRef: nonEmptyStringJsonSchema,
     recoveryDisposition: { enum: executionRecoveryDispositionSchema.options },
   },
+  allOf: [
+    {
+      if: { properties: { status: { const: 'completed' } }, required: ['status'] },
+      then: { not: { properties: { error: {} }, required: ['error'] } },
+    },
+  ],
 };
 
 export const networkAuthorizationEventPayloadJsonSchema: JsonSchema = {
