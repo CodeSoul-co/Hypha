@@ -1,3 +1,4 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,7 +21,7 @@ import {
   executionRecordCreateRequestExample,
   executionRecordExample,
 } from '@hypha/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SQLiteExecutionStoreFoundation,
   SQLiteExecutionStoreFoundationError,
@@ -169,6 +170,34 @@ describe('SQLiteExecutionStoreFoundation', () => {
     const created = await restored.create(rejectedRequest);
     await expect(restored.create(rejectedRequest)).resolves.toEqual(created);
     await restored.close();
+  });
+
+  it.each([
+    ['permission denial', 'EACCES', 'permission denied'],
+    ['filesystem I/O failure', 'EIO', 'input/output error'],
+  ])('normalizes store-root %s before opening SQLite', async (_caseName, code, message) => {
+    const root = await temporaryRoot();
+    const failure = Object.assign(new Error(message), { code });
+    const spy =
+      code === 'EACCES'
+        ? vi.spyOn(fsSync, 'mkdirSync').mockImplementationOnce(() => {
+            throw failure;
+          })
+        : vi.spyOn(fsSync, 'lstatSync').mockImplementationOnce(() => {
+            throw failure;
+          });
+
+    try {
+      expect(() => new SQLiteExecutionStoreFoundation({ rootPath: root })).toThrowError(
+        expect.objectContaining({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'Unable to prepare the SQLite Execution store.',
+        })
+      );
+      await expect(fs.readdir(root)).resolves.toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('lists only records matching owner, provider, status, and time filters', async () => {
@@ -1110,6 +1139,39 @@ describe('SQLiteExecutionStoreFoundation', () => {
         .get(created.id)
     ).toMatchObject({ record_json: JSON.stringify(created) });
     backup.close();
+  });
+
+  it('restores a verified migration backup and migrates it forward without data loss', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const backupFilename = `${filename}.backup-v1.sqlite`;
+    const created = structuredClone(executionRecordCreateRequestExample.record);
+    const database = openTestDatabase(filename);
+    createVersionOneDatabase(database);
+    insertLegacyRecord(database, created);
+    database.close();
+
+    const migrated = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(migrated.get(created.id)).resolves.toEqual(created);
+    await migrated.close();
+
+    const verifiedBackup = openTestDatabase(backupFilename);
+    expect(verifiedBackup.prepare('PRAGMA integrity_check').get()).toMatchObject({
+      integrity_check: 'ok',
+    });
+    expect(verifiedBackup.prepare('PRAGMA user_version').get()).toMatchObject({
+      user_version: 1,
+    });
+    verifiedBackup.close();
+
+    await fs.copyFile(backupFilename, filename);
+    const restored = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(restored.get(created.id)).resolves.toEqual(created);
+    await expect(restored.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: SQLiteExecutionStoreFoundation.schemaVersion },
+    });
+    await restored.close();
   });
 
   it('fails startup migration under a write lock and opens cleanly after release', async () => {

@@ -115,12 +115,12 @@ export class SQLiteExecutionStoreFoundation {
   private closed = false;
 
   constructor(options: SQLiteExecutionStoreFoundationOptions) {
-    const root = prepareStoreRoot(options.rootPath);
-    const basename = storeFilename(options.filename ?? 'executions.sqlite');
-    this.filename = path.join(root, basename);
-    secureSQLiteRuntimeFiles(this.filename);
-    const existingDatabaseHasContent =
-      fs.existsSync(this.filename) && fs.statSync(this.filename).size > 0;
+    const location = prepareStoreLocation(
+      options.rootPath,
+      options.filename ?? 'executions.sqlite'
+    );
+    this.filename = location.filename;
+    const existingDatabaseHasContent = location.existingDatabaseHasContent;
     this.now = options.now ?? (() => new Date().toISOString());
     const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, 'busyTimeoutMs');
     const maxDatabasePages =
@@ -1140,6 +1140,31 @@ function prepareStoreRoot(rootPath: string): string {
   const canonicalRoot = fs.realpathSync(requested);
   if (process.platform !== 'win32') fs.chmodSync(canonicalRoot, 0o700);
   return canonicalRoot;
+}
+
+function prepareStoreLocation(
+  rootPath: string,
+  filename: string
+): { filename: string; existingDatabaseHasContent: boolean } {
+  const basename = storeFilename(filename);
+  try {
+    const root = prepareStoreRoot(rootPath);
+    const resolvedFilename = path.join(root, basename);
+    secureSQLiteRuntimeFiles(resolvedFilename);
+    return {
+      filename: resolvedFilename,
+      existingDatabaseHasContent:
+        fs.existsSync(resolvedFilename) && fs.statSync(resolvedFilename).size > 0,
+    };
+  } catch (error) {
+    if (error instanceof TypeError) throw error;
+    throw storeError(
+      'EXECUTION_STORE_UNAVAILABLE',
+      'Unable to prepare the SQLite Execution store.',
+      undefined,
+      error
+    );
+  }
 }
 
 function storeFilename(value: string): string {
