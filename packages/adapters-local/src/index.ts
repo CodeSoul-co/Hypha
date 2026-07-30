@@ -44,6 +44,7 @@ export * from './workspace-runtime';
 export * from './common-tool-port-bindings';
 export * from './local-process-output-collector';
 export * from './local-process-output-artifacts';
+export * from './local-process-sandbox-provider-factory';
 export * from './local-process-output-stream-registry';
 export * from './execution-provider-error';
 export * from './local-process-policy';
