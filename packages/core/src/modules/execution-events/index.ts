@@ -407,6 +407,45 @@ export const networkAuthorizationEventPayloadJsonSchema: JsonSchema = {
   },
 };
 
+function eventPayloadJsonSchema(type: ExecutionFrameworkEventType): JsonSchema {
+  const categorySchema = isSandboxEventType(type)
+    ? sandboxLifecycleEventPayloadJsonSchema
+    : isCommandEventType(type)
+      ? commandExecutionEventPayloadJsonSchema
+      : networkAuthorizationEventPayloadJsonSchema;
+  const rule = executionEventRules[type];
+  const properties: Record<string, JsonSchema> = {};
+  const allowedStatuses =
+    rule.status === undefined ? undefined : Array.isArray(rule.status) ? rule.status : [rule.status];
+  if (allowedStatuses) {
+    properties.status = { enum: [...allowedStatuses] };
+  }
+  if (rule.decision) {
+    properties.decision = { const: rule.decision };
+  }
+  if (rule.errorCodes) {
+    properties.error = {
+      type: 'object',
+      required: ['code'],
+      properties: { code: { enum: [...rule.errorCodes] } },
+    };
+  }
+  if (rule.outputTruncated) {
+    properties.outputTruncated = { const: true };
+  }
+
+  return {
+    allOf: [
+      categorySchema,
+      {
+        type: 'object',
+        ...(rule.required ? { required: [...rule.required] } : {}),
+        properties,
+      },
+    ],
+  };
+}
+
 export const executionFrameworkEventJsonSchema: JsonSchema = {
   type: 'object',
   required: ['id', 'type', 'runId', 'timestamp', 'payload'],
@@ -420,15 +459,17 @@ export const executionFrameworkEventJsonSchema: JsonSchema = {
     agentId: nonEmptyStringJsonSchema,
     fsmState: nonEmptyStringJsonSchema,
     timestamp: timestampJsonSchema,
-    payload: {
-      oneOf: [
-        sandboxLifecycleEventPayloadJsonSchema,
-        commandExecutionEventPayloadJsonSchema,
-        networkAuthorizationEventPayloadJsonSchema,
-      ],
-    },
+    payload: { type: 'object' },
     metadata: { type: 'object' },
   },
+  oneOf: executionFrameworkEventTypes.map((type) => ({
+    type: 'object',
+    required: ['type', 'payload'],
+    properties: {
+      type: { const: type },
+      payload: eventPayloadJsonSchema(type),
+    },
+  })),
   additionalProperties: false,
 };
 

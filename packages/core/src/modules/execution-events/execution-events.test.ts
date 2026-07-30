@@ -27,6 +27,49 @@ describe('Execution lifecycle Event contracts', () => {
     );
   });
 
+  it('binds each public event type to its payload contract', () => {
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    const validate = ajv.compile(executionEventJsonSchemas.ExecutionFrameworkEvent);
+
+    expect(validate(sandboxLifecycleEventExample)).toBe(true);
+    expect(validate(commandExecutionEventExample)).toBe(true);
+    expect(validate(networkAuthorizationEventExample)).toBe(true);
+
+    const commandRequested = {
+      id: 'event.command.requested.example',
+      type: 'command.execution.requested',
+      workspaceId: 'workspace.example',
+      runId: 'run.example',
+      timestamp: '2026-07-16T00:00:00.000Z',
+      payload: {
+        operationId: 'operation.command.example',
+        executionId: 'execution.example',
+        workspaceId: 'workspace.example',
+      },
+    };
+    expect(validateExecutionFrameworkEvent(commandRequested)).toEqual(commandRequested);
+    expect(validate(commandRequested)).toBe(true);
+
+    const mismatchedPayload = {
+      ...commandExecutionEventExample,
+      payload: sandboxLifecycleEventExample.payload,
+    };
+    expect(() => validateExecutionFrameworkEvent(mismatchedPayload)).toThrow();
+    expect(validate(mismatchedPayload)).toBe(false);
+
+    const incompleteCompleted = {
+      ...commandExecutionEventExample,
+      payload: {
+        executionId: 'execution.example',
+        status: 'completed',
+        exitCode: 0,
+      },
+    };
+    expect(() => validateExecutionFrameworkEvent(incompleteCompleted)).toThrow(/latencyMs/u);
+    expect(validate(incompleteCompleted)).toBe(false);
+  });
+
   it('exports every lifecycle event type and payload JSON Schema', () => {
     expect(executionFrameworkEventTypes).toHaveLength(28);
     expect(executionFrameworkEventTypes).toEqual(
