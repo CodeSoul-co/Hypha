@@ -122,7 +122,19 @@ export const sandboxLifecycleEventPayloadSchema = executionEventPayloadBaseObjec
     status: z.union([sandboxStatusSchema, z.literal('degraded')]).optional(),
     missingCapabilities: z.array(sandboxCapabilityNameSchema).optional(),
   })
-  .superRefine(addPayloadSecurityIssues) satisfies ZodType<SandboxLifecycleEventPayload>;
+  .superRefine((value, context) => {
+    addPayloadSecurityIssues(value, context);
+    if (
+      value.missingCapabilities &&
+      new Set(value.missingCapabilities).size !== value.missingCapabilities.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['missingCapabilities'],
+        message: 'must not contain duplicate Sandbox capabilities',
+      });
+    }
+  }) satisfies ZodType<SandboxLifecycleEventPayload>;
 
 export const commandExecutionEventPayloadSchema = executionEventPayloadBaseObjectSchema
   .extend({

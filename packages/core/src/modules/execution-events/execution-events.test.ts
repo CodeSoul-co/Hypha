@@ -9,6 +9,7 @@ import {
   executionEventJsonSchemas,
   executionFrameworkEventTypes,
   networkAuthorizationEventExample,
+  sandboxLifecycleEventPayloadSchema,
   sandboxLifecycleEventExample,
   validateExecutionEventPayload,
   validateExecutionFrameworkEvent,
@@ -154,6 +155,39 @@ describe('Execution lifecycle Event contracts', () => {
         status: 'failed',
       })
     ).toThrow(/error/u);
+  });
+
+  it('keeps missing Sandbox capability uniqueness aligned across public contracts', () => {
+    const duplicateCapabilities = {
+      sandboxId: 'sandbox.example',
+      status: 'degraded' as const,
+      missingCapabilities: ['networkIsolation', 'networkIsolation'] as const,
+    };
+
+    expect(sandboxLifecycleEventPayloadSchema.safeParse(duplicateCapabilities).success).toBe(
+      false
+    );
+
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    expect(
+      ajv.validate(
+        executionEventJsonSchemas.SandboxLifecycleEventPayload,
+        duplicateCapabilities
+      )
+    ).toBe(false);
+
+    const distinctCapabilities = {
+      ...duplicateCapabilities,
+      missingCapabilities: ['networkIsolation', 'filesystemIsolation'],
+    };
+    expect(sandboxLifecycleEventPayloadSchema.safeParse(distinctCapabilities).success).toBe(true);
+    expect(
+      ajv.validate(
+        executionEventJsonSchemas.SandboxLifecycleEventPayload,
+        distinctCapabilities
+      )
+    ).toBe(true);
   });
 
   it('requires Command terminal evidence and matching normalized errors', () => {
