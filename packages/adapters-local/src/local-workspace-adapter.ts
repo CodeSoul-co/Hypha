@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { FileMutation } from '@hypha/core';
 import { executionProviderError } from './execution-provider-error';
 import {
+  LocalWorkspaceSnapshotCancelledError,
   LocalWorkspaceSnapshotLimitError,
   LocalWorkspaceSnapshotSourceChangedError,
   captureLocalWorkspaceSnapshot,
@@ -16,6 +17,10 @@ export interface LocalWorkspaceAdapterOptions {
   maxTrackedFiles?: number;
   maxTrackedBytes?: number;
   maxCaptureDurationMs?: number;
+}
+
+export interface LocalWorkspaceCaptureOptions {
+  abortSignal?: AbortSignal;
 }
 
 /** Adapts a governed Workspace root to Local Process mutation evidence. */
@@ -51,14 +56,22 @@ export class LocalWorkspaceAdapter {
     }
   }
 
-  async capture(): Promise<LocalWorkspaceSnapshot> {
+  async capture(options: LocalWorkspaceCaptureOptions = {}): Promise<LocalWorkspaceSnapshot> {
     try {
       return await captureLocalWorkspaceSnapshot(this.workspaceRoot, {
         maxFiles: this.maxTrackedFiles,
         maxBytes: this.maxTrackedBytes,
         maxDurationMs: this.maxCaptureDurationMs,
+        abortSignal: options.abortSignal,
       });
     } catch (error) {
+      if (error instanceof LocalWorkspaceSnapshotCancelledError) {
+        throw executionProviderError(
+          'EXECUTION_CANCELLED',
+          'Local Workspace mutation capture was cancelled.',
+          false
+        );
+      }
       if (error instanceof LocalWorkspaceSnapshotLimitError) {
         throw executionProviderError(
           'EXECUTION_RESOURCE_EXCEEDED',

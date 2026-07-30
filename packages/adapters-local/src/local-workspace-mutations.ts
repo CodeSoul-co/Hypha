@@ -36,6 +36,7 @@ export interface LocalWorkspaceSnapshotOptions {
   maxFiles?: number;
   maxBytes?: number;
   maxDurationMs?: number;
+  abortSignal?: AbortSignal;
 }
 
 export class LocalWorkspaceSnapshotLimitError extends Error {
@@ -55,6 +56,13 @@ export class LocalWorkspaceSnapshotSourceChangedError extends Error {
   }
 }
 
+export class LocalWorkspaceSnapshotCancelledError extends Error {
+  constructor() {
+    super('Workspace mutation capture was cancelled.');
+    this.name = 'LocalWorkspaceSnapshotCancelledError';
+  }
+}
+
 export async function captureLocalWorkspaceSnapshot(
   rootPath: string,
   options: LocalWorkspaceSnapshotOptions = {}
@@ -64,37 +72,42 @@ export async function captureLocalWorkspaceSnapshot(
   const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
   const maxDurationMs = options.maxDurationMs ?? 30_000;
   const startedAt = performance.now();
+  const assertCaptureActive = (): void => {
+    if (options.abortSignal?.aborted) throw new LocalWorkspaceSnapshotCancelledError();
+    if (performance.now() - startedAt > maxDurationMs) {
+      throw snapshotLimitError(maxFiles, maxBytes, maxDurationMs);
+    }
+  };
+  assertCaptureActive();
   const realRoot = await fs.realpath(root);
+  assertCaptureActive();
   const controlPlaneGuard = new WorkspaceControlPlaneGuard();
   controlPlaneGuard.assertWorkspaceRoot(root);
   controlPlaneGuard.assertWorkspaceRoot(realRoot);
   const entries = new Map<string, LocalWorkspaceEntry>();
   const directories = new Map<string, LocalWorkspaceDirectoryEntry>();
   let totalBytes = 0;
-  const assertTimeBudget = (): void => {
-    if (performance.now() - startedAt > maxDurationMs) {
-      throw snapshotLimitError(maxFiles, maxBytes, maxDurationMs);
-    }
-  };
 
   const walk = async (directory: string): Promise<void> => {
-    assertTimeBudget();
+    assertCaptureActive();
     const realDirectory = await fs.realpath(directory);
-    assertTimeBudget();
+    assertCaptureActive();
     assertWithinRoot(realDirectory, realRoot);
     controlPlaneGuard.assertResolvedPath(directory);
     controlPlaneGuard.assertResolvedPath(realDirectory);
     const children = await fs.readdir(directory, { withFileTypes: true });
-    assertTimeBudget();
+    assertCaptureActive();
     children.sort((left, right) => left.name.localeCompare(right.name));
     for (const child of children) {
-      assertTimeBudget();
+      assertCaptureActive();
       const absolutePath = path.join(directory, child.name);
       const relativePath = portableRelative(root, absolutePath);
       controlPlaneGuard.assertResolvedPath(absolutePath);
       const stat = await fs.lstat(absolutePath);
+      assertCaptureActive();
       if (stat.isSymbolicLink()) {
         const target = await fs.readlink(absolutePath);
+        assertCaptureActive();
         const symlinkTarget = workspaceRelativeSymlinkTarget(root, absolutePath, target);
         addEntry({
           path: relativePath,
@@ -107,6 +120,7 @@ export async function captureLocalWorkspaceSnapshot(
       } else if (stat.isDirectory()) {
         addDirectory({ path: relativePath, mode: stat.mode });
         await walk(absolutePath);
+        assertCaptureActive();
       } else if (stat.isFile()) {
         assertEntryCapacity();
         const file = await hashWorkspaceFile(
@@ -115,7 +129,7 @@ export async function captureLocalWorkspaceSnapshot(
           controlPlaneGuard,
           maxBytes - totalBytes,
           () => snapshotLimitError(maxFiles, maxBytes, maxDurationMs),
-          assertTimeBudget
+          assertCaptureActive
         );
         addEntry({
           path: relativePath,
@@ -150,6 +164,7 @@ export async function captureLocalWorkspaceSnapshot(
   };
 
   await walk(root);
+  assertCaptureActive();
   return {
     rootPath: root,
     entries,
@@ -292,16 +307,16 @@ async function hashWorkspaceFile(
   controlPlaneGuard: WorkspaceControlPlaneGuard,
   remainingBytes: number,
   limitError: () => LocalWorkspaceSnapshotLimitError,
-  assertTimeBudget: () => void
+  assertCaptureActive: () => void
 ): Promise<{ contentHash: string; sizeBytes: number; mode: number }> {
-  assertTimeBudget();
+  assertCaptureActive();
   const before = await fs.lstat(filename, { bigint: true });
-  assertTimeBudget();
+  assertCaptureActive();
   assertSingleLinkRegularFile(before);
   const sizeBytes = safeSizeNumber(before.size, limitError);
   if (sizeBytes > remainingBytes) throw limitError();
   const canonicalBefore = await fs.realpath(filename);
-  assertTimeBudget();
+  assertCaptureActive();
   assertWithinRoot(canonicalBefore, realRoot);
   controlPlaneGuard.assertResolvedPath(canonicalBefore);
 
@@ -309,8 +324,11 @@ async function hashWorkspaceFile(
   const hash = createHash('sha256');
   let bytesReadTotal = 0;
   try {
+    assertCaptureActive();
     const opened = await handle.stat({ bigint: true });
+    assertCaptureActive();
     const pathAfterOpen = await fs.lstat(filename, { bigint: true });
+    assertCaptureActive();
     if (
       !sameSingleLinkRegularFileIdentity(before, opened) ||
       !sameSingleLinkRegularFileIdentity(before, pathAfterOpen)
@@ -321,9 +339,9 @@ async function hashWorkspaceFile(
     const buffer = new Uint8Array(64 * 1024);
     let bytesRead = 0;
     do {
-      assertTimeBudget();
+      assertCaptureActive();
       ({ bytesRead } = await handle.read(buffer, 0, buffer.byteLength, null));
-      assertTimeBudget();
+      assertCaptureActive();
       if (bytesRead === 0) continue;
       bytesReadTotal += bytesRead;
       if (bytesReadTotal > remainingBytes || BigInt(bytesReadTotal) > before.size) {
@@ -335,7 +353,7 @@ async function hashWorkspaceFile(
     const finalHandleStat = await handle.stat({ bigint: true });
     const finalPathStat = await fs.lstat(filename, { bigint: true });
     const canonicalAfter = await fs.realpath(filename);
-    assertTimeBudget();
+    assertCaptureActive();
     if (
       bytesReadTotal !== sizeBytes ||
       canonicalAfter !== canonicalBefore ||

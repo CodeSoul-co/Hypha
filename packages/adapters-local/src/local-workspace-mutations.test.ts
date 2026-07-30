@@ -5,6 +5,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  LocalWorkspaceSnapshotCancelledError,
   LocalWorkspaceSnapshotLimitError,
   LocalWorkspaceSnapshotSourceChangedError,
   captureLocalWorkspaceSnapshot,
@@ -93,6 +94,19 @@ describe('local Workspace mutation capture', () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it('cancels a Workspace capture while filesystem traversal is in flight', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-capture-cancel-'));
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const controller = new AbortController();
+    const pending = captureLocalWorkspaceSnapshot(root, {
+      abortSignal: controller.signal,
+    });
+
+    queueMicrotask(() => controller.abort());
+
+    await expect(pending).rejects.toBeInstanceOf(LocalWorkspaceSnapshotCancelledError);
   });
 
   it('hashes large files incrementally without using whole-file reads', async () => {

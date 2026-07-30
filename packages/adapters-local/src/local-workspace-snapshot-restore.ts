@@ -25,7 +25,7 @@ import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 
 export interface RestoreLocalWorkspaceSnapshotOptions {
   workspaceRoot: string;
-  capture: () => Promise<LocalWorkspaceSnapshot>;
+  capture: (abortSignal?: AbortSignal) => Promise<LocalWorkspaceSnapshot>;
   artifacts: Pick<ArtifactManager, 'read'>;
   request: WorkspaceRestoreRequest;
   maxManifestBytes: number;
@@ -47,7 +47,7 @@ export async function restoreLocalWorkspaceSnapshot(
     root,
     async () => {
       assertRestoreActive(options.abortSignal);
-      await recoverInterruptedRestoreUnlocked(root, options.capture);
+      await recoverInterruptedRestoreUnlocked(root, () => options.capture(options.abortSignal));
       assertRestoreActive(options.abortSignal);
       await restoreLocalWorkspaceSnapshotUnlocked(root, options);
     },
@@ -78,7 +78,7 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
   const guard = new WorkspaceControlPlaneGuard();
   guard.assertWorkspaceRoot(root);
   assertRestoreActive(options.abortSignal);
-  const initial = await options.capture();
+  const initial = await options.capture(options.abortSignal);
   assertRestoreActive(options.abortSignal);
   assertExpectedWorkspaceHash(options.request, initial.sourceTreeHash);
   const manifest = await readManifest(options);
@@ -128,7 +128,7 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
       assertStagingTimeBudget
     );
     assertStagingTimeBudget();
-    const beforeSwap = await options.capture();
+    const beforeSwap = await options.capture(stagingCancellation.signal);
     assertStagingTimeBudget();
     if (beforeSwap.sourceTreeHash !== initial.sourceTreeHash) {
       throw revisionConflict(

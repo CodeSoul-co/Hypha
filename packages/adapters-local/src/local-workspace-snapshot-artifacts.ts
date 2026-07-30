@@ -111,7 +111,7 @@ export class LocalWorkspaceSnapshotArtifactService {
     this.assertScope(request);
     assertSnapshotCallerActive(options.abortSignal);
 
-    const captured = await this.workspace.capture();
+    const captured = await this.workspace.capture({ abortSignal: options.abortSignal });
     assertSnapshotCallerActive(options.abortSignal);
     this.assertRestorableLinks(captured);
     const persistenceStartedAt = this.nowMs();
@@ -127,7 +127,7 @@ export class LocalWorkspaceSnapshotArtifactService {
         cancellation
       );
       this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
-      const verified = await this.workspace.capture();
+      const verified = await this.workspace.capture({ abortSignal: cancellation.signal });
       this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
       if (verified.sourceTreeHash !== captured.sourceTreeHash) {
         throw executionProviderError(
@@ -241,7 +241,7 @@ export class LocalWorkspaceSnapshotArtifactService {
     try {
       await restoreLocalWorkspaceSnapshot({
         workspaceRoot: this.workspace.workspaceRoot,
-        capture: () => this.workspace.capture(),
+        capture: (abortSignal) => this.workspace.capture({ abortSignal }),
         artifacts: this.artifacts,
         request,
         maxManifestBytes: this.maxManifestBytes,
