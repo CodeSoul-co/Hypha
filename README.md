@@ -207,4 +207,4 @@ npm run cli -- --help
 
 ## License
 
-MIT
+MIT License.
