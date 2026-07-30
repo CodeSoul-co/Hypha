@@ -168,6 +168,7 @@ export function createDurableExecutionTerminalEvent(
   const record = validateExecutionRecord(recordValue);
   const result = requiredTerminalResult(record);
   const type = terminalEventType(result.status);
+  const idempotencyKey = terminalEventIdempotencyKey(record.id, result.revision);
   if (!result.completedAt) {
     throw completionError('Execution terminal event requires a completion timestamp');
   }
@@ -196,12 +197,18 @@ export function createDurableExecutionTerminalEvent(
   const input = {
     id: terminalEventId(record.id, result.revision, type),
     type,
+    ...(record.request.tenantId === undefined
+      ? {}
+      : { tenantId: record.request.tenantId }),
+    userId: record.request.userId,
     workspaceId: record.request.workspaceId,
     ...(record.request.sessionId === undefined ? {} : { sessionId: record.request.sessionId }),
     runId: record.request.runId,
     ...(record.request.stepId === undefined ? {} : { stepId: record.request.stepId }),
     ...(record.request.agentId === undefined ? {} : { agentId: record.request.agentId }),
     ...(record.request.fsmState === undefined ? {} : { fsmState: record.request.fsmState }),
+    idempotencyKey,
+    operationId: record.request.operationId,
     timestamp: result.completedAt,
     payload: commonPayload,
   };
@@ -262,15 +269,35 @@ function assertAppendedTerminalEvent(
   expected: ExecutionFrameworkEvent,
   appended: ExecutionFrameworkEvent
 ): void {
+  const identityFields = [
+    'id',
+    'type',
+    'tenantId',
+    'userId',
+    'workspaceId',
+    'sessionId',
+    'runId',
+    'stepId',
+    'agentId',
+    'fsmState',
+    'branchId',
+    'correlationId',
+    'causationId',
+    'parentEventId',
+    'idempotencyKey',
+    'operationId',
+    'timestamp',
+  ] as const;
   const expectedRevision =
     'revision' in expected.payload ? expected.payload.revision : undefined;
   const appendedRevision =
     'revision' in appended.payload ? appended.payload.revision : undefined;
   if (
-    appended.id !== expected.id ||
-    appended.type !== expected.type ||
-    appended.runId !== expected.runId ||
-    appended.workspaceId !== expected.workspaceId ||
+    identityFields.some(
+      (field) => expected[field] !== undefined && appended[field] !== expected[field]
+    ) ||
+    appended.payload.operationId !== expected.payload.operationId ||
+    appended.payload.workspaceId !== expected.payload.workspaceId ||
     appended.payload.executionId !== expected.payload.executionId ||
     appendedRevision !== expectedRevision
   ) {

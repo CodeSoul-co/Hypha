@@ -214,7 +214,20 @@ describe('DurableExecutionCompletionCoordinator', () => {
 
 describe('DurableExecutionTerminalEventCoordinator', () => {
   it('builds a deterministic event from the durable terminal record', () => {
-    const terminal = committedRecord(runningRecord(), providerResult());
+    const running = runningRecord();
+    const terminal = committedRecord(
+      {
+        ...running,
+        request: {
+          ...running.request,
+          sessionId: 'session.example',
+          stepId: 'step.example',
+          agentId: 'agent.example',
+          fsmState: 'collecting_artifacts',
+        },
+      },
+      providerResult()
+    );
     const event = createDurableExecutionTerminalEvent({
       ...terminal,
       revision: terminal.revision + 1,
@@ -223,8 +236,16 @@ describe('DurableExecutionTerminalEventCoordinator', () => {
     expect(event).toMatchObject({
       id: 'event:command.execution.completed:execution.example:2',
       type: 'command.execution.completed',
+      tenantId: 'tenant.example',
+      userId: 'user.example',
       workspaceId: 'workspace.example',
+      sessionId: 'session.example',
       runId: 'run.example',
+      stepId: 'step.example',
+      agentId: 'agent.example',
+      fsmState: 'collecting_artifacts',
+      idempotencyKey: 'execution-terminal-event:execution.example:2',
+      operationId: 'operation.execute',
       timestamp: '2026-07-24T00:00:01.000Z',
       payload: {
         operationId: 'operation.execute',
@@ -263,6 +284,12 @@ describe('DurableExecutionTerminalEventCoordinator', () => {
     expect(requests[0]).toMatchObject({
       executionRevision: 2,
       idempotencyKey: 'execution-terminal-event:execution.example:2',
+      event: {
+        tenantId: 'tenant.example',
+        userId: 'user.example',
+        idempotencyKey: 'execution-terminal-event:execution.example:2',
+        operationId: 'operation.execute',
+      },
     });
   });
 
@@ -308,6 +335,27 @@ describe('DurableExecutionTerminalEventCoordinator', () => {
     });
 
     await expect(coordinator.append(completed)).rejects.toThrow(/identity/u);
+  });
+
+  it.each([
+    ['tenantId', undefined, /identity/u],
+    ['userId', 'user.other', /identity/u],
+    ['workspaceId', 'workspace.other', /must match the event workspaceId/u],
+    ['runId', 'run.other', /identity/u],
+    ['idempotencyKey', 'execution-terminal-event:other', /identity/u],
+    ['operationId', 'operation.other', /must match the event operationId/u],
+  ] as const)('rejects an appended event that changes %s', async (field, value, error) => {
+    const completed = committedRecord(runningRecord(), providerResult());
+    const coordinator = new DurableExecutionTerminalEventCoordinator({
+      events: {
+        append: async (request) => ({
+          ...request.event,
+          [field]: value,
+        }),
+      },
+    });
+
+    await expect(coordinator.append(completed)).rejects.toThrow(error);
   });
 });
 

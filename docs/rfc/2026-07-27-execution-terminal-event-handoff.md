@@ -26,6 +26,10 @@ Add an Execution-owned `DurableExecutionTerminalEventCoordinator` that:
 4. delegates persistence through an injected `DurableExecutionTerminalEventCommitPort`;
 5. validates the returned event and rejects mismatched identities.
 
+The terminal Event envelope carries the same tenant, user, Workspace, Run, operation, and
+idempotency identities used by the append request. A Runtime adapter must preserve those values
+when converting a persisted Event back to the Execution-facing result.
+
 The append port must implement idempotent resolution for an identical event and idempotency key.
 Runtime composition will adapt this port to its durable Event Store and retain ownership of stream
 sequence, run revision, fencing, and subsequent FSM observation.
