@@ -201,7 +201,10 @@ export interface ArtifactManager {
     options?: ArtifactOperationOptions
   ): Promise<ArtifactRecord>;
   get(request: ArtifactGetRecordRequest): Promise<ArtifactRecord | null>;
-  read(request: ArtifactReadRequest): Promise<ArtifactReadResult>;
+  read(
+    request: ArtifactReadRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactReadResult>;
   createDownloadAccess(
     request: ArtifactCreateDownloadAccessRequest
   ): Promise<ArtifactDownloadAccess>;

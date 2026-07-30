@@ -97,6 +97,38 @@ describe('LocalFilesystemExecutionArtifactStore', () => {
     await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
   });
 
+  it('rejects a pre-cancelled read as a structured download failure', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const ref = await store.put(request('objects/pre-cancelled-read.bin', Uint8Array.from([1])));
+    const controller = new AbortController();
+    controller.abort(new Error('cancel local Artifact read'));
+
+    await expect(store.get({ ref }, { abortSignal: controller.signal })).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_DOWNLOAD_FAILED',
+        retryable: false,
+        details: { providerCode: 'LOCAL_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+  });
+
+  it('stops a local file stream after read cancellation', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const bytes = new Uint8Array(256 * 1024).fill(7);
+    const ref = await store.put(request('objects/cancelled-read.bin', bytes));
+    const controller = new AbortController();
+    const content = await store.get({ ref }, { abortSignal: controller.signal });
+    const iterator = content.stream[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({ done: false });
+    controller.abort(new Error('cancel local Artifact stream'));
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: 'LOCAL_ARTIFACT_TRANSFER_ABORTED',
+    });
+  });
+
   it('deduplicates identical content while keeping independent object manifests', async () => {
     const root = await createRoot();
     const store = createStore(root);

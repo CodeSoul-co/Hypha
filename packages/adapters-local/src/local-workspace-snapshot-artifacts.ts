@@ -231,9 +231,13 @@ export class LocalWorkspaceSnapshotArtifactService {
     }
   }
 
-  async restoreFullSnapshot(input: WorkspaceRestoreRequest): Promise<void> {
+  async restoreFullSnapshot(
+    input: WorkspaceRestoreRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<void> {
     const request = validateWorkspaceRestoreRequest(input);
     this.assertScope(request);
+    if (options.abortSignal?.aborted) throw snapshotRestoreCancelledError();
     try {
       await restoreLocalWorkspaceSnapshot({
         workspaceRoot: this.workspace.workspaceRoot,
@@ -245,9 +249,11 @@ export class LocalWorkspaceSnapshotArtifactService {
         maxRestoreEntries: this.maxRestoreEntries,
         maxRestoreLockWaitDurationMs: this.maxRestoreLockWaitDurationMs,
         maxRestoreStagingDurationMs: this.maxRestoreStagingDurationMs,
+        abortSignal: options.abortSignal,
       });
     } catch (error) {
       if (hasNormalizedError(error)) throw error;
+      if (options.abortSignal?.aborted) throw snapshotRestoreCancelledError();
       const code = nodeErrorCode(error);
       throw executionProviderError(
         'EXECUTION_INTERNAL_ERROR',
@@ -587,6 +593,14 @@ function snapshotPersistenceCancelledError() {
   return executionProviderError(
     'EXECUTION_CANCELLED',
     'Workspace snapshot Artifact persistence was cancelled.',
+    false
+  );
+}
+
+function snapshotRestoreCancelledError() {
+  return executionProviderError(
+    'EXECUTION_CANCELLED',
+    'Workspace snapshot restore was cancelled.',
     false
   );
 }

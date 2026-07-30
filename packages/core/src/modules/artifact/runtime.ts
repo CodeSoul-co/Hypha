@@ -291,7 +291,10 @@ export class DefaultArtifactManager implements ArtifactManager {
     return stored.record;
   }
 
-  async read(input: ArtifactReadRequest): Promise<ArtifactReadResult> {
+  async read(
+    input: ArtifactReadRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactReadResult> {
     const request = validateArtifactManagerInput(() => validateArtifactReadRequest(input));
     const latest = await this.requireStoredRecord(request.artifactId);
     if (latest.record.status === 'deleted') {
@@ -306,13 +309,16 @@ export class DefaultArtifactManager implements ArtifactManager {
         'Artifact profile does not allow byte-range reads.'
       );
     }
-    const content = await this.requireStore(profile).get({
-      ref: stored.record.storageRef,
-      range: request.range,
-      expectedContentHash:
-        request.expectedContentHash ??
-        (profile.contentAddressing.verifyOnRead ? stored.record.contentHash : undefined),
-    });
+    const content = await this.requireStore(profile).get(
+      {
+        ref: stored.record.storageRef,
+        range: request.range,
+        expectedContentHash:
+          request.expectedContentHash ??
+          (profile.contentAddressing.verifyOnRead ? stored.record.contentHash : undefined),
+      },
+      options
+    );
     return { record: stored.record, content };
   }
 

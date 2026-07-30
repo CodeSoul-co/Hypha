@@ -216,52 +216,59 @@ export class LocalFilesystemExecutionArtifactStore implements ArtifactStoreProvi
     );
   }
 
-  async get(input: ArtifactGetRequest): Promise<ArtifactContent> {
-    return this.operation('get', async (paths) => {
-      const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
-      this.assertOwnedRef(request.ref);
-      const manifest = await this.requireManifest(paths, request.ref.objectKey);
-      this.assertCurrentRef(request.ref, manifest);
-      const blobPath = localArtifactBlobPath(paths, manifest.contentHash);
-      await ensureSafeLocalArtifactDirectory(paths.root, path.dirname(blobPath));
-      const verified = await hashLocalArtifactFile(blobPath, paths.root);
-      if (
-        verified.contentHash !== manifest.contentHash ||
-        verified.sizeBytes !== manifest.sizeBytes
-      ) {
-        throw artifactStoreError(
-          'ARTIFACT_HASH_MISMATCH',
-          'Stored Artifact bytes failed integrity verification.',
-          false,
-          {
-            expectedContentHash: manifest.contentHash,
-            actualContentHash: verified.contentHash,
-            expectedSizeBytes: manifest.sizeBytes,
-            actualSizeBytes: verified.sizeBytes,
-          }
-        );
-      }
-      if (request.expectedContentHash && request.expectedContentHash !== verified.contentHash) {
-        throw artifactStoreError(
-          'ARTIFACT_HASH_MISMATCH',
-          'Stored Artifact does not match expectedContentHash.',
-          false,
-          {
-            expectedContentHash: request.expectedContentHash,
-            actualContentHash: verified.contentHash,
-          }
-        );
-      }
-      const range = normalizeLocalArtifactRange(request.range, manifest.sizeBytes);
-      return {
-        stream: streamLocalArtifactFile(blobPath, range, paths.root),
-        contentHash: verified.contentHash,
-        sizeBytes: range ? range.endInclusive! - range.start + 1 : manifest.sizeBytes,
-        mimeType: manifest.mimeType,
-        etag: manifest.etag,
-        range,
-      };
-    });
+  async get(
+    input: ArtifactGetRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactContent> {
+    return this.operation(
+      'get',
+      async (paths) => {
+        const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
+        this.assertOwnedRef(request.ref);
+        const manifest = await this.requireManifest(paths, request.ref.objectKey);
+        this.assertCurrentRef(request.ref, manifest);
+        const blobPath = localArtifactBlobPath(paths, manifest.contentHash);
+        await ensureSafeLocalArtifactDirectory(paths.root, path.dirname(blobPath));
+        const verified = await hashLocalArtifactFile(blobPath, paths.root, options.abortSignal);
+        if (
+          verified.contentHash !== manifest.contentHash ||
+          verified.sizeBytes !== manifest.sizeBytes
+        ) {
+          throw artifactStoreError(
+            'ARTIFACT_HASH_MISMATCH',
+            'Stored Artifact bytes failed integrity verification.',
+            false,
+            {
+              expectedContentHash: manifest.contentHash,
+              actualContentHash: verified.contentHash,
+              expectedSizeBytes: manifest.sizeBytes,
+              actualSizeBytes: verified.sizeBytes,
+            }
+          );
+        }
+        if (request.expectedContentHash && request.expectedContentHash !== verified.contentHash) {
+          throw artifactStoreError(
+            'ARTIFACT_HASH_MISMATCH',
+            'Stored Artifact does not match expectedContentHash.',
+            false,
+            {
+              expectedContentHash: request.expectedContentHash,
+              actualContentHash: verified.contentHash,
+            }
+          );
+        }
+        const range = normalizeLocalArtifactRange(request.range, manifest.sizeBytes);
+        return {
+          stream: streamLocalArtifactFile(blobPath, range, paths.root, options.abortSignal),
+          contentHash: verified.contentHash,
+          sizeBytes: range ? range.endInclusive! - range.start + 1 : manifest.sizeBytes,
+          mimeType: manifest.mimeType,
+          etag: manifest.etag,
+          range,
+        };
+      },
+      options.abortSignal
+    );
   }
 
   async head(input: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null> {

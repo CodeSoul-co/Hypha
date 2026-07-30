@@ -177,32 +177,40 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     );
   }
 
-  async get(input: ArtifactGetRequest): Promise<ArtifactContent> {
-    return this.operation('get', async () => {
-      const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
-      this.assertOwnedVersionedRef(request.ref);
-      const result = await this.transport.get({
-        bucket: this.bucket,
-        key: request.ref.objectKey,
-        versionId: request.ref.versionId,
-        expectedEtag: request.ref.etag,
-        expectedContentHash: request.expectedContentHash,
-        range: request.range,
-      });
-      this.assertRefMatchesState(request.ref, result.state);
-      const contentHash = requireS3ContentHash(result.state);
-      if (request.expectedContentHash && request.expectedContentHash !== contentHash) {
-        throw hashMismatch(request.expectedContentHash, contentHash);
-      }
-      return {
-        stream: result.stream,
-        contentHash,
-        sizeBytes: result.range ? artifactRangeSize(result.range) : result.state.sizeBytes,
-        mimeType: result.state.mimeType,
-        etag: normalizeS3Etag(result.state.etag),
-        range: result.range,
-      };
-    });
+  async get(
+    input: ArtifactGetRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactContent> {
+    return this.operation(
+      'get',
+      async () => {
+        const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
+        this.assertOwnedVersionedRef(request.ref);
+        const result = await this.transport.get({
+          bucket: this.bucket,
+          key: request.ref.objectKey,
+          versionId: request.ref.versionId,
+          expectedEtag: request.ref.etag,
+          expectedContentHash: request.expectedContentHash,
+          range: request.range,
+          abortSignal: options.abortSignal,
+        });
+        this.assertRefMatchesState(request.ref, result.state);
+        const contentHash = requireS3ContentHash(result.state);
+        if (request.expectedContentHash && request.expectedContentHash !== contentHash) {
+          throw hashMismatch(request.expectedContentHash, contentHash);
+        }
+        return {
+          stream: result.stream,
+          contentHash,
+          sizeBytes: result.range ? artifactRangeSize(result.range) : result.state.sizeBytes,
+          mimeType: result.state.mimeType,
+          etag: normalizeS3Etag(result.state.etag),
+          range: result.range,
+        };
+      },
+      options.abortSignal
+    );
   }
 
   async head(input: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null> {

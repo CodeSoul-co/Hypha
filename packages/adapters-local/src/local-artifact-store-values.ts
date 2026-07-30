@@ -54,7 +54,8 @@ export function normalizeLocalArtifactStoreError(
     return artifactStoreError('ARTIFACT_HASH_MISMATCH', error.message, false, { operation });
   }
   if (error instanceof LocalArtifactTransferAbortedError) {
-    return artifactStoreError('ARTIFACT_UPLOAD_FAILED', error.message, false, {
+    const code = operation === 'get' ? 'ARTIFACT_DOWNLOAD_FAILED' : 'ARTIFACT_UPLOAD_FAILED';
+    return artifactStoreError(code, error.message, false, {
       operation,
       providerCode: error.code,
     });

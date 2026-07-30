@@ -180,6 +180,17 @@ describe('S3ExecutionArtifactStore', () => {
     });
   });
 
+  it('propagates cancellation context into S3 downloads', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport);
+    const ref = await store.put(request('objects/cancelled-read.bin', Uint8Array.from([1, 2])));
+    const controller = new AbortController();
+
+    await store.get({ ref }, { abortSignal: controller.signal });
+
+    expect(transport.lastGet?.abortSignal).toBe(controller.signal);
+  });
+
   it('performs pinned server-side copy and creates constrained download access', async () => {
     const transport = new FakeS3ArtifactTransport();
     const store = createStore(transport);

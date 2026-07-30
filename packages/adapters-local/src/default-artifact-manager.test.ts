@@ -3,6 +3,7 @@ import type {
   ArtifactCreateRequest,
   ArtifactDownloadAccess,
   ArtifactDownloadAccessRequest,
+  ArtifactGetRequest,
   ArtifactOperationOptions,
   ArtifactProfileSpec,
   ArtifactPutRequest,
@@ -365,6 +366,23 @@ describe('DefaultArtifactManager', () => {
     expect(fixture.store.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
   });
 
+  it('propagates cancellation context through Artifact reads', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create(
+      createRequest('cancel-context-read', new TextEncoder().encode('read-cancellation'))
+    );
+    const controller = new AbortController();
+
+    await fixture.manager.read(
+      { principal: owner, artifactId: created.id },
+      { abortSignal: controller.signal }
+    );
+
+    expect(fixture.store.readOperationOptions).toEqual([
+      expect.objectContaining({ abortSignal: controller.signal }),
+    ]);
+  });
+
   it('rejects Workspace output that changed after collection was planned', async () => {
     const bytes = new TextEncoder().encode('changed-output');
     const fixture = createFixture({
@@ -542,6 +560,7 @@ function createFixture(
 class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
   readonly downloadRequests: ArtifactDownloadAccessRequest[] = [];
   readonly operationOptions: Array<ArtifactOperationOptions | undefined> = [];
+  readonly readOperationOptions: Array<ArtifactOperationOptions | undefined> = [];
   private readonly signedAccess: boolean;
 
   constructor(options: { id: string; signedAccess: boolean }) {
@@ -564,6 +583,14 @@ class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
         : new Error('Artifact upload aborted.');
     }
     return super.put(request);
+  }
+
+  override async get(
+    request: ArtifactGetRequest,
+    options?: ArtifactOperationOptions
+  ): ReturnType<InMemoryExecutionArtifactStore['get']> {
+    this.readOperationOptions.push(options);
+    return super.get(request, options);
   }
 
   async createDownloadAccess(

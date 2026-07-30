@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   ArtifactEventPublication,
   ArtifactEventPublisher,
+  ArtifactGetRequest,
   ArtifactOperationOptions,
   ArtifactProfileSpec,
   ArtifactPutRequest,
@@ -82,15 +83,22 @@ describe('Artifact Event publication decorators', () => {
     );
   });
 
-  it('preserves cancellation context through the eventing decorator', async () => {
+  it('preserves write and read cancellation context through the eventing decorator', async () => {
     const fixture = createFixture();
-    const controller = new AbortController();
+    const writeController = new AbortController();
+    const readController = new AbortController();
 
-    await fixture.manager.create(createRequest('operation.cancel-context', 'cancel-context'), {
-      abortSignal: controller.signal,
-    });
+    const created = await fixture.manager.create(
+      createRequest('operation.cancel-context', 'cancel-context'),
+      { abortSignal: writeController.signal }
+    );
+    await fixture.manager.read(
+      { principal, artifactId: created.id },
+      { abortSignal: readController.signal }
+    );
 
-    expect(fixture.store.operationOptions.at(-1)?.abortSignal).toBe(controller.signal);
+    expect(fixture.store.operationOptions.at(-1)?.abortSignal).toBe(writeController.signal);
+    expect(fixture.store.readOperationOptions.at(-1)?.abortSignal).toBe(readController.signal);
   });
 
   it('publishes normalized create failure and delete-blocked evidence', async () => {
@@ -409,6 +417,7 @@ function createFixture() {
 
 class CapturingArtifactOperationStore extends InMemoryExecutionArtifactStore {
   readonly operationOptions: Array<ArtifactOperationOptions | undefined> = [];
+  readonly readOperationOptions: Array<ArtifactOperationOptions | undefined> = [];
 
   override async put(
     request: ArtifactPutRequest,
@@ -416,6 +425,14 @@ class CapturingArtifactOperationStore extends InMemoryExecutionArtifactStore {
   ): Promise<ArtifactStorageRef> {
     this.operationOptions.push(options);
     return super.put(request);
+  }
+
+  override async get(
+    request: ArtifactGetRequest,
+    options?: ArtifactOperationOptions
+  ): ReturnType<InMemoryExecutionArtifactStore['get']> {
+    this.readOperationOptions.push(options);
+    return super.get(request, options);
   }
 }
 

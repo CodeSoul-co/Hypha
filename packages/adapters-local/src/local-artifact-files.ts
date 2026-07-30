@@ -109,15 +109,30 @@ export async function publishLocalArtifactBlob(
 
 export async function hashLocalArtifactFile(
   filename: string,
-  root?: string
+  root?: string,
+  abortSignal?: AbortSignal
 ): Promise<{ contentHash: string; sizeBytes: number }> {
+  assertLocalArtifactTransferActive(abortSignal);
   if (root) await ensureSafeLocalArtifactFile(root, filename);
+  assertLocalArtifactTransferActive(abortSignal);
   const hash = createHash('sha256');
   let sizeBytes = 0;
-  for await (const chunk of createReadStream(filename)) {
-    const bytes = chunk as Buffer;
-    sizeBytes += bytes.byteLength;
-    hash.update(bytes);
+  const stream = createReadStream(filename);
+  const abort = (): void => {
+    stream.destroy(new LocalArtifactTransferAbortedError());
+  };
+  abortSignal?.addEventListener('abort', abort, { once: true });
+  try {
+    for await (const chunk of stream) {
+      assertLocalArtifactTransferActive(abortSignal);
+      const bytes = chunk as Buffer;
+      sizeBytes += bytes.byteLength;
+      hash.update(bytes);
+    }
+    assertLocalArtifactTransferActive(abortSignal);
+  } finally {
+    abortSignal?.removeEventListener('abort', abort);
+    if (!stream.destroyed) stream.destroy();
   }
   return { contentHash: `sha256:${hash.digest('hex')}`, sizeBytes };
 }
@@ -125,14 +140,30 @@ export async function hashLocalArtifactFile(
 export function streamLocalArtifactFile(
   filename: string,
   range?: ArtifactByteRange,
-  root?: string
+  root?: string,
+  abortSignal?: AbortSignal
 ): AsyncIterable<Uint8Array> {
   return (async function* chunks(): AsyncIterable<Uint8Array> {
+    assertLocalArtifactTransferActive(abortSignal);
     if (root) await ensureSafeLocalArtifactFile(root, filename);
+    assertLocalArtifactTransferActive(abortSignal);
     const stream = createReadStream(filename, {
       ...(range ? { start: range.start, end: range.endInclusive } : {}),
     });
-    for await (const chunk of stream) yield Uint8Array.from(chunk as Buffer);
+    const abort = (): void => {
+      stream.destroy(new LocalArtifactTransferAbortedError());
+    };
+    abortSignal?.addEventListener('abort', abort, { once: true });
+    try {
+      for await (const chunk of stream) {
+        assertLocalArtifactTransferActive(abortSignal);
+        yield Uint8Array.from(chunk as Buffer);
+      }
+      assertLocalArtifactTransferActive(abortSignal);
+    } finally {
+      abortSignal?.removeEventListener('abort', abort);
+      if (!stream.destroyed) stream.destroy();
+    }
   })();
 }
 

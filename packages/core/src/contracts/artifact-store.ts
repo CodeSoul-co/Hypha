@@ -82,7 +82,7 @@ export interface ArtifactStoreProvider {
   readonly id: string;
   capabilities(): Promise<ArtifactStoreCapabilities>;
   put(request: ArtifactPutRequest, options?: ArtifactOperationOptions): Promise<ArtifactStorageRef>;
-  get(request: ArtifactGetRequest): Promise<ArtifactContent>;
+  get(request: ArtifactGetRequest, options?: ArtifactOperationOptions): Promise<ArtifactContent>;
   head(ref: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null>;
   exists(ref: ArtifactStorageRef): Promise<boolean>;
   delete(ref: ArtifactStorageRef): Promise<void>;

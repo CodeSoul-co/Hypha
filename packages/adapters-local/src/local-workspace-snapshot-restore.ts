@@ -4,6 +4,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type {
   ArtifactManager,
+  ArtifactOperationOptions,
   ArtifactRecord,
   WorkspaceRestoreRequest,
   WorkspaceSnapshotEntry,
@@ -32,6 +33,7 @@ export interface RestoreLocalWorkspaceSnapshotOptions {
   maxRestoreEntries: number;
   maxRestoreLockWaitDurationMs: number;
   maxRestoreStagingDurationMs: number;
+  abortSignal?: AbortSignal;
 }
 
 export type LocalWorkspaceRestoreRecoveryResult = 'none' | 'finalized' | 'rolled_back';
@@ -39,11 +41,14 @@ export type LocalWorkspaceRestoreRecoveryResult = 'none' | 'finalized' | 'rolled
 export async function restoreLocalWorkspaceSnapshot(
   options: RestoreLocalWorkspaceSnapshotOptions
 ): Promise<void> {
+  assertRestoreActive(options.abortSignal);
   const root = path.resolve(options.workspaceRoot);
   await withLocalWorkspaceRestoreLock(
     root,
     async () => {
+      assertRestoreActive(options.abortSignal);
       await recoverInterruptedRestoreUnlocked(root, options.capture);
+      assertRestoreActive(options.abortSignal);
       await restoreLocalWorkspaceSnapshotUnlocked(root, options);
     },
     { maxWaitDurationMs: options.maxRestoreLockWaitDurationMs }
@@ -69,15 +74,19 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
 ): Promise<void> {
   const guard = new WorkspaceControlPlaneGuard();
   guard.assertWorkspaceRoot(root);
+  assertRestoreActive(options.abortSignal);
   const initial = await options.capture();
+  assertRestoreActive(options.abortSignal);
   assertExpectedWorkspaceHash(options.request, initial.sourceTreeHash);
   const manifest = await readManifest(options);
+  assertRestoreActive(options.abortSignal);
   assertManifestScopeAndLimits(manifest, options);
   assertManifestPaths(manifest, root, guard);
 
   const parent = path.dirname(root);
   const stagingStartedAt = performance.now();
   const assertStagingTimeBudget = (): void => {
+    assertRestoreActive(options.abortSignal);
     if (performance.now() - stagingStartedAt > options.maxRestoreStagingDurationMs) {
       throw executionProviderError(
         'EXECUTION_RESOURCE_EXCEEDED',
@@ -223,10 +232,13 @@ async function recoverInterruptedRestoreUnlocked(
 async function readManifest(
   options: RestoreLocalWorkspaceSnapshotOptions
 ): Promise<WorkspaceSnapshotManifest> {
-  const result = await options.artifacts.read({
-    principal: options.request.principal,
-    artifactId: options.request.snapshotRef,
-  });
+  const result = await options.artifacts.read(
+    {
+      principal: options.request.principal,
+      artifactId: options.request.snapshotRef,
+    },
+    operationOptions(options.abortSignal)
+  );
   assertFinalSnapshotArtifact(result.record, options.request.workspaceId);
   if (result.record.sizeBytes > options.maxManifestBytes) {
     throw executionProviderError(
@@ -473,11 +485,14 @@ async function restoreFile(
     );
   }
   assertTimeBudget();
-  const result = await options.artifacts.read({
-    principal: options.request.principal,
-    artifactId: entry.artifactRef,
-    expectedContentHash: entry.contentHash,
-  });
+  const result = await options.artifacts.read(
+    {
+      principal: options.request.principal,
+      artifactId: entry.artifactRef,
+      expectedContentHash: entry.contentHash,
+    },
+    operationOptions(options.abortSignal)
+  );
   assertTimeBudget();
   assertFinalSnapshotArtifact(result.record, options.request.workspaceId);
   if (
@@ -711,4 +726,18 @@ function processIsAlive(pid: number): boolean {
   } catch (error) {
     return nodeErrorCode(error) !== 'ESRCH';
   }
+}
+
+function assertRestoreActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) {
+    throw executionProviderError(
+      'EXECUTION_CANCELLED',
+      'Workspace snapshot restore was cancelled.',
+      false
+    );
+  }
+}
+
+function operationOptions(abortSignal: AbortSignal | undefined): ArtifactOperationOptions {
+  return abortSignal ? { abortSignal } : {};
 }

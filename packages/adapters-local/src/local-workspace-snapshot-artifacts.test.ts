@@ -283,6 +283,48 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
   });
 
+  it('cancels an in-flight Artifact read without modifying the Workspace', async () => {
+    const root = await workspaceRoot('restore-cancellation');
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const current = await workspace.capture();
+    const controller = new AbortController();
+    let signalReady: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      signalReady = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(fixture.manager, 'read').mockImplementation(async (_request, options) => {
+      observedSignal = options?.abortSignal;
+      if (!observedSignal) throw new Error('Expected Workspace restore cancellation signal.');
+      signalReady?.();
+      await rejectWhenAborted(observedSignal);
+      throw new Error('unreachable');
+    });
+    const service = createService(workspace, fixture.manager);
+    const pending = service.restoreFullSnapshot(
+      restoreRequest('snapshot.cancelled', current.sourceTreeHash),
+      { abortSignal: controller.signal }
+    );
+
+    await started;
+    controller.abort(new Error('cancel Workspace restore'));
+
+    await expect(pending).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_CANCELLED', retryable: false },
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+    await expect(fs.access(workspaceRestoreJournalPath(root))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    const restoreEvidence = (await fs.readdir(path.dirname(root))).filter((candidate) =>
+      candidate.startsWith(`.${path.basename(root)}.restore-`)
+    );
+    expect(restoreEvidence).toEqual([]);
+  });
+
   it('fails closed when the Workspace changes while restore staging is prepared', async () => {
     const root = await workspaceRoot('restore-race');
     await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');

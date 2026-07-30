@@ -132,14 +132,17 @@ export class EventingArtifactManager implements ArtifactManager {
     return this.manager.get(request);
   }
 
-  async read(input: ArtifactReadRequest): Promise<ArtifactReadResult> {
+  async read(
+    input: ArtifactReadRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactReadResult> {
     const request = validateArtifactManagerInput(() => validateArtifactReadRequest(input));
     const operationId = this.events.operationId('read');
     await this.events.publish('artifact.read.requested', {
       operationId,
       artifactId: request.artifactId,
     });
-    const result = await this.manager.read(request);
+    const result = await this.manager.read(request, options);
     await this.events.publish(
       'artifact.read.completed',
       {
