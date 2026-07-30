@@ -151,6 +151,71 @@ describe('DefaultArtifactManager', () => {
     ).resolves.toEqual([record]);
   });
 
+  it('fails closed when an otherwise authorized principal declares a different Artifact scope', async () => {
+    const fixture = createFixture();
+    const record = await fixture.manager.create({
+      ...createRequest('scoped-artifact', new TextEncoder().encode('scoped')),
+      sessionId: 'session.example',
+      runId: 'run.example',
+      access: {
+        visibility: 'private',
+        ownerPrincipalId: owner.principalId,
+        workspaceId: 'workspace.example',
+        allowedPrincipalIds: ['user.collaborator'],
+      },
+    });
+    const matchingScope: ExecutionPrincipal = {
+      ...owner,
+      metadata: {
+        workspaceIds: ['workspace.example'],
+        sessionIds: ['session.example'],
+        runIds: ['run.example'],
+      },
+    };
+    const mismatchedPrincipals: ExecutionPrincipal[] = [
+      { ...matchingScope, tenantId: 'tenant.other' },
+      { ...matchingScope, metadata: { ...matchingScope.metadata, workspaceId: 'workspace.other' } },
+      { ...matchingScope, metadata: { ...matchingScope.metadata, sessionId: 'session.other' } },
+      { ...matchingScope, metadata: { ...matchingScope.metadata, runId: 'run.other' } },
+    ];
+
+    await expect(
+      fixture.manager.get({ principal: matchingScope, artifactId: record.id })
+    ).resolves.toEqual(record);
+    await expect(
+      fixture.manager.get({
+        principal: {
+          ...matchingScope,
+          principalId: 'user.collaborator',
+          userId: 'user.collaborator',
+        },
+        artifactId: record.id,
+      })
+    ).resolves.toEqual(record);
+    for (const principal of mismatchedPrincipals) {
+      await expect(
+        fixture.manager.get({ principal, artifactId: record.id })
+      ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+      await expect(
+        fixture.manager.list({ principal, workspaceId: record.workspaceId })
+      ).resolves.toEqual([]);
+    }
+
+    const administrator: ExecutionPrincipal = {
+      ...owner,
+      tenantId: 'tenant.other',
+      permissionScopes: ['artifact:read', 'artifact:admin'],
+      metadata: {
+        workspaceId: 'workspace.other',
+        sessionId: 'session.other',
+        runId: 'run.other',
+      },
+    };
+    await expect(
+      fixture.manager.get({ principal: administrator, artifactId: record.id })
+    ).resolves.toEqual(record);
+  });
+
   it('creates governed signed download access within the profile TTL', async () => {
     const fixture = createFixture({ signedAccess: true });
     const bytes = new TextEncoder().encode('downloadable');
