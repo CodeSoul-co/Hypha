@@ -209,6 +209,7 @@ export const executionFrameworkEventEnvelopeSchema = z
     stepId: nonEmptyString.optional(),
     agentId: nonEmptyString.optional(),
     fsmState: nonEmptyString.optional(),
+    operationId: nonEmptyString.optional(),
     timestamp: timestampSchema,
     payload: z.unknown().refine((value) => value !== undefined, {
       message: 'payload is required',
@@ -474,6 +475,7 @@ export const executionFrameworkEventJsonSchema: JsonSchema = {
     stepId: nonEmptyStringJsonSchema,
     agentId: nonEmptyStringJsonSchema,
     fsmState: nonEmptyStringJsonSchema,
+    operationId: nonEmptyStringJsonSchema,
     timestamp: timestampJsonSchema,
     payload: { type: 'object' },
     metadata: { type: 'object' },
@@ -502,6 +504,7 @@ export const sandboxLifecycleEventExample: ExecutionFrameworkEvent<'sandbox.read
   type: 'sandbox.ready',
   workspaceId: 'workspace.example',
   runId: 'run.example',
+  operationId: 'operation.sandbox.start.example',
   timestamp: '2026-07-16T00:00:01.000Z',
   payload: {
     operationId: 'operation.sandbox.start.example',
@@ -521,6 +524,7 @@ export const commandExecutionEventExample: ExecutionFrameworkEvent<'command.exec
     workspaceId: 'workspace.example',
     runId: 'run.example',
     stepId: 'step.example',
+    operationId: 'operation.command.example',
     timestamp: '2026-07-16T00:00:02.000Z',
     payload: {
       operationId: 'operation.command.example',
@@ -543,6 +547,7 @@ export const networkAuthorizationEventExample: ExecutionFrameworkEvent<'network.
     type: 'network.authorization.granted',
     workspaceId: 'workspace.example',
     runId: 'run.example',
+    operationId: 'operation.network.authorize.example',
     timestamp: '2026-07-16T00:00:00.500Z',
     payload: {
       operationId: 'operation.network.authorize.example',
@@ -572,16 +577,25 @@ export function validateExecutionEventPayload<TType extends ExecutionFrameworkEv
 export function validateExecutionFrameworkEvent(input: unknown): ExecutionFrameworkEvent {
   const event = executionFrameworkEventEnvelopeSchema.parse(input);
   const payload = validateExecutionEventPayload(event.type, event.payload);
-  if (event.workspaceId && payload.workspaceId && event.workspaceId !== payload.workspaceId) {
+  assertMatchingEventPayloadIdentity('workspaceId', event.workspaceId, payload.workspaceId);
+  assertMatchingEventPayloadIdentity('operationId', event.operationId, payload.operationId);
+  return { ...event, payload } as ExecutionFrameworkEvent;
+}
+
+function assertMatchingEventPayloadIdentity(
+  field: 'operationId' | 'workspaceId',
+  eventValue: string | undefined,
+  payloadValue: string | undefined
+): void {
+  if (eventValue && payloadValue && eventValue !== payloadValue) {
     throw new z.ZodError([
       {
         code: z.ZodIssueCode.custom,
-        path: ['payload', 'workspaceId'],
-        message: 'must match the event workspaceId',
+        path: ['payload', field],
+        message: `must match the event ${field}`,
       },
     ]);
   }
-  return { ...event, payload } as ExecutionFrameworkEvent;
 }
 
 export function createExecutionFrameworkEvent<TType extends ExecutionFrameworkEventType>(

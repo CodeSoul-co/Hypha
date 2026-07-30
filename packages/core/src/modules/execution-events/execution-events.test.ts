@@ -113,14 +113,17 @@ describe('Execution lifecycle Event contracts', () => {
       type: 'command.execution.queued',
       workspaceId: 'workspace.example',
       runId: 'run.example',
+      operationId: 'operation.command.example',
       timestamp: '2026-07-16T00:00:00.000Z',
       payload: {
+        operationId: 'operation.command.example',
         executionId: 'execution.example',
         workspaceId: 'workspace.example',
         status: 'queued',
       },
     });
     expect(event.payload.status).toBe('queued');
+    expect(event.operationId).toBe('operation.command.example');
   });
 
   it('requires create-request identity before a Sandbox ID exists', () => {
@@ -530,6 +533,19 @@ describe('Execution lifecycle Event contracts', () => {
         payload: { ...commandExecutionEventExample.payload, workspaceId: 'workspace.two' },
       })
     ).toThrow(/event workspaceId/u);
+  });
+
+  it('keeps envelope and payload operation identity consistent', () => {
+    expect(() =>
+      validateExecutionFrameworkEvent({
+        ...commandExecutionEventExample,
+        operationId: 'operation.envelope',
+        payload: {
+          ...commandExecutionEventExample.payload,
+          operationId: 'operation.payload',
+        },
+      })
+    ).toThrow(/event operationId/u);
   });
 
   it('rejects sensitive data in event-envelope metadata', () => {
