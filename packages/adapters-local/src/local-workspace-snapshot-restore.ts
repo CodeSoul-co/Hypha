@@ -85,24 +85,28 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
 
   const parent = path.dirname(root);
   const stagingStartedAt = performance.now();
-  const assertStagingTimeBudget = (): void => {
-    assertRestoreActive(options.abortSignal);
-    if (performance.now() - stagingStartedAt > options.maxRestoreStagingDurationMs) {
-      throw executionProviderError(
-        'EXECUTION_RESOURCE_EXCEEDED',
-        'Workspace restore staging exceeded its configured duration limit.',
-        false,
-        { maxRestoreStagingDurationMs: options.maxRestoreStagingDurationMs }
-      );
-    }
-  };
   const staging = await fs.mkdtemp(path.join(parent, `.${path.basename(root)}.restore-`));
-  assertStagingTimeBudget();
+  const stagingCancellation = createRestoreStagingCancellation(
+    options.abortSignal,
+    Math.max(0, options.maxRestoreStagingDurationMs - (performance.now() - stagingStartedAt))
+  );
+  const stagingOptions: RestoreLocalWorkspaceSnapshotOptions = {
+    ...options,
+    abortSignal: stagingCancellation.signal,
+  };
+  const assertStagingTimeBudget = (): void => {
+    if (performance.now() - stagingStartedAt > options.maxRestoreStagingDurationMs) {
+      stagingCancellation.abortForTimeout();
+    }
+    if (stagingCancellation.source() === 'timeout') throw restoreStagingTimeout(options);
+    assertRestoreActive(options.abortSignal);
+  };
   const backup = `${staging}.previous`;
   let stagingExists = true;
   let journalCreated = false;
 
   try {
+    assertStagingTimeBudget();
     await createLocalWorkspaceRestoreJournal(root, {
       workspaceName: path.basename(root),
       stagingName: path.basename(staging),
@@ -113,9 +117,16 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
       targetTreeHash: manifest.sourceTreeHash,
     });
     journalCreated = true;
-    await populateStagingDirectory(staging, manifest, options, guard, assertStagingTimeBudget);
+    await populateStagingDirectory(
+      staging,
+      manifest,
+      stagingOptions,
+      guard,
+      assertStagingTimeBudget
+    );
     assertStagingTimeBudget();
     const beforeSwap = await options.capture();
+    assertStagingTimeBudget();
     if (beforeSwap.sourceTreeHash !== initial.sourceTreeHash) {
       throw revisionConflict(
         'Workspace changed while the full snapshot restore was being prepared.',
@@ -124,6 +135,8 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
       );
     }
 
+    stagingCancellation.dispose();
+    assertRestoreActive(options.abortSignal);
     await fs.rename(root, backup);
     try {
       await fs.rename(staging, root);
@@ -150,7 +163,11 @@ async function restoreLocalWorkspaceSnapshotUnlocked(
     await fs.rm(backup, { recursive: true, force: true });
     await removeLocalWorkspaceRestoreJournal(root);
     journalCreated = false;
+  } catch (error) {
+    if (stagingCancellation.source() === 'timeout') throw restoreStagingTimeout(options);
+    throw error;
   } finally {
+    stagingCancellation.dispose();
     if (stagingExists) await fs.rm(staging, { recursive: true, force: true });
     if (journalCreated && !(await pathExists(backup))) {
       await removeLocalWorkspaceRestoreJournal(root);
@@ -740,4 +757,54 @@ function assertRestoreActive(abortSignal: AbortSignal | undefined): void {
 
 function operationOptions(abortSignal: AbortSignal | undefined): ArtifactOperationOptions {
   return abortSignal ? { abortSignal } : {};
+}
+
+type RestoreStagingCancellationSource = 'caller' | 'timeout';
+
+interface RestoreStagingCancellation {
+  readonly signal: AbortSignal;
+  source(): RestoreStagingCancellationSource | undefined;
+  abortForTimeout(): void;
+  dispose(): void;
+}
+
+function createRestoreStagingCancellation(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number
+): RestoreStagingCancellation {
+  const controller = new AbortController();
+  let cancellationSource: RestoreStagingCancellationSource | undefined;
+  const abort = (source: RestoreStagingCancellationSource, reason?: unknown): void => {
+    if (cancellationSource) return;
+    cancellationSource = source;
+    controller.abort(reason);
+  };
+  const abortFromCaller = (): void => abort('caller', callerSignal?.reason);
+  const abortForTimeout = (): void =>
+    abort('timeout', new Error('Workspace restore staging timed out.'));
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
+  const timer = setTimeout(abortForTimeout, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    source: () => cancellationSource,
+    abortForTimeout,
+    dispose() {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', abortFromCaller);
+    },
+  };
+}
+
+function restoreStagingTimeout(options: RestoreLocalWorkspaceSnapshotOptions) {
+  return executionProviderError(
+    'EXECUTION_RESOURCE_EXCEEDED',
+    'Workspace restore staging exceeded its configured duration limit.',
+    false,
+    { maxRestoreStagingDurationMs: options.maxRestoreStagingDurationMs }
+  );
 }

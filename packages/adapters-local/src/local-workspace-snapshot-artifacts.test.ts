@@ -407,6 +407,51 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     expect(restoreEvidence).toEqual([]);
   });
 
+  it('actively aborts an in-flight file Artifact read when restore staging times out', async () => {
+    const root = await workspaceRoot('restore-active-timeout');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const snapshot = await createService(workspace, fixture.manager).createFullSnapshot(
+      snapshotRequest()
+    );
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const current = await workspace.capture();
+    const readArtifact = fixture.manager.read.bind(fixture.manager);
+    let reads = 0;
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(fixture.manager, 'read').mockImplementation(async (request, options) => {
+      reads += 1;
+      if (reads === 1) return readArtifact(request, options);
+      observedSignal = options?.abortSignal;
+      if (!observedSignal) throw new Error('Expected Workspace restore timeout signal.');
+      await rejectWhenAborted(observedSignal);
+      throw new Error('unreachable');
+    });
+    const service = createService(workspace, fixture.manager, {
+      maxRestoreStagingDurationMs: 20,
+    });
+
+    await expect(
+      service.restoreFullSnapshot(restoreRequest(snapshot.id, current.sourceTreeHash))
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_RESOURCE_EXCEEDED',
+        details: { maxRestoreStagingDurationMs: 20 },
+      },
+    });
+
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+    await expect(fs.access(workspaceRestoreJournalPath(root))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    const restoreEvidence = (await fs.readdir(path.dirname(root))).filter((candidate) =>
+      candidate.startsWith(`.${path.basename(root)}.restore-`)
+    );
+    expect(restoreEvidence).toEqual([]);
+  });
+
   it('rejects protected control-plane paths from a validly hashed manifest', async () => {
     const root = await workspaceRoot('restore-protected');
     await fs.writeFile(path.join(root, 'result.txt'), 'current');
