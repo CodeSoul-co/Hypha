@@ -52,6 +52,7 @@ export interface S3ArtifactTransport {
     contentLength: number;
     contentType?: string;
     metadata: Record<string, string>;
+    serverSideEncryption?: 'AES256';
     ifAbsent: boolean;
     abortSignal?: AbortSignal;
   }): Promise<S3ArtifactWriteResult>;
@@ -308,6 +309,9 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     const metadata = {
       ...input.metadata,
       ...(input.contentType ? { 'Content-Type': input.contentType } : {}),
+      ...(input.serverSideEncryption
+        ? { 'x-amz-server-side-encryption': input.serverSideEncryption }
+        : {}),
       ...(input.ifAbsent ? { 'If-None-Match': '*' } : {}),
     };
     let interruption: S3ArtifactTransferAbortedError | S3ArtifactTransferTimeoutError | undefined;

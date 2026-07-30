@@ -182,6 +182,25 @@ describe('MinioS3ArtifactTransport', () => {
     );
   });
 
+  it('passes an explicit SSE-S3 requirement as a provider request header', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await transport.upload(uploadInput({ serverSideEncryption: 'AES256' }));
+
+    expect(minioClient.putObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      expect.any(Readable),
+      8,
+      expect.objectContaining({
+        'x-amz-server-side-encryption': 'AES256',
+      })
+    );
+  });
+
   it('fails before creating a client when cancellation already happened', async () => {
     const clientFactory = vi.fn(() => client());
     const abortController = new AbortController();

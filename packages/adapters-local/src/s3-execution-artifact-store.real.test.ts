@@ -326,6 +326,7 @@ async function createStore(
     new S3ExecutionArtifactStoreFactory({
       providerId,
       bucket,
+      keyPrefix: 'objects',
       region,
       maxObjectBytes: 16 * 1024 * 1024,
       maxMetadataBytes: 2 * 1024,

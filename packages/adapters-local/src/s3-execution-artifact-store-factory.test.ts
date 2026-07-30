@@ -11,6 +11,7 @@ describe('S3ExecutionArtifactStoreFactory', () => {
     registry.register(
       new S3ExecutionArtifactStoreFactory({
         bucket: 'hypha-artifacts',
+        keyPrefix: 'objects',
         region: 'us-east-1',
         now: () => '2026-07-29T00:00:00.000Z',
         transport,
@@ -25,6 +26,9 @@ describe('S3ExecutionArtifactStoreFactory', () => {
       details: {
         provider: 's3',
         versioningRequired: true,
+        keyPrefix: 'objects',
+        encryption: 'none',
+        minimumRetentionMs: 0,
         region: 'us-east-1',
       },
     });
@@ -50,6 +54,7 @@ describe('S3ExecutionArtifactStoreFactory', () => {
       new S3ExecutionArtifactStoreFactory({
         providerId: 'artifact-store.s3.custom',
         bucket: 'hypha-artifacts',
+        keyPrefix: 'objects',
         transport: fakeTransport(),
       })
     );
@@ -64,6 +69,7 @@ describe('S3ExecutionArtifactStoreFactory', () => {
       () =>
         new S3ExecutionArtifactStoreFactory({
           bucket: 'hypha-artifacts',
+          keyPrefix: 'objects',
           transport: fakeTransport(),
           transportOptions: {
             region: 'us-east-1',

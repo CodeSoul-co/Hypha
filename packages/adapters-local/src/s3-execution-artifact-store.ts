@@ -51,9 +51,12 @@ export const S3_EXECUTION_ARTIFACT_STORE_ID = 'artifact-store.s3.execution';
 export interface S3ExecutionArtifactStoreOptions {
   id?: string;
   bucket: string;
+  keyPrefix: string;
   region?: string;
   maxObjectBytes?: number;
   maxMetadataBytes?: number;
+  minimumRetentionMs?: number;
+  serverSideEncryption?: 'AES256';
   now?: () => string;
   transport?: S3ArtifactTransport;
   transportOptions?: MinioS3ArtifactTransportOptions;
@@ -68,9 +71,12 @@ export interface S3ExecutionArtifactStoreOptions {
 export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
   readonly id: string;
   private readonly bucket: string;
+  private readonly keyPrefix: string;
   private readonly region?: string;
   private readonly maxObjectBytes: number;
   private readonly maxMetadataBytes: number;
+  private readonly minimumRetentionMs: number;
+  private readonly serverSideEncryption?: 'AES256';
   private readonly now: () => string;
   private readonly transport: S3ArtifactTransport;
   private readiness?: Promise<void>;
@@ -86,11 +92,21 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
 
     this.id = options.id ?? S3_EXECUTION_ARTIFACT_STORE_ID;
     this.bucket = bucket;
+    this.keyPrefix = normalizeKeyPrefix(options.keyPrefix);
     this.region = optionalNonEmpty(options.region, 'region');
     this.maxObjectBytes = options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES;
     this.maxMetadataBytes = options.maxMetadataBytes ?? DEFAULT_MAX_METADATA_BYTES;
+    this.minimumRetentionMs = options.minimumRetentionMs ?? 0;
+    this.serverSideEncryption = options.serverSideEncryption;
     assertPositiveSafeInteger(this.maxObjectBytes, 'maxObjectBytes');
     assertPositiveSafeInteger(this.maxMetadataBytes, 'maxMetadataBytes');
+    assertNonNegativeSafeInteger(this.minimumRetentionMs, 'minimumRetentionMs');
+    if (
+      this.serverSideEncryption !== undefined &&
+      this.serverSideEncryption !== 'AES256'
+    ) {
+      throw new TypeError('serverSideEncryption is invalid.');
+    }
     this.now = options.now ?? (() => new Date().toISOString());
     this.transport = options.transport
       ? options.transport
@@ -103,7 +119,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       rangeRead: true,
       signedAccess: true,
       serverSideCopy: true,
-      encryption: false,
+      encryption: this.serverSideEncryption !== undefined,
       multipartUpload: true,
       contentAddressing: true,
     };
@@ -117,6 +133,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       'put',
       async () => {
         const request = validateArtifactStoreInput(() => validateArtifactPutRequest(input));
+        this.assertScopedObjectKey(request.objectKey);
         let staged;
         try {
           staged = await stageS3ArtifactContent(
@@ -149,6 +166,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
               request.metadata,
               this.maxMetadataBytes
             ),
+            serverSideEncryption: this.serverSideEncryption,
             ifAbsent: request.ifAbsent ?? false,
             abortSignal: options.abortSignal,
           });
@@ -242,6 +260,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     await this.operation('delete', async () => {
       const ref = validateArtifactStoreInput(() => artifactStorageRefSchema.parse(input));
       this.assertOwnedVersionedRef(ref);
+      await this.assertDeleteRetentionElapsed(ref);
       await this.transport.delete({
         bucket: this.bucket,
         key: ref.objectKey,
@@ -255,6 +274,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     return this.operation('copy', async () => {
       const request = validateArtifactStoreInput(() => artifactCopyRequestSchema.parse(input));
       this.assertOwnedVersionedRef(request.source);
+      this.assertScopedObjectKey(request.targetObjectKey);
       const sourceState = await this.requireState(request.source);
       if (request.targetObjectKey === request.source.objectKey) return request.source;
       const result = await this.transport.copy({
@@ -312,6 +332,9 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
         details: {
           provider: 's3',
           versioningRequired: true,
+          keyPrefix: this.keyPrefix,
+          encryption: this.serverSideEncryption ?? 'none',
+          minimumRetentionMs: this.minimumRetentionMs,
           ...(this.region ? { region: this.region } : {}),
         },
       };
@@ -381,6 +404,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
         false
       );
     }
+    this.assertScopedObjectKey(ref.objectKey);
     if (!ref.versionId?.trim()) {
       throw artifactStoreError(
         'ARTIFACT_INVALID_INPUT',
@@ -410,6 +434,13 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       );
     }
     requireS3ContentHash(state);
+    if (this.serverSideEncryption && state.encrypted !== true) {
+      throw artifactStoreError(
+        'ARTIFACT_VALIDATION_FAILED',
+        'S3 Artifact object is not protected by the configured server-side encryption.',
+        false
+      );
+    }
   }
 
   private async requireState(ref: ArtifactStorageRef): Promise<S3ArtifactObjectState> {
@@ -472,6 +503,49 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       throw artifactStoreError(
         'ARTIFACT_HASH_MISMATCH',
         'Copied S3 Artifact does not match its source.',
+        false
+      );
+    }
+    if (this.serverSideEncryption && result.state.encrypted !== true) {
+      throw artifactStoreError(
+        'ARTIFACT_VALIDATION_FAILED',
+        'Copied S3 Artifact is not protected by the configured server-side encryption.',
+        false
+      );
+    }
+  }
+
+  private async assertDeleteRetentionElapsed(
+    ref: ArtifactStorageRef & { versionId: string }
+  ): Promise<void> {
+    if (this.minimumRetentionMs === 0) return;
+    const state = await this.requireState(ref);
+    const createdAt = Date.parse(state.lastModifiedAt ?? '');
+    const now = Date.parse(this.now());
+    if (!Number.isFinite(createdAt) || !Number.isFinite(now)) {
+      throw artifactStoreError(
+        'ARTIFACT_VALIDATION_FAILED',
+        'S3 Artifact retention timestamps are invalid.',
+        false
+      );
+    }
+    const retainedUntil = createdAt + this.minimumRetentionMs;
+    if (now < retainedUntil) {
+      throw artifactStoreError(
+        'ARTIFACT_PERMISSION_DENIED',
+        'S3 Artifact version is still protected by the configured delete retention.',
+        false,
+        { retainedUntilAt: new Date(retainedUntil).toISOString() }
+      );
+    }
+  }
+
+  private assertScopedObjectKey(objectKey: string): void {
+    assertS3ObjectKey(objectKey);
+    if (!objectKey.startsWith(`${this.keyPrefix}/`)) {
+      throw artifactStoreError(
+        'ARTIFACT_INVALID_INPUT',
+        'S3 Artifact object key is outside the configured tenant prefix.',
         false
       );
     }
@@ -579,6 +653,42 @@ function optionalNonEmpty(value: string | undefined, name: string): string | und
 function assertPositiveSafeInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${name} must be a positive safe integer.`);
+  }
+}
+
+function assertNonNegativeSafeInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative safe integer.`);
+  }
+}
+
+function normalizeKeyPrefix(value: string): string {
+  const normalized = value?.trim().replace(/\/+$/u, '');
+  if (!normalized || normalized !== value) {
+    throw new TypeError('keyPrefix is invalid.');
+  }
+  assertS3ObjectKey(`${normalized}/scope-check`);
+  return normalized;
+}
+
+function assertS3ObjectKey(value: string): void {
+  if (
+    value.length === 0 ||
+    Buffer.byteLength(value, 'utf8') > 1024 ||
+    value.startsWith('/') ||
+    value.endsWith('/') ||
+    value.includes('\\') ||
+    value.split('/').some((segment) => segment.length === 0 || segment === '.' || segment === '..') ||
+    Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint === undefined || codePoint <= 31 || codePoint === 127;
+    })
+  ) {
+    throw artifactStoreError(
+      'ARTIFACT_INVALID_INPUT',
+      'S3 Artifact object key is invalid.',
+      false
+    );
   }
 }
 

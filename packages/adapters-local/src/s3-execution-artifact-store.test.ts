@@ -253,6 +253,63 @@ describe('S3ExecutionArtifactStore', () => {
     expect(transport.upload).not.toHaveBeenCalled();
   });
 
+  it('confines object keys to the configured tenant prefix and rejects unsafe encoding', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport);
+
+    await expect(
+      store.put(request('foreign/output.bin', Uint8Array.from([1])))
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_INVALID_INPUT' } });
+    await expect(
+      store.put(request('objects/control\u0001.bin', Uint8Array.from([1])))
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_INVALID_INPUT' } });
+    const ref = await store.put(request('objects/报告.bin', Uint8Array.from([1])));
+
+    await expect(store.head({ ...ref, objectKey: 'foreign/output.bin' })).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INVALID_INPUT' },
+    });
+    await expect(
+      store.copy({
+        operationId: 'copy:outside-prefix',
+        source: ref,
+        targetObjectKey: 'foreign/copied.bin',
+      })
+    ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_INVALID_INPUT' } });
+    expect(transport.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('enforces configured SSE and advertises encryption only when verified', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport, { serverSideEncryption: 'AES256' });
+    const ref = await store.put(request('objects/encrypted.bin', Uint8Array.from([1, 2])));
+
+    expect(transport.lastUpload?.serverSideEncryption).toBe('AES256');
+    expect(ref.encrypted).toBe(true);
+    await expect(store.capabilities()).resolves.toMatchObject({ encryption: true });
+  });
+
+  it('blocks version deletion until the configured retention interval has elapsed', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const retainingStore = createStore(transport, { minimumRetentionMs: 60_000 });
+    const ref = await retainingStore.put(
+      request('objects/retained.bin', Uint8Array.from([1]))
+    );
+
+    await expect(retainingStore.delete(ref)).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_PERMISSION_DENIED',
+        details: { retainedUntilAt: '2026-07-28T00:01:00.000Z' },
+      },
+    });
+    expect(transport.delete).not.toHaveBeenCalled();
+
+    const elapsedStore = createStore(transport, {
+      minimumRetentionMs: 60_000,
+      now: () => '2026-07-28T00:01:00.000Z',
+    });
+    await expect(elapsedStore.delete(ref)).resolves.toBeUndefined();
+  });
+
   it('fails closed when bucket versioning or uploaded version identity is unavailable', async () => {
     const unversionedTransport = new FakeS3ArtifactTransport();
     unversionedTransport.versioningEnabled = false;
@@ -333,7 +390,14 @@ describe('S3ExecutionArtifactStore', () => {
     await expect(store.health()).resolves.toEqual({
       status: 'healthy',
       checkedAt: fixedNow,
-      details: { provider: 's3', versioningRequired: true, region: 'us-east-1' },
+      details: {
+        provider: 's3',
+        versioningRequired: true,
+        keyPrefix: 'objects',
+        encryption: 'none',
+        minimumRetentionMs: 0,
+        region: 'us-east-1',
+      },
     });
     await store.close();
     await store.close();
@@ -412,7 +476,7 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
       versionId,
       lastModifiedAt: fixedNow,
       metadata: decodeMetadata(input.metadata),
-      encrypted: false,
+      encrypted: input.serverSideEncryption !== undefined,
     };
     this.putVersion(input.key, state);
     this.afterUpload?.();
@@ -574,6 +638,7 @@ function createStore(
   return new S3ExecutionArtifactStore({
     id: 'artifact-store.s3.test',
     bucket: 'hypha-artifacts',
+    keyPrefix: 'objects',
     region: 'us-east-1',
     now: () => fixedNow,
     transport,
