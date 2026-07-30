@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import type { CommandExecutionStatus } from '../../contracts/command-execution';
 import type {
   CommandExecutionEventPayload,
   CommandExecutionFrameworkEventType,
@@ -81,6 +82,14 @@ const unsuccessfulCommandExecutionStatuses = [
   'resource_exceeded',
   'quarantined',
 ] as const;
+const commandExecutionErrorCodesByStatus: Partial<
+  Record<CommandExecutionStatus, readonly string[]>
+> = {
+  cancelled: ['EXECUTION_CANCELLED'],
+  timed_out: ['EXECUTION_TIMEOUT', 'EXECUTION_IDLE_TIMEOUT'],
+  oom_killed: ['EXECUTION_OOM_KILLED'],
+  resource_exceeded: ['EXECUTION_RESOURCE_EXCEEDED', 'EXECUTION_OUTPUT_LIMIT'],
+} as const;
 
 const executionEventPayloadBaseObjectSchema = z
   .object({
@@ -146,6 +155,20 @@ export const commandExecutionEventPayloadSchema = executionEventPayloadBaseObjec
         code: z.ZodIssueCode.custom,
         path: ['error'],
         message: 'is required for a non-success terminal command execution',
+      });
+    }
+    const expectedErrorCodes = value.status
+      ? commandExecutionErrorCodesByStatus[value.status]
+      : undefined;
+    if (
+      expectedErrorCodes &&
+      value.error &&
+      !expectedErrorCodes.includes(value.error.code)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error', 'code'],
+        message: `must match command execution status ${value.status}`,
       });
     }
   }) satisfies ZodType<CommandExecutionEventPayload>;
@@ -354,6 +377,20 @@ export const commandExecutionEventPayloadJsonSchema: JsonSchema = {
         required: ['error'],
       },
     },
+    ...Object.entries(commandExecutionErrorCodesByStatus).map(([status, errorCodes]) => ({
+      if: { properties: { status: { const: status } }, required: ['status'] },
+      then: {
+        properties: {
+          error: {
+            ...normalizedExecutionErrorJsonSchema,
+            properties: {
+              ...(normalizedExecutionErrorJsonSchema.properties ?? {}),
+              code: { enum: [...errorCodes] },
+            },
+          },
+        },
+      },
+    })),
   ],
 };
 

@@ -215,6 +215,29 @@ describe('Execution lifecycle Event contracts', () => {
     }
   );
 
+  it.each(['cancelled', 'timed_out', 'oom_killed', 'resource_exceeded'] as const)(
+    'requires the public error code to match %s status',
+    (status) => {
+      const payload = {
+        executionId: 'execution.example',
+        status,
+        error: {
+          code: 'EXECUTION_INTERNAL_ERROR',
+          message: 'wrong terminal error code',
+          retryable: false,
+        },
+      };
+
+      expect(commandExecutionEventPayloadSchema.safeParse(payload).success).toBe(false);
+
+      const ajv = new Ajv({ strict: true, allErrors: true });
+      addFormats(ajv);
+      expect(
+        ajv.validate(executionEventJsonSchemas.CommandExecutionEventPayload, payload)
+      ).toBe(false);
+    }
+  );
+
   it('requires output truncation events to name the affected stream', () => {
     expect(() =>
       validateExecutionEventPayload('command.execution.output.truncated', {
