@@ -142,6 +142,35 @@ describe('local Workspace mutation capture', () => {
     );
   });
 
+  it('fails closed when the Workspace root is replaced during capture', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-root-identity-'));
+    const displacedRoot = `${root}.displaced`;
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const originalLstat = fs.lstat.bind(fs);
+    let rootStats = 0;
+    const lstat = vi.spyOn(fs, 'lstat');
+    lstat.mockImplementation(
+      (async (candidate, options) => {
+        if (path.resolve(String(candidate)) === path.resolve(root) && ++rootStats === 2) {
+          await fs.rename(root, displacedRoot);
+          await fs.mkdir(root);
+          await fs.writeFile(path.join(root, 'result.txt'), 'result');
+        }
+        return originalLstat(candidate, options);
+      }) as typeof fs.lstat
+    );
+
+    try {
+      await expect(captureLocalWorkspaceSnapshot(root)).rejects.toBeInstanceOf(
+        LocalWorkspaceSnapshotSourceChangedError
+      );
+    } finally {
+      lstat.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(displacedRoot, { recursive: true, force: true });
+    }
+  });
+
   it('counts directories toward the bounded snapshot entry budget', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-local-directory-bounds-'));
     await fs.mkdir(path.join(root, 'one'));

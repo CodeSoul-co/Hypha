@@ -756,10 +756,77 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     expect(records.every(({ record }) => record.status !== 'final')).toBe(true);
   });
 
+  it('fails closed when the Workspace changes after the manifest draft is created', async () => {
+    const root = await workspaceRoot('late-revision');
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const fixture = createFixture(root);
+    const originalCreate = fixture.manager.create.bind(fixture.manager);
+    vi.spyOn(fixture.manager, 'create').mockImplementationOnce(async (request, options) => {
+      const draft = await originalCreate(request, options);
+      await fs.writeFile(path.join(root, 'late.txt'), 'late');
+      return draft;
+    });
+    const service = createService(
+      new LocalWorkspaceAdapter({ workspaceRoot: root }),
+      fixture.manager
+    );
+
+    await expect(service.createFullSnapshot(snapshotRequest())).rejects.toMatchObject({
+      normalizedError: { code: 'EXECUTION_REVISION_CONFLICT' },
+    });
+    const records = await fixture.repository.list();
+    expect(
+      records.filter(({ record }) => record.name.endsWith('.json')).map(({ record }) => record.status)
+    ).toEqual(['draft']);
+  });
+
+  it('fails closed when the Workspace root is replaced by an equivalent tree', async () => {
+    const root = await workspaceRoot('root-identity');
+    await fs.writeFile(path.join(root, 'result.txt'), 'result');
+    const displacedRoot = `${root}.displaced`;
+    roots.push(displacedRoot);
+    const fixture = createFixture(root);
+    const originalCreate = fixture.manager.create.bind(fixture.manager);
+    vi.spyOn(fixture.manager, 'create').mockImplementationOnce(async (request, options) => {
+      const draft = await originalCreate(request, options);
+      await fs.rename(root, displacedRoot);
+      await fs.mkdir(root);
+      await fs.writeFile(path.join(root, 'result.txt'), 'result');
+      return draft;
+    });
+    const service = createService(
+      new LocalWorkspaceAdapter({ workspaceRoot: root }),
+      fixture.manager
+    );
+
+    await expect(service.createFullSnapshot(snapshotRequest())).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_REVISION_CONFLICT',
+        details: {
+          expectedWorkspaceSnapshotHash: expect.stringMatching(/^sha256:/u),
+          actualWorkspaceSnapshotHash: expect.stringMatching(/^sha256:/u),
+        },
+      },
+    });
+    const records = await fixture.repository.list();
+    expect(
+      records.filter(({ record }) => record.name.endsWith('.json')).map(({ record }) => record.status)
+    ).toEqual(['draft']);
+  });
+
   it('rejects an external symlink target before creating Artifacts', async () => {
     const root = await workspaceRoot('link');
     const unsafeSnapshot = {
       rootPath: root,
+      rootIdentity: {
+        dev: 0n,
+        ino: 0n,
+        mode: 0n,
+        nlink: 1n,
+        size: 0n,
+        mtimeNs: 0n,
+        ctimeNs: 0n,
+      },
       entries: new Map([
         [
           'outside-link',

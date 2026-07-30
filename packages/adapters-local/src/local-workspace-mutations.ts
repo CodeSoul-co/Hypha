@@ -6,8 +6,11 @@ import { performance } from 'node:perf_hooks';
 import type { FileMutation } from '@hypha/core';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 import {
+  directoryIdentity,
   hasSingleLinkRegularFileIdentity,
   sameSingleLinkRegularFileIdentity,
+  sameWorkspaceDirectoryIdentity,
+  type LocalWorkspaceDirectoryIdentity,
 } from './local-workspace-file-identity';
 
 export interface LocalWorkspaceEntry {
@@ -26,6 +29,7 @@ export interface LocalWorkspaceDirectoryEntry {
 
 export interface LocalWorkspaceSnapshot {
   rootPath: string;
+  rootIdentity: LocalWorkspaceDirectoryIdentity;
   entries: ReadonlyMap<string, LocalWorkspaceEntry>;
   directories: ReadonlyMap<string, LocalWorkspaceDirectoryEntry>;
   totalBytes: number;
@@ -79,6 +83,11 @@ export async function captureLocalWorkspaceSnapshot(
     }
   };
   assertCaptureActive();
+  const rootBefore = await fs.lstat(root, { bigint: true });
+  assertCaptureActive();
+  if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink()) {
+    throw new LocalWorkspaceSnapshotSourceChangedError();
+  }
   const realRoot = await fs.realpath(root);
   assertCaptureActive();
   const controlPlaneGuard = new WorkspaceControlPlaneGuard();
@@ -165,8 +174,19 @@ export async function captureLocalWorkspaceSnapshot(
 
   await walk(root);
   assertCaptureActive();
+  const rootAfter = await fs.lstat(root, { bigint: true });
+  assertCaptureActive();
+  const realRootAfter = await fs.realpath(root);
+  assertCaptureActive();
+  if (
+    realRootAfter !== realRoot ||
+    !sameWorkspaceDirectoryIdentity(rootBefore, rootAfter)
+  ) {
+    throw new LocalWorkspaceSnapshotSourceChangedError();
+  }
   return {
     rootPath: root,
+    rootIdentity: directoryIdentity(rootBefore),
     entries,
     directories,
     totalBytes,

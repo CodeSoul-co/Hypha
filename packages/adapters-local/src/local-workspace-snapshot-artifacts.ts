@@ -16,6 +16,7 @@ import {
   validateWorkspaceSnapshotRequest,
 } from '@hypha/core';
 import { executionProviderError } from './execution-provider-error';
+import { sameWorkspaceRootIdentity } from './local-workspace-file-identity';
 import { type LocalWorkspaceEntry, type LocalWorkspaceSnapshot } from './local-workspace-mutations';
 import type { LocalWorkspaceAdapter } from './local-workspace-adapter';
 import {
@@ -129,17 +130,7 @@ export class LocalWorkspaceSnapshotArtifactService {
       this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
       const verified = await this.workspace.capture({ abortSignal: cancellation.signal });
       this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
-      if (verified.sourceTreeHash !== captured.sourceTreeHash) {
-        throw executionProviderError(
-          'EXECUTION_REVISION_CONFLICT',
-          'Workspace changed while the full snapshot was being persisted.',
-          true,
-          {
-            expectedWorkspaceSnapshotHash: captured.sourceTreeHash,
-            actualWorkspaceSnapshotHash: verified.sourceTreeHash,
-          }
-        );
-      }
+      this.assertWorkspaceUnchanged(captured, verified);
       this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
 
       const finalizedFiles = new Map<string, ArtifactRecord>();
@@ -206,6 +197,11 @@ export class LocalWorkspaceSnapshotArtifactService {
       );
       this.assertArtifactContent(draftManifest, hashBytes(content), content.byteLength);
       this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      const finalVerification = await this.workspace.capture({
+        abortSignal: cancellation.signal,
+      });
+      this.assertSnapshotPersistenceActive(persistenceStartedAt, cancellation);
+      this.assertWorkspaceUnchanged(captured, finalVerification);
       const finalizedManifest = await this.artifacts.finalize({
         operationId: operationId(request.operationId, 'finalize-manifest'),
         principal: request.principal,
@@ -229,6 +225,27 @@ export class LocalWorkspaceSnapshotArtifactService {
     } finally {
       cancellation.dispose();
     }
+  }
+
+  private assertWorkspaceUnchanged(
+    expected: LocalWorkspaceSnapshot,
+    actual: LocalWorkspaceSnapshot
+  ): void {
+    if (
+      actual.sourceTreeHash === expected.sourceTreeHash &&
+      sameWorkspaceRootIdentity(expected.rootIdentity, actual.rootIdentity)
+    ) {
+      return;
+    }
+    throw executionProviderError(
+      'EXECUTION_REVISION_CONFLICT',
+      'Workspace changed while the full snapshot was being persisted.',
+      true,
+      {
+        expectedWorkspaceSnapshotHash: expected.sourceTreeHash,
+        actualWorkspaceSnapshotHash: actual.sourceTreeHash,
+      }
+    );
   }
 
   async restoreFullSnapshot(
