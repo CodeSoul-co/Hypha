@@ -97,6 +97,55 @@ describe('SQLite Execution Store durable worker integration', () => {
     await expect(store.get(secondClaim.id)).resolves.toEqual(committed);
   });
 
+  it('fails closed before taking over expired work when no Provider reconciler is configured', async () => {
+    const first = worker('worker.one');
+    const firstClaim = requiredRecord(await first.claimNext());
+    now = '2026-07-16T00:00:03.000Z';
+    const recovery = workerWithoutReconciler('worker.recovery');
+
+    await expect(recovery.claimNext()).rejects.toMatchObject({
+      code: 'EXECUTION_WORKER_RECONCILIATION_REQUIRED',
+      reason: 'recovery_reconciler_missing',
+    });
+    await expect(store.get(firstClaim.id)).resolves.toMatchObject({
+      revision: firstClaim.revision,
+      lease: firstClaim.lease,
+    });
+  });
+
+  it('rejects unknown Provider state and a stale recovery assessment without advancing fencing', async () => {
+    const first = worker('worker.one');
+    const firstClaim = requiredRecord(await first.claimNext());
+    now = '2026-07-16T00:00:03.000Z';
+    const unknown = worker('worker.unknown', async (record) => ({
+      executionId: record.id,
+      recordRevision: record.revision,
+      disposition: 'provider_state_unknown',
+      assessedAt: now,
+      reason: 'Provider status could not be established.',
+    }));
+
+    await expect(unknown.claimNext()).rejects.toMatchObject({
+      code: 'EXECUTION_WORKER_RECONCILIATION_REQUIRED',
+      reason: 'provider_state_unknown',
+    });
+
+    const stale = worker('worker.stale', async (record) => ({
+      executionId: record.id,
+      recordRevision: record.revision - 1,
+      disposition: 'not_started',
+      assessedAt: now,
+    }));
+    await expect(stale.claimNext()).rejects.toMatchObject({
+      code: 'EXECUTION_WORKER_RECONCILIATION_REQUIRED',
+      reason: 'recovery_assessment_identity_mismatch',
+    });
+    await expect(store.get(firstClaim.id)).resolves.toMatchObject({
+      revision: firstClaim.revision,
+      lease: firstClaim.lease,
+    });
+  });
+
   it('persists terminal Provider evidence before later commit and survives restart', async () => {
     const first = worker('worker.one');
     const claimed = requiredRecord(await first.claimNext());
@@ -279,7 +328,28 @@ describe('SQLite Execution Store durable worker integration', () => {
     expect(record?.lease).toBeUndefined();
   });
 
-  function worker(workerId: string): DurableExecutionWorker {
+  function worker(
+    workerId: string,
+    assess: NonNullable<
+      ConstructorParameters<typeof DurableExecutionWorker>[0]['recoveryReconciler']
+    >['assess'] = async (record) => ({
+      executionId: record.id,
+      recordRevision: record.revision,
+      disposition: 'not_started',
+      assessedAt: now,
+    })
+  ): DurableExecutionWorker {
+    return new DurableExecutionWorker({
+      store,
+      workerId,
+      recoveryReconciler: { assess },
+      leaseTtlMs: 1000,
+      now: () => now,
+      leaseId: (executionId) => `lease:${workerId}:${executionId}:${now}`,
+    });
+  }
+
+  function workerWithoutReconciler(workerId: string): DurableExecutionWorker {
     return new DurableExecutionWorker({
       store,
       workerId,

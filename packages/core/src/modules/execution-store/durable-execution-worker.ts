@@ -8,10 +8,11 @@ import type {
 import type {
   ExecutionLeaseGuard,
   ExecutionRecord,
+  ExecutionRecoveryAssessment,
   ExecutionStore,
 } from '../../contracts/execution-store';
 import { executionReceiptSchema, validateCommandExecutionResult } from '../command-execution';
-import { validateExecutionRecord } from './index';
+import { validateExecutionRecord, validateExecutionRecoveryAssessment } from './index';
 
 const terminalStatuses = new Set<CommandExecutionStatus>([
   'cancelled',
@@ -32,10 +33,15 @@ const claimConflictCodes = new Set([
 export interface DurableExecutionWorkerOptions {
   store: ExecutionStore;
   workerId: string;
+  recoveryReconciler?: DurableExecutionRecoveryReconciler;
   leaseTtlMs?: number;
   claimBatchSize?: number;
   now?: () => string;
   leaseId?: (executionId: string, workerId: string) => string;
+}
+
+export interface DurableExecutionRecoveryReconciler {
+  assess(record: ExecutionRecord): Promise<ExecutionRecoveryAssessment>;
 }
 
 /**
@@ -52,6 +58,7 @@ export class DurableExecutionWorker {
   private readonly claimBatchSize: number;
   private readonly now: () => string;
   private readonly leaseId: (executionId: string, workerId: string) => string;
+  private readonly recoveryReconciler?: DurableExecutionRecoveryReconciler;
   private acceptingClaims = true;
 
   constructor(options: DurableExecutionWorkerOptions) {
@@ -60,6 +67,7 @@ export class DurableExecutionWorker {
     this.leaseTtlMs = positiveInteger(options.leaseTtlMs ?? 30_000, 'leaseTtlMs');
     this.claimBatchSize = positiveInteger(options.claimBatchSize ?? 32, 'claimBatchSize');
     this.now = options.now ?? (() => new Date().toISOString());
+    this.recoveryReconciler = options.recoveryReconciler;
     this.leaseId =
       options.leaseId ??
       ((executionId, workerId) => `lease:${workerId}:${executionId}:${randomUUID()}`);
@@ -91,6 +99,7 @@ export class DurableExecutionWorker {
     for (const candidateValue of candidates) {
       if (!this.acceptingClaims) return null;
       const candidate = validateExecutionRecord(candidateValue);
+      await this.assertRecoverySafe(candidate);
       const acquiredAt = timestampAfter(candidate.updatedAt, observedAt);
       const requestedLeaseId = requiredIdentifier(
         this.leaseId(candidate.id, this.workerId),
@@ -115,6 +124,29 @@ export class DurableExecutionWorker {
       }
     }
     return null;
+  }
+
+  private async assertRecoverySafe(record: ExecutionRecord): Promise<void> {
+    if (record.status === 'queued' || record.terminalReceipt) return;
+    if (!this.recoveryReconciler) {
+      throw new ExecutionWorkerReconciliationRequiredError(
+        record.id,
+        'recovery_reconciler_missing'
+      );
+    }
+
+    const assessment = validateExecutionRecoveryAssessment(
+      await this.recoveryReconciler.assess(record)
+    );
+    if (assessment.executionId !== record.id || assessment.recordRevision !== record.revision) {
+      throw new ExecutionWorkerReconciliationRequiredError(
+        record.id,
+        'recovery_assessment_identity_mismatch'
+      );
+    }
+    if (assessment.disposition !== 'not_started') {
+      throw new ExecutionWorkerReconciliationRequiredError(record.id, assessment.disposition);
+    }
   }
 
   async renew(recordValue: ExecutionRecord): Promise<ExecutionRecord> {
@@ -267,6 +299,17 @@ export class ExecutionWorkerLeaseLostError extends Error {
   constructor(executionId: string, workerId: string) {
     super(`Worker ${workerId} no longer owns the lease for Execution ${executionId}.`);
     this.name = 'ExecutionWorkerLeaseLostError';
+  }
+}
+
+export class ExecutionWorkerReconciliationRequiredError extends Error {
+  readonly code = 'EXECUTION_WORKER_RECONCILIATION_REQUIRED';
+  readonly reason: string;
+
+  constructor(executionId: string, reason: string) {
+    super(`Execution ${executionId} requires Provider reconciliation before worker takeover.`);
+    this.name = 'ExecutionWorkerReconciliationRequiredError';
+    this.reason = reason;
   }
 }
 
