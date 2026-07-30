@@ -39,6 +39,23 @@ export function validateArtifactManagerInput<T>(validate: () => T): T {
   }
 }
 
+export function validateArtifactStoreOutput<T>(validate: () => T): T {
+  try {
+    return validate();
+  } catch (error) {
+    if (error instanceof ArtifactManagerError) throw error;
+    if (error instanceof ZodError) {
+      throw artifactManagerError(
+        'ARTIFACT_INTERNAL_ERROR',
+        'Artifact Store response failed contract validation.',
+        false,
+        { issues: error.issues }
+      );
+    }
+    throw error;
+  }
+}
+
 export function normalizedArtifactErrorCode(
   error: unknown
 ): NormalizedArtifactError['code'] | undefined {

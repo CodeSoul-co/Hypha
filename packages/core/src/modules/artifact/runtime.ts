@@ -37,6 +37,11 @@ import {
 } from '../../contracts/artifact-record-repository';
 import { validateArtifactProfileSpec, validateArtifactRecord } from './index';
 import {
+  validateArtifactContent,
+  validateArtifactDownloadAccess,
+  validateArtifactStoreCapabilities,
+} from './store';
+import {
   validateArtifactCreateRequest,
   validateArtifactCreateDownloadAccessRequest,
   validateArtifactFromWorkspaceRequest,
@@ -54,6 +59,7 @@ import {
   ArtifactManagerError,
   artifactManagerError,
   validateArtifactManagerInput,
+  validateArtifactStoreOutput,
 } from './manager-error';
 import {
   assertCreateAccess,
@@ -309,7 +315,7 @@ export class DefaultArtifactManager implements ArtifactManager {
         'Artifact profile does not allow byte-range reads.'
       );
     }
-    const content = await this.requireStore(profile).get(
+    const storeContent = await this.requireStore(profile).get(
       {
         ref: stored.record.storageRef,
         range: request.range,
@@ -319,6 +325,7 @@ export class DefaultArtifactManager implements ArtifactManager {
       },
       options
     );
+    const content = validateArtifactStoreOutput(() => validateArtifactContent(storeContent));
     return { record: stored.record, content };
   }
 
@@ -364,19 +371,23 @@ export class DefaultArtifactManager implements ArtifactManager {
     }
 
     const store = this.requireStore(profile);
-    const capabilities = await store.capabilities();
+    const storeCapabilities = await store.capabilities();
+    const capabilities = validateArtifactStoreOutput(() =>
+      validateArtifactStoreCapabilities(storeCapabilities)
+    );
     if (!capabilities.signedAccess || !store.createDownloadAccess) {
       throw artifactManagerError(
         'ARTIFACT_DOWNLOAD_FAILED',
         `Artifact Store ${store.id} does not support signed download access.`
       );
     }
-    return store.createDownloadAccess({
+    const downloadAccess = await store.createDownloadAccess({
       ref: stored.record.storageRef,
       expiresInSeconds,
       ...(stored.record.mimeType ? { responseMimeType: stored.record.mimeType } : {}),
       responseFilename: request.responseFilename ?? stored.record.name,
     });
+    return validateArtifactStoreOutput(() => validateArtifactDownloadAccess(downloadAccess));
   }
 
   async list(input: ArtifactListRequest): Promise<ArtifactRecord[]> {

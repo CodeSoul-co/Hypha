@@ -6,7 +6,12 @@ import type {
   ArtifactStorageRef,
   ArtifactStoreProvider,
 } from '../..';
-import { artifactManagerError, normalizedArtifactErrorCode } from './manager-error';
+import { validateArtifactObjectMetadata, validateArtifactStorageRef } from './store';
+import {
+  artifactManagerError,
+  normalizedArtifactErrorCode,
+  validateArtifactStoreOutput,
+} from './manager-error';
 
 export interface PersistArtifactContentRequest {
   operationId: string;
@@ -45,18 +50,21 @@ export async function persistArtifactContent(
   const stagingKey = `staging/${safeObjectSegment(request.operationId)}/${safeObjectSegment(
     request.nonce
   )}`;
-  const stagingRef = await request.store.put(
-    {
-      operationId: request.operationId,
-      objectKey: stagingKey,
-      content: request.content,
-      expectedContentHash: request.expectedContentHash,
-      sizeBytes: request.expectedSizeBytes,
-      mimeType: request.mimeType,
-      metadata: { 'hypha-operation-id': request.operationId },
-      ifAbsent: true,
-    },
-    options
+  const stagingRef = validateStoreStorageRef(
+    request.store,
+    await request.store.put(
+      {
+        operationId: request.operationId,
+        objectKey: stagingKey,
+        content: request.content,
+        expectedContentHash: request.expectedContentHash,
+        sizeBytes: request.expectedSizeBytes,
+        mimeType: request.mimeType,
+        metadata: { 'hypha-operation-id': request.operationId },
+        ifAbsent: true,
+      },
+      options
+    )
   );
 
   try {
@@ -87,26 +95,29 @@ async function promoteArtifactObject(
 ): Promise<PromotedArtifactObject> {
   const candidate = { ...stagingRef, objectKey: finalKey, versionId: undefined, etag: undefined };
   if (request.profile.contentAddressing.deduplicate) {
-    const existing = await request.store.head(candidate);
+    const existing = validateOptionalObjectMetadata(await request.store.head(candidate));
     if (existing) {
       assertSameContent(existing, staged);
       return { storageRef: metadataRef(candidate, existing), deduplicated: true };
     }
   }
   try {
-    const storageRef = await request.store.copy({
-      operationId: `${request.operationId}:promote`,
-      source: stagingRef,
-      targetObjectKey: finalKey,
-      ifAbsent: true,
-    });
+    const storageRef = validateStoreStorageRef(
+      request.store,
+      await request.store.copy({
+        operationId: `${request.operationId}:promote`,
+        source: stagingRef,
+        targetObjectKey: finalKey,
+        ifAbsent: true,
+      })
+    );
     return { storageRef, deduplicated: false };
   } catch (error) {
     if (
       request.profile.contentAddressing.deduplicate &&
       normalizedArtifactErrorCode(error) === 'ARTIFACT_VERSION_CONFLICT'
     ) {
-      const existing = await request.store.head(candidate);
+      const existing = validateOptionalObjectMetadata(await request.store.head(candidate));
       if (existing) {
         assertSameContent(existing, staged);
         return { storageRef: metadataRef(candidate, existing), deduplicated: true };
@@ -120,7 +131,7 @@ async function requireObjectMetadata(
   store: ArtifactStoreProvider,
   ref: ArtifactStorageRef
 ): Promise<ArtifactObjectMetadata> {
-  const metadata = await store.head(ref);
+  const metadata = validateOptionalObjectMetadata(await store.head(ref));
   if (!metadata) {
     throw artifactManagerError(
       'ARTIFACT_UPLOAD_FAILED',
@@ -129,6 +140,30 @@ async function requireObjectMetadata(
     );
   }
   return metadata;
+}
+
+function validateOptionalObjectMetadata(
+  input: ArtifactObjectMetadata | null
+): ArtifactObjectMetadata | null {
+  return input === null
+    ? null
+    : validateArtifactStoreOutput(() => validateArtifactObjectMetadata(input));
+}
+
+function validateStoreStorageRef(
+  store: ArtifactStoreProvider,
+  input: ArtifactStorageRef
+): ArtifactStorageRef {
+  const ref = validateArtifactStoreOutput(() => validateArtifactStorageRef(input));
+  if (ref.storeId !== store.id) {
+    throw artifactManagerError(
+      'ARTIFACT_INTERNAL_ERROR',
+      'Artifact Store returned a storage reference owned by a different Store.',
+      false,
+      { expectedStoreId: store.id, actualStoreId: ref.storeId }
+    );
+  }
+  return ref;
 }
 
 function assertProfileSize(profile: ArtifactProfileSpec, sizeBytes: number): void {

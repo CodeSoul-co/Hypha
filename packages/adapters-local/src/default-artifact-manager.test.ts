@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type {
   ArtifactCreateRequest,
+  ArtifactContent,
   ArtifactDownloadAccess,
   ArtifactDownloadAccessRequest,
   ArtifactGetRequest,
   ArtifactOperationOptions,
+  ArtifactObjectMetadata,
   ArtifactProfileSpec,
   ArtifactPutRequest,
   ArtifactStorageRef,
@@ -181,6 +183,70 @@ describe('DefaultArtifactManager', () => {
         expiresInSeconds: 301,
       })
     ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+  });
+
+  it.each(['put', 'head', 'copy'] as const)(
+    'fails closed when the Artifact Store returns an invalid %s result',
+    async (invalidOutput) => {
+      const store = new InvalidOutputArtifactStore({
+        id: 'artifact-store.test',
+        signedAccess: false,
+      });
+      store.invalidOutput = invalidOutput;
+      const fixture = createFixture({ store });
+
+      await expect(
+        fixture.manager.create(
+          createRequest(`invalid-${invalidOutput}`, new TextEncoder().encode(invalidOutput))
+        )
+      ).rejects.toMatchObject({
+        normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+      });
+    }
+  );
+
+  it('fails closed when the Artifact Store returns invalid read content', async () => {
+    const store = new InvalidOutputArtifactStore({
+      id: 'artifact-store.test',
+      signedAccess: false,
+    });
+    const fixture = createFixture({ store });
+    const record = await fixture.manager.create(
+      createRequest('invalid-read', new TextEncoder().encode('read'))
+    );
+    store.invalidOutput = 'get';
+
+    await expect(
+      fixture.manager.read({ principal: owner, artifactId: record.id })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+    });
+  });
+
+  it('fails closed when signed-access Store outputs violate their Runtime Schemas', async () => {
+    const store = new InvalidOutputArtifactStore({
+      id: 'artifact-store.test',
+      signedAccess: true,
+    });
+    const fixture = createFixture({ store });
+    const record = await fixture.manager.create(
+      createRequest('invalid-download', new TextEncoder().encode('download'))
+    );
+    const request = {
+      operationId: 'invalid-download-access',
+      principal: owner,
+      artifactId: record.id,
+    };
+
+    store.invalidOutput = 'capabilities';
+    await expect(fixture.manager.createDownloadAccess(request)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+    });
+
+    store.invalidOutput = 'download';
+    await expect(fixture.manager.createDownloadAccess(request)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+    });
   });
 
   it('fails closed when the Artifact Store cannot issue signed access', async () => {
@@ -511,13 +577,16 @@ function createFixture(
   overrides: {
     retainFinal?: boolean;
     signedAccess?: boolean;
+    store?: SignedInMemoryArtifactStore;
     workspaceReader?: ConstructorParameters<typeof DefaultArtifactManager>[0]['workspaceReader'];
   } = {}
 ) {
-  const store = new SignedInMemoryArtifactStore({
-    id: 'artifact-store.test',
-    signedAccess: overrides.signedAccess ?? false,
-  });
+  const store =
+    overrides.store ??
+    new SignedInMemoryArtifactStore({
+      id: 'artifact-store.test',
+      signedAccess: overrides.signedAccess ?? false,
+    });
   const repository = new InMemoryArtifactRecordRepository();
   const profile: ArtifactProfileSpec = {
     id: 'artifact-profile.test',
@@ -603,6 +672,58 @@ class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
       url: `https://artifacts.example/${encodeURIComponent(request.ref.objectKey)}`,
       expiresAt: new Date(Date.UTC(2026, 6, 18, 0, 0, request.expiresInSeconds)).toISOString(),
     };
+  }
+}
+
+class InvalidOutputArtifactStore extends SignedInMemoryArtifactStore {
+  invalidOutput?: 'put' | 'head' | 'copy' | 'get' | 'capabilities' | 'download';
+
+  override async capabilities(): Promise<ArtifactStoreCapabilities> {
+    const capabilities = await super.capabilities();
+    return this.invalidOutput === 'capabilities'
+      ? new Proxy(capabilities, {
+          get(target, property, receiver) {
+            return property === 'signedAccess'
+              ? 'invalid'
+              : Reflect.get(target, property, receiver);
+          },
+        })
+      : capabilities;
+  }
+
+  override async put(
+    request: ArtifactPutRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactStorageRef> {
+    const ref = await super.put(request, options);
+    return this.invalidOutput === 'put' ? { ...ref, storeId: '' } : ref;
+  }
+
+  override async head(ref: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null> {
+    const metadata = await super.head(ref);
+    return this.invalidOutput === 'head' && metadata
+      ? { ...metadata, contentHash: 'invalid' }
+      : metadata;
+  }
+
+  override async copy(request: Parameters<InMemoryExecutionArtifactStore['copy']>[0]) {
+    const ref = await super.copy(request);
+    return this.invalidOutput === 'copy' ? { ...ref, storeId: 'artifact-store.foreign' } : ref;
+  }
+
+  override async get(
+    request: ArtifactGetRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactContent> {
+    const content = await super.get(request, options);
+    return this.invalidOutput === 'get' ? { ...content, contentHash: 'invalid' } : content;
+  }
+
+  override async createDownloadAccess(
+    request: ArtifactDownloadAccessRequest
+  ): Promise<ArtifactDownloadAccess> {
+    const access = await super.createDownloadAccess(request);
+    return this.invalidOutput === 'download' ? { ...access, url: 'not-a-url' } : access;
   }
 }
 
