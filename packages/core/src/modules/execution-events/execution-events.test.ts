@@ -126,6 +126,47 @@ describe('Execution lifecycle Event contracts', () => {
     expect(event.operationId).toBe('operation.command.example');
   });
 
+  it('preserves Framework correlation and idempotency identities across public contracts', () => {
+    const event = createExecutionFrameworkEvent({
+      id: 'event.command.queued.correlated',
+      type: 'command.execution.queued',
+      workspaceId: 'workspace.example',
+      runId: 'run.example',
+      correlationId: 'correlation.execution.example',
+      causationId: 'event.command.requested.example',
+      parentEventId: 'event.run.started.example',
+      idempotencyKey: 'execution.example:queued',
+      timestamp: '2026-07-16T00:00:00.000Z',
+      payload: {
+        executionId: 'execution.example',
+        workspaceId: 'workspace.example',
+        status: 'queued',
+      },
+    });
+    expect(event).toMatchObject({
+      correlationId: 'correlation.execution.example',
+      causationId: 'event.command.requested.example',
+      parentEventId: 'event.run.started.example',
+      idempotencyKey: 'execution.example:queued',
+    });
+
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    expect(ajv.validate(executionEventJsonSchemas.ExecutionFrameworkEvent, event)).toBe(true);
+  });
+
+  it.each(['correlationId', 'causationId', 'parentEventId', 'idempotencyKey'] as const)(
+    'rejects an empty Framework %s in runtime and public contracts',
+    (field) => {
+      const event = { ...commandExecutionEventExample, [field]: '' };
+      expect(() => validateExecutionFrameworkEvent(event)).toThrow();
+
+      const ajv = new Ajv({ strict: true, allErrors: true });
+      addFormats(ajv);
+      expect(ajv.validate(executionEventJsonSchemas.ExecutionFrameworkEvent, event)).toBe(false);
+    }
+  );
+
   it('requires create-request identity before a Sandbox ID exists', () => {
     expect(
       validateExecutionEventPayload('sandbox.create.requested', {
