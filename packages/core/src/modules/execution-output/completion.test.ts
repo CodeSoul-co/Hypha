@@ -278,9 +278,18 @@ describe('DurableExecutionTerminalEventCoordinator', () => {
     await expect(coordinator.append(completed)).resolves.toMatchObject({
       type: 'command.execution.completed',
     });
+    const released = {
+      ...completed,
+      revision: completed.revision + 1,
+      lease: undefined,
+    };
+    await expect(coordinator.append(released)).resolves.toMatchObject({
+      type: 'command.execution.completed',
+    });
 
-    expect(calls).toEqual(['event', 'event']);
+    expect(calls).toEqual(['event', 'event', 'event']);
     expect(requests[1]).toEqual(requests[0]);
+    expect(requests[2]).toEqual(requests[0]);
     expect(requests[0]).toMatchObject({
       executionRevision: 2,
       idempotencyKey: 'execution-terminal-event:execution.example:2',
@@ -357,6 +366,30 @@ describe('DurableExecutionTerminalEventCoordinator', () => {
 
     await expect(coordinator.append(completed)).rejects.toThrow(error);
   });
+
+  it.each([
+    ['artifactRefs', []],
+    ['providerId', 'execution.other'],
+    ['sandboxId', 'sandbox.other'],
+  ] as const)(
+    'rejects an appended event that changes terminal %s evidence',
+    async (field, value) => {
+      const completed = committedRecord(runningRecord(), providerResult());
+      const coordinator = new DurableExecutionTerminalEventCoordinator({
+        events: {
+          append: async (request) => ({
+            ...request.event,
+            payload: {
+              ...request.event.payload,
+              [field]: value,
+            },
+          }),
+        },
+      });
+
+      await expect(coordinator.append(completed)).rejects.toThrow(/evidence/u);
+    }
+  );
 });
 
 function completionWorker(

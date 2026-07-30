@@ -24,6 +24,7 @@ import {
   validateExecutionOutputCollectionResult,
   validateExecutionOutputCollectionPolicy,
 } from './contracts';
+import { canonicalizeJson } from '../runtime/canonical-json';
 
 export interface DurableExecutionCompletionWorker {
   renew(record: ExecutionRecord): Promise<ExecutionRecord>;
@@ -296,12 +297,12 @@ function assertAppendedTerminalEvent(
     identityFields.some(
       (field) => expected[field] !== undefined && appended[field] !== expected[field]
     ) ||
-    appended.payload.operationId !== expected.payload.operationId ||
-    appended.payload.workspaceId !== expected.payload.workspaceId ||
-    appended.payload.executionId !== expected.payload.executionId ||
-    appendedRevision !== expectedRevision
+    appendedRevision !== expectedRevision ||
+    canonicalizeJson(appended.payload) !== canonicalizeJson(expected.payload)
   ) {
-    throw completionError('Appended Execution terminal event identity does not match its request');
+    throw completionError(
+      'Appended Execution terminal event identity or evidence does not match its request'
+    );
   }
 }
 
