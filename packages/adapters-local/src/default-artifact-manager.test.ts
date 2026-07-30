@@ -452,9 +452,14 @@ describe('DefaultArtifactManager', () => {
       expectedContentHash: hashArtifactBytes(bytes),
       expectedSizeBytes: bytes.byteLength,
       provenance: { sourceType: 'command_generated', createdBy: owner.principalId },
+      retention: { referencedByCount: 1 },
     });
 
-    expect(record).toMatchObject({ name: 'report.txt', mimeType: 'text/plain' });
+    expect(record).toMatchObject({
+      name: 'report.txt',
+      mimeType: 'text/plain',
+      retention: { referencedByCount: 1 },
+    });
     expect(requests).toEqual([
       expect.objectContaining({
         workspaceId: 'workspace.example',

@@ -64,6 +64,7 @@ export interface ArtifactFromWorkspaceRequest {
   expectedSizeBytes?: number;
   logicalArtifactId?: string;
   provenance: ArtifactProvenance;
+  retention?: ArtifactRetentionRecord;
   sensitive?: boolean;
   tags?: string[];
   idempotencyKey?: string;
