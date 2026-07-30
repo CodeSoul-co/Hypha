@@ -13,6 +13,7 @@ describe('buildDockerTerminalResult', () => {
     const result = buildDockerTerminalResult(
       terminalInput({
         resourceSnapshot: {
+          containerReference: 'container123',
           cpuPercent: 25.5,
           memoryUsageBytes: 10_485_760,
           memoryLimitBytes: 134_217_728,
@@ -253,9 +254,26 @@ describe('buildDockerTerminalResult', () => {
       'must be unique',
     ],
     [
+      'mismatched resource identity',
+      {
+        resourceSnapshot: {
+          containerReference: 'different-container',
+          cpuPercent: 1,
+          memoryUsageBytes: 1,
+          memoryLimitBytes: 2,
+          memoryPercent: 50,
+          processCount: 1,
+          blockReadBytes: 0,
+          blockWriteBytes: 0,
+        },
+      },
+      'resource snapshot identity does not match',
+    ],
+    [
       'invalid resource snapshot',
       {
         resourceSnapshot: {
+          containerReference: 'container123',
           cpuPercent: -1,
           memoryUsageBytes: 1,
           memoryLimitBytes: 2,
@@ -325,6 +343,7 @@ describe('buildDockerTerminalResult', () => {
     const changedResource = buildDockerTerminalResult(
       terminalInput({
         resourceSnapshot: {
+          containerReference: 'container123',
           cpuPercent: 1,
           memoryUsageBytes: 1,
           memoryLimitBytes: 2,

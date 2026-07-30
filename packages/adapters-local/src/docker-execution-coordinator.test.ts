@@ -239,6 +239,37 @@ describe('DockerExecutionCoordinator', () => {
     expect(events).not.toContain('remove:container123');
   });
 
+  it('fails closed and aborts output when the execution container disappears before terminal inspection', async () => {
+    const events: string[] = [];
+    const engine = new FakeEngine(events, {
+      inspectionSequence: [null, null],
+    });
+
+    const failure = await createCoordinator(events, { engine })
+      .execute(coordinatorInput())
+      .catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      phase: 'inspect',
+      code: 'DOCKER_INVALID_RESPONSE',
+      cleanup: {
+        complete: true,
+        containerAbsent: true,
+        stopAttempted: false,
+      },
+    });
+    expect(events).toEqual([
+      'prepare',
+      'create',
+      'start:container123',
+      'execute:container123',
+      'stats:container123',
+      'inspect:container123',
+      'abort',
+      'inspect:container123',
+    ]);
+  });
+
   it.each([
     [
       'reserved managed label',
@@ -342,6 +373,7 @@ interface FakeEngineOptions {
   inspection?: DockerContainerInspection | null;
   stopError?: Error;
   removeError?: Error;
+  inspectionSequence?: Array<DockerContainerInspection | null>;
 }
 
 class FakeEngine implements DockerEngineClient {
@@ -370,6 +402,10 @@ class FakeEngine implements DockerEngineClient {
   async inspectContainer(reference: string): Promise<DockerContainerInspection | null> {
     this.events.push(`inspect:${reference}`);
     if (this.removed) return null;
+    const sequence = this.options.inspectionSequence;
+    if (sequence && sequence.length > 0) {
+      return sequence.shift() ?? null;
+    }
     const configured =
       this.options.inspection === undefined ? inspection({ running: this.running }) : this.options.inspection;
     return configured;
@@ -477,6 +513,7 @@ function processResult(): DockerCliResult {
 
 function resourceSnapshot(): DockerResourceSnapshot {
   return {
+    containerReference: 'container123',
     cpuPercent: 1,
     memoryUsageBytes: 1_048_576,
     memoryLimitBytes: 134_217_728,

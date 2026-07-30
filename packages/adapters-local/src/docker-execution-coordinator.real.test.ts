@@ -29,11 +29,22 @@ const transport = new DockerCliTransport({ dockerPath });
 const engine = new DockerEngineCliClient(transport);
 const temporaryWorkspaces: string[] = [];
 const containerNames: string[] = [];
+const ownedScopeIds: string[] = [];
 
 beforeAll(async () => {
   const result = await runDocker(['image', 'inspect', `${image}@${imageDigest}`]);
   expect(result.outcome).toBe('exited');
   expect(result.exitCode).toBe(0);
+  const security = await runDocker(['info', '--format', '{{json .SecurityOptions}}']);
+  expect(security.outcome).toBe('exited');
+  expect(security.exitCode).toBe(0);
+  const securityOptions: unknown = JSON.parse(security.stdout);
+  expect(Array.isArray(securityOptions)).toBe(true);
+  expect(
+    (securityOptions as unknown[]).some(
+      (option) => typeof option === 'string' && option.includes('name=seccomp')
+    )
+  ).toBe(true);
 }, 30_000);
 
 afterEach(async () => {
@@ -43,6 +54,9 @@ afterEach(async () => {
       await expect(engine.inspectContainer(name)).resolves.toBeNull();
     })
   );
+  for (const scopeId of ownedScopeIds.splice(0)) {
+    await assertNoOwnedDockerResources(scopeId);
+  }
   await Promise.all(
     temporaryWorkspaces.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))
   );
@@ -118,6 +132,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
     });
     expect(result.metadata).toMatchObject({
       resourceSnapshot: {
+        containerReference: observedContainerReference,
         cpuPercent: expect.any(Number),
         memoryUsageBytes: expect.any(Number),
         memoryLimitBytes: expect.any(Number),
@@ -375,6 +390,32 @@ describe('DockerExecutionCoordinator real daemon', () => {
     });
     await expect(engine.inspectContainer(name)).resolves.toBeNull();
   }, 60_000);
+
+  it('fails closed under real temporary-filesystem pressure and removes all owned resources', async () => {
+    const workspace = await temporaryWorkspace('disk-pressure');
+    const name = uniqueContainerName('disk-pressure');
+
+    const result = await coordinator(realOutputs(workspace)).execute(
+      executionInput(name, workspace, 'disk-pressure', {
+        executable: 'sh',
+        args: ['-c', 'dd if=/dev/zero of=/tmp/fill bs=1M count=8 2>/dev/null'],
+        timeoutMs: 5_000,
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      exitCode: 1,
+      metadata: {
+        cleanup: {
+          complete: true,
+          containerAbsent: true,
+          stopAttempted: true,
+        },
+      },
+    });
+    await expect(engine.inspectContainer(name)).resolves.toBeNull();
+  }, 60_000);
 });
 
 class RealDockerOutputs implements DockerExecutionOutputCollector {
@@ -483,12 +524,14 @@ function executionInput(
     maxCombinedOutputBytes?: number;
   }
 ) {
+  const scopeId = `scope.docker.real.${caseName}`;
+  ownedScopeIds.push(scopeId);
   return {
     providerId: 'docker.real',
     executionId: `execution.docker.real.${caseName}`,
     revision: 1,
     sandboxId: `sandbox.docker.real.${caseName}`,
-    scopeId: `scope.docker.real.${caseName}`,
+    scopeId,
     createInput: {
       name,
       image,
@@ -558,6 +601,21 @@ async function inspectRawContainer(containerReference: string): Promise<Record<s
     throw new Error('Docker inspect returned an invalid acceptance record.');
   }
   return requiredRecord(parsed[0], 'Docker inspection');
+}
+
+async function assertNoOwnedDockerResources(scopeId: string): Promise<void> {
+  const filter = `label=hypha.execution.scope=${scopeId}`;
+  const resources = [
+    ['container', '{{.ID}}'],
+    ['network', '{{.ID}}'],
+    ['volume', '{{.Name}}'],
+  ] as const;
+  for (const [resource, format] of resources) {
+    const result = await runDocker([resource, 'ls', '--filter', filter, '--format', format]);
+    expect(result.outcome).toBe('exited');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim(), `${resource} residue remained for ${scopeId}`).toBe('');
+  }
 }
 
 function runDocker(args: string[]): Promise<DockerCliResult> {

@@ -125,7 +125,11 @@ export class DockerEngineCliClient implements DockerEngineClient {
 
   async removeContainer(containerReference: string): Promise<void> {
     const safeReference = validContainerReference(containerReference);
-    const result = await this.transport.run(defaultRequest(['rm', '--force', safeReference]));
+    // --volumes removes anonymous volumes declared by an image. Named volumes
+    // are never created by this boundary, so cleanup cannot cross ownership.
+    const result = await this.transport.run(
+      defaultRequest(['rm', '--force', '--volumes', safeReference])
+    );
     if (successful(result)) return;
 
     if ((await this.inspectContainer(safeReference)) === null) return;

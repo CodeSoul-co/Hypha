@@ -316,7 +316,7 @@ function validateInput(input: BuildDockerTerminalResultInput): void {
   validateProcessResult(input.processResult);
   validateInspection(input.inspection, input.containerReference);
   if (input.resourceSnapshot !== undefined) {
-    validateResourceSnapshot(input.resourceSnapshot);
+    validateResourceSnapshot(input.resourceSnapshot, input.containerReference);
   }
   if (input.resourceSnapshot !== undefined && input.resourceFailureCode !== undefined) {
     throw invalidEvidence('Docker resource snapshot and failure evidence are mutually exclusive.');
@@ -442,8 +442,14 @@ function validateInspection(value: DockerContainerInspection, containerReference
   if (value.finishedAt !== undefined) timestamp(value.finishedAt, 'Docker inspection finishedAt');
 }
 
-function validateResourceSnapshot(value: DockerResourceSnapshot): void {
+function validateResourceSnapshot(
+  value: DockerResourceSnapshot,
+  containerReference: string
+): void {
   if (!isRecord(value)) throw invalidEvidence('Docker resource snapshot must be an object.');
+  if (value.containerReference !== containerReference) {
+    throw invalidEvidence('Docker resource snapshot identity does not match the execution container.');
+  }
   nonNegativeFiniteNumber(value.cpuPercent, 'Docker CPU percentage');
   nonNegativeSafeInteger(value.memoryUsageBytes, 'Docker memory usage bytes');
   nonNegativeSafeInteger(value.memoryLimitBytes, 'Docker memory limit bytes');

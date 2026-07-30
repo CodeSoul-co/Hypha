@@ -15,6 +15,7 @@ const STATS_OUTPUT_LIMIT_BYTES = 256 * 1024;
 const STATS_FORMAT = '{{json .}}';
 
 export interface DockerResourceSnapshot {
+  containerReference: string;
   cpuPercent: number;
   memoryUsageBytes: number;
   memoryLimitBytes: number;
@@ -51,11 +52,16 @@ export class DockerStatsResourceAccounting implements DockerResourceAccounting {
     if (result.outcome !== 'exited' || result.exitCode !== 0) {
       throw dockerFailure('Docker resource snapshot failed.', STATS_COMMAND, result);
     }
-    return parseDockerResourceSnapshot(result.stdout);
+    return {
+      containerReference: safeReference,
+      ...parseDockerResourceSnapshot(result.stdout),
+    };
   }
 }
 
-export function parseDockerResourceSnapshot(value: string): DockerResourceSnapshot {
+export function parseDockerResourceSnapshot(
+  value: string
+): Omit<DockerResourceSnapshot, 'containerReference'> {
   const record = parseStatsRecord(value);
   const [memoryUsageBytes, memoryLimitBytes] = parseBytePair(
     record.MemUsage,

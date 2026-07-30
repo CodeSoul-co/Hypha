@@ -114,7 +114,7 @@ describe('DockerEngineCliClient', () => {
       ['start', 'container123'],
       ['container', 'inspect', 'container123'],
       ['stop', '--time', '5', 'container123'],
-      ['rm', '--force', 'container123'],
+      ['rm', '--force', '--volumes', 'container123'],
     ]);
   });
 

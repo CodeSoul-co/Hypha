@@ -28,6 +28,7 @@ describe('DockerStatsResourceAccounting', () => {
     await expect(
       new DockerStatsResourceAccounting(transport).snapshot('container123', signal)
     ).resolves.toEqual({
+      containerReference: 'container123',
       cpuPercent: 125.5,
       memoryUsageBytes: 1_572_864,
       memoryLimitBytes: 134_217_728,
