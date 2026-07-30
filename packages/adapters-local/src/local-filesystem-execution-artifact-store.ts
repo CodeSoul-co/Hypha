@@ -5,6 +5,7 @@ import type {
   ArtifactCopyRequest,
   ArtifactGetRequest,
   ArtifactObjectMetadata,
+  ArtifactOperationOptions,
   ArtifactPutRequest,
   ArtifactStorageRef,
   ArtifactStoreCapabilities,
@@ -29,6 +30,7 @@ import {
   hashLocalArtifactFile,
   isNodeError,
   listLocalArtifactFiles,
+  LocalArtifactTransferAbortedError,
   localArtifactBlobPath,
   pathExists,
   prepareLocalArtifactStore,
@@ -99,99 +101,119 @@ export class LocalFilesystemExecutionArtifactStore implements ArtifactStoreProvi
     };
   }
 
-  async put(input: ArtifactPutRequest): Promise<ArtifactStorageRef> {
-    return this.operation('put', async (paths) => {
-      const request = validateArtifactStoreInput(() => validateArtifactPutRequest(input));
-      let temporary;
-      try {
-        temporary = await writeLocalArtifactTempFile(request.content, paths, this.maxObjectBytes);
-      } catch (error) {
-        if (error instanceof ArtifactContentLimitError) {
-          throw artifactStoreError('ARTIFACT_TOO_LARGE', error.message, false, {
-            maxObjectBytes: error.maxBytes,
-            observedBytes: error.observedBytes,
-          });
-        }
-        throw error;
-      }
-      try {
-        this.assertOpen();
-        if (request.sizeBytes !== undefined && request.sizeBytes !== temporary.sizeBytes) {
-          throw artifactStoreError(
-            'ARTIFACT_VALIDATION_FAILED',
-            'Artifact size does not match the declared sizeBytes.',
-            false,
-            { expectedSizeBytes: request.sizeBytes, actualSizeBytes: temporary.sizeBytes }
+  async put(
+    input: ArtifactPutRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactStorageRef> {
+    return this.operation(
+      'put',
+      async (paths) => {
+        const request = validateArtifactStoreInput(() => validateArtifactPutRequest(input));
+        let temporary;
+        try {
+          temporary = await writeLocalArtifactTempFile(
+            request.content,
+            paths,
+            this.maxObjectBytes,
+            options.abortSignal
           );
+        } catch (error) {
+          if (error instanceof ArtifactContentLimitError) {
+            throw artifactStoreError('ARTIFACT_TOO_LARGE', error.message, false, {
+              maxObjectBytes: error.maxBytes,
+              observedBytes: error.observedBytes,
+            });
+          }
+          throw error;
         }
-        if (
-          request.expectedContentHash !== undefined &&
-          request.expectedContentHash !== temporary.contentHash
-        ) {
-          throw artifactStoreError(
-            'ARTIFACT_HASH_MISMATCH',
-            'Artifact bytes do not match expectedContentHash.',
-            false,
-            {
-              expectedContentHash: request.expectedContentHash,
-              actualContentHash: temporary.contentHash,
-            }
-          );
-        }
-
-        return await this.withMutation(async () => {
+        try {
           this.assertOpen();
-          const existing = await readLocalArtifactManifest(paths, request.objectKey);
-          if (request.ifAbsent && existing) {
+          assertLocalArtifactOperationActive(options.abortSignal);
+          if (request.sizeBytes !== undefined && request.sizeBytes !== temporary.sizeBytes) {
             throw artifactStoreError(
-              'ARTIFACT_VERSION_CONFLICT',
-              `Artifact object ${request.objectKey} already exists.`,
-              false
+              'ARTIFACT_VALIDATION_FAILED',
+              'Artifact size does not match the declared sizeBytes.',
+              false,
+              { expectedSizeBytes: request.sizeBytes, actualSizeBytes: temporary.sizeBytes }
             );
           }
-          const blobPath = localArtifactBlobPath(paths, temporary.contentHash);
-          await publishLocalArtifactBlob(
-            paths.root,
-            temporary.path,
-            blobPath,
-            temporary.contentHash,
-            temporary.sizeBytes
-          );
-          const manifest: LocalArtifactObjectManifest = {
-            schemaVersion: 1,
-            objectKey: request.objectKey,
-            contentHash: temporary.contentHash,
-            sizeBytes: temporary.sizeBytes,
-            mimeType: request.mimeType,
-            etag: temporary.contentHash,
-            metadata: cloneLocalArtifactMetadata(request.metadata),
-            lastModifiedAt: this.now(),
-          };
-          try {
-            await writeLocalArtifactManifest(paths, manifest, {
-              ifAbsent: request.ifAbsent,
-            });
-          } catch (error) {
-            if (request.ifAbsent && isNodeError(error, 'EEXIST')) {
-              await this.deleteBlobWhenUnreferenced(paths, temporary.contentHash);
+          if (
+            request.expectedContentHash !== undefined &&
+            request.expectedContentHash !== temporary.contentHash
+          ) {
+            throw artifactStoreError(
+              'ARTIFACT_HASH_MISMATCH',
+              'Artifact bytes do not match expectedContentHash.',
+              false,
+              {
+                expectedContentHash: request.expectedContentHash,
+                actualContentHash: temporary.contentHash,
+              }
+            );
+          }
+
+          return await this.withMutation(async () => {
+            this.assertOpen();
+            assertLocalArtifactOperationActive(options.abortSignal);
+            const existing = await readLocalArtifactManifest(paths, request.objectKey);
+            if (request.ifAbsent && existing) {
               throw artifactStoreError(
                 'ARTIFACT_VERSION_CONFLICT',
                 `Artifact object ${request.objectKey} already exists.`,
                 false
               );
             }
-            throw error;
-          }
-          if (existing && existing.contentHash !== manifest.contentHash) {
-            await this.deleteBlobWhenUnreferenced(paths, existing.contentHash);
-          }
-          return this.storageRef(manifest);
-        });
-      } catch (error) {
-        await fs.rm(temporary.path, { force: true }).catch(() => undefined);
-        throw error;
-      }
-    });
+            const blobPath = localArtifactBlobPath(paths, temporary.contentHash);
+            let blobPublished = false;
+            try {
+              assertLocalArtifactOperationActive(options.abortSignal);
+              await publishLocalArtifactBlob(
+                paths.root,
+                temporary.path,
+                blobPath,
+                temporary.contentHash,
+                temporary.sizeBytes
+              );
+              blobPublished = true;
+              assertLocalArtifactOperationActive(options.abortSignal);
+              const manifest: LocalArtifactObjectManifest = {
+                schemaVersion: 1,
+                objectKey: request.objectKey,
+                contentHash: temporary.contentHash,
+                sizeBytes: temporary.sizeBytes,
+                mimeType: request.mimeType,
+                etag: temporary.contentHash,
+                metadata: cloneLocalArtifactMetadata(request.metadata),
+                lastModifiedAt: this.now(),
+              };
+              await writeLocalArtifactManifest(paths, manifest, {
+                ifAbsent: request.ifAbsent,
+              });
+              if (existing && existing.contentHash !== manifest.contentHash) {
+                await this.deleteBlobWhenUnreferenced(paths, existing.contentHash);
+              }
+              return this.storageRef(manifest);
+            } catch (error) {
+              if (blobPublished) {
+                await this.deleteBlobWhenUnreferenced(paths, temporary.contentHash);
+              }
+              if (request.ifAbsent && isNodeError(error, 'EEXIST')) {
+                throw artifactStoreError(
+                  'ARTIFACT_VERSION_CONFLICT',
+                  `Artifact object ${request.objectKey} already exists.`,
+                  false
+                );
+              }
+              throw error;
+            }
+          });
+        } catch (error) {
+          await fs.rm(temporary.path, { force: true }).catch(() => undefined);
+          throw error;
+        }
+      },
+      options.abortSignal
+    );
   }
 
   async get(input: ArtifactGetRequest): Promise<ArtifactContent> {
@@ -379,12 +401,15 @@ export class LocalFilesystemExecutionArtifactStore implements ArtifactStoreProvi
 
   private async operation<T>(
     operation: string,
-    action: (paths: LocalArtifactStorePaths) => Promise<T>
+    action: (paths: LocalArtifactStorePaths) => Promise<T>,
+    abortSignal?: AbortSignal
   ): Promise<T> {
     try {
       this.assertOpen();
+      assertLocalArtifactOperationActive(abortSignal);
       const paths = await this.ready;
       this.assertOpen();
+      assertLocalArtifactOperationActive(abortSignal);
       return await action(paths);
     } catch (error) {
       throw normalizeLocalArtifactStoreError(error, operation);
@@ -476,4 +501,8 @@ export class LocalFilesystemExecutionArtifactStore implements ArtifactStoreProvi
       encrypted: false,
     };
   }
+}
+
+function assertLocalArtifactOperationActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) throw new LocalArtifactTransferAbortedError();
 }

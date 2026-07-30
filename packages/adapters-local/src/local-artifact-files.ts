@@ -18,6 +18,15 @@ export interface LocalArtifactTempFile {
   sizeBytes: number;
 }
 
+export class LocalArtifactTransferAbortedError extends Error {
+  readonly code = 'LOCAL_ARTIFACT_TRANSFER_ABORTED';
+
+  constructor() {
+    super('Local Artifact transfer was aborted.');
+    this.name = 'LocalArtifactTransferAbortedError';
+  }
+}
+
 export async function prepareLocalArtifactStore(
   rootPath: string
 ): Promise<LocalArtifactStorePaths> {
@@ -39,8 +48,10 @@ export async function prepareLocalArtifactStore(
 export async function writeLocalArtifactTempFile(
   source: ArtifactByteSource,
   paths: LocalArtifactStorePaths,
-  maxBytes: number
+  maxBytes: number,
+  abortSignal?: AbortSignal
 ): Promise<LocalArtifactTempFile> {
+  assertLocalArtifactTransferActive(abortSignal);
   const temporaryPath = path.join(paths.temporary, `upload-${randomUUID()}.tmp`);
   assertContainedPath(paths.root, temporaryPath);
   const handle = await fs.open(temporaryPath, 'wx', 0o600);
@@ -48,15 +59,18 @@ export async function writeLocalArtifactTempFile(
   let sizeBytes = 0;
   try {
     for await (const chunk of toAsyncChunks(source)) {
+      assertLocalArtifactTransferActive(abortSignal);
       if (!(chunk instanceof Uint8Array)) {
         throw new TypeError('Artifact content streams must yield Uint8Array chunks.');
       }
       sizeBytes += chunk.byteLength;
       if (sizeBytes > maxBytes) throw new ArtifactContentLimitError(maxBytes, sizeBytes);
       hash.update(chunk);
-      await writeAll(handle, chunk);
+      await writeAll(handle, chunk, abortSignal);
     }
+    assertLocalArtifactTransferActive(abortSignal);
     await handle.sync();
+    assertLocalArtifactTransferActive(abortSignal);
   } catch (error) {
     await handle.close().catch(() => undefined);
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -253,14 +267,24 @@ async function safeReadDirectory(directory: string): Promise<import('node:fs').D
   }
 }
 
-async function writeAll(handle: fs.FileHandle, chunk: Uint8Array): Promise<void> {
+async function writeAll(
+  handle: fs.FileHandle,
+  chunk: Uint8Array,
+  abortSignal?: AbortSignal
+): Promise<void> {
   let offset = 0;
   while (offset < chunk.byteLength) {
+    assertLocalArtifactTransferActive(abortSignal);
     const result = await handle.write(chunk, offset, chunk.byteLength - offset, null);
+    assertLocalArtifactTransferActive(abortSignal);
     if (result.bytesWritten <= 0)
       throw new Error('Artifact temporary file write made no progress.');
     offset += result.bytesWritten;
   }
+}
+
+function assertLocalArtifactTransferActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) throw new LocalArtifactTransferAbortedError();
 }
 
 async function* toAsyncChunks(source: ArtifactByteSource): AsyncIterable<Uint8Array> {

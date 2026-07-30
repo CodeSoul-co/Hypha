@@ -47,6 +47,56 @@ describe('LocalFilesystemExecutionArtifactStore', () => {
     expect(ref.objectKey).toBe('objects/report.bin');
   });
 
+  it('rejects a pre-cancelled write without creating temporary or published state', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const controller = new AbortController();
+    controller.abort(new Error('cancel local Artifact write'));
+
+    await expect(
+      store.put(request('objects/pre-cancelled.bin', Uint8Array.from([1, 2, 3])), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        retryable: false,
+        details: { providerCode: 'LOCAL_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+
+    await expect(store.stats()).resolves.toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+    const paths = await prepareLocalArtifactStore(root);
+    await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
+  });
+
+  it('cancels a streamed write between chunks and removes its temporary file', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const controller = new AbortController();
+    async function* chunks(): AsyncIterable<Uint8Array> {
+      yield Uint8Array.from([1, 2]);
+      controller.abort(new Error('cancel streamed local Artifact write'));
+      yield Uint8Array.from([3, 4]);
+    }
+
+    await expect(
+      store.put(request('objects/cancelled-stream.bin', chunks()), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        retryable: false,
+        details: { providerCode: 'LOCAL_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+
+    await expect(store.stats()).resolves.toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+    const paths = await prepareLocalArtifactStore(root);
+    await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
+  });
+
   it('deduplicates identical content while keeping independent object manifests', async () => {
     const root = await createRoot();
     const store = createStore(root);
