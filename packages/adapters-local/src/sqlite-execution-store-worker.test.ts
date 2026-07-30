@@ -386,7 +386,7 @@ function outputArtifact(status: 'draft' | 'final'): ArtifactRecord {
       ownerPrincipalId: 'agent.example',
       workspaceId: 'workspace.example',
     },
-    retention: {},
+    retention: { referencedByCount: 1 },
     status,
     ...(status === 'final' ? { finalizedAt: '2026-07-16T00:00:02.000Z' } : {}),
     createdAt: '2026-07-16T00:00:01.500Z',

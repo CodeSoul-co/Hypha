@@ -72,6 +72,7 @@ export * from './projection-store';
 export * from './sqlite-driver';
 export * from './artifact-content-io';
 export * from './artifact-manager-tool-port';
+export * from './artifact-manager-execution-cache-verifier';
 export * from './legacy-tool-artifact-importer';
 export * from './legacy-tool-artifact-inventory';
 export * from './legacy-tool-artifact-migration-planner';
