@@ -214,7 +214,6 @@ describe('memory canonical contract integration', () => {
     const validity = createMemoryCacheValidityInput({
       scope,
       memoryProfileRevision: memoryProfileSpecExample.revision!,
-      mutationGeneration: '1',
       selectedMemoryVersionIds: results.map((result) => result.record.versionId),
       policyRevision: 'policy:v1',
     });
@@ -224,7 +223,6 @@ describe('memory canonical contract integration', () => {
       reason: 'created',
       memoryIds: [record.id],
       memoryVersionIds: [record.versionId],
-      mutationGeneration: '1',
       validityHash: memoryCacheValidityHash(validity),
     });
 

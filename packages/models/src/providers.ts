@@ -58,8 +58,6 @@ export interface OpenAIChatCompletionResponse {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
-    prompt_cache_hit_tokens?: number;
-    prompt_cache_miss_tokens?: number;
     prompt_tokens_details?: {
       cached_tokens?: number;
     };
@@ -294,18 +292,14 @@ export class OpenAICompatibleModelProvider implements ModelProvider<ModelRequest
     return compactObject({
       model: providerModel,
       messages: normalizeMessages(instructions, request.input),
-      tools: request.tools
-        ?.map((tool) => ({
-          type: 'function',
-          function: {
-            name: toolNameMap.toProviderName.get(tool.name) ?? tool.name,
-            description: tool.description,
-            parameters: tool.inputSchema,
-          },
-        }))
-        .sort((left, right) =>
-          String(left.function.name).localeCompare(String(right.function.name))
-        ),
+      tools: request.tools?.map((tool) => ({
+        type: 'function',
+        function: {
+          name: toolNameMap.toProviderName.get(tool.name) ?? tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      })),
       response_format: normalizeResponseFormat(request.responseFormat),
       reasoning_effort: request.reasoning?.effort,
       temperature: request.temperature,
@@ -387,19 +381,11 @@ function normalizeMessages(
 
 function normalizeUsage(usage: OpenAIChatCompletionResponse['usage']): ModelUsage | undefined {
   if (!usage) return undefined;
-  const cacheHitTokens =
-    usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens;
-  const cacheMissTokens =
-    usage.prompt_cache_miss_tokens ??
-    (typeof usage.prompt_tokens === 'number' && typeof cacheHitTokens === 'number'
-      ? Math.max(0, usage.prompt_tokens - cacheHitTokens)
-      : undefined);
   return {
     inputTokens: usage.prompt_tokens,
     outputTokens: usage.completion_tokens,
     totalTokens: usage.total_tokens,
-    cacheHitTokens,
-    cacheMissTokens,
+    cacheHitTokens: usage.prompt_tokens_details?.cached_tokens,
   };
 }
 

@@ -27,7 +27,7 @@ The runtime model is event-first:
 - `Run` is one concrete execution under a Session.
 - `Event` is the smallest source-of-truth fact record. Trace, replay, audit, regression, and state projection are derived from events.
 
-The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state.
+The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state. Anomaly recovery is also FSM-native: bounded retry and circuit wait enter `Recovering`, committed effects enter `Compensating`, and uncertain effects enter `Quarantined`.
 
 ## API Documentation
 
@@ -35,7 +35,8 @@ Public API documentation is maintained as field-level references:
 
 - [Documentation Index](docs/README.md): entry point for architecture, package boundaries, guides, and API references.
 - [HTTP API](docs/api/http.md): REST endpoints, authentication, request bodies, response shapes, and runtime conventions.
-- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, inference, memory, tools, MCP, skills, and model providers.
+- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, execution, inference, memory, tools, MCP, skills, and model providers.
+- [Execution Contracts](docs/architecture/execution.md): provider-neutral Workspace, Sandbox, Command, Store, Event, and cache-fingerprint boundaries.
 - [Architecture](docs/reference/architecture.md): package responsibilities, harness semantics, runtime model, and extension boundaries.
 - [Storage](docs/reference/storage.md): document, messaging, relational, vector, and artifact storage conventions for local, self-hosted, managed, and cloud deployments.
 - [Domain Packs](docs/guides/domain-packs.md): field contracts and examples for declaring workflows, tools, memory, skills, policy, and output contracts.
@@ -47,6 +48,41 @@ When the server is running, the interactive route index is also available at `/a
 hypha defaults to a single-user runtime for local and self-hosted deployments. The configured owner account is seeded from `auth.singleUser`, and public registration is disabled unless multi-user mode is explicitly enabled.
 
 Internal APIs keep `userId` boundaries for sessions, memory, token usage, API keys, and session queues. This keeps default deployment simple while preserving the concurrency model required by multi-user clients.
+
+## Governed Runtime
+
+`@hypha/core` provides the event-first orchestration contracts and local reference implementations
+needed to run FSM work without hidden loops. The runtime includes versioned event schemas and
+upcasters, optimistic event-stream append, projections, scoped session commands, message
+inbox/outbox delivery, run leases and state claims with fencing, shared/exclusive resource claims,
+deterministic helpers, timers, pause/resume/signal controls, cancellation, checkpoints, recovery,
+replay, and query services. `@hypha/harness` adds a bounded FSM driver and execution context while
+keeping DomainPack workflows, provider adapters, and application state outside the runtime core.
+
+Every command and durable operation remains scoped by user, session, and run identity. Revision,
+lease, claim, event, and checkpoint evidence prevents stale workers or repeated loop iterations from
+being treated as progress. See the [Runtime Model](docs/reference/runtime-model.md) and
+[Framework API](docs/api/framework.md).
+
+The durable Runtime graph is an explicit framework composition. The bundled Express server still
+uses its `EventRuntime` compatibility path and does not start the canonical session-command,
+continuation, timer, or recovery schedulers by default. Applications that require autonomous work
+to continue across process restarts must compose and own those workers explicitly; the default
+server must not be treated as a cross-restart continuous executor.
+
+## Coordinated Recovery
+
+Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and
+cache failures through the same FSM-governed recovery contract. Participants run in dependency
+order, completed upstream work is not repeated, and progress is proven by stable receipts,
+revisions, hashes, or provider state rather than by another loop iteration. Bounded retry,
+reconciliation, compatible fallback, degradation, compensation, human review, quarantine,
+cancellation, and failure are explicit strategies with trace events.
+
+Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
+changing the source result, and WorkCache can retain only revision-matched, revalidated recovery
+knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
+[FSM anomaly recovery](docs/architecture/fsm-recovery.md).
 
 ## Inference Runtime
 
@@ -64,15 +100,83 @@ Enable it with `HYPHA_SERVING_CACHE=memory` or `HYPHA_SERVING_CACHE=sqlite`; the
 
 Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
 
-For provider-side prefix cache, Hypha keeps request shape stable by canonicalizing tool schemas and tracking stable prefix hashes per provider/model/scope. Provider usage fields include `cacheHitTokens` and `cacheMissTokens` when the upstream API reports cached or missed prompt tokens. These metrics describe provider prefix-cache reuse; they are separate from Hypha's local exact response cache.
+## Governed Tools and MCP
 
-## WorkCache
+Local, HTTP, Plugin, Mock, and MCP capabilities share `ToolAdapter`, `ToolRegistry`, and the
+single `GovernedToolRunner` execution path. Each call is a persistent Invocation with schema,
+permission, policy, approval, idempotency, retry, timeout, cancellation, artifact, event,
+observation, cache-validity, and recovery semantics. Dynamic MCP capabilities are separated into
+connection, catalog, trust, drift, schema-cache, and immutable Run snapshot records.
 
-`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
+See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
+[security guide](docs/guides/tool-mcp-security.md), and
+[adapter guide](docs/guides/tool-adapters.md).
 
-On `cache-base`, WorkCache defaults to `HYPHA_WORKCACHE=memory` so event-derived blocks are available during real runtime checks. Set `HYPHA_WORKCACHE=off` to disable it, or `HYPHA_WORKCACHE=sqlite` with `HYPHA_WORKCACHE_SQLITE_PATH` for persistent blocks. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
+The server includes governed, side-effect-free `utility.json`, `utility.text`, and `utility.hash`
+tools for bounded JSON operations, literal text transformations, and SHA-256 fingerprints. See the
+[common utility guide](docs/guides/common-utility-tools.md) and
+[FSM recovery architecture](docs/architecture/fsm-recovery.md).
 
-WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes.
+## Governed Execution Contracts
+
+`@hypha/core` exposes provider-neutral contracts for managed Workspaces, sandbox environments,
+command execution, revisioned records and leases, lifecycle events, and deterministic cache
+fingerprints. The contracts keep filesystem, process, container, remote-provider, storage, artifact,
+policy, and secret implementations behind adapter and harness boundaries. Paths, identities,
+transitions, terminal evidence, sensitive event fields, idempotency, and stale-writer fencing are
+validated before adapters perform side effects.
+
+Runtime work crosses into Execution through a validated `ExecutionActivityRequest` that binds the
+Run, FSM state attempt, Workspace, fencing token, deadline, principal, and idempotency identity.
+`DefaultExecutionRiskEvaluator` derives provider-neutral risk evidence, while
+`GovernedExecutionPort` verifies Tool binding, permission scopes, Policy/Human Approval evidence,
+cancellation, deadlines, and authorization expiry immediately before dispatch. Unsuccessful
+activity terminals require normalized errors and durable Event references.
+
+`DefaultExecutionOutputPlanner` deterministically selects bounded, content-addressed Workspace
+mutations. `DefaultExecutionOutputCollector` then creates and optionally finalizes Artifacts only
+when returned records match the planned hash, size, path, principal, user, tenant, Workspace, Run,
+provenance, and Artifact version. These components expose framework ports; they do not imply a
+particular container, cloud object store, or remote execution provider.
+
+The Artifact lifecycle is content-addressed and append-only. `DefaultArtifactManager` and its
+eventing wrapper govern create, read, list, version navigation, lineage, retention, garbage
+collection, and download access through principal-scoped policy checks. In-memory, local-file, and
+SQLite-backed reference components are available; concrete cloud providers remain adapter
+extensions and are not implied by the core contract.
+
+See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
+extension rules.
+
+## Governed Memory and Context
+
+`@hypha/memory` provides versioned Memory profiles, principal/user/workspace scope enforcement,
+optimistic record revisions, scoped idempotency, structured history, atomic record-plus-index-outbox
+persistence, deterministic retrieval explanations, lifecycle workers, and bounded context assembly.
+The native provider keeps structured records as the source of truth while vector indexing runs as a
+leased, retry-bounded outbox job. Hard delete removes current and historical versions; external
+provider adapters must preserve scope metadata and reconcile uncertain writes before replay.
+
+Memory, Context, Domain, Cache, Replay, and Evaluation share versioned dependency and validity
+snapshots. Context builders apply policy, provenance, token budgets, deterministic compaction, and
+instruction/data boundaries before model injection. See the
+[Governed Memory architecture](docs/architecture/memory.md).
+
+The bundled server loads `configs/memory-profiles.yaml` and starts with `native-default`, backed by
+MongoDB for durable records, history, mappings, and recovery evidence plus Redis for native working
+state. The same composition can select self-hosted `mem0-oss`, managed `mem0-platform`, or
+`memorybank-managed` without placing credentials in the profile. Set
+`HYPHA_MEMORY_CONFIG_PATH` to an alternative validated profile file and provide only the environment
+references required by the selected provider. External providers still use MongoDB for Hypha-owned
+identity mappings and durable governance evidence. See
+[Memory provider profiles](docs/guides/memory-provider-profiles.md) and
+[External provider runtime](docs/guides/memory-external-provider-runtime.md).
+
+`MemoryBankLocalClient` is a protocol compatibility fixture, not a bundled MemoryBank service. The
+separate, disabled `memorybank-hindsight-local` profile and its registered factory form the supplied
+self-hosted MemoryBank-style deployment candidate; it is intentionally excluded from the canonical
+selectable profile file. Managed and self-hosted provider profiles become release-ready only after
+their environment-specific acceptance suite runs with zero skipped cases.
 
 ## Development Commands
 

@@ -429,7 +429,6 @@ export class LLMManager {
   }
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    await this.ensureReady();
     const provider = options?.model
       ? this.getProviderFromModel(options.model)
       : this.defaultProvider;
@@ -446,7 +445,6 @@ export class LLMManager {
   }
 
   async *streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk> {
-    await this.ensureReady();
     const provider = options?.model
       ? this.getProviderFromModel(options.model)
       : this.defaultProvider;
@@ -561,22 +559,6 @@ export class LLMManager {
     return models[0]?.id;
   }
 
-  async ensureReady(): Promise<void> {
-    if (!this.initialized) {
-      await this.initialize();
-    }
-    if (this.adapters.size === 0 || this.adapters.has(this.defaultProvider)) {
-      return;
-    }
-    const fallback = this.adapters.keys().next().value as string | undefined;
-    if (!fallback) return;
-    logger.warn(
-      `Configured defaultProvider="${this.defaultProvider}" is not initialized (missing API key?). ` +
-        `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`
-    );
-    await this.setDefaultProvider(fallback);
-  }
-
   async isModelEnabled(modelId: string): Promise<boolean> {
     const allModels = await this.listAllModels();
     return allModels.some((m) => m.id === modelId);
@@ -683,13 +665,9 @@ function wrapWithServingCache(
   return new CachedLLMProvider(provider, cache, {
     policy,
     trace,
-    providerResolver: (request) => {
-      const metadataProvider = stringFromRecord(request.metadata, 'provider');
-      if (metadataProvider && manager.isProviderAvailable(metadataProvider)) {
-        return metadataProvider;
-      }
-      return manager.getProviderFromModel(request.modelAlias || manager.getDefaultModel());
-    },
+    providerResolver: (request) =>
+      stringFromRecord(request.metadata, 'provider') ??
+      manager.getProviderFromModel(request.modelAlias || manager.getDefaultModel()),
     modelResolver: (request) => request.modelAlias || manager.getDefaultModel(),
     scopeResolver: (request) => servingCacheScopeForRequest(request),
     paramsResolver: (request) => ({
@@ -787,8 +765,6 @@ export function modelResponseToChatResponse(
           inputTokens: response.usage.inputTokens ?? 0,
           outputTokens: response.usage.outputTokens ?? 0,
           totalTokens: response.usage.totalTokens ?? 0,
-          cacheHitTokens: response.usage.cacheHitTokens,
-          cacheMissTokens: response.usage.cacheMissTokens,
         }
       : undefined,
     toolCalls: response.toolCalls?.map((toolCall) => ({
@@ -1033,8 +1009,6 @@ function legacyUsageToModelUsage(usage: NonNullable<ChatResponse['usage']>): Mod
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens,
-    cacheHitTokens: usage.cacheHitTokens,
-    cacheMissTokens: usage.cacheMissTokens,
   };
 }
 
@@ -1043,8 +1017,6 @@ function modelUsageToLegacyUsage(usage: ModelUsage): NonNullable<ChatResponse['u
     inputTokens: usage.inputTokens ?? 0,
     outputTokens: usage.outputTokens ?? 0,
     totalTokens: usage.totalTokens ?? 0,
-    cacheHitTokens: usage.cacheHitTokens,
-    cacheMissTokens: usage.cacheMissTokens,
   };
 }
 
