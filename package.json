@@ -70,6 +70,7 @@
     "js-yaml": "^4.1.0",
     "jsonwebtoken": "^9.0.2",
     "lodash": "^4.17.21",
+    "minio": "8.0.7",
     "mongoose": "^8.0.0",
     "openai": "^4.28.0",
     "pg": "8.22.0",
