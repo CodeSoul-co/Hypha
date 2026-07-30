@@ -5,6 +5,7 @@ import type { ArtifactPutRequest } from '@hypha/core';
 import { readArtifactStream } from './artifact-content-io';
 import {
   HYPHA_CONTENT_HASH_METADATA_KEY,
+  HYPHA_OPERATION_ID_METADATA_KEY,
   type S3ArtifactObjectState,
 } from './s3-artifact-store-values';
 import { S3ExecutionArtifactStore } from './s3-execution-artifact-store';
@@ -358,6 +359,60 @@ describe('S3ExecutionArtifactStore', () => {
     expect(transport.objectCount()).toBe(0);
   });
 
+  it('reconciles a remotely committed upload after its response is lost', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    transport.errorAfterUpload = providerError('ServiceUnavailable', 503);
+    const store = createStore(transport, {
+      visibilityVerificationDelayMs: 0,
+    });
+
+    const ref = await store.put(
+      request('objects/reconciled.bin', Uint8Array.from([1, 2, 3]))
+    );
+
+    expect(ref).toMatchObject({
+      objectKey: 'objects/reconciled.bin',
+      versionId: 'version-1',
+    });
+    expect(
+      Buffer.from(
+        transport.lastUpload?.metadata[HYPHA_OPERATION_ID_METADATA_KEY] ?? '',
+        'base64'
+      ).toString('utf8')
+    ).toBe('put:objects/reconciled.bin');
+    expect(transport.objectCount()).toBe(1);
+  });
+
+  it('does not reconcile a retryable failure against a different operation', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    const store = createStore(transport, { visibilityVerificationDelayMs: 0 });
+    await store.put(request('objects/operation-conflict.bin', Uint8Array.from([1])));
+    transport.nextError = providerError('ServiceUnavailable', 503);
+
+    await expect(
+      store.put({
+        ...request('objects/operation-conflict.bin', Uint8Array.from([1])),
+        operationId: 'put:different-operation',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_STORE_UNAVAILABLE', retryable: true },
+    });
+  });
+
+  it('waits for a newly finalized version to become visible', async () => {
+    const transport = new FakeS3ArtifactTransport();
+    transport.headMissesBeforeVisible = 2;
+    const store = createStore(transport, {
+      visibilityVerificationAttempts: 3,
+      visibilityVerificationDelayMs: 0,
+    });
+
+    await expect(
+      store.put(request('objects/eventually-visible.bin', Uint8Array.from([1])))
+    ).resolves.toMatchObject({ versionId: 'version-1' });
+    expect(transport.head).toHaveBeenCalledTimes(3);
+  });
+
   it('normalizes provider failures without exposing provider payloads', async () => {
     const transport = new FakeS3ArtifactTransport();
     const store = createStore(transport);
@@ -451,6 +506,8 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
   omitVersionOnWrite = false;
   corruptPublishedState = false;
   nextError?: unknown;
+  errorAfterUpload?: unknown;
+  headMissesBeforeVisible = 0;
   afterUpload?: () => void;
   lastUpload?: Parameters<S3ArtifactTransport['upload']>[0];
   lastGet?: Parameters<S3ArtifactTransport['get']>[0];
@@ -480,6 +537,11 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
     };
     this.putVersion(input.key, state);
     this.afterUpload?.();
+    if (this.errorAfterUpload) {
+      const error = this.errorAfterUpload;
+      this.errorAfterUpload = undefined;
+      throw error;
+    }
     return {
       etag: state.etag,
       ...(this.omitVersionOnWrite ? {} : { versionId }),
@@ -505,6 +567,10 @@ class FakeS3ArtifactTransport implements S3ArtifactTransport {
     input: Parameters<S3ArtifactTransport['head']>[0]
   ): Promise<S3ArtifactObjectState | null> {
     this.throwNext();
+    if (this.headMissesBeforeVisible > 0) {
+      this.headMissesBeforeVisible -= 1;
+      return null;
+    }
     const state = this.findVersion(input.key, input.versionId);
     if (!state) return null;
     const result = objectState(state);

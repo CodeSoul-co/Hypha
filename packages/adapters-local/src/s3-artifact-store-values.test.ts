@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { readArtifactStream } from './artifact-content-io';
 import {
   HYPHA_CONTENT_HASH_METADATA_KEY,
+  HYPHA_OPERATION_ID_METADATA_KEY,
   HYPHA_USER_METADATA_KEY,
   encodeS3ArtifactMetadata,
   normalizeS3ArtifactRange,
   normalizeS3ArtifactStoreError,
   normalizeS3Etag,
   quoteS3Etag,
+  requireS3OperationId,
   s3ObjectMetadata,
   verifyS3ArtifactStream,
 } from './s3-artifact-store-values';
@@ -18,7 +20,12 @@ const contentHash = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 
 describe('S3 Artifact Store values', () => {
   it('round-trips bounded Hypha metadata without treating ETag as a content hash', () => {
-    const metadata = encodeS3ArtifactMetadata(contentHash, { source: 'execution' }, 1024);
+    const metadata = encodeS3ArtifactMetadata(
+      contentHash,
+      'operation:artifact-test',
+      { source: 'execution' },
+      1024
+    );
     const object = s3ObjectMetadata({
       sizeBytes: bytes.byteLength,
       mimeType: 'application/octet-stream',
@@ -36,12 +43,21 @@ describe('S3 Artifact Store values', () => {
       metadata: { source: 'execution' },
     });
     expect(object.etag).not.toBe(contentHash);
+    expect(requireS3OperationId({ sizeBytes: bytes.byteLength, metadata })).toBe(
+      'operation:artifact-test'
+    );
+    expect(metadata[HYPHA_OPERATION_ID_METADATA_KEY]).toBe(
+      Buffer.from('operation:artifact-test', 'utf8').toString('base64')
+    );
   });
 
   it('rejects oversized, corrupt, and missing object metadata', () => {
-    expect(() => encodeS3ArtifactMetadata(contentHash, { value: 'too-large' }, 2)).toThrow(
-      'exceeds the 2 byte limit'
-    );
+    expect(() =>
+      encodeS3ArtifactMetadata(contentHash, 'operation:metadata', { value: 'too-large' }, 2)
+    ).toThrow('exceeds the 2 byte limit');
+    expect(() =>
+      encodeS3ArtifactMetadata(contentHash, 'x'.repeat(513), undefined, 1024)
+    ).toThrow('operationId must be between');
     expect(() =>
       s3ObjectMetadata({
         sizeBytes: 1,
@@ -117,6 +133,10 @@ describe('S3 Artifact Store values', () => {
     ['NoSuchKey', 404, 'ARTIFACT_NOT_FOUND', false],
     ['AccessDenied', 403, 'ARTIFACT_PERMISSION_DENIED', false],
     ['PreconditionFailed', 412, 'ARTIFACT_VERSION_CONFLICT', false],
+    ['ConditionalRequestConflict', 409, 'ARTIFACT_VERSION_CONFLICT', true],
+    ['OperationAborted', 409, 'ARTIFACT_STORE_UNAVAILABLE', true],
+    ['SlowDown', 429, 'ARTIFACT_STORE_UNAVAILABLE', true],
+    ['InternalError', 500, 'ARTIFACT_STORE_UNAVAILABLE', true],
     ['InvalidRange', 416, 'ARTIFACT_INVALID_INPUT', false],
     ['ServiceUnavailable', 503, 'ARTIFACT_STORE_UNAVAILABLE', true],
   ])('normalizes %s without leaking provider messages', (name, status, code, retryable) => {

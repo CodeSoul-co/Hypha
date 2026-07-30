@@ -3,7 +3,9 @@ import type { ArtifactByteRange, ArtifactGetRequest, ArtifactObjectMetadata } fr
 import { ArtifactStoreAdapterError, artifactStoreError } from './artifact-store-adapter-error';
 
 export const HYPHA_CONTENT_HASH_METADATA_KEY = 'hypha-content-hash';
+export const HYPHA_OPERATION_ID_METADATA_KEY = 'hypha-operation-id';
 export const HYPHA_USER_METADATA_KEY = 'hypha-user-metadata';
+const MAX_OPERATION_ID_BYTES = 512;
 
 const RETRYABLE_S3_NETWORK_CODES = new Set([
   'EAI_AGAIN',
@@ -28,13 +30,16 @@ export interface S3ArtifactObjectState {
 
 export function encodeS3ArtifactMetadata(
   contentHash: string,
+  operationId: string,
   metadata: Record<string, string> | undefined,
   maxMetadataBytes: number
 ): Record<string, string> {
   requireContentHash(contentHash);
+  const encodedOperationId = encodeOperationId(operationId);
   assertPositiveSafeInteger(maxMetadataBytes, 'maxMetadataBytes');
   const result: Record<string, string> = {
     [HYPHA_CONTENT_HASH_METADATA_KEY]: contentHash,
+    [HYPHA_OPERATION_ID_METADATA_KEY]: encodedOperationId,
   };
   if (!metadata || Object.keys(metadata).length === 0) return result;
   const serialized = Buffer.from(JSON.stringify(metadata), 'utf8');
@@ -48,6 +53,25 @@ export function encodeS3ArtifactMetadata(
   }
   result[HYPHA_USER_METADATA_KEY] = serialized.toString('base64');
   return result;
+}
+
+export function requireS3OperationId(state: S3ArtifactObjectState): string {
+  assertS3ObjectState(state);
+  const encoded = state.metadata?.[HYPHA_OPERATION_ID_METADATA_KEY];
+  if (!encoded) throw invalidObjectMetadata('S3 object is missing valid Hypha operation metadata.');
+  try {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    if (
+      Buffer.from(decoded, 'utf8').toString('base64') !== encoded ||
+      Buffer.byteLength(decoded, 'utf8') === 0 ||
+      Buffer.byteLength(decoded, 'utf8') > MAX_OPERATION_ID_BYTES
+    ) {
+      throw new Error();
+    }
+    return decoded;
+  } catch {
+    throw invalidObjectMetadata('S3 object contains invalid Hypha operation metadata.');
+  }
 }
 
 export function s3ObjectMetadata(state: S3ArtifactObjectState): ArtifactObjectMetadata {
@@ -214,6 +238,14 @@ export function normalizeS3ArtifactStoreError(
       { operation, providerCode }
     );
   }
+  if (status === 409 && providerCode === 'ConditionalRequestConflict') {
+    return artifactStoreError(
+      'ARTIFACT_VERSION_CONFLICT',
+      'S3 conditional request conflicted with another object mutation.',
+      true,
+      { operation, providerCode, status }
+    );
+  }
   if (status === 416 || providerCode === 'InvalidRange') {
     return artifactStoreError(
       'ARTIFACT_INVALID_INPUT',
@@ -224,6 +256,7 @@ export function normalizeS3ArtifactStoreError(
   }
   if (
     status === 429 ||
+    status === 409 ||
     (status !== undefined && status >= 500) ||
     RETRYABLE_S3_NETWORK_CODES.has(providerCode)
   ) {
@@ -306,6 +339,18 @@ function requireContentHash(value: string | undefined): string {
     );
   }
   return value;
+}
+
+function encodeOperationId(value: string): string {
+  const sizeBytes = Buffer.byteLength(value, 'utf8');
+  if (sizeBytes === 0 || sizeBytes > MAX_OPERATION_ID_BYTES) {
+    throw artifactStoreError(
+      'ARTIFACT_INVALID_INPUT',
+      `Artifact operationId must be between 1 and ${MAX_OPERATION_ID_BYTES} UTF-8 bytes.`,
+      false
+    );
+  }
+  return Buffer.from(value, 'utf8').toString('base64');
 }
 
 function s3StatusCode(error: unknown): number | undefined {

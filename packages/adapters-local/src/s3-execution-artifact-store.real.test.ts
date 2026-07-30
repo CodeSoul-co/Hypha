@@ -16,6 +16,11 @@ import {
   S3ArtifactTransferTimeoutError,
   type MinioS3ArtifactTransportOptions,
 } from './s3-artifact-store-transport';
+import {
+  HYPHA_CONTENT_HASH_METADATA_KEY,
+  HYPHA_OPERATION_ID_METADATA_KEY,
+  HYPHA_USER_METADATA_KEY,
+} from './s3-artifact-store-values';
 import { S3ExecutionArtifactStoreFactory } from './s3-execution-artifact-store-factory';
 
 const dockerPath = process.env.HYPHA_REAL_DOCKER_PATH ?? 'docker';
@@ -85,7 +90,10 @@ afterAll(async () => {
   try {
     if (activeFixture) {
       await activeFixture.store.close();
+      await expect(listIncompleteUploads(activeFixture.client, '')).resolves.toEqual([]);
+      await expect(listBucketObjectVersions(activeFixture.client)).resolves.toEqual([]);
       await activeFixture.client.removeBucket(bucket);
+      await expect(activeFixture.client.bucketExists(bucket)).resolves.toBe(false);
     }
   } finally {
     const removal = await runDocker(['rm', '-f', containerName]);
@@ -119,9 +127,18 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
   });
 
   it('round-trips multipart content, range reads, server copy, and signed download access', async () => {
-    const { store } = requireFixture();
+    const { client, store } = requireFixture();
     const bytes = deterministicBytes(6 * 1024 * 1024 + 17);
-    const source = await store.put(putRequest('objects/multipart.bin', bytes));
+    const request = {
+      ...putRequest('objects/multipart.bin', bytes),
+      metadata: { source: 'real-minio' },
+    };
+    const source = await store.put(request);
+    const sourceVersionId = requireVersionId(source);
+    const sourceHead = await store.head(source);
+    const providerState = await client.statObject(bucket, source.objectKey, {
+      versionId: sourceVersionId,
+    });
     const sourceContent = await readRef(store, source);
     const range = await store.get({
       ref: source,
@@ -145,6 +162,25 @@ describe('S3ExecutionArtifactStore real MinIO', () => {
 
     expect(sourceContent.byteLength).toBe(bytes.byteLength);
     expect(contentHash(sourceContent)).toBe(contentHash(bytes));
+    expect(sourceHead).toMatchObject({
+      contentHash: request.expectedContentHash,
+      sizeBytes: request.sizeBytes,
+      mimeType: request.mimeType,
+      metadata: request.metadata,
+    });
+    expect(providerState).toMatchObject({
+      size: request.sizeBytes,
+      versionId: sourceVersionId,
+      metaData: {
+        [HYPHA_CONTENT_HASH_METADATA_KEY]: request.expectedContentHash,
+        [HYPHA_OPERATION_ID_METADATA_KEY]: Buffer.from(request.operationId, 'utf8').toString(
+          'base64'
+        ),
+        [HYPHA_USER_METADATA_KEY]: Buffer.from(JSON.stringify(request.metadata), 'utf8').toString(
+          'base64'
+        ),
+      },
+    });
     expect(rangeBytes).toEqual(bytes.slice(1024, 8192));
     expect(range).toMatchObject({
       range: { start: 1024, endInclusive: 8191 },
@@ -432,6 +468,11 @@ function putRequest(objectKey: string, content: Uint8Array) {
   };
 }
 
+function requireVersionId(ref: ArtifactStorageRef): string {
+  if (!ref.versionId) throw new Error('Real MinIO Artifact reference is missing a versionId.');
+  return ref.versionId;
+}
+
 async function readRef(
   store: AcceptedS3ArtifactStore,
   ref: ArtifactStorageRef
@@ -495,6 +536,18 @@ function listIncompleteUploads(client: Client, key: string): Promise<string[]> {
     });
     stream.on('error', reject);
     stream.on('end', () => resolve(uploadIds));
+  });
+}
+
+function listBucketObjectVersions(client: Client): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const objectVersions: string[] = [];
+    const stream = client.listObjects(bucket, '', true, { IncludeVersion: true });
+    stream.on('data', (item) => {
+      objectVersions.push(item.name ?? item.key ?? item.prefix ?? '<unknown>');
+    });
+    stream.on('error', reject);
+    stream.on('end', () => resolve(objectVersions));
   });
 }
 

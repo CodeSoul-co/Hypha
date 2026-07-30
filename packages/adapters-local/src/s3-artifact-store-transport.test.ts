@@ -826,6 +826,33 @@ describe('MinioS3ArtifactTransport', () => {
     expect(minioClient.removeObject).not.toHaveBeenCalled();
   });
 
+  it('waits for an eventually consistent delete to become invisible', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(objectStat())
+        .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        consistencyVerificationAttempts: 3,
+        consistencyVerificationDelayMs: 0,
+      })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).resolves.toBe(true);
+    expect(minioClient.statObject).toHaveBeenCalledTimes(4);
+  });
+
   it('refuses unpinned or stale deletes before issuing a mutation', async () => {
     const minioClient = client();
     const clientFactory = vi.fn(() => minioClient);

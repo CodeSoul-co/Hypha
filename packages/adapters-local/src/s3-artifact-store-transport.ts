@@ -20,6 +20,8 @@ import {
 } from './s3-artifact-store-values';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const DEFAULT_CONSISTENCY_VERIFICATION_ATTEMPTS = 4;
+const DEFAULT_CONSISTENCY_VERIFICATION_DELAY_MS = 25;
 const MIN_MULTIPART_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_SIGNED_DOWNLOAD_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -173,6 +175,8 @@ export interface MinioS3ArtifactTransportOptions extends S3ArtifactClientConfigI
   multipartPartSizeBytes?: number;
   requestTimeoutMs?: number;
   maximumRetryCount?: number;
+  consistencyVerificationAttempts?: number;
+  consistencyVerificationDelayMs?: number;
   clientFactory?: MinioClientFactory;
   now?: () => Date;
 }
@@ -269,6 +273,8 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
   private readonly multipartPartSizeBytes: number;
   private readonly requestTimeoutMs: number;
   private readonly maximumRetryCount: number;
+  private readonly consistencyVerificationAttempts: number;
+  private readonly consistencyVerificationDelayMs: number;
   private readonly clientFactory: MinioClientFactory;
   private readonly now: () => Date;
   private closed = false;
@@ -283,6 +289,10 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     this.multipartPartSizeBytes = options.multipartPartSizeBytes ?? 8 * 1024 * 1024;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maximumRetryCount = options.maximumRetryCount ?? 1;
+    this.consistencyVerificationAttempts =
+      options.consistencyVerificationAttempts ?? DEFAULT_CONSISTENCY_VERIFICATION_ATTEMPTS;
+    this.consistencyVerificationDelayMs =
+      options.consistencyVerificationDelayMs ?? DEFAULT_CONSISTENCY_VERIFICATION_DELAY_MS;
     assertSafeIntegerAtLeast(
       this.multipartPartSizeBytes,
       MIN_MULTIPART_PART_SIZE_BYTES,
@@ -290,6 +300,14 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     );
     assertPositiveSafeInteger(this.requestTimeoutMs, 'requestTimeoutMs');
     assertNonNegativeSafeInteger(this.maximumRetryCount, 'maximumRetryCount');
+    assertPositiveSafeInteger(
+      this.consistencyVerificationAttempts,
+      'consistencyVerificationAttempts'
+    );
+    assertNonNegativeSafeInteger(
+      this.consistencyVerificationDelayMs,
+      'consistencyVerificationDelayMs'
+    );
     this.clientFactory = options.clientFactory ?? defaultMinioClientFactory;
     this.now = options.now ?? (() => new Date());
   }
@@ -430,11 +448,20 @@ export class MinioS3ArtifactTransport implements S3ArtifactTransport {
     assertExpectedObjectIdentity(current, input.expectedEtag, undefined);
 
     await client.removeObject(input.bucket, input.key, { versionId });
-    try {
-      await client.statObject(input.bucket, input.key, { versionId });
-    } catch (error) {
-      if (isMissingObject(error)) return true;
-      throw error;
+    for (
+      let attempt = 1;
+      attempt <= this.consistencyVerificationAttempts;
+      attempt += 1
+    ) {
+      try {
+        await client.statObject(input.bucket, input.key, { versionId });
+      } catch (error) {
+        if (isMissingObject(error)) return true;
+        throw error;
+      }
+      if (attempt < this.consistencyVerificationAttempts) {
+        await delay(this.consistencyVerificationDelayMs);
+      }
     }
     throw artifactStoreError(
       'ARTIFACT_DELETE_PARTIAL',
@@ -954,4 +981,8 @@ function assertNonNegativeSafeInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${name} must be a non-negative safe integer.`);
   }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

@@ -39,12 +39,15 @@ import {
   normalizeS3ArtifactStoreError,
   normalizeS3Etag,
   requireS3ContentHash,
+  requireS3OperationId,
   s3ObjectMetadata,
   type S3ArtifactObjectState,
 } from './s3-artifact-store-values';
 
 const DEFAULT_MAX_OBJECT_BYTES = 5 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_METADATA_BYTES = 2 * 1024;
+const DEFAULT_VISIBILITY_VERIFICATION_ATTEMPTS = 4;
+const DEFAULT_VISIBILITY_VERIFICATION_DELAY_MS = 25;
 
 export const S3_EXECUTION_ARTIFACT_STORE_ID = 'artifact-store.s3.execution';
 
@@ -57,6 +60,8 @@ export interface S3ExecutionArtifactStoreOptions {
   maxMetadataBytes?: number;
   minimumRetentionMs?: number;
   serverSideEncryption?: 'AES256';
+  visibilityVerificationAttempts?: number;
+  visibilityVerificationDelayMs?: number;
   now?: () => string;
   transport?: S3ArtifactTransport;
   transportOptions?: MinioS3ArtifactTransportOptions;
@@ -77,6 +82,8 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
   private readonly maxMetadataBytes: number;
   private readonly minimumRetentionMs: number;
   private readonly serverSideEncryption?: 'AES256';
+  private readonly visibilityVerificationAttempts: number;
+  private readonly visibilityVerificationDelayMs: number;
   private readonly now: () => string;
   private readonly transport: S3ArtifactTransport;
   private readiness?: Promise<void>;
@@ -98,9 +105,21 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     this.maxMetadataBytes = options.maxMetadataBytes ?? DEFAULT_MAX_METADATA_BYTES;
     this.minimumRetentionMs = options.minimumRetentionMs ?? 0;
     this.serverSideEncryption = options.serverSideEncryption;
+    this.visibilityVerificationAttempts =
+      options.visibilityVerificationAttempts ?? DEFAULT_VISIBILITY_VERIFICATION_ATTEMPTS;
+    this.visibilityVerificationDelayMs =
+      options.visibilityVerificationDelayMs ?? DEFAULT_VISIBILITY_VERIFICATION_DELAY_MS;
     assertPositiveSafeInteger(this.maxObjectBytes, 'maxObjectBytes');
     assertPositiveSafeInteger(this.maxMetadataBytes, 'maxMetadataBytes');
     assertNonNegativeSafeInteger(this.minimumRetentionMs, 'minimumRetentionMs');
+    assertPositiveSafeInteger(
+      this.visibilityVerificationAttempts,
+      'visibilityVerificationAttempts'
+    );
+    assertNonNegativeSafeInteger(
+      this.visibilityVerificationDelayMs,
+      'visibilityVerificationDelayMs'
+    );
     if (
       this.serverSideEncryption !== undefined &&
       this.serverSideEncryption !== 'AES256'
@@ -163,6 +182,7 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
             contentType: request.mimeType,
             metadata: encodeS3ArtifactMetadata(
               staged.contentHash,
+              request.operationId,
               request.metadata,
               this.maxMetadataBytes
             ),
@@ -178,13 +198,23 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
             versionId,
             etag,
             staged.contentHash,
-            staged.sizeBytes
+            staged.sizeBytes,
+            request.operationId
           );
           assertNotAborted(options.abortSignal);
           return this.storageRef(request.objectKey, state);
         } catch (error) {
           if (writeResult?.versionId) {
             await this.rollbackFailedPut(request.objectKey, writeResult, error);
+          } else {
+            const reconciled = await this.reconcileAmbiguousPut(
+              request.objectKey,
+              request.operationId,
+              staged.contentHash,
+              staged.sizeBytes,
+              error
+            );
+            if (reconciled) return this.storageRef(request.objectKey, reconciled);
           }
           throw error;
         } finally {
@@ -458,9 +488,10 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     versionId: string,
     etag: string,
     contentHash: string,
-    sizeBytes: number
+    sizeBytes: number,
+    operationId: string
   ): Promise<S3ArtifactObjectState> {
-    const state = await this.transport.head({ bucket: this.bucket, key: objectKey, versionId });
+    const state = await this.waitForVisibleState({ objectKey, versionId });
     if (!state) {
       throw artifactStoreError(
         'ARTIFACT_UPLOAD_FAILED',
@@ -480,6 +511,13 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
     );
     const actualContentHash = requireS3ContentHash(state);
     if (actualContentHash !== contentHash) throw hashMismatch(contentHash, actualContentHash);
+    if (requireS3OperationId(state) !== operationId) {
+      throw artifactStoreError(
+        'ARTIFACT_VERSION_CONFLICT',
+        'Published S3 Artifact belongs to a different operation.',
+        false
+      );
+    }
     if (state.sizeBytes !== sizeBytes) {
       throw artifactStoreError(
         'ARTIFACT_HASH_MISMATCH',
@@ -489,6 +527,62 @@ export class S3ExecutionArtifactStore implements ArtifactStoreProvider {
       );
     }
     return state;
+  }
+
+  /**
+   * The operation id stored with the remote object acts as a durable,
+   * provider-side journal receipt. A retryable transport failure can therefore
+   * reconcile an upload that committed remotely but lost its client response.
+   */
+  private async reconcileAmbiguousPut(
+    objectKey: string,
+    operationId: string,
+    contentHash: string,
+    sizeBytes: number,
+    originalError: unknown
+  ): Promise<S3ArtifactObjectState | null> {
+    const normalized = normalizeS3ArtifactStoreError(originalError, 'put');
+    if (!normalized.normalizedError.retryable) return null;
+    let state: S3ArtifactObjectState | null;
+    try {
+      state = await this.waitForVisibleState({ objectKey });
+    } catch {
+      return null;
+    }
+    if (!state) return null;
+    try {
+      if (
+        requireS3OperationId(state) !== operationId ||
+        requireS3ContentHash(state) !== contentHash ||
+        state.sizeBytes !== sizeBytes
+      ) {
+        return null;
+      }
+      requireProviderIdentity(state.versionId, 'versionId');
+      requireProviderIdentity(normalizeS3Etag(state.etag), 'etag');
+      if (this.serverSideEncryption && state.encrypted !== true) return null;
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  private async waitForVisibleState(input: {
+    objectKey: string;
+    versionId?: string;
+  }): Promise<S3ArtifactObjectState | null> {
+    for (let attempt = 1; attempt <= this.visibilityVerificationAttempts; attempt += 1) {
+      const state = await this.transport.head({
+        bucket: this.bucket,
+        key: input.objectKey,
+        ...(input.versionId ? { versionId: input.versionId } : {}),
+      });
+      if (state) return state;
+      if (attempt < this.visibilityVerificationAttempts) {
+        await delay(this.visibilityVerificationDelayMs);
+      }
+    }
+    return null;
   }
 
   private assertCopyMatchesSource(
@@ -712,4 +806,8 @@ function artifactRangeSize(range: { start: number; endInclusive?: number }): num
     );
   }
   return range.endInclusive - range.start + 1;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
