@@ -155,8 +155,62 @@ describe('Execution lifecycle Event contracts', () => {
     expect(ajv.validate(executionEventJsonSchemas.ExecutionFrameworkEvent, event)).toBe(true);
   });
 
+  it('preserves Framework creation ownership context without accepting persistence fields', () => {
+    const event = createExecutionFrameworkEvent({
+      id: 'event.command.queued.owned',
+      type: 'command.execution.queued',
+      version: '1.0.0',
+      tenantId: 'tenant.example',
+      userId: 'user.example',
+      workspaceId: 'workspace.example',
+      runId: 'run.example',
+      branchId: 'branch.example',
+      timestamp: '2026-07-16T00:00:00.000Z',
+      payload: {
+        executionId: 'execution.example',
+        workspaceId: 'workspace.example',
+        status: 'queued',
+      },
+    });
+
+    expect(event).toMatchObject({
+      version: '1.0.0',
+      tenantId: 'tenant.example',
+      userId: 'user.example',
+      branchId: 'branch.example',
+    });
+    const ajv = new Ajv({ strict: true, allErrors: true });
+    addFormats(ajv);
+    expect(ajv.validate(executionEventJsonSchemas.ExecutionFrameworkEvent, event)).toBe(true);
+
+    for (const persistenceField of [
+      ['sequence', 1],
+      ['globalSequence', 1],
+      ['recordedAt', '2026-07-16T00:00:01.000Z'],
+      ['payloadHash', 'sha256:persisted'],
+    ] as const) {
+      const persistedShape = { ...event, [persistenceField[0]]: persistenceField[1] };
+      expect(() => validateExecutionFrameworkEvent(persistedShape)).toThrow();
+      expect(
+        ajv.validate(executionEventJsonSchemas.ExecutionFrameworkEvent, persistedShape)
+      ).toBe(false);
+    }
+  });
+
   it.each(['correlationId', 'causationId', 'parentEventId', 'idempotencyKey'] as const)(
     'rejects an empty Framework %s in runtime and public contracts',
+    (field) => {
+      const event = { ...commandExecutionEventExample, [field]: '' };
+      expect(() => validateExecutionFrameworkEvent(event)).toThrow();
+
+      const ajv = new Ajv({ strict: true, allErrors: true });
+      addFormats(ajv);
+      expect(ajv.validate(executionEventJsonSchemas.ExecutionFrameworkEvent, event)).toBe(false);
+    }
+  );
+
+  it.each(['version', 'tenantId', 'userId', 'branchId'] as const)(
+    'rejects an empty Framework creation-context %s in runtime and public contracts',
     (field) => {
       const event = { ...commandExecutionEventExample, [field]: '' };
       expect(() => validateExecutionFrameworkEvent(event)).toThrow();
