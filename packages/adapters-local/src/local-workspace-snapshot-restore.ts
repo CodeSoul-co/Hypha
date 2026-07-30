@@ -51,7 +51,10 @@ export async function restoreLocalWorkspaceSnapshot(
       assertRestoreActive(options.abortSignal);
       await restoreLocalWorkspaceSnapshotUnlocked(root, options);
     },
-    { maxWaitDurationMs: options.maxRestoreLockWaitDurationMs }
+    {
+      maxWaitDurationMs: options.maxRestoreLockWaitDurationMs,
+      abortSignal: options.abortSignal,
+    }
   );
 }
 

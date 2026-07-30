@@ -27,6 +27,7 @@ export type LocalWorkspaceRestoreJournalInput = Omit<
 
 export interface LocalWorkspaceRestoreLockOptions {
   maxWaitDurationMs?: number;
+  abortSignal?: AbortSignal;
 }
 
 export async function withLocalWorkspaceRestoreLock<T>(
@@ -50,7 +51,8 @@ export async function withLocalWorkspaceRestoreLock<T>(
     if (restoreLocks.get(key) === queued) restoreLocks.delete(key);
   });
   try {
-    await waitForRestoreLock(previous, maxWaitDurationMs);
+    await waitForRestoreLock(previous, maxWaitDurationMs, options.abortSignal);
+    assertRestoreLockActive(options.abortSignal);
   } catch (error) {
     release?.();
     throw error;
@@ -270,11 +272,14 @@ function platformPathKey(value: string): string {
 
 async function waitForRestoreLock(
   previous: Promise<void>,
-  maxWaitDurationMs: number
+  maxWaitDurationMs: number,
+  abortSignal: AbortSignal | undefined
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
   try {
-    await Promise.race([
+    assertRestoreLockActive(abortSignal);
+    const waits: Promise<void>[] = [
       previous,
       new Promise<void>((_resolve, reject) => {
         timer = setTimeout(() => {
@@ -288,8 +293,31 @@ async function waitForRestoreLock(
           );
         }, maxWaitDurationMs);
       }),
-    ]);
+    ];
+    if (abortSignal) {
+      waits.push(
+        new Promise<void>((_resolve, reject) => {
+          abortListener = () => reject(restoreLockCancelled());
+          abortSignal.addEventListener('abort', abortListener, { once: true });
+          if (abortSignal.aborted) abortListener();
+        })
+      );
+    }
+    await Promise.race(waits);
   } finally {
     if (timer) clearTimeout(timer);
+    if (abortListener) abortSignal?.removeEventListener('abort', abortListener);
   }
+}
+
+function assertRestoreLockActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) throw restoreLockCancelled();
+}
+
+function restoreLockCancelled() {
+  return executionProviderError(
+    'EXECUTION_CANCELLED',
+    'Workspace restore lock wait was cancelled.',
+    false
+  );
 }

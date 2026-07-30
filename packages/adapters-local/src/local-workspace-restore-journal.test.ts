@@ -113,6 +113,90 @@ describe('Local Workspace restore journal', () => {
       vi.useRealTimers();
     }
   });
+
+  it('cancels lock waiting without running the cancelled task or bypassing the holder', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-restore-lock-cancel-'));
+    roots.push(root);
+    let releaseHolder: (() => void) | undefined;
+    const holderReleased = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const holder = withLocalWorkspaceRestoreLock(root, async () => {
+      holderStarted?.();
+      await holderReleased;
+    });
+
+    try {
+      await started;
+      const controller = new AbortController();
+      let cancelledTaskRan = false;
+      const cancelled = withLocalWorkspaceRestoreLock(
+        root,
+        async () => {
+          cancelledTaskRan = true;
+        },
+        {
+          maxWaitDurationMs: 30_000,
+          abortSignal: controller.signal,
+        }
+      );
+
+      controller.abort();
+      await expect(cancelled).rejects.toMatchObject({
+        normalizedError: {
+          code: 'EXECUTION_CANCELLED',
+          retryable: false,
+        },
+      });
+      expect(cancelledTaskRan).toBe(false);
+
+      let successorRan = false;
+      const successor = withLocalWorkspaceRestoreLock(root, async () => {
+        successorRan = true;
+        return 'acquired';
+      });
+      await Promise.resolve();
+      expect(successorRan).toBe(false);
+
+      releaseHolder?.();
+      await holder;
+      await expect(successor).resolves.toBe('acquired');
+    } finally {
+      releaseHolder?.();
+      await holder;
+    }
+  });
+
+  it('rejects a pre-cancelled lock request without running or blocking later work', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-restore-lock-pre-cancel-'));
+    roots.push(root);
+    const controller = new AbortController();
+    controller.abort();
+    let cancelledTaskRan = false;
+
+    await expect(
+      withLocalWorkspaceRestoreLock(
+        root,
+        async () => {
+          cancelledTaskRan = true;
+        },
+        { abortSignal: controller.signal }
+      )
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'EXECUTION_CANCELLED',
+        retryable: false,
+      },
+    });
+    expect(cancelledTaskRan).toBe(false);
+    await expect(withLocalWorkspaceRestoreLock(root, async () => 'acquired')).resolves.toBe(
+      'acquired'
+    );
+  });
 });
 
 function journalInput(root: string, label: string): LocalWorkspaceRestoreJournalInput {

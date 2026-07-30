@@ -15,7 +15,10 @@ import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-re
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';
 import { LocalArtifactWorkspaceContentReader } from './local-artifact-workspace-content-reader';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
-import { workspaceRestoreJournalPath } from './local-workspace-restore-journal';
+import {
+  withLocalWorkspaceRestoreLock,
+  workspaceRestoreJournalPath,
+} from './local-workspace-restore-journal';
 import { LocalWorkspaceSnapshotArtifactService } from './local-workspace-snapshot-artifacts';
 import {
   encodeWorkspaceSnapshotManifest,
@@ -323,6 +326,53 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
       candidate.startsWith(`.${path.basename(root)}.restore-`)
     );
     expect(restoreEvidence).toEqual([]);
+  });
+
+  it('cancels while waiting for the Workspace restore lock without reading Artifacts', async () => {
+    const root = await workspaceRoot('restore-lock-cancellation');
+    await fs.writeFile(path.join(root, 'result.txt'), 'snapshot');
+    const fixture = createFixture(root);
+    const workspace = new LocalWorkspaceAdapter({ workspaceRoot: root });
+    const service = createService(workspace, fixture.manager);
+    const snapshot = await service.createFullSnapshot(snapshotRequest());
+    await fs.writeFile(path.join(root, 'result.txt'), 'current');
+    const current = await workspace.capture();
+    const read = vi.spyOn(fixture.manager, 'read');
+    let releaseHolder: (() => void) | undefined;
+    const holderReleased = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const holder = withLocalWorkspaceRestoreLock(root, async () => {
+      holderStarted?.();
+      await holderReleased;
+    });
+
+    try {
+      await started;
+      const controller = new AbortController();
+      const pending = service.restoreFullSnapshot(
+        restoreRequest(snapshot.id, current.sourceTreeHash),
+        { abortSignal: controller.signal }
+      );
+      await Promise.resolve();
+      controller.abort(new Error('cancel Workspace restore lock wait'));
+
+      await expect(pending).rejects.toMatchObject({
+        normalizedError: { code: 'EXECUTION_CANCELLED', retryable: false },
+      });
+      expect(read).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(root, 'result.txt'), 'utf8')).resolves.toBe('current');
+      await expect(fs.access(workspaceRestoreJournalPath(root))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      releaseHolder?.();
+      await holder;
+    }
   });
 
   it('fails closed when the Workspace changes while restore staging is prepared', async () => {
