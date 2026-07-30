@@ -56,6 +56,26 @@ export function validateArtifactStoreOutput<T>(validate: () => T): T {
   }
 }
 
+export function validateArtifactRepositoryOutput<T>(validate: () => T): T {
+  try {
+    return validate();
+  } catch (error) {
+    if (error instanceof ArtifactManagerError) throw error;
+    if (error instanceof ZodError) {
+      throw artifactManagerError(
+        'ARTIFACT_INTERNAL_ERROR',
+        'Artifact record repository response failed contract validation.',
+        false,
+        {
+          repositoryCode: 'ARTIFACT_RECORD_REPOSITORY_CORRUPT',
+          issues: error.issues,
+        }
+      );
+    }
+    throw error;
+  }
+}
+
 export function normalizedArtifactErrorCode(
   error: unknown
 ): NormalizedArtifactError['code'] | undefined {

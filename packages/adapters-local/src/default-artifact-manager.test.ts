@@ -12,6 +12,7 @@ import type {
   ArtifactStorageRef,
   ArtifactStoreCapabilities,
   ExecutionPrincipal,
+  StoredArtifactRecord,
 } from '@hypha/core';
 import { ArtifactManagerError, DefaultArtifactManager } from '@hypha/core';
 import { hashArtifactBytes } from './artifact-content-io';
@@ -248,6 +249,50 @@ describe('DefaultArtifactManager', () => {
       normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
     });
   });
+
+  it.each(['get', 'list', 'getByVersionId', 'findIdempotency'] as const)(
+    'fails closed when the Artifact record repository returns corrupt data from %s',
+    async (invalidOutput) => {
+      const repository = new InvalidOutputArtifactRecordRepository();
+      const fixture = createFixture({ repository });
+      const bytes = new TextEncoder().encode(invalidOutput);
+      const create = {
+        ...createRequest(`invalid-repository-${invalidOutput}`, bytes),
+        idempotencyKey: `idempotency-${invalidOutput}`,
+      };
+      const first = await fixture.manager.create(create);
+      const second = await fixture.manager.createVersion({
+        operationId: `version-${invalidOutput}`,
+        principal: owner,
+        artifactId: first.id,
+        expectedRevision: first.revision,
+        content: bytes,
+        expectedContentHash: hashArtifactBytes(bytes),
+        provenance: {
+          sourceType: 'derived',
+          createdBy: owner.principalId,
+          sourceArtifactIds: [first.id],
+        },
+      });
+      repository.invalidOutput = invalidOutput;
+
+      const operation =
+        invalidOutput === 'get'
+          ? fixture.manager.get({ principal: owner, artifactId: first.id })
+          : invalidOutput === 'list'
+            ? fixture.manager.list({ principal: owner, workspaceId: first.workspaceId })
+            : invalidOutput === 'getByVersionId'
+              ? fixture.manager.previous({ principal: owner, versionId: second.versionId })
+              : fixture.manager.create(create);
+
+      await expect(operation).rejects.toMatchObject({
+        normalizedError: {
+          code: 'ARTIFACT_INTERNAL_ERROR',
+          details: { repositoryCode: 'ARTIFACT_RECORD_REPOSITORY_CORRUPT' },
+        },
+      });
+    }
+  );
 
   it('fails closed when the Artifact Store cannot issue signed access', async () => {
     const fixture = createFixture();
@@ -578,6 +623,7 @@ function createFixture(
     retainFinal?: boolean;
     signedAccess?: boolean;
     store?: SignedInMemoryArtifactStore;
+    repository?: InMemoryArtifactRecordRepository;
     workspaceReader?: ConstructorParameters<typeof DefaultArtifactManager>[0]['workspaceReader'];
   } = {}
 ) {
@@ -587,7 +633,7 @@ function createFixture(
       id: 'artifact-store.test',
       signedAccess: overrides.signedAccess ?? false,
     });
-  const repository = new InMemoryArtifactRecordRepository();
+  const repository = overrides.repository ?? new InMemoryArtifactRecordRepository();
   const profile: ArtifactProfileSpec = {
     id: 'artifact-profile.test',
     version: '1.0.0',
@@ -725,6 +771,52 @@ class InvalidOutputArtifactStore extends SignedInMemoryArtifactStore {
     const access = await super.createDownloadAccess(request);
     return this.invalidOutput === 'download' ? { ...access, url: 'not-a-url' } : access;
   }
+}
+
+class InvalidOutputArtifactRecordRepository extends InMemoryArtifactRecordRepository {
+  invalidOutput?: 'get' | 'list' | 'getByVersionId' | 'findIdempotency';
+
+  override async get(artifactId: string, versionId?: string): Promise<StoredArtifactRecord | null> {
+    return this.corruptIfSelected('get', await super.get(artifactId, versionId));
+  }
+
+  override async list(): Promise<StoredArtifactRecord[]> {
+    const stored = await super.list();
+    return this.invalidOutput === 'list'
+      ? stored.map((record, index) => (index === 0 ? corruptStoredRecord(record) : record))
+      : stored;
+  }
+
+  override async getByVersionId(versionId: string): Promise<StoredArtifactRecord | null> {
+    return this.corruptIfSelected('getByVersionId', await super.getByVersionId(versionId));
+  }
+
+  override async findIdempotency(
+    operationId: string,
+    idempotencyKey: string
+  ): Promise<StoredArtifactRecord | null> {
+    return this.corruptIfSelected(
+      'findIdempotency',
+      await super.findIdempotency(operationId, idempotencyKey)
+    );
+  }
+
+  private corruptIfSelected(
+    operation: NonNullable<InvalidOutputArtifactRecordRepository['invalidOutput']>,
+    stored: StoredArtifactRecord | null
+  ): StoredArtifactRecord | null {
+    return this.invalidOutput === operation && stored ? corruptStoredRecord(stored) : stored;
+  }
+}
+
+function corruptStoredRecord(stored: StoredArtifactRecord): StoredArtifactRecord {
+  return {
+    ...stored,
+    record: {
+      ...stored.record,
+      contentHash: 'not-a-digest',
+    },
+  };
 }
 
 function createRequest(operationId: string, content: Uint8Array): ArtifactCreateRequest {

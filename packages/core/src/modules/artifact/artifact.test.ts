@@ -9,6 +9,8 @@ import {
   validateArtifactProfileSpec,
   validateArtifactRecord,
   validateArtifactRef,
+  validateStoredArtifactRecord,
+  validateStoredArtifactRecords,
 } from './index';
 
 describe('ArtifactProfileSpec', () => {
@@ -110,6 +112,26 @@ describe('ArtifactRecord and ArtifactRef', () => {
         },
       })
     ).toThrow(/sourceArtifactIds/u);
+  });
+
+  it('validates stored Artifact records and rejects corrupt repository values', () => {
+    const stored = {
+      record: artifactRecordExample,
+      profileRef: {
+        id: artifactProfileSpecExample.id,
+        version: artifactProfileSpecExample.version,
+      },
+    };
+
+    expect(validateStoredArtifactRecord(stored)).toEqual(stored);
+    expect(validateStoredArtifactRecords([stored])).toEqual([stored]);
+    expect(() =>
+      validateStoredArtifactRecord({
+        ...stored,
+        record: { ...stored.record, contentHash: 'not-a-digest' },
+      })
+    ).toThrow();
+    expect(() => validateStoredArtifactRecords({ records: [stored] })).toThrow();
   });
 });
 
