@@ -25,6 +25,11 @@ import {
   createServerRuntimeComposition,
   type ServerRuntimeCompositionBindings,
 } from './ServerRuntimeComposition';
+import {
+  ServerRuntimeWorkerLifecycle,
+  type ServerRuntimeWorkerBindings,
+  type ServerRuntimeWorkers,
+} from './ServerRuntimeWorkerLifecycle';
 
 const projectionRevision = 'runtime-orchestration-projection:1.0.0';
 const streamFingerprintRevision = 'runtime-stream-fingerprint:1.0.0';
@@ -58,6 +63,8 @@ export class ServerCanonicalRuntime {
   private migration?: CanonicalEventFamilyMigrationReport;
   private composition?: Readonly<ServerCanonicalRuntimeComposition>;
   private runtimeComposition?: Readonly<RuntimeComposition>;
+  private workerLifecycle?: ServerRuntimeWorkerLifecycle;
+  private closePromise?: Promise<void>;
   private closed = false;
 
   constructor(private readonly options: ServerCanonicalRuntimeOptions) {
@@ -193,17 +200,59 @@ export class ServerCanonicalRuntime {
     return this.runtimeComposition;
   }
 
+  /**
+   * Starts the durable Runtime pollers only after the audited execution graph
+   * has been composed. The returned workers are owned by this service.
+   */
+  startWorkers(bindings: ServerRuntimeWorkerBindings): Promise<Readonly<ServerRuntimeWorkers>> {
+    this.assertOpen();
+    if (!this.runtimeComposition) {
+      throw failure(
+        'RUNTIME_STARTUP_INCOMPLETE',
+        'Canonical Runtime execution graph is not composed'
+      );
+    }
+    if (!this.workerLifecycle) {
+      this.workerLifecycle = new ServerRuntimeWorkerLifecycle(this.runtimeComposition, bindings);
+    }
+    return this.workerLifecycle.start();
+  }
+
+  areWorkersRunning(): boolean {
+    return this.workerLifecycle?.isRunning() ?? false;
+  }
+
   isInitialized(): boolean {
     return !this.closed && this.composition !== undefined;
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
+  close(): Promise<void> {
+    if (!this.closePromise) {
+      this.closed = true;
+      this.closePromise = this.closeInternal();
+    }
+    return this.closePromise;
+  }
+
+  private async closeInternal(): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      await this.workerLifecycle?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    this.workerLifecycle = undefined;
     this.runtimeComposition = undefined;
     this.composition = undefined;
     this.bridge = undefined;
-    await this.lifecycle.close();
+    try {
+      await this.lifecycle.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'One or more canonical Runtime shutdown phases failed');
+    }
   }
 
   private requireBridge(): DurableEventStoreBridge {
