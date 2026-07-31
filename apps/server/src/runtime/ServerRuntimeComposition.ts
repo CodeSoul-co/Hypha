@@ -5,6 +5,7 @@ import {
   type RuntimeActivityRedispatchRecoveryPort,
   type RuntimeActivityReconciliationPort,
   type RuntimeCancellationRecoveryPort,
+  type RuntimeOperationalTelemetry,
   type RuntimeRecoveryRequeuePort,
 } from '@hypha/core';
 import { FSMRuntime, type FSMProcessSpec } from '@hypha/fsm';
@@ -34,6 +35,7 @@ export interface ServerRuntimeCompositionOptions {
   recoveryRedispatches: RuntimeActivityRedispatchRecoveryPort;
   recoveryCancellations: RuntimeCancellationRecoveryPort;
   recoveryRequeue: RuntimeRecoveryRequeuePort;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
   nextId?: FencedBoundedFSMDriverOptions['nextId'];
 }
 
@@ -65,6 +67,9 @@ export function createServerRuntimeComposition(
           runtime: new EventFirstRuntime(
             new CanonicalRunManagerEventStore(canonicalEvents, options.mergedEvents)
           ),
+          ...(options.operationalTelemetry === undefined
+            ? {}
+            : { operationalTelemetry: options.operationalTelemetry }),
         });
       },
       createTimerWorker: ({ events, projections, projectionStore, runLeases }) =>
@@ -73,6 +78,9 @@ export function createServerRuntimeComposition(
           projections,
           projectionStore,
           runLeases,
+          ...(options.operationalTelemetry === undefined
+            ? {}
+            : { operationalTelemetry: options.operationalTelemetry }),
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
         }),
       createRecoveryService: ({ events, projections, projectionStore, runLeases, stateClaims }) =>
