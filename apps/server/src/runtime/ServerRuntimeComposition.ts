@@ -24,9 +24,7 @@ import type { RuntimeBackbone } from './RuntimeBackbone';
 import { RuntimeCompositionRoot, type RuntimeComposition } from './RuntimeCompositionRoot';
 import { CanonicalRunManagerEventStore } from './OrchestrationEventStore';
 
-export interface ServerRuntimeCompositionOptions {
-  backbone: RuntimeBackbone;
-  mergedEvents: EventStore;
+export interface ServerRuntimeCompositionBindings {
   inference: InferenceProvider;
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
@@ -37,6 +35,11 @@ export interface ServerRuntimeCompositionOptions {
   recoveryRequeue: RuntimeRecoveryRequeuePort;
   operationalTelemetry?: RuntimeOperationalTelemetry;
   nextId?: FencedBoundedFSMDriverOptions['nextId'];
+}
+
+export interface ServerRuntimeCompositionOptions extends ServerRuntimeCompositionBindings {
+  backbone: RuntimeBackbone;
+  mergedEvents: EventStore;
 }
 
 /**

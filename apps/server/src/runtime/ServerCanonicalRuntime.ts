@@ -20,6 +20,11 @@ import {
 } from './OrchestrationEventStore';
 import { createRuntimeBackbone, type RuntimeBackbone } from './RuntimeBackbone';
 import { RuntimeBackboneLifecycle } from './RuntimeBackboneLifecycle';
+import type { RuntimeComposition } from './RuntimeCompositionRoot';
+import {
+  createServerRuntimeComposition,
+  type ServerRuntimeCompositionBindings,
+} from './ServerRuntimeComposition';
 
 const projectionRevision = 'runtime-orchestration-projection:1.0.0';
 const streamFingerprintRevision = 'runtime-stream-fingerprint:1.0.0';
@@ -52,6 +57,7 @@ export class ServerCanonicalRuntime {
   private bridge?: DurableEventStoreBridge;
   private migration?: CanonicalEventFamilyMigrationReport;
   private composition?: Readonly<ServerCanonicalRuntimeComposition>;
+  private runtimeComposition?: Readonly<RuntimeComposition>;
   private closed = false;
 
   constructor(private readonly options: ServerCanonicalRuntimeOptions) {
@@ -147,8 +153,7 @@ export class ServerCanonicalRuntime {
       projections: backbone.projections,
       projectionStore: backbone.projectionStore,
       runLeases: backbone.runLeases,
-      nextId: (namespace) =>
-        `${namespace}:${this.runtimeInstanceId}:${++this.bridgeLeaseSequence}`,
+      nextId: (namespace) => `${namespace}:${this.runtimeInstanceId}:${++this.bridgeLeaseSequence}`,
       ...(this.options.now === undefined ? {} : { now: this.options.now }),
     });
     this.composition = Object.freeze({
@@ -171,6 +176,23 @@ export class ServerCanonicalRuntime {
     return this.composition;
   }
 
+  /**
+   * Composes the execution graph only after canonical migration and audit have
+   * established the authoritative Event and coordination dependencies.
+   */
+  composeRuntime(bindings: ServerRuntimeCompositionBindings): Readonly<RuntimeComposition> {
+    this.assertOpen();
+    if (this.runtimeComposition) return this.runtimeComposition;
+
+    const canonical = this.get();
+    this.runtimeComposition = createServerRuntimeComposition({
+      ...bindings,
+      backbone: canonical.backbone,
+      mergedEvents: canonical.events,
+    });
+    return this.runtimeComposition;
+  }
+
   isInitialized(): boolean {
     return !this.closed && this.composition !== undefined;
   }
@@ -178,6 +200,7 @@ export class ServerCanonicalRuntime {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.runtimeComposition = undefined;
     this.composition = undefined;
     this.bridge = undefined;
     await this.lifecycle.close();
