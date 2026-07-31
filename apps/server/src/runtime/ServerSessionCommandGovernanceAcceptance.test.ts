@@ -1,7 +1,12 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { ArtifactSessionCommandPayloadStore } from '@hypha/core';
+import {
+  ArtifactSessionCommandPayloadStore,
+  InMemoryTelemetryRecorder,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
+} from '@hypha/core';
 import { InMemoryExecutionArtifactStore, SQLiteSessionQueue } from '@hypha/adapters-local';
 import {
   ServerSessionCommandRuntime,
@@ -162,7 +167,9 @@ describe('Server Session Command governance acceptance', () => {
     const payloads = payloadStore();
     const gate = holdGate();
     const handled: string[] = [];
+    const recorder = new InMemoryTelemetryRecorder();
     let now = '2026-07-31T01:00:00.000Z';
+    let monotonicNow = 0;
     let queue = new SQLiteSessionQueue({ filename, now: () => now });
     const runtime = createRuntime({
       queue,
@@ -183,6 +190,14 @@ describe('Server Session Command governance acceptance', () => {
         }
         handled.push(input.command.id);
         return apply(input);
+      },
+      operationalTelemetry: new RuntimeOperationalTelemetry({
+        recorder,
+        now: () => now,
+      }),
+      monotonicNow: () => {
+        monotonicNow += 2;
+        return monotonicNow;
       },
     });
 
@@ -231,6 +246,21 @@ describe('Server Session Command governance acceptance', () => {
         rejectionCode: 'acceptance_poison_command',
       });
       expect(handled).toEqual(['command.run-a.in-flight', 'command.run-b']);
+      expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalTotal)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            value: 1,
+            attributes: { resource: 'session_command', outcome: 'failed' },
+          }),
+          expect.objectContaining({
+            value: 1,
+            attributes: { resource: 'session_command', outcome: 'succeeded' },
+          }),
+        ])
+      );
+      expect(
+        JSON.stringify(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalTotal))
+      ).not.toMatch(/run\.|session\.|command\.|sha256:/u);
 
       await runtime.close();
       queue.close();
@@ -288,6 +318,8 @@ function createRuntime(input: {
     | { disposition: 'failed'; rejectionCode: string; deadLetter: true }
   >;
   now?: () => string;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
 }): ServerSessionCommandRuntime<AcceptancePayloads> {
   return new ServerSessionCommandRuntime<AcceptancePayloads>({
     queue: input.queue,
@@ -303,6 +335,10 @@ function createRuntime(input: {
       },
     },
     ...(input.now === undefined ? {} : { now: input.now }),
+    ...(input.operationalTelemetry === undefined
+      ? {}
+      : { operationalTelemetry: input.operationalTelemetry }),
+    ...(input.monotonicNow === undefined ? {} : { monotonicNow: input.monotonicNow }),
   });
 }
 
