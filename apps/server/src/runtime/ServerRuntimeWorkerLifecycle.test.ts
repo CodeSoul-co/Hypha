@@ -4,6 +4,8 @@ import type {
   RuntimeTimerSweepRequest,
   RuntimeTimerSweepResult,
 } from '@hypha/core';
+import type { ServerRuntimeRecoverySchedulerOptions } from './ServerRuntimeRecoveryScheduler';
+import type { ServerRuntimeTimerSchedulerOptions } from './ServerRuntimeTimerScheduler';
 import { ServerRuntimeWorkerLifecycle } from './ServerRuntimeWorkerLifecycle';
 
 describe('ServerRuntimeWorkerLifecycle', () => {
@@ -17,9 +19,29 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     const lifecycle = createLifecycle(sweep, scan);
 
     const [first, second] = await Promise.all([lifecycle.start(), lifecycle.start()]);
+    await waitFor(
+      () =>
+        first.status().timer.successfulSweeps === 1 &&
+        first.status().recovery.successfulSweeps === 1
+    );
 
     expect(first).toBe(second);
     expect(lifecycle.isRunning()).toBe(true);
+    expect(first.status()).toEqual({
+      lifecycle: 'running',
+      timer: {
+        running: true,
+        successfulSweeps: 1,
+        failedSweeps: 0,
+        lastSuccessfulSweepAt: expect.any(String),
+      },
+      recovery: {
+        running: true,
+        successfulSweeps: 1,
+        failedSweeps: 0,
+        lastSuccessfulSweepAt: expect.any(String),
+      },
+    });
     expect(sweep).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'runtime.timer.server', limit: 100 })
     );
@@ -30,6 +52,11 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     expect(firstClose).toBe(secondClose);
     await firstClose;
     expect(lifecycle.isRunning()).toBe(false);
+    expect(first.status()).toMatchObject({
+      lifecycle: 'closed',
+      timer: { running: false },
+      recovery: { running: false },
+    });
   });
 
   it('signals both schedulers and drains their in-flight sweeps before closing', async () => {
@@ -51,6 +78,7 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     const workers = await lifecycle.start();
 
     const closing = lifecycle.close();
+    expect(workers.status().lifecycle).toBe('draining');
     expect(workers.timer.isRunning()).toBe(true);
     expect(workers.recovery.isRunning()).toBe(true);
 
@@ -62,7 +90,52 @@ describe('ServerRuntimeWorkerLifecycle', () => {
 
     expect(workers.timer.isRunning()).toBe(false);
     expect(workers.recovery.isRunning()).toBe(false);
+    expect(workers.status().lifecycle).toBe('closed');
     expect(() => lifecycle.start()).toThrow('Runtime Worker lifecycle is closed');
+  });
+
+  it('records bounded sweep failures while preserving configured observers', async () => {
+    const now = '2026-07-31T12:00:00.000Z';
+    const timerError = new Error('timer dependency unavailable');
+    const timerOnError = jest.fn();
+    const recoveryOnSweep = jest.fn();
+    const lifecycle = createLifecycle(
+      jest.fn(async () => {
+        throw timerError;
+      }),
+      jest.fn(async () => recoveryPage()),
+      {
+        timer: { now: () => now, onError: timerOnError },
+        recovery: { now: () => now, onSweep: recoveryOnSweep },
+      }
+    );
+
+    const workers = await lifecycle.start();
+    await waitFor(
+      () =>
+        workers.status().timer.failedSweeps === 1 &&
+        workers.status().recovery.successfulSweeps === 1
+    );
+
+    expect(workers.status()).toEqual({
+      lifecycle: 'running',
+      timer: {
+        running: true,
+        successfulSweeps: 0,
+        failedSweeps: 1,
+        lastFailedSweepAt: now,
+      },
+      recovery: {
+        running: true,
+        successfulSweeps: 1,
+        failedSweeps: 0,
+        lastSuccessfulSweepAt: now,
+      },
+    });
+    expect(timerOnError).toHaveBeenCalledWith(timerError);
+    expect(recoveryOnSweep).toHaveBeenCalledWith(expect.objectContaining({ checkedAt: now }));
+    expect(JSON.stringify(workers.status())).not.toContain(timerError.message);
+    await lifecycle.close();
   });
 
   it('closes cleanly before startup and rejects later activation', async () => {
@@ -80,7 +153,11 @@ describe('ServerRuntimeWorkerLifecycle', () => {
 
 function createLifecycle(
   sweep: (request: RuntimeTimerSweepRequest) => Promise<RuntimeTimerSweepResult>,
-  scan: (request: RuntimeRecoveryScanRequest) => Promise<RuntimeRecoveryScanResult>
+  scan: (request: RuntimeRecoveryScanRequest) => Promise<RuntimeRecoveryScanResult>,
+  overrides: {
+    timer?: Partial<Omit<ServerRuntimeTimerSchedulerOptions, 'worker'>>;
+    recovery?: Partial<Omit<ServerRuntimeRecoverySchedulerOptions, 'service'>>;
+  } = {}
 ): ServerRuntimeWorkerLifecycle {
   return new ServerRuntimeWorkerLifecycle(
     {
@@ -100,6 +177,7 @@ function createLifecycle(
         leaseTtlMs: 30_000,
         pageLimit: 100,
         pollIntervalMs: 60_000,
+        ...overrides.timer,
       },
       recovery: {
         ownerId: 'runtime.recovery.server',
@@ -107,6 +185,7 @@ function createLifecycle(
         pageLimit: 100,
         pollIntervalMs: 60_000,
         autoRecoverReasons: ['PROJECTION_BEHIND'],
+        ...overrides.recovery,
       },
     }
   );
@@ -128,4 +207,12 @@ function recoveryPage(): RuntimeRecoveryScanResult {
     candidates: [],
     scannedStreams: 0,
   };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error('Timed out waiting for Runtime worker evidence');
 }
