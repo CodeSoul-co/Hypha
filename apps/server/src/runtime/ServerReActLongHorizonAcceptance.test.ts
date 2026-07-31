@@ -254,6 +254,179 @@ describe('Server ReAct long-horizon acceptance', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('sustains repeated restarts, lease takeovers, and duplicate delivery for 24 quanta', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-long-horizon-stress-'));
+    const paths: DurablePaths = {
+      events: path.join(root, 'events.sqlite'),
+      projections: path.join(root, 'projections.sqlite'),
+      queue: path.join(root, 'queue.sqlite'),
+      checkpoints: path.join(root, 'checkpoints.sqlite'),
+    };
+    const artifacts = new InMemoryExecutionArtifactStore();
+    const terminalQuantum = 24;
+    const restartAfter = new Set([6, 12, 18]);
+    const takeoverAt = new Set([5, 11, 17, 23]);
+    let now = '2026-07-29T17:00:00.000Z';
+    let quantumCount = 0;
+    let workerGeneration = 0;
+    let node: RuntimeNode | undefined;
+
+    const openNode = async (): Promise<RuntimeNode> => {
+      workerGeneration += 1;
+      return createNode({
+        workerId: `worker.stress.${workerGeneration}`,
+        paths,
+        artifacts,
+        now: () => now,
+        execute: async (activeNode, descriptor) => {
+          quantumCount += 1;
+          return executeQuantum(
+            activeNode,
+            descriptor.checkpointSequence,
+            quantumCount,
+            now,
+            terminalQuantum
+          );
+        },
+      });
+    };
+
+    try {
+      node = await openNode();
+      await seedRun(node.events, now);
+      const initialCheckpoint = checkpoint(1, now);
+      await node.checkpoints.put(initialCheckpoint, 'stress.seed.checkpoint');
+      const initialPayload = payload(initialCheckpoint, now);
+      await node.commands.enqueue({
+        id: 'command.stress.quantum.1',
+        commandType: 'continue_react',
+        idempotencyKey: reActContinuationIdempotencyKey(initialPayload),
+        tenantId: scope.tenantId,
+        userId: scope.userId,
+        sessionId: scope.sessionId,
+        targetRunId: scope.runId,
+        payload: initialPayload,
+        createdAt: now,
+        availableAt: now,
+      });
+
+      for (let quantum = 1; quantum <= terminalQuantum; quantum += 1) {
+        const command = await queuedCommand(node.queue);
+        const commandValue = await commandPayload(node.payloads, command);
+        const beforeQuantum = await requiredHead(node.events);
+        expect(beforeQuantum.runRevision).toBe(quantum);
+        expect(commandValue.checkpointSequence).toBe(beforeQuantum.runRevision);
+        expect((await enqueueDuplicate(node.commands, command, commandValue)).status).toBe(
+          'reused'
+        );
+
+        if (takeoverAt.has(quantum)) {
+          const staleWorkerId = `worker.stale.${quantum}`;
+          const staleClaim = await node.queue.claim({
+            workerId: staleWorkerId,
+            now,
+            leaseMs: 100,
+          });
+          expect(staleClaim).toMatchObject({
+            id: command.id,
+            claimedBy: staleWorkerId,
+            leaseEpoch: 1,
+          });
+          now = advanceClock(now);
+          await expect(node.commands.processNext()).resolves.toMatchObject({
+            disposition: 'applied',
+            commandId: command.id,
+          });
+          await expect(
+            node.queue.complete({
+              commandId: staleClaim!.id,
+              workerId: staleWorkerId,
+              claimToken: staleClaim!.claimToken!,
+              leaseEpoch: staleClaim!.leaseEpoch,
+              completedAt: now,
+            })
+          ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+        } else {
+          await expect(node.commands.processNext()).resolves.toMatchObject({
+            disposition: 'applied',
+            commandId: command.id,
+          });
+        }
+
+        expect((await enqueueDuplicate(node.commands, command, commandValue)).status).toBe(
+          'reused'
+        );
+        const terminal = quantum === terminalQuantum;
+        const afterQuantum = await requiredHead(node.events);
+        expect(afterQuantum).toMatchObject({
+          lastSequence: terminal ? quantum * 2 + 2 : quantum * 2 + 1,
+          runRevision: quantum + 1,
+        });
+        await expect(node.query.getRun({ scope })).resolves.toMatchObject({
+          projection: {
+            runStatus: terminal ? 'completed' : 'running',
+            currentState: `Quantum${quantum}`,
+          },
+          projectionLastSequence: afterQuantum.lastSequence,
+          eventHeadSequence: afterQuantum.lastSequence,
+          projectionLag: 0,
+        });
+        if (terminal) {
+          await expect(node.checkpoints.get(scope.runId, stepId, scopeHash)).resolves.toBeNull();
+        } else {
+          await expect(node.checkpoints.get(scope.runId, stepId, scopeHash)).resolves.toMatchObject(
+            {
+              stepSequence: afterQuantum.runRevision,
+            }
+          );
+        }
+
+        if (restartAfter.has(quantum)) {
+          await node.close();
+          node = undefined;
+          now = advanceClock(now);
+          node = await openNode();
+          await expect(node.events.getStreamHead(streamScope())).resolves.toEqual(afterQuantum);
+          await expect(node.query.getRun({ scope })).resolves.toMatchObject({
+            projectionLastSequence: afterQuantum.lastSequence,
+            eventHeadSequence: afterQuantum.lastSequence,
+            projectionLag: 0,
+          });
+        }
+        now = advanceClock(now);
+      }
+
+      expect(quantumCount).toBe(terminalQuantum);
+      await expect(node.commands.processNext()).resolves.toMatchObject({
+        disposition: 'idle',
+      });
+      const commands = await node.queue.list({
+        scope: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          sessionId: scope.sessionId,
+        },
+      });
+      expect(commands).toHaveLength(terminalQuantum);
+      expect(commands.every((command) => command.status === 'applied')).toBe(true);
+      expect(new Set(commands.map((command) => command.id)).size).toBe(terminalQuantum);
+      expect(commands.filter((command) => command.leaseEpoch === 2)).toHaveLength(takeoverAt.size);
+      await expect(node.query.getRun({ scope })).resolves.toMatchObject({
+        projection: {
+          runStatus: 'completed',
+          currentState: `Quantum${terminalQuantum}`,
+          statePath: Array.from({ length: terminalQuantum }, (_, index) => `Quantum${index + 1}`),
+        },
+        projectionLastSequence: 50,
+        eventHeadSequence: 50,
+        projectionLag: 0,
+      });
+    } finally {
+      await node?.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 async function createNode(input: {
@@ -360,13 +533,14 @@ async function executeQuantum(
   node: RuntimeNode,
   checkpointSequence: number,
   quantum: number,
-  now: string
+  now: string,
+  terminalQuantum = 3
 ): Promise<Awaited<ReturnType<ReActQuantumExecutor['runOneQuantum']>>> {
   const current = await node.checkpoints.get(scope.runId, stepId, scopeHash);
   expect(current).toMatchObject({ stepSequence: checkpointSequence });
   const head = await requiredHead(node.events);
   expect(checkpointSequence).toBe(head.runRevision);
-  const terminal = quantum === 3;
+  const terminal = quantum === terminalQuantum;
   const appended = await node.events.append({
     scope: streamScope(),
     events: [
@@ -533,6 +707,10 @@ function streamScope() {
     userId: scope.userId,
     runId: scope.runId,
   };
+}
+
+function advanceClock(timestamp: string): string {
+  return new Date(Date.parse(timestamp) + 1_000).toISOString();
 }
 
 function event(
