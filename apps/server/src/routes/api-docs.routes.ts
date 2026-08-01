@@ -813,6 +813,19 @@ const statusEndpoints = [
   },
   {
     method: 'GET',
+    path: '/ready',
+    desc: 'Traffic readiness; returns 503 until the canonical Runtime execution graph and durable workers are running',
+    auth: 'None',
+    response: `{
+  "success": false,
+  "data": {
+    "status": "not_ready",
+    "runtime": { "ready": false, "state": "event_authority_ready", "message": "..." }
+  }
+}`,
+  },
+  {
+    method: 'GET',
     path: '/status',
     desc: 'Service status with all components',
     auth: 'None',

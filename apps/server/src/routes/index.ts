@@ -14,6 +14,7 @@ import devRoutes from './dev.routes';
 import runtimeRoutes from './runtime.routes';
 import { approvalRouter, invocationRouter } from './tool-runtime.routes';
 import mcpRoutes from './mcp.routes';
+import { getServerRuntimeReadiness } from '../services/ServerRuntimeReadiness';
 
 const router = Router();
 
@@ -23,6 +24,22 @@ router.get('/health', (_req, res) => {
     success: true,
     data: {
       status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    },
+  });
+});
+
+// Readiness check: fail closed until the canonical execution graph and every
+// durable Runtime worker are actually running. This is intentionally distinct
+// from the process liveness endpoint above.
+router.get('/ready', (_req, res) => {
+  const runtime = getServerRuntimeReadiness();
+  res.status(runtime.ready ? 200 : 503).json({
+    success: runtime.ready,
+    data: {
+      status: runtime.ready ? 'ready' : 'not_ready',
+      runtime,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     },
