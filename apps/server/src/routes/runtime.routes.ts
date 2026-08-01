@@ -16,6 +16,37 @@ const router = Router();
 
 router.use(authMiddleware(true));
 
+const startReActRunSchema = z
+  .object({
+    stepId: z.string().trim().min(1).max(256).optional(),
+    modelAlias: z.string().trim().min(1).max(256).optional(),
+    messages: z
+      .array(
+        z
+          .object({
+            role: z.enum(['system', 'user', 'assistant']),
+            content: z.string().max(1_000_000),
+            name: z.string().trim().min(1).max(256).optional(),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(10_000),
+    systemPrompt: z.string().max(1_000_000).optional(),
+    agentSpec: z.record(z.unknown()).optional(),
+    budget: z
+      .object({
+        iterations: z.number().int().positive().optional(),
+        modelCalls: z.number().int().positive().optional(),
+        toolCalls: z.number().int().nonnegative().optional(),
+        totalTokens: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    deadlineAt: z.string().datetime({ offset: true }).optional(),
+  })
+  .strict();
+
 const startRunCommandBodySchema = z
   .object({
     input: z.unknown().optional(),
@@ -30,6 +61,7 @@ const startRunCommandBodySchema = z
       .optional(),
     domainPack: z.unknown().optional(),
     fsm: z.unknown().optional(),
+    react: startReActRunSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();

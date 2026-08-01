@@ -41,6 +41,8 @@ import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
 import { createServerProductionRuntime } from './runtime/ServerProductionRuntime';
 import { createServerProductionSessionCommands } from './runtime/ServerProductionSessionCommands';
+import { ServerProductionReActExecution } from './runtime/ServerProductionReActExecution';
+import { LocalFilesystemExecutionArtifactStore } from '@hypha/adapters-local';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 import {
   bindServerRuntimeReadiness,
@@ -214,9 +216,43 @@ class Application {
       autoRecoverReasons: workers.autoRecoverReasons,
     });
     const composition = runtime.composeRuntime(production.execution);
+    const commandArtifacts = new LocalFilesystemExecutionArtifactStore({
+      id: 'artifact-store.local-filesystem.session-commands',
+      rootPath: workers.commandArtifactRoot,
+    });
+    const react = new ServerProductionReActExecution({
+      artifacts: commandArtifacts,
+      checkpoints: composition.reactCheckpoints,
+      scopedRunners: composition.scopedReActRunners,
+      inference: adapters.inference,
+      toolRunner: adapters.toolRunner,
+      reactRuntime: adapters.reactRuntime,
+      source: {
+        prepare: (input, runId) => getEventRuntime().prepareCanonicalReActExecution(input, runId),
+        recordContextPrepared: (input) =>
+          getEventRuntime().recordCanonicalReActContextPrepared(input),
+        readRunFacts: (descriptor) => getEventRuntime().readCanonicalReActRunFacts(descriptor),
+        recordStep: (runId, step) => getEventRuntime().recordCanonicalReActStep(runId, step),
+        recordCheckpoint: (runId, checkpoint) =>
+          getEventRuntime().recordCanonicalReActCheckpoint(runId, checkpoint),
+        recordResume: (runId, checkpoint) =>
+          getEventRuntime().recordCanonicalReActResume(runId, checkpoint),
+        syncMemory: (context, observation) =>
+          getEventRuntime().syncCanonicalReActMemory(context, observation),
+        recordOutcome: (runId, result) =>
+          getEventRuntime().recordCanonicalReActOutcome(runId, result),
+      },
+      limits: {
+        quantumIterations: workers.reactQuantumIterations,
+        maxIterations: workers.reactMaxIterations,
+        maxModelCalls: workers.reactMaxModelCalls,
+        maxToolCalls: workers.reactMaxToolCalls,
+        maxTotalTokens: workers.reactMaxTotalTokens,
+      },
+    });
     const commands = await createServerProductionSessionCommands({
       queue: composition.sessionQueue,
-      artifactRoot: workers.commandArtifactRoot,
+      artifacts: commandArtifacts,
       workerId: `${workers.workerId}:commands`,
       leaseMs: workers.commandLeaseMs,
       pollIntervalMs: workers.commandPollIntervalMs,
@@ -225,6 +261,7 @@ class Application {
       maxHandlerDurationMs: workers.commandMaxHandlerDurationMs,
       shutdownDrainMs: workers.commandShutdownDrainMs,
       startRun: (input, runId) => getEventRuntime().startRunWithId(input, runId),
+      react,
       onError: (error) => logger.error('Session Command worker polling failed', error),
     });
     getEventRuntime().bindSessionCommandIngress(commands);

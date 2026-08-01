@@ -335,6 +335,12 @@ export interface ReActRunnerOptions {
   onCheckpoint?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
   onResume?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
   syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
+  /**
+   * Keep the latest durable checkpoint until an outer transaction records the
+   * terminal/waiting outcome. Production quantum executors use this to avoid
+   * an unrecoverable gap between Runner completion and Event persistence.
+   */
+  retainCheckpointUntilOutcome?: boolean;
   resolveToolExecutionScope?: (
     context: ReActRunContext,
     action: ReActAction
@@ -1293,6 +1299,7 @@ export class ReActRunner {
       return current;
     };
     const clearCheckpoint = async (): Promise<void> => {
+      if (this.options.retainCheckpointUntilOutcome) return;
       if (!this.options.checkpointStore || persistedStepSequence === undefined) return;
       await this.options.checkpointStore.delete(
         context.runId,
@@ -1395,7 +1402,13 @@ export class ReActRunner {
         }
         action = structuredClone(resumed.pendingAction);
       } else {
-        if (!resumed) await pushStep('observe', { messageCount: context.messages.length });
+        if (!resumed) {
+          await pushStep('observe', { messageCount: context.messages.length });
+          // Establish a recovery anchor before the first external Model call.
+          // Production keeps this checkpoint until the terminal Event is
+          // durable; local/default runners still clear it on normal outcome.
+          await persistCheckpoint('reason');
+        }
         const inferred = await infer();
         if (inferred.disposition === 'suspended') return inferred.result;
         response = inferred.response;
