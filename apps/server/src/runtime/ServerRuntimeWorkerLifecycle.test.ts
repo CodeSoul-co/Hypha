@@ -149,6 +149,35 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     expect(lifecycle.isRunning()).toBe(false);
     expect(() => lifecycle.start()).toThrow('Runtime Worker lifecycle is closed');
   });
+
+  it('owns the continuous Session Command loop with timer and recovery workers', async () => {
+    const commands = {
+      start: jest.fn(),
+      isRunning: jest.fn().mockReturnValue(true),
+      close: jest.fn(async () => {
+        commands.isRunning.mockReturnValue(false);
+      }),
+    };
+    const lifecycle = createLifecycle(
+      jest.fn(async () => timerPage()),
+      jest.fn(async () => recoveryPage()),
+      {
+        commands: {
+          runtime: commands,
+          scope: { userId: 'user.1', sessionId: 'session.1' },
+        },
+      }
+    );
+
+    const workers = await lifecycle.start();
+    expect(commands.start).toHaveBeenCalledTimes(1);
+    expect(commands.start).toHaveBeenCalledWith({ userId: 'user.1', sessionId: 'session.1' });
+    expect(workers.status().commands).toEqual({ running: true });
+
+    await lifecycle.close();
+    expect(commands.close).toHaveBeenCalledTimes(1);
+    expect(workers.status().commands).toEqual({ running: false });
+  });
 });
 
 function createLifecycle(
@@ -157,6 +186,7 @@ function createLifecycle(
   overrides: {
     timer?: Partial<Omit<ServerRuntimeTimerSchedulerOptions, 'worker'>>;
     recovery?: Partial<Omit<ServerRuntimeRecoverySchedulerOptions, 'service'>>;
+    commands?: ConstructorParameters<typeof ServerRuntimeWorkerLifecycle>[1]['commands'];
   } = {}
 ): ServerRuntimeWorkerLifecycle {
   return new ServerRuntimeWorkerLifecycle(
@@ -187,6 +217,7 @@ function createLifecycle(
         autoRecoverReasons: ['PROJECTION_BEHIND'],
         ...overrides.recovery,
       },
+      ...(overrides.commands === undefined ? {} : { commands: overrides.commands }),
     }
   );
 }

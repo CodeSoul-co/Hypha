@@ -2,6 +2,7 @@ import {
   FrameworkError,
   type DurableRuntimeTimerWorker,
   type RuntimeRecoveryService,
+  type SessionQueueScope,
 } from '@hypha/core';
 import {
   ServerRuntimeRecoveryScheduler,
@@ -22,11 +23,22 @@ export interface ServerRuntimeWorkerSources {
 export interface ServerRuntimeWorkerBindings {
   timer: Omit<ServerRuntimeTimerSchedulerOptions, 'worker'>;
   recovery: Omit<ServerRuntimeRecoverySchedulerOptions, 'service'>;
+  commands?: {
+    runtime: ServerSessionCommandLoop;
+    scope?: SessionQueueScope;
+  };
+}
+
+export interface ServerSessionCommandLoop {
+  start(scope?: SessionQueueScope): void;
+  isRunning(): boolean;
+  close(): Promise<void>;
 }
 
 export interface ServerRuntimeWorkers {
   timer: ServerRuntimeTimerScheduler;
   recovery: ServerRuntimeRecoveryScheduler;
+  commands?: ServerSessionCommandLoop;
   status(): Readonly<ServerRuntimeWorkerStatus>;
 }
 
@@ -50,6 +62,7 @@ export interface ServerRuntimeWorkerStatus {
   lifecycle: ServerRuntimeWorkerLifecycleState;
   timer: ServerRuntimeWorkerEvidence;
   recovery: ServerRuntimeWorkerEvidence;
+  commands?: Readonly<{ running: boolean }>;
 }
 
 /**
@@ -88,7 +101,11 @@ export class ServerRuntimeWorkerLifecycle {
   }
 
   isRunning(): boolean {
-    return Boolean(this.workers?.timer.isRunning() || this.workers?.recovery.isRunning());
+    return Boolean(
+      this.workers?.timer.isRunning() ||
+      this.workers?.recovery.isRunning() ||
+      this.workers?.commands?.isRunning()
+    );
   }
 
   status(): Readonly<ServerRuntimeWorkerStatus> {
@@ -96,6 +113,9 @@ export class ServerRuntimeWorkerLifecycle {
       lifecycle: this.lifecycleState,
       timer: workerEvidence(this.workers?.timer.isRunning() ?? false, this.timerEvidence),
       recovery: workerEvidence(this.workers?.recovery.isRunning() ?? false, this.recoveryEvidence),
+      ...(this.workers?.commands === undefined
+        ? {}
+        : { commands: Object.freeze({ running: this.workers.commands.isRunning() }) }),
     });
   }
 
@@ -122,12 +142,14 @@ export class ServerRuntimeWorkerLifecycle {
         onSweep: (result) => this.observeRecoverySweep(result),
         onError: (error) => this.observeRecoveryFailure(error),
       }),
+      ...(this.bindings.commands === undefined ? {} : { commands: this.bindings.commands.runtime }),
       status: () => this.status(),
     });
 
     try {
       workers.timer.start();
       workers.recovery.start();
+      workers.commands?.start(this.bindings.commands?.scope);
       if (this.closed) {
         throw conflict('Runtime Worker lifecycle closed during startup');
       }
@@ -189,7 +211,13 @@ export class ServerRuntimeWorkerLifecycle {
 }
 
 async function closeWorkers(workers: Readonly<ServerRuntimeWorkers>): Promise<void> {
-  const results = await Promise.allSettled([workers.recovery.close(), workers.timer.close()]);
+  // Signal every loop before awaiting any of them. This prevents the command
+  // queue from claiming new work while timer/recovery sweeps are draining.
+  const results = await Promise.allSettled([
+    workers.commands?.close() ?? Promise.resolve(),
+    workers.recovery.close(),
+    workers.timer.close(),
+  ]);
   const failures = results
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     .map((result) => result.reason);
