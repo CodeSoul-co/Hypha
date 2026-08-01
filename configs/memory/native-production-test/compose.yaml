@@ -1,0 +1,214 @@
+﻿name: hypha-native-production-test
+
+services:
+  mongo-1:
+    image: mongo:7
+    command:
+      ['mongod', '--replSet', 'hypha-rs', '--bind_ip_all', '--setParameter', 'enableTestCommands=1']
+    ports:
+      - '${HYPHA_NATIVE_MONGO_BIND_IP:-127.0.0.1}:27117:27017'
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand({ ping: 1 }).ok']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - mongo-1-data:/data/db
+
+  mongo-2:
+    image: mongo:7
+    command:
+      ['mongod', '--replSet', 'hypha-rs', '--bind_ip_all', '--setParameter', 'enableTestCommands=1']
+    ports:
+      - '${HYPHA_NATIVE_MONGO_BIND_IP:-127.0.0.1}:27118:27017'
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand({ ping: 1 }).ok']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - mongo-2-data:/data/db
+
+  mongo-3:
+    image: mongo:7
+    command:
+      ['mongod', '--replSet', 'hypha-rs', '--bind_ip_all', '--setParameter', 'enableTestCommands=1']
+    ports:
+      - '${HYPHA_NATIVE_MONGO_BIND_IP:-127.0.0.1}:27119:27017'
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand({ ping: 1 }).ok']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - mongo-3-data:/data/db
+
+  redis-primary:
+    image: redis:7
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - ''
+      - --protected-mode
+      - 'no'
+      - --replica-announce-ip
+      - host.docker.internal
+      - --replica-announce-port
+      - '27201'
+    ports:
+      - '127.0.0.1:27201:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-primary-data:/data
+
+  redis-replica-1:
+    image: redis:7
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - ''
+      - --protected-mode
+      - 'no'
+      - --replicaof
+      - host.docker.internal
+      - '27201'
+      - --replica-announce-ip
+      - host.docker.internal
+      - --replica-announce-port
+      - '27202'
+    ports:
+      - '127.0.0.1:27202:6379'
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-replica-1-data:/data
+
+  redis-replica-2:
+    image: redis:7
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - ''
+      - --protected-mode
+      - 'no'
+      - --replicaof
+      - host.docker.internal
+      - '27201'
+      - --replica-announce-ip
+      - host.docker.internal
+      - --replica-announce-port
+      - '27203'
+    ports:
+      - '127.0.0.1:27203:6379'
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-replica-2-data:/data
+
+  redis-sentinel-1:
+    image: redis:7
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' \
+          'port 26379' \
+          'protected-mode no' \
+          'sentinel resolve-hostnames yes' \
+          'sentinel announce-hostnames yes' \
+          'sentinel monitor hypha-master host.docker.internal 27201 2' \
+          'sentinel down-after-milliseconds hypha-master 1500' \
+          'sentinel failover-timeout hypha-master 15000' \
+          'sentinel parallel-syncs hypha-master 1' \
+          'sentinel announce-ip host.docker.internal' \
+          'sentinel announce-port 27301' > /tmp/sentinel.conf
+        exec redis-sentinel /tmp/sentinel.conf
+    ports:
+      - '127.0.0.1:27301:26379'
+    depends_on:
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+
+  redis-sentinel-2:
+    image: redis:7
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' \
+          'port 26379' \
+          'protected-mode no' \
+          'sentinel resolve-hostnames yes' \
+          'sentinel announce-hostnames yes' \
+          'sentinel monitor hypha-master host.docker.internal 27201 2' \
+          'sentinel down-after-milliseconds hypha-master 1500' \
+          'sentinel failover-timeout hypha-master 15000' \
+          'sentinel parallel-syncs hypha-master 1' \
+          'sentinel announce-ip host.docker.internal' \
+          'sentinel announce-port 27302' > /tmp/sentinel.conf
+        exec redis-sentinel /tmp/sentinel.conf
+    ports:
+      - '127.0.0.1:27302:26379'
+    depends_on:
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+
+  redis-sentinel-3:
+    image: redis:7
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' \
+          'port 26379' \
+          'protected-mode no' \
+          'sentinel resolve-hostnames yes' \
+          'sentinel announce-hostnames yes' \
+          'sentinel monitor hypha-master host.docker.internal 27201 2' \
+          'sentinel down-after-milliseconds hypha-master 1500' \
+          'sentinel failover-timeout hypha-master 15000' \
+          'sentinel parallel-syncs hypha-master 1' \
+          'sentinel announce-ip host.docker.internal' \
+          'sentinel announce-port 27303' > /tmp/sentinel.conf
+        exec redis-sentinel /tmp/sentinel.conf
+    ports:
+      - '127.0.0.1:27303:26379'
+    depends_on:
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+
+volumes:
+  mongo-1-data:
+  mongo-2-data:
+  mongo-3-data:
+  redis-primary-data:
+  redis-replica-1-data:
+  redis-replica-2-data:
