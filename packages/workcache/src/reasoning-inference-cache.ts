@@ -40,6 +40,8 @@ export class WorkCachedInferenceProvider implements InferenceProvider {
       identity,
       context: thinkingContext(request, 'node'),
       compute: () => this.provider.infer(request),
+      projectForCache: projectInferenceResponse,
+      hydrateCached: (response) => hydrateInferenceResponse(response, request),
       provenance: {
         providerId: request.providerId ?? this.provider.id,
         backendId: request.backendId,
@@ -59,6 +61,25 @@ export class WorkCachedInferenceProvider implements InferenceProvider {
     }
     yield* this.provider.stream(request);
   }
+}
+
+export function projectInferenceResponse(response: InferenceResponse): InferenceResponse {
+  return {
+    id: 'thinking-cache-projection',
+    output: response.output,
+    usage: response.usage,
+  };
+}
+
+export function hydrateInferenceResponse(
+  response: InferenceResponse,
+  request: InferenceRequest
+): InferenceResponse {
+  return {
+    id: `${request.runId}:${request.stepId}:thinking-cache`,
+    output: response.output,
+    usage: response.usage,
+  };
 }
 
 function reasoningInferenceIdentity(request: InferenceRequest, providerNamespace: string) {

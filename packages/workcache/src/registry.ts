@@ -6,6 +6,7 @@ import {
   materializeMessageBlock,
   materializeObservationBlock,
   materializePromptPrefixBlock,
+  materializeRecoveryKnowledgeBlock,
   materializeToolBlock,
   materializeVerificationBlock,
 } from './materializers';
@@ -36,6 +37,9 @@ export const DEFAULT_WORKCACHE_SOURCE_EVENT_TYPES = [
   'inference.completed',
   'model.call.completed',
   'llm.cache.write',
+  'recovery.attempt.completed',
+  'recovery.case.resolved',
+  'recovery.case.escalated',
 ] as const satisfies readonly FrameworkEventType[];
 
 const defaultSourceEventSet = new Set<FrameworkEventType>(DEFAULT_WORKCACHE_SOURCE_EVENT_TYPES);
@@ -100,6 +104,17 @@ export const DEFAULT_RUNTIME_TYPE_DEFINITIONS: RuntimeTypeDefinition[] = [
     nodeType: 'computation',
     treeType: 'ComputationTree',
     materialize: materializeComputationBlock,
+  },
+  {
+    id: 'recovery.knowledge',
+    sourceEventTypes: [
+      'recovery.attempt.completed',
+      'recovery.case.resolved',
+      'recovery.case.escalated',
+    ],
+    nodeType: 'recovery',
+    treeType: 'RecoveryTree',
+    materialize: materializeRecoveryKnowledgeBlock,
   },
   {
     id: 'prompt-prefix.serving-cache',

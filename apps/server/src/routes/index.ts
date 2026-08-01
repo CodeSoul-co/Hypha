@@ -2,6 +2,7 @@ import { Router } from 'express';
 import chatRoutes from './chat.routes';
 import authRoutes from './auth.routes';
 import memoryRoutes from './memory.routes';
+import memoryAdminRoutes from './memory-admin.routes';
 import skillRoutes from './skill.routes';
 import toolRoutes from './tool.routes';
 import workflowRoutes from './workflow.routes';
@@ -11,6 +12,8 @@ import usageRoutes from './usage.routes';
 import apiDocsRoutes from './api-docs.routes';
 import devRoutes from './dev.routes';
 import runtimeRoutes from './runtime.routes';
+import { approvalRouter, invocationRouter } from './tool-runtime.routes';
+import mcpRoutes from './mcp.routes';
 
 const router = Router();
 
@@ -29,9 +32,13 @@ router.get('/health', (_req, res) => {
 // Mount routes
 router.use('/auth', authRoutes);
 router.use('/chat', chatRoutes);
+router.use('/memory/admin', memoryAdminRoutes);
 router.use('/memory', memoryRoutes);
 router.use('/skills', skillRoutes);
 router.use('/tools', toolRoutes);
+router.use('/tool-invocations', invocationRouter);
+router.use('/tool-approvals', approvalRouter);
+router.use('/mcp', mcpRoutes);
 router.use('/workflows', workflowRoutes);
 router.use('/models', modelRoutes);
 router.use('/status', statusRoutes);

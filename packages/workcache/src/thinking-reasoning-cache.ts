@@ -5,7 +5,11 @@ import type {
   ReasoningStrategyDescriptor,
 } from '@hypha/inference';
 import { ThinkingCache, type ThinkingCacheEntryKind } from './thinking-cache';
-import { withThinkingCacheMetadata } from './reasoning-inference-cache';
+import {
+  hydrateInferenceResponse,
+  projectInferenceResponse,
+  withThinkingCacheMetadata,
+} from './reasoning-inference-cache';
 
 export interface ThinkingCachedReasoningProviderOptions {
   provider: InferenceProvider;
@@ -41,6 +45,8 @@ export class ThinkingCachedReasoningProvider implements InferenceProvider {
         sourceEventType: 'inference.requested',
       },
       compute: () => this.provider.infer(request),
+      projectForCache: projectInferenceResponse,
+      hydrateCached: (response) => hydrateInferenceResponse(response, request),
       provenance: {
         providerId: request.providerId ?? this.provider.id,
         backendId: request.backendId,

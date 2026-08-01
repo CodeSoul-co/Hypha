@@ -66,6 +66,8 @@ const compiled = compileDomainPackToHarnessedSystem(validPack, {
 });
 
 compiled.fsmProcess; // FSMProcessSpec
+compiled.processHash; // deterministic compiler + FSM + dependency fingerprint
+compiled.dependencySnapshot; // complete versioned runtime dependency closure
 compiled.harnessedSystem; // HarnessedAgentSystemSpec
 compiled.agentPatch; // skill/tool/memory/context refs for an AgentSpec
 
@@ -183,14 +185,18 @@ session profile, memory profile, MCP profile, context profile, reasoning
 profile, business rules, policy refs, evaluation refs, skills, and tools. It
 returns:
 
-| Field                   | Purpose                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `domainPack`            | Validated `DomainPackSpec`.                                                                                     |
-| `bindings`              | Resolved task, profiles, policies, tools, skills, and workflow state restrictions.                              |
-| `fsmProcess`            | Compiled `FSMProcessSpec` from the selected workflow.                                                           |
-| `harnessedSystem`       | `HarnessedAgentSystemSpec` tying agent, FSM, trace, policy, memory, MCP, context, tools, skills, and contracts. |
-| `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.                                   |
-| `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.                                        |
+| Field                   | Purpose                                                                                                                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `domainPack`            | Validated `DomainPackSpec`.                                                                                                                                                                     |
+| `bindings`              | Resolved task, profiles, policies, tools, skills, and workflow state restrictions.                                                                                                              |
+| `fsmProcess`            | Compiled `FSMProcessSpec` from the selected workflow.                                                                                                                                           |
+| `workflowRef`           | Versioned reference to the selected workflow.                                                                                                                                                   |
+| `compilerVersion`       | Domain compiler contract version included in the process fingerprint.                                                                                                                           |
+| `processHash`           | Deterministic hash of compiler version, workflow, FSM process, and dependency snapshot.                                                                                                         |
+| `dependencySnapshot`    | Sorted, versioned refs for Domain, task/output/session, Agent, Skill, Tool, MCP, Memory, Context, Reasoning, Policy, Evaluation, Trace, Model, Replay, Regression, and Deployment dependencies. |
+| `harnessedSystem`       | `HarnessedAgentSystemSpec` tying agent, FSM, trace, policy, memory, MCP, context, tools, skills, and contracts.                                                                                 |
+| `agentPatch`            | Agent-facing refs for skills, tools, memory, context, policies, and metadata.                                                                                                                   |
+| `sessionInitialization` | Runtime session defaults derived from the selected `SessionProfileSpec`.                                                                                                                        |
 
 The selected default MCP/reasoning profiles remain available on `agentPatch`
 metadata. The compiled `harnessedSystem.mcpRefs` and `reasoningRefs` include

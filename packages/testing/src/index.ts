@@ -1,6 +1,7 @@
 import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
 
 export * from './evaluation';
+export * from './mock-execution-provider';
 export * from './replay';
 export * from './regression';
 

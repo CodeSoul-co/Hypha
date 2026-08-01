@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { createFrameworkEvent } from '@hypha/core';
+import {
+  createFrameworkEvent,
+  InMemoryTelemetryRecorder,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
+} from '@hypha/core';
 import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
-import type { ContextBuilder } from '@hypha/kernel';
+import {
+  InMemoryReActContinuationCheckpointStore,
+  reActContinuationScopeHash,
+  type ContextBuilder,
+  type ReActAgentRuntime,
+} from '@hypha/kernel';
 import { SkillRegistry } from '@hypha/skills';
 import { GovernedToolRunner, MockToolRunner, ToolRegistry } from '@hypha/tools';
 import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
@@ -171,6 +181,80 @@ describe('@hypha/harness contracts', () => {
     ]);
   });
 
+  it('requeues transient message failures with backoff and dead-letters poison messages', async () => {
+    const trace = new InMemoryTraceRecorder();
+    let currentTime = '2026-07-04T00:00:00.000Z';
+    const bus = new InMemoryMessageBus({
+      trace,
+      now: () => currentTime,
+      maxDeliveryAttempts: 2,
+      initialRetryDelayMs: 100,
+    });
+    const recipient = { kind: 'agent' as const, id: 'agent.default' };
+    await bus.publish({
+      id: 'msg_poison',
+      type: 'workflow.input',
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      from: { kind: 'workflow', id: 'workflow.default' },
+      to: recipient,
+      payload: { text: 'retry me' },
+    });
+
+    const first = await bus.pull({
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      to: recipient,
+    });
+    expect(first?.attemptCount).toBe(1);
+    await bus.fail({
+      id: 'msg_poison',
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      retry: true,
+      reason: 'transient_handler_failure',
+    });
+
+    await expect(
+      bus.pull({
+        userId: 'owner',
+        sessionId: 'session_retry',
+        runId: 'run_retry',
+        to: recipient,
+      })
+    ).resolves.toBeNull();
+    currentTime = '2026-07-04T00:00:00.100Z';
+    const second = await bus.pull({
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      to: recipient,
+    });
+    expect(second?.attemptCount).toBe(2);
+    await bus.fail({
+      id: 'msg_poison',
+      userId: 'owner',
+      sessionId: 'session_retry',
+      runId: 'run_retry',
+      retry: true,
+      reason: 'same_handler_failure',
+    });
+
+    await expect(bus.list({ status: 'dead_lettered' })).resolves.toEqual([
+      expect.objectContaining({ id: 'msg_poison', attemptCount: 2 }),
+    ]);
+    expect((await trace.list({ runId: 'run_retry' })).map((event) => event.type)).toEqual([
+      'message.enqueued',
+      'message.delivered',
+      'message.retrying',
+      'message.delivered',
+      'message.dead_lettered',
+    ]);
+  });
+
   it('removes queued messages from delivery indexes when they are failed directly', async () => {
     const bus = new InMemoryMessageBus({
       now: () => '2026-07-04T00:00:00.000Z',
@@ -317,6 +401,109 @@ describe('@hypha/harness contracts', () => {
     });
   });
 
+  it('persists canonical Run identity and caller recovery metadata on run.created', async () => {
+    const runtime = new EventFirstRuntime();
+    await runtime.createRun({
+      id: 'run_canonical',
+      sessionId: 'session_canonical',
+      userId: 'owner',
+      metadata: { runtimeRunContext: { snapshot: 'persisted' } },
+    });
+
+    await expect(runtime.listEvents('run_canonical')).resolves.toEqual([
+      expect.objectContaining({
+        type: 'run.created',
+        payload: expect.objectContaining({ id: 'run_canonical', runId: 'run_canonical' }),
+        metadata: {
+          runtimeRunContext: { snapshot: 'persisted' },
+          userId: 'owner',
+        },
+      }),
+    ]);
+  });
+
+  it('emits lifecycle payloads that satisfy canonical orchestration schemas', async () => {
+    const runtime = new EventFirstRuntime();
+    const runs = new RunManager({ runtime });
+    const run = await runs.createRun({
+      id: 'run_lifecycle_schema',
+      sessionId: 'session_lifecycle_schema',
+      userId: 'owner',
+    });
+    const context = {
+      runId: run.id,
+      sessionId: run.sessionId,
+      userId: run.userId,
+    };
+
+    await runs.startRun(run);
+    await runs.waitForHumanReview(context);
+    await runs.completeRun(context, 'ok');
+    await runs.failRun(context, 'failed');
+    await runs.cancelRun(context, 'cancelled');
+
+    const events = await runs.listEvents(run.id);
+    expect(events.find((event) => event.type === 'run.started')?.payload).toMatchObject({
+      runId: run.id,
+    });
+    expect(events.find((event) => event.type === 'run.waiting_human')?.payload).toMatchObject({
+      waitId: `human-review:${run.id}`,
+    });
+    expect(events.find((event) => event.type === 'run.completed')?.payload).toMatchObject({
+      terminalState: 'Completed',
+    });
+    expect(events.find((event) => event.type === 'run.failed')?.payload).toMatchObject({
+      terminalState: 'Failed',
+    });
+    expect(events.find((event) => event.type === 'run.cancelled')?.payload).toMatchObject({
+      terminalState: 'Cancelled',
+    });
+  });
+
+  it('records continuation latency and repeated progress fingerprints without identity labels', async () => {
+    const recorder = new InMemoryTelemetryRecorder();
+    const runs = new RunManager({
+      operationalTelemetry: new RuntimeOperationalTelemetry({
+        recorder,
+        now: () => '2026-07-24T06:00:02.000Z',
+      }),
+    });
+    const checkpoint = {
+      version: '1.0.0' as const,
+      runId: 'run.telemetry',
+      stepId: 'react',
+      scopeHash: `sha256:${'1'.repeat(64)}`,
+      agentRef: { id: 'agent.telemetry', version: '1.0.0' },
+      nextPhase: 'reason' as const,
+      messages: [{ role: 'user' as const, content: 'continue' }],
+      iterations: 2,
+      modelCalls: 2,
+      toolCalls: 1,
+      totalTokens: 100,
+      toolInvocationSequence: 1,
+      stepSequence: 5,
+      consecutiveNoProgress: 2,
+      lastProgressFingerprint: `sha256:${'2'.repeat(64)}`,
+      createdAt: '2026-07-24T06:00:00.000Z',
+      updatedAt: '2026-07-24T06:00:00.000Z',
+    };
+    const context = {
+      runId: checkpoint.runId,
+      sessionId: 'session.telemetry',
+      userId: 'user.telemetry',
+    };
+
+    await runs.recordReactContinuationCheckpoint(context, checkpoint);
+    await runs.recordReactContinuationResumed(context, checkpoint, '2026-07-24T06:00:02.000Z');
+
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.continuationLatencyMs)[0]?.value).toBe(
+      2_000
+    );
+    expect(recorder.sum(RUNTIME_OPERATIONAL_METRIC_NAMES.noProgressFingerprintTotal)).toBe(1);
+    expect(JSON.stringify(recorder.list())).not.toContain(checkpoint.runId);
+    expect(JSON.stringify(recorder.list())).not.toContain(checkpoint.lastProgressFingerprint);
+  });
+
   it('runs the minimal ReAct + FSM runtime closure with trace events for each state', async () => {
     const inference: InferenceProvider = {
       id: 'mock-inference',
@@ -397,6 +584,139 @@ describe('@hypha/harness contracts', () => {
     await expect(runManager.projectRegression('run_stage4_minimal')).resolves.toMatchObject({
       statePath: [...REACT_FSM_STATE_PATH],
     });
+  });
+
+  it('resumes bounded ReAct quanta from durable checkpoints without recreating the Run', async () => {
+    const checkpointStore = new InMemoryReActContinuationCheckpointStore();
+    const actions = [
+      { action: 'tool', toolId: 'tool.mock', input: { page: 1 } },
+      { action: 'tool', toolId: 'tool.mock', input: { page: 2 } },
+      { action: 'finish', output: { answer: 'complete' } },
+    ];
+    let modelCalls = 0;
+    const inference: InferenceProvider = {
+      id: 'long-horizon-inference',
+      async infer(request: InferenceRequest): Promise<InferenceResponse> {
+        const output = actions[modelCalls++];
+        if (!output) throw new Error('Unexpected Model call');
+        return { id: `${request.runId}:response:${modelCalls}`, output };
+      },
+    };
+    const reactRuntime: ReActAgentRuntime = {
+      async reason(context) {
+        return {
+          runId: context.runId,
+          stepId: context.stepId,
+          agentId: context.agent.id,
+          modelAlias: context.agent.modelAlias,
+          input: { messages: context.messages },
+        };
+      },
+      async selectAction(response) {
+        const output = response.output as Record<string, unknown>;
+        return output.action === 'tool'
+          ? {
+              type: 'tool',
+              target: output.toolId as string,
+              input: output.input,
+            }
+          : { type: 'finish', input: output.output };
+      },
+      async verify(_context, observation) {
+        return observation.source === 'tool'
+          ? { type: 'model', reason: 'continue' }
+          : { type: 'finish', input: observation.value };
+      },
+    };
+    const invocationIds: string[] = [];
+    const toolRunner = new MockToolRunner();
+    toolRunner.registerHandler('tool.mock', async (request) => {
+      if (!request.context.invocationId) throw new Error('Expected deterministic invocationId');
+      invocationIds.push(request.context.invocationId);
+      return {
+        toolId: request.toolId,
+        status: 'completed',
+        output: request.input,
+      };
+    });
+    const eventRuntime = new EventFirstRuntime();
+    const runnerOptions = {
+      inference,
+      toolRunner,
+      reactRuntime,
+      reactCheckpointStore: checkpointStore,
+      continueAfterTool: true,
+      executionBudget: {
+        maxIterations: 4,
+        maxModelCalls: 5,
+        maxToolCalls: 4,
+        maxConsecutiveNoProgress: 2,
+        quantumIterations: 1,
+      },
+      now: () => '2026-07-23T12:00:00.000Z',
+    };
+    const input = {
+      runId: 'run_react_continuation',
+      stepId: 'react',
+      sessionId: 'session_react_continuation',
+      userId: 'owner',
+      agent: {
+        id: 'agent.continuation',
+        version: '1.0.0',
+        name: 'Continuation Agent',
+        modelAlias: 'default-chat',
+      },
+      input: 'collect every page',
+    };
+
+    const first = await new HarnessedReActFSMRunner({
+      ...runnerOptions,
+      runManager: new RunManager({ runtime: eventRuntime }),
+    }).run(input);
+    expect(first.react).toMatchObject({
+      status: 'suspended',
+      suspension: { reason: 'quantum_exhausted', retryable: true },
+    });
+    expect(first.run.status).toBe('running');
+
+    const resumed = await new HarnessedReActFSMRunner({
+      ...runnerOptions,
+      runManager: new RunManager({ runtime: eventRuntime }),
+    }).run({ ...input, resumeFromCheckpoint: true });
+
+    expect(resumed.react).toMatchObject({
+      status: 'completed',
+      output: { answer: 'complete' },
+    });
+    expect(resumed.run.status).toBe('completed');
+    expect(invocationIds).toEqual([
+      'run_react_continuation:react:tool:tool.mock:1',
+      'run_react_continuation:react:tool:tool.mock:2',
+    ]);
+    const eventTypes = resumed.events.map((event) => event.type);
+    expect(eventTypes.filter((type) => type === 'run.created')).toHaveLength(1);
+    expect(eventTypes.filter((type) => type === 'run.started')).toHaveLength(1);
+    expect(eventTypes).toEqual(
+      expect.arrayContaining([
+        'react.continuation.checkpointed',
+        'react.continuation.suspended',
+        'react.continuation.resumed',
+        'run.completed',
+      ])
+    );
+    await expect(
+      checkpointStore.get(
+        input.runId,
+        input.stepId,
+        reActContinuationScopeHash({
+          runId: input.runId,
+          stepId: input.stepId,
+          agent: input.agent,
+          messages: [],
+          memoryScope: { userId: input.userId, sessionId: input.sessionId },
+        })
+      )
+    ).resolves.toBeNull();
   });
 
   it('records thinking and agentic deliberation before ReAct execution when reasoning is enabled', async () => {
@@ -632,7 +952,10 @@ describe('@hypha/harness contracts', () => {
       output: {
         toolId: 'tool.danger',
         status: 'denied',
-        error: expect.stringContaining('requires an explicit policy override'),
+        error: expect.objectContaining({
+          code: 'TOOL_POLICY_DENIED',
+          message: expect.stringContaining('requires an explicit policy override'),
+        }),
       },
     });
     expect(result.events.map((event) => event.type)).toEqual(
@@ -643,6 +966,129 @@ describe('@hypha/harness contracts', () => {
     );
   });
 
+  it('enforces the FSM-resolved tool execution scope before dispatch', async () => {
+    let handlerCalls = 0;
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(
+      {
+        id: 'tool.scoped',
+        version: '0.0.0',
+        description: 'Scope enforcement test tool',
+        inputSchema: { type: 'object' },
+        sideEffectLevel: 'none',
+      },
+      async () => {
+        handlerCalls += 1;
+        return { ok: true };
+      }
+    );
+    const toolTrace = new InMemoryTraceRecorder();
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: {
+            action: 'tool',
+            toolId: 'tool.scoped',
+            toolCallId: 'call_scoped_1',
+            input: {},
+          },
+        };
+      },
+    };
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      toolRunner: new GovernedToolRunner(toolRegistry, toolTrace),
+      resolveToolExecutionScope: ({ fsmState }) => ({
+        allowedToolIds: ['tool.other'],
+        policyRefs: ['policy.scope'],
+        fsmState,
+      }),
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_scoped_tool',
+      stepId: 'react',
+      sessionId: 'session_scoped_tool',
+      userId: 'owner',
+      agent: {
+        id: 'agent.scoped-tool',
+        version: '0.0.0',
+        name: 'Scoped Tool Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.scoped'],
+      },
+      input: 'use scoped tool',
+    });
+
+    expect(handlerCalls).toBe(0);
+    expect(result.react).toMatchObject({
+      status: 'completed',
+      output: {
+        toolId: 'tool.scoped',
+        invocationId: 'run_scoped_tool:react:tool:tool.scoped:1',
+        status: 'denied',
+        error: { code: 'TOOL_NOT_ALLOWED_IN_SCOPE' },
+      },
+    });
+    expect(await toolTrace.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.call.rejected',
+          payload: expect.objectContaining({
+            error: expect.objectContaining({ code: 'TOOL_NOT_ALLOWED_IN_SCOPE' }),
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('fails closed when a tool action has no configured ToolRunner', async () => {
+    const inference: InferenceProvider = {
+      id: 'mock-inference',
+      async infer(request): Promise<InferenceResponse> {
+        return {
+          id: `${request.runId}:${request.stepId}:response`,
+          output: { action: 'tool', toolId: 'tool.missing', input: {} },
+        };
+      },
+    };
+    const runManager = new RunManager();
+    const runner = new HarnessedReActFSMRunner({
+      inference,
+      runManager,
+      now: () => '2026-07-04T00:00:00.000Z',
+    });
+
+    const result = await runner.run({
+      runId: 'run_missing_tool_runner',
+      stepId: 'react',
+      sessionId: 'session_missing_tool_runner',
+      userId: 'owner',
+      agent: {
+        id: 'agent.missing-tool-runner',
+        version: '0.0.0',
+        name: 'Missing Tool Runner Agent',
+        modelAlias: 'default-chat',
+        toolRefs: ['tool.missing'],
+      },
+      input: 'use missing tool',
+    });
+
+    expect(result.react).toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({
+        message: expect.stringContaining('cannot execute without toolRunner'),
+      }),
+    });
+    expect(result.run.status).toBe('failed');
+    expect(result.fsmSnapshot.currentState).toBe('Failed');
+    await expect(runManager.projectRun('run_missing_tool_runner')).resolves.toMatchObject({
+      status: 'failed',
+    });
+  });
   it('projects human-review runs from events instead of leaving them running', async () => {
     const inference: InferenceProvider = {
       id: 'mock-inference',

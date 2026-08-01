@@ -113,6 +113,7 @@ describe('@hypha/workcache stores and manager', () => {
       createWorkCacheKey({
         treeType: 'ObservationTree',
         nodeType: 'observation',
+        scope: { userId: 'owner', sessionId: 'session_1' },
         identity: {
           sourceEventType: 'context.build.completed',
           resourceId: 'file:/repo/README.md',
@@ -192,9 +193,11 @@ describe('@hypha/workcache graph-derived demand', () => {
     );
     const lookup = await manager.lookup({
       treeType: 'ToolTree',
+      scope: { userId: 'owner', sessionId: 'session_1' },
       cacheKey: createWorkCacheKey({
         treeType: 'ToolTree',
         nodeType: 'tool',
+        scope: { userId: 'owner', sessionId: 'session_1' },
         identity: {
           toolId: 'search.web',
           stableArgs: { query: 'hypha' },
@@ -286,9 +289,11 @@ describe('@hypha/workcache graph-derived demand', () => {
 
     const lookup = await manager.lookup({
       treeType: 'ObservationTree',
+      scope: { userId: 'owner', sessionId: 'session_1' },
       cacheKey: createWorkCacheKey({
         treeType: 'ObservationTree',
         nodeType: 'observation',
+        scope: { userId: 'owner', sessionId: 'session_1' },
         identity: {
           sourceEventType: 'message.enqueued',
           messageId: 'msg_1',
@@ -546,23 +551,21 @@ describe('@hypha/workcache tree safety rules', () => {
   it('materializes PromptPrefixTree blocks in deterministic order', async () => {
     const left = managerWithMemory();
     const right = managerWithMemory();
-    await left.ingest(
-      prefixEventWithBlocks('run_1:prefix_left', [
-        promptBlock('tool-schema', { id: 'tools', order: 20 }),
-        promptBlock('system', { id: 'system', order: 10 }),
-        promptBlock('memory', { id: 'memory', order: 30 }),
-      ])
-    );
-    await right.ingest(
-      prefixEventWithBlocks('run_1:prefix_right', [
-        promptBlock('memory', { id: 'memory', order: 30 }),
-        promptBlock('system', { id: 'system', order: 10 }),
-        promptBlock('tool-schema', { id: 'tools', order: 20 }),
-      ])
-    );
+    const leftSource = prefixEventWithBlocks('run_1:prefix_left', [
+      promptBlock('tool-schema', { id: 'tools', order: 20 }),
+      promptBlock('system', { id: 'system', order: 10 }),
+      promptBlock('memory', { id: 'memory', order: 30 }),
+    ]);
+    const rightSource = prefixEventWithBlocks('run_1:prefix_right', [
+      promptBlock('memory', { id: 'memory', order: 30 }),
+      promptBlock('system', { id: 'system', order: 10 }),
+      promptBlock('tool-schema', { id: 'tools', order: 20 }),
+    ]);
+    await left.ingest(leftSource);
+    await right.ingest(rightSource);
 
-    const leftPrefix = await left.materializePromptPrefix();
-    const rightPrefix = await right.materializePromptPrefix();
+    const leftPrefix = await left.materializePromptPrefix(leftSource);
+    const rightPrefix = await right.materializePromptPrefix(rightSource);
 
     expect(leftPrefix.materialization.prefixHash).toBe(rightPrefix.materialization.prefixHash);
     expect(leftPrefix.materialization.prefix).toBe(rightPrefix.materialization.prefix);
@@ -964,6 +967,7 @@ function event(type: FrameworkEventType, overrides: Partial<FrameworkEvent> = {}
     id: overrides.id ?? `run_1:${type}:event`,
     type,
     runId: overrides.runId ?? 'run_1',
+    userId: overrides.userId ?? 'owner',
     sessionId: overrides.sessionId ?? 'session_1',
     stepId: overrides.stepId ?? 'step_1',
     timestamp: overrides.timestamp ?? new Date(1000).toISOString(),

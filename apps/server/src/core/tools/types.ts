@@ -71,6 +71,10 @@ export abstract class BaseTool implements ITool {
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
+        metadata:
+          error && typeof error === 'object' && 'code' in error
+            ? { errorCode: String((error as { code: unknown }).code) }
+            : undefined,
       };
     }
   }
@@ -86,12 +90,39 @@ export interface MCPServerConfig {
   id: string;
   name: string;
   mode: 'local' | 'remote' | 'fixture';
+  connectionProfileRef?: string;
   command?: string;
   args?: string[];
   endpoint?: string;
-  authToken?: string;
+  sessionMode?: 'protocol_default' | 'stateless';
+  credentialRef?: string;
   autoStart?: boolean;
   autoConnect?: boolean;
+  required?: boolean;
+  reconnectPolicy?: {
+    maxAttempts: number;
+    backoffMs?: number;
+    maxBackoffMs?: number;
+    jitterRatio?: number;
+    maxElapsedMs?: number;
+  };
+  protocolVersionPolicy?: {
+    allowedVersions: string[];
+    rejectUnknown?: boolean;
+  };
+  egressPolicy?: {
+    allowedHosts?: string[];
+    denyPrivateNetworks?: boolean;
+    requireTls?: boolean;
+    maxRedirects?: number;
+    allowCrossOriginRedirects?: boolean;
+  };
+  contentPolicy?: {
+    maxResourceBytes?: number;
+    maxPromptBytes?: number;
+    maxPromptTokens?: number;
+    oversizeAction?: 'reject' | 'artifact';
+  };
 }
 
 export interface MCPCapabilities {
@@ -141,7 +172,7 @@ export interface MCPClient {
 
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  callTool(name: string, args: any): Promise<ToolResult>;
+  invoke(name: string, args: any): Promise<ToolResult>;
   listTools(): Promise<ToolDefinition[]>;
   healthCheck(): Promise<boolean>;
 }

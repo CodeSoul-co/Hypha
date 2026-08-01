@@ -5,6 +5,10 @@ materializes reusable `CacheBlock` records. It is not the source of truth:
 DomainPack, Session, Run, and Event semantics stay unchanged, and replay,
 audit, regression, and projections still derive from events.
 
+Recovery outcomes use the same boundary. `RecoveryTree` stores revision-safe
+strategy knowledge derived from recovery events; it never marks an FSM case
+complete or replaces a durable receipt.
+
 ## Runtime Type Alignment
 
 WorkCache V1 maps only current `FrameworkEventType` values by default.
@@ -12,16 +16,17 @@ Unknown events are ignored or rejected according to `unknownEventPolicy`; they
 are not accepted as source events unless extension events are explicitly
 enabled.
 
-| Source events | Work node | Primary tree |
-| --- | --- | --- |
-| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `plan` | `PlanTree` |
-| `inference.completed`, `model.call.completed` | `computation` | `ComputationTree` |
-| `tool.call.completed`, `mcp.call.completed` | `tool` | `ToolTree` |
-| `context.build.completed`, `context.compacted` | `observation` | `ObservationTree` |
-| `message.enqueued`, `message.delivered`, `message.acknowledged`, `message.failed`, `message.dead_lettered` | `observation` | `ObservationTree` |
-| `eval.completed`, `regression.completed` | `verification` | `VerificationTree` |
-| `memory.read.completed`, `memory.write.committed` | `memory` | `MemoryTree` |
-| `llm.cache.write` with prompt prefix metadata | `prompt_prefix` | `PromptPrefixTree` |
+| Source events                                                                                                    | Work node       | Primary tree       |
+| ---------------------------------------------------------------------------------------------------------------- | --------------- | ------------------ |
+| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `plan`          | `PlanTree`         |
+| `inference.completed`, `model.call.completed`                                                                    | `computation`   | `ComputationTree`  |
+| `tool.call.completed`, `mcp.call.completed`                                                                      | `tool`          | `ToolTree`         |
+| `context.build.completed`, `context.compacted`                                                                   | `observation`   | `ObservationTree`  |
+| `message.enqueued`, `message.delivered`, `message.acknowledged`, `message.failed`, `message.dead_lettered`       | `observation`   | `ObservationTree`  |
+| `eval.completed`, `regression.completed`                                                                         | `verification`  | `VerificationTree` |
+| `memory.read.completed`, `memory.write.committed`                                                                | `memory`        | `MemoryTree`       |
+| `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `recovery`      | `RecoveryTree`     |
+| `llm.cache.write` with prompt prefix metadata                                                                    | `prompt_prefix` | `PromptPrefixTree` |
 
 `MessageTree` and `KVPrefixTree` are not V1 roots. PromptPrefixTree stores
 stable prompt blocks and can materialize a logical prefix string; it does not
@@ -29,15 +34,16 @@ manage provider KV cache.
 
 ## Core Exports
 
-| Export | Purpose |
-| --- | --- |
-| `RuntimeTypeDefinition` | Source event to work node/tree alignment plus materializer. |
-| `NormalizedWorkEvent` | Event payload normalized for a primary tree. |
-| `WorkGraphNode`, `WorkGraphEdge`, `WorkGraph`, `DemandSignal` | Event-derived scheduling graph, typed dependencies, and cache demand signals. |
-| `CacheBlock<T>` | Typed cache artifact with validity, provenance, utility, and source event linkage. |
-| `CacheTree<T>`, `TypedCacheForest` | Tree lookup/write/invalidation over a shared store. |
-| `WorkCacheManager` | Ingests events, enforces TTL/validity, and emits audit events. |
-| `WorkCachePolicy` | Store mode, prompt budget, unknown-event behavior, and per-tree TTLs. |
+| Export                                                        | Purpose                                                                            |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `RuntimeTypeDefinition`                                       | Source event to work node/tree alignment plus materializer.                        |
+| `NormalizedWorkEvent`                                         | Event payload normalized for a primary tree.                                       |
+| `WorkGraphNode`, `WorkGraphEdge`, `WorkGraph`, `DemandSignal` | Event-derived scheduling graph, typed dependencies, and cache demand signals.      |
+| `CacheBlock<T>`                                               | Typed cache artifact with validity, provenance, utility, and source event linkage. |
+| `CacheTree<T>`, `TypedCacheForest`                            | Tree lookup/write/invalidation over a shared store.                                |
+| `WorkCacheManager`                                            | Ingests events, enforces TTL/validity, and emits audit events.                     |
+| `WorkCachePolicy`                                             | Store mode, prompt budget, unknown-event behavior, and per-tree TTLs.              |
+| `WorkCacheRecoveryKnowledgeStore`                             | `RecoveryKnowledgePort` backed by revision-safe `RecoveryTree` blocks.             |
 
 ## Work Graph and Tree Updates
 
@@ -60,7 +66,8 @@ serialized block JSON, timestamps, expiry, and source event linkage.
 `HotIndexedWorkCacheStore` wraps either store and keeps an in-process index by
 block id and tree/cache key. Runtime lookup checks the hot index first, writes
 through to the backing store, and evicts low-utility entries by demand score and
-last update time.
+last update time. Hot and Redis indexes verify their tree/key binding before a
+hit; stale aliases are removed instead of returning a differently keyed block.
 
 The intended runtime layout is:
 
@@ -68,24 +75,37 @@ The intended runtime layout is:
 source events in event log
   -> WorkGraphIndex and DemandSignal in CPU memory
   -> HotIndexedWorkCacheStore in CPU memory
-  -> MemoryWorkCacheStore or SQLiteWorkCacheStore backing store
+  -> MemoryWorkCacheStore, SQLiteWorkCacheStore, or RedisWorkCacheStore
 ```
 
-SQLite mode gives persistent cache trees; the event log remains the rebuild
-source of truth. Current-run graph and tree updates happen synchronously so a
-fresh block can be reused immediately. More expensive maintenance such as
-global pruning, graph compaction, or cross-run rebuilds should run behind the
-same store and graph interfaces without blocking an agent step.
+SQLite and Redis modes give persistent or shared cache trees; the event log
+remains the rebuild source of truth. Cache blocks and keys include tenant,
+user, workspace, session, agent, and DomainPack scope where available. The
+default policy requires `userId`. Unscoped events bypass caching, scope
+mismatches miss, and `validity.status=unknown` is never reusable.
 
 Configure the server with:
 
 ```bash
 HYPHA_WORKCACHE=off
-HYPHA_WORKCACHE=memory  # cache-base default
+HYPHA_WORKCACHE=memory  # bundled server default
 HYPHA_WORKCACHE=sqlite
+HYPHA_WORKCACHE=redis
 HYPHA_WORKCACHE_SQLITE_PATH=./data/runtime/cache/hypha-workcache.sqlite
 HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS=4096
+HYPHA_WORKCACHE_FAILURE_MODE=bypass
+HYPHA_WORKCACHE_SCOPE_REQUIREMENT=user
 ```
+
+Memory and tree stores enforce configured entry and byte limits. WorkGraph
+history and demand signals are also bounded. Redis mode publishes versioned
+invalidation messages so peer hot indexes cannot continue serving a deleted
+block; Redis index replacement and deletion use atomic operations when the
+client supports them. Store calls are time-bounded and optional cache failures
+do not change the source event, inference result, or recovery outcome.
+Thinking Cache also requires the configured WorkCache scope before it can use
+its in-process singleflight map, so an unscoped request cannot be coalesced with
+another request even when no persistent write occurs.
 
 ## Reuse Rules
 
@@ -103,18 +123,29 @@ ordering/template metadata. Dynamic suffix hashes and request ids are trace
 metadata only; they do not invalidate stable prefix blocks. A template content
 or version change should produce a new block hash and therefore a new block.
 
+Recovery knowledge is keyed by tenant/user/workspace/session/agent/DomainPack
+scope, failure fingerprint, participant id, and policy/spec/provider revisions.
+`WorkCacheManager.getRecoveryKnowledgePort()` validates scoped knowledge with
+the Core runtime schema before persistence and removes malformed legacy blocks.
+A new revision removes stale entries only inside the same scope; invalidation
+cannot remove another user's hint. The recovery supervisor still revalidates
+every hit and uses only a verified strategy for a handler declared by the
+current participant. Negative knowledge records a failed strategy but does not
+authorize a different side effect. Store outages bypass recovery hints rather
+than interrupting the recovery supervisor.
+
 ## Audit Events
 
 WorkCache may append derived audit events after the source event:
 
-| Event | Meaning |
-| --- | --- |
-| `workcache.lookup` | A tree lookup was attempted for a source event. |
-| `workcache.hit` | A fresh block with matching validity was reused. |
-| `workcache.miss` | No block existed, or the block expired/was invalid. |
-| `workcache.write` | A new block was stored. |
-| `workcache.invalidate` | A stale, expired, or changed-validity block was removed. |
-| `workcache.bypass` | The source event was known but not safe to cache. |
+| Event                           | Meaning                                                    |
+| ------------------------------- | ---------------------------------------------------------- |
+| `workcache.lookup`              | A tree lookup was attempted for a source event.            |
+| `workcache.hit`                 | A fresh block with matching validity was reused.           |
+| `workcache.miss`                | No block existed, or the block expired/was invalid.        |
+| `workcache.write`               | A new block was stored.                                    |
+| `workcache.invalidate`          | A stale, expired, or changed-validity block was removed.   |
+| `workcache.bypass`              | The source event was known but not safe to cache.          |
 | `workcache.prefix.materialized` | Stable prefix content was assembled from PromptPrefixTree. |
 
 Each audit payload includes `sourceEventId`, `sourceEventType`, `treeType`,

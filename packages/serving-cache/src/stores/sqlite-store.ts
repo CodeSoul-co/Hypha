@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { validateCacheEntry } from '../schemas';
 import type { CacheEntry, CacheMetadata, CacheStore } from '../types';
 
 interface SqliteDatabaseSync {
@@ -18,10 +19,12 @@ interface SqliteModule {
 export interface SQLiteCacheStoreOptions {
   filename: string;
   required?: boolean;
+  maxEntries?: number;
 }
 
 export class SQLiteCacheStore implements CacheStore {
   private readonly db: SqliteDatabaseSync;
+  private readonly maxEntries: number;
 
   constructor(options: SQLiteCacheStoreOptions) {
     fs.mkdirSync(path.dirname(options.filename), { recursive: true });
@@ -30,6 +33,7 @@ export class SQLiteCacheStore implements CacheStore {
       throw new Error('SQLite cache store requires node:sqlite or better-sqlite3.');
     }
     this.db = new sqlite.DatabaseSync(options.filename);
+    this.maxEntries = Math.max(1, options.maxEntries ?? 50000);
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS cache_entries (' +
         'key TEXT PRIMARY KEY, ' +
@@ -55,25 +59,37 @@ export class SQLiteCacheStore implements CacheStore {
       )
       .get(key);
     if (!row) return null;
-    const metadata = parseJson<CacheMetadata | undefined>(row.metadata_json, undefined);
-    return {
-      key: String(row.key),
-      value: parseJson<T>(row.value_json, null as T),
-      createdAt: Number(row.created_at),
-      expiresAt:
-        row.expires_at === null || row.expires_at === undefined
-          ? undefined
-          : Number(row.expires_at),
-      metadata: metadata
-        ? {
-            ...metadata,
-            hitCount: Number(row.hit_count ?? metadata.hitCount ?? 0),
-          }
-        : undefined,
-    };
+    try {
+      const metadata = parseJson<CacheMetadata | undefined>(row.metadata_json, undefined);
+      return validateCacheEntry<T>({
+        schemaVersion: '1.0',
+        keyVersion: '1',
+        key: String(row.key),
+        value: parseJson<T>(row.value_json, null as T),
+        createdAt: Number(row.created_at),
+        expiresAt:
+          row.expires_at === null || row.expires_at === undefined
+            ? undefined
+            : Number(row.expires_at),
+        sizeBytes: Buffer.byteLength(String(row.value_json), 'utf8'),
+        metadata: metadata
+          ? {
+              ...metadata,
+              hitCount: Number(row.hit_count ?? metadata.hitCount ?? 0),
+            }
+          : undefined,
+      });
+    } catch {
+      await this.delete(key);
+      return null;
+    }
   }
 
   async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {
+    validateCacheEntry(entry);
+    if (entry.key !== key) {
+      throw new Error('Serving Cache store key does not match CacheEntry.key.');
+    }
     this.db
       .prepare(
         'INSERT OR REPLACE INTO cache_entries ' +
@@ -89,6 +105,7 @@ export class SQLiteCacheStore implements CacheStore {
         entry.metadata?.hitCount ?? 0,
         key
       );
+    this.prune();
   }
 
   async delete(key: string): Promise<void> {
@@ -103,6 +120,17 @@ export class SQLiteCacheStore implements CacheStore {
     this.db
       .prepare('UPDATE cache_entries SET hit_count = hit_count + 1, last_hit_at = ? WHERE key = ?')
       .run(timestamp, key);
+  }
+
+  private prune(): void {
+    const rows = this.db
+      .prepare(
+        'SELECT key FROM cache_entries ORDER BY COALESCE(last_hit_at, created_at) DESC LIMIT -1 OFFSET ?'
+      )
+      .all(this.maxEntries);
+    for (const row of rows) {
+      this.db.prepare('DELETE FROM cache_entries WHERE key = ?').run(String(row.key));
+    }
   }
 }
 
