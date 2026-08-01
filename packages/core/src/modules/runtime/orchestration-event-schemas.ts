@@ -103,6 +103,7 @@ export const RUNTIME_RUN_MANAGER_EVENT_TYPES = [
   'react.continuation.checkpointed',
   'react.continuation.suspended',
   'react.continuation.resumed',
+  'react.continuation.quarantined',
 ] as const satisfies readonly FrameworkEventType[];
 
 export type RuntimeRunManagerEventType = (typeof RUNTIME_RUN_MANAGER_EVENT_TYPES)[number];
@@ -288,6 +289,15 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'context.build.started': openPayload(),
   'context.build.completed': openPayload(),
   'context.compacted': openPayload(),
+  'react.continuation.quarantined': strictPayload(
+    ['evidenceEventId', 'reason', 'commandIds', 'quarantinedAt'],
+    {
+      evidenceEventId: stringSchema,
+      reason: stringSchema,
+      commandIds: { type: 'array', items: stringSchema },
+      quarantinedAt: timestampSchema,
+    }
+  ),
   'skill.selected': openPayload(),
   'skill.loaded': openPayload(),
   'skill.completed': openPayload(),

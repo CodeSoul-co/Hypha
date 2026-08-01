@@ -66,6 +66,18 @@ describe('Memory runtime configuration boundary', () => {
     expect(() => validateMemoryRuntimeConfig(providerDrift)).toThrow(
       'Memory profile managementProviderRef must select its management spec'
     );
+
+    const dependencyDrift = config();
+    dependencyDrift.profiles[memoryProfileSpecExample.id].management.config = {
+      recordStoreRef: 'memory.store.record.mongodb',
+      vectorStoreRef: 'memory.vector.unregistered',
+    };
+    expect(() => validateMemoryRuntimeConfig(dependencyDrift)).toThrow(
+      'Native Memory recordStoreRef must match the profile dependency memory.store.record.sqlite'
+    );
+    expect(() => validateMemoryRuntimeConfig(dependencyDrift)).toThrow(
+      'Native Memory vectorStoreRef must match the profile dependency memory.vector.local'
+    );
   });
 
   it('rejects duplicate dependencies, invalid topology and ephemeral production coordination', () => {

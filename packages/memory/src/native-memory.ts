@@ -1,5 +1,6 @@
 import type {
   ManagedMemoryRecord,
+  ManagedMemoryScope,
   MemoryManagementCapabilities,
   MemoryProfileSpec,
 } from './contracts';
@@ -28,13 +29,22 @@ import {
 } from './managed-store';
 import type { MemoryEventPublisher, MemoryEventType } from './memory-events';
 import { DeterministicMemoryMaintenancePlanner } from './native-maintenance';
-import { hashMemoryContent, hashMemoryScope, normalizeMemoryError, sha256 } from './memory-utils';
 import {
+  hashMemoryContent,
+  hashMemoryScope,
+  memoryError,
+  normalizeMemoryError,
+  sha256,
+} from './memory-utils';
+import {
+  DenseMemoryCandidateGenerator,
   DefaultMemoryRetrievalPipeline,
   KeywordMemoryCandidateGenerator,
   StructuredMemoryCandidateGenerator,
   normalizeMemoryQuery,
 } from './retrieval';
+import type { EmbeddingProvider } from './index';
+import type { ManagedVectorStoreAdapter } from './index-outbox';
 
 export interface NativeMemoryProviderOptions {
   profile: MemoryProfileSpec;
@@ -42,6 +52,8 @@ export interface NativeMemoryProviderOptions {
   persistence?: MemoryPersistenceUnitOfWork;
   idempotencyStore?: MemoryIdempotencyStore;
   events?: MemoryEventPublisher;
+  embeddingProvider?: EmbeddingProvider;
+  vectorStores?: ManagedVectorStoreAdapter[];
   now?: () => string;
 }
 
@@ -84,6 +96,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
   private readonly now: () => string;
   private readonly planner: DeterministicMemoryMaintenancePlanner;
   readonly retrieval: DefaultMemoryRetrievalPipeline;
+  private readonly vectorStores: readonly ManagedVectorStoreAdapter[];
 
   constructor(private readonly options: NativeMemoryProviderOptions) {
     this.id = options.profile.managementProviderRef.id;
@@ -93,18 +106,29 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
     this.idempotencyStore = options.idempotencyStore ?? new InMemoryMemoryIdempotencyStore();
     this.now = options.now ?? (() => new Date().toISOString());
     this.planner = new DeterministicMemoryMaintenancePlanner(undefined, this.now);
+    this.vectorStores = options.vectorStores ?? [];
     this.retrieval = new DefaultMemoryRetrievalPipeline({
       recordStore: this.recordStore,
       generators: [
         new StructuredMemoryCandidateGenerator(this.recordStore),
         new KeywordMemoryCandidateGenerator(this.recordStore),
+        ...(options.embeddingProvider
+          ? this.vectorStores.map(
+              (store) =>
+                new DenseMemoryCandidateGenerator({
+                  store,
+                  embeddings: options.embeddingProvider!,
+                })
+            )
+          : []),
       ],
       rankingPolicy: {
         ...options.profile.retrievalPolicy,
         normalization: 'provider_normalized',
         weights: {
-          exact: 0.35,
-          keyword: 0.35,
+          semantic: 0.35,
+          exact: 0.2,
+          keyword: 0.2,
           recency: options.profile.retrievalPolicy.recencyWeight ?? 0.1,
           importance: options.profile.retrievalPolicy.importanceWeight ?? 0.05,
           confidence: options.profile.retrievalPolicy.confidenceWeight ?? 0.1,
@@ -117,7 +141,10 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
   }
 
   async capabilities(): Promise<MemoryManagementCapabilities> {
-    return nativeCapabilities;
+    return {
+      ...nativeCapabilities,
+      hybridSearch: Boolean(this.options.embeddingProvider && this.vectorStores.length > 0),
+    };
   }
 
   async add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult> {
@@ -128,7 +155,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
       const reused = await this.idempotencyStore.get(scopeHash, key);
       if (reused) return structuredClone(reused) as ManagedMemoryWriteResult;
     }
-    await this.trace('memory.write.requested', request.operationId, request.scope.runId, {
+    await this.trace('memory.write.requested', request.operationId, request.scope, {
       scopeHash,
     });
     try {
@@ -172,39 +199,46 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         existing,
         this.now()
       );
+      const targetVectorStoreIds = this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [];
+      const indexJobId = `${request.operationId}:${record.versionId}:index`;
       await this.persistence.transaction(async ({ recordStore, outboxStore }) => {
         if (record.revision === 1) await recordStore.create(record);
         else await recordStore.createVersion(record, record.revision - 1);
-        await outboxStore.enqueue({
-          id: `${request.operationId}:${record.versionId}:index`,
-          operationId: request.operationId,
-          memoryId: record.id,
-          memoryVersionId: record.versionId,
-          scopeHash: record.scopeHash,
-          action: 'upsert',
-          targetVectorStoreIds: this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [],
-          state: 'pending',
-          attempts: 0,
-          availableAt: this.now(),
-          createdAt: this.now(),
-          updatedAt: this.now(),
-        });
+        if (targetVectorStoreIds.length > 0) {
+          await outboxStore.enqueue({
+            id: indexJobId,
+            operationId: request.operationId,
+            memoryId: record.id,
+            memoryVersionId: record.versionId,
+            memoryRevision: record.revision,
+            scopeHash: record.scopeHash,
+            action: 'upsert',
+            targetVectorStoreIds,
+            state: 'pending',
+            attempts: 0,
+            availableAt: this.now(),
+            createdAt: this.now(),
+            updatedAt: this.now(),
+          });
+        }
       });
       const result: ManagedMemoryWriteResult = {
         operationId: request.operationId,
         status: 'committed',
         records: [record],
-        indexJobs: [{ id: `${request.operationId}:${record.versionId}:index`, state: 'pending' }],
+        ...(targetVectorStoreIds.length > 0
+          ? { indexJobs: [{ id: indexJobId, state: 'pending' as const }] }
+          : {}),
       };
       if (key) await this.idempotencyStore.set(scopeHash, key, result);
-      await this.trace('memory.write.committed', request.operationId, request.scope.runId, {
+      await this.trace('memory.write.committed', request.operationId, request.scope, {
         scopeHash,
         memoryId: record.id,
         memoryVersionId: record.versionId,
       });
       return structuredClone(result);
     } catch (error) {
-      await this.trace('memory.write.rejected', request.operationId, request.scope.runId, {
+      await this.trace('memory.write.rejected', request.operationId, request.scope, {
         scopeHash,
         error: normalizeMemoryError(error),
       });
@@ -214,8 +248,11 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
 
   async search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]> {
     this.assertProfile(request.profileRef.id);
+    if (request.mode === 'graph') {
+      throw memoryError('MEMORY_INVALID_INPUT', 'Native Memory graph search is unavailable.');
+    }
     const scopeHash = hashMemoryScope(request.scope);
-    await this.trace('memory.search.requested', request.operationId, request.scope.runId, {
+    await this.trace('memory.search.requested', request.operationId, request.scope, {
       scopeHash,
     });
     try {
@@ -227,6 +264,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         normalizedQuery: request.query?.trim().toLowerCase(),
         queryEmbedding: request.queryEmbedding,
         requestedTypes: request.memoryTypes,
+        mode: request.mode ?? this.options.profile.retrievalPolicy.defaultMode,
         profileRevision: this.options.profile.revision ?? this.options.profile.version,
       });
       const retrieval = await this.retrieval.retrieve({
@@ -238,14 +276,14 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         includeSuperseded: request.includeSuperseded,
         includeInvalidated: false,
       });
-      await this.trace('memory.search.completed', request.operationId, request.scope.runId, {
+      await this.trace('memory.search.completed', request.operationId, request.scope, {
         scopeHash,
         count: retrieval.results.length,
         retrievalSnapshotId: retrieval.snapshot.id,
       });
       return retrieval.results;
     } catch (error) {
-      await this.trace('memory.search.failed', request.operationId, request.scope.runId, {
+      await this.trace('memory.search.failed', request.operationId, request.scope, {
         scopeHash,
         error: normalizeMemoryError(error, 'MEMORY_RANKING_FAILED'),
       });
@@ -296,28 +334,34 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
       ],
     };
     const indexJobId = `${request.operationId}:${updated.versionId}:index`;
+    const targetVectorStoreIds = this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [];
     await this.persistence.transaction(async ({ recordStore, outboxStore }) => {
       await recordStore.createVersion(updated, request.expectedRevision!);
-      await outboxStore.enqueue({
-        id: indexJobId,
-        operationId: request.operationId,
-        memoryId: updated.id,
-        memoryVersionId: updated.versionId,
-        scopeHash,
-        action: 'upsert',
-        targetVectorStoreIds: this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [],
-        state: 'pending',
-        attempts: 0,
-        availableAt: this.now(),
-        createdAt: this.now(),
-        updatedAt: this.now(),
-      });
+      if (targetVectorStoreIds.length > 0) {
+        await outboxStore.enqueue({
+          id: indexJobId,
+          operationId: request.operationId,
+          memoryId: updated.id,
+          memoryVersionId: updated.versionId,
+          memoryRevision: updated.revision,
+          scopeHash,
+          action: 'upsert',
+          targetVectorStoreIds,
+          state: 'pending',
+          attempts: 0,
+          availableAt: this.now(),
+          createdAt: this.now(),
+          updatedAt: this.now(),
+        });
+      }
     });
     const result: ManagedMemoryWriteResult = {
       operationId: request.operationId,
       status: 'committed',
       records: [updated],
-      indexJobs: [{ id: indexJobId, state: 'pending' }],
+      ...(targetVectorStoreIds.length > 0
+        ? { indexJobs: [{ id: indexJobId, state: 'pending' as const }] }
+        : {}),
     };
     if (request.idempotencyKey) {
       await this.idempotencyStore.set(scopeHash, request.idempotencyKey, result);
@@ -337,11 +381,13 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         (record) => record.id
       );
     const deleted: string[] = [];
+    const targetVectorStoreIds = this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [];
     for (const id of targets) {
       const current = await this.recordStore.get(id, request.scope);
       if (!current) continue;
       await this.persistence.transaction(async ({ recordStore, outboxStore }) => {
         let versionId = current.versionId;
+        let memoryRevision = current.revision + 1;
         if (request.mode === 'hard') {
           await recordStore.delete(id, request.scope);
         } else {
@@ -353,21 +399,25 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
             this.now()
           );
           versionId = tombstone.versionId;
+          memoryRevision = tombstone.revision;
         }
-        await outboxStore.enqueue({
-          id: `${request.operationId}:${id}:delete`,
-          operationId: request.operationId,
-          memoryId: id,
-          memoryVersionId: versionId,
-          scopeHash: current.scopeHash,
-          action: 'delete',
-          targetVectorStoreIds: this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [],
-          state: 'pending',
-          attempts: 0,
-          availableAt: this.now(),
-          createdAt: this.now(),
-          updatedAt: this.now(),
-        });
+        if (targetVectorStoreIds.length > 0) {
+          await outboxStore.enqueue({
+            id: `${request.operationId}:${id}:delete`,
+            operationId: request.operationId,
+            memoryId: id,
+            memoryVersionId: versionId,
+            memoryRevision,
+            scopeHash: current.scopeHash,
+            action: 'delete',
+            targetVectorStoreIds,
+            state: 'pending',
+            attempts: 0,
+            availableAt: this.now(),
+            createdAt: this.now(),
+            updatedAt: this.now(),
+          });
+        }
       });
       deleted.push(id);
     }
@@ -392,8 +442,24 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
     }));
   }
 
-  health(): Promise<ProviderHealth> {
-    return this.recordStore.health();
+  async health(): Promise<ProviderHealth> {
+    const recordHealth = await this.recordStore.health();
+    if (recordHealth.status === 'unhealthy') return recordHealth;
+    const vectorHealth = await Promise.all(this.vectorStores.map((store) => store.health()));
+    const unavailable = vectorHealth.filter((health) => health.status !== 'healthy');
+    if (unavailable.length > 0) {
+      return {
+        status: 'degraded',
+        checkedAt: this.now(),
+        message:
+          'Native Memory vector projection is degraded; structured fallback remains available.',
+        details: { vectorStores: vectorHealth },
+      };
+    }
+    return {
+      ...recordHealth,
+      details: { ...recordHealth.details, vectorStores: vectorHealth },
+    };
   }
   async close(): Promise<void> {}
 
@@ -404,7 +470,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
   private async trace(
     type: MemoryEventType,
     operationId: string,
-    runId: string | undefined,
+    scope: ManagedMemoryScope,
     payload: Record<string, unknown>
   ): Promise<void> {
     if (!this.options.events) return;
@@ -421,7 +487,14 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         error: payload.error as import('./contracts').NormalizedMemoryError | undefined,
         metadata: { ...payload, scopeHash: undefined },
       },
-      { runId: runId ?? 'memory-runtime' }
+      {
+        userId: scope.userId,
+        tenantId: scope.tenantId,
+        workspaceId: scope.workspaceId,
+        sessionId: scope.sessionId,
+        runId: scope.runId ?? operationId,
+        agentId: scope.agentId,
+      }
     );
   }
 }

@@ -70,6 +70,7 @@ function manager(port: MemoryActivityPort, reconciliationStore?: InMemoryMemoryL
     providerId: 'memory.provider.native',
     profileRef: memoryProfileSpecExample,
     eventContext: {
+      userId: scope.userId,
       runId: scope.runId,
       workspaceId: scope.workspaceId,
     },

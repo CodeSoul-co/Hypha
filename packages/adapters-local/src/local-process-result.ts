@@ -19,6 +19,12 @@ export interface BuildLocalProcessResultInput {
   processResult: LocalProcessRunResult;
   changedFiles: FileMutation[];
   resourceAccountant: LocalProcessResourceAccountant;
+  outputArtifacts?: LocalProcessOutputArtifactRefs;
+}
+
+export interface LocalProcessOutputArtifactRefs {
+  stdout?: string;
+  stderr?: string;
 }
 
 export function buildLocalProcessResult(
@@ -26,12 +32,44 @@ export function buildLocalProcessResult(
 ): CommandExecutionResult {
   const terminal = mapProcessOutcome(input.processResult);
   const resource = input.resourceAccountant.account(input.processResult);
+  const stdoutContentHash = hashExecutionText(input.processResult.stdout);
+  const stderrContentHash = hashExecutionText(input.processResult.stderr);
+  const stdoutTruncated =
+    input.processResult.observedStdoutBytes > Buffer.byteLength(input.processResult.stdout);
+  const stderrTruncated =
+    input.processResult.observedStderrBytes > Buffer.byteLength(input.processResult.stderr);
+  const generatedArtifactRefs = [
+    input.outputArtifacts?.stdout,
+    input.outputArtifacts?.stderr,
+  ].filter((reference): reference is string => reference !== undefined);
   const receiptBody = {
+    id: `receipt.local.${shortExecutionHash(input.executionId)}`,
     providerId: input.providerId,
     executionId: input.executionId,
-    status: terminal.status,
-    exitCode: terminal.exitCode,
-    completedAt: input.processResult.completedAt,
+    ...(input.processResult.processId
+      ? { providerExecutionRef: String(input.processResult.processId) }
+      : {}),
+    status: 'completed' as const,
+    issuedAt: input.processResult.completedAt,
+    metadata: {
+      outcome: input.processResult.outcome,
+      terminalStatus: terminal.status,
+      exitCode: terminal.exitCode,
+      signal: input.processResult.signal ?? null,
+      boundedOutput: {
+        stdoutContentHash,
+        stderrContentHash,
+        stdoutBytes: Buffer.byteLength(input.processResult.stdout),
+        stderrBytes: Buffer.byteLength(input.processResult.stderr),
+        stdoutTruncated,
+        stderrTruncated,
+      },
+      resourceUsage: resource.usage,
+      cleanup: {
+        terminationMechanism: input.processResult.terminationMechanism,
+        processTreeTerminationVerified: input.processResult.processTreeTerminationVerified,
+      },
+    },
   };
   return {
     executionId: input.executionId,
@@ -42,20 +80,25 @@ export function buildLocalProcessResult(
     ...(input.processResult.signal ? { signal: input.processResult.signal } : {}),
     stdout: input.processResult.stdout,
     stderr: input.processResult.stderr,
-    stdoutContentHash: hashExecutionText(input.processResult.stdout),
-    stderrContentHash: hashExecutionText(input.processResult.stderr),
+    stdoutContentHash,
+    stderrContentHash,
+    ...(input.outputArtifacts?.stdout
+      ? {
+          stdoutArtifactRef: input.outputArtifacts.stdout,
+          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
+        }
+      : {}),
+    ...(input.outputArtifacts?.stderr
+      ? {
+          stderrArtifactRef: input.outputArtifacts.stderr,
+          ...(stderrTruncated ? { stderrTruncated: true } : {}),
+        }
+      : {}),
     changedFiles: input.changedFiles,
-    generatedArtifactRefs: [],
+    generatedArtifactRefs,
     resourceUsage: resource.usage,
     externalReceipt: {
-      id: `receipt.local.${shortExecutionHash(input.executionId)}`,
-      providerId: input.providerId,
-      executionId: input.executionId,
-      ...(input.processResult.processId
-        ? { providerExecutionRef: String(input.processResult.processId) }
-        : {}),
-      status: 'completed',
-      issuedAt: input.processResult.completedAt,
+      ...receiptBody,
       receiptHash: hashExecutionValue(receiptBody),
     },
     startedAt: input.processResult.startedAt,

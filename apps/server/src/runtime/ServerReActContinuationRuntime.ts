@@ -71,7 +71,9 @@ export function createServerReActContinuationDefinition(
   options: ServerReActContinuationDefinitionOptions
 ): ServerSessionCommandDefinition<ContinueReActCommandPayloadV1, 'continue_react'> {
   const now = options.now ?? (() => new Date().toISOString());
-  const retryDelayMs = nonNegativeInteger(options.retryDelayMs ?? 1_000, 'retryDelayMs');
+  if (options.retryDelayMs !== undefined) {
+    nonNegativeInteger(options.retryDelayMs, 'retryDelayMs');
+  }
   const checkpointReferenceFor = options.checkpointReferenceFor ?? defaultCheckpointReference;
 
   return {
@@ -92,6 +94,13 @@ export function createServerReActContinuationDefinition(
         return applied(input.payload.runId);
       }
       if (!result.react) corrupt('ReAct quantum result does not contain execution evidence');
+
+      if (input.signal.aborted) {
+        throw new FrameworkError({
+          code: 'RUNTIME_CANCELLED',
+          message: 'Continuation command lost its execution lease before scheduling',
+        });
+      }
 
       const coordinated = await options.supervisor.coordinateResult({
         react: result.react,
@@ -126,17 +135,10 @@ export function createServerReActContinuationDefinition(
         case 'waiting_human':
           return applied(input.payload.runId);
         case 'failed':
-          if (input.command.attempts < input.command.maxAttempts) {
-            return {
-              disposition: 'retry',
-              availableAt: new Date(Date.parse(timestamp(now())) + retryDelayMs).toISOString(),
-            };
-          }
-          return {
-            disposition: 'failed',
-            rejectionCode: 'react_quantum_failed',
-            deadLetter: true,
-          };
+          // The Outcome recorder has already persisted a terminal run.failed
+          // fact. Retrying the same checkpoint would only replay a terminal
+          // Run and can never repair the cause.
+          return applied(input.payload.runId);
       }
     },
   };

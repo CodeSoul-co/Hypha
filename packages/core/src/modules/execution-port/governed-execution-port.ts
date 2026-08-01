@@ -35,38 +35,46 @@ export class GovernedExecutionPort implements ExecutionPort {
     const dispatchStartedAt = parseCurrentTime(this.now());
     assertActivityWithinDeadline(request, dispatchStartedAt);
     assertNotExpired(request.authorization.expiresAt, dispatchStartedAt, request);
+    const securitySnapshot = dispatchSecuritySnapshot(request);
 
     const verification = validateVerificationResult(
       await this.authorizationVerifier.verify(request, abortSignal)
     );
     assertNotAborted(abortSignal);
+    const revalidatedRequest = parseDispatchRequest(request);
+    assertDispatchSecurityUnchanged(securitySnapshot, revalidatedRequest);
 
     if (!verification.valid) {
       throw new FrameworkError({
         code: 'EXECUTION_POLICY_DENIED',
         message: 'Execution authorization evidence was rejected',
         context: {
-          activityId: request.activity.activityId,
-          authorizationId: request.authorization.id,
+          activityId: revalidatedRequest.activity.activityId,
+          authorizationId: revalidatedRequest.authorization.id,
           verificationRef: verification.verificationRef,
           reason: verification.reason,
         },
       });
     }
     const verifiedAt = parseCurrentTime(this.now());
-    assertActivityWithinDeadline(request, verifiedAt);
-    assertNotExpired(request.authorization.expiresAt, verifiedAt, request);
-    assertNotExpired(verification.expiresAt, verifiedAt, request, verification.verificationRef);
+    assertActivityWithinDeadline(revalidatedRequest, verifiedAt);
+    assertNotExpired(revalidatedRequest.authorization.expiresAt, verifiedAt, revalidatedRequest);
+    assertNotExpired(
+      verification.expiresAt,
+      verifiedAt,
+      revalidatedRequest,
+      verification.verificationRef
+    );
 
     const result = validateActivityResult(
-      await this.dispatcher.dispatch(request.activity, abortSignal)
+      await this.dispatcher.dispatch(revalidatedRequest.activity, abortSignal)
     );
-    if (result.activityId !== request.activity.activityId) {
+    if (result.activityId !== revalidatedRequest.activity.activityId) {
       throw new FrameworkError({
         code: 'EXECUTION_INTERNAL_ERROR',
         message: 'Execution dispatcher returned evidence for another activity',
         context: {
-          expectedActivityId: request.activity.activityId,
+          expectedActivityId: revalidatedRequest.activity.activityId,
           actualActivityId: result.activityId,
           verificationRef: verification.verificationRef,
         },
@@ -74,6 +82,41 @@ export class GovernedExecutionPort implements ExecutionPort {
     }
     return result;
   }
+}
+
+function dispatchSecuritySnapshot(request: ExecutionDispatchRequest): string {
+  return JSON.stringify(canonicalSecurityValue(request));
+}
+
+function assertDispatchSecurityUnchanged(
+  expectedSnapshot: string,
+  request: ExecutionDispatchRequest
+): void {
+  if (dispatchSecuritySnapshot(request) === expectedSnapshot) return;
+  throw new FrameworkError({
+    code: 'EXECUTION_POLICY_DENIED',
+    message: 'Execution dispatch changed during authorization verification',
+    context: {
+      activityId: request.activity.activityId,
+      authorizationId: request.authorization.id,
+      riskAssessmentId: request.riskAssessment.id,
+    },
+  });
+}
+
+function canonicalSecurityValue(value: unknown): unknown {
+  if (value instanceof Uint8Array) {
+    return { type: 'Uint8Array', bytes: Array.from(value) };
+  }
+  if (Array.isArray(value)) return value.map(canonicalSecurityValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.keys(value as Record<string, unknown>)
+    .sort()
+    .reduce<Record<string, unknown>>((result, key) => {
+      const normalized = canonicalSecurityValue((value as Record<string, unknown>)[key]);
+      if (normalized !== undefined) result[key] = normalized;
+      return result;
+    }, {});
 }
 
 function parseDispatchRequest(input: unknown): ExecutionDispatchRequest {

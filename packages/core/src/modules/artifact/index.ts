@@ -20,6 +20,7 @@ import type {
   ArtifactValidationPolicySpec,
   ArtifactVersioningPolicySpec,
 } from '../../contracts/artifact';
+import type { StoredArtifactRecord } from '../../contracts/artifact-record-repository';
 import { specRefSchema, versionedSpecSchema } from '../../schemas';
 import type { JsonSchema } from '../../specs';
 
@@ -338,6 +339,13 @@ export const artifactRecordSchema = z
       });
     }
   }) satisfies ZodType<ArtifactRecord>;
+
+export const storedArtifactRecordSchema = z
+  .object({
+    record: artifactRecordSchema,
+    profileRef: specRefSchema,
+  })
+  .strict() satisfies ZodType<StoredArtifactRecord>;
 
 export const artifactRefSchema = z
   .object({
@@ -753,6 +761,14 @@ export function validateArtifactProfileSpec(input: unknown): ArtifactProfileSpec
 
 export function validateArtifactRecord(input: unknown): ArtifactRecord {
   return artifactRecordSchema.parse(input);
+}
+
+export function validateStoredArtifactRecord(input: unknown): StoredArtifactRecord {
+  return storedArtifactRecordSchema.parse(input);
+}
+
+export function validateStoredArtifactRecords(input: unknown): StoredArtifactRecord[] {
+  return z.array(storedArtifactRecordSchema).parse(input);
 }
 
 export function validateArtifactRef(input: unknown): ArtifactRef {

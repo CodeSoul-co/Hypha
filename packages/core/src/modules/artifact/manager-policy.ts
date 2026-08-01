@@ -91,6 +91,8 @@ export function assertCreateAccess(
 }
 
 export function canAccessRecord(record: ArtifactRecord, principal: ExecutionPrincipal): boolean {
+  if (hasPermissionScope(principal, 'artifact:admin')) return true;
+  if (!hasCompatibleRecordScope(record, principal)) return false;
   if (
     record.access.ownerPrincipalId === principal.principalId ||
     record.userId === principal.userId ||
@@ -110,6 +112,58 @@ export function canAccessRecord(record: ArtifactRecord, principal: ExecutionPrin
     return principalMetadataContains(principal, 'sessionId', 'sessionIds', record.sessionId);
   }
   return false;
+}
+
+function hasCompatibleRecordScope(
+  record: ArtifactRecord,
+  principal: ExecutionPrincipal
+): boolean {
+  if (record.tenantId && record.tenantId !== principal.tenantId) return false;
+  if (
+    !matchesDeclaredMetadataScope(
+      principal,
+      'workspaceId',
+      'workspaceIds',
+      record.workspaceId
+    )
+  ) {
+    return false;
+  }
+  if (
+    record.sessionId &&
+    !matchesDeclaredMetadataScope(principal, 'sessionId', 'sessionIds', record.sessionId)
+  ) {
+    return false;
+  }
+  if (
+    record.runId &&
+    !matchesDeclaredMetadataScope(principal, 'runId', 'runIds', record.runId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function matchesDeclaredMetadataScope(
+  principal: ExecutionPrincipal,
+  singularKey: string,
+  pluralKey: string,
+  expected: string
+): boolean {
+  const metadata = principal.metadata;
+  if (!metadata) return true;
+  const hasSingular = Object.prototype.hasOwnProperty.call(metadata, singularKey);
+  const hasPlural = Object.prototype.hasOwnProperty.call(metadata, pluralKey);
+  if (!hasSingular && !hasPlural) return true;
+  if (hasSingular && metadata[singularKey] !== expected) return false;
+  if (
+    hasPlural &&
+    (!Array.isArray(metadata[pluralKey]) ||
+      !metadata[pluralKey].some((value) => value === expected))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function resolveProfileRef(

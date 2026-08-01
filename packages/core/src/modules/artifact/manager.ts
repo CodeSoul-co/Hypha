@@ -101,6 +101,7 @@ export const artifactFromWorkspaceRequestSchema = artifactCreateIdentitySchema
     expectedSizeBytes: nonNegativeInteger.optional(),
     logicalArtifactId: nonEmptyString.optional(),
     provenance: artifactProvenanceSchema,
+    retention: artifactRetentionRecordSchema.optional(),
     sensitive: z.boolean().optional(),
     tags: z.array(nonEmptyString).optional(),
     idempotencyKey: nonEmptyString.optional(),
@@ -345,6 +346,7 @@ export const artifactFromWorkspaceRequestJsonSchema: JsonSchema = strictObject(
     expectedSizeBytes: nonNegativeIntegerJsonSchema,
     logicalArtifactId: nonEmptyStringJsonSchema,
     provenance: artifactProvenanceJsonSchema,
+    retention: artifactRetentionRecordJsonSchema,
     sensitive: { type: 'boolean' },
     tags: arraySchema(nonEmptyStringJsonSchema, true),
     idempotencyKey: nonEmptyStringJsonSchema,
@@ -536,6 +538,7 @@ export const artifactFromWorkspaceRequestExample: ArtifactFromWorkspaceRequest =
   expectedContentHash: `sha256:${'d'.repeat(64)}`,
   expectedSizeBytes: 2,
   provenance: artifactCreateRequestExample.provenance,
+  retention: { referencedByCount: 1 },
   idempotencyKey: 'artifact-collect:run.example:report',
 };
 

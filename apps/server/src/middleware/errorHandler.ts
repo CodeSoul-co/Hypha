@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
 import { HTTP_STATUS, ERROR_CODES } from '../constants';
+import { FrameworkError } from '@hypha/core';
 
 // Custom error class
 export class AppError extends Error {
@@ -56,6 +57,21 @@ export function errorHandler(
     return;
   }
 
+  if (err instanceof FrameworkError) {
+    const statusCode = frameworkErrorStatus(err.code);
+    res.status(statusCode).json({
+      success: false,
+      error: {
+        code: err.code,
+        message:
+          statusCode >= 500 && process.env.NODE_ENV === 'production'
+            ? 'Runtime service is unavailable'
+            : err.message,
+      },
+    });
+    return;
+  }
+
   // Handle validation errors (Joi)
   if (err.name === 'ValidationError') {
     res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -106,9 +122,7 @@ export function errorHandler(
 
   // Default error response
   const statusCode = HTTP_STATUS.INTERNAL_SERVER_ERROR;
-  const message = process.env.NODE_ENV === 'production'
-    ? 'Internal server error'
-    : err.message;
+  const message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message;
 
   res.status(statusCode).json({
     success: false,
@@ -117,6 +131,21 @@ export function errorHandler(
       message,
     },
   });
+}
+
+function frameworkErrorStatus(code: string): number {
+  if (code.includes('UNAVAILABLE') || code.includes('STARTUP_INCOMPLETE')) {
+    return HTTP_STATUS.SERVICE_UNAVAILABLE;
+  }
+  if (code.includes('NOT_FOUND')) return HTTP_STATUS.NOT_FOUND;
+  if (code.includes('ACCESS_DENIED') || code.includes('POLICY_DENIED')) {
+    return HTTP_STATUS.FORBIDDEN;
+  }
+  if (code.includes('UNAUTHORIZED')) return HTTP_STATUS.UNAUTHORIZED;
+  if (code.includes('RESOURCE_EXHAUSTED')) return HTTP_STATUS.TOO_MANY_REQUESTS;
+  if (code.includes('CONFLICT') || code.includes('CANCELLED')) return HTTP_STATUS.CONFLICT;
+  if (code.includes('INVALID') || code.includes('VALIDATION')) return HTTP_STATUS.BAD_REQUEST;
+  return HTTP_STATUS.INTERNAL_SERVER_ERROR;
 }
 
 // Async handler wrapper

@@ -1,0 +1,1007 @@
+import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
+import { CopyDestinationOptions, CopySourceOptions } from 'minio';
+import { describe, expect, it, vi } from 'vitest';
+import { readArtifactStream } from './artifact-content-io';
+import {
+  MinioS3ArtifactTransport,
+  S3ArtifactUploadCleanupError,
+  S3ArtifactTransferAbortedError,
+  S3ArtifactTransferTimeoutError,
+} from './s3-artifact-store-transport';
+import {
+  HYPHA_CONTENT_HASH_METADATA_KEY,
+  HYPHA_USER_METADATA_KEY,
+} from './s3-artifact-store-values';
+
+function transportOptions(overrides: Record<string, unknown> = {}) {
+  return {
+    endpoint: 'http://127.0.0.1:9000',
+    allowedEndpointHosts: ['127.0.0.1'],
+    allowInsecureHttp: true,
+    allowPrivateNetwork: true,
+    forcePathStyle: true,
+    credentialProvider: () => ({
+      accessKeyId: 'test-access-key',
+      secretAccessKey: 'test-secret-key',
+      sessionToken: 'test-session-token',
+    }),
+    ...overrides,
+  };
+}
+
+function client(overrides: Record<string, unknown> = {}) {
+  return {
+    putObject: vi.fn().mockResolvedValue({
+      etag: 'multipart-etag-2',
+      versionId: 'version-1',
+    }),
+    removeIncompleteUpload: vi.fn().mockResolvedValue(undefined),
+    bucketExists: vi.fn().mockResolvedValue(true),
+    getBucketVersioning: vi.fn().mockResolvedValue({ Status: 'Enabled' }),
+    statObject: vi.fn().mockResolvedValue(objectStat()),
+    getObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes])),
+    getPartialObject: vi.fn().mockResolvedValue(Readable.from([artifactBytes.subarray(1, 3)])),
+    removeObject: vi.fn().mockResolvedValue(undefined),
+    copyObject: vi.fn().mockResolvedValue({
+      Etag: 'opaque-multipart-etag-2',
+      VersionId: 'version-1',
+    }),
+    presignedUrl: vi.fn(
+      async (
+        _method: string,
+        bucket: string,
+        key: string,
+        expiresInSeconds: number,
+        requestParameters: Record<string, string> = {}
+      ) => {
+        const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+        const url = new URL(`http://127.0.0.1:9000/${encodeURIComponent(bucket)}/${encodedKey}`);
+        for (const [name, value] of Object.entries(requestParameters)) {
+          url.searchParams.set(name, value);
+        }
+        url.searchParams.set('X-Amz-Expires', String(expiresInSeconds));
+        url.searchParams.set('X-Amz-Signature', 'test-signature');
+        return url.toString();
+      }
+    ),
+    ...overrides,
+  };
+}
+
+const artifactBytes = Buffer.from('artifact');
+const artifactContentHash = `sha256:${createHash('sha256').update(artifactBytes).digest('hex')}`;
+
+function objectStat(overrides: Record<string, unknown> = {}) {
+  return {
+    size: artifactBytes.byteLength,
+    etag: 'opaque-multipart-etag-2',
+    lastModified: new Date('2026-07-28T00:00:00.000Z'),
+    metaData: {
+      [HYPHA_CONTENT_HASH_METADATA_KEY]: artifactContentHash,
+      [HYPHA_USER_METADATA_KEY]: Buffer.from('{"source":"execution"}').toString('base64'),
+      'content-type': 'application/octet-stream',
+      'x-amz-server-side-encryption': 'AES256',
+    },
+    versionId: 'version-1',
+    ...overrides,
+  };
+}
+
+function uploadInput(overrides: Record<string, unknown> = {}) {
+  return {
+    bucket: 'hypha-artifacts',
+    key: 'tenant/run/output.bin',
+    body: Readable.from([Buffer.from('artifact')]),
+    contentLength: 8,
+    contentType: 'application/octet-stream',
+    metadata: { 'hypha-content-hash': `sha256:${'a'.repeat(64)}` },
+    ifAbsent: true,
+    ...overrides,
+  };
+}
+
+describe('MinioS3ArtifactTransport', () => {
+  it('creates a client with the trusted endpoint and fresh credentials for every operation', async () => {
+    const firstClient = client();
+    const secondClient = client();
+    const clientFactory = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const credentialProvider = vi
+      .fn()
+      .mockReturnValueOnce({
+        accessKeyId: 'first-access',
+        secretAccessKey: 'first-secret',
+      })
+      .mockReturnValueOnce({
+        accessKeyId: 'second-access',
+        secretAccessKey: 'second-secret',
+      });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory, credentialProvider })
+    );
+
+    await transport.upload(uploadInput());
+    await transport.checkBucket('hypha-artifacts');
+
+    expect(clientFactory).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        endPoint: '127.0.0.1',
+        port: 9000,
+        useSSL: false,
+        pathStyle: true,
+        accessKey: 'first-access',
+        secretKey: 'first-secret',
+      })
+    );
+    expect(clientFactory).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        accessKey: 'second-access',
+        secretKey: 'second-secret',
+      })
+    );
+    expect(credentialProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it('uploads with bounded multipart settings, metadata, and create-only precondition', async () => {
+    const minioClient = client();
+    const clientFactory = vi.fn(() => minioClient);
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory,
+        multipartPartSizeBytes: 5 * 1024 * 1024,
+        maximumRetryCount: 2,
+      })
+    );
+    const input = uploadInput();
+
+    await expect(transport.upload(input)).resolves.toEqual({
+      etag: 'multipart-etag-2',
+      versionId: 'version-1',
+    });
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        partSize: 5 * 1024 * 1024,
+        retryOptions: { maximumRetryCount: 2 },
+      })
+    );
+    expect(minioClient.putObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      expect.any(Readable),
+      8,
+      {
+        'hypha-content-hash': `sha256:${'a'.repeat(64)}`,
+        'Content-Type': 'application/octet-stream',
+        'If-None-Match': '*',
+      }
+    );
+  });
+
+  it('passes an explicit SSE-S3 requirement as a provider request header', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await transport.upload(uploadInput({ serverSideEncryption: 'AES256' }));
+
+    expect(minioClient.putObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      expect.any(Readable),
+      8,
+      expect.objectContaining({
+        'x-amz-server-side-encryption': 'AES256',
+      })
+    );
+  });
+
+  it('fails before creating a client when cancellation already happened', async () => {
+    const clientFactory = vi.fn(() => client());
+    const abortController = new AbortController();
+    abortController.abort();
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.upload(uploadInput({ abortSignal: abortController.signal }))
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('destroys the body and cleans incomplete multipart state after cancellation', async () => {
+    const abortController = new AbortController();
+    const minioClient = client({
+      putObject: vi.fn(
+        async (_bucket: string, _key: string, body: Readable): Promise<never> =>
+          await new Promise((_, reject) => {
+            body.once('error', reject);
+            abortController.abort();
+          })
+      ),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.upload(uploadInput({ abortSignal: abortController.signal }))
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin'
+    );
+  });
+
+  it('removes the exact completed version when cancellation races with upload completion', async () => {
+    const abortController = new AbortController();
+    const minioClient = client({
+      putObject: vi.fn(async () => {
+        abortController.abort();
+        return {
+          etag: 'interrupted-etag',
+          versionId: 'interrupted-version',
+        };
+      }),
+      statObject: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.upload(uploadInput({ abortSignal: abortController.signal }))
+    ).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    expect(minioClient.removeObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'interrupted-version' }
+    );
+    expect(minioClient.statObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'interrupted-version' }
+    );
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when a completed version survives cancellation cleanup', async () => {
+    const abortController = new AbortController();
+    const minioClient = client({
+      putObject: vi.fn(async () => {
+        abortController.abort();
+        return {
+          etag: 'interrupted-etag',
+          versionId: 'interrupted-version',
+        };
+      }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.upload(uploadInput({ abortSignal: abortController.signal }))
+    ).rejects.toBeInstanceOf(S3ArtifactUploadCleanupError);
+    expect(minioClient.removeObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'interrupted-version' }
+    );
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
+  });
+
+  it('cleans incomplete multipart state after a provider upload failure', async () => {
+    const providerError = Object.assign(new Error('provider detail'), {
+      code: 'SlowDown',
+    });
+    const minioClient = client({
+      putObject: vi.fn().mockRejectedValue(providerError),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(transport.upload(uploadInput())).rejects.toBe(providerError);
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
+  });
+
+  it('times out a stalled upload and cleans incomplete multipart state', async () => {
+    const minioClient = client({
+      putObject: vi.fn(
+        async (_bucket: string, _key: string, body: Readable): Promise<never> =>
+          await new Promise((_, reject) => {
+            body.once('error', reject);
+          })
+      ),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        requestTimeoutMs: 10,
+      })
+    );
+
+    await expect(transport.upload(uploadInput())).rejects.toBeInstanceOf(
+      S3ArtifactTransferTimeoutError
+    );
+    expect(minioClient.removeIncompleteUpload).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when multipart cleanup itself fails', async () => {
+    const minioClient = client({
+      putObject: vi.fn().mockRejectedValue(new Error('upload failed')),
+      removeIncompleteUpload: vi.fn().mockRejectedValue(new Error('cleanup failed')),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(transport.upload(uploadInput())).rejects.toBeInstanceOf(
+      S3ArtifactUploadCleanupError
+    );
+  });
+
+  it('treats an already absent incomplete upload as successful cleanup', async () => {
+    const missingUpload = Object.assign(new Error('missing'), {
+      code: 'NoSuchUpload',
+    });
+    const providerError = new Error('upload failed');
+    const minioClient = client({
+      putObject: vi.fn().mockRejectedValue(providerError),
+      removeIncompleteUpload: vi.fn().mockRejectedValue(missingUpload),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(transport.upload(uploadInput())).rejects.toBe(providerError);
+  });
+
+  it('reports a missing bucket and rejects all work after idempotent close', async () => {
+    const minioClient = client({
+      bucketExists: vi.fn().mockResolvedValue(false),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(transport.checkBucket('missing-bucket')).rejects.toMatchObject({
+      name: 'NoSuchBucket',
+    });
+    transport.close();
+    transport.close();
+    await expect(transport.upload(uploadInput())).rejects.toThrow('S3 upload transport is closed.');
+  });
+
+  it('fails bucket readiness when immutable object versioning is not enabled', async () => {
+    const minioClient = client({
+      getBucketVersioning: vi.fn().mockResolvedValue({ Status: 'Suspended' }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(transport.checkBucket('hypha-artifacts')).rejects.toMatchObject({
+      name: 'InvalidBucketState',
+    });
+  });
+
+  it.each([{ multipartPartSizeBytes: 1024 }, { requestTimeoutMs: 0 }, { maximumRetryCount: -1 }])(
+    'rejects invalid bounded transport option %o',
+    (option) => {
+      expect(() => new MinioS3ArtifactTransport(transportOptions(option))).toThrow(TypeError);
+    }
+  );
+
+  it('maps object stat values and returns null only for missing objects', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.head({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).resolves.toEqual({
+      sizeBytes: artifactBytes.byteLength,
+      etag: 'opaque-multipart-etag-2',
+      versionId: 'version-1',
+      lastModifiedAt: '2026-07-28T00:00:00.000Z',
+      mimeType: 'application/octet-stream',
+      encrypted: true,
+      metadata: objectStat().metaData,
+    });
+    expect(minioClient.statObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'version-1' }
+    );
+
+    minioClient.statObject.mockRejectedValueOnce(
+      Object.assign(new Error('provider detail'), { code: 'NoSuchKey' })
+    );
+    await expect(
+      transport.head({ bucket: 'hypha-artifacts', key: 'missing.bin' })
+    ).resolves.toBeNull();
+    minioClient.statObject.mockRejectedValueOnce(
+      Object.assign(new Error('provider detail'), { code: 'AccessDenied' })
+    );
+    await expect(
+      transport.head({ bucket: 'hypha-artifacts', key: 'denied.bin' })
+    ).rejects.toMatchObject({ code: 'AccessDenied' });
+  });
+
+  it('downloads a pinned full object and verifies size, hash, and final identity', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      versionId: 'version-1',
+      expectedEtag: '"opaque-multipart-etag-2"',
+      expectedContentHash: artifactContentHash,
+    });
+
+    await expect(readArtifactStream(result.stream)).resolves.toEqual(
+      Uint8Array.from(artifactBytes)
+    );
+    expect(result.range).toBeUndefined();
+    expect(result.state.versionId).toBe('version-1');
+    expect(minioClient.getObject).toHaveBeenCalledWith('hypha-artifacts', 'tenant/run/output.bin', {
+      versionId: 'version-1',
+    });
+    expect(minioClient.statObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('downloads a bounded range and verifies the object identity after streaming', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      range: { start: 1, endInclusive: 2 },
+    });
+
+    await expect(readArtifactStream(result.stream)).resolves.toEqual(
+      Uint8Array.from(artifactBytes.subarray(1, 3))
+    );
+    expect(result.range).toEqual({ start: 1, endInclusive: 2 });
+    expect(minioClient.getPartialObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      1,
+      2,
+      undefined
+    );
+    expect(minioClient.statObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects expected hash and ETag mismatches before downloading bytes', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.get({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        expectedContentHash: `sha256:${'0'.repeat(64)}`,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_HASH_MISMATCH' },
+    });
+    await expect(
+      transport.get({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        expectedEtag: 'different-etag',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    expect(minioClient.getObject).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the object identity changes during a ranged download', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(objectStat({ etag: 'replacement-etag' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      range: { start: 1, endInclusive: 2 },
+    });
+
+    await expect(readArtifactStream(result.stream)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT', retryable: true },
+    });
+  });
+
+  it('destroys an active download when cancellation is requested', async () => {
+    const abortController = new AbortController();
+    const stalled = new Readable({ read: () => undefined });
+    const minioClient = client({
+      getObject: vi.fn().mockResolvedValue(stalled),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      abortSignal: abortController.signal,
+    });
+
+    const read = readArtifactStream(result.stream);
+    abortController.abort();
+
+    await expect(read).rejects.toBeInstanceOf(S3ArtifactTransferAbortedError);
+    expect(stalled.destroyed).toBe(true);
+  });
+
+  it('times out and destroys a stalled download', async () => {
+    const stalled = new Readable({ read: () => undefined });
+    const minioClient = client({
+      getObject: vi.fn().mockResolvedValue(stalled),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        requestTimeoutMs: 10,
+      })
+    );
+    const result = await transport.get({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+    });
+
+    await expect(readArtifactStream(result.stream)).rejects.toBeInstanceOf(
+      S3ArtifactTransferTimeoutError
+    );
+    expect(stalled.destroyed).toBe(true);
+  });
+
+  it('rejects invalid provider metadata instead of casting it into trusted state', async () => {
+    const minioClient = client({
+      statObject: vi.fn().mockResolvedValue(objectStat({ metaData: { unsafe: 1 } })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.head({ bucket: 'hypha-artifacts', key: 'tenant/run/output.bin' })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VALIDATION_FAILED' },
+    });
+  });
+
+  it('creates version-pinned signed download access with bounded response overrides', async () => {
+    const now = new Date('2026-07-28T08:00:00.000Z');
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        now: () => now,
+      })
+    );
+
+    const access = await transport.createDownloadAccess({
+      bucket: 'hypha-artifacts',
+      key: 'tenant/run/output.bin',
+      versionId: 'version-1',
+      expectedEtag: '"opaque-multipart-etag-2"',
+      expectedContentHash: artifactContentHash,
+      expiresInSeconds: 120,
+      responseMimeType: 'application/octet-stream',
+      responseFilename: 'execution output (final).bin',
+    });
+
+    expect(access).toMatchObject({
+      method: 'GET',
+      expiresAt: '2026-07-28T08:02:00.000Z',
+    });
+    const url = new URL(access.url);
+    expect(url.origin).toBe('http://127.0.0.1:9000');
+    expect(url.searchParams.get('versionId')).toBe('version-1');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('120');
+    expect(url.searchParams.get('response-content-type')).toBe('application/octet-stream');
+    expect(url.searchParams.get('response-content-disposition')).toBe(
+      "attachment; filename*=UTF-8''execution%20output%20%28final%29.bin"
+    );
+    expect(minioClient.statObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'version-1' }
+    );
+    expect(minioClient.presignedUrl).toHaveBeenCalledWith(
+      'GET',
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      120,
+      expect.objectContaining({ versionId: 'version-1' }),
+      now
+    );
+  });
+
+  it('refuses unversioned signed access before resolving credentials', async () => {
+    const credentialProvider = vi.fn();
+    const transport = new MinioS3ArtifactTransport(transportOptions({ credentialProvider }));
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: '',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toThrow('versionId must not be empty');
+    expect(credentialProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'zero TTL',
+      input: { expiresInSeconds: 0 },
+      message: 'positive safe integer',
+    },
+    {
+      name: 'TTL beyond the S3 signature limit',
+      input: { expiresInSeconds: 604_801 },
+      message: 'must not exceed 604800',
+    },
+    {
+      name: 'response header injection',
+      input: { responseMimeType: 'text/plain\r\nx-unsafe: true' },
+      message: 'responseMimeType is invalid',
+    },
+    {
+      name: 'path-shaped download filename',
+      input: { responseFilename: '../secret.txt' },
+      message: 'safe filename',
+    },
+  ])('rejects unsafe signed access input: $name', async ({ input, message }) => {
+    const clientFactory = vi.fn(() => client());
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expiresInSeconds: 120,
+        ...input,
+      })
+    ).rejects.toThrow(message);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('refuses to outlive temporary signing credentials', async () => {
+    const clientFactory = vi.fn(() => client());
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory,
+        now: () => new Date('2026-07-28T08:00:00.000Z'),
+        credentialProvider: () => ({
+          accessKeyId: 'temporary-access',
+          secretAccessKey: 'temporary-secret',
+          expiration: new Date('2026-07-28T08:01:59.000Z'),
+        }),
+      })
+    );
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toMatchObject({
+      code: 'S3_ARTIFACT_CREDENTIAL_INVALID',
+    });
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('checks the pinned object identity before creating signed access', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expectedEtag: 'replacement-etag',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    expect(minioClient.presignedUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'does not bind the requested version',
+      url: 'http://127.0.0.1:9000/hypha-artifacts/output.bin?X-Amz-Expires=120',
+    },
+    {
+      name: 'changes the configured endpoint',
+      url: 'https://attacker.example/output.bin?versionId=version-1&X-Amz-Expires=120',
+    },
+    {
+      name: 'changes the requested lifetime',
+      url: 'http://127.0.0.1:9000/hypha-artifacts/output.bin?versionId=version-1&X-Amz-Expires=600',
+    },
+  ])('rejects a signed URL that $name', async ({ url }) => {
+    const minioClient = client({
+      presignedUrl: vi.fn().mockResolvedValue(url),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.createDownloadAccess({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expiresInSeconds: 120,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_DOWNLOAD_FAILED' },
+    });
+  });
+
+  it('deletes only the exact pinned object version and verifies its removal', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expectedEtag: 'opaque-multipart-etag-2',
+      })
+    ).resolves.toBe(true);
+    expect(minioClient.removeObject).toHaveBeenCalledWith(
+      'hypha-artifacts',
+      'tenant/run/output.bin',
+      { versionId: 'version-1' }
+    );
+    expect(minioClient.statObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps version-pinned delete idempotent when the version is already absent', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).resolves.toBe(false);
+    expect(minioClient.removeObject).not.toHaveBeenCalled();
+  });
+
+  it('waits for an eventually consistent delete to become invisible', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(objectStat())
+        .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'NoSuchKey' })),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({
+        clientFactory: () => minioClient,
+        consistencyVerificationAttempts: 3,
+        consistencyVerificationDelayMs: 0,
+      })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).resolves.toBe(true);
+    expect(minioClient.statObject).toHaveBeenCalledTimes(4);
+  });
+
+  it('refuses unpinned or stale deletes before issuing a mutation', async () => {
+    const minioClient = client();
+    const clientFactory = vi.fn(() => minioClient);
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: '',
+      })
+    ).rejects.toThrow('versionId must not be empty');
+    expect(clientFactory).not.toHaveBeenCalled();
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+        expectedEtag: 'stale-etag',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' },
+    });
+    expect(minioClient.removeObject).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a supposedly deleted version remains visible', async () => {
+    const minioClient = client();
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.delete({
+        bucket: 'hypha-artifacts',
+        key: 'tenant/run/output.bin',
+        versionId: 'version-1',
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_DELETE_PARTIAL', retryable: true },
+    });
+  });
+
+  it('copies a pinned source with atomic target creation and verifies the result', async () => {
+    const targetState = objectStat({
+      etag: 'copied-etag',
+      versionId: 'copied-version',
+    });
+    const minioClient = client({
+      statObject: vi.fn().mockResolvedValueOnce(objectStat()).mockResolvedValueOnce(targetState),
+      copyObject: vi.fn().mockResolvedValue({
+        Etag: 'copied-etag',
+        VersionId: 'copied-version',
+      }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.copy({
+        sourceBucket: 'hypha-artifacts',
+        sourceKey: 'tenant/run/output.bin',
+        sourceVersionId: 'version-1',
+        expectedSourceEtag: 'opaque-multipart-etag-2',
+        targetBucket: 'hypha-artifacts',
+        targetKey: 'tenant/run/copied.bin',
+        ifAbsent: true,
+      })
+    ).resolves.toMatchObject({
+      etag: 'copied-etag',
+      versionId: 'copied-version',
+      state: {
+        etag: 'copied-etag',
+        versionId: 'copied-version',
+        sizeBytes: artifactBytes.byteLength,
+      },
+    });
+
+    const [source, destination] = minioClient.copyObject.mock.calls[0] as [
+      CopySourceOptions,
+      CopyDestinationOptions,
+    ];
+    expect(source).toBeInstanceOf(CopySourceOptions);
+    expect(source.getHeaders()).toMatchObject({
+      'x-amz-copy-source': 'hypha-artifacts/tenant/run/output.bin?versionId=version-1',
+      'x-amz-copy-source-if-match': '"opaque-multipart-etag-2"',
+    });
+    expect(destination).toBeInstanceOf(CopyDestinationOptions);
+    expect(destination.getHeaders()).toMatchObject({
+      'If-None-Match': '*',
+      'X-Amz-Metadata-Directive': 'COPY',
+    });
+    expect(minioClient.statObject).toHaveBeenLastCalledWith(
+      'hypha-artifacts',
+      'tenant/run/copied.bin',
+      { versionId: 'copied-version' }
+    );
+  });
+
+  it('requires an atomic source identity before copying', async () => {
+    const clientFactory = vi.fn(() => client());
+    const transport = new MinioS3ArtifactTransport(transportOptions({ clientFactory }));
+
+    await expect(
+      transport.copy({
+        sourceBucket: 'hypha-artifacts',
+        sourceKey: 'tenant/run/output.bin',
+        targetBucket: 'hypha-artifacts',
+        targetKey: 'tenant/run/copied.bin',
+        ifAbsent: false,
+      })
+    ).rejects.toThrow('requires a sourceVersionId or expectedSourceEtag');
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when copied metadata or bytes do not match the source', async () => {
+    const minioClient = client({
+      statObject: vi
+        .fn()
+        .mockResolvedValueOnce(objectStat())
+        .mockResolvedValueOnce(
+          objectStat({
+            etag: 'copied-etag',
+            versionId: 'copied-version',
+            size: artifactBytes.byteLength + 1,
+          })
+        ),
+      copyObject: vi.fn().mockResolvedValue({
+        Etag: 'copied-etag',
+        VersionId: 'copied-version',
+      }),
+    });
+    const transport = new MinioS3ArtifactTransport(
+      transportOptions({ clientFactory: () => minioClient })
+    );
+
+    await expect(
+      transport.copy({
+        sourceBucket: 'hypha-artifacts',
+        sourceKey: 'tenant/run/output.bin',
+        sourceVersionId: 'version-1',
+        targetBucket: 'hypha-artifacts',
+        targetKey: 'tenant/run/copied.bin',
+        ifAbsent: false,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_HASH_MISMATCH' },
+    });
+  });
+});

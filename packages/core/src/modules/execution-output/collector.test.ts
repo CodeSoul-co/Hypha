@@ -32,6 +32,7 @@ describe('DefaultExecutionOutputCollector', () => {
           createdBy: 'user.example',
           executionId: 'execution.example',
         },
+        retention: { referencedByCount: 1 },
       })
     );
     expect(artifacts.finalize).toHaveBeenCalledWith(
@@ -88,6 +89,16 @@ describe('DefaultExecutionOutputCollector', () => {
 
   it('fails closed when an Artifact record does not match the planned integrity evidence', async () => {
     const artifacts = artifactManager(artifactRecord({ contentHash: `sha256:${'b'.repeat(64)}` }));
+    const collector = new DefaultExecutionOutputCollector(artifacts);
+
+    await expect(collector.collect(collectionPlan(), collectionContext())).rejects.toMatchObject({
+      code: 'EXECUTION_INTERNAL_ERROR',
+    });
+    expect(artifacts.finalize).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when Artifact Manager omits Execution reference protection', async () => {
+    const artifacts = artifactManager(artifactRecord({ retention: {} }));
     const collector = new DefaultExecutionOutputCollector(artifacts);
 
     await expect(collector.collect(collectionPlan(), collectionContext())).rejects.toMatchObject({
@@ -237,7 +248,7 @@ function artifactRecord(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord
       ownerPrincipalId: 'user.example',
       workspaceId: 'workspace.example',
     },
-    retention: {},
+    retention: { referencedByCount: 1 },
     status: 'draft',
     createdAt: '2026-07-20T00:00:00.000Z',
     updatedAt: '2026-07-20T00:00:00.000Z',
