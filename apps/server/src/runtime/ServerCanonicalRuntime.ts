@@ -50,6 +50,19 @@ export interface ServerCanonicalRuntimeComposition {
   migration: CanonicalEventFamilyMigrationReport;
 }
 
+export type ServerRuntimeExecutionState =
+  | 'not_initialized'
+  | 'event_authority_ready'
+  | 'execution_graph_ready'
+  | 'workers_running'
+  | 'closed';
+
+export interface ServerRuntimeExecutionReadiness {
+  ready: boolean;
+  state: ServerRuntimeExecutionState;
+  message: string;
+}
+
 /**
  * Owns the Server cutover from compatibility Events to the canonical Runtime
  * store. Migration and bounded replay complete before the merged EventStore is
@@ -220,6 +233,47 @@ export class ServerCanonicalRuntime {
 
   areWorkersRunning(): boolean {
     return this.workerLifecycle?.isRunning() ?? false;
+  }
+
+  /**
+   * Reports product execution readiness separately from Event-store health.
+   * A healthy Event authority is necessary, but it does not prove that the
+   * execution graph or any durable worker loop is active.
+   */
+  executionReadiness(): Readonly<ServerRuntimeExecutionReadiness> {
+    if (this.closed) {
+      return Object.freeze({
+        ready: false,
+        state: 'closed',
+        message: 'Canonical Runtime is closed',
+      });
+    }
+    if (!this.composition) {
+      return Object.freeze({
+        ready: false,
+        state: 'not_initialized',
+        message: 'Canonical Runtime Event authority is not initialized',
+      });
+    }
+    if (!this.runtimeComposition) {
+      return Object.freeze({
+        ready: false,
+        state: 'event_authority_ready',
+        message: 'Canonical Runtime execution graph is not composed',
+      });
+    }
+    if (!this.areWorkersRunning()) {
+      return Object.freeze({
+        ready: false,
+        state: 'execution_graph_ready',
+        message: 'Canonical Runtime durable workers are not running',
+      });
+    }
+    return Object.freeze({
+      ready: true,
+      state: 'workers_running',
+      message: 'Canonical Runtime execution graph and durable workers are running',
+    });
   }
 
   isInitialized(): boolean {
