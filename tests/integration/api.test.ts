@@ -900,6 +900,12 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       expect(ownInvocation.status).toBe(200);
       expect(ownInvocation.body.data.id).toBe(r.body.invocationId);
 
+      const ownRun = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+      expect(ownRun.status).toBe(200);
+      expect(ownRun.body.data.userId).toBe(devUserId);
+
       const foreignInvocation = await request(app)
         .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
         .set('Authorization', `Bearer ${foreignToken}`);
@@ -911,6 +917,14 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         .set('Authorization', `Bearer ${foreignToken}`)
         .send({ reason: 'cross-user cancellation must be denied' });
       expect(foreignCancel.status).toBe(403);
+
+      for (const suffix of ['', '/events', '/replay', '/audit', '/regression']) {
+        const foreignRunRead = await request(app)
+          .get(`/api/v1/runtime/runs/${r.body.runId}${suffix}`)
+          .set('Authorization', `Bearer ${foreignToken}`);
+        expect(foreignRunRead.status).toBe(403);
+        expect(foreignRunRead.body.error.code).toBe('RUNTIME_RUN_ACCESS_DENIED');
+      }
 
       const approved = await request(app)
         .post(`/api/v1/tool-approvals/${r.body.invocationId}/approve`)
