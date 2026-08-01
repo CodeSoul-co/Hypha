@@ -273,6 +273,17 @@ describe('configuration storage taxonomy', () => {
     });
   });
 
+  it('keeps the default Tool workspace outside the framework control-plane', () => {
+    reloadConfig();
+
+    expect(filesystemToolConfig()).toMatchObject({
+      workingDirectory: './data/workspace',
+      readPaths: ['./data/workspace'],
+      writePaths: ['./data/workspace'],
+      executePaths: ['./data/workspace/bin'],
+    });
+  });
+
   it('keeps FILESYSTEM_TOOL_ROOT as a legacy read-write fallback', () => {
     process.env.FILESYSTEM_TOOL_ROOT = './legacy-workspace';
 

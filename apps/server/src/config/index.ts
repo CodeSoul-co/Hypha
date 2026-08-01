@@ -491,8 +491,8 @@ const configSchema = z.object({
       .default({}),
     filesystem: z
       .object({
-        workingDirectory: z.string().default('.'),
-        readPaths: pathListSchema.default(['.']),
+        workingDirectory: z.string().default('./data/workspace'),
+        readPaths: pathListSchema.default(['./data/workspace']),
         writePaths: pathListSchema.default(['./data/workspace']),
         executePaths: pathListSchema.default(['./data/workspace/bin']),
         execution: z
