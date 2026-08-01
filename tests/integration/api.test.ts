@@ -86,77 +86,39 @@ describe('GET /api/v1/ready', () => {
 });
 
 describe('durable Runtime Session Commands', () => {
-  it('persists, applies, reuses, and scopes a start_run command', async () => {
+  it('does not admit a start_run command before continuation execution is composed', async () => {
     const sessionId = `runtime-command-${Date.now()}`;
     const idempotencyKey = `start-run-${Date.now()}`;
     const body = { input: { task: 'durable-server-start' } };
-    const accepted = await request(app)
+    const rejected = await request(app)
       .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
       .set('Authorization', `Bearer ${devToken}`)
       .set('Idempotency-Key', idempotencyKey)
       .send(body);
 
-    expect(accepted.status).toBe(202);
-    expect(accepted.body.data).toMatchObject({
-      commandType: 'start_run',
-      userId: devUserId,
-      sessionId,
-      targetRunId: expect.any(String),
+    expect(rejected.status).toBe(503);
+    expect(rejected.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        details: { state: 'maintenance_workers_running' },
+      },
     });
-    expect(accepted.body.data).not.toHaveProperty('payloadRef');
-    expect(accepted.body.data).not.toHaveProperty('payloadHash');
-    expect(accepted.body.data).not.toHaveProperty('claimToken');
-    expect(accepted.body.data).not.toHaveProperty('leaseEpoch');
-
-    const reused = await request(app)
-      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
-      .set('Authorization', `Bearer ${devToken}`)
-      .set('Idempotency-Key', idempotencyKey)
-      .send(body);
-    expect(reused.status).toBe(202);
-    expect(reused.body.data).toMatchObject({ id: accepted.body.data.id, status: 'reused' });
-
-    let applied: Record<string, unknown> | undefined;
-    for (let attempt = 0; attempt < 80 && !applied; attempt += 1) {
-      const listed = await request(app)
-        .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
-        .set('Authorization', `Bearer ${devToken}`);
-      expect(listed.status).toBe(200);
-      applied = (listed.body.data || []).find(
-        (command: Record<string, unknown>) =>
-          command.id === accepted.body.data.id && command.status === 'applied'
-      );
-      if (!applied) await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    expect(applied).toMatchObject({
-      resultRunId: accepted.body.data.targetRunId,
-      targetRunId: accepted.body.data.targetRunId,
-    });
-
-    const run = await request(app)
-      .get(`/api/v1/runtime/runs/${accepted.body.data.targetRunId}`)
-      .set('Authorization', `Bearer ${devToken}`);
-    expect(run.status).toBe(200);
-    expect(run.body.data).toMatchObject({
-      runId: accepted.body.data.targetRunId,
-      userId: devUserId,
-    });
-
-    const foreignToken = generateToken({
-      id: `foreign-${Date.now()}`,
-      email: 'foreign@example.com',
-      isAdmin: false,
-    });
-    const foreignList = await request(app)
+    const listed = await request(app)
       .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
-      .set('Authorization', `Bearer ${foreignToken}`);
-    expect(foreignList.status).toBe(200);
-    expect(foreignList.body.data).toEqual([]);
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual([]);
+  });
 
-    const foreignRun = await request(app)
-      .get(`/api/v1/runtime/runs/${accepted.body.data.targetRunId}`)
-      .set('Authorization', `Bearer ${foreignToken}`);
-    expect(foreignRun.status).toBe(403);
+  it('allows browser preflight to request the idempotency header', async () => {
+    const response = await request(app)
+      .options('/api/v1/runtime/sessions/browser/commands/start-run')
+      .set('Origin', 'https://client.example')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Idempotency-Key, Content-Type');
+    expect(response.status).toBe(204);
+    expect(response.headers['access-control-allow-headers']).toContain('Idempotency-Key');
   });
 });
 

@@ -10,6 +10,7 @@ import {
   type SessionCommandStatus,
 } from '@hypha/core';
 import { z } from 'zod';
+import { getServerRuntimeReadiness } from '../services/ServerRuntimeReadiness';
 
 const router = Router();
 
@@ -46,6 +47,17 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const userId = authenticatedUserId(req);
     if (!userId) return unauthorized(res);
+    const readiness = getServerRuntimeReadiness();
+    if (!readiness.ready) {
+      return res.status(HTTP_STATUS.SERVICE_UNAVAILABLE).json({
+        success: false,
+        error: {
+          code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+          message: readiness.message,
+          details: { state: readiness.state },
+        },
+      });
+    }
     const sessionId = req.params.sessionId.trim();
     const idempotencyKey = req.get('Idempotency-Key')?.trim();
     if (!sessionId || !idempotencyKey || idempotencyKey.length > 256) {

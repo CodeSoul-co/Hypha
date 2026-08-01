@@ -546,6 +546,7 @@ class EventRuntimeService {
   private readonly runtime: EventFirstRuntime;
   private sessionCommands?: ServerStartRunCommandIngress;
   private readonly knownSessions = new Set<string>();
+  private readonly maxKnownSessions = 10_000;
   private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
@@ -1197,6 +1198,12 @@ class EventRuntimeService {
       activeSkills,
     });
     this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
+    try {
+      await this.ensureRunToolSnapshot(input.runId);
+    } catch (error) {
+      this.runCapabilitySnapshots.delete(input.runId);
+      throw error;
+    }
     const skillInstructions = activeSkills.map(
       (skill) =>
         `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
@@ -1644,7 +1651,14 @@ class EventRuntimeService {
     const invocationId = `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
     const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
-    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
+    const contractSnapshot = await this.toolSnapshotStore.get(contractSnapshotRef);
+    if (!contractSnapshot || contractSnapshot.runId !== input.runId) {
+      throw new FrameworkError({
+        code: 'TOOL_CONTRACT_SNAPSHOT_UNAVAILABLE',
+        message: `Run Tool contract snapshot is unavailable: ${contractSnapshotRef}`,
+      });
+    }
+    const effectiveCapabilities = contractSnapshot.effectiveCapabilities;
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1783,9 +1797,8 @@ class EventRuntimeService {
   private ensureRunToolSnapshot(runId: string): Promise<string> {
     const active = this.runToolSnapshots.get(runId);
     if (active) return active;
-    const snapshot = this.createRunToolSnapshot(runId).catch((error) => {
-      this.runToolSnapshots.delete(runId);
-      throw error;
+    const snapshot = this.createRunToolSnapshot(runId).finally(() => {
+      if (this.runToolSnapshots.get(runId) === snapshot) this.runToolSnapshots.delete(runId);
     });
     this.runToolSnapshots.set(runId, snapshot);
     return snapshot;
@@ -1794,7 +1807,20 @@ class EventRuntimeService {
   private async createRunToolSnapshot(runId: string): Promise<string> {
     const snapshotId = `tool-snapshot:${runId}`;
     const persisted = await this.toolSnapshotStore.get(snapshotId);
-    if (persisted) return persisted.id;
+    if (persisted) {
+      const requested = this.runCapabilitySnapshots.get(runId);
+      this.runCapabilitySnapshots.delete(runId);
+      if (
+        requested &&
+        capabilityPolicyHash(requested) !== capabilityPolicyHash(persisted.effectiveCapabilities)
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+          message: `Run capability snapshot is already immutable: ${runId}`,
+        });
+      }
+      return persisted.id;
+    }
 
     const manager = getToolManager();
     for (const definition of manager.listTools(true)) {
@@ -1833,6 +1859,7 @@ class EventRuntimeService {
       snapshotHash: hashToolContract(body),
     };
     await this.toolSnapshotStore.save(snapshot);
+    this.runCapabilitySnapshots.delete(runId);
     await this.events.record(
       createFrameworkEvent({
         id: `${snapshotId}:created`,
@@ -3041,9 +3068,19 @@ class EventRuntimeService {
     this.sessionInitializations.set(runtimeSessionId, initialization);
     try {
       await initialization;
-      this.knownSessions.add(runtimeSessionId);
+      this.rememberSession(runtimeSessionId);
     } finally {
       this.sessionInitializations.delete(runtimeSessionId);
+    }
+  }
+
+  private rememberSession(runtimeSessionId: string): void {
+    this.knownSessions.delete(runtimeSessionId);
+    this.knownSessions.add(runtimeSessionId);
+    while (this.knownSessions.size > this.maxKnownSessions) {
+      const oldest = this.knownSessions.values().next().value as string | undefined;
+      if (!oldest) return;
+      this.knownSessions.delete(oldest);
     }
   }
 
@@ -3639,6 +3676,14 @@ function capabilityConstraint(
     maximumSideEffectLevel,
     policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
   };
+}
+
+export function capabilityPolicyHash(
+  snapshot?: EffectiveAgentCapabilitySnapshot
+): string | undefined {
+  if (!snapshot) return undefined;
+  const { id: _id, createdAt: _createdAt, snapshotHash: _snapshotHash, ...policy } = snapshot;
+  return hashToolContract(policy);
 }
 
 function inferToolSideEffect(
