@@ -172,6 +172,8 @@ describe('ServerRuntimeWorkerLifecycle', () => {
 
   it('owns the continuous Session Command loop with timer and recovery workers', async () => {
     const commands = {
+      processNext: jest.fn(async () => ({ disposition: 'idle' as const })),
+      supportedCommandTypes: jest.fn(() => ['start_run' as const]),
       start: jest.fn(),
       isRunning: jest.fn().mockReturnValue(true),
       close: jest.fn(async () => {
@@ -190,15 +192,51 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     );
 
     const workers = await lifecycle.start();
+    expect(commands.processNext).toHaveBeenCalledTimes(1);
+    expect(commands.processNext).toHaveBeenCalledWith({
+      userId: 'user.1',
+      sessionId: 'session.1',
+    });
     expect(commands.start).toHaveBeenCalledTimes(1);
     expect(commands.start).toHaveBeenCalledWith({ userId: 'user.1', sessionId: 'session.1' });
-    expect(workers.status().commands).toEqual({ running: true });
+    expect(workers.status().commands).toEqual({
+      running: true,
+      startupPollDisposition: 'idle',
+      supportedCommandTypes: ['start_run'],
+    });
     commands.isRunning.mockReturnValue(false);
     expect(lifecycle.isRunning()).toBe(false);
 
     await lifecycle.close();
     expect(commands.close).toHaveBeenCalledTimes(1);
-    expect(workers.status().commands).toEqual({ running: false });
+    expect(workers.status().commands).toEqual({
+      running: false,
+      startupPollDisposition: 'idle',
+      supportedCommandTypes: ['start_run'],
+    });
+  });
+
+  it('fails startup before admitting traffic when the command queue cannot be polled', async () => {
+    const commands = {
+      processNext: jest.fn(async () => {
+        throw new Error('session queue unavailable');
+      }),
+      supportedCommandTypes: jest.fn(() => ['start_run' as const]),
+      start: jest.fn(),
+      isRunning: jest.fn().mockReturnValue(false),
+      close: jest.fn(async () => undefined),
+    };
+    const lifecycle = createLifecycle(
+      jest.fn(async () => timerPage()),
+      jest.fn(async () => recoveryPage()),
+      { commands: { runtime: commands } }
+    );
+
+    await expect(lifecycle.start()).rejects.toThrow('session queue unavailable');
+    expect(commands.start).not.toHaveBeenCalled();
+    expect(commands.close).toHaveBeenCalledTimes(1);
+    expect(lifecycle.status().lifecycle).toBe('failed');
+    await lifecycle.close();
   });
 });
 

@@ -183,7 +183,12 @@ export async function pathExists(filename: string): Promise<boolean> {
 }
 
 export function isNodeError(error: unknown, code: string): boolean {
-  return error instanceof Error && 'code' in error && error.code === code;
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }
 
 export class LocalArtifactIntegrityError extends Error {

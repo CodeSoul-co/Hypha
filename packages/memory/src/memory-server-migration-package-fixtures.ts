@@ -40,6 +40,7 @@ import {
   type MemoryRuntimeConfig,
 } from './memory-runtime-factory';
 import { NativeMemoryManagementProvider } from './native-memory';
+import { InMemoryLocalVectorStoreAdapter } from './index-outbox';
 import { memoryManagementProviderSpecExample, memoryProfileSpecExample } from './profile-contract';
 
 const canonicalStateMachine = {
@@ -244,7 +245,7 @@ async function observeLifecycleFailure(
 }
 
 function createInstrumentedNativeInstallation(profile: MemoryProfileSpec) {
-  const provider = new NativeMemoryManagementProvider({ profile });
+  const provider = createFixtureNativeProvider(profile);
   const originalClose = provider.close.bind(provider);
   let providerCloseCount = 0;
   let installationCloseCount = 0;
@@ -269,9 +270,17 @@ function createNativeRuntimeFactory(): MemoryRuntimeFactory {
   const registry = new MemoryManagementProviderRegistry().register({
     id: 'native-migration-acceptance',
     supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
-    create: async ({ profile }) => new NativeMemoryManagementProvider({ profile }),
+    create: async ({ profile }) => createFixtureNativeProvider(profile),
   });
   return createRuntimeFactory(registry);
+}
+
+function createFixtureNativeProvider(profile: MemoryProfileSpec): NativeMemoryManagementProvider {
+  return new NativeMemoryManagementProvider({
+    profile,
+    embeddingProvider: { embed: async (input) => input.map(() => [1, 0]) },
+    vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+  });
 }
 
 function createRuntimeFactory(

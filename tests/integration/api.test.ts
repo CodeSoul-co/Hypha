@@ -19,6 +19,11 @@ import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
 import { getServerMemoryOperations } from '../../apps/server/src/services/ServerMemoryOperations';
+import {
+  getMemoryApplicationService,
+  getServerMemoryComposition,
+} from '../../apps/server/src/services/ServerMemoryComposition';
+import { getMongoConnection } from '../../apps/server/src/services/database';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
 import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
@@ -55,7 +60,7 @@ describe('GET /api/v1/health', () => {
 });
 
 describe('GET /api/v1/ready', () => {
-  it('fails closed while the production Session Command worker is not configured', async () => {
+  it('fails closed while the production continuation handler is not composed', async () => {
     const r = await request(app).get('/api/v1/ready');
 
     expect(r.status).toBe(503);
@@ -77,6 +82,43 @@ describe('GET /api/v1/ready', () => {
         },
       },
     });
+  });
+});
+
+describe('durable Runtime Session Commands', () => {
+  it('does not admit a start_run command before continuation execution is composed', async () => {
+    const sessionId = `runtime-command-${Date.now()}`;
+    const idempotencyKey = `start-run-${Date.now()}`;
+    const body = { input: { task: 'durable-server-start' } };
+    const rejected = await request(app)
+      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+
+    expect(rejected.status).toBe(503);
+    expect(rejected.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        details: { state: 'maintenance_workers_running' },
+      },
+    });
+    const listed = await request(app)
+      .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual([]);
+  });
+
+  it('allows browser preflight to request the idempotency header', async () => {
+    const response = await request(app)
+      .options('/api/v1/runtime/sessions/browser/commands/start-run')
+      .set('Origin', 'https://client.example')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Idempotency-Key, Content-Type');
+    expect(response.status).toBe(204);
+    expect(response.headers['access-control-allow-headers']).toContain('Idempotency-Key');
   });
 });
 
@@ -288,6 +330,80 @@ describe('user-scoped session storage', () => {
 
     await permanentMemory.deleteConversation(a.id, 'user-a');
     await permanentMemory.deleteConversation(b.id, 'user-b');
+  });
+});
+
+describe('canonical managed Memory production composition', () => {
+  it('indexes and retrieves through the durable Mongo vector projection', async () => {
+    const memory = getMemoryApplicationService('harness');
+    const profileRef = getServerMemoryComposition().profileRef();
+    const suffix = `${Date.now()}`;
+    const scope = { userId: devUserId, sessionId: `memory-semantic-${suffix}` };
+    const principal = {
+      principalId: `user:${devUserId}`,
+      type: 'user' as const,
+      userId: devUserId,
+      permissionScopes: ['memory:read', 'memory:write'],
+    };
+    const added = await memory.add({
+      operationId: `memory:add:${suffix}`,
+      principal,
+      scope,
+      profileRef,
+      input: `durable-vector-token-${suffix}`,
+      inputType: 'text',
+      memoryType: 'semantic',
+      source: { type: 'user_message', sourceId: `message:${suffix}` },
+      extractionMode: 'none',
+      writeMode: 'sync',
+      idempotencyKey: `memory:add:${suffix}`,
+    });
+    const memoryId = added.records[0]?.id;
+    expect(memoryId).toBeDefined();
+
+    let results: Awaited<ReturnType<typeof memory.search>> = [];
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      results = await memory.search({
+        operationId: `memory:search:${suffix}:${attempt}`,
+        principal,
+        scope,
+        profileRef,
+        query: `durable-vector-token-${suffix}`,
+        mode: 'semantic',
+        topK: 5,
+      });
+      if (results.some((result) => result.record.id === memoryId)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          record: expect.objectContaining({ id: memoryId }),
+          semanticScore: expect.any(Number),
+          reasons: expect.arrayContaining(['dense-vector-similarity']),
+        }),
+      ])
+    );
+
+    const mongo = getMongoConnection();
+    const vectorDocument = await mongo?.connection.db
+      ?.collection('canonical_memory_managed_memory_vectors')
+      .findOne({ id: memoryId });
+    expect(vectorDocument).toMatchObject({
+      id: memoryId,
+      deleted: false,
+      memoryRevision: added.records[0]?.revision,
+    });
+    expect(vectorDocument?.vector).toEqual(expect.arrayContaining([expect.any(Number)]));
+
+    await memory.delete({
+      operationId: `memory:delete:${suffix}`,
+      principal,
+      scope,
+      memoryIds: [memoryId!],
+      mode: 'soft',
+      reason: 'integration cleanup',
+    });
   });
 });
 
@@ -656,6 +772,26 @@ describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
     // the regression is that we used to fail BEFORE reaching the first stage.
     const errMsg = r.body.data?.error || '';
     expect(errMsg).not.toMatch(/Cannot read propert/i);
+
+    const projected = await request(app)
+      .get(`/api/v1/workflows/executions/${r.body.data.executionId}`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(projected.status).toBe(200);
+    expect(projected.body.data).toMatchObject({
+      runId: r.body.data.runId,
+      executionId: r.body.data.executionId,
+      workflowName: 'conversation-flow',
+      status: expect.stringMatching(/completed|failed/),
+    });
+
+    const cancellation = await request(app)
+      .post(`/api/v1/workflows/executions/${r.body.data.executionId}/cancel`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(cancellation.status).toBe(409);
+    expect(cancellation.body).toMatchObject({
+      success: false,
+      error: { code: 'RUNTIME_RUN_CONFLICT' },
+    });
   });
 });
 
@@ -900,6 +1036,12 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       expect(ownInvocation.status).toBe(200);
       expect(ownInvocation.body.data.id).toBe(r.body.invocationId);
 
+      const ownRun = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+      expect(ownRun.status).toBe(200);
+      expect(ownRun.body.data.userId).toBe(devUserId);
+
       const foreignInvocation = await request(app)
         .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
         .set('Authorization', `Bearer ${foreignToken}`);
@@ -911,6 +1053,14 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         .set('Authorization', `Bearer ${foreignToken}`)
         .send({ reason: 'cross-user cancellation must be denied' });
       expect(foreignCancel.status).toBe(403);
+
+      for (const suffix of ['', '/events', '/replay', '/audit', '/regression']) {
+        const foreignRunRead = await request(app)
+          .get(`/api/v1/runtime/runs/${r.body.runId}${suffix}`)
+          .set('Authorization', `Bearer ${foreignToken}`);
+        expect(foreignRunRead.status).toBe(403);
+        expect(foreignRunRead.body.error.code).toBe('RUNTIME_RUN_ACCESS_DENIED');
+      }
 
       const approved = await request(app)
         .post(`/api/v1/tool-approvals/${r.body.invocationId}/approve`)

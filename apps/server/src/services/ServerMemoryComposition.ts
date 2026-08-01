@@ -2,14 +2,15 @@ import fs from 'fs/promises';
 import path from 'path';
 import YAML from 'yaml';
 import { createFrameworkEvent, type EventStore } from '@hypha/core';
+import { LocalHashEmbeddingProvider } from '@hypha/adapters-local';
 import {
   CanonicalMemoryRuntimeLoader,
-  InMemoryLocalVectorStoreAdapter,
   MemoryManagementProviderRegistry,
   MemoryOperationalMetrics,
   MemoryProviderTelemetry,
   MemoryRuntimeFactory,
   MongoStructuredStoreProvider,
+  StructuredManagedVectorStoreAdapter,
   createHindsightLocalMemoryProviderFactory,
   createMem0OssMemoryProviderFactory,
   createMem0PlatformMemoryProviderFactory,
@@ -19,7 +20,6 @@ import {
   memoryEventIdempotencyKey,
   sanitizeMemoryEventPayload,
   sanitizeMemoryOperationalValue,
-  type EmbeddingProvider,
   type MemoryApplicationService,
   type MemoryLifecycleTaskStore,
   type MemoryEventContext,
@@ -358,7 +358,13 @@ async function createProductionMemoryRuntime(eventStore: EventStore): Promise<Me
   await structuredStore.initialize([
     'memory_external_mappings',
     'memory_external_provider_operations',
+    'managed_memory_vectors',
   ]);
+  const vectorStore = new StructuredManagedVectorStoreAdapter(structuredStore, {
+    id: 'memory.vector.local',
+    table: 'managed_memory_vectors',
+  });
+  await vectorStore.initialize();
   const configPath = path.resolve(
     process.cwd(),
     process.env.HYPHA_MEMORY_CONFIG_PATH?.trim() || 'configs/memory-profiles.yaml'
@@ -382,8 +388,8 @@ async function createProductionMemoryRuntime(eventStore: EventStore): Promise<Me
       createNativeMemoryManagementProviderFactory({
         structuredStore,
         redisClient: redis as unknown as RedisLikeWorkingMemoryClient,
-        embeddingProvider: new LocalDeterministicEmbeddingProvider(),
-        vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+        embeddingProvider: new LocalHashEmbeddingProvider(),
+        vectorStores: [vectorStore],
         ownerId: `server:${process.pid}`,
         workingMemoryNamespace: 'hypha:memory:working',
         onIndexEvent: (event) => serverMemoryOperationalMetrics.observeIndexEvent(event),
@@ -598,21 +604,6 @@ export function resolveMongoTransactionMode(
     Boolean(hello.setName || configuredReplicaSet?.trim()) || hello.msg === 'isdbgrid';
   return transactionCapable ? 'required' : 'disabled';
 }
-class LocalDeterministicEmbeddingProvider implements EmbeddingProvider {
-  async embed(inputs: string[]): Promise<number[][]> {
-    return inputs.map((input) => deterministicVector(input));
-  }
-}
-
-function deterministicVector(input: string): number[] {
-  const values = Array.from({ length: 32 }, () => 0);
-  for (let index = 0; index < input.length; index += 1) {
-    values[index % values.length] += input.charCodeAt(index) / 65535;
-  }
-  const norm = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  return norm === 0 ? values : values.map((value) => value / norm);
-}
-
 function isServingState(state: ServerMemoryCompositionState): boolean {
   return state === 'ready' || state === 'degraded';
 }

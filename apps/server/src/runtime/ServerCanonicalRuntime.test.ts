@@ -245,6 +245,8 @@ function executionBindings(): ServerRuntimeCompositionBindings {
 function workerBindings(): ServerRuntimeWorkerBindings {
   let running = true;
   const commands = {
+    processNext: jest.fn(async () => ({ disposition: 'idle' as const })),
+    supportedCommandTypes: jest.fn(() => ['continue_react' as const]),
     start: jest.fn(),
     isRunning: jest.fn(() => running),
     close: jest.fn(async () => {

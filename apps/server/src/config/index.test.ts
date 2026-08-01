@@ -158,6 +158,13 @@ describe('configuration storage taxonomy', () => {
         timerErrorBackoffMs: 5_000,
         recoveryPollIntervalMs: 5_000,
         recoveryErrorBackoffMs: 10_000,
+        commandArtifactRoot: './data/runtime/session-command-artifacts',
+        commandLeaseMs: 30_000,
+        commandPollIntervalMs: 100,
+        commandErrorBackoffMs: 1_000,
+        commandRenewalIntervalMs: 10_000,
+        commandMaxHandlerDurationMs: 300_000,
+        commandShutdownDrainMs: 30_000,
         autoRecoverReasons: ['PROJECTION_BEHIND'],
       },
     });

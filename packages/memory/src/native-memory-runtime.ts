@@ -82,6 +82,8 @@ export function createNativeMemoryManagementProviderFactory(
           store: dependencies.structuredStore,
         }),
         events: dependencies.events,
+        embeddingProvider: dependencies.embeddingProvider,
+        vectorStores: dependencies.vectorStores,
         now: () => (dependencies.now?.() ?? new Date()).toISOString(),
       });
       const outbox = new IndexOutboxWorker({

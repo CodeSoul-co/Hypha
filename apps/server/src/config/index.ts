@@ -611,10 +611,29 @@ const configSchema = z.object({
               timerErrorBackoffMs: z.number().int().positive().default(5_000),
               recoveryPollIntervalMs: z.number().int().positive().default(5_000),
               recoveryErrorBackoffMs: z.number().int().positive().default(10_000),
+              commandArtifactRoot: z
+                .string()
+                .min(1)
+                .default('./data/runtime/session-command-artifacts'),
+              commandLeaseMs: z.number().int().positive().default(30_000),
+              commandPollIntervalMs: z.number().int().positive().default(100),
+              commandErrorBackoffMs: z.number().int().positive().default(1_000),
+              commandRenewalIntervalMs: z.number().int().positive().default(10_000),
+              commandMaxHandlerDurationMs: z.number().int().positive().default(300_000),
+              commandShutdownDrainMs: z.number().int().nonnegative().default(30_000),
               autoRecoverReasons: z
                 .array(z.enum(['PROJECTION_BEHIND']))
                 .min(1)
                 .default(['PROJECTION_BEHIND']),
+            })
+            .superRefine((workers, context) => {
+              if (workers.commandRenewalIntervalMs >= workers.commandLeaseMs) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  path: ['commandRenewalIntervalMs'],
+                  message: 'commandRenewalIntervalMs must be shorter than commandLeaseMs',
+                });
+              }
             })
             .default({}),
         })

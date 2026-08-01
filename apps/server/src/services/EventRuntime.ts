@@ -16,11 +16,23 @@ import {
   type FrameworkEvent,
   type FrameworkEventType,
   type EventStore,
+  type ListSessionCommandsRequest,
   type TraceRecorder,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type RuntimeActivityCancellationPort,
+  type RuntimeActivityCancellationRequest,
+  type RuntimeCancelCommand,
+  type RuntimeCancelResult,
+  type RuntimeCancellationTargetResult,
+  type RuntimeCancellationRecoveryPort,
+  type RuntimeChildRunCancellationRequest,
+  type RuntimeChildRunListRequest,
+  type RuntimeChildRunCancellationPort,
   type RuntimeHumanWaitService,
+  type SessionCommandRecord,
+  type SessionQueueScope,
   type SpecRef,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
@@ -118,16 +130,16 @@ import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
-
-interface RuntimeRunContext {
-  runId: string;
-  userId: string;
-  sessionId: string;
-  clientSessionId: string;
-  domainPackId: string;
-  fsm: FSMProcessSpec;
-  snapshot: FSMSnapshot;
-}
+import {
+  projectRuntimeRunContext,
+  runtimeRunContextMetadata,
+  type RuntimeRunContext,
+} from '../runtime/RuntimeRunContextProjection';
+import {
+  projectWorkflowExecution,
+  workflowExecutionIdFromEvent,
+  type WorkflowExecutionProjection,
+} from '../runtime/WorkflowExecutionProjection';
 
 export interface EventRunHandle {
   runId: string;
@@ -506,22 +518,35 @@ export interface EventRuntimeInitialization {
   events: EventStore & TraceRecorder;
   eventDbPath?: string;
   humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  cancellations?: RuntimeCancellationRecoveryPort;
+}
+
+export interface ServerStartRunCommandIngress {
+  enqueueStartRun(input: StartRunInput, idempotencyKey: string): Promise<SessionCommandRecord>;
+  listSessionCommands(
+    scope: SessionQueueScope,
+    options?: Omit<ListSessionCommandsRequest, 'scope'>
+  ): Promise<SessionCommandRecord[]>;
 }
 
 export interface EventRuntimeCanonicalExecutionAdapters {
   inference: InferenceProvider;
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
+  cancellationActivities: RuntimeActivityCancellationPort;
+  cancellationChildren: RuntimeChildRunCancellationPort;
 }
 
 class EventRuntimeService {
   private readonly events: EventStore & TraceRecorder;
   private readonly humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  private readonly cancellations?: RuntimeCancellationRecoveryPort;
   private readonly humanWaitOwnerId = `server-event-runtime:${process.pid}`;
   private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
-  private readonly runs = new Map<string, RuntimeRunContext>();
+  private sessionCommands?: ServerStartRunCommandIngress;
   private readonly knownSessions = new Set<string>();
+  private readonly maxKnownSessions = 10_000;
   private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
@@ -549,6 +574,7 @@ class EventRuntimeService {
         mode: sqliteStorage.sqliteMode,
       });
     this.humanWaits = options?.humanWaits;
+    this.cancellations = options?.cancellations;
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
@@ -631,6 +657,39 @@ class EventRuntimeService {
     return this.reasoning.registry.unregister(id);
   }
 
+  bindSessionCommandIngress(ingress: ServerStartRunCommandIngress): void {
+    if (this.sessionCommands && this.sessionCommands !== ingress) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: 'Server Session Command ingress is already bound',
+      });
+    }
+    this.sessionCommands = ingress;
+  }
+
+  enqueueStartRun(input: StartRunInput, idempotencyKey: string): Promise<SessionCommandRecord> {
+    if (!this.sessionCommands) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Server Session Command ingress is not bound',
+      });
+    }
+    return this.sessionCommands.enqueueStartRun(input, idempotencyKey);
+  }
+
+  listSessionCommands(
+    scope: SessionQueueScope,
+    options: Omit<ListSessionCommandsRequest, 'scope'> = {}
+  ): Promise<SessionCommandRecord[]> {
+    if (!this.sessionCommands) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Server Session Command ingress is not bound',
+      });
+    }
+    return this.sessionCommands.listSessionCommands(scope, options);
+  }
+
   /**
    * Exposes the Server-owned model and governed Tool adapters to the canonical
    * Runtime composition without leaking provider SDKs into Runtime packages.
@@ -647,6 +706,15 @@ class EventRuntimeService {
           this.toolRunner.cancelInvocation(invocationId, reason),
       },
       fsmSpec: this.defaultFsm,
+      cancellationActivities: {
+        cancel: async (request: RuntimeActivityCancellationRequest) =>
+          this.cancelToolActivity(request.activityId, request.reason),
+      },
+      cancellationChildren: {
+        listChildren: async (request: RuntimeChildRunListRequest) =>
+          this.listChildRuns(request.scope.runId),
+        cancel: async (request: RuntimeChildRunCancellationRequest) => this.cancelChildRun(request),
+      },
     });
   }
 
@@ -725,6 +793,78 @@ class EventRuntimeService {
     });
   }
 
+  private async cancelToolActivity(
+    activityId: string,
+    reason: string
+  ): Promise<RuntimeCancellationTargetResult> {
+    const invocation = await this.toolRunner.getInvocation(activityId);
+    if (!invocation) {
+      return { targetType: 'activity', targetId: activityId, status: 'not_found' };
+    }
+    const result = await this.toolRunner.cancelInvocation(activityId, reason);
+    return {
+      targetType: 'activity',
+      targetId: activityId,
+      status: result.status === 'cancelled' ? 'cancelled' : 'already_terminal',
+    };
+  }
+
+  private async listChildRuns(parentRunId: string): Promise<Array<{ runId: string }>> {
+    const created = await this.events.list({ type: 'run.created' });
+    const children: Array<{ runId: string }> = [];
+    for (const event of created) {
+      const context = projectRuntimeRunContext([event], event.runId);
+      if (context?.parentRunId === parentRunId) children.push({ runId: event.runId });
+    }
+    return children;
+  }
+
+  private async cancelChildRun(
+    request: RuntimeChildRunCancellationRequest
+  ): Promise<RuntimeCancellationTargetResult> {
+    if (!this.cancellations) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Canonical Runtime cancellation service is not bound',
+      });
+    }
+    const child = await this.findRun(request.childRunId);
+    if (
+      !child ||
+      child.parentRunId !== request.parentScope.runId ||
+      child.userId !== request.parentScope.userId
+    ) {
+      return { targetType: 'child_run', targetId: request.childRunId, status: 'not_found' };
+    }
+    await this.cancellations.cancel({
+      commandId: request.idempotencyKey,
+      scope: {
+        ...(request.parentScope.tenantId === undefined
+          ? {}
+          : { tenantId: request.parentScope.tenantId }),
+        userId: child.userId,
+        sessionId: child.sessionId,
+        runId: child.runId,
+      },
+      principal: {
+        principalId: request.parentScope.userId,
+        type: 'user',
+        userId: request.parentScope.userId,
+        permissionScopes: ['runtime.run.cancel'],
+      },
+      ownerId: 'server.runtime.child-cancellation',
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      reason: request.reason,
+      policy: {
+        propagation: request.propagation,
+        cancelRunningActivities: true,
+      },
+      requestedAt: request.requestedAt,
+      idempotencyKey: request.idempotencyKey,
+    });
+    return { targetType: 'child_run', targetId: request.childRunId, status: 'cancelled' };
+  }
+
   async listAgentPrompts(): Promise<AgentPromptSpec[]> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
@@ -747,30 +887,22 @@ class EventRuntimeService {
   }
 
   async startRun(input: StartRunInput): Promise<EventRunHandle> {
+    return this.startRunWithId(input, generateId());
+  }
+
+  async startRunWithId(input: StartRunInput, runId: string): Promise<EventRunHandle> {
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
     await this.ensureSession(input.userId, input.sessionId, domainPack, input.metadata);
 
-    const runId = generateId();
     const timestamp = new Date().toISOString();
     const workflowRef = input.workflowRef ?? {
       id: fsm.id,
       version: fsm.version,
     };
     const snapshot = createInitialSnapshot(fsm, runId, timestamp);
-
-    await this.runtime.createRun({
-      id: runId,
-      sessionId: runtimeSessionId,
-      userId: input.userId,
-      domainPackRef: { id: domainPack.id, version: domainPack.version },
-      workflowRef,
-      agentRef: input.agentId ? { id: input.agentId } : undefined,
-      input: input.input,
-      timestamp,
-    });
-    this.runs.set(runId, {
+    const context: RuntimeRunContext = {
       runId,
       userId: input.userId,
       sessionId: runtimeSessionId,
@@ -778,11 +910,51 @@ class EventRuntimeService {
       domainPackId: domainPack.id,
       fsm,
       snapshot,
-    });
-    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
-    await this.append(runId, 'fsm.state.entered', { stateId: snapshot.currentState }, timestamp, {
-      fsmState: snapshot.currentState,
-    });
+    };
+
+    const existingEvents = await this.events.list({ runId });
+    const existingContext = projectRuntimeRunContext(existingEvents, runId);
+    if (existingContext) {
+      if (
+        existingContext.userId !== input.userId ||
+        existingContext.sessionId !== runtimeSessionId ||
+        existingContext.clientSessionId !== input.sessionId
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+          message: `Run id is already bound to another Session scope: ${runId}`,
+        });
+      }
+    } else {
+      await this.runtime.createRun({
+        id: runId,
+        sessionId: runtimeSessionId,
+        userId: input.userId,
+        domainPackRef: { id: domainPack.id, version: domainPack.version },
+        workflowRef,
+        agentRef: input.agentId ? { id: input.agentId } : undefined,
+        input: input.input,
+        metadata: {
+          ...input.metadata,
+          ...runtimeRunContextMetadata(context),
+        },
+        timestamp,
+      });
+    }
+    if (!existingEvents.some((event) => event.type === 'run.started')) {
+      await this.append(runId, 'run.started', { runId, input: input.input }, timestamp, {
+        eventId: `${runId}:started`,
+      });
+    }
+    if (!existingEvents.some((event) => event.type === 'fsm.state.entered')) {
+      await this.append(
+        runId,
+        'fsm.state.entered',
+        { stateId: snapshot.currentState, snapshot },
+        timestamp,
+        { eventId: `${runId}:initial-state`, fsmState: snapshot.currentState }
+      );
+    }
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
@@ -791,7 +963,7 @@ class EventRuntimeService {
     to: string,
     payload: Record<string, unknown> = {}
   ): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     if (context.snapshot.currentState === to) return;
     const from = context.snapshot.currentState;
     await this.append(runId, 'fsm.transition.requested', { from, to, ...payload }, undefined, {
@@ -813,14 +985,16 @@ class EventRuntimeService {
       await this.append(runId, 'fsm.state.exited', { stateId: from }, undefined, {
         fsmState: from,
       });
-      await this.append(runId, 'fsm.transition.accepted', { from, to, ...payload }, undefined, {
+      await this.append(
+        runId,
+        'fsm.transition.accepted',
+        { from, to, snapshot: next, ...payload },
+        undefined,
+        { fsmState: to }
+      );
+      await this.append(runId, 'fsm.state.entered', { stateId: to, snapshot: next }, undefined, {
         fsmState: to,
       });
-      await this.append(runId, 'fsm.state.entered', { stateId: to }, undefined, {
-        fsmState: to,
-      });
-      context.snapshot = next;
-      this.runs.set(runId, context);
     } catch (error) {
       if (error instanceof FrameworkError && error.code === 'FSM_HUMAN_REVIEW_REQUIRED') {
         await this.append(runId, 'human.review.requested', {
@@ -840,7 +1014,7 @@ class EventRuntimeService {
 
   async inferChat(input: ChatInferenceInput): Promise<ChatResponse> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
-    const runContext = this.runs.get(input.runId);
+    const runContext = await this.requireRun(input.runId);
     await this.append(
       input.runId,
       'inference.requested',
@@ -865,10 +1039,10 @@ class EventRuntimeService {
     const inferenceRequest: ReasoningRequest<LLMInferenceInput> = {
       runId: input.runId,
       stepId: input.stepId,
-      sessionId: runContext?.clientSessionId,
+      sessionId: runContext.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
-      cacheScope: { userId: runContext?.userId ?? 'single-user' },
+      cacheScope: { userId: runContext.userId },
       input: {
         messages: input.messages,
         options: {
@@ -890,11 +1064,11 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
-        userId: runContext?.userId,
-        sessionId: runContext?.clientSessionId,
-        runtimeSessionId: runContext?.sessionId,
+        userId: runContext.userId,
+        sessionId: runContext.clientSessionId,
+        runtimeSessionId: runContext.sessionId,
         provider: resolved.provider,
-        domainPackId: runContext?.domainPackId,
+        domainPackId: runContext.domainPackId,
       },
     };
 
@@ -975,6 +1149,7 @@ class EventRuntimeService {
     userId: string,
     sessionId: string
   ): Promise<ResolvedRuntimeAgentSpec> {
+    const runContext = await this.requireRun(input.runId);
     const spec = input.agentSpec ?? {};
     const id = spec.id ?? input.agentId ?? 'agent.default';
     const name = spec.name ?? input.agentId ?? 'Default Runtime Agent';
@@ -991,7 +1166,7 @@ class EventRuntimeService {
           userId,
           sessionId,
           tenantId: stringValue(asRecord(input.metadata)?.tenantId),
-          domainId: this.runs.get(input.runId)?.domainPackId,
+          domainId: runContext.domainPackId,
           promptRefs,
         });
     const baseSystemInstructions =
@@ -1010,20 +1185,25 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
-    const availableToolIds =
-      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
       agentId: id,
       principalId: userId,
       tenantId: stringValue(asRecord(input.metadata)?.tenantId),
-      domainId: this.runs.get(input.runId)?.domainPackId,
+      domainId: runContext.domainPackId,
       agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
       domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
       activeSkills,
     });
     this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
+    try {
+      await this.ensureRunToolSnapshot(input.runId);
+    } catch (error) {
+      this.runCapabilitySnapshots.delete(input.runId);
+      throw error;
+    }
     const skillInstructions = activeSkills.map(
       (skill) =>
         `<skill id="${skill.id}" version="${skill.version}">\n${skill.instructions ?? ''}\n${skill.references
@@ -1095,9 +1275,9 @@ class EventRuntimeService {
       sessionId?: string;
     }
   ): Promise<ChatResponse> {
-    const runContext = this.runs.get(input.runId);
-    const userId = input.userId ?? runContext?.userId ?? 'single-user';
-    const sessionId = input.sessionId ?? runContext?.clientSessionId ?? input.runId;
+    const runContext = await this.requireRun(input.runId);
+    const userId = input.userId ?? runContext.userId;
+    const sessionId = input.sessionId ?? runContext.clientSessionId;
     const agent = await this.resolveChatAgent(input, userId, sessionId);
     const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     let chatResponse: ChatResponse | undefined;
@@ -1234,12 +1414,8 @@ class EventRuntimeService {
 
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
-    const runContext = this.runs.get(input.runId);
-    const agent = await this.resolveChatAgent(
-      input,
-      runContext?.userId ?? 'single-user',
-      runContext?.clientSessionId ?? input.runId
-    );
+    const runContext = await this.requireRun(input.runId);
+    const agent = await this.resolveChatAgent(input, runContext.userId, runContext.clientSessionId);
     const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     await this.append(
       input.runId,
@@ -1266,10 +1442,10 @@ class EventRuntimeService {
     const inferenceRequest: InferenceRequest<LLMInferenceInput> = {
       runId: input.runId,
       stepId: input.stepId,
-      sessionId: runContext?.clientSessionId,
+      sessionId: runContext.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
-      cacheScope: { userId: runContext?.userId ?? 'single-user' },
+      cacheScope: { userId: runContext.userId },
       input: {
         messages: input.messages,
         options: {
@@ -1293,11 +1469,11 @@ class EventRuntimeService {
             }
           : asRecord(input.agentSpec?.metadata)?.prompt,
         stream: true,
-        userId: runContext?.userId,
-        sessionId: runContext?.clientSessionId,
-        runtimeSessionId: runContext?.sessionId,
+        userId: runContext.userId,
+        sessionId: runContext.clientSessionId,
+        runtimeSessionId: runContext.sessionId,
         provider: resolved.provider,
-        domainPackId: runContext?.domainPackId,
+        domainPackId: runContext.domainPackId,
       },
     };
     const reasoning: ReasoningOptions = {
@@ -1475,7 +1651,14 @@ class EventRuntimeService {
     const invocationId = `tool-invocation:${generateId()}`;
     const toolId = this.registerManagedTool(input.toolId, input.toolSpec);
     const contractSnapshotRef = await this.ensureRunToolSnapshot(input.runId);
-    const effectiveCapabilities = this.runCapabilitySnapshots.get(input.runId);
+    const contractSnapshot = await this.toolSnapshotStore.get(contractSnapshotRef);
+    if (!contractSnapshot || contractSnapshot.runId !== input.runId) {
+      throw new FrameworkError({
+        code: 'TOOL_CONTRACT_SNAPSHOT_UNAVAILABLE',
+        message: `Run Tool contract snapshot is unavailable: ${contractSnapshotRef}`,
+      });
+    }
+    const effectiveCapabilities = contractSnapshot.effectiveCapabilities;
     const result = await this.toolRunner.run({
       toolId,
       input: input.params,
@@ -1547,7 +1730,7 @@ class EventRuntimeService {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     const result = await this.toolRunner.rejectInvocation(invocationId);
     const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
-    const run = runId ? this.runs.get(runId) : undefined;
+    const run = runId ? await this.findRun(runId) : null;
     if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
       await this.resolveHumanReview(run, invocationId, rejectedBy, 'rejected');
       await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
@@ -1561,7 +1744,7 @@ class EventRuntimeService {
     approvedBy: string
   ): Promise<void> {
     const runId = invocation.scope?.runId ?? invocation.request.context.runId;
-    const run = this.runs.get(runId);
+    const run = await this.findRun(runId);
     if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
 
     if (run.snapshot.currentState === 'HumanReview') {
@@ -1614,9 +1797,8 @@ class EventRuntimeService {
   private ensureRunToolSnapshot(runId: string): Promise<string> {
     const active = this.runToolSnapshots.get(runId);
     if (active) return active;
-    const snapshot = this.createRunToolSnapshot(runId).catch((error) => {
-      this.runToolSnapshots.delete(runId);
-      throw error;
+    const snapshot = this.createRunToolSnapshot(runId).finally(() => {
+      if (this.runToolSnapshots.get(runId) === snapshot) this.runToolSnapshots.delete(runId);
     });
     this.runToolSnapshots.set(runId, snapshot);
     return snapshot;
@@ -1625,7 +1807,20 @@ class EventRuntimeService {
   private async createRunToolSnapshot(runId: string): Promise<string> {
     const snapshotId = `tool-snapshot:${runId}`;
     const persisted = await this.toolSnapshotStore.get(snapshotId);
-    if (persisted) return persisted.id;
+    if (persisted) {
+      const requested = this.runCapabilitySnapshots.get(runId);
+      this.runCapabilitySnapshots.delete(runId);
+      if (
+        requested &&
+        capabilityPolicyHash(requested) !== capabilityPolicyHash(persisted.effectiveCapabilities)
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+          message: `Run capability snapshot is already immutable: ${runId}`,
+        });
+      }
+      return persisted.id;
+    }
 
     const manager = getToolManager();
     for (const definition of manager.listTools(true)) {
@@ -1644,8 +1839,7 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash:
-        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
+      sourceCapabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -1665,6 +1859,7 @@ class EventRuntimeService {
       snapshotHash: hashToolContract(body),
     };
     await this.toolSnapshotStore.save(snapshot);
+    this.runCapabilitySnapshots.delete(runId);
     await this.events.record(
       createFrameworkEvent({
         id: `${snapshotId}:created`,
@@ -1918,14 +2113,12 @@ class EventRuntimeService {
     caseId: string;
     participant: RecoveryParticipant<TValue>;
   }): Promise<TValue> {
-    const context = this.requireRun(input.runId);
+    const context = await this.requireRun(input.runId);
     const recoveryFsm = new FSMRuntime(
       context.fsm,
       input.runId,
       {
         onTransition: async (transition) => {
-          context.snapshot = transition.snapshot;
-          this.runs.set(input.runId, context);
           await this.append(
             input.runId,
             'fsm.state.exited',
@@ -1940,6 +2133,7 @@ class EventRuntimeService {
               from: transition.from,
               to: transition.to,
               phase: 'recovery',
+              snapshot: transition.snapshot,
               ...transition.metadata,
             },
             transition.acceptedAt,
@@ -1947,12 +2141,15 @@ class EventRuntimeService {
           );
         },
         onStateEntered: async (entered) => {
-          context.snapshot = entered.snapshot;
-          this.runs.set(input.runId, context);
           await this.append(
             input.runId,
             'fsm.state.entered',
-            { stateId: entered.stateId, fromState: entered.fromState, phase: 'recovery' },
+            {
+              stateId: entered.stateId,
+              fromState: entered.fromState,
+              phase: 'recovery',
+              snapshot: entered.snapshot,
+            },
             entered.enteredAt,
             { stepId: input.stepId, fsmState: entered.stateId }
           );
@@ -1987,8 +2184,6 @@ class EventRuntimeService {
       },
       maxInlineDelayMs: 1_000,
     });
-    context.snapshot = recoveryFsm.getSnapshot();
-    this.runs.set(input.runId, context);
     if (result.status === 'succeeded' || result.status === 'degraded') {
       return result.outputs[input.participant.id] as TValue;
     }
@@ -2015,8 +2210,9 @@ class EventRuntimeService {
   private async recordBypassedCacheFailure(failure: RecoveryFailure): Promise<void> {
     if (failure.module !== 'cache') return;
     const runId = stringValue(failure.metadata?.runId);
-    if (!runId || !this.runs.has(runId)) return;
-    const context = this.runs.get(runId)!;
+    if (!runId) return;
+    const context = await this.findRun(runId);
+    if (!context) return;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
     const candidateHash = stableRecoveryHash(failure.evidence);
@@ -2079,7 +2275,7 @@ class EventRuntimeService {
   }
 
   private async recordServingCacheEvent(event: ServingCacheEvent): Promise<void> {
-    if (!event.runId || !this.runs.has(event.runId)) return;
+    if (!event.runId || !(await this.findRun(event.runId))) return;
     const { type, runId, stepId, ...payload } = event;
     await this.append(runId, type, payload, undefined, { stepId });
   }
@@ -2094,30 +2290,34 @@ class EventRuntimeService {
   }
 
   async completeRun(runId: string, output?: unknown): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
+    let terminalState = context.snapshot.currentState;
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
-      await this.transition(runId, inferCompletedState(context.fsm), { reason: 'completed' });
+      terminalState = inferCompletedState(context.fsm);
+      await this.transition(runId, terminalState, { reason: 'completed' });
     }
     await this.append(runId, 'run.completed', {
-      terminalState: context.snapshot.currentState,
+      terminalState,
       output,
     });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     const message = error instanceof Error ? error.message : String(error);
+    let terminalState = context.snapshot.currentState;
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
-      await this.transition(runId, inferFailedState(context.fsm), { reason: message });
+      terminalState = inferFailedState(context.fsm);
+      await this.transition(runId, terminalState, { reason: message });
     }
     await this.append(runId, 'run.failed', {
-      terminalState: context.snapshot.currentState,
+      terminalState,
       error: message,
     });
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     const waitId =
       typeof payload.waitId === 'string' && payload.waitId.trim()
         ? payload.waitId
@@ -2156,6 +2356,83 @@ class EventRuntimeService {
       return;
     }
     await this.append(runId, 'run.waiting_human', { ...payload, waitId });
+  }
+
+  async projectWorkflowExecution(executionId: string): Promise<WorkflowExecutionProjection | null> {
+    const directEvents = await this.events.list({ runId: executionId });
+    const direct = projectWorkflowExecution(directEvents, executionId);
+    if (direct) return direct;
+
+    const lookupTypes: FrameworkEventType[] = [
+      'workflow.stage.started',
+      'workflow.stage.completed',
+      'workflow.stage.failed',
+      'run.completed',
+      'run.failed',
+      'run.cancelled',
+    ];
+    const candidates = (await Promise.all(lookupTypes.map((type) => this.events.list({ type }))))
+      .flat()
+      .find((event) => workflowExecutionIdFromEvent(event) === executionId);
+    if (!candidates) return null;
+    return projectWorkflowExecution(
+      await this.events.list({ runId: candidates.runId }),
+      executionId
+    );
+  }
+
+  async projectOwnedWorkflowExecution(
+    executionId: string,
+    userId: string
+  ): Promise<WorkflowExecutionProjection | null> {
+    const execution = await this.projectWorkflowExecution(executionId);
+    return execution?.userId === userId ? execution : null;
+  }
+
+  async cancelOwnedWorkflowExecution(input: {
+    executionId: string;
+    userId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  }): Promise<RuntimeCancelResult | null> {
+    const execution = await this.projectOwnedWorkflowExecution(input.executionId, input.userId);
+    if (!execution) return null;
+    if (!this.cancellations) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Canonical Runtime cancellation service is not bound',
+      });
+    }
+    const context = await this.requireRun(execution.runId);
+    const commandId = input.idempotencyKey?.trim() || `workflow-cancel:${execution.runId}`;
+    const priorRequest = (await this.events.list({ runId: execution.runId })).find(
+      (event) =>
+        event.type === 'run.cancel.requested' &&
+        stringValue(asRecord(event.payload)?.commandId) === commandId
+    );
+    const requestedAt =
+      stringValue(asRecord(priorRequest?.payload)?.requestedAt) ?? new Date().toISOString();
+    const command: RuntimeCancelCommand = {
+      commandId,
+      scope: {
+        userId: input.userId,
+        sessionId: context.sessionId,
+        runId: execution.runId,
+      },
+      principal: {
+        principalId: input.userId,
+        type: 'user',
+        userId: input.userId,
+        permissionScopes: ['runtime.run.cancel'],
+      },
+      ownerId: 'server.workflow-cancellation',
+      leaseTtlMs: 30_000,
+      reason: input.reason?.trim() || 'Workflow execution cancelled by its owner.',
+      policy: { propagation: 'all_descendants', cancelRunningActivities: true },
+      requestedAt,
+      idempotencyKey: input.idempotencyKey?.trim() || commandId,
+    };
+    return this.cancellations.cancel(command);
   }
 
   private async resolveHumanReview(
@@ -2233,7 +2510,7 @@ class EventRuntimeService {
   }): Promise<WorkflowExecution> {
     const workflow = input.workflow;
     const execution: WorkflowExecution = {
-      id: generateId(),
+      id: input.runId,
       workflowName: workflow.name,
       workflowVersion: workflow.version,
       status: 'running',
@@ -2791,9 +3068,19 @@ class EventRuntimeService {
     this.sessionInitializations.set(runtimeSessionId, initialization);
     try {
       await initialization;
-      this.knownSessions.add(runtimeSessionId);
+      this.rememberSession(runtimeSessionId);
     } finally {
       this.sessionInitializations.delete(runtimeSessionId);
+    }
+  }
+
+  private rememberSession(runtimeSessionId: string): void {
+    this.knownSessions.delete(runtimeSessionId);
+    this.knownSessions.add(runtimeSessionId);
+    while (this.knownSessions.size > this.maxKnownSessions) {
+      const oldest = this.knownSessions.values().next().value as string | undefined;
+      if (!oldest) return;
+      this.knownSessions.delete(oldest);
     }
   }
 
@@ -2847,11 +3134,11 @@ class EventRuntimeService {
     type: FrameworkEventType,
     payload: unknown,
     timestamp?: string,
-    options: { stepId?: string; fsmState?: string } = {}
+    options: { eventId?: string; stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     await this.runtime.appendRunEvent({
-      id: `${runId}:${type}:${generateId()}`,
+      id: options.eventId ?? `${runId}:${type}:${generateId()}`,
       type,
       runId,
       sessionId: context.sessionId,
@@ -2869,8 +3156,12 @@ class EventRuntimeService {
     });
   }
 
-  private requireRun(runId: string): RuntimeRunContext {
-    const context = this.runs.get(runId);
+  private async findRun(runId: string): Promise<RuntimeRunContext | null> {
+    return projectRuntimeRunContext(await this.events.list({ runId }), runId);
+  }
+
+  private async requireRun(runId: string): Promise<RuntimeRunContext> {
+    const context = await this.findRun(runId);
     if (!context) {
       throw new Error(`Runtime run not found: ${runId}`);
     }
@@ -3385,6 +3676,14 @@ function capabilityConstraint(
     maximumSideEffectLevel,
     policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
   };
+}
+
+export function capabilityPolicyHash(
+  snapshot?: EffectiveAgentCapabilitySnapshot
+): string | undefined {
+  if (!snapshot) return undefined;
+  const { id: _id, createdAt: _createdAt, snapshotHash: _snapshotHash, ...policy } = snapshot;
+  return hashToolContract(policy);
 }
 
 function inferToolSideEffect(
