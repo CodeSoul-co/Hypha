@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import YAML from 'yaml';
+import { createFrameworkEvent, type EventStore } from '@hypha/core';
 import {
   CanonicalMemoryRuntimeLoader,
   InMemoryLocalVectorStoreAdapter,
@@ -15,10 +16,16 @@ import {
   createMemoryBankManagedProviderFactory,
   createNativeMemoryManagementProviderFactory,
   memoryError,
+  memoryEventIdempotencyKey,
+  sanitizeMemoryEventPayload,
   sanitizeMemoryOperationalValue,
   type EmbeddingProvider,
   type MemoryApplicationService,
   type MemoryLifecycleTaskStore,
+  type MemoryEventContext,
+  type MemoryEventPayloadBase,
+  type MemoryEventPublisher,
+  type MemoryEventType,
   type MemoryProviderCostEstimator,
   type MemoryProviderOperationalReport,
   type MemoryOperationalMetricsSnapshot,
@@ -265,12 +272,14 @@ export class ServerMemoryComposition {
 const serverMemoryOperationalMetrics = new MemoryOperationalMetrics();
 
 let productionComposition: ServerMemoryComposition | null = null;
+let productionEventStore: EventStore | null = null;
 
 export function getServerMemoryComposition(): ServerMemoryComposition {
   if (!productionComposition) {
-    productionComposition = new ServerMemoryComposition({
-      bootstrap: createProductionMemoryRuntime,
-    });
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Server Memory composition has not been initialized with the canonical Event Store.'
+    );
   }
   return productionComposition;
 }
@@ -282,15 +291,37 @@ export function getMemoryApplicationService(
   return consumer ? composition.bindConsumer(consumer) : composition.service();
 }
 
-export async function initializeServerMemoryComposition(): Promise<MemoryRuntimeCompositionReceipt> {
-  return getServerMemoryComposition().start();
+export async function initializeServerMemoryComposition(
+  eventStore?: EventStore
+): Promise<MemoryRuntimeCompositionReceipt> {
+  if (!eventStore) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Canonical Event Store is required to initialize Server Memory.'
+    );
+  }
+  if (productionEventStore && productionEventStore !== eventStore) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Server Memory cannot be rebound to a different canonical Event Store.'
+    );
+  }
+  if (!productionComposition) {
+    productionEventStore = eventStore;
+    productionComposition = new ServerMemoryComposition({
+      bootstrap: () => createProductionMemoryRuntime(eventStore),
+    });
+  }
+  return productionComposition.start();
 }
 
 export async function closeServerMemoryComposition(): Promise<void> {
-  await getServerMemoryComposition().stop();
+  await productionComposition?.stop();
+  productionComposition = null;
+  productionEventStore = null;
 }
 
-async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
+async function createProductionMemoryRuntime(eventStore: EventStore): Promise<MemoryRuntime> {
   const mongo = getMongoConnection();
   const database = mongo?.connection.db;
   if (!mongo || !database) {
@@ -365,7 +396,6 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     .register(createHindsightLocalMemoryProviderFactory())
     .register(createMem0PlatformMemoryProviderFactory())
     .register(createMemoryBankManagedProviderFactory());
-  let eventSequence = 0;
   const telemetry = createServerMemoryTelemetry();
   const activeProviderType = () =>
     loaded.config.profiles[loaded.config.activeProfile].management.type;
@@ -383,18 +413,18 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
           };
         },
       },
-      events: {
-        publish: async (type, _payload, context) =>
-          `server-memory:${context.runId}:${type}:${++eventSequence}`,
-      },
+      events: createServerMemoryEventPublisher(eventStore),
       harness: {
         beforeExecute: async () => undefined,
         afterExecute: async () => undefined,
       },
     },
     eventContext: (request) => ({
+      userId: request.scope.userId,
+      tenantId: request.scope.tenantId,
       runId: request.scope.runId ?? request.operationId,
       sessionId: request.scope.sessionId,
+      workspaceId: request.scope.workspaceId,
       agentId: request.scope.agentId,
     }),
     telemetry,
@@ -410,6 +440,54 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     providerId: runtime.compositionReceipt.providerId,
   });
   return runtime;
+}
+
+export function createServerMemoryEventPublisher(
+  eventStore: EventStore,
+  now: () => string = () => new Date().toISOString()
+): MemoryEventPublisher {
+  return {
+    async publish(
+      type: MemoryEventType,
+      payload: MemoryEventPayloadBase,
+      context: MemoryEventContext
+    ): Promise<string> {
+      const sanitizedPayload = sanitizeMemoryEventPayload(payload);
+      const idempotencyKey = memoryEventIdempotencyKey(type, sanitizedPayload);
+      const eventId = `memory-event:${idempotencyKey.slice('sha256:'.length)}`;
+      const existing = await eventStore.list({
+        userId: context.userId,
+        runId: context.runId,
+        type,
+      });
+      if (existing.some((event) => event.id === eventId)) return eventId;
+
+      await eventStore.append(
+        createFrameworkEvent({
+          id: eventId,
+          type,
+          version: '1.0.0',
+          tenantId: context.tenantId,
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          sessionId: context.sessionId,
+          runId: context.runId,
+          stepId: context.stepId,
+          agentId: context.agentId,
+          operationId: sanitizedPayload.operationId,
+          idempotencyKey,
+          timestamp: now(),
+          payload: sanitizedPayload,
+          metadata: {
+            source: 'server-memory-composition',
+            profileId: sanitizedPayload.profileId,
+            providerId: sanitizedPayload.providerId,
+          },
+        })
+      );
+      return eventId;
+    },
+  };
 }
 
 export function createServerMemoryTelemetry(

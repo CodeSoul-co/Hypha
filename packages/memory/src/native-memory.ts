@@ -1,5 +1,6 @@
 import type {
   ManagedMemoryRecord,
+  ManagedMemoryScope,
   MemoryManagementCapabilities,
   MemoryProfileSpec,
 } from './contracts';
@@ -128,7 +129,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
       const reused = await this.idempotencyStore.get(scopeHash, key);
       if (reused) return structuredClone(reused) as ManagedMemoryWriteResult;
     }
-    await this.trace('memory.write.requested', request.operationId, request.scope.runId, {
+    await this.trace('memory.write.requested', request.operationId, request.scope, {
       scopeHash,
     });
     try {
@@ -197,14 +198,14 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         indexJobs: [{ id: `${request.operationId}:${record.versionId}:index`, state: 'pending' }],
       };
       if (key) await this.idempotencyStore.set(scopeHash, key, result);
-      await this.trace('memory.write.committed', request.operationId, request.scope.runId, {
+      await this.trace('memory.write.committed', request.operationId, request.scope, {
         scopeHash,
         memoryId: record.id,
         memoryVersionId: record.versionId,
       });
       return structuredClone(result);
     } catch (error) {
-      await this.trace('memory.write.rejected', request.operationId, request.scope.runId, {
+      await this.trace('memory.write.rejected', request.operationId, request.scope, {
         scopeHash,
         error: normalizeMemoryError(error),
       });
@@ -215,7 +216,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
   async search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]> {
     this.assertProfile(request.profileRef.id);
     const scopeHash = hashMemoryScope(request.scope);
-    await this.trace('memory.search.requested', request.operationId, request.scope.runId, {
+    await this.trace('memory.search.requested', request.operationId, request.scope, {
       scopeHash,
     });
     try {
@@ -238,14 +239,14 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         includeSuperseded: request.includeSuperseded,
         includeInvalidated: false,
       });
-      await this.trace('memory.search.completed', request.operationId, request.scope.runId, {
+      await this.trace('memory.search.completed', request.operationId, request.scope, {
         scopeHash,
         count: retrieval.results.length,
         retrievalSnapshotId: retrieval.snapshot.id,
       });
       return retrieval.results;
     } catch (error) {
-      await this.trace('memory.search.failed', request.operationId, request.scope.runId, {
+      await this.trace('memory.search.failed', request.operationId, request.scope, {
         scopeHash,
         error: normalizeMemoryError(error, 'MEMORY_RANKING_FAILED'),
       });
@@ -404,7 +405,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
   private async trace(
     type: MemoryEventType,
     operationId: string,
-    runId: string | undefined,
+    scope: ManagedMemoryScope,
     payload: Record<string, unknown>
   ): Promise<void> {
     if (!this.options.events) return;
@@ -421,7 +422,14 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         error: payload.error as import('./contracts').NormalizedMemoryError | undefined,
         metadata: { ...payload, scopeHash: undefined },
       },
-      { runId: runId ?? 'memory-runtime' }
+      {
+        userId: scope.userId,
+        tenantId: scope.tenantId,
+        workspaceId: scope.workspaceId,
+        sessionId: scope.sessionId,
+        runId: scope.runId ?? operationId,
+        agentId: scope.agentId,
+      }
     );
   }
 }
