@@ -129,6 +129,8 @@ describe('memory canonical contract integration', () => {
       scope,
       profileRef: input.profileRef,
       eventContext: {
+        userId: scope.userId,
+        tenantId: scope.tenantId,
         runId: scope.runId!,
         sessionId: scope.sessionId,
         workspaceId: scope.workspaceId,

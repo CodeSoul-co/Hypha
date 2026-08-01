@@ -5,10 +5,19 @@ import type {
   RemoteArtifactDownloadRequest,
   RemoteArtifactTransferReceipt,
   RemoteArtifactUploadRequest,
+  RemoteExecutionReconciliationRequest,
+  RemoteExecutionReconciliationResult,
   RemoteOutputStreamRequest,
   RemoteSandboxProviderCapabilities,
 } from '../../contracts/remote-sandbox-provider';
 import type { JsonSchema } from '../../specs';
+import {
+  commandExecutionResultExample,
+  commandExecutionResultJsonSchema,
+  commandExecutionResultSchema,
+  executionReceiptJsonSchema,
+  executionReceiptSchema,
+} from '../command-execution';
 import { executionPrincipalJsonSchema, executionPrincipalSchema } from '../execution';
 import {
   sandboxProviderCapabilitiesJsonSchema,
@@ -37,6 +46,50 @@ export const remoteOutputStreamRequestSchema = z
     causationId: nonEmptyString.optional(),
   })
   .strict() satisfies ZodType<RemoteOutputStreamRequest>;
+
+export const remoteExecutionReconciliationRequestSchema = z
+  .object({
+    operationId: nonEmptyString,
+    executionId: nonEmptyString,
+    sandboxId: nonEmptyString,
+    principal: executionPrincipalSchema,
+    providerExecutionRef: nonEmptyString.optional(),
+    idempotencyKey: nonEmptyString.optional(),
+    correlationId: nonEmptyString.optional(),
+    causationId: nonEmptyString.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.providerExecutionRef && !value.idempotencyKey) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['providerExecutionRef'],
+        message: 'providerExecutionRef or idempotencyKey is required for reconciliation',
+      });
+    }
+  }) satisfies ZodType<RemoteExecutionReconciliationRequest>;
+
+export const remoteExecutionReconciliationResultSchema = z
+  .object({
+    executionId: nonEmptyString,
+    sandboxId: nonEmptyString,
+    state: z.enum([
+      'not_found',
+      'accepted',
+      'running',
+      'completed',
+      'failed',
+      'cancelled',
+      'unknown',
+    ]),
+    providerExecutionRef: nonEmptyString.optional(),
+    observedAt: timestampSchema,
+    result: commandExecutionResultSchema.optional(),
+    receipt: executionReceiptSchema.optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine(addReconciliationResultIssues) satisfies ZodType<RemoteExecutionReconciliationResult>;
 
 export const remoteArtifactUploadRequestSchema = z
   .object({
@@ -153,6 +206,67 @@ export const remoteOutputStreamRequestJsonSchema: JsonSchema = {
     correlationId: nonEmptyStringJsonSchema,
     causationId: nonEmptyStringJsonSchema,
   },
+  additionalProperties: false,
+};
+
+export const remoteExecutionReconciliationRequestJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['operationId', 'executionId', 'sandboxId', 'principal'],
+  properties: {
+    operationId: nonEmptyStringJsonSchema,
+    executionId: nonEmptyStringJsonSchema,
+    sandboxId: nonEmptyStringJsonSchema,
+    principal: executionPrincipalJsonSchema,
+    providerExecutionRef: nonEmptyStringJsonSchema,
+    idempotencyKey: nonEmptyStringJsonSchema,
+    correlationId: nonEmptyStringJsonSchema,
+    causationId: nonEmptyStringJsonSchema,
+  },
+  anyOf: [{ required: ['providerExecutionRef'] }, { required: ['idempotencyKey'] }],
+  additionalProperties: false,
+};
+
+export const remoteExecutionReconciliationResultJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['executionId', 'sandboxId', 'state', 'observedAt'],
+  properties: {
+    executionId: nonEmptyStringJsonSchema,
+    sandboxId: nonEmptyStringJsonSchema,
+    state: {
+      enum: [
+        'not_found',
+        'accepted',
+        'running',
+        'completed',
+        'failed',
+        'cancelled',
+        'unknown',
+      ],
+    },
+    providerExecutionRef: nonEmptyStringJsonSchema,
+    observedAt: timestampJsonSchema,
+    result: commandExecutionResultJsonSchema,
+    receipt: executionReceiptJsonSchema,
+    metadata: { type: 'object' },
+  },
+  allOf: [
+    {
+      if: {
+        properties: {
+          state: { enum: ['accepted', 'running', 'completed', 'failed', 'cancelled'] },
+        },
+        required: ['state'],
+      },
+      then: { required: ['providerExecutionRef'] },
+    },
+    {
+      if: {
+        properties: { state: { enum: ['completed', 'failed', 'cancelled'] } },
+        required: ['state'],
+      },
+      then: { required: ['result'] },
+    },
+  ],
   additionalProperties: false,
 };
 
@@ -279,6 +393,8 @@ export const remoteArtifactTransferReceiptJsonSchema: JsonSchema = {
 export const remoteSandboxProviderContractJsonSchemas: Record<string, JsonSchema> = {
   RemoteSandboxProviderCapabilities: remoteSandboxProviderCapabilitiesJsonSchema,
   RemoteOutputStreamRequest: remoteOutputStreamRequestJsonSchema,
+  RemoteExecutionReconciliationRequest: remoteExecutionReconciliationRequestJsonSchema,
+  RemoteExecutionReconciliationResult: remoteExecutionReconciliationResultJsonSchema,
   RemoteArtifactUploadRequest: remoteArtifactUploadRequestJsonSchema,
   RemoteArtifactDownloadRequest: remoteArtifactDownloadRequestJsonSchema,
   RemoteArtifactChunk: remoteArtifactChunkJsonSchema,
@@ -316,6 +432,41 @@ export const remoteOutputStreamRequestExample: RemoteOutputStreamRequest = {
   maxChunks: 100,
   follow: true,
   correlationId: 'correlation.remote.example',
+};
+
+export const remoteExecutionReconciliationRequestExample: RemoteExecutionReconciliationRequest = {
+  operationId: 'operation.remote-reconcile.example',
+  executionId: 'execution.remote.example',
+  sandboxId: 'sandbox.remote.example',
+  principal: examplePrincipal,
+  providerExecutionRef: 'provider-execution.remote.example',
+  idempotencyKey: 'remote-execution:run.example:step.example',
+  correlationId: 'correlation.remote.example',
+};
+
+const remoteExecutionReceiptExample = {
+  id: 'receipt.remote-execution.example',
+  providerId: 'provider.remote.example',
+  executionId: remoteExecutionReconciliationRequestExample.executionId,
+  providerExecutionRef: remoteExecutionReconciliationRequestExample.providerExecutionRef,
+  status: 'completed' as const,
+  issuedAt: '2026-07-17T00:00:01.000Z',
+  receiptHash: 'sha256:remote-execution-receipt',
+};
+
+export const remoteExecutionReconciliationResultExample: RemoteExecutionReconciliationResult = {
+  executionId: remoteExecutionReconciliationRequestExample.executionId,
+  sandboxId: remoteExecutionReconciliationRequestExample.sandboxId,
+  state: 'completed',
+  providerExecutionRef: remoteExecutionReconciliationRequestExample.providerExecutionRef,
+  observedAt: '2026-07-17T00:00:01.000Z',
+  result: {
+    ...commandExecutionResultExample,
+    executionId: remoteExecutionReconciliationRequestExample.executionId,
+    sandboxId: remoteExecutionReconciliationRequestExample.sandboxId,
+    externalReceipt: remoteExecutionReceiptExample,
+  },
+  receipt: remoteExecutionReceiptExample,
 };
 
 export const remoteArtifactUploadRequestExample: RemoteArtifactUploadRequest = {
@@ -381,6 +532,18 @@ export function validateRemoteSandboxProviderCapabilities(
 
 export function validateRemoteOutputStreamRequest(input: unknown): RemoteOutputStreamRequest {
   return remoteOutputStreamRequestSchema.parse(input);
+}
+
+export function validateRemoteExecutionReconciliationRequest(
+  input: unknown
+): RemoteExecutionReconciliationRequest {
+  return remoteExecutionReconciliationRequestSchema.parse(input);
+}
+
+export function validateRemoteExecutionReconciliationResult(
+  input: unknown
+): RemoteExecutionReconciliationResult {
+  return remoteExecutionReconciliationResultSchema.parse(input);
 }
 
 export function validateRemoteArtifactUploadRequest(input: unknown): RemoteArtifactUploadRequest {
@@ -486,6 +649,86 @@ export function validateRemoteArtifactChunkSequence(
 
 function chunkSequenceError(path: Array<string | number>, message: string): z.ZodError {
   return new z.ZodError([{ code: z.ZodIssueCode.custom, path, message }]);
+}
+
+function addReconciliationResultIssues(
+  value: RemoteExecutionReconciliationResult,
+  context: z.RefinementCtx
+): void {
+  const terminalStates = ['completed', 'failed', 'cancelled'] as const;
+  const foundStates = ['accepted', 'running', ...terminalStates] as const;
+  if (foundStates.includes(value.state as (typeof foundStates)[number])) {
+    if (!value.providerExecutionRef) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['providerExecutionRef'],
+        message: 'is required when the remote execution was found',
+      });
+    }
+  }
+  if (terminalStates.includes(value.state as (typeof terminalStates)[number]) && !value.result) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['result'],
+      message: 'is required for a terminal reconciliation state',
+    });
+  }
+  if (value.result) {
+    if (value.result.executionId !== value.executionId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['result', 'executionId'],
+        message: 'must match the reconciled executionId',
+      });
+    }
+    if (value.result.sandboxId !== value.sandboxId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['result', 'sandboxId'],
+        message: 'must match the reconciled sandboxId',
+      });
+    }
+    if (!resultStatusMatchesReconciliationState(value.state, value.result.status)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['result', 'status'],
+        message: 'must match the reconciliation state',
+      });
+    }
+  }
+  if (value.receipt) {
+    if (value.receipt.executionId !== value.executionId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['receipt', 'executionId'],
+        message: 'must match the reconciled executionId',
+      });
+    }
+    if (
+      value.providerExecutionRef &&
+      value.receipt.providerExecutionRef !== value.providerExecutionRef
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['receipt', 'providerExecutionRef'],
+        message: 'must match the reconciled providerExecutionRef',
+      });
+    }
+  }
+}
+
+function resultStatusMatchesReconciliationState(
+  state: RemoteExecutionReconciliationResult['state'],
+  status: NonNullable<RemoteExecutionReconciliationResult['result']>['status']
+): boolean {
+  if (state === 'accepted') return status === 'queued' || status === 'starting';
+  if (state === 'running') return status === 'running' || status === 'cancelling';
+  if (state === 'completed') return status === 'completed';
+  if (state === 'cancelled') return status === 'cancelled';
+  if (state === 'failed') {
+    return ['failed', 'timed_out', 'oom_killed', 'resource_exceeded', 'quarantined'].includes(status);
+  }
+  return false;
 }
 
 function isBase64(value: string): boolean {

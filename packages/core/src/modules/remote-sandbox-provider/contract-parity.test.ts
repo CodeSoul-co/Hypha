@@ -9,6 +9,8 @@ import {
   remoteArtifactDownloadRequestSchema,
   remoteArtifactTransferReceiptSchema,
   remoteArtifactUploadRequestSchema,
+  remoteExecutionReconciliationRequestSchema,
+  remoteExecutionReconciliationResultSchema,
   remoteOutputStreamRequestSchema,
   remoteSandboxProviderCapabilitiesSchema,
   remoteSandboxProviderContractJsonSchemas,
@@ -24,6 +26,16 @@ const contractPairs: ContractSchemaPair[] = [
     name: 'RemoteOutputStreamRequest',
     zod: remoteOutputStreamRequestSchema,
     json: remoteSandboxProviderContractJsonSchemas.RemoteOutputStreamRequest,
+  },
+  {
+    name: 'RemoteExecutionReconciliationRequest',
+    zod: remoteExecutionReconciliationRequestSchema,
+    json: remoteSandboxProviderContractJsonSchemas.RemoteExecutionReconciliationRequest,
+  },
+  {
+    name: 'RemoteExecutionReconciliationResult',
+    zod: remoteExecutionReconciliationResultSchema,
+    json: remoteSandboxProviderContractJsonSchemas.RemoteExecutionReconciliationResult,
   },
   {
     name: 'RemoteArtifactUploadRequest',

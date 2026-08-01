@@ -1,6 +1,10 @@
 import type { ArtifactGetRequest, ArtifactObjectMetadata } from '@hypha/core';
 import { ArtifactStoreAdapterError, artifactStoreError } from './artifact-store-adapter-error';
-import { isNodeError, LocalArtifactIntegrityError } from './local-artifact-files';
+import {
+  isNodeError,
+  LocalArtifactIntegrityError,
+  LocalArtifactTransferAbortedError,
+} from './local-artifact-files';
 import type { LocalArtifactObjectManifest } from './local-artifact-manifest';
 
 export function localManifestMetadata(
@@ -48,6 +52,13 @@ export function normalizeLocalArtifactStoreError(
   if (error instanceof ArtifactStoreAdapterError) return error;
   if (error instanceof LocalArtifactIntegrityError) {
     return artifactStoreError('ARTIFACT_HASH_MISMATCH', error.message, false, { operation });
+  }
+  if (error instanceof LocalArtifactTransferAbortedError) {
+    const code = operation === 'get' ? 'ARTIFACT_DOWNLOAD_FAILED' : 'ARTIFACT_UPLOAD_FAILED';
+    return artifactStoreError(code, error.message, false, {
+      operation,
+      providerCode: error.code,
+    });
   }
   if (error instanceof TypeError) {
     return artifactStoreError('ARTIFACT_INVALID_INPUT', error.message, false, { operation });

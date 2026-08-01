@@ -27,6 +27,12 @@ describe('ArtifactManager contracts', () => {
     expect(
       validateArtifactCreateDownloadAccessRequest(artifactCreateDownloadAccessRequestExample)
     ).toEqual(artifactCreateDownloadAccessRequestExample);
+    expect(() =>
+      validateArtifactFromWorkspaceRequest({
+        ...artifactFromWorkspaceRequestExample,
+        retention: { referencedByCount: -1 },
+      })
+    ).toThrow(/referencedByCount/u);
   });
 
   it.each(['../report.json', 'nested/report.json', 'report\r\nmalicious.txt'])(

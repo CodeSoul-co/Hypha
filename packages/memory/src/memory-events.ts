@@ -20,6 +20,8 @@ export interface MemoryEventPayloadBase {
 }
 
 export interface MemoryEventContext {
+  userId: string;
+  tenantId?: string;
   runId: string;
   sessionId?: string;
   workspaceId?: string;

@@ -343,6 +343,7 @@ describe('ReActQuantumExecutor', () => {
     await checkpoints.put(checkpoint(), 'checkpoint.quantum');
     const controller = new AbortController();
     const record = vi.fn();
+    const { pendingOperationReceipts: _pendingOperationReceipts, ...value } = payload();
     const executor = new ReActQuantumExecutor({
       checkpoints,
       contextSnapshots: contextStore(snapshot()),
@@ -366,12 +367,112 @@ describe('ReActQuantumExecutor', () => {
 
     await expect(
       executor.runOneQuantum({
-        command: command(),
-        descriptor: descriptor(),
+        command: command(value),
+        descriptor: descriptor(value),
         signal: controller.signal,
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_CANCELLED' });
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it('retains the checkpoint until a terminal outcome is durably recorded', async () => {
+    const checkpoints = new InMemoryReActContinuationCheckpointStore();
+    await checkpoints.put(checkpoint(), 'checkpoint.quantum');
+    const terminal: ReActRunResult = {
+      runId: 'run.quantum',
+      status: 'completed',
+      steps: [],
+      output: 'done',
+    };
+    const executor = new ReActQuantumExecutor({
+      checkpoints,
+      contextSnapshots: contextStore(snapshot()),
+      runtime: { replay: async () => runtimeState() },
+      receiptReconciler: { reconcile: async () => undefined },
+      runnerFactory: { create: async () => ({ run: async () => terminal }) },
+      outcomeRecorder: {
+        record: async () => {
+          throw new Error('event store unavailable');
+        },
+      },
+      quantumIterations: 4,
+      now: () => now,
+    });
+
+    await expect(
+      executor.runOneQuantum({
+        command: command(),
+        descriptor: descriptor(),
+        signal: new AbortController().signal,
+      })
+    ).rejects.toThrow('event store unavailable');
+    await expect(checkpoints.get('run.quantum', 'react', scopeHash)).resolves.toMatchObject({
+      stepSequence: 5,
+    });
+  });
+
+  it('records a fail-closed timeout without invoking providers', async () => {
+    const checkpoints = new InMemoryReActContinuationCheckpointStore();
+    await checkpoints.put(checkpoint(), 'checkpoint.quantum');
+    const run = vi.fn();
+    const record = vi.fn();
+    const value = {
+      ...payload(),
+      deadlineAt: '2026-07-24T03:59:59.000Z',
+    };
+    const executor = new ReActQuantumExecutor({
+      checkpoints,
+      contextSnapshots: contextStore(snapshot()),
+      runtime: { replay: async () => runtimeState() },
+      revisionValidator: { validate: async () => undefined },
+      runnerFactory: { create: async () => ({ run }) },
+      outcomeRecorder: { record },
+      quantumIterations: 4,
+      now: () => now,
+    });
+
+    await expect(
+      executor.runOneQuantum({
+        command: command(value),
+        descriptor: descriptor(value),
+        signal: new AbortController().signal,
+      })
+    ).resolves.toMatchObject({
+      disposition: 'failed',
+      react: { status: 'failed', error: { code: 'RUNTIME_RUN_TIMEOUT' } },
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: 'failed',
+        react: expect.objectContaining({ status: 'failed' }),
+      })
+    );
+    await expect(checkpoints.get('run.quantum', 'react', scopeHash)).resolves.toBeNull();
+  });
+
+  it('fails closed when pending receipts have no production reconciler', async () => {
+    const checkpoints = new InMemoryReActContinuationCheckpointStore();
+    await checkpoints.put(checkpoint(), 'checkpoint.quantum');
+    const run = vi.fn();
+    const executor = new ReActQuantumExecutor({
+      checkpoints,
+      contextSnapshots: contextStore(snapshot()),
+      runtime: { replay: async () => runtimeState() },
+      runnerFactory: { create: async () => ({ run }) },
+      outcomeRecorder: { record: async () => undefined },
+      quantumIterations: 4,
+      now: () => now,
+    });
+
+    await expect(
+      executor.runOneQuantum({
+        command: command(),
+        descriptor: descriptor(),
+        signal: new AbortController().signal,
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE' });
+    expect(run).not.toHaveBeenCalled();
   });
 });
 
