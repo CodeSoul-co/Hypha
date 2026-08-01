@@ -44,6 +44,8 @@ storage:
       db: "${REDIS_DB:0}"
       keyPrefix: "${REDIS_KEY_PREFIX:hypha:}"
       tls: "${REDIS_TLS:false}"
+    # The stock Server does not register a Kafka adapter yet. Setting enabled
+    # to true is rejected at startup instead of reporting a false integration.
     kafka:
       enabled: "${KAFKA_ENABLED:false}"
       deployment: "${KAFKA_DEPLOYMENT:local}"
@@ -62,6 +64,8 @@ storage:
       sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
       eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/runtime/events/hypha-runtime-events.sqlite}"
       structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/runtime/structured/hypha-structured.sqlite}"
+    # This profile is an extension contract. The stock Server rejects enabled
+    # until a concrete Postgres adapter, lifecycle, and readiness probe exist.
     postgres:
       enabled: "${POSTGRES_ENABLED:false}"
       deployment: "${POSTGRES_DEPLOYMENT:local}"
@@ -80,6 +84,8 @@ storage:
       enabled: true
       deployment: "local"
       path: "${HYPHA_STORAGE_VECTOR_INDEX:./data/storage/vector/hypha-vectors.json}"
+    # Remote vector profiles below are extension contracts. The stock Server
+    # rejects enabled until their concrete adapters are composed.
     qdrant:
       enabled: "${QDRANT_ENABLED:false}"
       deployment: "${QDRANT_DEPLOYMENT:self_hosted}"
@@ -110,6 +116,8 @@ storage:
       enabled: true
       deployment: "local"
       rootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/storage/artifacts}"
+    # The stock Server currently composes only the local filesystem artifact
+    # store and rejects S3 enablement until a concrete adapter is registered.
     s3:
       enabled: "${S3_ARTIFACTS_ENABLED:false}"
       deployment: "${S3_ARTIFACTS_DEPLOYMENT:managed}"

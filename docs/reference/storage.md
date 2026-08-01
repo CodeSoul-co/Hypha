@@ -76,6 +76,8 @@ const qdrant = createQdrantStorageProfile({ host: 'localhost', port: 6333 });
 const pinecone = createPineconeStorageProfile();
 ```
 
+Profile factories declare portable contracts; they do not instantiate provider clients. The stock Server currently composes MongoDB, Redis, local SQLite/JSON storage, the local vector index, and the filesystem artifact store. It fails configuration validation if Kafka, Postgres, Qdrant, Chroma, Pinecone, or S3 is marked enabled without a registered concrete Server composition.
+
 ## Storage Recovery Contract
 
 `classifyStorageFailure(error, context)` normalizes relational, document, event, object, vector,
@@ -99,10 +101,10 @@ Runtime configuration is grouped by function before provider:
 | Config Path          | Function                                  | Examples                                      |
 | -------------------- | ----------------------------------------- | --------------------------------------------- |
 | `storage.document`   | Document records                          | MongoDB local or Atlas.                       |
-| `storage.messaging`  | Cache, streams, queues, pub/sub           | Redis local/cloud, Kafka self-hosted/managed. |
-| `storage.relational` | Event logs and structured source of truth | SQLite local, Postgres production.            |
-| `storage.vector`     | Semantic indexes                          | Local JSON, Qdrant, Chroma, Pinecone.         |
-| `storage.artifacts`  | File/blob payloads                        | Local filesystem, S3-compatible stores.       |
+| `storage.messaging`  | Cache, streams, queues, pub/sub           | Redis adapter; Kafka profile contract.        |
+| `storage.relational` | Event logs and structured source of truth | SQLite adapter; Postgres profile contract.    |
+| `storage.vector`     | Semantic indexes                          | Local JSON adapter; remote profile contracts. |
+| `storage.artifacts`  | File/blob payloads                        | Filesystem adapter; S3 profile contract.      |
 
 Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
 
@@ -151,13 +153,13 @@ REDIS_TLS=true
 
 `REDIS_URL` takes precedence over host/port config. `KV_URL` and `RENDER_REDIS_URL` are also recognized as compatibility fallbacks.
 
-Kafka config is available under `storage.messaging.kafka` for queue/pub-sub adapters. It is optional and not required for the current API startup path.
+Kafka configuration is available under `storage.messaging.kafka` as an extension contract. The stock Server does not compose a Kafka client and rejects `KAFKA_ENABLED=true`; a deployment must first provide an adapter, lifecycle hooks, readiness probe, and real acceptance tests.
 
 ## Relational and Vector Extension Points
 
-`StructuredStoreProvider` is the relational/source-of-truth interface. `SQLiteStructuredStore` is the local implementation. Future providers such as Postgres or MySQL should implement the same methods: `get`, `insert`, `update`, `query`, and `transaction`.
+`StructuredStoreProvider` is the relational/source-of-truth interface. `SQLiteStructuredStore` is the local implementation. Other providers such as Postgres or MySQL must implement the same methods: `get`, `insert`, `update`, `query`, and `transaction`, then be registered in Server composition before their configuration can be enabled.
 
-`VectorIndexProvider` is the vector retrieval interface. `LocalVectorIndexProvider` is the local implementation. Provider profiles already cover `pgvector`, Qdrant, Milvus, Chroma, Pinecone, and Weaviate; concrete adapters should implement `upsert`, `search`, and `delete`.
+`VectorIndexProvider` is the vector retrieval interface. `LocalVectorIndexProvider` is the local implementation. Provider profiles cover `pgvector`, Qdrant, Milvus, Chroma, Pinecone, and Weaviate; each concrete adapter must implement `upsert`, `search`, and `delete` and register lifecycle and readiness behavior before Server enablement.
 
 Vector stores are retrieval indexes, not the full source of truth. Persist factual memory records in structured storage, then index selected semantic or episodic values in a vector provider.
 
