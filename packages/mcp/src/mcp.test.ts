@@ -27,6 +27,7 @@ import {
   mcpConnectionRecordDefinition,
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
+  normalizeMCPToolOutput,
   normalizeMCPToolSpec,
   normalizedMCPErrorSchema,
   RedisMCPCapabilityCatalogStore,
@@ -40,6 +41,81 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('unwraps structured Tool output without misclassifying domain objects', () => {
+    expect(
+      normalizeMCPToolOutput({
+        content: [{ type: 'text', text: '{"value":"hypha"}' }],
+        structuredContent: { value: 'hypha' },
+      })
+    ).toEqual({ value: 'hypha' });
+    const domainValue = { structuredContent: { value: 'domain-field' } };
+    expect(normalizeMCPToolOutput(domainValue)).toBe(domainValue);
+  });
+
+  it('persists an explicit side-effect approval and rejects unsafe downgrades', async () => {
+    const capabilities: MCPCapabilityDescriptor[] = [
+      {
+        id: 'side-effect-review',
+        version: '1.0.0',
+        serverId: 'review-server',
+        capabilityId: 'lookup',
+        type: 'tool',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        trustLevel: 'untrusted',
+        declarationSource: 'server',
+      },
+    ];
+    const catalog = new MCPCapabilityCatalog({
+      integration: {
+        id: 'side-effect-review',
+        version: '1.0.0',
+        servers: [{ id: 'review-server', mode: 'local' }],
+      },
+      gateway: new MockMCPGateway(capabilities),
+      trustPolicy: {
+        defaultTrustLevel: 'restricted',
+        requireApprovalForNewCapability: true,
+        requireApprovalForSchemaChange: true,
+      },
+      driftPolicy: {
+        onDescriptionChange: 'snapshot_next_run',
+        onSchemaChange: 'require_approval',
+        onRemoval: 'allow_existing_run',
+        onServerIdentityChange: 'quarantine',
+      },
+    });
+    const discovered = (await catalog.refresh('review-server')).capabilities[0];
+    await catalog.approveRevision({
+      serverId: 'review-server',
+      capabilityId: 'lookup',
+      capabilityHash: discovered.capabilityHash,
+      approvedBy: 'admin.review',
+      sideEffectLevel: 'read',
+    });
+    await expect(catalog.refresh('review-server')).resolves.toMatchObject({
+      capabilities: [
+        expect.objectContaining({
+          driftState: 'approved',
+          normalizedToolSpec: expect.objectContaining({ sideEffectLevel: 'read' }),
+          metadata: expect.objectContaining({ approvedSideEffectLevel: 'read' }),
+        }),
+      ],
+    });
+
+    capabilities[0].sideEffectLevel = 'write';
+    const changed = (await catalog.refresh('review-server')).capabilities[0];
+    await expect(
+      catalog.approveRevision({
+        serverId: 'review-server',
+        capabilityId: 'lookup',
+        capabilityHash: changed.capabilityHash,
+        approvedBy: 'admin.review',
+        sideEffectLevel: 'read',
+      })
+    ).rejects.toMatchObject({ code: 'MCP_SIDE_EFFECT_OVERRIDE_UNSAFE' });
+  });
+
   it('keeps NormalizedMCPError TypeScript, Zod, and JSON Schema in parity', () => {
     const jsonSchema = governedMCPIntegrationJsonSchemas.NormalizedMCPError;
     expect(jsonSchema.required).toEqual(['code', 'message', 'retryable']);

@@ -63,7 +63,10 @@ describe('public Memory consumer composition', () => {
         events: { publish: async (type: MemoryEventType) => 'event:' + type },
         harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
       },
-      eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+      eventContext: (request) => ({
+        userId: request.scope.userId,
+        runId: request.scope.runId ?? request.operationId,
+      }),
       contextBuilder,
       contextGateway: new DefaultContextInjectionGateway(),
     }).create(runtimeConfig());
@@ -145,7 +148,7 @@ describe('public Memory consumer composition', () => {
             events: { publish: async () => 'event' },
             harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
           },
-          eventContext: () => ({ runId: 'consumer-run' }),
+          eventContext: () => ({ userId: 'consumer-user', runId: 'consumer-run' }),
           contextBuilder: new DefaultMemoryContextBuilder(),
         })
     ).toThrow('contextBuilder and contextGateway must be installed together');

@@ -12,6 +12,7 @@
  *   bug 10 — /workflows/:name/execute does not crash on minimal context
  */
 import request from 'supertest';
+import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import application from '../../apps/server/src/app';
@@ -66,6 +67,36 @@ describe('GET /api/v1/ready', () => {
           ready: false,
           state: 'maintenance_workers_running',
         },
+        components: {
+          runtime: { ready: false },
+          storage: { ready: true, mongodb: true, redis: true },
+          memory: { ready: true },
+          llm: { ready: false, availableProviders: [] },
+          tools: { initialized: true, ready: true },
+          skills: { initialized: true, ready: true },
+        },
+      },
+    });
+  });
+});
+
+describe('GET /api/v1/status', () => {
+  it('reports observed product readiness without hard-coded provider health', async () => {
+    const r = await request(app).get('/api/v1/status');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      data: {
+        service: 'hypha',
+        readiness: {
+          ready: false,
+          status: 'not_ready',
+          components: {
+            runtime: { ready: false },
+            llm: { ready: false, availableProviders: [] },
+          },
+        },
+        llm: { availableProviders: [] },
       },
     });
   });
@@ -378,7 +409,7 @@ describe('GET /api/v1/tools (bug 9)', () => {
 });
 
 describe('MCP tool invocation', () => {
-  it('lists the configured fixture server and normalized MCP tools', async () => {
+  it('discovers and explicitly approves the real local stdio MCP capability', async () => {
     const servers = await request(app)
       .get('/api/v1/tools/mcp/servers')
       .set('Authorization', `Bearer ${devToken}`);
@@ -386,36 +417,82 @@ describe('MCP tool invocation', () => {
     expect(servers.body.data || []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'classic',
+          id: 'local-example',
           status: 'connected',
-          toolCount: 6,
         }),
       ])
     );
+
+    const capabilities = await request(app)
+      .get('/api/v1/mcp/capabilities')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(capabilities.status).toBe(200);
+    const discovered = capabilities.body.data || [];
+    const capability = discovered.find(
+      (candidate: any) =>
+        candidate.serverId === 'local-example' && candidate.remoteName === 'hash_reference'
+    );
+    expect(capability).toMatchObject({
+      serverId: 'local-example',
+      remoteName: 'hash_reference',
+      kind: 'tool',
+      capabilityHash: expect.any(String),
+    });
+    const requiredCapabilities = [
+      { kind: 'tool', capabilityId: 'hash_reference', sideEffectLevel: 'read' },
+      { kind: 'resource', capabilityId: 'hypha://framework/runtime-contract' },
+      { kind: 'prompt', capabilityId: 'runtime_diagnostic' },
+    ];
+    for (const required of requiredCapabilities) {
+      const discoveredCapability = discovered.find(
+        (candidate: any) =>
+          candidate.serverId === 'local-example' &&
+          candidate.kind === required.kind &&
+          candidate.remoteName === required.capabilityId
+      );
+      expect(discoveredCapability).toMatchObject({
+        capabilityHash: expect.any(String),
+        driftState: expect.any(String),
+      });
+      if (
+        discoveredCapability.driftState === 'approved' &&
+        (required.sideEffectLevel === undefined ||
+          discoveredCapability.normalizedToolSpec?.sideEffectLevel === required.sideEffectLevel)
+      ) {
+        continue;
+      }
+      const approval = await request(app)
+        .post(
+          `/api/v1/mcp/servers/local-example/capabilities/${encodeURIComponent(required.capabilityId)}/approve`
+        )
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({
+          capabilityHash: discoveredCapability.capabilityHash,
+          sideEffectLevel: required.sideEffectLevel,
+        });
+      expect(approval.status).toBe(200);
+      expect(approval.body).toMatchObject({
+        success: true,
+        data: { status: 'approved' },
+      });
+    }
 
     const tools = await request(app)
       .get('/api/v1/tools/mcp/tools')
       .set('Authorization', `Bearer ${devToken}`);
     expect(tools.status).toBe(200);
-    const classic = (tools.body.data || []).find((server: any) => server.serverId === 'classic');
-    expect(classic).toBeTruthy();
-    const toolIds = (classic.tools || []).map((tool: any) => tool.id);
-    expect(toolIds).toEqual(
-      expect.arrayContaining([
-        'filesystem.read_file',
-        'search.web_search',
-        'baidu.web_search',
-        'so360.web_search',
-      ])
+    const local = (tools.body.data || []).find(
+      (server: any) => server.serverId === 'local-example'
     );
-    expect(classic.tools || []).toEqual(
+    expect(local).toBeTruthy();
+    expect(local.tools || []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'filesystem.read_file',
+          id: 'mcp.local-example.hash_reference',
           source: 'mcp',
           sourceRef: expect.objectContaining({
-            serverId: 'filesystem',
-            capabilityId: 'read_file',
+            mcpServerId: 'local-example',
+            mcpCapabilityId: 'hash_reference',
           }),
         }),
       ])
@@ -426,20 +503,39 @@ describe('MCP tool invocation', () => {
       .set('Authorization', `Bearer ${devToken}`);
     expect(allTools.status).toBe(200);
     expect((allTools.body.data || []).map((tool: any) => tool.name)).toEqual(
-      expect.arrayContaining(['filesystem.read_file', 'search.web_search', 'baidu.web_search'])
+      expect.arrayContaining(['mcp.local-example.hash_reference'])
+    );
+
+    const resources = await request(app)
+      .get('/api/v1/mcp/servers/local-example/resources')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(resources.status).toBe(200);
+    expect(resources.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ remoteName: 'hypha://framework/runtime-contract' }),
+      ])
+    );
+
+    const prompts = await request(app)
+      .get('/api/v1/mcp/servers/local-example/prompts')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(prompts.status).toBe(200);
+    expect(prompts.body.data || []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ remoteName: 'runtime_diagnostic' })])
     );
   });
 
-  it('executes a fixture MCP filesystem tool through the governed HTTP path', async () => {
+  it('executes the approved local stdio MCP tool through the governed HTTP path', async () => {
+    const value = 'hypha-real-mcp';
     const r = await request(app)
       .post('/api/v1/tools/execute')
       .set('Authorization', `Bearer ${devToken}`)
-      .send({ name: 'filesystem.read_file', params: { path: '/README.md' } });
+      .send({ name: 'mcp.local-example.hash_reference', params: { value } });
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data).toMatchObject({
-      path: '/README.md',
-      content: expect.stringContaining('Classic MCP fixture'),
+      algorithm: 'sha256',
+      digest: createHash('sha256').update(value).digest('hex'),
     });
 
     const events = await request(app)
@@ -452,48 +548,16 @@ describe('MCP tool invocation', () => {
           type: 'mcp.call.started',
           payload: expect.objectContaining({
             source: 'mcp',
-            serverId: 'filesystem',
-            capabilityId: 'read_file',
+            serverId: 'local-example',
+            capabilityId: 'hash_reference',
           }),
         }),
         expect.objectContaining({
           type: 'mcp.call.completed',
           payload: expect.objectContaining({
             source: 'mcp',
-            serverId: 'filesystem',
-            capabilityId: 'read_file',
-          }),
-        }),
-      ])
-    );
-  });
-
-  it('executes a mainland MCP search fixture through the governed HTTP path', async () => {
-    const r = await request(app)
-      .post('/api/v1/tools/execute')
-      .set('Authorization', `Bearer ${devToken}`)
-      .send({ name: 'baidu.web_search', params: { query: 'hypha', limit: 1 } });
-    expect(r.status).toBe(200);
-    expect(r.body.success).toBe(true);
-    expect(r.body.data).toMatchObject({
-      query: 'hypha',
-      count: 1,
-      provider: 'baidu-fixture',
-      note: 'classic-mcp-mainland-baidu',
-    });
-
-    const events = await request(app)
-      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
-      .set('Authorization', `Bearer ${devToken}`);
-    expect(events.status).toBe(200);
-    expect(events.body.data || []).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: 'mcp.call.completed',
-          payload: expect.objectContaining({
-            source: 'mcp',
-            serverId: 'baidu',
-            capabilityId: 'web_search',
+            serverId: 'local-example',
+            capabilityId: 'hash_reference',
           }),
         }),
       ])
@@ -504,10 +568,10 @@ describe('MCP tool invocation', () => {
     const r = await request(app)
       .post('/api/v1/tools/execute')
       .set('Authorization', `Bearer ${devToken}`)
-      .send({ name: 'filesystem.read_file', params: {} });
+      .send({ name: 'mcp.local-example.hash_reference', params: {} });
     expect(r.status).toBe(400);
     expect(r.body.success).toBe(false);
-    expect(r.body.error.message).toContain('missing required field: path');
+    expect(r.body.error.message).toContain('missing required field: value');
 
     const events = await request(app)
       .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
@@ -525,6 +589,59 @@ describe('MCP tool invocation', () => {
         }),
       ])
     );
+  });
+
+  it('reads an approved MCP Resource through a scoped canonical Run', async () => {
+    const r = await request(app)
+      .post('/api/v1/mcp/servers/local-example/resources/read')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ uri: 'hypha://framework/runtime-contract' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      runId: expect.any(String),
+      data: {
+        contents: [
+          expect.objectContaining({
+            uri: 'hypha://framework/runtime-contract',
+            mimeType: 'application/json',
+          }),
+        ],
+      },
+    });
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'mcp.call.started' }),
+        expect.objectContaining({ type: 'mcp.call.completed' }),
+        expect.objectContaining({ type: 'run.completed' }),
+      ])
+    );
+  });
+
+  it('renders an approved MCP Prompt through a scoped canonical Run', async () => {
+    const r = await request(app)
+      .post('/api/v1/mcp/servers/local-example/prompts/runtime_diagnostic/render')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ arguments: { component: 'memory' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      runId: expect.any(String),
+      data: {
+        messages: [
+          expect.objectContaining({
+            role: 'user',
+            content: expect.objectContaining({
+              type: 'text',
+              text: expect.stringContaining('memory'),
+            }),
+          }),
+        ],
+      },
+    });
   });
 });
 

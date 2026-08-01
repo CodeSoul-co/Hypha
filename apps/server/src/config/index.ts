@@ -671,6 +671,47 @@ const configSchema = z.object({
     max: z.number().default(100),
   }),
 }).superRefine((config, context) => {
+  const uncomposedStorageProviders = [
+    {
+      enabled: config.storage.messaging.kafka.enabled,
+      path: ['storage', 'messaging', 'kafka', 'enabled'],
+      name: 'Kafka',
+    },
+    {
+      enabled: config.storage.relational.postgres.enabled,
+      path: ['storage', 'relational', 'postgres', 'enabled'],
+      name: 'Postgres',
+    },
+    {
+      enabled: config.storage.vector.qdrant.enabled,
+      path: ['storage', 'vector', 'qdrant', 'enabled'],
+      name: 'Qdrant',
+    },
+    {
+      enabled: config.storage.vector.chroma.enabled,
+      path: ['storage', 'vector', 'chroma', 'enabled'],
+      name: 'Chroma',
+    },
+    {
+      enabled: config.storage.vector.pinecone.enabled,
+      path: ['storage', 'vector', 'pinecone', 'enabled'],
+      name: 'Pinecone',
+    },
+    {
+      enabled: config.storage.artifacts.s3.enabled,
+      path: ['storage', 'artifacts', 's3', 'enabled'],
+      name: 'S3 Artifact Storage',
+    },
+  ] as const;
+  for (const provider of uncomposedStorageProviders) {
+    if (!provider.enabled) continue;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...provider.path],
+      message: `${provider.name} is declared but is not composed into the Server runtime; enabled must remain false until a concrete adapter, lifecycle, and readiness probe are registered`,
+    });
+  }
+
   if (config.app.env !== 'production') {
     return;
   }

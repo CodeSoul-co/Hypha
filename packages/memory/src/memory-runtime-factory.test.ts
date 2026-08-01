@@ -46,7 +46,10 @@ function runtimeFactory(
       events: { publish: vi.fn(async (type: MemoryEventType) => `event:${type}`) },
       harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
     },
-    eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+    eventContext: (request) => ({
+      userId: request.scope.userId,
+      runId: request.scope.runId ?? request.operationId,
+    }),
     now,
     telemetry,
     providerCostEstimator: () => ({ costUnits: 0 }),

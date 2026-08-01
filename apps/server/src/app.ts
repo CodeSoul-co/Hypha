@@ -153,9 +153,13 @@ class Application {
     // previous behaviour was to silently boot with a broken default.
     await this.ensureDefaultProviderAvailable();
 
+    // Establish the canonical Event authority before any subsystem can emit
+    // lifecycle facts. Migration and bounded replay must complete first.
+    await this.initializeCanonicalRuntime();
+
     // Initialize the unique canonical Memory application service after its
-    // MongoDB and Redis dependencies are ready.
-    await initializeServerMemoryComposition();
+    // storage dependencies and Event fact store are ready.
+    await initializeServerMemoryComposition(this.canonicalRuntime!.get().events);
 
     // Bind every Memory-capable Server subsystem to that same service instance.
     getMemoryApplicationService('tool');
@@ -167,10 +171,6 @@ class Application {
 
     // Initialize Tool Manager
     await initializeToolManager();
-
-    // Cut legacy Runtime Events over to the schema-backed canonical store only
-    // after migration and bounded replay have passed.
-    await this.initializeCanonicalRuntime();
 
     // Recover persisted Tool invocations after their adapters are available.
     await getEventRuntime().recoverToolInvocations();
@@ -548,11 +548,13 @@ class Application {
           this.server = null;
         },
         drainWorkersAndReleaseLeases: async () => {
+          // Memory workers may emit terminal lifecycle facts while draining,
+          // so the canonical Event authority must outlive Memory shutdown.
+          await closeServerMemoryComposition();
           destroyEventRuntime();
           await this.canonicalRuntime?.close();
           this.canonicalRuntime = null;
           clearServerRuntimeReadiness();
-          await closeServerMemoryComposition();
         },
         closeServicesAndConnections: async () => {
           await destroyLLM();

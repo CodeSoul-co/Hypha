@@ -537,7 +537,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "toolCount": 6 }]
+  "data": [{ "id": "local-example", "name": "Hypha Local MCP Example", "status": "connected", "toolCount": 0 }]
 }`,
   },
   {
@@ -547,7 +547,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": { "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "healthy": true }
+  "data": { "id": "local-example", "name": "Hypha Local MCP Example", "status": "connected", "healthy": true }
 }`,
   },
   {
@@ -576,13 +576,13 @@ const toolEndpoints = [
     desc: 'Execute a local or MCP tool through the governed runtime path',
     auth: 'JWT Bearer Token or X-API-Key',
     body: `{
-  "name": "filesystem.read_file",
-  "params": { "path": "/README.md" }
+  "name": "mcp.local-example.hash_reference",
+  "params": { "value": "hypha" }
 }`,
     response: `{
   "success": true,
   "runId": "run_...",
-  "data": { "path": "/README.md", "content": "..." }
+  "data": { "algorithm": "sha256", "digest": "..." }
 }`,
   },
   {
@@ -592,7 +592,75 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "serverId": "classic", "serverName": "Classic MCP Fixture", "tools": [{ "id": "baidu.web_search", "source": "mcp" }] }]
+  "data": [{ "serverId": "local-example", "serverName": "Hypha Local MCP Example", "tools": [] }]
+}`,
+  },
+  {
+    method: 'GET',
+    path: '/mcp/capabilities',
+    desc: 'List discovered MCP Tool, Resource, and Prompt capability revisions',
+    auth: 'JWT Bearer Token or X-API-Key',
+    response: `{
+  "success": true,
+  "data": [{ "serverId": "local-example", "kind": "tool", "remoteName": "hash_reference", "capabilityHash": "sha256:...", "driftState": "approved" }]
+}`,
+  },
+  {
+    method: 'POST',
+    path: '/mcp/servers/:serverId/capabilities/:capabilityId/approve',
+    desc: 'Approve one exact MCP capability revision; Tool approvals may classify an undeclared side-effect level',
+    auth: 'JWT Bearer Token or X-API-Key (Admin)',
+    body: `{
+  "capabilityHash": "sha256:...",
+  "sideEffectLevel": "read"
+}`,
+    response: `{
+  "success": true,
+  "data": { "status": "approved" }
+}`,
+  },
+  {
+    method: 'GET',
+    path: '/mcp/servers/:serverId/resources',
+    desc: 'List approved MCP Resources',
+    auth: 'JWT Bearer Token or X-API-Key',
+    response: `{
+  "success": true,
+  "data": [{ "kind": "resource", "remoteName": "hypha://framework/runtime-contract" }]
+}`,
+  },
+  {
+    method: 'POST',
+    path: '/mcp/servers/:serverId/resources/read',
+    desc: 'Read an approved Resource through a scoped, event-backed Runtime Run',
+    auth: 'JWT Bearer Token or X-API-Key',
+    body: `{ "uri": "hypha://framework/runtime-contract" }`,
+    response: `{
+  "success": true,
+  "runId": "run_...",
+  "data": { "contents": [...] }
+}`,
+  },
+  {
+    method: 'GET',
+    path: '/mcp/servers/:serverId/prompts',
+    desc: 'List approved MCP Prompts',
+    auth: 'JWT Bearer Token or X-API-Key',
+    response: `{
+  "success": true,
+  "data": [{ "kind": "prompt", "remoteName": "runtime_diagnostic" }]
+}`,
+  },
+  {
+    method: 'POST',
+    path: '/mcp/servers/:serverId/prompts/:name/render',
+    desc: 'Render an approved Prompt through a scoped, event-backed Runtime Run',
+    auth: 'JWT Bearer Token or X-API-Key',
+    body: `{ "arguments": { "component": "memory" } }`,
+    response: `{
+  "success": true,
+  "runId": "run_...",
+  "data": { "messages": [...] }
 }`,
   },
 ];
