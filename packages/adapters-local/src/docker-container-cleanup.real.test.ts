@@ -29,12 +29,10 @@ beforeAll(async () => {
 }, 30_000);
 
 afterEach(async () => {
-  await Promise.all(
-    containerNames.splice(0).map(async (name) => {
-      await cleanupEngine.removeContainer(name);
-      await expect(cleanupEngine.inspectContainer(name)).resolves.toBeNull();
-    })
-  );
+  for (const name of containerNames.splice(0)) {
+    await cleanupEngine.removeContainer(name);
+    await expect(cleanupEngine.inspectContainer(name)).resolves.toBeNull();
+  }
   await Promise.all(
     temporaryWorkspaces.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))
   );

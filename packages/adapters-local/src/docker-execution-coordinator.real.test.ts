@@ -25,6 +25,7 @@ const image = process.env.HYPHA_REAL_DOCKER_IMAGE ?? 'redis';
 const imageDigest =
   process.env.HYPHA_REAL_DOCKER_DIGEST ??
   'sha256:77cb4599f0121142e25139cea1aafaf45fe765c74a0a41b38f4a4ea9fc8cb846';
+const testRuntime = executionTestRuntime(process.env.HYPHA_REAL_DOCKER_TEST_RUNTIME);
 const transport = new DockerCliTransport({ dockerPath });
 const engine = new DockerEngineCliClient(transport);
 const temporaryWorkspaces: string[] = [];
@@ -101,10 +102,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
     const result = await coordinator(outputs).execute(
       executionInput(name, workspace, 'success', {
         executable: 'sh',
-        args: [
-          '-c',
-          'cp /etc/hostname /workspace/result.txt && printf artifact-output',
-        ],
+        args: ['-c', 'cp /etc/hostname /workspace/result.txt && printf artifact-output'],
         timeoutMs: 5_000,
       })
     );
@@ -180,11 +178,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const execution = coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'cancel', {
-        executable: 'perl',
-        args: [
-          '-e',
-          'my $pid = fork(); die "fork failed" unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } open(my $fh, ">", "/workspace/cancel.started") or die "marker failed"; print {$fh} "started\\n"; close($fh); wait;',
-        ],
+        ...cancellationCommand(),
         timeoutMs: 10_000,
         signal: cancellation.signal,
       })
@@ -219,8 +213,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
       executionInput(name, workspace, 'output-limit', {
         // A finite burst still exceeds every configured limit while avoiding
         // an unbounded producer during Windows Docker CLI process teardown.
-        executable: 'perl',
-        args: ['-e', 'print "hypha\\n" x 1024'],
+        ...outputLimitCommand(),
         timeoutMs: 5_000,
         maxStdoutBytes: 128,
         maxCombinedOutputBytes: 256,
@@ -282,8 +275,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'network', {
-        executable: 'redis-cli',
-        args: ['-h', '1.1.1.1', '-p', '6379', 'PING'],
+        ...networkProbeCommand(),
         timeoutMs: 2_000,
       })
     );
@@ -309,8 +301,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'oom', {
-        executable: 'perl',
-        args: ['-e', '$value = "x" x (256 * 1024 * 1024); sleep 30'],
+        ...outOfMemoryCommand(),
         timeoutMs: 10_000,
       })
     );
@@ -337,11 +328,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'filesystem', {
-        executable: 'perl',
-        args: [
-          '-e',
-          'my $socket = -S "/var/run/docker.sock"; my $opened = open(my $fh, ">", "/etc/hypha-denied"); exit(($socket || $opened) ? 23 : 0);',
-        ],
+        ...filesystemProbeCommand(),
         timeoutMs: 5_000,
       })
     );
@@ -366,11 +353,7 @@ describe('DockerExecutionCoordinator real daemon', () => {
 
     const result = await coordinator(realOutputs(workspace)).execute(
       executionInput(name, workspace, 'pids', {
-        executable: 'perl',
-        args: [
-          '-e',
-          'for (1..200) { my $pid = fork(); exit 42 unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } } wait;',
-        ],
+        ...pidLimitCommand(),
         timeoutMs: 10_000,
       })
     );
@@ -468,9 +451,7 @@ class RecordingArtifactPort implements DockerExecutionArtifactStreamPort {
     stream: LocalProcessArtifactStream;
   }): LocalProcessOutputArtifactStream {
     if (this.streams.has(input.stream)) throw new Error('Artifact stream was opened twice.');
-    const stream = new RecordingArtifactStream(
-      `artifact.${input.executionId}.${input.stream}`
-    );
+    const stream = new RecordingArtifactStream(`artifact.${input.executionId}.${input.stream}`);
     this.streams.set(input.stream, stream);
     return stream;
   }
@@ -508,6 +489,105 @@ function coordinator(outputs: DockerExecutionOutputCollector): DockerExecutionCo
     new DockerStatsResourceAccounting(transport),
     outputs
   );
+}
+
+type ExecutionTestRuntime = 'redis' | 'python';
+
+interface TestCommand {
+  executable: string;
+  args: string[];
+}
+
+function executionTestRuntime(value: string | undefined): ExecutionTestRuntime {
+  const runtime = value ?? 'redis';
+  if (runtime !== 'redis' && runtime !== 'python') {
+    throw new Error('HYPHA_REAL_DOCKER_TEST_RUNTIME must be redis or python.');
+  }
+  return runtime;
+}
+
+function cancellationCommand(): TestCommand {
+  return testRuntime === 'python'
+    ? {
+        executable: 'python',
+        args: [
+          '-c',
+          "import os,time; pid=os.fork(); (time.sleep(30) if pid == 0 else (open('/workspace/cancel.started','w').write('started\\n'), os.waitpid(pid,0)))",
+        ],
+      }
+    : {
+        executable: 'perl',
+        args: [
+          '-e',
+          'my $pid = fork(); die "fork failed" unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } open(my $fh, ">", "/workspace/cancel.started") or die "marker failed"; print {$fh} "started\\n"; close($fh); wait;',
+        ],
+      };
+}
+
+function outputLimitCommand(): TestCommand {
+  return testRuntime === 'python'
+    ? { executable: 'python', args: ['-c', "print('hypha\\n' * 1024, end='')"] }
+    : { executable: 'perl', args: ['-e', 'print "hypha\\n" x 1024'] };
+}
+
+function networkProbeCommand(): TestCommand {
+  return testRuntime === 'python'
+    ? {
+        executable: 'python',
+        args: [
+          '-c',
+          "import socket,sys; s=socket.socket(); s.settimeout(1);\ntry: s.connect(('1.1.1.1',6379)); print('PONG'); sys.exit(0)\nexcept OSError: sys.exit(1)",
+        ],
+      }
+    : { executable: 'redis-cli', args: ['-h', '1.1.1.1', '-p', '6379', 'PING'] };
+}
+
+function outOfMemoryCommand(): TestCommand {
+  return testRuntime === 'python'
+    ? {
+        executable: 'python',
+        args: [
+          '-c',
+          "import time; chunks=[]\nfor _ in range(256):\n value=bytearray(1024*1024); value[:]=b'x'*len(value); chunks.append(value)\ntime.sleep(30)",
+        ],
+      }
+    : { executable: 'perl', args: ['-e', '$value = "x" x (256 * 1024 * 1024); sleep 30'] };
+}
+
+function filesystemProbeCommand(): TestCommand {
+  return testRuntime === 'python'
+    ? {
+        executable: 'python',
+        args: [
+          '-c',
+          "import os,sys; exposed=os.path.exists('/var/run/docker.sock');\ntry:\n open('/etc/hypha-denied','w').close(); opened=True\nexcept OSError: opened=False\nsys.exit(23 if exposed or opened else 0)",
+        ],
+      }
+    : {
+        executable: 'perl',
+        args: [
+          '-e',
+          'my $socket = -S "/var/run/docker.sock"; my $opened = open(my $fh, ">", "/etc/hypha-denied"); exit(($socket || $opened) ? 23 : 0);',
+        ],
+      };
+}
+
+function pidLimitCommand(): TestCommand {
+  return testRuntime === 'python'
+    ? {
+        executable: 'python',
+        args: [
+          '-c',
+          'import os,time; children=[]\ntry:\n for _ in range(200):\n  pid=os.fork()\n  if pid == 0: time.sleep(30); os._exit(0)\n  children.append(pid)\nexcept OSError: os._exit(42)\nfor pid in children: os.waitpid(pid,0)',
+        ],
+      }
+    : {
+        executable: 'perl',
+        args: [
+          '-e',
+          'for (1..200) { my $pid = fork(); exit 42 unless defined $pid; if ($pid == 0) { sleep 30; exit 0; } } wait;',
+        ],
+      };
 }
 
 function executionInput(

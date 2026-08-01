@@ -24,6 +24,7 @@ const image = process.env.HYPHA_REAL_DOCKER_IMAGE ?? 'redis';
 const imageDigest =
   process.env.HYPHA_REAL_DOCKER_DIGEST ??
   'sha256:77cb4599f0121142e25139cea1aafaf45fe765c74a0a41b38f4a4ea9fc8cb846';
+const testRuntime = executionTestRuntime(process.env.HYPHA_REAL_DOCKER_TEST_RUNTIME);
 const transport = new DockerCliTransport({ dockerPath });
 const engine = new DockerEngineCliClient(transport);
 const temporaryWorkspaces: string[] = [];
@@ -71,8 +72,9 @@ describe('DockerSandboxProvider real daemon', () => {
         factoryRegistered: true,
       },
     });
+    const probe = versionProbeCommand();
     const result = await provider.execute(
-      command(ready.id, executionId, 'redis-cli', ['--version'])
+      command(ready.id, executionId, probe.executable, probe.args)
     );
 
     expect(result).toMatchObject({
@@ -97,7 +99,7 @@ describe('DockerSandboxProvider real daemon', () => {
         },
       },
     });
-    expect(artifacts.content('stdout').toString('utf8')).toContain('redis-cli');
+    expect(artifacts.content('stdout').toString('utf8')).toContain(probe.expectedOutput);
     await expect(engine.inspectContainer(containerName)).resolves.toBeNull();
 
     const idle = await provider.status({ sandboxId: ready.id, principal });
@@ -261,7 +263,7 @@ function environment(): ExecutionEnvironmentSpec {
     },
     process: {
       shellEnabled: false,
-      allowedExecutables: ['redis-cli', 'sleep'],
+      allowedExecutables: [versionProbeCommand().executable, 'sleep'],
       executableResolution: 'container_path',
       killProcessTreeOnExit: true,
       inheritHostEnvironment: false,
@@ -318,6 +320,26 @@ function environment(): ExecutionEnvironmentSpec {
     workingDirectoryPolicy: 'workspace_only',
     defaultTimeoutMs: 5_000,
   };
+}
+
+type ExecutionTestRuntime = 'redis' | 'python';
+
+function executionTestRuntime(value: string | undefined): ExecutionTestRuntime {
+  const runtime = value ?? 'redis';
+  if (runtime !== 'redis' && runtime !== 'python') {
+    throw new Error('HYPHA_REAL_DOCKER_TEST_RUNTIME must be redis or python.');
+  }
+  return runtime;
+}
+
+function versionProbeCommand(): Readonly<{
+  executable: string;
+  args: string[];
+  expectedOutput: string;
+}> {
+  return testRuntime === 'python'
+    ? { executable: 'python', args: ['--version'], expectedOutput: 'Python' }
+    : { executable: 'redis-cli', args: ['--version'], expectedOutput: 'redis-cli' };
 }
 
 class RecordingArtifactPort implements DockerExecutionArtifactStreamPort {
