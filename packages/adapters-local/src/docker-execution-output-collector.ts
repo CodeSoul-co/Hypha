@@ -1,8 +1,6 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import {
-  validateCommandExecutionRequest,
-  type CommandExecutionRequest,
-} from '@hypha/core';
+import { validateCommandExecutionRequest, type CommandExecutionRequest } from '@hypha/core';
 import type { DockerCliResult } from './docker-cli-transport';
 import type {
   DockerExecutionCollectedOutputs,
@@ -38,30 +36,39 @@ export interface DockerExecutionOutputCollectorOptions {
  * after the container has been stopped and re-inspected as quiescent.
  */
 export class LocalDockerExecutionOutputCollector implements DockerExecutionOutputCollector {
-  private readonly workspace: LocalWorkspaceAdapter;
+  private readonly workspaceRoot: string;
   private readonly outputArtifacts: DockerExecutionArtifactStreamPort;
+  private readonly maxTrackedFiles?: number;
+  private readonly maxTrackedBytes?: number;
 
   constructor(options: DockerExecutionOutputCollectorOptions) {
-    this.workspace = new LocalWorkspaceAdapter({
-      workspaceRoot: options.workspaceRoot,
-      maxTrackedFiles: options.maxTrackedFiles,
-      maxTrackedBytes: options.maxTrackedBytes,
-    });
+    this.workspaceRoot = options.workspaceRoot;
     this.outputArtifacts = options.outputArtifacts;
+    this.maxTrackedFiles = options.maxTrackedFiles;
+    this.maxTrackedBytes = options.maxTrackedBytes;
   }
 
   async prepare(input: {
     executionId: string;
     workspaceRoot: string;
   }): Promise<DockerExecutionOutputSession> {
-    if (!sameResolvedPath(input.workspaceRoot, this.workspace.workspaceRoot)) {
+    const [requestedRoot, configuredRoot] = await canonicalWorkspaceRoots(
+      input.workspaceRoot,
+      this.workspaceRoot
+    );
+    if (path.relative(requestedRoot, configuredRoot) !== '') {
       throw new Error('Docker Workspace mount does not match the configured output collector.');
     }
-    await this.workspace.assertAvailable();
-    const before = await this.workspace.capture();
+    const workspace = new LocalWorkspaceAdapter({
+      workspaceRoot: configuredRoot,
+      ...(this.maxTrackedFiles === undefined ? {} : { maxTrackedFiles: this.maxTrackedFiles }),
+      ...(this.maxTrackedBytes === undefined ? {} : { maxTrackedBytes: this.maxTrackedBytes }),
+    });
+    await workspace.assertAvailable();
+    const before = await workspace.capture();
     return new LocalDockerExecutionOutputSession(
       input.executionId,
-      this.workspace,
+      workspace,
       before,
       this.outputArtifacts
     );
@@ -130,11 +137,7 @@ class LocalDockerExecutionOutputSession implements DockerExecutionOutputSession 
     this.state = 'collecting';
     try {
       const after = await this.workspace.capture();
-      const changedFiles = this.workspace.diff(
-        this.before,
-        after,
-        input.processResult.completedAt
-      );
+      const changedFiles = this.workspace.diff(this.before, after, input.processResult.completedAt);
       const [stdoutArtifactRef, stderrArtifactRef] = await Promise.all([
         this.streams.stdout?.complete(),
         this.streams.stderr?.complete(),
@@ -170,6 +173,6 @@ class LocalDockerExecutionOutputSession implements DockerExecutionOutputSession 
   }
 }
 
-function sameResolvedPath(left: string, right: string): boolean {
-  return path.relative(path.resolve(left), path.resolve(right)) === '';
+function canonicalWorkspaceRoots(left: string, right: string): Promise<[string, string]> {
+  return Promise.all([fs.realpath(path.resolve(left)), fs.realpath(path.resolve(right))]);
 }

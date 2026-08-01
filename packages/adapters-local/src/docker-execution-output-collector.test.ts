@@ -83,6 +83,24 @@ describe('LocalDockerExecutionOutputCollector', () => {
     ).rejects.toThrow('does not match');
   });
 
+  it('accepts an equivalent Workspace root reached through a filesystem symlink', async () => {
+    const root = await workspace();
+    const aliasParent = await workspace();
+    const alias = path.join(aliasParent, 'workspace-alias');
+    await fs.symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const collector = new LocalDockerExecutionOutputCollector({
+      workspaceRoot: alias,
+      outputArtifacts: new FakeArtifactPort(),
+    });
+
+    await expect(
+      collector.prepare({
+        executionId: 'execution.docker.symlink',
+        workspaceRoot: await fs.realpath(root),
+      })
+    ).resolves.toBeDefined();
+  });
+
   it('opens a stream for truncated evidence even when the final event has no captured bytes', async () => {
     const root = await workspace();
     const artifacts = new FakeArtifactPort();
