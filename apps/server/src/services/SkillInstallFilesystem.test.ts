@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import {
   assertDirectoryStable,
+  governedChildPath,
   installVerifiedSkillFile,
   isPortablePathWithin,
   readTrustedLocalSkill,
@@ -138,20 +139,20 @@ describe('Skill install filesystem boundary', () => {
   });
 
   it('handles POSIX /var aliases and Windows drive/UNC containment without prefix checks', () => {
-    expect(isPortablePathWithin('/private/var/folders/root', '/private/var/folders/root/a.md', 'posix')).toBe(
-      true
-    );
-    expect(isPortablePathWithin('/var/folders/root', '/private/var/folders/root/a.md', 'posix')).toBe(
-      false
-    );
+    expect(
+      isPortablePathWithin('/private/var/folders/root', '/private/var/folders/root/a.md', 'posix')
+    ).toBe(true);
+    expect(
+      isPortablePathWithin('/var/folders/root', '/private/var/folders/root/a.md', 'posix')
+    ).toBe(false);
     expect(isPortablePathWithin('C:\\skills', 'C:\\skills\\a.md', 'win32')).toBe(true);
     expect(isPortablePathWithin('C:\\skills', 'C:\\skills-escape\\a.md', 'win32')).toBe(false);
-    expect(isPortablePathWithin('\\\\server\\share\\skills', '\\\\server\\share\\skills\\a.md', 'win32')).toBe(
-      true
-    );
-    expect(isPortablePathWithin('\\\\server\\share\\skills', '\\\\server\\other\\a.md', 'win32')).toBe(
-      false
-    );
+    expect(
+      isPortablePathWithin('\\\\server\\share\\skills', '\\\\server\\share\\skills\\a.md', 'win32')
+    ).toBe(true);
+    expect(
+      isPortablePathWithin('\\\\server\\share\\skills', '\\\\server\\other\\a.md', 'win32')
+    ).toBe(false);
   });
 
   it('canonicalizes a Windows junction data root', async () => {
@@ -163,5 +164,22 @@ describe('Skill install filesystem boundary', () => {
     process.env.HYPHA_SKILL_DATA_ROOT = junction;
     const roots = await resolveGovernedSkillRoots();
     expect(roots.data.canonicalPath.toLowerCase()).toBe((await fs.realpath(target)).toLowerCase());
+  });
+
+  it.each([
+    '..%2foutside.md',
+    '..%252foutside.md',
+    '..%5coutside.md',
+    `outside\u2215skill.md`,
+    `outside\uff0fskill.md`,
+    'CON.md',
+    'nul.txt',
+    'skill.md.',
+    'skill.md ',
+    'skill:stream.md',
+  ])('rejects encoded, Unicode, or device-path filename %s', (filename) => {
+    expect(() => governedChildPath(root, filename)).toThrow(
+      expect.objectContaining({ code: 'SKILL_PATH_ESCAPE' })
+    );
   });
 });
