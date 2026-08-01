@@ -171,7 +171,11 @@ describe('public Memory consumer composition', () => {
       id: 'consumer-cached-native',
       supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
       create: async ({ profile }) => {
-        const provider = new NativeMemoryManagementProvider({ profile });
+        const provider = new NativeMemoryManagementProvider({
+          profile,
+          embeddingProvider: { embed: async (input) => input.map(() => [1, 0]) },
+          vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+        });
         const search = provider.search.bind(provider);
         provider.search = async (request) => {
           searchCalls += 1;
@@ -198,7 +202,10 @@ describe('public Memory consumer composition', () => {
         events: { publish: async () => 'event' },
         harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
       },
-      eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+      eventContext: (request) => ({
+        userId: request.scope.userId,
+        runId: request.scope.runId ?? request.operationId,
+      }),
       searchCache: { cache },
     }).create(config);
     const request: ManagedMemorySearchRequest = {

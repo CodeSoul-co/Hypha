@@ -310,6 +310,7 @@ export async function initializeServerMemoryComposition(
     productionEventStore = eventStore;
     productionComposition = new ServerMemoryComposition({
       bootstrap: () => createProductionMemoryRuntime(eventStore),
+      operationalMetrics: serverMemoryOperationalMetrics,
     });
   }
   return productionComposition.start();

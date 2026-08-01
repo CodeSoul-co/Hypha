@@ -25,8 +25,10 @@ describe('EventRuntime WorkCache integration', () => {
     process.env.HYPHA_SERVING_CACHE = 'off';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     jest.useRealTimers();
+    const { destroyEventRuntime } = await import('./EventRuntime');
+    await destroyEventRuntime();
     for (const key of trackedEnv) {
       const value = originalEnv[key];
       if (value === undefined) {

@@ -104,7 +104,11 @@ function governedFixture(projectionInvalidation: MemoryProjectionInvalidationCoo
     activities,
     providerId: provider.id,
     profileRef: memoryProfileSpecExample,
-    eventContext: { runId: scope.runId, workspaceId: scope.workspaceId },
+    eventContext: {
+      userId: scope.userId,
+      runId: scope.runId,
+      workspaceId: scope.workspaceId,
+    },
     projectionInvalidation,
   });
   return { manager, provider };
