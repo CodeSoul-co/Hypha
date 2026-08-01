@@ -1025,6 +1025,51 @@ describe('@hypha/inference', () => {
     expect(providerCalled).toBe(false);
   });
 
+  it('reports an explicit bypass when no Prefix Cache Provider is composed', async () => {
+    const manager = new InferenceManager();
+    manager.register({
+      id: 'mock',
+      infer: async (request) => ({ id: 'prefix-not-configured', output: request.metadata }),
+    });
+    const cacheScope = { userId: 'user-prefix-not-configured' };
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run-prefix-not-configured',
+        stepId: 'step-prefix-not-configured',
+        modelAlias: 'default',
+        input: 'hello',
+        cacheScope,
+        prefix: {
+          id: 'prefix-not-configured',
+          version: '1',
+          contentHash: 'hash',
+          cacheScope,
+        },
+      })
+    ).resolves.toMatchObject({
+      cache: {
+        prefixHit: false,
+        bypassed: true,
+        issues: [
+          {
+            operation: 'prefix_read',
+            code: 'INFERENCE_PREFIX_CACHE_NOT_CONFIGURED',
+            bypassed: true,
+          },
+        ],
+      },
+      output: {
+        inferenceCacheIssues: [
+          {
+            operation: 'prefix_read',
+            code: 'INFERENCE_PREFIX_CACHE_NOT_CONFIGURED',
+          },
+        ],
+      },
+    });
+  });
+
   it('reports provider failures without hiding the original inference error', async () => {
     const failures: RecoveryFailure[] = [];
     const manager = new InferenceManager({

@@ -183,7 +183,20 @@ export class InferenceManager {
     request: InferenceRequest,
     ref: PrefixCacheRef | undefined
   ): Promise<CacheResolution<string>> {
-    if (!ref || !this.prefixCache) return { value: null, issues: [] };
+    if (!ref) return { value: null, issues: [] };
+    if (!this.prefixCache) {
+      return {
+        value: null,
+        issues: [
+          {
+            operation: 'prefix_read',
+            code: 'INFERENCE_PREFIX_CACHE_NOT_CONFIGURED',
+            message: 'Prefix Cache reuse was requested but no Prefix Cache Provider is configured.',
+            bypassed: true,
+          },
+        ],
+      };
+    }
     try {
       return {
         value: await runInferenceCacheOperation(
