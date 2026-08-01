@@ -1,7 +1,5 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { createHash } from 'crypto';
-import stableStringify from 'fast-json-stable-stringify';
 import { parse as parseYaml } from 'yaml';
 import { z, type ZodType } from 'zod';
 import type {
@@ -26,6 +24,7 @@ import {
   deploymentSpecSchema,
   evaluationSpecSchema,
   exportSpecJsonSchemas,
+  hashCanonicalJson,
   contextSpecSchema,
   humanReviewPolicySpecSchema,
   jsonSchemaSchema,
@@ -1344,8 +1343,7 @@ function compareSpecRefs(left: SpecRef, right: SpecRef): number {
 }
 
 function hashDomainCompilation(value: unknown): string {
-  const canonicalJson = stableStringify(value);
-  return `sha256:${createHash('sha256').update(canonicalJson).digest('hex')}`;
+  return hashCanonicalJson(toCanonicalDomainHashValue(value));
 }
 
 function compactRecord(input: Record<string, unknown>): Record<string, unknown> {
@@ -1355,7 +1353,23 @@ function compactRecord(input: Record<string, unknown>): Record<string, unknown> 
 }
 
 function stableHash(value: unknown): string {
-  return `sha256:${createHash('sha256').update(stableStringify(value)).digest('hex')}`;
+  return hashCanonicalJson(toCanonicalDomainHashValue(value));
+}
+
+function toCanonicalDomainHashValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) =>
+      entry === undefined ? null : toCanonicalDomainHashValue(entry)
+    );
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, toCanonicalDomainHashValue(entry)])
+    );
+  }
+  return value;
 }
 
 function selectWorkflow(domainPack: DomainPackSpec, workflowId?: string): WorkflowSpec {
