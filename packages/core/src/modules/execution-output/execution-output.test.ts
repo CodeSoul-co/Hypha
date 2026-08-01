@@ -10,8 +10,10 @@ import {
   executionOutputCollectionPlanJsonSchema,
   executionOutputCollectionPolicyExample,
   executionOutputCollectionPolicyJsonSchema,
+  executionOutputCollectionResultJsonSchema,
   validateExecutionOutputCollectionPlan,
   validateExecutionOutputCollectionPolicy,
+  validateExecutionOutputCollectionResult,
 } from './index';
 
 const planner = new DefaultExecutionOutputPlanner();
@@ -123,6 +125,43 @@ describe('Execution output boundary contracts', () => {
     expect(() => validateExecutionOutputCollectionPlan(invalidPlan)).toThrow(/only be true/u);
     const ajv = new Ajv({ strict: true });
     expect(ajv.validate(executionOutputCollectionPlanJsonSchema, invalidPlan)).toBe(false);
+  });
+
+  it('validates collected Artifact references and finalization evidence', () => {
+    const result = {
+      executionId: 'execution.example',
+      collected: [
+        {
+          relativePath: 'outputs/report.json',
+          artifactRef: 'artifact:report',
+          versionId: 'artifact:report:v1',
+          contentHash: `sha256:${'a'.repeat(64)}`,
+          sizeBytes: 12,
+          status: 'final',
+        },
+      ],
+      existingArtifactRefs: ['artifact:stdout'],
+      artifactRefs: ['artifact:stdout', 'artifact:report'],
+      finalizedArtifactRefs: ['artifact:report'],
+    };
+
+    expect(validateExecutionOutputCollectionResult(result)).toEqual(result);
+    const ajv = new Ajv({ strict: true });
+    expect(ajv.validate(executionOutputCollectionResultJsonSchema, result), ajv.errorsText()).toBe(
+      true
+    );
+    expect(() =>
+      validateExecutionOutputCollectionResult({
+        ...result,
+        artifactRefs: ['artifact:stdout'],
+      })
+    ).toThrow(/artifactRefs/u);
+    expect(() =>
+      validateExecutionOutputCollectionResult({
+        ...result,
+        collected: [{ ...result.collected[0], status: 'draft' }],
+      })
+    ).toThrow(/must be final/u);
   });
 });
 

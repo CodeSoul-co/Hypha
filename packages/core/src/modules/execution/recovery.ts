@@ -52,7 +52,8 @@ export function classifyExecutionFailure(
 ): RecoveryFailure {
   const normalized = normalizedExecutionError(error);
   const details = normalized.details ?? {};
-  const receipt = context.result?.externalReceipt ?? receiptFrom(details);
+  const receipt =
+    context.result?.externalReceipt ?? context.record?.terminalReceipt ?? receiptFrom(details);
   const executionId =
     context.record?.id ??
     context.result?.executionId ??
@@ -153,6 +154,15 @@ export function adviseExecutionRecovery(failure: RecoveryFailure): ExecutionReco
     return {
       strategy: 'reconcile',
       reason: 'Query the provider receipt and execution record before any replay.',
+      refreshRecordBeforeRetry: true,
+      requireReceiptReconciliation: true,
+    };
+  }
+  if (failure.sideEffectState === 'committed') {
+    return {
+      strategy: 'reconcile',
+      reason:
+        'Resume downstream Artifact and persistence steps from the durable Provider receipt without replay.',
       refreshRecordBeforeRetry: true,
       requireReceiptReconciliation: true,
     };

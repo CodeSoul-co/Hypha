@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type {
   ArtifactCreateRequest,
+  ArtifactContent,
   ArtifactDownloadAccess,
   ArtifactDownloadAccessRequest,
+  ArtifactGetRequest,
+  ArtifactOperationOptions,
+  ArtifactObjectMetadata,
   ArtifactProfileSpec,
+  ArtifactPutRequest,
+  ArtifactStorageRef,
   ArtifactStoreCapabilities,
   ExecutionPrincipal,
+  StoredArtifactRecord,
 } from '@hypha/core';
 import { ArtifactManagerError, DefaultArtifactManager } from '@hypha/core';
 import { hashArtifactBytes } from './artifact-content-io';
@@ -144,6 +151,71 @@ describe('DefaultArtifactManager', () => {
     ).resolves.toEqual([record]);
   });
 
+  it('fails closed when an otherwise authorized principal declares a different Artifact scope', async () => {
+    const fixture = createFixture();
+    const record = await fixture.manager.create({
+      ...createRequest('scoped-artifact', new TextEncoder().encode('scoped')),
+      sessionId: 'session.example',
+      runId: 'run.example',
+      access: {
+        visibility: 'private',
+        ownerPrincipalId: owner.principalId,
+        workspaceId: 'workspace.example',
+        allowedPrincipalIds: ['user.collaborator'],
+      },
+    });
+    const matchingScope: ExecutionPrincipal = {
+      ...owner,
+      metadata: {
+        workspaceIds: ['workspace.example'],
+        sessionIds: ['session.example'],
+        runIds: ['run.example'],
+      },
+    };
+    const mismatchedPrincipals: ExecutionPrincipal[] = [
+      { ...matchingScope, tenantId: 'tenant.other' },
+      { ...matchingScope, metadata: { ...matchingScope.metadata, workspaceId: 'workspace.other' } },
+      { ...matchingScope, metadata: { ...matchingScope.metadata, sessionId: 'session.other' } },
+      { ...matchingScope, metadata: { ...matchingScope.metadata, runId: 'run.other' } },
+    ];
+
+    await expect(
+      fixture.manager.get({ principal: matchingScope, artifactId: record.id })
+    ).resolves.toEqual(record);
+    await expect(
+      fixture.manager.get({
+        principal: {
+          ...matchingScope,
+          principalId: 'user.collaborator',
+          userId: 'user.collaborator',
+        },
+        artifactId: record.id,
+      })
+    ).resolves.toEqual(record);
+    for (const principal of mismatchedPrincipals) {
+      await expect(
+        fixture.manager.get({ principal, artifactId: record.id })
+      ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
+      await expect(
+        fixture.manager.list({ principal, workspaceId: record.workspaceId })
+      ).resolves.toEqual([]);
+    }
+
+    const administrator: ExecutionPrincipal = {
+      ...owner,
+      tenantId: 'tenant.other',
+      permissionScopes: ['artifact:read', 'artifact:admin'],
+      metadata: {
+        workspaceId: 'workspace.other',
+        sessionId: 'session.other',
+        runId: 'run.other',
+      },
+    };
+    await expect(
+      fixture.manager.get({ principal: administrator, artifactId: record.id })
+    ).resolves.toEqual(record);
+  });
+
   it('creates governed signed download access within the profile TTL', async () => {
     const fixture = createFixture({ signedAccess: true });
     const bytes = new TextEncoder().encode('downloadable');
@@ -178,6 +250,114 @@ describe('DefaultArtifactManager', () => {
       })
     ).rejects.toMatchObject({ normalizedError: { code: 'ARTIFACT_PERMISSION_DENIED' } });
   });
+
+  it.each(['put', 'head', 'copy'] as const)(
+    'fails closed when the Artifact Store returns an invalid %s result',
+    async (invalidOutput) => {
+      const store = new InvalidOutputArtifactStore({
+        id: 'artifact-store.test',
+        signedAccess: false,
+      });
+      store.invalidOutput = invalidOutput;
+      const fixture = createFixture({ store });
+
+      await expect(
+        fixture.manager.create(
+          createRequest(`invalid-${invalidOutput}`, new TextEncoder().encode(invalidOutput))
+        )
+      ).rejects.toMatchObject({
+        normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+      });
+    }
+  );
+
+  it('fails closed when the Artifact Store returns invalid read content', async () => {
+    const store = new InvalidOutputArtifactStore({
+      id: 'artifact-store.test',
+      signedAccess: false,
+    });
+    const fixture = createFixture({ store });
+    const record = await fixture.manager.create(
+      createRequest('invalid-read', new TextEncoder().encode('read'))
+    );
+    store.invalidOutput = 'get';
+
+    await expect(
+      fixture.manager.read({ principal: owner, artifactId: record.id })
+    ).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+    });
+  });
+
+  it('fails closed when signed-access Store outputs violate their Runtime Schemas', async () => {
+    const store = new InvalidOutputArtifactStore({
+      id: 'artifact-store.test',
+      signedAccess: true,
+    });
+    const fixture = createFixture({ store });
+    const record = await fixture.manager.create(
+      createRequest('invalid-download', new TextEncoder().encode('download'))
+    );
+    const request = {
+      operationId: 'invalid-download-access',
+      principal: owner,
+      artifactId: record.id,
+    };
+
+    store.invalidOutput = 'capabilities';
+    await expect(fixture.manager.createDownloadAccess(request)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+    });
+
+    store.invalidOutput = 'download';
+    await expect(fixture.manager.createDownloadAccess(request)).rejects.toMatchObject({
+      normalizedError: { code: 'ARTIFACT_INTERNAL_ERROR' },
+    });
+  });
+
+  it.each(['get', 'list', 'getByVersionId', 'findIdempotency'] as const)(
+    'fails closed when the Artifact record repository returns corrupt data from %s',
+    async (invalidOutput) => {
+      const repository = new InvalidOutputArtifactRecordRepository();
+      const fixture = createFixture({ repository });
+      const bytes = new TextEncoder().encode(invalidOutput);
+      const create = {
+        ...createRequest(`invalid-repository-${invalidOutput}`, bytes),
+        idempotencyKey: `idempotency-${invalidOutput}`,
+      };
+      const first = await fixture.manager.create(create);
+      const second = await fixture.manager.createVersion({
+        operationId: `version-${invalidOutput}`,
+        principal: owner,
+        artifactId: first.id,
+        expectedRevision: first.revision,
+        content: bytes,
+        expectedContentHash: hashArtifactBytes(bytes),
+        provenance: {
+          sourceType: 'derived',
+          createdBy: owner.principalId,
+          sourceArtifactIds: [first.id],
+        },
+      });
+      repository.invalidOutput = invalidOutput;
+
+      const operation =
+        invalidOutput === 'get'
+          ? fixture.manager.get({ principal: owner, artifactId: first.id })
+          : invalidOutput === 'list'
+            ? fixture.manager.list({ principal: owner, workspaceId: first.workspaceId })
+            : invalidOutput === 'getByVersionId'
+              ? fixture.manager.previous({ principal: owner, versionId: second.versionId })
+              : fixture.manager.create(create);
+
+      await expect(operation).rejects.toMatchObject({
+        normalizedError: {
+          code: 'ARTIFACT_INTERNAL_ERROR',
+          details: { repositoryCode: 'ARTIFACT_RECORD_REPOSITORY_CORRUPT' },
+        },
+      });
+    }
+  );
 
   it('fails closed when the Artifact Store cannot issue signed access', async () => {
     const fixture = createFixture();
@@ -272,14 +452,115 @@ describe('DefaultArtifactManager', () => {
       expectedContentHash: hashArtifactBytes(bytes),
       expectedSizeBytes: bytes.byteLength,
       provenance: { sourceType: 'command_generated', createdBy: owner.principalId },
+      retention: { referencedByCount: 1 },
     });
 
-    expect(record).toMatchObject({ name: 'report.txt', mimeType: 'text/plain' });
+    expect(record).toMatchObject({
+      name: 'report.txt',
+      mimeType: 'text/plain',
+      retention: { referencedByCount: 1 },
+    });
     expect(requests).toEqual([
       expect.objectContaining({
         workspaceId: 'workspace.example',
         relativePath: 'outputs/report.txt',
       }),
+    ]);
+  });
+
+  it('propagates cancellation context through every content-producing entry point', async () => {
+    const workspaceBytes = new TextEncoder().encode('workspace-cancellation');
+    const fixture = createFixture({
+      workspaceReader: {
+        async read() {
+          return {
+            content: workspaceBytes,
+            contentHash: hashArtifactBytes(workspaceBytes),
+            sizeBytes: workspaceBytes.byteLength,
+            mimeType: 'text/plain',
+          };
+        },
+      },
+    });
+    const createController = new AbortController();
+    const versionController = new AbortController();
+    const workspaceController = new AbortController();
+    const created = await fixture.manager.create(
+      createRequest('cancel-context-create', new TextEncoder().encode('create-cancellation')),
+      { abortSignal: createController.signal }
+    );
+    const versionBytes = new TextEncoder().encode('version-cancellation');
+
+    await fixture.manager.createVersion(
+      {
+        operationId: 'cancel-context-version',
+        principal: owner,
+        artifactId: created.id,
+        expectedRevision: created.revision,
+        content: versionBytes,
+        expectedContentHash: hashArtifactBytes(versionBytes),
+        expectedSizeBytes: versionBytes.byteLength,
+        provenance: {
+          sourceType: 'derived',
+          createdBy: owner.principalId,
+          sourceArtifactIds: [created.id],
+          transformation: 'verify cancellation propagation',
+        },
+      },
+      { abortSignal: versionController.signal }
+    );
+    await fixture.manager.createFromWorkspace(
+      {
+        operationId: 'cancel-context-workspace',
+        principal: owner,
+        profileRef: { id: fixture.profile.id, version: fixture.profile.version },
+        userId: owner.userId!,
+        tenantId: owner.tenantId,
+        workspaceId: 'workspace.example',
+        relativePath: 'outputs/cancel.txt',
+        kind: 'report',
+        provenance: { sourceType: 'command_generated', createdBy: owner.principalId },
+      },
+      { abortSignal: workspaceController.signal }
+    );
+
+    expect(fixture.store.operationOptions.map((options) => options?.abortSignal)).toEqual([
+      createController.signal,
+      versionController.signal,
+      workspaceController.signal,
+    ]);
+  });
+
+  it('does not commit an Artifact when the Store rejects a pre-cancelled upload', async () => {
+    const fixture = createFixture();
+    const controller = new AbortController();
+    controller.abort(new Error('cancel before Artifact upload'));
+
+    await expect(
+      fixture.manager.create(
+        createRequest('pre-cancelled-create', new TextEncoder().encode('cancelled')),
+        { abortSignal: controller.signal }
+      )
+    ).rejects.toThrow('cancel before Artifact upload');
+
+    await expect(fixture.repository.list()).resolves.toEqual([]);
+    expect(fixture.store.stats()).toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+  });
+
+  it('propagates cancellation context through Artifact reads', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create(
+      createRequest('cancel-context-read', new TextEncoder().encode('read-cancellation'))
+    );
+    const controller = new AbortController();
+
+    await fixture.manager.read(
+      { principal: owner, artifactId: created.id },
+      { abortSignal: controller.signal }
+    );
+
+    expect(fixture.store.readOperationOptions).toEqual([
+      expect.objectContaining({ abortSignal: controller.signal }),
     ]);
   });
 
@@ -411,14 +692,18 @@ function createFixture(
   overrides: {
     retainFinal?: boolean;
     signedAccess?: boolean;
+    store?: SignedInMemoryArtifactStore;
+    repository?: InMemoryArtifactRecordRepository;
     workspaceReader?: ConstructorParameters<typeof DefaultArtifactManager>[0]['workspaceReader'];
   } = {}
 ) {
-  const store = new SignedInMemoryArtifactStore({
-    id: 'artifact-store.test',
-    signedAccess: overrides.signedAccess ?? false,
-  });
-  const repository = new InMemoryArtifactRecordRepository();
+  const store =
+    overrides.store ??
+    new SignedInMemoryArtifactStore({
+      id: 'artifact-store.test',
+      signedAccess: overrides.signedAccess ?? false,
+    });
+  const repository = overrides.repository ?? new InMemoryArtifactRecordRepository();
   const profile: ArtifactProfileSpec = {
     id: 'artifact-profile.test',
     version: '1.0.0',
@@ -459,6 +744,8 @@ function createFixture(
 
 class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
   readonly downloadRequests: ArtifactDownloadAccessRequest[] = [];
+  readonly operationOptions: Array<ArtifactOperationOptions | undefined> = [];
+  readonly readOperationOptions: Array<ArtifactOperationOptions | undefined> = [];
   private readonly signedAccess: boolean;
 
   constructor(options: { id: string; signedAccess: boolean }) {
@@ -468,6 +755,27 @@ class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
 
   override async capabilities(): Promise<ArtifactStoreCapabilities> {
     return { ...(await super.capabilities()), signedAccess: this.signedAccess };
+  }
+
+  override async put(
+    request: ArtifactPutRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactStorageRef> {
+    this.operationOptions.push(options);
+    if (options?.abortSignal?.aborted) {
+      throw options.abortSignal.reason instanceof Error
+        ? options.abortSignal.reason
+        : new Error('Artifact upload aborted.');
+    }
+    return super.put(request);
+  }
+
+  override async get(
+    request: ArtifactGetRequest,
+    options?: ArtifactOperationOptions
+  ): ReturnType<InMemoryExecutionArtifactStore['get']> {
+    this.readOperationOptions.push(options);
+    return super.get(request, options);
   }
 
   async createDownloadAccess(
@@ -481,6 +789,104 @@ class SignedInMemoryArtifactStore extends InMemoryExecutionArtifactStore {
       expiresAt: new Date(Date.UTC(2026, 6, 18, 0, 0, request.expiresInSeconds)).toISOString(),
     };
   }
+}
+
+class InvalidOutputArtifactStore extends SignedInMemoryArtifactStore {
+  invalidOutput?: 'put' | 'head' | 'copy' | 'get' | 'capabilities' | 'download';
+
+  override async capabilities(): Promise<ArtifactStoreCapabilities> {
+    const capabilities = await super.capabilities();
+    return this.invalidOutput === 'capabilities'
+      ? new Proxy(capabilities, {
+          get(target, property, receiver) {
+            return property === 'signedAccess'
+              ? 'invalid'
+              : Reflect.get(target, property, receiver);
+          },
+        })
+      : capabilities;
+  }
+
+  override async put(
+    request: ArtifactPutRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactStorageRef> {
+    const ref = await super.put(request, options);
+    return this.invalidOutput === 'put' ? { ...ref, storeId: '' } : ref;
+  }
+
+  override async head(ref: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null> {
+    const metadata = await super.head(ref);
+    return this.invalidOutput === 'head' && metadata
+      ? { ...metadata, contentHash: 'invalid' }
+      : metadata;
+  }
+
+  override async copy(request: Parameters<InMemoryExecutionArtifactStore['copy']>[0]) {
+    const ref = await super.copy(request);
+    return this.invalidOutput === 'copy' ? { ...ref, storeId: 'artifact-store.foreign' } : ref;
+  }
+
+  override async get(
+    request: ArtifactGetRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactContent> {
+    const content = await super.get(request, options);
+    return this.invalidOutput === 'get' ? { ...content, contentHash: 'invalid' } : content;
+  }
+
+  override async createDownloadAccess(
+    request: ArtifactDownloadAccessRequest
+  ): Promise<ArtifactDownloadAccess> {
+    const access = await super.createDownloadAccess(request);
+    return this.invalidOutput === 'download' ? { ...access, url: 'not-a-url' } : access;
+  }
+}
+
+class InvalidOutputArtifactRecordRepository extends InMemoryArtifactRecordRepository {
+  invalidOutput?: 'get' | 'list' | 'getByVersionId' | 'findIdempotency';
+
+  override async get(artifactId: string, versionId?: string): Promise<StoredArtifactRecord | null> {
+    return this.corruptIfSelected('get', await super.get(artifactId, versionId));
+  }
+
+  override async list(): Promise<StoredArtifactRecord[]> {
+    const stored = await super.list();
+    return this.invalidOutput === 'list'
+      ? stored.map((record, index) => (index === 0 ? corruptStoredRecord(record) : record))
+      : stored;
+  }
+
+  override async getByVersionId(versionId: string): Promise<StoredArtifactRecord | null> {
+    return this.corruptIfSelected('getByVersionId', await super.getByVersionId(versionId));
+  }
+
+  override async findIdempotency(
+    operationId: string,
+    idempotencyKey: string
+  ): Promise<StoredArtifactRecord | null> {
+    return this.corruptIfSelected(
+      'findIdempotency',
+      await super.findIdempotency(operationId, idempotencyKey)
+    );
+  }
+
+  private corruptIfSelected(
+    operation: NonNullable<InvalidOutputArtifactRecordRepository['invalidOutput']>,
+    stored: StoredArtifactRecord | null
+  ): StoredArtifactRecord | null {
+    return this.invalidOutput === operation && stored ? corruptStoredRecord(stored) : stored;
+  }
+}
+
+function corruptStoredRecord(stored: StoredArtifactRecord): StoredArtifactRecord {
+  return {
+    ...stored,
+    record: {
+      ...stored.record,
+      contentHash: 'not-a-digest',
+    },
+  };
 }
 
 function createRequest(operationId: string, content: Uint8Array): ArtifactCreateRequest {

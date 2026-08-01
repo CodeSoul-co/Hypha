@@ -56,13 +56,15 @@ export async function readLocalArtifactManifest(
 
 export async function writeLocalArtifactManifest(
   paths: LocalArtifactStorePaths,
-  manifest: LocalArtifactObjectManifest
+  manifest: LocalArtifactObjectManifest,
+  options: { ifAbsent?: boolean } = {}
 ): Promise<void> {
   manifestSchema.parse(manifest);
   await writeJsonAtomically(
     paths.root,
     localArtifactManifestPath(paths, manifest.objectKey),
-    manifest
+    manifest,
+    options
   );
 }
 

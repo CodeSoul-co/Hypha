@@ -60,6 +60,88 @@ describe('LocalFilesystemExecutionArtifactStore', () => {
     expect(ref.objectKey).toBe('objects/report.bin');
   });
 
+  it('rejects a pre-cancelled write without creating temporary or published state', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const controller = new AbortController();
+    controller.abort(new Error('cancel local Artifact write'));
+
+    await expect(
+      store.put(request('objects/pre-cancelled.bin', Uint8Array.from([1, 2, 3])), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        retryable: false,
+        details: { providerCode: 'LOCAL_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+
+    await expect(store.stats()).resolves.toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+    const paths = await prepareLocalArtifactStore(root);
+    await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
+  });
+
+  it('cancels a streamed write between chunks and removes its temporary file', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const controller = new AbortController();
+    async function* chunks(): AsyncIterable<Uint8Array> {
+      yield Uint8Array.from([1, 2]);
+      controller.abort(new Error('cancel streamed local Artifact write'));
+      yield Uint8Array.from([3, 4]);
+    }
+
+    await expect(
+      store.put(request('objects/cancelled-stream.bin', chunks()), {
+        abortSignal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_UPLOAD_FAILED',
+        retryable: false,
+        details: { providerCode: 'LOCAL_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+
+    await expect(store.stats()).resolves.toEqual({ objects: 0, blobs: 0, storedBytes: 0 });
+    const paths = await prepareLocalArtifactStore(root);
+    await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
+  });
+
+  it('rejects a pre-cancelled read as a structured download failure', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const ref = await store.put(request('objects/pre-cancelled-read.bin', Uint8Array.from([1])));
+    const controller = new AbortController();
+    controller.abort(new Error('cancel local Artifact read'));
+
+    await expect(store.get({ ref }, { abortSignal: controller.signal })).rejects.toMatchObject({
+      normalizedError: {
+        code: 'ARTIFACT_DOWNLOAD_FAILED',
+        retryable: false,
+        details: { providerCode: 'LOCAL_ARTIFACT_TRANSFER_ABORTED' },
+      },
+    });
+  });
+
+  it('stops a local file stream after read cancellation', async () => {
+    const root = await createRoot();
+    const store = createStore(root);
+    const bytes = new Uint8Array(256 * 1024).fill(7);
+    const ref = await store.put(request('objects/cancelled-read.bin', bytes));
+    const controller = new AbortController();
+    const content = await store.get({ ref }, { abortSignal: controller.signal });
+    const iterator = content.stream[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({ done: false });
+    controller.abort(new Error('cancel local Artifact stream'));
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: 'LOCAL_ARTIFACT_TRANSFER_ABORTED',
+    });
+  });
+
   it('deduplicates identical content while keeping independent object manifests', async () => {
     const root = await createRoot();
     const store = createStore(root);
@@ -135,6 +217,28 @@ describe('LocalFilesystemExecutionArtifactStore', () => {
     expect(writes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(writes.filter((result) => result.status === 'rejected')).toHaveLength(1);
     await expect(store.stats()).resolves.toEqual({ objects: 1, blobs: 1, storedBytes: 1 });
+    const paths = await prepareLocalArtifactStore(root);
+    await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
+  });
+
+  it('publishes only one concurrent ifAbsent writer across Store instances', async () => {
+    const root = await createRoot();
+    const first = createStore(root);
+    const second = createStore(root);
+    const writes = await Promise.allSettled([
+      first.put({ ...request('objects/cross-instance.bin', Uint8Array.from([1])), ifAbsent: true }),
+      second.put({
+        ...request('objects/cross-instance.bin', Uint8Array.from([2])),
+        ifAbsent: true,
+      }),
+    ]);
+
+    expect(writes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = writes.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: { normalizedError: { code: 'ARTIFACT_VERSION_CONFLICT' } },
+    });
+    await expect(first.stats()).resolves.toEqual({ objects: 1, blobs: 1, storedBytes: 1 });
     const paths = await prepareLocalArtifactStore(root);
     await expect(fs.readdir(paths.temporary)).resolves.toEqual([]);
   });

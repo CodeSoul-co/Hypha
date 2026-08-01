@@ -113,6 +113,25 @@ Runtime configuration is grouped by function before provider:
 
 Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
 
+Execution provides a concrete `S3ExecutionArtifactStore` and an explicit
+`S3ExecutionArtifactStoreFactory`. The Factory can be added to
+`ArtifactStoreProviderRegistry`, but it is not registered or selected by default and is not yet
+wired into Server composition. Its capability contract reports versioning, range reads, signed
+access, server-side copy, multipart upload, and content addressing; encryption remains `false`.
+Deployment requires a bucket with object versioning enabled, explicit endpoint policy, and current
+real MinIO/S3 acceptance evidence.
+
+Execution also exports `PostgresExecutionStoreFactory` with the stable
+`execution-store.postgres` identity. The Factory validates an explicit Postgres connection string,
+TLS mode, pool limits, and operation timeouts; initializes the versioned schema under an advisory
+lock before returning the Store; and closes its pool when initialization fails. It can be added to
+`ExecutionStoreRegistry`, but it is not registered or selected by default and is not wired into
+Server composition. Current adapter evidence covers runtime-schema-validated records, restart
+persistence, idempotency, CAS, lease renewal and fencing, concurrent migration, lock timeout,
+database outage and crash recovery, unsupported schema, read-only migration failure, corrupt-record
+quarantine, health, and close. These adapter guarantees do not by themselves make a deployment
+release-ready.
+
 Local defaults are organized under `data/`: events in `data/runtime/events/`, structured records in `data/runtime/structured/`, vector indexes in `data/storage/vector/`, artifacts in `data/storage/artifacts/`, and system logs in `data/logs/system.log`.
 
 ## Document Storage

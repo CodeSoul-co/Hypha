@@ -15,6 +15,7 @@ import type {
   ArtifactListRequest,
   ArtifactManager,
   ArtifactMutationRequest,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
   ArtifactPreviousRequest,
   ArtifactReadRequest,
@@ -34,7 +35,17 @@ import {
   ArtifactRecordRepositoryConflictError,
   ArtifactRecordRepositoryError,
 } from '../../contracts/artifact-record-repository';
-import { validateArtifactProfileSpec, validateArtifactRecord } from './index';
+import {
+  validateArtifactProfileSpec,
+  validateArtifactRecord,
+  validateStoredArtifactRecord,
+  validateStoredArtifactRecords,
+} from './index';
+import {
+  validateArtifactContent,
+  validateArtifactDownloadAccess,
+  validateArtifactStoreCapabilities,
+} from './store';
 import {
   validateArtifactCreateRequest,
   validateArtifactCreateDownloadAccessRequest,
@@ -53,6 +64,8 @@ import {
   ArtifactManagerError,
   artifactManagerError,
   validateArtifactManagerInput,
+  validateArtifactRepositoryOutput,
+  validateArtifactStoreOutput,
 } from './manager-error';
 import {
   assertCreateAccess,
@@ -105,15 +118,21 @@ export class DefaultArtifactManager implements ArtifactManager {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  async create(input: ArtifactCreateRequest): Promise<ArtifactRecord> {
+  async create(
+    input: ArtifactCreateRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactCreateRequest(input));
     const lockKey = request.idempotencyKey
       ? `idempotency:${request.operationId}:${request.idempotencyKey}`
       : `create:${this.nextId('lock')}`;
-    return this.withLock(lockKey, () => this.createUnlocked(request, false));
+    return this.withLock(lockKey, () => this.createUnlocked(request, false, options));
   }
 
-  async createFromWorkspace(input: ArtifactFromWorkspaceRequest): Promise<ArtifactRecord> {
+  async createFromWorkspace(
+    input: ArtifactFromWorkspaceRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactFromWorkspaceRequest(input));
     const lockKey = request.idempotencyKey
       ? `idempotency:${request.operationId}:${request.idempotencyKey}`
@@ -153,12 +172,16 @@ export class DefaultArtifactManager implements ArtifactManager {
             request.expectedContentHash ?? qualifiedContentHash(source.contentHash),
           expectedSizeBytes: request.expectedSizeBytes ?? source.sizeBytes,
         },
-        true
+        true,
+        options
       );
     });
   }
 
-  async createVersion(input: ArtifactVersionRequest): Promise<ArtifactRecord> {
+  async createVersion(
+    input: ArtifactVersionRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactVersionRequest(input));
     return this.withLock(`artifact:${request.artifactId}`, async () => {
       const idempotent = await this.findIdempotent(request.operationId, request.idempotencyKey);
@@ -183,7 +206,7 @@ export class DefaultArtifactManager implements ArtifactManager {
           'Deleted Artifacts cannot receive a new version.'
         );
       }
-      const versions = (await this.repositoryOperation(() => this.repository.list())).filter(
+      const versions = (await this.repositoryStoredRecords()).filter(
         (stored) => stored.record.id === previous.record.id
       );
       if (
@@ -198,12 +221,15 @@ export class DefaultArtifactManager implements ArtifactManager {
         );
       }
       this.assertContentPolicy(profile, previous.record.kind, previous.record.mimeType, request);
-      const persisted = await persistArtifactContent({
-        ...request,
-        profile,
-        store: this.requireStore(profile),
-        nonce: this.nextId('content'),
-      });
+      const persisted = await persistArtifactContent(
+        {
+          ...request,
+          profile,
+          store: this.requireStore(profile),
+          nonce: this.nextId('content'),
+        },
+        options
+      );
       const timestamp = this.timestamp();
       const versionNumber = previous.record.versionNumber + 1;
       const versionId = artifactVersionId(
@@ -262,9 +288,11 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async get(request: ArtifactGetRecordRequest): Promise<ArtifactRecord | null> {
     const validated = validateArtifactManagerInput(() => validateArtifactGetRecordRequest(request));
-    const latest = await this.repositoryOperation(() => this.repository.get(validated.artifactId));
+    const latest = await this.repositoryStoredRecord(() =>
+      this.repository.get(validated.artifactId)
+    );
     if (!latest || latest.record.status === 'deleted') return null;
-    const stored = await this.repositoryOperation(() =>
+    const stored = await this.repositoryStoredRecord(() =>
       this.repository.get(validated.artifactId, validated.versionId)
     );
     if (!stored) return null;
@@ -277,7 +305,10 @@ export class DefaultArtifactManager implements ArtifactManager {
     return stored.record;
   }
 
-  async read(input: ArtifactReadRequest): Promise<ArtifactReadResult> {
+  async read(
+    input: ArtifactReadRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactReadResult> {
     const request = validateArtifactManagerInput(() => validateArtifactReadRequest(input));
     const latest = await this.requireStoredRecord(request.artifactId);
     if (latest.record.status === 'deleted') {
@@ -292,13 +323,17 @@ export class DefaultArtifactManager implements ArtifactManager {
         'Artifact profile does not allow byte-range reads.'
       );
     }
-    const content = await this.requireStore(profile).get({
-      ref: stored.record.storageRef,
-      range: request.range,
-      expectedContentHash:
-        request.expectedContentHash ??
-        (profile.contentAddressing.verifyOnRead ? stored.record.contentHash : undefined),
-    });
+    const storeContent = await this.requireStore(profile).get(
+      {
+        ref: stored.record.storageRef,
+        range: request.range,
+        expectedContentHash:
+          request.expectedContentHash ??
+          (profile.contentAddressing.verifyOnRead ? stored.record.contentHash : undefined),
+      },
+      options
+    );
+    const content = validateArtifactStoreOutput(() => validateArtifactContent(storeContent));
     return { record: stored.record, content };
   }
 
@@ -344,26 +379,28 @@ export class DefaultArtifactManager implements ArtifactManager {
     }
 
     const store = this.requireStore(profile);
-    const capabilities = await store.capabilities();
+    const storeCapabilities = await store.capabilities();
+    const capabilities = validateArtifactStoreOutput(() =>
+      validateArtifactStoreCapabilities(storeCapabilities)
+    );
     if (!capabilities.signedAccess || !store.createDownloadAccess) {
       throw artifactManagerError(
         'ARTIFACT_DOWNLOAD_FAILED',
         `Artifact Store ${store.id} does not support signed download access.`
       );
     }
-    return store.createDownloadAccess({
+    const downloadAccess = await store.createDownloadAccess({
       ref: stored.record.storageRef,
       expiresInSeconds,
       ...(stored.record.mimeType ? { responseMimeType: stored.record.mimeType } : {}),
       responseFilename: request.responseFilename ?? stored.record.name,
     });
+    return validateArtifactStoreOutput(() => validateArtifactDownloadAccess(downloadAccess));
   }
 
   async list(input: ArtifactListRequest): Promise<ArtifactRecord[]> {
     const request = validateArtifactManagerInput(() => validateArtifactListRequest(input));
-    const latest = latestStoredByArtifact(
-      await this.repositoryOperation(() => this.repository.list())
-    );
+    const latest = latestStoredByArtifact(await this.repositoryStoredRecords());
     const records = latest
       .filter((stored) => stored.record.workspaceId === request.workspaceId)
       .filter((stored) => request.includeDeleted || stored.record.status !== 'deleted')
@@ -420,7 +457,7 @@ export class DefaultArtifactManager implements ArtifactManager {
       if (stored.record.revision !== request.expectedRevision) {
         throw revisionConflict(stored.record, request.expectedRevision);
       }
-      const versions = (await this.repositoryOperation(() => this.repository.list())).filter(
+      const versions = (await this.repositoryStoredRecords()).filter(
         (candidate) => candidate.record.id === stored.record.id
       );
       for (const version of versions) {
@@ -456,7 +493,7 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async traceLineage(input: ArtifactTraceLineageRequest): Promise<ArtifactLineage> {
     const request = validateArtifactManagerInput(() => validateArtifactTraceLineageRequest(input));
-    const all = await this.repositoryOperation(() => this.repository.list());
+    const all = await this.repositoryStoredRecords();
     const storedVersions = all.filter((stored) => stored.record.id === request.artifactId);
     if (!storedVersions.length) {
       throw artifactManagerError(
@@ -511,7 +548,7 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async latest(input: ArtifactLatestRequest): Promise<ArtifactRecord | null> {
     const request = validateArtifactManagerInput(() => validateArtifactLatestRequest(input));
-    const candidates = (await this.repositoryOperation(() => this.repository.list()))
+    const candidates = (await this.repositoryStoredRecords())
       .filter((stored) => stored.record.logicalArtifactId === request.logicalArtifactId)
       .sort((left, right) => right.record.versionNumber - left.record.versionNumber);
     const latest = candidates[0];
@@ -527,7 +564,7 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   async previous(input: ArtifactPreviousRequest): Promise<ArtifactRecord | null> {
     const request = validateArtifactManagerInput(() => validateArtifactPreviousRequest(input));
-    const stored = await this.repositoryOperation(() =>
+    const stored = await this.repositoryStoredRecord(() =>
       this.repository.getByVersionId(request.versionId)
     );
     if (stored) {
@@ -539,7 +576,7 @@ export class DefaultArtifactManager implements ArtifactManager {
       );
     }
     if (!stored?.record.previousVersionId) return null;
-    const previous = await this.repositoryOperation(() =>
+    const previous = await this.repositoryStoredRecord(() =>
       this.repository.getByVersionId(stored.record.previousVersionId!)
     );
     if (!previous) return null;
@@ -571,7 +608,8 @@ export class DefaultArtifactManager implements ArtifactManager {
 
   private async createUnlocked(
     request: ArtifactCreateRequest,
-    trustedWorkspaceSource: boolean
+    trustedWorkspaceSource: boolean,
+    options: ArtifactOperationOptions
   ): Promise<ArtifactRecord> {
     const idempotent = await this.findIdempotent(request.operationId, request.idempotencyKey);
     if (idempotent) {
@@ -599,12 +637,15 @@ export class DefaultArtifactManager implements ArtifactManager {
     };
     assertCreateAccess(access, request.principal, request.workspaceId, request.tenantId);
     const retention = this.retentionRecord(profile, request.retention);
-    const persisted = await persistArtifactContent({
-      ...request,
-      profile,
-      store: this.requireStore(profile),
-      nonce: this.nextId('content'),
-    });
+    const persisted = await persistArtifactContent(
+      {
+        ...request,
+        profile,
+        store: this.requireStore(profile),
+        nonce: this.nextId('content'),
+      },
+      options
+    );
     const artifactId = this.nextId('artifact');
     const logicalArtifactId = request.logicalArtifactId ?? artifactId;
     const timestamp = this.timestamp();
@@ -819,7 +860,9 @@ export class DefaultArtifactManager implements ArtifactManager {
     artifactId: string,
     versionId?: string
   ): Promise<StoredArtifactRecord> {
-    const stored = await this.repositoryOperation(() => this.repository.get(artifactId, versionId));
+    const stored = await this.repositoryStoredRecord(() =>
+      this.repository.get(artifactId, versionId)
+    );
     if (!stored) {
       throw artifactManagerError('ARTIFACT_NOT_FOUND', `Artifact ${artifactId} was not found.`);
     }
@@ -831,8 +874,24 @@ export class DefaultArtifactManager implements ArtifactManager {
     idempotencyKey?: string
   ): Promise<StoredArtifactRecord | null> {
     return idempotencyKey
-      ? this.repositoryOperation(() => this.repository.findIdempotency(operationId, idempotencyKey))
+      ? this.repositoryStoredRecord(() =>
+          this.repository.findIdempotency(operationId, idempotencyKey)
+        )
       : Promise.resolve(null);
+  }
+
+  private async repositoryStoredRecord(
+    operation: () => Promise<StoredArtifactRecord | null>
+  ): Promise<StoredArtifactRecord | null> {
+    const stored = await this.repositoryOperation(operation);
+    return stored === null
+      ? null
+      : validateArtifactRepositoryOutput(() => validateStoredArtifactRecord(stored));
+  }
+
+  private async repositoryStoredRecords(): Promise<StoredArtifactRecord[]> {
+    const stored = await this.repositoryOperation(() => this.repository.list());
+    return validateArtifactRepositoryOutput(() => validateStoredArtifactRecords(stored));
   }
 
   private async commitRecords(

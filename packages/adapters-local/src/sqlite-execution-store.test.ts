@@ -3,15 +3,21 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
+  ExecutionReceipt,
   ExecutionLeaseAcquireRequest,
+  ExecutionLeaseRenewRequest,
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionStore,
 } from '@hypha/core';
 import {
+  DurableExecutionWorker,
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
+  executionLeaseReleaseRequestExample,
+  executionLeaseRenewRequestExample,
   executionRecordCreateRequestExample,
+  validateExecutionRecord,
 } from '@hypha/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
@@ -39,47 +45,50 @@ describe('SQLiteExecutionStore public adapter', () => {
     await reopened.close?.();
   });
 
-  it('allows only one compare-and-set across independent processes', async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
-    const first = new SQLiteExecutionStore({ rootPath: root });
-    const queued = await first.create(structuredClone(executionRecordCreateRequestExample));
-    const mutation = {
-      operationId: 'operation.execution.update.first',
-      executionId: queued.id,
-      expectedRevision: queued.revision,
-      next: {
-        ...queued,
-        revision: queued.revision + 1,
-        status: 'starting' as const,
-        attempt: 1,
-        updatedAt: '2026-07-16T00:00:01.000Z',
-      },
-      idempotencyKey: 'execution-update:first',
-    };
-    const competing = structuredClone(mutation);
-    competing.operationId = 'operation.execution.update.competing';
-    competing.idempotencyKey = 'execution-update:competing';
+  it.each([2, 4, 8])(
+    'allows only one compare-and-set across %i independent processes',
+    async (processCount) => {
+      const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-cas-'));
+      root = testRoot;
+      const seed = new SQLiteExecutionStore({ rootPath: testRoot });
+      const queued = await seed
+        .create(structuredClone(executionRecordCreateRequestExample))
+        .finally(() => seed.close());
+      const mutations = Array.from({ length: processCount }, (_, index) =>
+        startingMutation(
+          queued,
+          `operation.execution.update.competing-${processCount}-${index}`,
+          `execution-update:competing-${processCount}-${index}`
+        )
+      );
 
-    try {
-      const results = await Promise.allSettled([
-        first.compareAndSet(mutation),
-        runStoreOperationInChild(root, 'compareAndSet', competing),
-      ]);
+      const results = await Promise.allSettled(
+        mutations.map((mutation) =>
+          runStoreOperationInChild<ExecutionRecord>(testRoot, 'compareAndSet', mutation)
+        )
+      );
 
       expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-      const rejected = results.find(
+      const rejected = results.filter(
         (result): result is PromiseRejectedResult => result.status === 'rejected'
       );
-      expect(rejected?.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
-      await expect(first.get(queued.id)).resolves.toMatchObject({
-        revision: 1,
-        status: 'starting',
-      });
-    } finally {
-      await first.close();
-    }
-  }, 60_000);
+      expect(rejected).toHaveLength(processCount - 1);
+      for (const result of rejected) {
+        expect(result.reason).toMatchObject({ code: 'EXECUTION_STORE_REVISION_CONFLICT' });
+      }
+
+      const reopened = new SQLiteExecutionStore({ rootPath: testRoot });
+      try {
+        await expect(reopened.get(queued.id)).resolves.toMatchObject({
+          revision: 1,
+          status: 'starting',
+        });
+      } finally {
+        await reopened.close();
+      }
+    },
+    120_000
+  );
 
   it('fences an expired lease takeover across independent processes', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-lease-'));
@@ -125,7 +134,119 @@ describe('SQLiteExecutionStore public adapter', () => {
     }
   }, 60_000);
 
-  it('recovers atomically when a worker crashes immediately before or after compare-and-set', async () => {
+  it('renews, releases, and reacquires a lease across independent processes', async () => {
+    const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-lease-lifecycle-'));
+    root = testRoot;
+    const seed = new SQLiteExecutionStore({ rootPath: testRoot });
+    await seed
+      .create(structuredClone(executionRecordCreateRequestExample))
+      .finally(() => seed.close());
+
+    const acquired = await runStoreOperationInChild<ExecutionRecord>(
+      testRoot,
+      'acquireLease',
+      structuredClone(executionLeaseAcquireRequestExample)
+    );
+    if (!acquired.lease) throw new Error('Expected the independent worker to acquire a lease.');
+
+    const renewed = await runStoreOperationInChild<ExecutionRecord>(testRoot, 'renewLease', {
+      ...structuredClone(executionLeaseRenewRequestExample),
+      expectedRevision: acquired.revision,
+      leaseGuard: leaseGuardFor(acquired.lease),
+    });
+    expect(renewed).toMatchObject({
+      revision: 2,
+      lease: {
+        id: acquired.lease.id,
+        ownerId: acquired.lease.ownerId,
+        fencingToken: 1,
+        heartbeatAt: executionLeaseRenewRequestExample.heartbeatAt,
+      },
+    });
+    if (!renewed.lease) throw new Error('Expected the renewed lease to remain present.');
+
+    const released = await runStoreOperationInChild<ExecutionRecord>(testRoot, 'releaseLease', {
+      ...structuredClone(executionLeaseReleaseRequestExample),
+      expectedRevision: renewed.revision,
+      leaseGuard: leaseGuardFor(renewed.lease),
+    });
+    expect(released).toMatchObject({ revision: 3 });
+    expect(released.lease).toBeUndefined();
+
+    const successor = await runStoreOperationInChild<ExecutionRecord>(testRoot, 'acquireLease', {
+      ...structuredClone(executionLeaseAcquireRequestExample),
+      operationId: 'operation.lease.acquire.after-release',
+      expectedRevision: released.revision,
+      requestedLeaseId: 'lease.execution.example.after-release',
+      ownerId: 'runtime-worker.after-release',
+      acquiredAt: '2026-07-16T00:00:21.000Z',
+      idempotencyKey: 'lease-acquire:after-release',
+    });
+    expect(successor.lease).toMatchObject({
+      id: 'lease.execution.example.after-release',
+      ownerId: 'runtime-worker.after-release',
+      fencingToken: 2,
+    });
+
+    await expect(
+      runStoreOperationInChild<ExecutionRecord>(testRoot, 'renewLease', {
+        ...structuredClone(executionLeaseRenewRequestExample),
+        operationId: 'operation.lease.renew.released-worker',
+        expectedRevision: successor.revision,
+        leaseGuard: leaseGuardFor(acquired.lease),
+        heartbeatAt: '2026-07-16T00:00:22.000Z',
+        idempotencyKey: 'lease-renew:released-worker',
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+
+    const reopened = new SQLiteExecutionStore({ rootPath: testRoot });
+    try {
+      await expect(reopened.get(successor.id)).resolves.toEqual(successor);
+    } finally {
+      await reopened.close();
+    }
+  }, 60_000);
+
+  it('rolls back an uncommitted WAL transaction after its worker crashes', async () => {
+    const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-uncommitted-wal-'));
+    root = testRoot;
+    const store = new SQLiteExecutionStore({ rootPath: testRoot });
+    const queued = await store
+      .create(structuredClone(executionRecordCreateRequestExample))
+      .finally(() => store.close());
+    const mutation = startingMutation(
+      queued,
+      'operation.execution.update.uncommitted-wal',
+      'execution-update:uncommitted-wal'
+    );
+
+    await runStoreCrashInChild(
+      testRoot,
+      'crashDuringCompareAndSetTransaction',
+      mutation,
+      CRASH_DURING_CAS_TRANSACTION_EXIT_CODE
+    );
+    await expect(
+      fs.readFile(path.join(testRoot, 'uncommitted-transaction.marker'), 'utf8')
+    ).resolves.toBe('transaction-started');
+
+    const recovered = new SQLiteExecutionStore({ rootPath: testRoot });
+    try {
+      await expect(recovered.get(queued.id)).resolves.toEqual(queued);
+      await expect(recovered.compareAndSet(mutation)).resolves.toEqual(mutation.next);
+      await expect(recovered.health()).resolves.toMatchObject({
+        status: 'healthy',
+        details: {
+          schemaVersion: SQLiteExecutionStore.schemaVersion,
+          quarantinedRecords: 0,
+        },
+      });
+    } finally {
+      await recovered.close();
+    }
+  }, 60_000);
+
+  it('recovers atomically from a committed WAL after a worker crashes at compare-and-set', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-cas-'));
     const store = new SQLiteExecutionStore({ rootPath: root });
     const queued = await store.create(structuredClone(executionRecordCreateRequestExample));
@@ -152,9 +273,127 @@ describe('SQLiteExecutionStore public adapter', () => {
       mutation,
       CRASH_AFTER_CAS_EXIT_CODE
     );
+    const wal = await fs.stat(path.join(root, 'executions.sqlite-wal'));
+    expect(wal.size).toBeGreaterThan(32);
+
     const afterCrashRecovery = new SQLiteExecutionStore({ rootPath: root });
     await expect(afterCrashRecovery.get(queued.id)).resolves.toEqual(mutation.next);
+    await expect(afterCrashRecovery.compareAndSet(mutation)).resolves.toEqual(mutation.next);
+    await expect(afterCrashRecovery.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: {
+        schemaVersion: SQLiteExecutionStore.schemaVersion,
+        quarantinedRecords: 0,
+      },
+    });
     await afterCrashRecovery.close();
+  }, 60_000);
+
+  it('preserves idempotency and terminal evidence across a real process restart', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-terminal-restart-'));
+    const seed = new SQLiteExecutionStore({ rootPath: root });
+    const queued = await seed
+      .create(structuredClone(executionRecordCreateRequestExample))
+      .finally(() => seed.close());
+    const receipt: ExecutionReceipt = {
+      id: `receipt:${queued.id}`,
+      providerId: queued.providerId,
+      executionId: queued.id,
+      providerExecutionRef: `provider-execution:${queued.id}`,
+      status: 'completed',
+      issuedAt: '2026-07-16T00:00:01.250Z',
+      receiptHash: 'sha256:provider-terminal-receipt',
+    };
+    const childRequest: ChildTerminalReceiptCrashRequest = {
+      workerId: 'worker.receipt-crash',
+      claimAt: '2026-07-16T00:00:01.000Z',
+      checkpointAt: '2026-07-16T00:00:01.500Z',
+      leaseTtlMs: 1_000,
+      receipt,
+    };
+
+    await runStoreCrashInChild(
+      root,
+      'crashAfterCheckpointTerminalReceipt',
+      childRequest,
+      CRASH_AFTER_TERMINAL_RECEIPT_EXIT_CODE
+    );
+    const evidence = parseTerminalCheckpointEvidence(
+      await fs.readFile(path.join(root, 'terminal-receipt-checkpoint.json'), 'utf8')
+    );
+    expect(evidence.checkpointed).toMatchObject({
+      revision: 2,
+      status: 'starting',
+      terminalReceipt: receipt,
+      lease: { ownerId: childRequest.workerId, fencingToken: 1 },
+    });
+
+    let now = childRequest.checkpointAt;
+    const recoveryEvidence = await (async () => {
+      const restarted = new SQLiteExecutionStore({ rootPath: root });
+      try {
+        const replayWorker = new DurableExecutionWorker({
+          store: restarted,
+          workerId: childRequest.workerId,
+          leaseTtlMs: childRequest.leaseTtlMs,
+          now: () => now,
+          leaseId: (executionId) => `lease:${childRequest.workerId}:${executionId}`,
+        });
+        await expect(
+          replayWorker.checkpointTerminalReceipt(evidence.claimed, receipt)
+        ).resolves.toEqual(evidence.checkpointed);
+        await expect(restarted.get(queued.id)).resolves.toEqual(evidence.checkpointed);
+
+        now = '2026-07-16T00:00:03.000Z';
+        const recoveryWorker = new DurableExecutionWorker({
+          store: restarted,
+          workerId: 'worker.receipt-recovery',
+          leaseTtlMs: 1_000,
+          now: () => now,
+          leaseId: (executionId) => `lease:worker.receipt-recovery:${executionId}`,
+        });
+        const recovered = await recoveryWorker.claimNext();
+        if (!recovered) throw new Error('Expected the recovery worker to claim the Execution.');
+        expect(recovered).toMatchObject({
+          terminalReceipt: receipt,
+          lease: { ownerId: 'worker.receipt-recovery', fencingToken: 2 },
+        });
+        now = '2026-07-16T00:00:03.500Z';
+        const result = {
+          ...structuredClone(commandExecutionResultExample),
+          executionId: recovered.id,
+          revision: recovered.revision + 1,
+          externalReceipt: receipt,
+        };
+        const completed = await recoveryWorker.commit(recovered, result);
+        expect(completed).toMatchObject({
+          status: 'completed',
+          terminalReceipt: receipt,
+          result: { externalReceipt: receipt },
+          lease: undefined,
+        });
+        return { completed, recovered, result };
+      } finally {
+        await restarted.close();
+      }
+    })();
+
+    const finalRestart = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      const replayedRecovery = new DurableExecutionWorker({
+        store: finalRestart,
+        workerId: 'worker.receipt-recovery',
+        leaseTtlMs: 1_000,
+        now: () => now,
+        leaseId: (executionId) => `lease:worker.receipt-recovery:${executionId}`,
+      });
+      await expect(
+        replayedRecovery.commit(recoveryEvidence.recovered, recoveryEvidence.result)
+      ).resolves.toEqual(recoveryEvidence.completed);
+      await expect(finalRestart.get(queued.id)).resolves.toEqual(recoveryEvidence.completed);
+    } finally {
+      await finalRestart.close();
+    }
   }, 60_000);
 
   it('takes over an expired lease after its worker crashes and rejects the late result', async () => {
@@ -214,17 +453,113 @@ describe('SQLiteExecutionStore public adapter', () => {
       await recovered.close();
     }
   }, 60_000);
+
+  it('preserves a renewed lease across worker crash and fences it after takeover', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'hypha-sqlite-execution-crash-renew-'));
+    const store = new SQLiteExecutionStore({ rootPath: root });
+    await store.create(structuredClone(executionRecordCreateRequestExample));
+    await store.close();
+
+    await runStoreCrashInChild(
+      root,
+      'crashAfterRenewLease',
+      {
+        acquire: structuredClone(executionLeaseAcquireRequestExample),
+        renew: structuredClone(executionLeaseRenewRequestExample),
+      },
+      CRASH_AFTER_LEASE_RENEW_EXIT_CODE
+    );
+
+    const recovered = new SQLiteExecutionStore({ rootPath: root });
+    try {
+      const renewed = await recovered.get(executionLeaseAcquireRequestExample.executionId);
+      expect(renewed).toMatchObject({
+        revision: 2,
+        lease: {
+          id: executionLeaseAcquireRequestExample.requestedLeaseId,
+          ownerId: executionLeaseAcquireRequestExample.ownerId,
+          fencingToken: 1,
+          heartbeatAt: executionLeaseRenewRequestExample.heartbeatAt,
+          expiresAt: '2026-07-16T00:00:40.000Z',
+        },
+      });
+      if (!renewed) throw new Error('Expected the renewed lease to survive worker crash.');
+
+      await expect(
+        recovered.acquireLease({
+          ...structuredClone(executionLeaseAcquireRequestExample),
+          operationId: 'operation.lease.acquire.before-renewed-expiry',
+          expectedRevision: renewed.revision,
+          requestedLeaseId: 'lease.execution.example.before-renewed-expiry',
+          ownerId: 'runtime-worker.before-renewed-expiry',
+          acquiredAt: '2026-07-16T00:00:30.000Z',
+          idempotencyKey: 'lease-acquire:before-renewed-expiry',
+        })
+      ).rejects.toMatchObject({ code: 'EXECUTION_STORE_LEASE_HELD' });
+
+      const takeover = await recovered.acquireLease({
+        ...structuredClone(executionLeaseAcquireRequestExample),
+        operationId: 'operation.lease.acquire.after-renewed-expiry',
+        expectedRevision: renewed.revision,
+        requestedLeaseId: 'lease.execution.example.after-renewed-expiry',
+        ownerId: 'runtime-worker.after-renewed-expiry',
+        acquiredAt: '2026-07-16T00:00:40.000Z',
+        idempotencyKey: 'lease-acquire:after-renewed-expiry',
+      });
+      expect(takeover.lease).toMatchObject({
+        id: 'lease.execution.example.after-renewed-expiry',
+        ownerId: 'runtime-worker.after-renewed-expiry',
+        fencingToken: 2,
+      });
+
+      await expect(
+        recovered.renewLease({
+          ...structuredClone(executionLeaseRenewRequestExample),
+          operationId: 'operation.lease.renew.crashed-worker',
+          expectedRevision: takeover.revision,
+          idempotencyKey: 'lease-renew:crashed-worker',
+        })
+      ).rejects.toMatchObject({ code: 'EXECUTION_STORE_FENCING_REJECTED' });
+      await expect(recovered.get(takeover.id)).resolves.toEqual(takeover);
+    } finally {
+      await recovered.close();
+    }
+  }, 60_000);
 });
 
-type ChildStoreOperation = 'acquireLease' | 'compareAndSet';
+type ChildStoreOperation = 'acquireLease' | 'compareAndSet' | 'releaseLease' | 'renewLease';
 type ChildStoreCrashOperation =
   | 'crashAfterAcquireLease'
   | 'crashAfterCompareAndSet'
-  | 'crashBeforeCompareAndSet';
+  | 'crashAfterCheckpointTerminalReceipt'
+  | 'crashAfterRenewLease'
+  | 'crashBeforeCompareAndSet'
+  | 'crashDuringCompareAndSetTransaction';
 
 const CRASH_BEFORE_CAS_EXIT_CODE = 71;
 const CRASH_AFTER_CAS_EXIT_CODE = 72;
 const CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE = 73;
+const CRASH_AFTER_LEASE_RENEW_EXIT_CODE = 74;
+const CRASH_DURING_CAS_TRANSACTION_EXIT_CODE = 75;
+const CRASH_AFTER_TERMINAL_RECEIPT_EXIT_CODE = 76;
+
+interface ChildLeaseRenewCrashRequest {
+  acquire: ExecutionLeaseAcquireRequest;
+  renew: ExecutionLeaseRenewRequest;
+}
+
+interface ChildTerminalReceiptCrashRequest {
+  workerId: string;
+  claimAt: string;
+  checkpointAt: string;
+  leaseTtlMs: number;
+  receipt: ExecutionReceipt;
+}
+
+interface TerminalCheckpointEvidence {
+  claimed: ExecutionRecord;
+  checkpointed: ExecutionRecord;
+}
 
 interface ChildStoreResponse<T> {
   ready?: boolean;
@@ -253,33 +588,39 @@ async function runStoreOperationInChild<T>(
     }
   );
   let stderr = '';
-  let settled = false;
+  let completed = false;
+  let response: ChildStoreResponse<T> | undefined;
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
     stderr += chunk;
   });
 
   return new Promise<T>((resolve, reject) => {
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (completed) return;
+      completed = true;
+      reject(error);
+    });
     child.on('message', (message: ChildStoreResponse<T>) => {
       if (message.ready) {
         child.send({ rootPath, operation, request });
         return;
       }
-      settled = true;
-      if (message.ok) {
-        resolve(message.result as T);
-        return;
-      }
-      reject(
-        Object.assign(new Error(message.error?.message ?? 'SQLite child operation failed.'), {
-          code: message.error?.code,
-        })
-      );
+      response = message;
     });
-    child.on('exit', (code) => {
-      if (!settled) {
+    child.on('close', (code) => {
+      if (completed) return;
+      completed = true;
+      if (!response) {
         reject(new Error(`SQLite child exited with code ${code}: ${stderr.trim()}`));
+      } else if (response.ok) {
+        resolve(response.result as T);
+      } else {
+        reject(
+          Object.assign(new Error(response.error?.message ?? 'SQLite child operation failed.'), {
+            code: response.error?.code,
+          })
+        );
       }
     });
   });
@@ -288,7 +629,11 @@ async function runStoreOperationInChild<T>(
 async function runStoreCrashInChild(
   rootPath: string,
   operation: ChildStoreCrashOperation,
-  request: ExecutionLeaseAcquireRequest | ExecutionRecordCompareAndSetRequest,
+  request:
+    | ChildLeaseRenewCrashRequest
+    | ChildTerminalReceiptCrashRequest
+    | ExecutionLeaseAcquireRequest
+    | ExecutionRecordCompareAndSetRequest,
   expectedExitCode: number
 ): Promise<void> {
   const repoRoot = process.cwd();
@@ -364,6 +709,14 @@ function startingMutation(
   };
 }
 
+function leaseGuardFor(lease: NonNullable<ExecutionRecord['lease']>) {
+  return {
+    leaseId: lease.id,
+    ownerId: lease.ownerId,
+    fencingToken: lease.fencingToken,
+  };
+}
+
 function terminalMutation(
   current: ExecutionRecord,
   staleLease: NonNullable<ExecutionRecord['lease']>,
@@ -397,9 +750,32 @@ function terminalMutation(
   };
 }
 
+function parseTerminalCheckpointEvidence(value: string): TerminalCheckpointEvidence {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !('claimed' in parsed) ||
+    !('checkpointed' in parsed)
+  ) {
+    throw new TypeError('Terminal checkpoint evidence is invalid.');
+  }
+  return {
+    claimed: validateExecutionRecord(parsed.claimed),
+    checkpointed: validateExecutionRecord(parsed.checkpointed),
+  };
+}
+
 const SQLITE_STORE_CHILD_SOURCE = String.raw`
 const Module = require('node:module');
+const fs = require('node:fs');
 const path = require('node:path');
+let DatabaseSync;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch {
+  DatabaseSync = require('better-sqlite3');
+}
 const originalResolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (request, parent, isMain, options) {
   if (request === '@hypha/core') {
@@ -413,11 +789,24 @@ const { SQLiteExecutionStore } = require(
     'packages/adapters-local/src/sqlite-execution-store.ts'
   )
 );
+const { DurableExecutionWorker } = require('@hypha/core');
 process.on('message', async ({ rootPath, operation, request }) => {
   const store = new SQLiteExecutionStore({ rootPath });
   try {
     if (operation === 'crashBeforeCompareAndSet') {
       process.exit(${CRASH_BEFORE_CAS_EXIT_CODE});
+    }
+    if (operation === 'crashDuringCompareAndSetTransaction') {
+      const database = new DatabaseSync(path.join(rootPath, 'executions.sqlite'));
+      database.exec('BEGIN IMMEDIATE');
+      database
+        .prepare('UPDATE execution_records SET record_json = ? WHERE execution_id = ?')
+        .run(JSON.stringify(request.next), request.executionId);
+      fs.writeFileSync(
+        path.join(rootPath, 'uncommitted-transaction.marker'),
+        'transaction-started'
+      );
+      process.exit(${CRASH_DURING_CAS_TRANSACTION_EXIT_CODE});
     }
     if (operation === 'crashAfterCompareAndSet') {
       await store.compareAndSet(request);
@@ -426,6 +815,30 @@ process.on('message', async ({ rootPath, operation, request }) => {
     if (operation === 'crashAfterAcquireLease') {
       await store.acquireLease(request);
       process.exit(${CRASH_AFTER_LEASE_ACQUIRE_EXIT_CODE});
+    }
+    if (operation === 'crashAfterRenewLease') {
+      await store.acquireLease(request.acquire);
+      await store.renewLease(request.renew);
+      process.exit(${CRASH_AFTER_LEASE_RENEW_EXIT_CODE});
+    }
+    if (operation === 'crashAfterCheckpointTerminalReceipt') {
+      let now = request.claimAt;
+      const worker = new DurableExecutionWorker({
+        store,
+        workerId: request.workerId,
+        leaseTtlMs: request.leaseTtlMs,
+        now: () => now,
+        leaseId: (executionId) => 'lease:' + request.workerId + ':' + executionId,
+      });
+      const claimed = await worker.claimNext();
+      if (!claimed) throw new Error('Expected the crash worker to claim the Execution.');
+      now = request.checkpointAt;
+      const checkpointed = await worker.checkpointTerminalReceipt(claimed, request.receipt);
+      fs.writeFileSync(
+        path.join(rootPath, 'terminal-receipt-checkpoint.json'),
+        JSON.stringify({ claimed, checkpointed })
+      );
+      process.exit(${CRASH_AFTER_TERMINAL_RECEIPT_EXIT_CODE});
     }
     const result = await store[operation](request);
     process.send({ ok: true, result });

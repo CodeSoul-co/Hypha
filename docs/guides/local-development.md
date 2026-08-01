@@ -217,7 +217,12 @@ REDIS_DEPLOYMENT=cloud
 REDIS_TLS=true
 ```
 
-Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` as extension contracts and disabled by default. The stock Server rejects attempts to enable them. A deployment that supplies one must register its concrete adapter, lifecycle cleanup, readiness probe, failure-injection tests, and real-environment acceptance in the same integration before removing that guard.
+Kafka, Qdrant, Chroma, and Pinecone are declared in `config.yaml` as extension contracts and are
+disabled by default. Postgres Execution Store and S3-compatible Artifact Store factories are
+available from `@hypha/adapters-local`, but the stock Server does not select them automatically.
+A deployment that enables either provider must compose its factory, lifecycle cleanup, readiness
+probe, credentials, and real-environment acceptance together; unsupported enabled selections fail
+closed during Server configuration loading.
 
 Do not commit `.env`, `data/`, root `logs/`, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 

@@ -4,9 +4,11 @@ import {
   type ContractSchemaPair,
 } from '../../../test-support/contract-schema-parity';
 import {
+  collectedExecutionOutputSchema,
   executionOutputCollectionItemSchema,
   executionOutputCollectionPlanSchema,
   executionOutputCollectionPolicySchema,
+  executionOutputCollectionResultSchema,
   executionOutputJsonSchemas,
 } from './index';
 
@@ -25,6 +27,16 @@ const contractPairs: ContractSchemaPair[] = [
     name: 'ExecutionOutputCollectionPlan',
     zod: executionOutputCollectionPlanSchema,
     json: executionOutputJsonSchemas.ExecutionOutputCollectionPlan,
+  },
+  {
+    name: 'CollectedExecutionOutput',
+    zod: collectedExecutionOutputSchema,
+    json: executionOutputJsonSchemas.CollectedExecutionOutput,
+  },
+  {
+    name: 'ExecutionOutputCollectionResult',
+    zod: executionOutputCollectionResultSchema,
+    json: executionOutputJsonSchemas.ExecutionOutputCollectionResult,
   },
 ];
 
