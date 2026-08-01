@@ -19,6 +19,11 @@ import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
 import { getServerMemoryOperations } from '../../apps/server/src/services/ServerMemoryOperations';
+import {
+  getMemoryApplicationService,
+  getServerMemoryComposition,
+} from '../../apps/server/src/services/ServerMemoryComposition';
+import { getMongoConnection } from '../../apps/server/src/services/database';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
 import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
@@ -288,6 +293,80 @@ describe('user-scoped session storage', () => {
 
     await permanentMemory.deleteConversation(a.id, 'user-a');
     await permanentMemory.deleteConversation(b.id, 'user-b');
+  });
+});
+
+describe('canonical managed Memory production composition', () => {
+  it('indexes and retrieves through the durable Mongo vector projection', async () => {
+    const memory = getMemoryApplicationService('harness');
+    const profileRef = getServerMemoryComposition().profileRef();
+    const suffix = `${Date.now()}`;
+    const scope = { userId: devUserId, sessionId: `memory-semantic-${suffix}` };
+    const principal = {
+      principalId: `user:${devUserId}`,
+      type: 'user' as const,
+      userId: devUserId,
+      permissionScopes: ['memory:read', 'memory:write'],
+    };
+    const added = await memory.add({
+      operationId: `memory:add:${suffix}`,
+      principal,
+      scope,
+      profileRef,
+      input: `durable-vector-token-${suffix}`,
+      inputType: 'text',
+      memoryType: 'semantic',
+      source: { type: 'user_message', sourceId: `message:${suffix}` },
+      extractionMode: 'none',
+      writeMode: 'sync',
+      idempotencyKey: `memory:add:${suffix}`,
+    });
+    const memoryId = added.records[0]?.id;
+    expect(memoryId).toBeDefined();
+
+    let results: Awaited<ReturnType<typeof memory.search>> = [];
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      results = await memory.search({
+        operationId: `memory:search:${suffix}:${attempt}`,
+        principal,
+        scope,
+        profileRef,
+        query: `durable-vector-token-${suffix}`,
+        mode: 'semantic',
+        topK: 5,
+      });
+      if (results.some((result) => result.record.id === memoryId)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          record: expect.objectContaining({ id: memoryId }),
+          semanticScore: expect.any(Number),
+          reasons: expect.arrayContaining(['dense-vector-similarity']),
+        }),
+      ])
+    );
+
+    const mongo = getMongoConnection();
+    const vectorDocument = await mongo?.connection.db
+      ?.collection('canonical_memory_managed_memory_vectors')
+      .findOne({ id: memoryId });
+    expect(vectorDocument).toMatchObject({
+      id: memoryId,
+      deleted: false,
+      memoryRevision: added.records[0]?.revision,
+    });
+    expect(vectorDocument?.vector).toEqual(expect.arrayContaining([expect.any(Number)]));
+
+    await memory.delete({
+      operationId: `memory:delete:${suffix}`,
+      principal,
+      scope,
+      memoryIds: [memoryId!],
+      mode: 'soft',
+      reason: 'integration cleanup',
+    });
   });
 });
 
