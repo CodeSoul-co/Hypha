@@ -186,6 +186,12 @@ image, workspace snapshot, and secret-version evidence as applicable. Reuse fail
 environment fingerprint is unavailable or an operation has external or irreversible side effects.
 Raw environment values, secrets, stdout, and stderr are not cache-key inputs.
 
+Persisted Result Cache records are versioned, runtime-validated, serialized-size bounded, and bound
+to the physical lookup key. `InMemoryExecutionCacheStore` is the bounded local Store;
+`RedisExecutionCacheStore` accepts a provider-neutral client for local, self-hosted, or managed
+Redis and applies record TTL at the storage boundary. A hit remains only a reusable projection and
+never fabricates a Command receipt, Workspace mutation, or FSM transition.
+
 ## Extension Boundary
 
 Adapters may implement local processes, containers, or remote sandboxes, but Core remains provider

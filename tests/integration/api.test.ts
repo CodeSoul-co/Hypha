@@ -12,13 +12,18 @@
  *   bug 10 — /workflows/:name/execute does not crash on minimal context
  */
 import request from 'supertest';
+import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import application from '../../apps/server/src/app';
 import { generateToken } from '../../apps/server/src/middleware/auth';
 import { UserModel } from '../../apps/server/src/models/User';
-import { getTemporaryMemory } from '../../apps/server/src/core/memory/TemporaryMemory';
-import { getPermanentMemory } from '../../apps/server/src/core/memory/PermanentMemory';
+import { getServerMemoryOperations } from '../../apps/server/src/services/ServerMemoryOperations';
+import {
+  getMemoryApplicationService,
+  getServerMemoryComposition,
+} from '../../apps/server/src/services/ServerMemoryComposition';
+import { getMongoConnection } from '../../apps/server/src/services/database';
 import { getToolManager } from '../../apps/server/src/core/tools/ToolManager';
 import { getLLMManager } from '../../apps/server/src/core/llm/LLMFactory';
 import type { ITool, ToolParams, ToolResult } from '../../apps/server/src/core/tools/types';
@@ -51,6 +56,91 @@ describe('GET /api/v1/health', () => {
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data.status).toBe('healthy');
+  });
+});
+
+describe('GET /api/v1/ready', () => {
+  it('fails closed while the production continuation handler is not composed', async () => {
+    const r = await request(app).get('/api/v1/ready');
+
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({
+      success: false,
+      data: {
+        status: 'not_ready',
+        runtime: {
+          ready: false,
+          state: 'maintenance_workers_running',
+        },
+        components: {
+          runtime: { ready: false },
+          storage: { ready: true, mongodb: true, redis: true },
+          memory: { ready: true },
+          llm: { ready: false, availableProviders: [] },
+          tools: { initialized: true, ready: true },
+          skills: { initialized: true, ready: true },
+        },
+      },
+    });
+  });
+});
+
+describe('durable Runtime Session Commands', () => {
+  it('does not admit a start_run command before continuation execution is composed', async () => {
+    const sessionId = `runtime-command-${Date.now()}`;
+    const idempotencyKey = `start-run-${Date.now()}`;
+    const body = { input: { task: 'durable-server-start' } };
+    const rejected = await request(app)
+      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+
+    expect(rejected.status).toBe(503);
+    expect(rejected.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        details: { state: 'maintenance_workers_running' },
+      },
+    });
+    const listed = await request(app)
+      .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual([]);
+  });
+
+  it('allows browser preflight to request the idempotency header', async () => {
+    const response = await request(app)
+      .options('/api/v1/runtime/sessions/browser/commands/start-run')
+      .set('Origin', 'https://client.example')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Idempotency-Key, Content-Type');
+    expect(response.status).toBe(204);
+    expect(response.headers['access-control-allow-headers']).toContain('Idempotency-Key');
+  });
+});
+
+describe('GET /api/v1/status', () => {
+  it('reports observed product readiness without hard-coded provider health', async () => {
+    const r = await request(app).get('/api/v1/status');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      data: {
+        service: 'hypha',
+        readiness: {
+          ready: false,
+          status: 'not_ready',
+          components: {
+            runtime: { ready: false },
+            llm: { ready: false, availableProviders: [] },
+          },
+        },
+        llm: { availableProviders: [] },
+      },
+    });
   });
 });
 
@@ -184,8 +274,8 @@ describe('POST /api/v1/auth/register', () => {
 });
 
 describe('user-scoped session storage', () => {
-  it('keeps the same sessionId isolated across users in temporary memory', async () => {
-    const tempMemory = getTemporaryMemory();
+  it('keeps the same sessionId isolated across users in canonical working memory', async () => {
+    const tempMemory = getServerMemoryOperations('memory-routes');
     const sessionId = `shared-${Date.now()}`;
 
     await tempMemory.addMessage(sessionId, {
@@ -211,8 +301,8 @@ describe('user-scoped session storage', () => {
     await tempMemory.clearMessages(sessionId, 'user-b');
   });
 
-  it('allows duplicate sessionId across users in permanent memory', async () => {
-    const permanentMemory = getPermanentMemory();
+  it('allows duplicate sessionId across users in canonical durable memory', async () => {
+    const permanentMemory = getServerMemoryOperations('memory-routes');
     const sessionId = `shared-${Date.now()}`;
 
     const a = await permanentMemory.createConversation({
@@ -238,8 +328,82 @@ describe('user-scoped session storage', () => {
     expect((await permanentMemory.getConversationBySessionId(sessionId, 'user-a'))?.id).toBe(a.id);
     expect((await permanentMemory.getConversationBySessionId(sessionId, 'user-b'))?.id).toBe(b.id);
 
-    await permanentMemory.deleteConversation(a.id);
-    await permanentMemory.deleteConversation(b.id);
+    await permanentMemory.deleteConversation(a.id, 'user-a');
+    await permanentMemory.deleteConversation(b.id, 'user-b');
+  });
+});
+
+describe('canonical managed Memory production composition', () => {
+  it('indexes and retrieves through the durable Mongo vector projection', async () => {
+    const memory = getMemoryApplicationService('harness');
+    const profileRef = getServerMemoryComposition().profileRef();
+    const suffix = `${Date.now()}`;
+    const scope = { userId: devUserId, sessionId: `memory-semantic-${suffix}` };
+    const principal = {
+      principalId: `user:${devUserId}`,
+      type: 'user' as const,
+      userId: devUserId,
+      permissionScopes: ['memory:read', 'memory:write'],
+    };
+    const added = await memory.add({
+      operationId: `memory:add:${suffix}`,
+      principal,
+      scope,
+      profileRef,
+      input: `durable-vector-token-${suffix}`,
+      inputType: 'text',
+      memoryType: 'semantic',
+      source: { type: 'user_message', sourceId: `message:${suffix}` },
+      extractionMode: 'none',
+      writeMode: 'sync',
+      idempotencyKey: `memory:add:${suffix}`,
+    });
+    const memoryId = added.records[0]?.id;
+    expect(memoryId).toBeDefined();
+
+    let results: Awaited<ReturnType<typeof memory.search>> = [];
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      results = await memory.search({
+        operationId: `memory:search:${suffix}:${attempt}`,
+        principal,
+        scope,
+        profileRef,
+        query: `durable-vector-token-${suffix}`,
+        mode: 'semantic',
+        topK: 5,
+      });
+      if (results.some((result) => result.record.id === memoryId)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          record: expect.objectContaining({ id: memoryId }),
+          semanticScore: expect.any(Number),
+          reasons: expect.arrayContaining(['dense-vector-similarity']),
+        }),
+      ])
+    );
+
+    const mongo = getMongoConnection();
+    const vectorDocument = await mongo?.connection.db
+      ?.collection('canonical_memory_managed_memory_vectors')
+      .findOne({ id: memoryId });
+    expect(vectorDocument).toMatchObject({
+      id: memoryId,
+      deleted: false,
+      memoryRevision: added.records[0]?.revision,
+    });
+    expect(vectorDocument?.vector).toEqual(expect.arrayContaining([expect.any(Number)]));
+
+    await memory.delete({
+      operationId: `memory:delete:${suffix}`,
+      principal,
+      scope,
+      memoryIds: [memoryId!],
+      mode: 'soft',
+      reason: 'integration cleanup',
+    });
   });
 });
 
@@ -361,7 +525,7 @@ describe('GET /api/v1/tools (bug 9)', () => {
 });
 
 describe('MCP tool invocation', () => {
-  it('lists the configured fixture server and normalized MCP tools', async () => {
+  it('discovers and explicitly approves the real local stdio MCP capability', async () => {
     const servers = await request(app)
       .get('/api/v1/tools/mcp/servers')
       .set('Authorization', `Bearer ${devToken}`);
@@ -369,36 +533,82 @@ describe('MCP tool invocation', () => {
     expect(servers.body.data || []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'classic',
+          id: 'local-example',
           status: 'connected',
-          toolCount: 6,
         }),
       ])
     );
+
+    const capabilities = await request(app)
+      .get('/api/v1/mcp/capabilities')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(capabilities.status).toBe(200);
+    const discovered = capabilities.body.data || [];
+    const capability = discovered.find(
+      (candidate: any) =>
+        candidate.serverId === 'local-example' && candidate.remoteName === 'hash_reference'
+    );
+    expect(capability).toMatchObject({
+      serverId: 'local-example',
+      remoteName: 'hash_reference',
+      kind: 'tool',
+      capabilityHash: expect.any(String),
+    });
+    const requiredCapabilities = [
+      { kind: 'tool', capabilityId: 'hash_reference', sideEffectLevel: 'read' },
+      { kind: 'resource', capabilityId: 'hypha://framework/runtime-contract' },
+      { kind: 'prompt', capabilityId: 'runtime_diagnostic' },
+    ];
+    for (const required of requiredCapabilities) {
+      const discoveredCapability = discovered.find(
+        (candidate: any) =>
+          candidate.serverId === 'local-example' &&
+          candidate.kind === required.kind &&
+          candidate.remoteName === required.capabilityId
+      );
+      expect(discoveredCapability).toMatchObject({
+        capabilityHash: expect.any(String),
+        driftState: expect.any(String),
+      });
+      if (
+        discoveredCapability.driftState === 'approved' &&
+        (required.sideEffectLevel === undefined ||
+          discoveredCapability.normalizedToolSpec?.sideEffectLevel === required.sideEffectLevel)
+      ) {
+        continue;
+      }
+      const approval = await request(app)
+        .post(
+          `/api/v1/mcp/servers/local-example/capabilities/${encodeURIComponent(required.capabilityId)}/approve`
+        )
+        .set('Authorization', `Bearer ${devToken}`)
+        .send({
+          capabilityHash: discoveredCapability.capabilityHash,
+          sideEffectLevel: required.sideEffectLevel,
+        });
+      expect(approval.status).toBe(200);
+      expect(approval.body).toMatchObject({
+        success: true,
+        data: { status: 'approved' },
+      });
+    }
 
     const tools = await request(app)
       .get('/api/v1/tools/mcp/tools')
       .set('Authorization', `Bearer ${devToken}`);
     expect(tools.status).toBe(200);
-    const classic = (tools.body.data || []).find((server: any) => server.serverId === 'classic');
-    expect(classic).toBeTruthy();
-    const toolIds = (classic.tools || []).map((tool: any) => tool.id);
-    expect(toolIds).toEqual(
-      expect.arrayContaining([
-        'filesystem.read_file',
-        'search.web_search',
-        'baidu.web_search',
-        'so360.web_search',
-      ])
+    const local = (tools.body.data || []).find(
+      (server: any) => server.serverId === 'local-example'
     );
-    expect(classic.tools || []).toEqual(
+    expect(local).toBeTruthy();
+    expect(local.tools || []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'filesystem.read_file',
+          id: 'mcp.local-example.hash_reference',
           source: 'mcp',
           sourceRef: expect.objectContaining({
-            serverId: 'filesystem',
-            capabilityId: 'read_file',
+            mcpServerId: 'local-example',
+            mcpCapabilityId: 'hash_reference',
           }),
         }),
       ])
@@ -409,20 +619,39 @@ describe('MCP tool invocation', () => {
       .set('Authorization', `Bearer ${devToken}`);
     expect(allTools.status).toBe(200);
     expect((allTools.body.data || []).map((tool: any) => tool.name)).toEqual(
-      expect.arrayContaining(['filesystem.read_file', 'search.web_search', 'baidu.web_search'])
+      expect.arrayContaining(['mcp.local-example.hash_reference'])
+    );
+
+    const resources = await request(app)
+      .get('/api/v1/mcp/servers/local-example/resources')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(resources.status).toBe(200);
+    expect(resources.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ remoteName: 'hypha://framework/runtime-contract' }),
+      ])
+    );
+
+    const prompts = await request(app)
+      .get('/api/v1/mcp/servers/local-example/prompts')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(prompts.status).toBe(200);
+    expect(prompts.body.data || []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ remoteName: 'runtime_diagnostic' })])
     );
   });
 
-  it('executes a fixture MCP filesystem tool through the governed HTTP path', async () => {
+  it('executes the approved local stdio MCP tool through the governed HTTP path', async () => {
+    const value = 'hypha-real-mcp';
     const r = await request(app)
       .post('/api/v1/tools/execute')
       .set('Authorization', `Bearer ${devToken}`)
-      .send({ name: 'filesystem.read_file', params: { path: '/README.md' } });
+      .send({ name: 'mcp.local-example.hash_reference', params: { value } });
     expect(r.status).toBe(200);
     expect(r.body.success).toBe(true);
     expect(r.body.data).toMatchObject({
-      path: '/README.md',
-      content: expect.stringContaining('Classic MCP fixture'),
+      algorithm: 'sha256',
+      digest: createHash('sha256').update(value).digest('hex'),
     });
 
     const events = await request(app)
@@ -435,48 +664,16 @@ describe('MCP tool invocation', () => {
           type: 'mcp.call.started',
           payload: expect.objectContaining({
             source: 'mcp',
-            serverId: 'filesystem',
-            capabilityId: 'read_file',
+            serverId: 'local-example',
+            capabilityId: 'hash_reference',
           }),
         }),
         expect.objectContaining({
           type: 'mcp.call.completed',
           payload: expect.objectContaining({
             source: 'mcp',
-            serverId: 'filesystem',
-            capabilityId: 'read_file',
-          }),
-        }),
-      ])
-    );
-  });
-
-  it('executes a mainland MCP search fixture through the governed HTTP path', async () => {
-    const r = await request(app)
-      .post('/api/v1/tools/execute')
-      .set('Authorization', `Bearer ${devToken}`)
-      .send({ name: 'baidu.web_search', params: { query: 'hypha', limit: 1 } });
-    expect(r.status).toBe(200);
-    expect(r.body.success).toBe(true);
-    expect(r.body.data).toMatchObject({
-      query: 'hypha',
-      count: 1,
-      provider: 'baidu-fixture',
-      note: 'classic-mcp-mainland-baidu',
-    });
-
-    const events = await request(app)
-      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
-      .set('Authorization', `Bearer ${devToken}`);
-    expect(events.status).toBe(200);
-    expect(events.body.data || []).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: 'mcp.call.completed',
-          payload: expect.objectContaining({
-            source: 'mcp',
-            serverId: 'baidu',
-            capabilityId: 'web_search',
+            serverId: 'local-example',
+            capabilityId: 'hash_reference',
           }),
         }),
       ])
@@ -487,10 +684,10 @@ describe('MCP tool invocation', () => {
     const r = await request(app)
       .post('/api/v1/tools/execute')
       .set('Authorization', `Bearer ${devToken}`)
-      .send({ name: 'filesystem.read_file', params: {} });
+      .send({ name: 'mcp.local-example.hash_reference', params: {} });
     expect(r.status).toBe(400);
     expect(r.body.success).toBe(false);
-    expect(r.body.error.message).toContain('missing required field: path');
+    expect(r.body.error.message).toContain('missing required field: value');
 
     const events = await request(app)
       .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
@@ -509,6 +706,59 @@ describe('MCP tool invocation', () => {
       ])
     );
   });
+
+  it('reads an approved MCP Resource through a scoped canonical Run', async () => {
+    const r = await request(app)
+      .post('/api/v1/mcp/servers/local-example/resources/read')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ uri: 'hypha://framework/runtime-contract' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      runId: expect.any(String),
+      data: {
+        contents: [
+          expect.objectContaining({
+            uri: 'hypha://framework/runtime-contract',
+            mimeType: 'application/json',
+          }),
+        ],
+      },
+    });
+    const events = await request(app)
+      .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(events.body.data || []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'mcp.call.started' }),
+        expect.objectContaining({ type: 'mcp.call.completed' }),
+        expect.objectContaining({ type: 'run.completed' }),
+      ])
+    );
+  });
+
+  it('renders an approved MCP Prompt through a scoped canonical Run', async () => {
+    const r = await request(app)
+      .post('/api/v1/mcp/servers/local-example/prompts/runtime_diagnostic/render')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ arguments: { component: 'memory' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      runId: expect.any(String),
+      data: {
+        messages: [
+          expect.objectContaining({
+            role: 'user',
+            content: expect.objectContaining({
+              type: 'text',
+              text: expect.stringContaining('memory'),
+            }),
+          }),
+        ],
+      },
+    });
+  });
 });
 
 describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
@@ -522,6 +772,26 @@ describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
     // the regression is that we used to fail BEFORE reaching the first stage.
     const errMsg = r.body.data?.error || '';
     expect(errMsg).not.toMatch(/Cannot read propert/i);
+
+    const projected = await request(app)
+      .get(`/api/v1/workflows/executions/${r.body.data.executionId}`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(projected.status).toBe(200);
+    expect(projected.body.data).toMatchObject({
+      runId: r.body.data.runId,
+      executionId: r.body.data.executionId,
+      workflowName: 'conversation-flow',
+      status: expect.stringMatching(/completed|failed/),
+    });
+
+    const cancellation = await request(app)
+      .post(`/api/v1/workflows/executions/${r.body.data.executionId}/cancel`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(cancellation.status).toBe(409);
+    expect(cancellation.body).toMatchObject({
+      success: false,
+      error: { code: 'RUNTIME_RUN_CONFLICT' },
+    });
   });
 });
 
@@ -727,6 +997,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
           'tool.policy.checked',
           'human.review.requested',
           'fsm.state.entered',
+          'runtime.wait.created',
           'run.waiting_human',
         ])
       );
@@ -765,6 +1036,12 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       expect(ownInvocation.status).toBe(200);
       expect(ownInvocation.body.data.id).toBe(r.body.invocationId);
 
+      const ownRun = await request(app)
+        .get(`/api/v1/runtime/runs/${r.body.runId}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+      expect(ownRun.status).toBe(200);
+      expect(ownRun.body.data.userId).toBe(devUserId);
+
       const foreignInvocation = await request(app)
         .get(`/api/v1/tool-invocations/${r.body.invocationId}`)
         .set('Authorization', `Bearer ${foreignToken}`);
@@ -776,6 +1053,14 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
         .set('Authorization', `Bearer ${foreignToken}`)
         .send({ reason: 'cross-user cancellation must be denied' });
       expect(foreignCancel.status).toBe(403);
+
+      for (const suffix of ['', '/events', '/replay', '/audit', '/regression']) {
+        const foreignRunRead = await request(app)
+          .get(`/api/v1/runtime/runs/${r.body.runId}${suffix}`)
+          .set('Authorization', `Bearer ${foreignToken}`);
+        expect(foreignRunRead.status).toBe(403);
+        expect(foreignRunRead.body.error.code).toBe('RUNTIME_RUN_ACCESS_DENIED');
+      }
 
       const approved = await request(app)
         .post(`/api/v1/tool-approvals/${r.body.invocationId}/approve`)
@@ -793,8 +1078,13 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       const completedEvents = await request(app)
         .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
         .set('Authorization', `Bearer ${devToken}`);
-      expect((completedEvents.body.data || []).map((event: any) => event.type)).toContain(
-        'run.completed'
+      expect((completedEvents.body.data || []).map((event: any) => event.type)).toEqual(
+        expect.arrayContaining([
+          'run.resume.requested',
+          'runtime.wait.resolved',
+          'run.resumed',
+          'run.completed',
+        ])
       );
     } finally {
       await getToolManager().unregister('approval-test-tool');

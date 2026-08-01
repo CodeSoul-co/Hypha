@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InMemoryEventStore, type RecoveryFailure } from '@hypha/core';
+import {
+  InMemoryEventSchemaRegistry,
+  InMemoryEventStore,
+  registerRuntimeOrchestrationEventSchemas,
+  type RecoveryFailure,
+} from '@hypha/core';
 import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
 import { runRecoverySupervisor } from './recovery-supervisor';
 
@@ -117,6 +122,14 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     expect(fsm.getSnapshot().currentState).toBe('Reasoning');
     const events = await trace.list({ runId: 'run_coordinated' });
     expect(events.map((event) => event.type)).toContain('recovery.case.resolved');
+    const schemas = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(schemas);
+    for (const event of events.filter((item) => item.type.startsWith('recovery.case.'))) {
+      await expect(schemas.validate(event)).resolves.toEqual(
+        expect.objectContaining({ valid: true })
+      );
+      expect(event.userId).toBe('user-recovery');
+    }
     expect(
       events
         .filter((event) => event.type === 'recovery.attempt.completed')

@@ -52,12 +52,43 @@ describe('LocalProcessSupervisor', () => {
   it('terminates a command that stops producing output after its idle timeout', async () => {
     const result = await new LocalProcessSupervisor().run(
       request(['-e', "process.stdout.write('started'); setInterval(() => {}, 1000)"], {
-        idleTimeoutMs: 250,
+        // Leave enough startup budget for the child to be scheduled when the
+        // full contract suite is running under constrained CI resources. The
+        // assertion still proves the timer is reset by observed output and
+        // eventually terminates the idle process.
+        idleTimeoutMs: 1_000,
+        timeoutMs: 5_000,
       })
     );
 
     expect(result).toMatchObject({ outcome: 'idle_timed_out', stdout: 'started' });
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'falls back to the owned child when macOS denies a process-group signal',
+    async () => {
+      let denied = false;
+      const supervisor = new LocalProcessSupervisor({
+        kill: (pid, signal) => {
+          if (pid < 0 && signal !== 0 && !denied) {
+            denied = true;
+            throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+          }
+          process.kill(pid, signal);
+        },
+      });
+
+      const result = await supervisor.run(
+        request(['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 40 })
+      );
+
+      expect(denied).toBe(true);
+      expect(result).toMatchObject({
+        outcome: 'timed_out',
+        processTreeTerminationVerified: true,
+      });
+    }
+  );
 
   it('stops and bounds a process that exceeds an output limit', async () => {
     const result = await new LocalProcessSupervisor().run(

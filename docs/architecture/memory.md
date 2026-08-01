@@ -39,6 +39,10 @@ truth during recovery.
 Local and self-hosted deployments can use `StructuredMemoryPersistenceUnitOfWork` over a
 transactional `StructuredStoreProvider`. `InMemoryMemoryPersistenceUnitOfWork` is deterministic and
 atomic for tests but declares `durable: false`.
+`StructuredMemoryExtractionStateStore` persists extraction jobs, batches, and compare-and-set
+cursors. `StructuredMemoryLifecycleTaskStore` persists leased lifecycle and provider reconciliation
+tasks so expired work can be reclaimed after a process restart. The in-memory state and task stores
+remain test fixtures rather than production recovery stores.
 
 ## Retrieval and Context Safety
 
@@ -56,8 +60,9 @@ as executable policy.
 ## External Providers
 
 `ExternalMemoryManagementAdapter` keeps provider-specific transport and payloads behind the common
-management contract. `Mem0RestClient` maps Hypha scope dimensions to Mem0 metadata and discards
-responses whose returned scope hash does not match the request. External mutations are not retried
+management contract. `Mem0OssClient` and `Mem0PlatformClient` encode separate deployment protocols. MemoryBank
+Local and Managed likewise use independent concrete clients. Every client maps Hypha scope dimensions
+to provider metadata and discards responses whose returned scope hash does not match the request. External mutations are not retried
 after a write may have started unless reconciliation proves that replay is safe. MemoryBank-specific
 policy remains adapter configuration rather than a Core or Domain abstraction.
 
@@ -74,18 +79,45 @@ record version, content hash, profile/policy revision, provider revision, and sc
 invalidates reuse. Replay stores references and snapshots rather than consulting mutable current
 memory as if it were historical truth.
 
+`CachedMemoryManagementProvider` is the optional read-through adapter for managed search. It hashes
+the full principal permission boundary, scope, profile revision, provider revision, query, filters,
+retrieval options, and pagination without placing raw query text or embeddings in the Store key.
+Only searches with `updateAccessStats: false` are reusable; searches that may mutate access counters
+always reach the Memory provider. Add, update, and delete operations execute against the source
+provider first and then invalidate every cached query in the same scope. Cache Store timeouts,
+oversized records, and trace failures bypass by default, while a provider failure is never retried by
+the Cache adapter. Every scope has a monotonic cache revision. A successful mutation advances that
+revision before old keys are removed, so a search that overlaps the mutation cannot publish a stale
+result; one bounded retry recomputes against the new revision. Failed invalidation quarantines the
+scope locally and is retried before another lookup instead of serving the prior view.
+
+`InMemoryMemorySearchCacheStore` supplies bounded local storage.
+`RedisMemorySearchCacheStore` supplies key-bound, TTL-limited shared storage for local,
+self-hosted, or managed Redis. Both enforce the same record schema, hard scope, scope revision, size,
+and physical/logical key rules.
+
 ## Minimal Managed Provider
 
 ```ts
 import {
-  MemoryManager,
+  DefaultMemoryActivityPort,
+  GovernedMemoryManager,
   NativeMemoryManagementProvider,
   memoryProfileSpecExample,
+  registerMemoryManagementProviderHandlers,
 } from '@hypha/memory';
 
-const memory = new MemoryManager(
-  new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample })
-);
+const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+const activities = new DefaultMemoryActivityPort({ policy, events, harness });
+registerMemoryManagementProviderHandlers(activities, provider);
+const memory = new GovernedMemoryManager({
+  activities,
+  profileRef: memoryProfileSpecExample,
+  eventContext: (request) => ({
+    runId: request.scope.runId ?? request.operationId,
+    workspaceId: request.scope.workspaceId,
+  }),
+});
 
 await memory.add({
   operationId: 'memory:add:preference',
@@ -104,6 +136,17 @@ await memory.add({
 });
 ```
 
-Production assembly must supply the policy, trace, persistence, provider health, and external
-receipt hooks required by the selected profile. Direct provider or store writes bypassing those
-boundaries are not framework-compliant.
+`GovernedMemoryManager` is the canonical managed API. Production assembly must supply policy,
+harness, event, persistence, provider health, and external receipt hooks required by the selected
+profile. The legacy `MemoryManager` remains only as a compatibility surface while consumers migrate.
+Direct provider or store writes bypassing those boundaries are not framework-compliant. See the
+[Managed Memory migration guide](../guides/memory-managed-migration.md).
+
+## Operational contracts
+
+`DefaultMemoryContextGateway` is the shared Chat, Workflow, and Harness context entry point.
+`VersionValidContextCache` accepts only exact version-valid envelopes. Provider readiness/liveness,
+dead-letter disposition, quota, deletion evidence, failure fingerprints, and backup/restore
+capabilities are Framework contracts; Server endpoints, metrics exporters, secret resolution, and
+deployment jobs remain in runtime assembly. See the
+[provider adapter and operations guide](../guides/memory-provider-adapter-and-operations.md).

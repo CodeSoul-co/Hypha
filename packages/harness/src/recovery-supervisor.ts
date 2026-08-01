@@ -1,6 +1,7 @@
 import {
   createFrameworkEvent,
   defaultRecoveryConvergencePolicy,
+  hashCanonicalJson,
   recoveryEvidenceHash,
   recoveryFailureFingerprint,
   recoveryKnowledgeKeyMatches,
@@ -845,21 +846,100 @@ class RecoveryEventRecorder {
         id: `${snapshot.id}:${String(this.sequence).padStart(4, '0')}:${type}`,
         type,
         runId: this.runId,
+        ...(this.options.tenantId === undefined ? {} : { tenantId: this.options.tenantId }),
+        userId: this.options.userId,
         sessionId: this.options.sessionId,
         workspaceId: this.options.workspaceId,
         stepId: this.options.stepId,
         agentId: this.options.agentId,
         fsmState: this.options.fsm.getSnapshot().currentState,
         timestamp: this.now(),
-        payload: {
-          caseId: snapshot.id,
-          rootFingerprint: snapshot.rootFingerprint,
-          status: snapshot.status,
-          cycles: snapshot.cycles,
-          ...payload,
-        },
+        payload: recoveryEventPayload(type, snapshot, payload),
         metadata: this.options.metadata,
       })
     );
   }
+}
+
+function recoveryEventPayload(
+  type: FrameworkEventType,
+  snapshot: RecoveryCaseSnapshot,
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const base = {
+    caseId: snapshot.id,
+    rootFingerprint: snapshot.rootFingerprint,
+    status: snapshot.status,
+    cycles: snapshot.cycles,
+    ...payload,
+  };
+  if (
+    type !== 'recovery.case.opened' &&
+    type !== 'recovery.case.resolved' &&
+    type !== 'recovery.case.escalated'
+  ) {
+    return base;
+  }
+
+  const failure = recordValue(payload.failure) ?? recordValue(snapshot.lastFailure) ?? {};
+  const strategy = stringValue(payload.strategy);
+  return {
+    ...base,
+    supervisorStatus: snapshot.status,
+    status:
+      type === 'recovery.case.opened'
+        ? 'active'
+        : type === 'recovery.case.resolved'
+          ? 'recovered'
+          : 'suspended',
+    candidateId: snapshot.id,
+    candidateHash: hashCanonicalJson({
+      caseId: snapshot.id,
+      rootFingerprint: snapshot.rootFingerprint,
+      lastEvidenceHash: snapshot.lastEvidenceHash,
+      cycles: snapshot.cycles,
+    }),
+    reason:
+      stringValue(payload.reason) ??
+      stringValue(failure.category) ??
+      stringValue(failure.code) ??
+      'CUSTOM',
+    safeAction: recoverySafeAction(strategy),
+    ...(type === 'recovery.case.opened'
+      ? {}
+      : {
+          disposition:
+            type === 'recovery.case.resolved'
+              ? strategy === 'retry'
+                ? 'requeued'
+                : 'recovered'
+              : 'requires_review',
+        }),
+  };
+}
+
+function recoverySafeAction(strategy: string | undefined): string {
+  switch (strategy) {
+    case 'retry':
+      return 'requeue';
+    case 'reconcile':
+      return 'apply_observation';
+    case 'compensate':
+      return 'compensate_activity';
+    case 'fail':
+    case 'cancel':
+      return 'mark_failed';
+    default:
+      return 'manual_review';
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

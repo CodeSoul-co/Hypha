@@ -94,6 +94,42 @@ npm run test:integration
 The final validation also covers Cache enabled and disabled modes, replay, regression, DomainPack
 loading, and runtime smoke tests.
 
+## Production readiness and acceptance evidence
+
+- Liveness is not traffic readiness. `/health` may report that the process is alive, but `/ready`
+  must fail closed until the canonical Event authority, execution graph, Session Command worker,
+  timer/recovery workers, and every required provider are configured and have completed their
+  startup probes.
+- A maintenance worker is not an execution worker. Running timer or projection-recovery sweeps
+  must not be reported as proof that new or continued Runs can execute.
+- Release acceptance jobs require the real dependency and must execute with zero skipped cases.
+  Docker, PostgreSQL, S3-compatible storage, remote Sandbox, Redis Sentinel, MongoDB replica set,
+  managed Memory, MCP, and remote Skill evidence cannot be replaced by mocks or conditional skips.
+- Acceptance evidence is commit-specific. Record the exact commit, immutable image or service
+  revision, environment topology, executed test count, skipped count, failure injection, timeout,
+  cancellation, restart, cleanup, and resource-recovery results. Do not reuse evidence from an
+  earlier commit after implementation or dependency changes.
+- A required external environment that is unavailable is a release blocker, not a passing test.
+  The corresponding source branch may retain reviewed work, but it must not advance through the
+  integration chain until a maintainer records fresh evidence for the exact candidate.
+- Test commands must terminate naturally. `--forceExit`, blanket timeout inflation, swallowed
+  cleanup failures, and pass-on-missing-environment behavior are forbidden in release gates.
+
+## Dependency and runtime compatibility
+
+- Root dependency, lockfile, Node engine, TypeScript, lint, and test-runner changes are `dev`
+  backbone work. Do not hide them inside a module source-branch feature commit.
+- A security upgrade is incomplete if its transitive dependencies raise the supported Node engine
+  or platform requirements. Validate the declared minimum Node version in CI before merging, or
+  propose the runtime-baseline change explicitly and update all images, workflows, and public setup
+  documentation together.
+- Do not use `npm audit fix --force` on integration or release branches. Review the dependency path,
+  exploitability, engine compatibility, and lockfile diff; route major or cross-workspace upgrades
+  through an isolated backbone change with full workspace validation.
+- Installed-but-unreachable vulnerable code still requires a documented decision. Either remove or
+  upgrade the dependency with compatible evidence, or record the bounded exposure and compensating
+  control; never report a non-zero production audit as clean.
+
 ## FSM recovery engineering rules
 
 - Runtime recovery must be represented by explicit FSM states, transitions, persisted counters,

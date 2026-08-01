@@ -34,6 +34,13 @@ pagination. MCP SDK types remain in the transport/session layer.
 A Run stores an immutable Tool contract snapshot. Catalog drift creates a new revision; it cannot
 silently replace the schema used by an active or replayed Run.
 
+MCP transport envelopes are not Tool domain outputs. When a Tool declares an output schema, the
+runner validates the protocol `structuredContent` value; text/binary `content`, `isError`, and other
+transport fields remain protocol evidence. Approved Resources and Prompts use a short-lived,
+user-scoped Run access record with the exact permission scope, deadline, capability hash, and server
+identity. Their HTTP surfaces create canonical Runs and persist MCP call and terminal events rather
+than invoking the SDK with an unverified caller-provided Run ID.
+
 ## Cross-Module Ports
 
 - Command and file Tools call `WorkspaceRuntimePort`; process execution lives in the local adapter.
@@ -42,3 +49,23 @@ silently replace the schema used by an active or replayed Run.
   not write long-term memory.
 - Tool result cache validity includes Tool, policy, scope, snapshot, capability, and external-state
   revisions. Side-effect Tools bypass this read cache.
+
+## Result Cache Boundary
+
+`InMemoryToolResultCache` is the bounded local reference Store. `RedisToolResultCache` uses the
+same provider-neutral contract for local, self-hosted, or managed Redis deployments. Persisted
+entries carry schema/key versions and a canonical logical key; every read is runtime-validated and
+must match the physical lookup key and current Tool, input, scope, policy, snapshot, capability,
+and external-state validity.
+
+Only `none` Tools and `read` Tools with an explicit `externalStateVersion` can reuse results.
+Sensitive output declarations bypass the cache. Cached values contain only output, structured
+content, and Artifact references; Invocation state, receipts, observations, lifecycle metadata, and
+provider payloads are excluded. Entries containing Artifact references require a deployment
+`ToolResultCacheArtifactVerifier` before they can be written or reused.
+
+Cache lookup, write, delete, and Artifact verification are time-bounded. The default `bypass`
+failure mode treats unavailable, expired, corrupt, mismatched, or unverifiable entries as misses and
+continues through the governed Tool Adapter. `strict` is available for deployments that explicitly
+require cache availability, but cache hits never replace permission, policy, approval, or trace
+checks.

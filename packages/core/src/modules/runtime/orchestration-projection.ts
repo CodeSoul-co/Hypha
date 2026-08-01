@@ -8,10 +8,11 @@ import type {
 import { RUNTIME_WAIT_INTENT_TYPES } from '../../contracts/runtime-helpers';
 import { validateRuntimeOrchestrationProjection } from '../../contracts/runtime-projection-schemas';
 import { FrameworkError } from '../../errors';
+import { migrateLegacyHumanWaitEvent } from './legacy-wait-migration';
 import type { ProjectionDefinition } from './projection';
 
 export const RUNTIME_ORCHESTRATION_PROJECTION_ID = 'runtime.orchestration';
-export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.3.0';
+export const RUNTIME_ORCHESTRATION_PROJECTION_VERSION = '1.5.0';
 
 const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.created',
@@ -27,6 +28,8 @@ const ORCHESTRATION_EVENT_TYPES = new Set<FrameworkEventType>([
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'human.review.requested',
+  'human.review.resolved',
   'runtime.wait.created',
   'runtime.wait.resolved',
   'runtime.signal.received',
@@ -103,6 +106,10 @@ export function reduceRuntimeOrchestrationProjection(
       return terminateRun(state, event, 'failed');
     case 'run.cancelled':
       return terminateRun(state, event, 'cancelled');
+    case 'human.review.requested':
+      return humanReviewRequested(state, event);
+    case 'human.review.resolved':
+      return legacyHumanReviewResolved(state, event);
     case 'runtime.wait.created':
       return waitCreated(state, event);
     case 'runtime.wait.resolved':
@@ -204,9 +211,19 @@ function runWaiting(
     paused: 'pause',
   } as const;
   const expectedWaitType: RuntimePendingWaitProjection['type'] = waitTypesByStatus[runStatus];
+  let projectedEvent = event;
+  if (!state.pendingWait && runStatus === 'waiting_human') {
+    const migration = migrateLegacyHumanWaitEvent(event, state.pendingHumanActionRef);
+    if (migration.entry.status === 'quarantined') {
+      divergence('Legacy Human Wait cannot be migrated safely', event, {
+        migration: migration.entry,
+      });
+    }
+    projectedEvent = migration.event;
+  }
   const withPendingWait = state.pendingWait
     ? state
-    : projectLegacyPendingWait(state, event, expectedWaitType);
+    : projectLegacyPendingWait(state, projectedEvent, expectedWaitType);
   if (withPendingWait.pendingWait?.type !== expectedWaitType) {
     divergence(`${event.type} requires a matching pending Wait`, event, {
       expectedWaitType,
@@ -240,6 +257,10 @@ function projectLegacyPendingWait(
     stateAttempt: state.stateAttempt,
     type: expectedWaitType,
     ...(optionalString(wait.key) === undefined ? {} : { key: optionalString(wait.key) }),
+    ...(optionalString(wait.pendingActionRef) === undefined
+      ? {}
+      : { pendingActionRef: optionalString(wait.pendingActionRef) }),
+    ...(optionalString(wait.reason) === undefined ? {} : { reason: optionalString(wait.reason) }),
     ...(recordValue(wait.expectedSchema) === null
       ? {}
       : { expectedSchema: recordValue(wait.expectedSchema) ?? undefined }),
@@ -248,7 +269,69 @@ function projectLegacyPendingWait(
       : { expiresAt: optionalString(wait.expiresAt) }),
     createdAt: event.timestamp,
   };
-  return { ...omitLastResume(state), pendingWait };
+  return { ...omitPendingHumanActionRef(omitLastResume(state)), pendingWait };
+}
+
+function humanReviewRequested(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  const payload = payloadRecord(event);
+  const actionRef =
+    optionalString(payload.pendingActionRef) ??
+    optionalString(payload.invocationId) ??
+    optionalString(payload.taskId) ??
+    optionalString(payload.requestId) ??
+    (optionalString(payload.toolId) ? `tool:${optionalString(payload.toolId)}` : undefined);
+  return actionRef ? validated({ ...state, pendingHumanActionRef: actionRef }, event) : state;
+}
+
+function legacyHumanReviewResolved(
+  state: RuntimeOrchestrationProjection,
+  event: PersistedFrameworkEvent
+): RuntimeOrchestrationProjection {
+  requireCreated(state, event);
+  if (state.runStatus !== 'waiting_human' || state.pendingWait?.type !== 'human') {
+    divergence('Human review resolution requires a Human-waiting Run', event);
+  }
+  const actionRefs = humanReviewActionRefs(event);
+  const pendingActionRef = state.pendingWait.pendingActionRef;
+  if (!pendingActionRef || !actionRefs.includes(pendingActionRef)) {
+    divergence('Human review resolution does not match the pending Wait action', event, {
+      pendingActionRef,
+      resolvedActionRefs: actionRefs,
+    });
+  }
+  const payload = payloadRecord(event);
+  const grant = recordValue(payload.grant);
+  const approvalRequest = recordValue(payload.approvalRequest);
+  const lastResume: RuntimeResumeProjection = {
+    commandId: `legacy-human-review:${event.id}`,
+    kind: 'manual',
+    waitId: state.pendingWait.waitId,
+    principalId:
+      optionalString(grant?.approvedBy) ??
+      optionalString(payload.approvedBy) ??
+      optionalString(approvalRequest?.principalId) ??
+      optionalString(approvalRequest?.userId) ??
+      event.userId,
+    resumedAt: event.timestamp,
+  };
+  return validated({ ...state, lastResume }, event);
+}
+
+function humanReviewActionRefs(event: PersistedFrameworkEvent): string[] {
+  const payload = payloadRecord(event);
+  const grant = recordValue(payload.grant);
+  const approvalRequest = recordValue(payload.approvalRequest);
+  return [
+    optionalString(payload.invocationId),
+    optionalString(grant?.invocationId),
+    optionalString(approvalRequest?.invocationId),
+    optionalString(payload.taskId),
+    optionalString(payload.requestId),
+    optionalString(payload.toolId) ? `tool:${optionalString(payload.toolId)}` : undefined,
+  ].filter((value): value is string => value !== undefined);
 }
 
 function runResumeRequested(
@@ -256,7 +339,7 @@ function runResumeRequested(
   event: PersistedFrameworkEvent
 ): RuntimeOrchestrationProjection {
   requireCreated(state, event);
-  if (!['paused', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
+  if (!['paused', 'waiting_human', 'waiting_signal', 'waiting_timer'].includes(state.runStatus)) {
     divergence(`Run cannot resume from ${state.runStatus}`, event);
   }
   if (!state.pendingWait) divergence('Run resume requires a pending Wait', event);
@@ -325,6 +408,10 @@ function waitCreated(
     stateAttempt,
     type: type as RuntimePendingWaitProjection['type'],
     ...(optionalString(wait.key) === undefined ? {} : { key: optionalString(wait.key) }),
+    ...(optionalString(wait.pendingActionRef) === undefined
+      ? {}
+      : { pendingActionRef: optionalString(wait.pendingActionRef) }),
+    ...(optionalString(wait.reason) === undefined ? {} : { reason: optionalString(wait.reason) }),
     ...(recordValue(wait.expectedSchema) === null
       ? {}
       : { expectedSchema: recordValue(wait.expectedSchema) ?? undefined }),
@@ -333,7 +420,7 @@ function waitCreated(
       : { expiresAt: optionalString(wait.expiresAt) }),
     createdAt: requiredString(payload.createdAt, 'wait createdAt', event),
   };
-  const withoutLastResume = omitLastResume(state);
+  const withoutLastResume = omitPendingHumanActionRef(omitLastResume(state));
   return validated({ ...withoutLastResume, pendingWait }, event);
 }
 
@@ -481,28 +568,33 @@ function stateEntered(
   event: PersistedFrameworkEvent
 ): RuntimeOrchestrationProjection {
   requireActive(state, event);
+  const enteringState = consumeLegacyHumanResolution(state);
   const payload = payloadRecord(event);
   const stateId =
     optionalString(payload.stateId) ??
     event.fsmState ??
     requiredString(undefined, 'stateId', event);
-  if (state.pendingTransition && state.pendingTransition.to !== stateId) {
+  if (enteringState.pendingTransition && enteringState.pendingTransition.to !== stateId) {
     divergence('Entered state does not match the accepted transition target', event, {
-      expectedState: state.pendingTransition.to,
+      expectedState: enteringState.pendingTransition.to,
       actualState: stateId,
     });
   }
-  if (!state.pendingTransition && state.currentState && state.currentState !== stateId) {
+  if (
+    !enteringState.pendingTransition &&
+    enteringState.currentState &&
+    enteringState.currentState !== stateId
+  ) {
     divergence('A new FSM state requires an accepted transition', event, {
-      currentState: state.currentState,
+      currentState: enteringState.currentState,
       enteredState: stateId,
     });
   }
   const stateVisitCounts = {
-    ...state.stateVisitCounts,
-    [stateId]: (state.stateVisitCounts[stateId] ?? 0) + 1,
+    ...enteringState.stateVisitCounts,
+    [stateId]: (enteringState.stateVisitCounts[stateId] ?? 0) + 1,
   };
-  const withoutPendingTransition = omitPendingTransition(state);
+  const withoutPendingTransition = omitPendingTransition(enteringState);
   return validated(
     {
       ...withoutPendingTransition,
@@ -513,6 +605,23 @@ function stateEntered(
     },
     event
   );
+}
+
+function consumeLegacyHumanResolution(
+  state: RuntimeOrchestrationProjection
+): RuntimeOrchestrationProjection {
+  if (
+    state.runStatus !== 'waiting_human' ||
+    state.pendingWait?.type !== 'human' ||
+    state.lastResume?.kind !== 'manual' ||
+    state.lastResume.waitId !== state.pendingWait.waitId
+  ) {
+    return state;
+  }
+  return {
+    ...omitPendingHumanActionRef(omitPendingWait(state)),
+    runStatus: 'running',
+  };
 }
 
 function stateExited(
@@ -636,6 +745,14 @@ function omitPendingWait(
 ): Omit<RuntimeOrchestrationProjection, 'pendingWait'> {
   const { pendingWait, ...remaining } = state;
   void pendingWait;
+  return remaining;
+}
+
+function omitPendingHumanActionRef(
+  state: RuntimeOrchestrationProjection
+): Omit<RuntimeOrchestrationProjection, 'pendingHumanActionRef'> {
+  const { pendingHumanActionRef, ...remaining } = state;
+  void pendingHumanActionRef;
   return remaining;
 }
 

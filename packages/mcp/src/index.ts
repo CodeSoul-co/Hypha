@@ -33,7 +33,9 @@ import {
 export * from './governance';
 export * from './contracts';
 export * from './connection-manager';
+export * from './coordination';
 export * from './catalog';
+export * from './oauth';
 
 export interface MCPIntegrationSpec {
   id: string;

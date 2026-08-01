@@ -7,7 +7,11 @@ import {
   validateRuntimeActivityObservation,
 } from '../../contracts/runtime-activity-schemas';
 import { validateRuntimeCancelCommand } from '../../contracts/runtime-cancellation-schemas';
-import type { RunLeaseAuthorization, RunLeaseStore } from '../../contracts/runtime-coordination';
+import type {
+  RunLeaseAuthorization,
+  RunLeaseStore,
+  StateExecutionClaimStore,
+} from '../../contracts/runtime-coordination';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type {
   RuntimeActivityReconciliationPort,
@@ -23,6 +27,7 @@ import type {
 } from '../../contracts/runtime-recovery';
 import {
   validateRuntimeActivityReconciliationResult,
+  validateRuntimeActivityCompensationResult,
   validateRuntimeRecoveryCandidate,
   validateRuntimeRecoveryCommand,
   validateRuntimeRecoveryResult,
@@ -44,6 +49,10 @@ import {
   RUNTIME_ORCHESTRATION_PROJECTION_VERSION,
 } from './orchestration-projection';
 import type { ProjectionEngine, ProjectionStore } from './projection';
+import type {
+  RuntimeActivityRedispatchCommand,
+  RuntimeActivityRedispatchResult,
+} from './runtime-activity-redispatch-service';
 
 const REQUEUE_STATUSES = new Set([
   'created',
@@ -55,17 +64,30 @@ const REQUEUE_STATUSES = new Set([
   'recovering',
 ]);
 const TERMINAL_ACTIVITY_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const REDISPATCH_BLOCKED_RUN_STATUSES = new Set([
+  'cancelling',
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+]);
 
 export interface RuntimeRecoveryServiceOptions {
   events: EventRuntime;
   projections: ProjectionEngine;
   projectionStore: ProjectionStore<RuntimeOrchestrationProjection>;
   runLeases: RunLeaseStore;
+  stateClaims: StateExecutionClaimStore;
   activities: RuntimeActivityReconciliationPort;
+  redispatches: RuntimeActivityRedispatchRecoveryPort;
   cancellations: RuntimeCancellationRecoveryPort;
   requeue: RuntimeRecoveryRequeuePort;
   now?: () => string;
   nextId?: (namespace: string) => string;
+}
+
+export interface RuntimeActivityRedispatchRecoveryPort {
+  redispatch(command: RuntimeActivityRedispatchCommand): Promise<RuntimeActivityRedispatchResult>;
 }
 
 export class RuntimeRecoveryService {
@@ -114,8 +136,31 @@ export class RuntimeRecoveryService {
       }
 
       const projection = record.state;
+      const streamEvents = await this.options.events.read({ scope: head.scope });
+      const completedCandidates = completedCandidateIds(streamEvents);
+      const addCandidate = (input: RuntimeRecoveryCandidate): void => {
+        if (!completedCandidates.has(input.candidateId)) candidates.push(input);
+      };
+      if (!REDISPATCH_BLOCKED_RUN_STATUSES.has(projection.runStatus)) {
+        for (const requestEvent of incompleteRedispatchRequests(streamEvents)) {
+          const payload = payloadRecord(requestEvent);
+          addCandidate(
+            candidate({
+              scope: head.scope,
+              reason: 'ACTIVITY_REDISPATCH_INCOMPLETE',
+              safeAction: 'reconcile_redispatch',
+              eventHeadSequence: head.lastSequence,
+              projectionSequence: record.lastSequence,
+              activityId: requiredString(payload.activityId, 'Redispatch Activity id'),
+              redispatchRequestEventId: requestEvent.id,
+              ...(currentLease === null ? {} : { currentLease }),
+              detectedAt: request.checkedAt,
+            })
+          );
+        }
+      }
       for (const activityId of projection.pendingActivityIds) {
-        candidates.push(
+        addCandidate(
           candidate({
             scope: head.scope,
             reason: 'ACTIVITY_RESULT_UNAPPLIED',
@@ -128,8 +173,22 @@ export class RuntimeRecoveryService {
           })
         );
       }
+      for (const activityId of compensationActivityIds(streamEvents)) {
+        addCandidate(
+          candidate({
+            scope: head.scope,
+            reason: 'ACTIVITY_COMPENSATION_REQUIRED',
+            safeAction: 'compensate_activity',
+            eventHeadSequence: head.lastSequence,
+            projectionSequence: record.lastSequence,
+            activityId,
+            ...(currentLease === null ? {} : { currentLease }),
+            detectedAt: request.checkedAt,
+          })
+        );
+      }
       if (projection.runStatus === 'cancelling') {
-        candidates.push(
+        addCandidate(
           candidate({
             scope: head.scope,
             reason: 'CANCELLATION_INCOMPLETE',
@@ -140,17 +199,36 @@ export class RuntimeRecoveryService {
             detectedAt: request.checkedAt,
           })
         );
-      } else if (REQUEUE_STATUSES.has(projection.runStatus) && currentLease === null) {
-        candidates.push(
-          candidate({
-            scope: head.scope,
-            reason: 'LEASE_EXPIRED',
-            safeAction: 'requeue',
-            eventHeadSequence: head.lastSequence,
-            projectionSequence: record.lastSequence,
-            detectedAt: request.checkedAt,
-          })
+      } else if (
+        REQUEUE_STATUSES.has(projection.runStatus) &&
+        currentLease === null &&
+        projection.currentState &&
+        projection.stateAttempt > 0
+      ) {
+        const stateClaim = await this.options.stateClaims.get(
+          {
+            ...(head.scope.tenantId === undefined ? {} : { tenantId: head.scope.tenantId }),
+            userId: head.scope.userId,
+            runId: head.scope.runId,
+            stateId: projection.currentState,
+            stateAttempt: projection.stateAttempt,
+          },
+          request.checkedAt
         );
+        if (stateClaim?.status === 'expired') {
+          addCandidate(
+            candidate({
+              scope: head.scope,
+              reason: 'STATE_CLAIM_EXPIRED',
+              safeAction: 'requeue',
+              eventHeadSequence: head.lastSequence,
+              projectionSequence: record.lastSequence,
+              stateId: projection.currentState,
+              stateAttempt: projection.stateAttempt,
+              detectedAt: request.checkedAt,
+            })
+          );
+        }
       }
     }
     return validateRuntimeRecoveryScanResult({
@@ -170,6 +248,9 @@ export class RuntimeRecoveryService {
     if (!head) return result(command, 'stale');
     if (prior.length === 0 && head.lastSequence !== command.candidate.eventHeadSequence) {
       return result(command, 'stale');
+    }
+    if (command.candidate.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE') {
+      return this.recoverRedispatch(command);
     }
     if (command.candidate.reason === 'CANCELLATION_INCOMPLETE') {
       return this.recoverCancellation(command);
@@ -194,7 +275,13 @@ export class RuntimeRecoveryService {
       if (command.candidate.reason === 'ACTIVITY_RESULT_UNAPPLIED') {
         return await this.reconcileActivity(command, authorization, operation);
       }
-      if (command.candidate.reason === 'LEASE_EXPIRED') {
+      if (command.candidate.reason === 'ACTIVITY_COMPENSATION_REQUIRED') {
+        return await this.compensateActivity(command, authorization, operation);
+      }
+      if (
+        command.candidate.reason === 'LEASE_EXPIRED' ||
+        command.candidate.reason === 'STATE_CLAIM_EXPIRED'
+      ) {
         return await this.requeue(command, authorization, operation);
       }
       return await this.escalate(
@@ -206,6 +293,98 @@ export class RuntimeRecoveryService {
     } finally {
       await this.release(authorization);
     }
+  }
+
+  private async recoverRedispatch(command: RuntimeRecoveryCommand): Promise<RuntimeRecoveryResult> {
+    const request = await this.redispatchRequest(command.candidate);
+    if (!request) return result(command, 'stale');
+    const payload = payloadRecord(request);
+    const metadata = recordValue(request.metadata);
+    if (!metadata) invalid('Redispatch request metadata must be an object');
+    try {
+      const recovered = await this.options.redispatches.redispatch({
+        commandId: requiredString(payload.commandId, 'Redispatch command id'),
+        scope: {
+          ...(request.tenantId === undefined ? {} : { tenantId: request.tenantId }),
+          userId: request.userId,
+          ...(request.workspaceId === undefined ? {} : { workspaceId: request.workspaceId }),
+          sessionId: requiredString(request.sessionId, 'Redispatch Session id'),
+          runId: request.runId,
+          ...(request.agentId === undefined ? {} : { agentId: request.agentId }),
+        },
+        ownerId: command.ownerId,
+        leaseTtlMs: command.leaseTtlMs,
+        taskId: requiredString(payload.taskId, 'Redispatch task id'),
+        expectedTaskRevision: requiredPositiveInteger(
+          metadata.expectedTaskRevision,
+          'Redispatch expected task revision'
+        ),
+        expectedSubjectHash: requiredString(
+          metadata.subjectHash,
+          'Redispatch expected subject hash'
+        ),
+        activityDescriptorRef: requiredString(
+          payload.activityDescriptorRef,
+          'Redispatch Activity descriptor reference'
+        ),
+        activityDescriptorHash: requiredString(
+          payload.activityDescriptorHash,
+          'Redispatch Activity descriptor hash'
+        ),
+        requestedAt: requiredString(payload.requestedAt, 'Redispatch requested timestamp'),
+        idempotencyKey: request.idempotencyKey ?? request.id,
+      });
+      if (recovered.requestEventId !== request.id) {
+        invalid('Redispatch recovery returned a different request Event id');
+      }
+      return validateRuntimeRecoveryResult({
+        candidateId: command.candidate.candidateId,
+        disposition: recovered.receiptReused ? 'reused' : 'recovered',
+        eventIds: [recovered.requestEventId, recovered.receiptEventId],
+        projection: await this.project(command.candidate),
+      });
+    } catch (error) {
+      if (!isFrameworkError(error)) throw error;
+      if (error.code === 'RUNTIME_LEASE_UNAVAILABLE') {
+        return result(command, 'lease_unavailable');
+      }
+      if (error.code === 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED') {
+        return result(command, 'stale');
+      }
+      if (error.code !== 'RUNTIME_ACTIVITY_OUTCOME_UNKNOWN') throw error;
+      const outcome = await this.redispatchOutcomeUnknown(command.candidate, request.id);
+      return validateRuntimeRecoveryResult({
+        candidateId: command.candidate.candidateId,
+        disposition: 'requires_review',
+        eventIds: [request.id, ...(outcome === null ? [] : [outcome.id])],
+        projection: await this.project(command.candidate),
+      });
+    }
+  }
+
+  private async redispatchRequest(
+    candidateInput: RuntimeRecoveryCandidate
+  ): Promise<PersistedFrameworkEvent | null> {
+    const requestEventId = candidateInput.redispatchRequestEventId;
+    if (!requestEventId) invalid('Redispatch recovery candidate is missing request Event id');
+    const requests = await this.options.events.read({
+      scope: streamScope(candidateInput),
+      types: ['activity.redispatch.requested'],
+    });
+    return requests.find((event) => event.id === requestEventId) ?? null;
+  }
+
+  private async redispatchOutcomeUnknown(
+    candidateInput: RuntimeRecoveryCandidate,
+    requestEventId: string
+  ): Promise<PersistedFrameworkEvent | null> {
+    const outcomes = await this.options.events.read({
+      scope: streamScope(candidateInput),
+      types: ['activity.redispatch.outcome_unknown'],
+    });
+    return (
+      outcomes.find((event) => payloadString(event, 'requestEventId') === requestEventId) ?? null
+    );
   }
 
   private async rebuildProjection(
@@ -274,9 +453,41 @@ export class RuntimeRecoveryService {
           'Side-effecting Activity state is unknown'
         );
       }
-      reconciliation = await this.retryActivity(command, authorization, invocation);
+      try {
+        reconciliation = await this.retryActivity(command, authorization, invocation);
+      } catch (error) {
+        if (!isFrameworkError(error) || error.code !== 'RUNTIME_STATE_EXECUTION_UNAVAILABLE') {
+          throw error;
+        }
+        return this.escalate(
+          command,
+          authorization,
+          operation,
+          'Activity provider cannot safely retry the unresolved invocation'
+        );
+      }
     } else if (reconciliation.status === 'not_started') {
-      reconciliation = await this.retryActivity(command, authorization, invocation);
+      try {
+        reconciliation = await this.retryActivity(command, authorization, invocation);
+      } catch (error) {
+        if (!isFrameworkError(error) || error.code !== 'RUNTIME_STATE_EXECUTION_UNAVAILABLE') {
+          throw error;
+        }
+        return this.escalate(
+          command,
+          authorization,
+          operation,
+          'Activity provider cannot safely start the unresolved invocation'
+        );
+      }
+    }
+    if (reconciliation.status === 'waiting') {
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Activity is waiting for an external or human decision'
+      );
     }
 
     const observation = reconciliation.observation;
@@ -327,18 +538,193 @@ export class RuntimeRecoveryService {
     return { activityId: invocation.activityId, status: observation.status, observation };
   }
 
+  private async compensateActivity(
+    command: RuntimeRecoveryCommand,
+    authorization: RunLeaseAuthorization,
+    operation: PersistedFrameworkEvent[]
+  ): Promise<RuntimeRecoveryResult> {
+    const invocation = await this.activityInvocation(command.candidate);
+    if (!invocation) {
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Compensation Activity invocation is missing or invalid'
+      );
+    }
+    if (
+      invocation.effect !== 'external_effect' ||
+      invocation.metadata?.compensationAvailable !== true
+    ) {
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Activity is not declared safely compensatable'
+      );
+    }
+    if (!this.options.activities.compensate) {
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Activity provider does not expose compensation'
+      );
+    }
+
+    const compensationId = `${command.candidate.candidateId}:compensation`;
+    if (!operation.some((event) => event.type === 'runtime.activity.compensation.requested')) {
+      const requested = await this.append(
+        command,
+        authorization,
+        [
+          this.compensationEvent(command, invocation, 'runtime.activity.compensation.requested', {
+            compensationId,
+            reason: command.candidate.reason,
+            requestedAt: command.requestedAt,
+          }),
+        ],
+        'compensation-requested'
+      );
+      operation = [...operation, ...requested.events];
+    }
+    await this.heartbeat(command, authorization);
+
+    let compensation;
+    try {
+      compensation = validateRuntimeActivityCompensationResult(
+        await this.options.activities.compensate({
+          invocation,
+          reason: command.candidate.reason,
+          requestedAt: command.requestedAt,
+          fencingToken: authorization.guard.fencingToken,
+          idempotencyKey: `${operationId(command)}:compensate`,
+        })
+      );
+      if (compensation.activityId !== invocation.activityId) {
+        invalid('Activity compensation returned a different activityId');
+      }
+    } catch (error) {
+      const errorCode =
+        error instanceof FrameworkError ? error.code : 'runtime_activity_compensation_failed';
+      const appended = await this.append(
+        command,
+        authorization,
+        [
+          this.compensationEvent(command, invocation, 'runtime.activity.compensation.failed', {
+            compensationId,
+            status: 'failed',
+            errorCode,
+          }),
+          this.recoveryEvent(command, 'recovery.case.escalated', {
+            disposition: 'requires_review',
+            reason: 'Activity compensation provider failed',
+            errorCode,
+          }),
+        ],
+        'compensation-failed'
+      );
+      return validateRuntimeRecoveryResult({
+        candidateId: command.candidate.candidateId,
+        disposition: 'requires_review',
+        eventIds: [
+          ...operation.map((event) => event.id),
+          ...appended.events.map((event) => event.id),
+        ],
+        projection: await this.project(command.candidate),
+      });
+    }
+    await this.heartbeat(command, authorization);
+
+    if (compensation.status !== 'completed') {
+      const appended = await this.append(
+        command,
+        authorization,
+        [
+          this.compensationEvent(command, invocation, 'runtime.activity.compensation.failed', {
+            compensationId,
+            status: compensation.status,
+            providerRevision: compensation.providerRevision,
+            errorCode: compensation.errorCode,
+          }),
+          this.recoveryEvent(command, 'recovery.case.escalated', {
+            disposition: 'requires_review',
+            reason: 'Activity compensation requires operator review',
+            compensationStatus: compensation.status,
+          }),
+        ],
+        'compensation-review'
+      );
+      return validateRuntimeRecoveryResult({
+        candidateId: command.candidate.candidateId,
+        disposition: 'requires_review',
+        eventIds: [
+          ...operation.map((event) => event.id),
+          ...appended.events.map((event) => event.id),
+        ],
+        projection: await this.project(command.candidate),
+      });
+    }
+
+    const appended = await this.append(
+      command,
+      authorization,
+      [
+        this.compensationEvent(command, invocation, 'runtime.activity.compensation.completed', {
+          compensationId,
+          status: compensation.status,
+          providerRevision: compensation.providerRevision,
+          receiptId: compensation.receiptId,
+        }),
+        this.recoveryEvent(command, 'recovery.case.resolved', {
+          disposition: 'compensated',
+          activityId: invocation.activityId,
+          receiptId: compensation.receiptId,
+        }),
+      ],
+      'compensation-completed'
+    );
+    return validateRuntimeRecoveryResult({
+      candidateId: command.candidate.candidateId,
+      disposition: appended.reused ? 'reused' : 'compensated',
+      eventIds: [
+        ...operation.map((event) => event.id),
+        ...appended.events.map((event) => event.id),
+      ],
+      projection: await this.project(command.candidate),
+    });
+  }
+
   private async requeue(
     command: RuntimeRecoveryCommand,
     authorization: RunLeaseAuthorization,
     operation: PersistedFrameworkEvent[]
   ): Promise<RuntimeRecoveryResult> {
-    await this.options.requeue.requeue({
-      scope: command.candidate.scope,
-      reason: command.candidate.reason,
-      requestedAt: command.requestedAt,
-      fencingToken: authorization.guard.fencingToken,
-      idempotencyKey: `${operationId(command)}:requeue`,
-    });
+    try {
+      await this.options.requeue.requeue({
+        scope: command.candidate.scope,
+        reason: command.candidate.reason,
+        requestedAt: command.requestedAt,
+        fencingToken: authorization.guard.fencingToken,
+        ...(command.candidate.stateId === undefined
+          ? {}
+          : { expectedStateId: command.candidate.stateId }),
+        ...(command.candidate.stateAttempt === undefined
+          ? {}
+          : { expectedStateAttempt: command.candidate.stateAttempt }),
+        idempotencyKey: `${operationId(command)}:requeue`,
+      });
+    } catch (error) {
+      if (!isFrameworkError(error) || error.code !== 'RUNTIME_STATE_EXECUTION_UNAVAILABLE') {
+        throw error;
+      }
+      return this.escalate(
+        command,
+        authorization,
+        operation,
+        'Runtime owner cannot safely requeue the interrupted State attempt'
+      );
+    }
     await this.heartbeat(command, authorization);
     const appended = await this.append(
       command,
@@ -530,17 +916,24 @@ export class RuntimeRecoveryService {
         : type === 'recovery.case.resolved'
           ? 'recovered'
           : 'suspended';
-    return this.event(command.candidate, type, {
-      caseId: command.candidate.candidateId,
-      rootFingerprint: candidateHash(command.candidate),
-      status,
-      cycles: 1,
-      candidateId: command.candidate.candidateId,
-      candidateHash: candidateHash(command.candidate),
-      reason: command.candidate.reason,
-      safeAction: command.candidate.safeAction,
-      ...withoutUndefined(details),
-    });
+    return this.event(
+      command.candidate,
+      type,
+      withoutUndefined({
+        caseId: command.candidate.candidateId,
+        rootFingerprint: candidateHash(command.candidate),
+        status,
+        cycles: 1,
+        candidateId: command.candidate.candidateId,
+        candidateHash: candidateHash(command.candidate),
+        reason: command.candidate.reason,
+        safeAction: command.candidate.safeAction,
+        activityId: command.candidate.activityId,
+        stateId: command.candidate.stateId,
+        stateAttempt: command.candidate.stateAttempt,
+        ...withoutUndefined(details),
+      })
+    );
   }
 
   private activityEvent(
@@ -557,6 +950,32 @@ export class RuntimeRecoveryService {
       }),
       operationId: invocation.operationId,
       idempotencyKey: `${invocation.idempotencyKey}:event:${observation.status}:reconciled`,
+      fsmState: invocation.stateId,
+      metadata: {
+        stateAttempt: invocation.stateAttempt,
+        recoveryCandidateId: command.candidate.candidateId,
+      },
+    };
+  }
+
+  private compensationEvent(
+    command: RuntimeRecoveryCommand,
+    invocation: RuntimeActivityInvocation,
+    type: Extract<
+      EventCreateInput['type'],
+      | 'runtime.activity.compensation.requested'
+      | 'runtime.activity.compensation.completed'
+      | 'runtime.activity.compensation.failed'
+    >,
+    details: Record<string, unknown>
+  ): EventCreateInput {
+    return {
+      ...this.event(command.candidate, type, {
+        activityId: invocation.activityId,
+        ...withoutUndefined(details),
+      }),
+      operationId: invocation.operationId,
+      idempotencyKey: `${operationId(command)}:${type}`,
       fsmState: invocation.stateId,
       metadata: {
         stateAttempt: invocation.stateAttempt,
@@ -645,15 +1064,31 @@ export class RuntimeRecoveryService {
 }
 
 function candidate(input: Omit<RuntimeRecoveryCandidate, 'candidateId'>): RuntimeRecoveryCandidate {
-  const target = input.activityId ?? 'run';
+  const target =
+    input.redispatchRequestEventId ??
+    input.activityId ??
+    (input.stateId === undefined || input.stateAttempt === undefined
+      ? `run:${input.eventHeadSequence}`
+      : `state:${input.stateId}:${input.stateAttempt}`);
   return validateRuntimeRecoveryCandidate({
     ...input,
-    candidateId: `recovery:${input.scope.runId}:${input.reason}:${target}:${input.eventHeadSequence}`,
+    candidateId: `recovery:${input.scope.runId}:${input.reason}:${target}`,
   });
 }
 
 function candidateHash(input: RuntimeRecoveryCandidate): string {
-  return hashCanonicalJson(input);
+  return hashCanonicalJson(
+    withoutUndefined({
+      candidateId: input.candidateId,
+      scope: input.scope,
+      reason: input.reason,
+      safeAction: input.safeAction,
+      activityId: input.activityId,
+      redispatchRequestEventId: input.redispatchRequestEventId,
+      stateId: input.stateId,
+      stateAttempt: input.stateAttempt,
+    })
+  );
 }
 
 function operationId(command: RuntimeRecoveryCommand): string {
@@ -685,6 +1120,70 @@ function completedRecovery(events: PersistedFrameworkEvent[]): PersistedFramewor
   );
 }
 
+function completedCandidateIds(events: PersistedFrameworkEvent[]): Set<string> {
+  return new Set(
+    events
+      .filter(
+        (event) =>
+          event.type === 'recovery.case.resolved' || event.type === 'recovery.case.escalated'
+      )
+      .map((event) => payloadString(event, 'candidateId') ?? payloadString(event, 'caseId'))
+      .filter((candidateId): candidateId is string => candidateId !== undefined)
+  );
+}
+
+function compensationActivityIds(events: PersistedFrameworkEvent[]): string[] {
+  const requested = new Map<string, RuntimeActivityInvocation>();
+  const settled = new Set<string>();
+  const failed = new Set<string>();
+  for (const event of events) {
+    if (event.type === 'runtime.activity.requested') {
+      try {
+        const invocation = validateRuntimeActivityInvocation(payloadRecord(event).invocation);
+        requested.set(invocation.activityId, invocation);
+      } catch {
+        // Invalid invocation is handled by the existing recovery review path.
+      }
+      continue;
+    }
+    const activityId = activityIdFromEvent(event);
+    if (!activityId) continue;
+    if (event.type === 'runtime.activity.failed') failed.add(activityId);
+    if (
+      event.type === 'runtime.activity.compensation.completed' ||
+      event.type === 'runtime.activity.compensation.failed'
+    ) {
+      settled.add(activityId);
+    }
+  }
+  return [...failed]
+    .filter((activityId) => {
+      const invocation = requested.get(activityId);
+      return (
+        !settled.has(activityId) &&
+        invocation?.effect === 'external_effect' &&
+        invocation.metadata?.compensationAvailable === true
+      );
+    })
+    .sort();
+}
+
+function incompleteRedispatchRequests(
+  events: PersistedFrameworkEvent[]
+): PersistedFrameworkEvent[] {
+  const acceptedRequestIds = new Set(
+    events
+      .filter((event) => event.type === 'activity.redispatch.accepted')
+      .map((event) => payloadString(event, 'requestEventId'))
+      .filter((requestEventId): requestEventId is string => requestEventId !== undefined)
+  );
+  return events
+    .filter(
+      (event) => event.type === 'activity.redispatch.requested' && !acceptedRequestIds.has(event.id)
+    )
+    .sort((left, right) => left.sequence - right.sequence);
+}
+
 function result(
   command: RuntimeRecoveryCommand,
   disposition: RuntimeRecoveryDisposition
@@ -703,6 +1202,13 @@ function activityIdFromRequested(event: PersistedFrameworkEvent): string | undef
   return typeof activityId === 'string' ? activityId : undefined;
 }
 
+function activityIdFromEvent(event: PersistedFrameworkEvent): string | undefined {
+  const payload = payloadRecord(event);
+  if (typeof payload.activityId === 'string') return payload.activityId;
+  const observation = recordValue(payload.observation);
+  return typeof observation?.activityId === 'string' ? observation.activityId : undefined;
+}
+
 function payloadRecord(event: PersistedFrameworkEvent): Record<string, unknown> {
   const value = recordValue(event.payload);
   if (!value) invalid('Recovery Event payload must be an object');
@@ -718,6 +1224,19 @@ function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0)
+    invalid(`${label} must be a non-empty string`);
+  return value;
+}
+
+function requiredPositiveInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    invalid(`${label} must be a positive integer`);
+  }
+  return value as number;
 }
 
 function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {

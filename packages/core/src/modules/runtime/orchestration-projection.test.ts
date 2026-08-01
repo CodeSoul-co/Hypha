@@ -27,6 +27,8 @@ const eventTypes: FrameworkEventType[] = [
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'human.review.requested',
+  'human.review.resolved',
   'fsm.transition.accepted',
   'fsm.state.entered',
   'fsm.state.exited',
@@ -35,6 +37,13 @@ const eventTypes: FrameworkEventType[] = [
   'runtime.activity.failed',
   'runtime.activity.waiting',
   'runtime.activity.cancelled',
+  'inference.requested',
+  'inference.completed',
+  'llm.cache.lookup',
+  'llm.cache.hit',
+  'llm.cache.miss',
+  'llm.cache.write',
+  'llm.cache.bypass',
 ];
 
 const payloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
@@ -176,6 +185,59 @@ describe('Runtime orchestration projection', () => {
     });
   });
 
+  it('preserves identical Run and FSM semantics with serving cache enabled or disabled', async () => {
+    const withoutCache = await fixture();
+    const withCache = await fixture();
+    const lifecycle = [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.reasoning.1', 'fsm.state.entered', { stateId: 'Reasoning' }),
+      event('inference.requested', 'inference.requested', {
+        stepId: 'reasoning.1',
+        modelAlias: 'default-fast',
+      }),
+      event('inference.completed', 'inference.completed', {
+        responseId: 'response.1',
+        usage: { totalTokens: 12 },
+      }),
+      event('transition.completed', 'fsm.transition.accepted', {
+        from: 'Reasoning',
+        to: 'Completed',
+      }),
+      event('state.reasoning.exit', 'fsm.state.exited', { stateId: 'Reasoning' }),
+      event('state.completed.1', 'fsm.state.entered', { stateId: 'Completed' }),
+      event('run.completed', 'run.completed', { terminalState: 'Completed' }),
+    ];
+    await append(withoutCache, lifecycle);
+    await append(withCache, [
+      ...lifecycle.slice(0, 4),
+      event('cache.lookup', 'llm.cache.lookup', { key: 'llm:exact:test' }),
+      event('cache.hit', 'llm.cache.hit', { key: 'llm:exact:test' }),
+      ...lifecycle.slice(4),
+    ]);
+
+    const definition = createRuntimeOrchestrationProjectionDefinition(scope.runId);
+    const cacheDisabledProjection = await withoutCache.engine.rebuild(
+      definition,
+      withoutCache.projectionStore,
+      scope
+    );
+    const cacheEnabledProjection = await withCache.engine.rebuild(
+      definition,
+      withCache.projectionStore,
+      scope
+    );
+
+    expect(cacheEnabledProjection.state).toEqual(cacheDisabledProjection.state);
+    expect(cacheEnabledProjection.state).toMatchObject({
+      runStatus: 'completed',
+      currentState: 'Completed',
+      terminalState: 'Completed',
+      statePath: ['Reasoning', 'Completed'],
+      stateAttempt: 1,
+    });
+  });
+
   it('projects a durable cancelling lifecycle before terminal cancellation', async () => {
     const target = await fixture();
     await append(target, [
@@ -195,7 +257,7 @@ describe('Runtime orchestration projection', () => {
     await expect(
       target.engine.update(definition, target.projectionStore, scope)
     ).resolves.toMatchObject({
-      projectionVersion: '1.3.0',
+      projectionVersion: '1.5.0',
       state: {
         runStatus: 'cancelling',
         cancellation: {
@@ -233,7 +295,7 @@ describe('Runtime orchestration projection', () => {
         scope
       )
     ).resolves.toMatchObject({
-      projectionVersion: '1.3.0',
+      projectionVersion: '1.5.0',
       state: {
         runStatus: 'waiting_signal',
         pendingWait: {
@@ -242,6 +304,144 @@ describe('Runtime orchestration projection', () => {
           stateAttempt: 1,
           type: 'signal',
           key: 'legacy.signal',
+        },
+      },
+    });
+  });
+
+  it('migrates a legacy Human Wait when a stable Tool action is present', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        tool: 'approval-test-tool',
+        reason: 'Integration approval required',
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).resolves.toMatchObject({
+      state: {
+        runStatus: 'waiting_human',
+        pendingWait: {
+          waitId: 'legacy-human-wait:legacy.human.waiting',
+          stateId: 'Acting',
+          stateAttempt: 1,
+          type: 'human',
+          pendingActionRef: 'tool:approval-test-tool',
+          reason: 'Integration approval required',
+        },
+      },
+    });
+  });
+
+  it('migrates a legacy Human Wait from a preceding review request', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('review.requested', 'human.review.requested', {
+        taskId: 'review-task:legacy',
+      }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        reason: 'Review task persisted before the Wait contract existed',
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).resolves.toMatchObject({
+      state: {
+        runStatus: 'waiting_human',
+        pendingWait: {
+          type: 'human',
+          pendingActionRef: 'review-task:legacy',
+        },
+      },
+    });
+  });
+
+  it('resumes a legacy Human Wait when its review resolution matches the pending action', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.human-review.1', 'fsm.state.entered', { stateId: 'HumanReview' }),
+      event('review.requested', 'human.review.requested', {
+        invocationId: 'tool-invocation:approval',
+      }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        waitId: 'human-review:approval',
+        reason: 'Review required',
+      }),
+      event('review.resolved', 'human.review.resolved', {
+        invocationId: 'tool-invocation:approval',
+        approvedBy: 'operator-1',
+      }),
+      event('transition.observation', 'fsm.transition.accepted', {
+        from: 'HumanReview',
+        to: 'ObservationRecorded',
+      }),
+      event('state.observation.1', 'fsm.state.entered', {
+        stateId: 'ObservationRecorded',
+      }),
+    ]);
+
+    const result = await target.engine.rebuild(
+      createRuntimeOrchestrationProjectionDefinition(scope.runId),
+      target.projectionStore,
+      scope
+    );
+    expect(result).toMatchObject({
+      projectionVersion: '1.5.0',
+      state: {
+        runStatus: 'running',
+        currentState: 'ObservationRecorded',
+        lastResume: {
+          kind: 'manual',
+          waitId: 'human-review:approval',
+          principalId: 'operator-1',
+        },
+      },
+    });
+    expect(result.state).not.toHaveProperty('pendingWait');
+  });
+
+  it('quarantines a legacy Human Wait without stable pending-action evidence', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.acting.1', 'fsm.state.entered', { stateId: 'Acting' }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        reason: 'No action reference was persisted',
+      }),
+    ]);
+
+    await expect(
+      target.engine.rebuild(
+        createRuntimeOrchestrationProjectionDefinition(scope.runId),
+        target.projectionStore,
+        scope
+      )
+    ).rejects.toMatchObject({
+      code: 'RUNTIME_REPLAY_DIVERGENCE',
+      context: {
+        migration: {
+          status: 'quarantined',
+          eventId: 'legacy.human.waiting',
         },
       },
     });
