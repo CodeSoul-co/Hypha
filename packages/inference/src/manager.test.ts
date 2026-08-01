@@ -384,8 +384,15 @@ describe('@hypha/inference', () => {
   it('surfaces prefix and KV cache hits through manager metadata', async () => {
     const prefixCache = new InMemoryPrefixCacheProvider();
     const kvCache = new InMemoryKvCacheProvider();
-    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
-    const kv = { id: 'kv_1', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+    const cacheScope = { userId: 'user-cache-hit' };
+    const prefix = { id: 'system', version: '1', contentHash: 'hash', cacheScope };
+    const kv = {
+      id: 'kv_1',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'run' as const,
+      cacheScope,
+    };
     await prefixCache.put(prefix, 'cached system prompt');
     await kvCache.put(kv, { blocks: 1 });
 
@@ -408,6 +415,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_1',
         modelAlias: 'default',
         input: 'hello',
+        cacheScope,
         prefix,
         kvCache: kv,
       })
@@ -423,7 +431,8 @@ describe('@hypha/inference', () => {
 
   it('routes streaming inference through cache-aware providers', async () => {
     const prefixCache = new InMemoryPrefixCacheProvider();
-    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
+    const cacheScope = { userId: 'user-stream-cache' };
+    const prefix = { id: 'system', version: '1', contentHash: 'hash', cacheScope };
     await prefixCache.put(prefix, 'cached streaming prompt');
     const manager = new InferenceManager({ prefixCache });
     manager.register({
@@ -446,6 +455,7 @@ describe('@hypha/inference', () => {
       stepId: 'step_stream',
       modelAlias: 'default',
       input: 'hello',
+      cacheScope,
       prefix,
     })) {
       chunks.push(chunk);
@@ -601,11 +611,13 @@ describe('@hypha/inference', () => {
 
   it('enforces KV cache expiry on inference manager reads', async () => {
     const kvCache = new InMemoryKvCacheProvider();
+    const cacheScope = { userId: 'user-expired-cache' };
     const kv = {
       id: 'expired',
       provider: 'mock',
       modelAlias: 'default',
       scope: 'run' as const,
+      cacheScope,
       expiresAt: '2000-01-01T00:00:00.000Z',
     };
     await kvCache.put(kv, { stale: true });
@@ -628,6 +640,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_expired',
         modelAlias: 'default',
         input: 'hello',
+        cacheScope,
         kvCache: kv,
       })
     ).resolves.toMatchObject({
@@ -641,11 +654,13 @@ describe('@hypha/inference', () => {
 
   it('writes provider KV cache values and reuses them on later inference', async () => {
     const kvCache = new InMemoryKvCacheProvider();
+    const cacheScope = { userId: 'user-write-cache' };
     const kv = {
       id: 'kv_write',
       provider: 'mock',
       modelAlias: 'default',
       scope: 'session' as const,
+      cacheScope,
     };
     const manager = new InferenceManager({ kvCache });
     manager.register({
@@ -665,6 +680,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_write',
         modelAlias: 'default',
         input: 'hello',
+        cacheScope,
         cachePolicy: {
           writeKvCache: { ref: kv },
         },
@@ -679,6 +695,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_read',
         modelAlias: 'default',
         input: 'hello again',
+        cacheScope,
         cachePolicy: {
           kvCache: kv,
         },
@@ -691,11 +708,13 @@ describe('@hypha/inference', () => {
 
   it('does not overwrite an existing KV cache hit when write_if_missing is used', async () => {
     const kvCache = new InMemoryKvCacheProvider();
+    const cacheScope = { userId: 'user-existing-cache' };
     const kv = {
       id: 'kv_existing',
       provider: 'mock',
       modelAlias: 'default',
       scope: 'session' as const,
+      cacheScope,
     };
     await kvCache.put(kv, { handle: 'existing' });
 
@@ -715,6 +734,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_existing',
         modelAlias: 'default',
         input: 'hello',
+        cacheScope,
         cachePolicy: {
           kvCache: kv,
           writeKvCache: { ref: kv, mode: 'write_if_missing' },
@@ -728,11 +748,13 @@ describe('@hypha/inference', () => {
 
   it('checks the target KV ref before write_if_missing writes without a read policy', async () => {
     const kvCache = new InMemoryKvCacheProvider();
+    const cacheScope = { userId: 'user-write-only-cache' };
     const kv = {
       id: 'kv_existing_write_only',
       provider: 'mock',
       modelAlias: 'default',
       scope: 'session' as const,
+      cacheScope,
     };
     await kvCache.put(kv, { handle: 'existing' });
 
@@ -752,6 +774,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_write_only',
         modelAlias: 'default',
         input: 'hello',
+        cacheScope,
         cachePolicy: {
           writeKvCache: { ref: kv, mode: 'write_if_missing' },
         },
@@ -795,8 +818,15 @@ describe('@hypha/inference', () => {
         nextKvCacheValue: { handle: 'new' },
       }),
     });
-    const prefix = { id: 'system', version: '1', contentHash: 'hash' };
-    const kv = { id: 'kv_failed', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+    const cacheScope = { userId: 'user-failed-cache' };
+    const prefix = { id: 'system', version: '1', contentHash: 'hash', cacheScope };
+    const kv = {
+      id: 'kv_failed',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'run' as const,
+      cacheScope,
+    };
 
     await expect(
       manager.infer('mock', {
@@ -804,6 +834,7 @@ describe('@hypha/inference', () => {
         stepId: 'step_cache_bypass',
         modelAlias: 'default',
         input: 'hello',
+        cacheScope,
         cachePolicy: {
           prefix,
           kvCache: kv,
@@ -848,15 +879,23 @@ describe('@hypha/inference', () => {
         nextKvCacheValue: { handle: 'next' },
       }),
     });
-    const kv = { id: 'kv-timeout', provider: 'mock', modelAlias: 'default', scope: 'run' as const };
+    const cacheScope = { userId: 'user-timeout-cache' };
+    const kv = {
+      id: 'kv-timeout',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'run' as const,
+      cacheScope,
+    };
     const startedAt = Date.now();
     const response = await manager.infer('mock', {
       runId: 'run_cache_timeout',
       stepId: 'step_cache_timeout',
       modelAlias: 'default',
       input: 'hello',
+      cacheScope,
       cachePolicy: {
-        prefix: { id: 'prefix-timeout', version: '1', contentHash: 'hash' },
+        prefix: { id: 'prefix-timeout', version: '1', contentHash: 'hash', cacheScope },
         kvCache: kv,
         writeKvCache: { ref: kv },
       },
@@ -876,6 +915,114 @@ describe('@hypha/inference', () => {
       },
     });
     expect(failures).toHaveLength(3);
+  });
+
+  it('bypasses every cache operation when the authoritative user scope is missing', async () => {
+    const operations: string[] = [];
+    const manager = new InferenceManager({
+      prefixCache: {
+        get: async () => {
+          operations.push('prefix_read');
+          return 'unsafe';
+        },
+        put: async () => {
+          operations.push('prefix_write');
+        },
+        invalidate: async () => {
+          operations.push('prefix_invalidate');
+        },
+      },
+      kvCache: {
+        get: async () => {
+          operations.push('kv_read');
+          return { unsafe: true };
+        },
+        put: async () => {
+          operations.push('kv_write');
+        },
+        invalidate: async () => {
+          operations.push('kv_invalidate');
+        },
+      },
+    });
+    manager.register({
+      id: 'mock',
+      infer: async (request) => ({
+        id: 'scope-bypass',
+        output: {
+          cachePolicy: request.cachePolicy,
+          prefix: request.resolvedPrefixContent,
+          kv: request.resolvedKvCacheValue,
+        },
+        nextKvCacheValue: { handle: 'unsafe' },
+      }),
+    });
+    const kv = {
+      id: 'unscoped',
+      provider: 'mock',
+      modelAlias: 'default',
+      scope: 'session' as const,
+    };
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run-unscoped',
+        stepId: 'step-unscoped',
+        modelAlias: 'default',
+        input: 'hello',
+        cachePolicy: {
+          prefix: { id: 'prefix-unscoped', version: '1', contentHash: 'hash' },
+          kvCache: kv,
+          writeKvCache: { ref: kv },
+        },
+      })
+    ).resolves.toMatchObject({
+      cache: {
+        bypassed: true,
+        kvCacheMissReason: 'not_configured',
+        issues: [
+          { operation: 'prefix_read', code: 'INFERENCE_CACHE_SCOPE_REQUIRED' },
+          { operation: 'kv_read', code: 'INFERENCE_CACHE_SCOPE_REQUIRED' },
+          { operation: 'kv_write', code: 'INFERENCE_CACHE_SCOPE_REQUIRED' },
+        ],
+      },
+      output: {
+        cachePolicy: undefined,
+        prefix: undefined,
+        kv: undefined,
+      },
+    });
+    expect(operations).toEqual([]);
+  });
+
+  it('rejects cache references that conflict with the authoritative request scope', async () => {
+    let providerCalled = false;
+    const manager = new InferenceManager({ kvCache: new InMemoryKvCacheProvider() });
+    manager.register({
+      id: 'mock',
+      infer: async () => {
+        providerCalled = true;
+        return { id: 'must-not-run', output: null };
+      },
+    });
+
+    await expect(
+      manager.infer('mock', {
+        runId: 'run-scope-mismatch',
+        stepId: 'step-scope-mismatch',
+        modelAlias: 'default',
+        input: 'hello',
+        cacheScope: { userId: 'user-a', tenantId: 'tenant-a' },
+        kvCache: {
+          id: 'foreign',
+          provider: 'mock',
+          modelAlias: 'default',
+          scope: 'session',
+          cacheScope: { userId: 'user-b', tenantId: 'tenant-a' },
+        },
+      })
+    ).rejects.toMatchObject({ code: 'INFERENCE_CACHE_SCOPE_MISMATCH' });
+    expect(providerCalled).toBe(false);
   });
 
   it('reports provider failures without hiding the original inference error', async () => {

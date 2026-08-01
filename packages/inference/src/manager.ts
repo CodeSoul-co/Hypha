@@ -5,6 +5,8 @@ import { classifyInferenceCacheFailure, classifyInferenceFailure } from './recov
 import type {
   InferenceCacheIssue,
   InferenceCacheMissReason,
+  InferenceCachePolicy,
+  InferenceCacheScope,
   InferenceManagerOptions,
   InferenceProvider,
   InferenceRequest,
@@ -106,17 +108,54 @@ export class InferenceManager {
     providerId: string,
     request: InferenceRequest
   ): Promise<PreparedInferenceRequest> {
-    const prefixRef = request.cachePolicy?.prefix ?? request.prefix;
-    const kvCacheRef = request.cachePolicy?.kvCache ?? request.kvCache;
+    const requestedPrefixRef = request.cachePolicy?.prefix ?? request.prefix;
+    const requestedKvCacheRef = request.cachePolicy?.kvCache ?? request.kvCache;
+    const requestedWritePolicy = request.cachePolicy?.writeKvCache;
+    const cacheRequested = Boolean(
+      requestedPrefixRef || requestedKvCacheRef || requestedWritePolicy
+    );
+    const cacheScope = validCacheScope(request.cacheScope);
+    const scopeIssues =
+      cacheRequested && !cacheScope
+        ? cacheScopeRequiredIssues({
+            prefixRead: Boolean(requestedPrefixRef),
+            kvRead: Boolean(requestedKvCacheRef),
+            kvWrite: Boolean(requestedWritePolicy),
+          })
+        : [];
+    const prefixRef = cacheScope
+      ? bindCacheScope(requestedPrefixRef, cacheScope, 'Prefix Cache')
+      : undefined;
+    const kvCacheRef = cacheScope
+      ? bindCacheScope(requestedKvCacheRef, cacheScope, 'KV Cache')
+      : undefined;
+    const writeKvCache =
+      cacheScope && requestedWritePolicy
+        ? {
+            ...requestedWritePolicy,
+            ref: bindCacheScope(requestedWritePolicy.ref, cacheScope, 'KV Cache write')!,
+          }
+        : undefined;
+    const cachePolicy: InferenceCachePolicy | undefined = cacheScope
+      ? {
+          ...(request.cachePolicy ?? {}),
+          prefix: prefixRef,
+          kvCache: kvCacheRef,
+          writeKvCache,
+        }
+      : undefined;
     const [prefix, kvCache] = await Promise.all([
       this.resolvePrefixCache(providerId, request, prefixRef),
       this.resolveKvCache(providerId, request, kvCacheRef),
     ]);
-    const cacheIssues = [...prefix.issues, ...kvCache.issues];
+    const cacheIssues = [...scopeIssues, ...prefix.issues, ...kvCache.issues];
     const kvCacheHit = kvCache.value !== null;
+    const kvCacheMissReason =
+      !cacheScope && requestedKvCacheRef ? 'not_configured' : kvCache.missReason;
     return {
       request: {
         ...request,
+        cachePolicy,
         prefix: prefixRef,
         kvCache: kvCacheRef,
         resolvedPrefixContent: prefix.value ?? undefined,
@@ -125,7 +164,7 @@ export class InferenceManager {
           ...request.metadata,
           prefixCacheHit: prefix.value !== null,
           kvCacheHit,
-          ...(kvCache.missReason ? { kvCacheMissReason: kvCache.missReason } : {}),
+          ...(kvCacheMissReason ? { kvCacheMissReason } : {}),
           ...(cacheIssues.length > 0 ? { inferenceCacheIssues: cacheIssues } : {}),
         },
       },
@@ -134,7 +173,7 @@ export class InferenceManager {
       kvCacheHit,
       prefixRef,
       kvCacheRef,
-      kvCacheMissReason: kvCache.missReason,
+      kvCacheMissReason,
       cacheIssues,
     };
   }
@@ -517,4 +556,79 @@ export class InMemoryKvCacheProvider implements KvCacheProvider {
   private key(ref: KvCacheRef): string {
     return `${inferenceCacheScopeHash(ref.cacheScope)}:${ref.scope}:${ref.provider}:${ref.modelAlias}:${ref.id}`;
   }
+}
+
+function validCacheScope(scope: InferenceCacheScope | undefined): InferenceCacheScope | undefined {
+  return scope?.userId.trim() ? scope : undefined;
+}
+
+function bindCacheScope<TRef extends PrefixCacheRef | KvCacheRef>(
+  ref: TRef | undefined,
+  scope: InferenceCacheScope,
+  label: string
+): TRef | undefined {
+  if (!ref) return undefined;
+  if (ref.cacheScope && !sameCacheScope(ref.cacheScope, scope)) {
+    throw new FrameworkError({
+      code: 'INFERENCE_CACHE_SCOPE_MISMATCH',
+      message: `${label} scope does not match the authoritative inference request scope.`,
+      context: {
+        cacheUserId: ref.cacheScope.userId,
+        requestUserId: scope.userId,
+      },
+    });
+  }
+  return {
+    ...ref,
+    cacheScope: { ...scope },
+  };
+}
+
+function sameCacheScope(left: InferenceCacheScope, right: InferenceCacheScope): boolean {
+  return (
+    left.userId === right.userId &&
+    (left.tenantId ?? '') === (right.tenantId ?? '') &&
+    (left.workspaceId ?? '') === (right.workspaceId ?? '')
+  );
+}
+
+function cacheScopeRequiredIssues(input: {
+  prefixRead: boolean;
+  kvRead: boolean;
+  kvWrite: boolean;
+}): InferenceCacheIssue[] {
+  const message =
+    'Inference Cache reuse was bypassed because request.cacheScope.userId is required.';
+  return [
+    ...(input.prefixRead
+      ? [
+          {
+            operation: 'prefix_read' as const,
+            code: 'INFERENCE_CACHE_SCOPE_REQUIRED',
+            message,
+            bypassed: true,
+          },
+        ]
+      : []),
+    ...(input.kvRead
+      ? [
+          {
+            operation: 'kv_read' as const,
+            code: 'INFERENCE_CACHE_SCOPE_REQUIRED',
+            message,
+            bypassed: true,
+          },
+        ]
+      : []),
+    ...(input.kvWrite
+      ? [
+          {
+            operation: 'kv_write' as const,
+            code: 'INFERENCE_CACHE_SCOPE_REQUIRED',
+            message,
+            bypassed: true,
+          },
+        ]
+      : []),
+  ];
 }
