@@ -1,4 +1,5 @@
 import { FrameworkError, type RecoveryFailure } from '@hypha/core';
+import { deserialize, serialize } from 'node:v8';
 import { inferenceCacheScopeHash, isKvCacheExpired, runInferenceCacheOperation } from './cache';
 import { classifyInferenceCacheFailure, classifyInferenceFailure } from './recovery';
 import type {
@@ -366,6 +367,8 @@ export interface InMemoryPrefixCacheProviderOptions {
 
 export interface InMemoryKvCacheProviderOptions {
   maxEntries?: number;
+  maxEntryBytes?: number;
+  maxTotalBytes?: number;
 }
 
 export class InferenceCacheCapacityError extends Error {
@@ -442,40 +445,73 @@ export class InMemoryPrefixCacheProvider implements PrefixCacheProvider {
 }
 
 export class InMemoryKvCacheProvider implements KvCacheProvider {
-  private readonly records = new Map<string, unknown>();
+  private readonly records = new Map<string, { payload: Buffer; bytes: number }>();
   private readonly maxEntries: number;
+  private readonly maxEntryBytes: number;
+  private readonly maxTotalBytes: number;
+  private totalBytes = 0;
 
   constructor(options: InMemoryKvCacheProviderOptions = {}) {
     this.maxEntries = Math.max(1, options.maxEntries ?? 1_000);
+    this.maxEntryBytes = Math.max(1, options.maxEntryBytes ?? 4 * 1024 * 1024);
+    this.maxTotalBytes = Math.max(this.maxEntryBytes, options.maxTotalBytes ?? 64 * 1024 * 1024);
   }
 
   async get(ref: KvCacheRef): Promise<unknown | null> {
     const key = this.key(ref);
-    const value = this.records.get(key);
-    if (value !== undefined) {
+    const record = this.records.get(key);
+    if (record) {
       this.records.delete(key);
-      this.records.set(key, value);
+      this.records.set(key, record);
     }
-    return value === undefined ? null : value;
+    return record ? deserialize(record.payload) : null;
   }
 
   async put(ref: KvCacheRef, value: unknown): Promise<void> {
+    let payload: Buffer;
+    try {
+      payload = serialize(value);
+    } catch (error) {
+      throw new InferenceCacheCapacityError(
+        `KV cache value is not safely serializable: ${
+          error instanceof Error ? error.message : 'unknown serialization error'
+        }`
+      );
+    }
+    const bytes = payload.byteLength;
+    if (bytes > this.maxEntryBytes) {
+      throw new InferenceCacheCapacityError(
+        `KV cache entry is ${bytes} bytes; limit is ${this.maxEntryBytes} bytes.`
+      );
+    }
     const key = this.key(ref);
+    const previous = this.records.get(key);
+    if (previous) this.totalBytes -= previous.bytes;
     this.records.delete(key);
-    this.records.set(key, value);
-    while (this.records.size > this.maxEntries) {
+    this.records.set(key, { payload, bytes });
+    this.totalBytes += bytes;
+    while (this.records.size > this.maxEntries || this.totalBytes > this.maxTotalBytes) {
       const oldestKey = this.records.keys().next().value as string | undefined;
       if (!oldestKey) break;
+      const oldest = this.records.get(oldestKey);
+      if (oldest) this.totalBytes -= oldest.bytes;
       this.records.delete(oldestKey);
     }
   }
 
   async invalidate(ref: KvCacheRef): Promise<void> {
-    this.records.delete(this.key(ref));
+    const key = this.key(ref);
+    const existing = this.records.get(key);
+    if (existing) this.totalBytes -= existing.bytes;
+    this.records.delete(key);
   }
 
   size(): number {
     return this.records.size;
+  }
+
+  stats(): { entries: number; totalBytes: number } {
+    return { entries: this.records.size, totalBytes: this.totalBytes };
   }
 
   private key(ref: KvCacheRef): string {
