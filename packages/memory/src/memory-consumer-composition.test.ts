@@ -5,6 +5,7 @@ import {
   MemoryManagementProviderRegistry,
   MemoryRuntimeFactory,
   NativeMemoryManagementProvider,
+  InMemoryLocalVectorStoreAdapter,
   memoryManagementProviderSpecExample,
   memoryProfileSpecExample,
   type ContextProfileSpec,
@@ -50,7 +51,11 @@ describe('public Memory consumer composition', () => {
       id: 'consumer-native',
       supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
       create: async ({ profile }) => ({
-        provider: new NativeMemoryManagementProvider({ profile }),
+        provider: new NativeMemoryManagementProvider({
+          profile,
+          embeddingProvider: { embed: async (input) => input.map(() => [1, 0]) },
+          vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+        }),
         resources: { supervisor: 'installed' },
         close: installationClose,
       }),

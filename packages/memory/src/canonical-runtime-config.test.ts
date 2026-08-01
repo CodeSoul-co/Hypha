@@ -7,12 +7,22 @@ import {
   MemoryManagementProviderRegistry,
   MemoryRuntimeFactory,
   NativeMemoryManagementProvider,
+  InMemoryLocalVectorStoreAdapter,
   canonicalMemoryRuntimeConfigExample,
   canonicalMemoryRuntimeConfigJsonSchema,
   canonicalMemoryRuntimeConfigSchema,
   type MemoryEventType,
   type MemoryManagementProviderFactoryContext,
+  type MemoryProfileSpec,
 } from './index';
+
+function nativeProvider(profile: MemoryProfileSpec): NativeMemoryManagementProvider {
+  return new NativeMemoryManagementProvider({
+    profile,
+    embeddingProvider: { embed: async (input) => input.map(() => [1, 0]) },
+    vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+  });
+}
 
 describe('canonical Memory runtime configuration', () => {
   it('keeps TypeScript, Zod, JSON Schema and fixture aligned', () => {
@@ -52,7 +62,7 @@ describe('canonical Memory runtime configuration', () => {
       supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
       create: async (input) => {
         context = input;
-        return new NativeMemoryManagementProvider({ profile: input.profile });
+        return nativeProvider(input.profile);
       },
     });
     const factory = new MemoryRuntimeFactory({
@@ -103,7 +113,7 @@ describe('canonical Memory runtime configuration', () => {
     const registry = new MemoryManagementProviderRegistry().register({
       id: 'repository-native-default',
       supports: (spec) => spec.type === 'native' && spec.deployment === 'local',
-      create: async (input) => new NativeMemoryManagementProvider({ profile: input.profile }),
+      create: async (input) => nativeProvider(input.profile),
     });
     const factory = new MemoryRuntimeFactory({
       registry,
