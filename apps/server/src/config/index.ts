@@ -621,6 +621,11 @@ const configSchema = z.object({
               commandRenewalIntervalMs: z.number().int().positive().default(10_000),
               commandMaxHandlerDurationMs: z.number().int().positive().default(300_000),
               commandShutdownDrainMs: z.number().int().nonnegative().default(30_000),
+              reactQuantumIterations: z.number().int().positive().default(4),
+              reactMaxIterations: z.number().int().positive().default(64),
+              reactMaxModelCalls: z.number().int().positive().default(64),
+              reactMaxToolCalls: z.number().int().positive().default(64),
+              reactMaxTotalTokens: z.number().int().positive().default(1_000_000),
               autoRecoverReasons: z
                 .array(z.enum(['PROJECTION_BEHIND']))
                 .min(1)

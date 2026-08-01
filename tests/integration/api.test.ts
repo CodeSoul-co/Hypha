@@ -60,7 +60,7 @@ describe('GET /api/v1/health', () => {
 });
 
 describe('GET /api/v1/ready', () => {
-  it('fails closed while the production continuation handler is not composed', async () => {
+  it('reports the composed durable Runtime while failing closed on unavailable LLM providers', async () => {
     const r = await request(app).get('/api/v1/ready');
 
     expect(r.status).toBe(503);
@@ -69,11 +69,11 @@ describe('GET /api/v1/ready', () => {
       data: {
         status: 'not_ready',
         runtime: {
-          ready: false,
-          state: 'maintenance_workers_running',
+          ready: true,
+          state: 'workers_running',
         },
         components: {
-          runtime: { ready: false },
+          runtime: { ready: true },
           storage: { ready: true, mongodb: true, redis: true },
           memory: { ready: true },
           llm: { ready: false, availableProviders: [] },
@@ -86,29 +86,41 @@ describe('GET /api/v1/ready', () => {
 });
 
 describe('durable Runtime Session Commands', () => {
-  it('does not admit a start_run command before continuation execution is composed', async () => {
+  it('admits and durably applies a start_run command through the production worker', async () => {
     const sessionId = `runtime-command-${Date.now()}`;
     const idempotencyKey = `start-run-${Date.now()}`;
     const body = { input: { task: 'durable-server-start' } };
-    const rejected = await request(app)
+    const accepted = await request(app)
       .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
       .set('Authorization', `Bearer ${devToken}`)
       .set('Idempotency-Key', idempotencyKey)
       .send(body);
 
-    expect(rejected.status).toBe(503);
-    expect(rejected.body).toMatchObject({
-      success: false,
-      error: {
-        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
-        details: { state: 'maintenance_workers_running' },
-      },
+    expect(accepted.status).toBe(202);
+    expect(accepted.body).toMatchObject({
+      success: true,
+      data: { commandType: 'start_run', status: 'queued' },
     });
-    const listed = await request(app)
+    let listed = await request(app)
       .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
       .set('Authorization', `Bearer ${devToken}`);
+    for (
+      let attempt = 0;
+      attempt < 120 &&
+      !listed.body.data?.some((command: { status: string }) => command.status === 'applied');
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      listed = await request(app)
+        .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+        .set('Authorization', `Bearer ${devToken}`);
+    }
     expect(listed.status).toBe(200);
-    expect(listed.body.data).toEqual([]);
+    expect(listed.body.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ commandType: 'start_run', status: 'applied' }),
+      ])
+    );
   });
 
   it('allows browser preflight to request the idempotency header', async () => {
@@ -134,7 +146,7 @@ describe('GET /api/v1/status', () => {
           ready: false,
           status: 'not_ready',
           components: {
-            runtime: { ready: false },
+            runtime: { ready: true },
             llm: { ready: false, availableProviders: [] },
           },
         },

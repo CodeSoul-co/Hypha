@@ -165,6 +165,11 @@ describe('configuration storage taxonomy', () => {
         commandRenewalIntervalMs: 10_000,
         commandMaxHandlerDurationMs: 300_000,
         commandShutdownDrainMs: 30_000,
+        reactQuantumIterations: 4,
+        reactMaxIterations: 64,
+        reactMaxModelCalls: 64,
+        reactMaxToolCalls: 64,
+        reactMaxTotalTokens: 1_000_000,
         autoRecoverReasons: ['PROJECTION_BEHIND'],
       },
     });
