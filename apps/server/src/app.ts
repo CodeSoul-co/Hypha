@@ -39,6 +39,7 @@ import {
 } from './services/EventRuntime';
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
+import { createServerProductionRuntime } from './runtime/ServerProductionRuntime';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 
 class Application {
@@ -54,19 +55,26 @@ class Application {
   }
 
   async initialize(): Promise<void> {
-    // Setup middleware
-    this.setupMiddleware();
+    try {
+      // Setup middleware
+      this.setupMiddleware();
 
-    // Setup routes
-    this.setupRoutes();
+      // Setup routes
+      this.setupRoutes();
 
-    // Setup error handling
-    this.setupErrorHandling();
+      // Setup error handling
+      this.setupErrorHandling();
 
-    // Initialize services
-    await this.initializeServices();
+      // Initialize services
+      await this.initializeServices();
 
-    logger.info('Application initialized successfully');
+      logger.info('Application initialized successfully');
+    } catch (error) {
+      await this.stop().catch((shutdownError) => {
+        logger.error('Failed to clean up after initialization failure:', shutdownError);
+      });
+      throw error;
+    }
   }
 
   private setupMiddleware(): void {
@@ -169,7 +177,37 @@ class Application {
     // Initialize Prompt Manager
     await initializePromptManager();
 
+    // Compose the canonical execution graph only after every adapter, Skill,
+    // Tool, Workflow, and Prompt dependency is ready. Worker startup performs
+    // an initial durable sweep and fails closed before /ready can return 200.
+    await this.activateCanonicalExecution();
+
     logger.info('All services initialized');
+  }
+
+  private async activateCanonicalExecution(): Promise<void> {
+    const runtime = this.canonicalRuntime;
+    if (!runtime) {
+      throw new Error('Canonical Runtime Event authority is not initialized');
+    }
+    const adapters = getEventRuntime().canonicalExecutionAdapters();
+    const workers = runtimeConfig().canonical.workers;
+    const production = createServerProductionRuntime({
+      ...adapters,
+      workerId: workers.workerId,
+      leaseTtlMs: workers.leaseTtlMs,
+      pageLimit: workers.pageLimit,
+      timerPollIntervalMs: workers.timerPollIntervalMs,
+      timerErrorBackoffMs: workers.timerErrorBackoffMs,
+      recoveryPollIntervalMs: workers.recoveryPollIntervalMs,
+      recoveryErrorBackoffMs: workers.recoveryErrorBackoffMs,
+      autoRecoverReasons: workers.autoRecoverReasons,
+    });
+    runtime.composeRuntime(production.execution);
+    const active = await runtime.startWorkers(production.workers);
+    logger.info('Canonical Runtime execution graph activated', {
+      workers: active.status(),
+    });
   }
 
   private async initializeCanonicalRuntime(): Promise<void> {
@@ -245,22 +283,29 @@ class Application {
 
   async start(): Promise<void> {
     const { host, port } = this.config.app;
-
-    return new Promise((resolve) => {
-      this.server = this.app.listen(port, host, async () => {
-        logger.info(`Server started`, {
-          host,
-          port,
-          env: this.config.app.env,
-          url: `http://${host}:${port}`,
-        });
-
-        // Startup health check
-        await this.startupHealthCheck(host, port);
-
+    await new Promise<void>((resolve, reject) => {
+      const server = this.app.listen(port, host);
+      this.server = server;
+      const onError = (error: Error) => {
+        server.off('listening', onListening);
+        this.server = null;
+        reject(error);
+      };
+      const onListening = () => {
+        server.off('error', onError);
         resolve();
-      });
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
     });
+    logger.info(`Server started`, {
+      host,
+      port,
+      env: this.config.app.env,
+      url: `http://${host}:${port}`,
+    });
+
+    await this.startupHealthCheck(host, port);
   }
 
   private async startupHealthCheck(host: string, port: number): Promise<void> {
@@ -550,6 +595,9 @@ async function main() {
     await app.start();
   } catch (error) {
     logger.error('Failed to start application:', error);
+    await app.stop().catch((shutdownError) => {
+      logger.error('Failed to clean up after startup failure:', shutdownError);
+    });
     process.exit(1);
   }
 }

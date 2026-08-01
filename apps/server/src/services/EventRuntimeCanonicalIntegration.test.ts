@@ -34,6 +34,23 @@ describe('Server EventRuntime canonical integration', () => {
       eventDbPath: path.join(root, 'runtime.sqlite'),
       humanWaits: composition.humanWaits,
     });
+    const adapters = runtime.canonicalExecutionAdapters();
+    expect(adapters.fsmSpec.id).toBeTruthy();
+    await expect(
+      adapters.inference.infer({
+        runId: 'run.invalid',
+        stepId: 'step.invalid',
+        modelAlias: 'model.invalid',
+        input: {},
+      })
+    ).rejects.toMatchObject({ code: 'INFERENCE_INVALID_INPUT' });
+    await expect(
+      adapters.toolRunner.run({
+        toolId: 'utility.text',
+        input: {},
+        context: { runId: 'run.invalid', stepId: 'step.invalid' },
+      })
+    ).rejects.toMatchObject({ code: 'TOOL_INVALID_INPUT' });
 
     const run = await runtime.startRun({
       userId: 'user.integration',
