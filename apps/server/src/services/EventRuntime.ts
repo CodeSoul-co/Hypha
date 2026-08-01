@@ -1606,15 +1606,7 @@ class EventRuntimeService {
         message: `Tool not found: ${toolId}`,
       });
     }
-    const spec: ToolSpec = {
-      ...resolved.spec,
-      ...override,
-      id: resolved.spec.id,
-      version: override?.version ?? resolved.spec.version,
-      description: override?.description ?? resolved.spec.description,
-      inputSchema: override?.inputSchema ?? resolved.spec.inputSchema,
-      sideEffectLevel: override?.sideEffectLevel ?? resolved.spec.sideEffectLevel,
-    };
+    const spec = mergeManagedToolSpec(resolved.spec, override);
     this.toolRegistry.registerAdapter(spec, resolved.adapter, { replace: true });
     return spec.id;
   }
@@ -2888,6 +2880,39 @@ class EventRuntimeService {
   private runtimeSessionId(userId: string, clientSessionId: string): string {
     return `user:${userId}:session:${clientSessionId}`;
   }
+}
+
+export function mergeManagedToolSpec(resolved: ToolSpec, override?: Partial<ToolSpec>): ToolSpec {
+  const sourceRef =
+    resolved.sourceRef || override?.sourceRef
+      ? {
+          ...override?.sourceRef,
+          ...resolved.sourceRef,
+        }
+      : undefined;
+  const governedMCP = resolved.source === 'mcp';
+  return {
+    ...resolved,
+    ...override,
+    id: resolved.id,
+    version: resolved.version,
+    revision: resolved.revision,
+    name: resolved.name,
+    inputSchema: resolved.inputSchema,
+    outputSchema: resolved.outputSchema,
+    input: resolved.input,
+    output: resolved.output,
+    source: resolved.source,
+    sourceRef,
+    sideEffectLevel:
+      governedMCP || override?.sideEffectLevel === undefined
+        ? resolved.sideEffectLevel
+        : override.sideEffectLevel,
+    permissionScope:
+      governedMCP || override?.permissionScope === undefined
+        ? resolved.permissionScope
+        : override.permissionScope,
+  };
 }
 
 function createDefaultDomainPack(): DomainPackSpec {
