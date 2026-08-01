@@ -1,10 +1,14 @@
 import type { ProviderHealth } from '../../contracts/execution';
 import {
   DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+  SESSION_COMMAND_RUN_CANCELLED_CODE,
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
+  type CancelSessionCommandsRequest,
+  type CancelSessionCommandsResult,
   type ClaimSessionCommandRequest,
+  type CloseDeadLetterSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
@@ -15,13 +19,18 @@ import {
   type RenewSessionCommandRequest,
   type SessionCommandClaim,
   type SessionCommandRecord,
+  type SessionQueueHealthSnapshot,
   type SessionQueueScope,
   type StuckSessionCommand,
 } from '../../contracts/session-queue';
 import {
+  validateCancelSessionCommandsRequest,
+  validateCancelSessionCommandsResult,
+  validateCloseDeadLetterSessionCommandRequest,
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
+  validateSessionQueueHealthSnapshot,
   validateStuckSessionCommand,
 } from '../../contracts/session-queue-schemas';
 import { hashCanonicalJson } from './canonical-json';
@@ -35,10 +44,12 @@ export interface SessionQueue {
   fail(request: FailSessionCommandRequest): Promise<void>;
   release(request: ReleaseSessionCommandRequest): Promise<void>;
   list(request: ListSessionCommandsRequest): Promise<SessionCommandRecord[]>;
+  cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult>;
   redriveDeadLetter(request: RedriveDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
+  closeDeadLetter(request: CloseDeadLetterSessionCommandRequest): Promise<SessionCommandRecord>;
   listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]>;
   drain(scope: SessionQueueScope): Promise<void>;
-  health(): Promise<ProviderHealth>;
+  health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }>;
 }
 
 export interface InMemorySessionQueueOptions {
@@ -326,6 +337,45 @@ export class InMemorySessionQueue implements SessionQueue {
       .map((record) => structuredClone(record));
   }
 
+  async cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult> {
+    const validated = validateCancelSessionCommandsRequest(request);
+    this.recover(validated.cancelledAt);
+    const result: CancelSessionCommandsResult = {
+      targetRunId: validated.targetRunId,
+      cancelledCommandIds: [],
+      alreadyCancelledCommandIds: [],
+      alreadyTerminalCommandIds: [],
+    };
+    const records = [...this.records.values()]
+      .filter(
+        (record) =>
+          sameScope(scopeFromCommand(record), validated.scope) &&
+          record.targetRunId === validated.targetRunId &&
+          record.id !== validated.cancellationCommandId
+      )
+      .sort((left, right) => left.enqueueSequence - right.enqueueSequence);
+    for (const record of records) {
+      if (record.rejectionCode === SESSION_COMMAND_RUN_CANCELLED_CODE) {
+        result.alreadyCancelledCommandIds.push(record.id);
+        continue;
+      }
+      if (!isPending(record)) {
+        result.alreadyTerminalCommandIds.push(record.id);
+        continue;
+      }
+      record.status = 'rejected';
+      record.rejectionCode = SESSION_COMMAND_RUN_CANCELLED_CODE;
+      record.completedAt = validated.cancelledAt;
+      delete record.claimedBy;
+      delete record.claimToken;
+      delete record.leaseExpiresAt;
+      this.records.set(record.id, validateSessionCommandRecord(record));
+      result.cancelledCommandIds.push(record.id);
+      this.notifyIfDrained(scopeFromCommand(record));
+    }
+    return validateCancelSessionCommandsResult(result);
+  }
+
   async redriveDeadLetter(
     request: RedriveDeadLetterSessionCommandRequest
   ): Promise<SessionCommandRecord> {
@@ -392,10 +442,64 @@ export class InMemorySessionQueue implements SessionQueue {
         requestedAt,
       },
     });
+    const resolvedSource = validateSessionCommandRecord({
+      ...source,
+      status: 'dead_letter_resolved',
+      deadLetterResolution: {
+        version: '1.0.0',
+        disposition: 'redriven',
+        operatorId: validated.operatorId,
+        reason: validated.reason,
+        resolvedAt: requestedAt,
+        redriveCommandId: record.id,
+      },
+    });
+    this.records.set(resolvedSource.id, resolvedSource);
     this.records.set(record.id, record);
     this.idempotency.set(idempotencyKey, { commandId: record.id, fingerprint });
     this.sessionSequences.set(key, enqueueSequence);
     return structuredClone(record);
+  }
+
+  async closeDeadLetter(
+    request: CloseDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateCloseDeadLetterSessionCommandRequest(request);
+    const record = this.records.get(validated.commandId);
+    const resolution = {
+      version: '1.0.0' as const,
+      disposition: 'closed' as const,
+      operatorId: validated.operatorId,
+      reason: validated.reason,
+      resolvedAt: validated.closedAt,
+    };
+    if (
+      record &&
+      sameScope(scopeFromCommand(record), validated.scope) &&
+      record.status === 'dead_letter_resolved' &&
+      record.deadLetterResolution?.disposition === 'closed' &&
+      hashCanonicalJson(record.deadLetterResolution) === hashCanonicalJson(resolution)
+    ) {
+      return structuredClone(record);
+    }
+    if (
+      !record ||
+      !sameScope(scopeFromCommand(record), validated.scope) ||
+      record.status !== 'dead_letter'
+    ) {
+      throw busError(
+        'RUNTIME_SESSION_QUEUE_CONFLICT',
+        'Only an unresolved dead-letter command in the requested scope can be closed',
+        { commandId: validated.commandId }
+      );
+    }
+    const updated = validateSessionCommandRecord({
+      ...record,
+      status: 'dead_letter_resolved',
+      deadLetterResolution: resolution,
+    });
+    this.records.set(updated.id, updated);
+    return structuredClone(updated);
   }
 
   async listStuck(request: ListStuckSessionCommandsRequest): Promise<StuckSessionCommand[]> {
@@ -434,17 +538,14 @@ export class InMemorySessionQueue implements SessionQueue {
     });
   }
 
-  async health(): Promise<ProviderHealth> {
-    this.recover(this.now());
+  async health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }> {
+    const checkedAt = this.now();
+    const recoveredExpiredLeases = this.recover(checkedAt);
     const records = [...this.records.values()];
     return {
       status: 'healthy',
-      checkedAt: this.now(),
-      details: {
-        commands: records.length,
-        queued: records.filter((record) => record.status === 'queued').length,
-        claimed: records.filter((record) => record.status === 'claimed').length,
-      },
+      checkedAt,
+      details: createSessionQueueHealthSnapshot(records, checkedAt, recoveredExpiredLeases),
     };
   }
 
@@ -507,16 +608,29 @@ export class InMemorySessionQueue implements SessionQueue {
     }
   }
 
-  private recover(now: string): void {
+  private recover(now: string): number {
     timestamp(now, 'recovery.now');
     const affected = new Map<string, SessionQueueScope>();
+    let recoveredExpiredLeases = 0;
     for (const record of this.records.values()) {
       if (
         record.status === 'claimed' &&
         record.leaseExpiresAt !== undefined &&
         isAtOrBefore(record.leaseExpiresAt, now)
       ) {
+        recoveredExpiredLeases += 1;
         const exhausted = record.attempts >= record.maxAttempts;
+        record.leaseRecoveries = [
+          ...(record.leaseRecoveries ?? []),
+          {
+            version: '1.0.0',
+            previousWorkerId: record.claimedBy!,
+            previousLeaseEpoch: record.leaseEpoch,
+            leaseExpiredAt: record.leaseExpiresAt,
+            recoveredAt: now,
+            disposition: exhausted ? 'dead_lettered' : 'requeued',
+          },
+        ];
         record.status = exhausted ? 'dead_letter' : 'queued';
         if (exhausted) {
           record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
@@ -526,6 +640,7 @@ export class InMemorySessionQueue implements SessionQueue {
         delete record.claimedBy;
         delete record.claimToken;
         delete record.leaseExpiresAt;
+        validateSessionCommandRecord(record);
       }
       if (
         record.status === 'queued' &&
@@ -539,6 +654,7 @@ export class InMemorySessionQueue implements SessionQueue {
       }
     }
     for (const scope of affected.values()) this.notifyIfDrained(scope);
+    return recoveredExpiredLeases;
   }
 
   private isDrained(scope: SessionQueueScope): boolean {
@@ -555,6 +671,39 @@ export class InMemorySessionQueue implements SessionQueue {
     this.drainWaiters.delete(key);
     for (const resolve of waiters) resolve();
   }
+}
+
+export function createSessionQueueHealthSnapshot(
+  records: readonly SessionCommandRecord[],
+  checkedAt: string,
+  recoveredExpiredLeases = 0
+): SessionQueueHealthSnapshot {
+  timestamp(checkedAt, 'health.checkedAt');
+  const pending = records.filter(isPending);
+  const oldestCreatedAtMs =
+    pending.length === 0
+      ? undefined
+      : Math.min(...pending.map((record) => Date.parse(record.createdAt)));
+  return validateSessionQueueHealthSnapshot({
+    version: '1.0.0',
+    totalCommands: records.length,
+    pendingCommands: pending.length,
+    queuedCommands: pending.filter((record) => record.status === 'queued').length,
+    claimedCommands: pending.filter((record) => record.status === 'claimed').length,
+    deadLetterCommands: records.filter((record) => record.status === 'dead_letter').length,
+    resolvedDeadLetterCommands: records.filter((record) => record.status === 'dead_letter_resolved')
+      .length,
+    retryingCommands: pending.filter((record) => record.attempts > 0).length,
+    redeliveredCommands: records.filter((record) => record.leaseEpoch > 1).length,
+    recoveredExpiredLeases,
+    leaseRecoveryCount: records.reduce(
+      (count, record) => count + (record.leaseRecoveries?.length ?? 0),
+      0
+    ),
+    ...(oldestCreatedAtMs === undefined
+      ? {}
+      : { oldestPendingAgeMs: Math.max(0, Date.parse(checkedAt) - oldestCreatedAtMs) }),
+  });
 }
 
 function validateEnqueueRequest(request: EnqueueSessionCommandRequest): void {

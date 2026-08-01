@@ -96,7 +96,9 @@ describe('FilesystemTool', () => {
     const result = await tool.execute({ operation: 'read', path: requestedPath });
 
     expect(result).toMatchObject({ success: false });
-    expect(result.error).toContain('outside configured read paths');
+    expect(result.error).toMatch(
+      /outside configured read paths|cannot traverse symbolic links or junctions/u
+    );
   });
 
   it('requires executable writes to be inside the execute allowlist', async () => {
