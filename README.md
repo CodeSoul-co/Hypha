@@ -64,11 +64,12 @@ lease, claim, event, and checkpoint evidence prevents stale workers or repeated 
 being treated as progress. See the [Runtime Model](docs/reference/runtime-model.md) and
 [Framework API](docs/api/framework.md).
 
-The durable Runtime graph is an explicit framework composition. The bundled Express server still
-uses its `EventRuntime` compatibility path and does not start the canonical session-command,
-continuation, timer, or recovery schedulers by default. Applications that require autonomous work
-to continue across process restarts must compose and own those workers explicitly; the default
-server must not be treated as a cross-restart continuous executor.
+The bundled Express server composes the canonical Runtime graph during startup. It owns durable
+session-command, ReAct continuation, timer, and recovery workers; restores their persisted state;
+and stops them in dependency order during shutdown. A start command is persisted before execution,
+each ReAct quantum is bounded, and the next quantum is rebuilt from Event, checkpoint, and Artifact
+evidence rather than process memory. `/ready` fails closed when the Runtime graph, a required worker,
+Memory, storage, or the configured LLM provider is unavailable.
 
 ## Coordinated Recovery
 
@@ -108,6 +109,10 @@ permission, policy, approval, idempotency, retry, timeout, cancellation, artifac
 observation, cache-validity, and recovery semantics. Dynamic MCP capabilities are separated into
 connection, catalog, trust, drift, schema-cache, and immutable Run snapshot records.
 
+Skills are loaded progressively through the Server `SkillManager`. Built-in, filesystem, package,
+and explicitly enabled remote registries share validation, content hashing, quarantine, review, and
+activation rules; a required remote Skill fails startup instead of silently becoming unavailable.
+
 See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
 [security guide](docs/guides/tool-mcp-security.md), and
 [adapter guide](docs/guides/tool-adapters.md).
@@ -142,8 +147,12 @@ particular container, cloud object store, or remote execution provider.
 The Artifact lifecycle is content-addressed and append-only. `DefaultArtifactManager` and its
 eventing wrapper govern create, read, list, version navigation, lineage, retention, garbage
 collection, and download access through principal-scoped policy checks. In-memory, local-file, and
-SQLite-backed reference components are available; concrete cloud providers remain adapter
-extensions and are not implied by the core contract.
+SQLite-backed reference components are available. `@hypha/adapters-local` also provides explicit
+factories for local-process and Docker execution, remote-sandbox HTTP transport, SQLite and
+PostgreSQL execution stores, and local or S3-compatible execution Artifacts. Deployments register
+only the providers they intend to trust; capability negotiation and readiness fail closed when a
+required control or provider is unavailable. Environment-specific providers are release-qualified
+only by their required, zero-skipped acceptance suites.
 
 See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
 extension rules.
@@ -187,12 +196,15 @@ npm run build
 npm run typecheck
 npm test
 npm run lint
+npm run test:release
 npm run cli -- --help
 ```
 
 - `npm run dev` starts the Express API server with dotenv.
 - `npm run build` compiles framework packages, the API server, and the CLI.
 - `npm test` runs unit, package, and integration test suites.
+- `npm run test:release` additionally requires real Memory and Execution provider acceptance; it is
+  expected to fail when those deployment services or credentials are absent.
 - `npm run cli -- --help` shows the CLI client commands.
 
 ## License

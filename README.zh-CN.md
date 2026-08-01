@@ -64,10 +64,11 @@ adapter 和应用状态不进入 Runtime core。
 Event 与 checkpoint 证据防止 stale worker 或重复循环被误判为有效进展。详见
 [Runtime 模型](docs/reference/runtime-model.md)与 [Framework API](docs/api/framework.md)。
 
-持久 Runtime graph 是需要显式装配的 Framework 能力。仓库内置的 Express Server 当前仍使用
-`EventRuntime` 兼容路径，默认不会启动 canonical session-command、continuation、timer 或 recovery
-scheduler。需要在进程重启后继续自主执行的应用必须显式装配并管理这些 worker 的生命周期；不能把
-默认 Server 当作跨重启连续执行器。
+内置 Express Server 会在启动时组合 canonical Runtime graph，并统一管理持久 session-command、
+ReAct continuation、timer 与 recovery worker；启动时恢复持久状态，关闭时按依赖顺序停止。start
+command 会先持久化再执行，每个 ReAct quantum 都有明确边界，后续 quantum 只从 Event、checkpoint
+与 Artifact 证据重建，而不依赖进程内状态。当 Runtime graph、必要 worker、Memory、Storage 或已配置
+的 LLM Provider 不可用时，`/ready` 会失败关闭。
 
 ## 跨模块协同恢复
 
@@ -97,6 +98,9 @@ Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`To
 
 动态 MCP capability 的连接状态、catalog、trust、drift、schema cache 与 Run contract snapshot 相互分离。运行中的 Run 使用不可变 snapshot，远端 capability 变化不会静默替换当前执行或 replay 使用的契约。
 
+Skill 由 Server `SkillManager` 渐进加载。内置目录、文件系统、package 与显式启用的远端 registry
+统一执行校验、内容哈希、隔离、复核和激活规则；必要的远端 Skill 不可用时会阻断启动，不会静默缺失。
+
 参见 [Tool/MCP 架构](docs/architecture/tool-mcp.md)、[安全指南](docs/guides/tool-mcp-security.md) 与 [Adapter 指南](docs/guides/tool-adapters.md)。
 
 服务端内置受治理、无副作用的 `utility.json`、`utility.text` 与 `utility.hash`，用于有边界的 JSON 处理、字面文本变换和 SHA-256 指纹。参见[通用工具指南](docs/guides/common-utility-tools.md)与 [FSM 异常恢复架构](docs/architecture/fsm-recovery.md)。
@@ -118,8 +122,11 @@ port，不代表内置了某个容器、云对象存储或远端 Execution Provi
 
 Artifact 生命周期采用 content-addressed、append-only 语义。`DefaultArtifactManager` 及其 eventing
 wrapper 通过 principal-scoped policy 管理创建、读取、列表、版本导航、lineage、retention、垃圾回收
-与下载授权。框架提供内存、本地文件和 SQLite 参考组件；具体云 Provider 仍属于 Adapter 扩展，
-core contract 不承诺未实现的云端能力。
+与下载授权。框架提供内存、本地文件和 SQLite 参考组件；`@hypha/adapters-local` 还提供显式的
+local-process、Docker、remote-sandbox HTTP、SQLite/PostgreSQL Execution Store，以及本地或
+S3-compatible Execution Artifact Factory。部署只注册其明确授信的 Provider；必要控制或 Provider
+不可用时，capability negotiation 与 readiness 会失败关闭。环境相关 Provider 只有通过 required、
+0-skipped 的真实验收套件后，才能作为对应环境的发布能力。
 
 契约分层与扩展规则参见 [Execution 架构](docs/architecture/execution.md)。
 
@@ -157,12 +164,15 @@ npm run build
 npm run typecheck
 npm test
 npm run lint
+npm run test:release
 npm run cli -- --help
 ```
 
 - `npm run dev`：使用 dotenv 启动 Express API server。
 - `npm run build`：编译 framework packages、API server 和 CLI。
 - `npm test`：运行 unit、package 和 integration 测试套件。
+- `npm run test:release`：额外强制执行真实 Memory 与 Execution Provider 验收；缺少对应部署服务或
+  凭据时应当失败。
 - `npm run cli -- --help`：查看 CLI client 命令。
 
 ## 支持协议
