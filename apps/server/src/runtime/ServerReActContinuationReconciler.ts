@@ -10,10 +10,15 @@ import {
   type SessionQueue,
 } from '@hypha/core';
 import { reActContinuationIdempotencyKey, type ReActContinuationScheduler } from '@hypha/harness';
-import type { ReActContinuationCheckpoint, ReActContinuationCheckpointStore } from '@hypha/kernel';
+import {
+  validateReActContinuationCheckpoint,
+  type ReActContinuationCheckpoint,
+  type ReActContinuationCheckpointStore,
+} from '@hypha/kernel';
 
 export interface ReActContinuationSuspensionEvidence {
   eventId: string;
+  source: 'suspension' | 'human_approval';
   tenantId?: string;
   userId: string;
   workspaceId?: string;
@@ -102,7 +107,7 @@ export class ServerReActContinuationReconciler {
     };
     for (const head of page.heads) {
       assertActive(request.signal);
-      const evidence = await this.latestOpenSuspension(head);
+      const evidence = await this.latestOpenContinuation(head);
       if (!evidence) continue;
       const commands = await this.listContinuationCommands(evidence);
       const checkpoint = await this.options.checkpoints.get(
@@ -177,24 +182,129 @@ export class ServerReActContinuationReconciler {
       .catch(() => undefined);
   }
 
-  private async latestOpenSuspension(
+  private async latestOpenContinuation(
     head: Readonly<EventStreamHead>
   ): Promise<ReActContinuationSuspensionEvidence | null> {
     const events = await this.options.events.read({
       scope: head.scope,
-      types: ['react.continuation.suspended', 'run.completed', 'run.failed', 'run.cancelled'],
+      types: [
+        'react.continuation.suspended',
+        'react.continuation.resumed',
+        'react.continuation.quarantined',
+        'human.review.requested',
+        'human.review.approved',
+        'human.review.rejected',
+        'human.review.expired',
+        'human.review.cancelled',
+        'human.review.superseded',
+        'run.completed',
+        'run.failed',
+        'run.cancelled',
+      ],
     });
-    const latest = [...events].sort((left, right) => right.sequence - left.sequence)[0];
-    if (!latest || latest.type !== 'react.continuation.suspended') return null;
-    return suspensionEvidence(latest, head.scope.userId);
+    const ordered = [...events].sort((left, right) => left.sequence - right.sequence);
+    const human = await this.approvedHumanContinuation(ordered, head.scope.userId);
+    if (human && !continuationClosed(ordered, human)) return human;
+    const latestSuspension = [...ordered]
+      .reverse()
+      .find((event) => event.type === 'react.continuation.suspended');
+    if (!latestSuspension) return null;
+    const payload = objectPayload(latestSuspension.payload);
+    if (payload.requiresHumanReview !== false || payload.retryable !== true) return null;
+    const suspension = suspensionEvidence(latestSuspension, head.scope.userId);
+    return continuationClosed(ordered, suspension) ? null : suspension;
+  }
+
+  private async approvedHumanContinuation(
+    events: readonly PersistedFrameworkEvent[],
+    fallbackUserId: string
+  ): Promise<ReActContinuationSuspensionEvidence | null> {
+    const requests = new Map<string, PersistedFrameworkEvent>();
+    for (const event of events) {
+      if (event.type !== 'human.review.requested') continue;
+      const payload = objectPayload(event.payload);
+      const metadata = optionalObject(payload.metadata);
+      if (metadata?.resumeMode !== 'react_feedback') continue;
+      requests.set(stringField(payload, 'taskId'), event);
+    }
+    const approval = [...events].reverse().find((event) => {
+      if (event.type !== 'human.review.approved') return false;
+      const taskId = optionalString(objectPayload(event.payload).taskId);
+      return taskId !== undefined && requests.has(taskId);
+    });
+    if (!approval) return null;
+    const approvalPayload = objectPayload(approval.payload);
+    const taskId = stringField(approvalPayload, 'taskId');
+    const request = requests.get(taskId);
+    if (!request) return null;
+    const requestPayload = objectPayload(request.payload);
+    const metadata = optionalObject(requestPayload.metadata);
+    if (!metadata) corrupt('ReAct HumanTask is missing continuation metadata');
+    const stepId = stringField(metadata, 'stepId');
+    const scopeHash = hashField(metadata, 'scopeHash');
+    const requestedSequence = integerField(metadata, 'checkpointSequence');
+    const requestedHash = hashField(metadata, 'checkpointHash');
+    const runId = approval.runId;
+    let checkpoint = await this.options.checkpoints.get(runId, stepId, scopeHash);
+    if (checkpoint && checkpoint.stepSequence === requestedSequence) {
+      if (hashCanonicalJson(checkpoint) !== requestedHash) {
+        return humanEvidence(
+          approval,
+          fallbackUserId,
+          stepId,
+          scopeHash,
+          requestedSequence,
+          requestedHash
+        );
+      }
+      const advanced = approvedCheckpoint(checkpoint, approval);
+      checkpoint = (
+        await this.options.checkpoints.put(
+          advanced,
+          `human-review-resume:${approval.id}:${advanced.stepSequence}`
+        )
+      ).checkpoint;
+    } else if (
+      checkpoint &&
+      checkpoint.stepSequence === requestedSequence + 1 &&
+      !isApprovedCheckpoint(checkpoint, approval)
+    ) {
+      return humanEvidence(
+        approval,
+        fallbackUserId,
+        stepId,
+        scopeHash,
+        requestedSequence,
+        requestedHash
+      );
+    }
+    return checkpoint
+      ? humanEvidence(
+          approval,
+          fallbackUserId,
+          stepId,
+          scopeHash,
+          checkpoint.stepSequence,
+          hashCanonicalJson(checkpoint)
+        )
+      : humanEvidence(
+          approval,
+          fallbackUserId,
+          stepId,
+          scopeHash,
+          requestedSequence,
+          requestedHash
+        );
   }
 
   private async listContinuationCommands(
     evidence: ReActContinuationSuspensionEvidence
   ): Promise<SessionCommandRecord[]> {
     const commands: SessionCommandRecord[] = [];
+    let scanned = 0;
     let fromSequence: number | undefined;
-    while (commands.length < this.maxCommandsPerSession) {
+    while (scanned < this.maxCommandsPerSession) {
+      const limit = Math.min(100, this.maxCommandsPerSession - scanned);
       const page = await this.options.queue.list({
         scope: {
           ...(evidence.tenantId === undefined ? {} : { tenantId: evidence.tenantId }),
@@ -202,14 +312,15 @@ export class ServerReActContinuationReconciler {
           sessionId: evidence.sessionId,
         },
         ...(fromSequence === undefined ? {} : { fromSequence }),
-        limit: Math.min(100, this.maxCommandsPerSession - commands.length),
+        limit,
       });
+      scanned += page.length;
       const relevant = page.filter(
         (command) =>
           command.commandType === 'continue_react' && command.targetRunId === evidence.runId
       );
       commands.push(...relevant);
-      if (page.length < 100) return commands;
+      if (page.length < limit) return commands;
       fromSequence = Math.max(...page.map((command) => command.enqueueSequence)) + 1;
     }
     throw new FrameworkError({
@@ -227,6 +338,7 @@ function suspensionEvidence(
   if (!event.sessionId) corrupt('ReAct suspension Event is missing sessionId');
   const evidence = {
     eventId: event.id,
+    source: 'suspension' as const,
     ...(event.tenantId === undefined ? {} : { tenantId: event.tenantId }),
     userId: event.userId ?? fallbackUserId,
     ...(event.workspaceId === undefined ? {} : { workspaceId: event.workspaceId }),
@@ -239,6 +351,108 @@ function suspensionEvidence(
     suspendedAt: event.timestamp,
   };
   return evidence;
+}
+
+function humanEvidence(
+  event: PersistedFrameworkEvent,
+  fallbackUserId: string,
+  stepId: string,
+  scopeHash: string,
+  checkpointSequence: number,
+  checkpointHash: string
+): ReActContinuationSuspensionEvidence {
+  if (!event.sessionId) corrupt('ReAct approval Event is missing sessionId');
+  return {
+    eventId: event.id,
+    source: 'human_approval',
+    ...(event.tenantId === undefined ? {} : { tenantId: event.tenantId }),
+    userId: event.userId ?? fallbackUserId,
+    ...(event.workspaceId === undefined ? {} : { workspaceId: event.workspaceId }),
+    sessionId: event.sessionId,
+    runId: event.runId,
+    stepId,
+    scopeHash,
+    checkpointSequence,
+    checkpointHash,
+    suspendedAt: event.timestamp,
+  };
+}
+
+function approvedCheckpoint(
+  checkpoint: Readonly<ReActContinuationCheckpoint>,
+  approval: Readonly<PersistedFrameworkEvent>
+): ReActContinuationCheckpoint {
+  const feedback = approvalFeedback(approval);
+  return validateReActContinuationCheckpoint({
+    ...structuredClone(checkpoint),
+    nextPhase: 'reason',
+    messages: [...checkpoint.messages, { role: 'user', content: feedback }],
+    stepSequence: checkpoint.stepSequence + 1,
+    consecutiveNoProgress: 0,
+    lastProgressFingerprint: undefined,
+    pendingAction: undefined,
+    pendingToolInvocationId: undefined,
+    updatedAt: approval.timestamp,
+  });
+}
+
+function isApprovedCheckpoint(
+  checkpoint: Readonly<ReActContinuationCheckpoint>,
+  approval: Readonly<PersistedFrameworkEvent>
+): boolean {
+  const last = checkpoint.messages[checkpoint.messages.length - 1];
+  return (
+    checkpoint.nextPhase === 'reason' &&
+    checkpoint.pendingAction === undefined &&
+    checkpoint.pendingToolInvocationId === undefined &&
+    checkpoint.consecutiveNoProgress === 0 &&
+    last?.role === 'user' &&
+    last.content === approvalFeedback(approval) &&
+    checkpoint.updatedAt === approval.timestamp
+  );
+}
+
+function approvalFeedback(approval: Readonly<PersistedFrameworkEvent>): string {
+  const payload = objectPayload(approval.payload);
+  const reason = optionalString(payload.reason);
+  return reason
+    ? `Human review approved. Reviewer feedback: ${reason}`
+    : 'Human review approved. Continue from the reviewed checkpoint.';
+}
+
+function continuationClosed(
+  events: readonly PersistedFrameworkEvent[],
+  evidence: Readonly<ReActContinuationSuspensionEvidence>
+): boolean {
+  return events.some((event) => {
+    if (event.sequence <= sequenceOf(events, evidence.eventId)) return false;
+    if (
+      event.type === 'run.completed' ||
+      event.type === 'run.failed' ||
+      event.type === 'run.cancelled' ||
+      event.type === 'react.continuation.resumed'
+    ) {
+      return true;
+    }
+    if (event.type !== 'react.continuation.quarantined') return false;
+    return optionalString(objectPayload(event.payload).evidenceEventId) === evidence.eventId;
+  });
+}
+
+function sequenceOf(events: readonly PersistedFrameworkEvent[], eventId: string): number {
+  const event = events.find((candidate) => candidate.id === eventId);
+  if (!event) corrupt('Continuation evidence Event disappeared during reconciliation');
+  return event.sequence;
+}
+
+function optionalObject(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function checkpointProblem(

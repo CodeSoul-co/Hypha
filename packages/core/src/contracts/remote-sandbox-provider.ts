@@ -1,4 +1,8 @@
-import type { CommandOutputChunk } from './command-execution';
+import type {
+  CommandExecutionResult,
+  CommandOutputChunk,
+  ExecutionReceipt,
+} from './command-execution';
 import type { ExecutionPrincipal } from './execution';
 import type { SandboxProvider } from './sandbox-provider';
 import type { SandboxProviderCapabilities } from './sandbox';
@@ -16,6 +20,37 @@ export interface RemoteOutputStreamRequest {
   follow?: boolean;
   correlationId?: string;
   causationId?: string;
+}
+
+export interface RemoteExecutionReconciliationRequest {
+  operationId: string;
+  executionId: string;
+  sandboxId: string;
+  principal: ExecutionPrincipal;
+  providerExecutionRef?: string;
+  idempotencyKey?: string;
+  correlationId?: string;
+  causationId?: string;
+}
+
+export type RemoteExecutionReconciliationState =
+  | 'not_found'
+  | 'accepted'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'unknown';
+
+export interface RemoteExecutionReconciliationResult {
+  executionId: string;
+  sandboxId: string;
+  state: RemoteExecutionReconciliationState;
+  providerExecutionRef?: string;
+  observedAt: string;
+  result?: CommandExecutionResult;
+  receipt?: ExecutionReceipt;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RemoteArtifactUploadRequest {
@@ -80,6 +115,9 @@ export interface RemoteArtifactTransferReceipt {
 
 export interface RemoteSandboxProvider extends SandboxProvider {
   capabilities(): Promise<RemoteSandboxProviderCapabilities>;
+  reconcileExecution(
+    request: RemoteExecutionReconciliationRequest
+  ): Promise<RemoteExecutionReconciliationResult>;
   streamOutput(request: RemoteOutputStreamRequest): AsyncIterable<CommandOutputChunk>;
   uploadArtifact(
     request: RemoteArtifactUploadRequest,

@@ -39,6 +39,12 @@ import {
 } from './services/EventRuntime';
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
+import { createServerProductionRuntime } from './runtime/ServerProductionRuntime';
+import { createServerProductionSessionCommands } from './runtime/ServerProductionSessionCommands';
+import { ServerProductionReActExecution } from './runtime/ServerProductionReActExecution';
+import { ServerReActContinuationReconciler } from './runtime/ServerReActContinuationReconciler';
+import { ServerReActContinuationReconciliationScheduler } from './runtime/ServerReActContinuationReconciliationScheduler';
+import { LocalFilesystemExecutionArtifactStore } from '@hypha/adapters-local';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 import {
   bindServerRuntimeReadiness,
@@ -50,6 +56,7 @@ class Application {
   private config: ReturnType<typeof getConfig>;
   private server: http.Server | null = null;
   private canonicalRuntime: ServerCanonicalRuntime | null = null;
+  private runtimeArtifacts: LocalFilesystemExecutionArtifactStore | null = null;
   private shutdownCoordinator: ServerShutdownCoordinator | null = null;
 
   constructor() {
@@ -58,19 +65,26 @@ class Application {
   }
 
   async initialize(): Promise<void> {
-    // Setup middleware
-    this.setupMiddleware();
+    try {
+      // Setup middleware
+      this.setupMiddleware();
 
-    // Setup routes
-    this.setupRoutes();
+      // Setup routes
+      this.setupRoutes();
 
-    // Setup error handling
-    this.setupErrorHandling();
+      // Setup error handling
+      this.setupErrorHandling();
 
-    // Initialize services
-    await this.initializeServices();
+      // Initialize services
+      await this.initializeServices();
 
-    logger.info('Application initialized successfully');
+      logger.info('Application initialized successfully');
+    } catch (error) {
+      await this.stop().catch((shutdownError) => {
+        logger.error('Failed to clean up after initialization failure:', shutdownError);
+      });
+      throw error;
+    }
   }
 
   private setupMiddleware(): void {
@@ -86,7 +100,7 @@ class Application {
       cors({
         origin: '*', // Configure for production
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'Idempotency-Key'],
       })
     );
 
@@ -145,9 +159,13 @@ class Application {
     // previous behaviour was to silently boot with a broken default.
     await this.ensureDefaultProviderAvailable();
 
+    // Establish the canonical Event authority before any subsystem can emit
+    // lifecycle facts. Migration and bounded replay must complete first.
+    await this.initializeCanonicalRuntime();
+
     // Initialize the unique canonical Memory application service after its
-    // MongoDB and Redis dependencies are ready.
-    await initializeServerMemoryComposition();
+    // storage dependencies and Event fact store are ready.
+    await initializeServerMemoryComposition(this.canonicalRuntime!.get().events);
 
     // Bind every Memory-capable Server subsystem to that same service instance.
     getMemoryApplicationService('tool');
@@ -160,10 +178,6 @@ class Application {
     // Initialize Tool Manager
     await initializeToolManager();
 
-    // Cut legacy Runtime Events over to the schema-backed canonical store only
-    // after migration and bounded replay have passed.
-    await this.initializeCanonicalRuntime();
-
     // Recover persisted Tool invocations after their adapters are available.
     await getEventRuntime().recoverToolInvocations();
 
@@ -173,7 +187,127 @@ class Application {
     // Initialize Prompt Manager
     await initializePromptManager();
 
+    // Compose the canonical execution graph only after every adapter, Skill,
+    // Tool, Workflow, and Prompt dependency is ready. Worker startup performs
+    // an initial durable sweep and fails closed before /ready can return 200.
+    await this.activateCanonicalExecution();
+
     logger.info('All services initialized');
+  }
+
+  private async activateCanonicalExecution(): Promise<void> {
+    const runtime = this.canonicalRuntime;
+    if (!runtime) {
+      throw new Error('Canonical Runtime Event authority is not initialized');
+    }
+    const adapters = getEventRuntime().canonicalExecutionAdapters();
+    const cancellations = runtime.composeCancellations({
+      activities: adapters.cancellationActivities,
+      children: adapters.cancellationChildren,
+    });
+    const workers = runtimeConfig().canonical.workers;
+    const production = createServerProductionRuntime({
+      ...adapters,
+      cancellations,
+      workerId: workers.workerId,
+      leaseTtlMs: workers.leaseTtlMs,
+      pageLimit: workers.pageLimit,
+      timerPollIntervalMs: workers.timerPollIntervalMs,
+      timerErrorBackoffMs: workers.timerErrorBackoffMs,
+      recoveryPollIntervalMs: workers.recoveryPollIntervalMs,
+      recoveryErrorBackoffMs: workers.recoveryErrorBackoffMs,
+      autoRecoverReasons: workers.autoRecoverReasons,
+    });
+    const composition = runtime.composeRuntime(production.execution);
+    const commandArtifacts = new LocalFilesystemExecutionArtifactStore({
+      id: 'artifact-store.local-filesystem.session-commands',
+      rootPath: workers.commandArtifactRoot,
+    });
+    this.runtimeArtifacts = commandArtifacts;
+    const react = new ServerProductionReActExecution({
+      artifacts: commandArtifacts,
+      checkpoints: composition.reactCheckpoints,
+      scopedRunners: composition.scopedReActRunners,
+      inference: adapters.inference,
+      toolRunner: adapters.toolRunner,
+      reactRuntime: adapters.reactRuntime,
+      source: {
+        prepare: (input, runId) => getEventRuntime().prepareCanonicalReActExecution(input, runId),
+        recordContextPrepared: (input) =>
+          getEventRuntime().recordCanonicalReActContextPrepared(input),
+        readRunFacts: (descriptor) => getEventRuntime().readCanonicalReActRunFacts(descriptor),
+        recordStep: (runId, step) => getEventRuntime().recordCanonicalReActStep(runId, step),
+        recordCheckpoint: (runId, checkpoint) =>
+          getEventRuntime().recordCanonicalReActCheckpoint(runId, checkpoint),
+        recordResume: (runId, checkpoint) =>
+          getEventRuntime().recordCanonicalReActResume(runId, checkpoint),
+        syncMemory: (context, observation) =>
+          getEventRuntime().syncCanonicalReActMemory(context, observation),
+        recordOutcome: (runId, result) =>
+          getEventRuntime().recordCanonicalReActOutcome(runId, result),
+      },
+      limits: {
+        quantumIterations: workers.reactQuantumIterations,
+        maxIterations: workers.reactMaxIterations,
+        maxModelCalls: workers.reactMaxModelCalls,
+        maxToolCalls: workers.reactMaxToolCalls,
+        maxTotalTokens: workers.reactMaxTotalTokens,
+      },
+    });
+    const commands = await createServerProductionSessionCommands({
+      queue: composition.sessionQueue,
+      artifacts: commandArtifacts,
+      workerId: `${workers.workerId}:commands`,
+      leaseMs: workers.commandLeaseMs,
+      pollIntervalMs: workers.commandPollIntervalMs,
+      errorBackoffMs: workers.commandErrorBackoffMs,
+      renewalIntervalMs: workers.commandRenewalIntervalMs,
+      maxHandlerDurationMs: workers.commandMaxHandlerDurationMs,
+      shutdownDrainMs: workers.commandShutdownDrainMs,
+      startRun: (input, runId) => getEventRuntime().startRunWithId(input, runId),
+      react,
+      onError: (error) => logger.error('Session Command worker polling failed', error),
+    });
+    getEventRuntime().bindSessionCommandIngress(commands);
+    const continuationReconciler = new ServerReActContinuationReconciler({
+      events: composition.events,
+      queue: composition.sessionQueue,
+      checkpoints: composition.reactCheckpoints,
+      scheduler: commands.continuationScheduler(),
+      payloadFactory: {
+        build: ({ checkpoint }) => react.buildContinuationPayload(checkpoint),
+      },
+      quarantine: {
+        quarantine: ({ evidence, reason, commandIds }) =>
+          getEventRuntime().recordCanonicalReActContinuationQuarantine({
+            runId: evidence.runId,
+            stepId: evidence.stepId,
+            evidenceEventId: evidence.eventId,
+            evidenceTimestamp: evidence.suspendedAt,
+            reason,
+            commandIds,
+          }),
+      },
+    });
+    const continuationReconciliation = new ServerReActContinuationReconciliationScheduler({
+      reconciler: continuationReconciler,
+      pageLimit: workers.pageLimit,
+      pollIntervalMs: workers.recoveryPollIntervalMs,
+      errorBackoffMs: workers.recoveryErrorBackoffMs,
+      onError: (error) => logger.error('ReAct continuation reconciliation failed', error),
+    });
+    const active = await runtime.startWorkers({
+      ...production.workers,
+      commands: { runtime: commands },
+      continuations: { runtime: continuationReconciliation },
+    });
+    logger.info('Canonical Runtime durable workers activated', {
+      workers: active.status(),
+    });
+    const readiness = runtime.executionReadiness();
+    if (!readiness.ready) {
+      logger.warn('Canonical Runtime remains unavailable for execution traffic', { readiness });
+    }
   }
 
   private async initializeCanonicalRuntime(): Promise<void> {
@@ -197,6 +331,7 @@ class Application {
         events: composition.events,
         eventDbPath: serverRuntimeEventDatabasePath(),
         humanWaits: composition.humanWaits,
+        cancellations: { cancel: (command) => runtime.cancel(command) },
       });
       this.canonicalRuntime = runtime;
       bindServerRuntimeReadiness(() => runtime.executionReadiness());
@@ -250,22 +385,29 @@ class Application {
 
   async start(): Promise<void> {
     const { host, port } = this.config.app;
-
-    return new Promise((resolve) => {
-      this.server = this.app.listen(port, host, async () => {
-        logger.info(`Server started`, {
-          host,
-          port,
-          env: this.config.app.env,
-          url: `http://${host}:${port}`,
-        });
-
-        // Startup health check
-        await this.startupHealthCheck(host, port);
-
+    await new Promise<void>((resolve, reject) => {
+      const server = this.app.listen(port, host);
+      this.server = server;
+      const onError = (error: Error) => {
+        server.off('listening', onListening);
+        this.server = null;
+        reject(error);
+      };
+      const onListening = () => {
+        server.off('error', onError);
         resolve();
-      });
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
     });
+    logger.info(`Server started`, {
+      host,
+      port,
+      env: this.config.app.env,
+      url: `http://${host}:${port}`,
+    });
+
+    await this.startupHealthCheck(host, port);
   }
 
   private async startupHealthCheck(host: string, port: number): Promise<void> {
@@ -499,11 +641,15 @@ class Application {
           this.server = null;
         },
         drainWorkersAndReleaseLeases: async () => {
+          // Memory workers may emit terminal lifecycle facts while draining,
+          // so the canonical Event authority must outlive Memory shutdown.
+          await closeServerMemoryComposition();
           destroyEventRuntime();
           await this.canonicalRuntime?.close();
           this.canonicalRuntime = null;
+          await this.runtimeArtifacts?.close?.();
+          this.runtimeArtifacts = null;
           clearServerRuntimeReadiness();
-          await closeServerMemoryComposition();
         },
         closeServicesAndConnections: async () => {
           await destroyLLM();
@@ -557,6 +703,9 @@ async function main() {
     await app.start();
   } catch (error) {
     logger.error('Failed to start application:', error);
+    await app.stop().catch((shutdownError) => {
+      logger.error('Failed to clean up after startup failure:', shutdownError);
+    });
     process.exit(1);
   }
 }

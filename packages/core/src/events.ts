@@ -225,6 +225,7 @@ export type FrameworkEventType =
   | 'context.build.started'
   | 'context.build.completed'
   | 'context.compacted'
+  | 'react.continuation.quarantined'
   | 'human.review.requested'
   | 'human.review.approved'
   | 'human.review.rejected'

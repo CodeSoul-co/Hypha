@@ -31,6 +31,7 @@ const request: MemoryActivityRequest = {
   },
   profileRef: { id: 'memory.default', version: '1.0.0' },
   eventContext: {
+    userId: 'user:integration',
     runId: 'run:integration',
     sessionId: 'session:integration',
     workspaceId: 'workspace:integration',

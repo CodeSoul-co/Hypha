@@ -25,6 +25,16 @@ function managedClient(tool: ToolDefinition): MCPClient {
 }
 
 describe('ToolManager MCP governance boundary', () => {
+  it('fails operational readiness before initialization instead of accepting empty state', () => {
+    expect(new ToolManager().operationalReadiness()).toEqual({
+      initialized: false,
+      ready: false,
+      status: 'not_initialized',
+      profiles: {},
+      mcpServers: {},
+    });
+  });
+
   it('does not expose a managed SDK-discovered tool until its approved revision is imported', () => {
     const manager = new ToolManager();
     const discovered: ToolDefinition = {
@@ -199,6 +209,53 @@ describe('ToolManager MCP governance boundary', () => {
         reconnecting: false,
       },
     });
+  });
+
+  it('does not report a configured MCP server as ready before it is connected', async () => {
+    const manager = new ToolManager();
+
+    await manager.registerMCPServer({
+      id: 'manual-remote',
+      name: 'Manual remote',
+      mode: 'remote',
+      endpoint: 'https://example.com/mcp',
+      autoConnect: false,
+      required: true,
+    });
+
+    expect(manager.mcpServerReadiness()).toEqual({
+      'manual-remote': {
+        status: 'failed',
+        required: true,
+        error: 'MCP server is configured but not connected',
+      },
+    });
+  });
+
+  it('rejects in-process MCP fixtures in production before registering capability state', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const manager = new ToolManager();
+
+    try {
+      await expect(
+        manager.registerMCPServer({
+          id: 'classic',
+          name: 'Classic fixture',
+          mode: 'fixture',
+          autoConnect: true,
+          required: false,
+        })
+      ).rejects.toMatchObject({
+        code: 'MCP_FIXTURE_FORBIDDEN_IN_PRODUCTION',
+        serverId: 'classic',
+      });
+      expect(manager.listMCPClients()).toEqual([]);
+      expect(manager.mcpServerReadiness()).toEqual({});
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   it('rejects caller-asserted Run ids for MCP Resource and Prompt access', async () => {

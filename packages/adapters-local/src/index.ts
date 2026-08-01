@@ -43,15 +43,23 @@ import { loadSqlite, type SqliteDatabaseSync, type SqliteModule } from './sqlite
 export * from './workspace-runtime';
 export * from './common-tool-port-bindings';
 export * from './local-process-output-collector';
+export * from './local-process-output-artifacts';
+export * from './local-process-sandbox-provider-factory';
+export * from './local-process-output-stream-registry';
 export * from './execution-provider-error';
 export * from './local-process-policy';
 export * from './local-workspace-adapter';
+export * from './local-artifact-workspace-content-reader';
+export * from './local-workspace-snapshot-artifacts';
 export * from './local-process-resource-accounting';
 export * from './execution-provider-values';
 export * from './local-sandbox-lifecycle';
 export * from './local-active-execution-registry';
 export * from './local-process-result';
 export * from './local-process-execution-provider';
+export * from './docker-sandbox-provider-factory';
+export * from './remote-sandbox-provider-factory';
+export * from './s3-execution-artifact-store-factory';
 export * from './in-memory-execution-cache-store';
 export * from './redis-execution-cache-store';
 export * from './runtime-event-store';
@@ -66,6 +74,7 @@ export * from './projection-store';
 export * from './sqlite-driver';
 export * from './artifact-content-io';
 export * from './artifact-manager-tool-port';
+export * from './artifact-manager-execution-cache-verifier';
 export * from './legacy-tool-artifact-importer';
 export * from './legacy-tool-artifact-inventory';
 export * from './legacy-tool-artifact-migration-planner';
@@ -74,6 +83,7 @@ export * from './legacy-tool-artifact-migration-executor';
 export * from './legacy-tool-artifact-migration-rollback';
 export * from './sqlite-execution-store';
 export * from './sqlite-execution-store-factory';
+export * from './postgres-execution-store-factory';
 export * from './artifact-store-adapter-error';
 export * from './local-artifact-files';
 export * from './local-artifact-manifest';
@@ -126,7 +136,7 @@ export function createLocalStorageBackbone(
     options.structuredDbFilename ?? path.join(rootPath, 'structured.sqlite');
   const vectorFilename = options.vectorFilename ?? path.join(rootPath, 'vectors.json');
   const artifactRootPath = options.artifactRootPath ?? path.join(rootPath, 'artifacts');
-  const embeddings = options.embeddings ?? new MockEmbeddingProvider();
+  const embeddings = options.embeddings ?? new LocalHashEmbeddingProvider();
   const structured = new SQLiteStructuredStore({
     filename: structuredDbFilename,
     mode: options.sqliteMode,
@@ -993,6 +1003,35 @@ export class MockEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
+export interface LocalHashEmbeddingProviderOptions {
+  dimensions?: number;
+}
+
+/**
+ * Zero-dependency lexical embedding for the local backbone.
+ *
+ * This is deliberately named by its algorithm rather than presented as a
+ * neural semantic model. Token and character n-gram feature hashing gives
+ * related local text stable overlap while keeping dimensions and persistence
+ * deterministic. Deployments that require semantic recall should inject a
+ * concrete embedding Provider through `createLocalStorageBackbone`.
+ */
+export class LocalHashEmbeddingProvider implements EmbeddingProvider {
+  private readonly dimensions: number;
+
+  constructor(options: LocalHashEmbeddingProviderOptions = {}) {
+    const dimensions = options.dimensions ?? 256;
+    if (!Number.isSafeInteger(dimensions) || dimensions < 32 || dimensions > 4096) {
+      throw new Error('Local hash embedding dimensions must be between 32 and 4096.');
+    }
+    this.dimensions = dimensions;
+  }
+
+  async embed(input: string[]): Promise<number[][]> {
+    return input.map((value) => lexicalHashVector(value, this.dimensions));
+  }
+}
+
 function cosineSimilarity(a: number[], b: number[]): number {
   const length = Math.min(a.length, b.length);
   let dot = 0;
@@ -1089,4 +1128,33 @@ function hash(content: Buffer | string): string {
 function deterministicVector(value: string): number[] {
   const digest = createHash('sha256').update(value).digest();
   return Array.from({ length: 8 }, (_unused, index) => digest[index] / 255);
+}
+
+function lexicalHashVector(value: string, dimensions: number): number[] {
+  const vector = Array.from({ length: dimensions }, () => 0);
+  for (const feature of lexicalFeatures(value)) {
+    const digest = createHash('sha256').update(feature).digest();
+    const index = digest.readUInt32BE(0) % dimensions;
+    vector[index] += (digest[4] & 1) === 0 ? 1 : -1;
+  }
+  const magnitude = Math.sqrt(vector.reduce((sum, component) => sum + component * component, 0));
+  return magnitude === 0 ? vector : vector.map((component) => component / magnitude);
+}
+
+function lexicalFeatures(value: string): string[] {
+  const normalized = value.normalize('NFKC').toLocaleLowerCase('und').trim();
+  if (!normalized) return [];
+  const tokens = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const features: string[] = [];
+  for (const token of tokens) {
+    features.push(`token:${token}`);
+    const characters = Array.from(token);
+    if (characters.length === 1) features.push(`char:${token}`);
+    for (const width of [2, 3]) {
+      for (let index = 0; index + width <= characters.length; index += 1) {
+        features.push(`ngram:${characters.slice(index, index + width).join('')}`);
+      }
+    }
+  }
+  return features;
 }

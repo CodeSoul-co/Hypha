@@ -3,6 +3,7 @@ import type {
   ArtifactCopyRequest,
   ArtifactGetRequest,
   ArtifactObjectMetadata,
+  ArtifactOperationOptions,
   ArtifactPutRequest,
   ArtifactStorageRef,
   ArtifactStoreCapabilities,
@@ -150,8 +151,12 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
     return this.storageRef(request.objectKey, collected.contentHash);
   }
 
-  async get(input: ArtifactGetRequest): Promise<ArtifactContent> {
+  async get(
+    input: ArtifactGetRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactContent> {
     this.assertOpen();
+    assertArtifactOperationActive(options.abortSignal);
     const request = validateArtifactStoreInput(() => validateArtifactGetRequest(input));
     this.assertOwnedRef(request.ref);
     const object = this.requireObject(request.ref.objectKey);
@@ -177,7 +182,7 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
 
     const selected = selectRange(blob.bytes, request.range);
     return {
-      stream: streamArtifactBytes(selected.bytes),
+      stream: abortableArtifactStream(selected.bytes, options.abortSignal),
       contentHash: actualHash,
       sizeBytes: selected.bytes.byteLength,
       mimeType: object.mimeType,
@@ -371,6 +376,28 @@ export class InMemoryExecutionArtifactStore implements ArtifactStoreProvider {
       encrypted: false,
     };
   }
+}
+
+function assertArtifactOperationActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error('Artifact operation was aborted.');
+  }
+}
+
+function abortableArtifactStream(
+  bytes: Uint8Array,
+  abortSignal: AbortSignal | undefined
+): AsyncIterable<Uint8Array> {
+  const stream = streamArtifactBytes(bytes);
+  return (async function* abortable(): AsyncIterable<Uint8Array> {
+    for await (const chunk of stream) {
+      assertArtifactOperationActive(abortSignal);
+      yield chunk;
+    }
+    assertArtifactOperationActive(abortSignal);
+  })();
 }
 
 function selectRange(

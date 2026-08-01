@@ -1,8 +1,10 @@
 import { z, type ZodType } from 'zod';
 import type {
+  CollectedExecutionOutput,
   ExecutionOutputCollectionItem,
   ExecutionOutputCollectionPlan,
   ExecutionOutputCollectionPolicy,
+  ExecutionOutputCollectionResult,
   ExecutionOutputSkipReason,
 } from '../../contracts/execution-output';
 import type { JsonSchema } from '../../specs';
@@ -12,6 +14,7 @@ import { relativePathJsonSchema } from '../workspace/operations';
 
 const nonEmptyString = z.string().min(1);
 const nonNegativeInteger = z.number().int().nonnegative();
+const collectedArtifactStatusSchema = z.enum(['draft', 'final']);
 
 export const executionOutputPatternSchema = z
   .string()
@@ -157,6 +160,82 @@ export const executionOutputCollectionPlanSchema = z
     }
   }) satisfies ZodType<ExecutionOutputCollectionPlan>;
 
+export const collectedExecutionOutputSchema = z
+  .object({
+    relativePath: workspaceRelativePathSchema,
+    artifactRef: nonEmptyString,
+    versionId: nonEmptyString,
+    contentHash: artifactContentHashSchema,
+    sizeBytes: nonNegativeInteger,
+    status: collectedArtifactStatusSchema,
+  })
+  .strict() satisfies ZodType<CollectedExecutionOutput>;
+
+export const executionOutputCollectionResultSchema = z
+  .object({
+    executionId: nonEmptyString,
+    collected: z.array(collectedExecutionOutputSchema),
+    existingArtifactRefs: z.array(nonEmptyString),
+    artifactRefs: z.array(nonEmptyString),
+    finalizedArtifactRefs: z.array(nonEmptyString),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    addUniqueReferenceIssues(value.existingArtifactRefs, 'existingArtifactRefs', context);
+    addUniqueReferenceIssues(value.artifactRefs, 'artifactRefs', context);
+    addUniqueReferenceIssues(value.finalizedArtifactRefs, 'finalizedArtifactRefs', context);
+    addUniqueReferenceIssues(
+      value.collected.map((entry) => entry.artifactRef),
+      'collected',
+      context
+    );
+
+    const artifactRefs = new Set(value.artifactRefs);
+    const finalizedRefs = new Set(value.finalizedArtifactRefs);
+    const collectedRefs = new Set(value.collected.map((entry) => entry.artifactRef));
+    value.existingArtifactRefs.forEach((artifactRef, index) => {
+      if (!artifactRefs.has(artifactRef)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['existingArtifactRefs', index],
+          message: 'must also appear in artifactRefs',
+        });
+      }
+    });
+    value.finalizedArtifactRefs.forEach((artifactRef, index) => {
+      if (!artifactRefs.has(artifactRef)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['finalizedArtifactRefs', index],
+          message: 'must also appear in artifactRefs',
+        });
+      }
+      if (!collectedRefs.has(artifactRef)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['finalizedArtifactRefs', index],
+          message: 'must refer to an Artifact collected by this operation',
+        });
+      }
+    });
+    value.collected.forEach((entry, index) => {
+      if (!artifactRefs.has(entry.artifactRef)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['collected', index, 'artifactRef'],
+          message: 'must also appear in artifactRefs',
+        });
+      }
+      if (finalizedRefs.has(entry.artifactRef) && entry.status !== 'final') {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['collected', index, 'status'],
+          message: 'must be final when listed in finalizedArtifactRefs',
+        });
+      }
+    });
+  }) satisfies ZodType<ExecutionOutputCollectionResult>;
+
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const nonNegativeIntegerJsonSchema: JsonSchema = { type: 'integer', minimum: 0 };
 const contentHashJsonSchema: JsonSchema = {
@@ -259,10 +338,57 @@ export const executionOutputCollectionPlanJsonSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+export const collectedExecutionOutputJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['relativePath', 'artifactRef', 'versionId', 'contentHash', 'sizeBytes', 'status'],
+  properties: {
+    relativePath: relativePathJsonSchema,
+    artifactRef: nonEmptyStringJsonSchema,
+    versionId: nonEmptyStringJsonSchema,
+    contentHash: contentHashJsonSchema,
+    sizeBytes: nonNegativeIntegerJsonSchema,
+    status: { enum: ['draft', 'final'] },
+  },
+  additionalProperties: false,
+};
+
+export const executionOutputCollectionResultJsonSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'executionId',
+    'collected',
+    'existingArtifactRefs',
+    'artifactRefs',
+    'finalizedArtifactRefs',
+  ],
+  properties: {
+    executionId: nonEmptyStringJsonSchema,
+    collected: { type: 'array', items: collectedExecutionOutputJsonSchema },
+    existingArtifactRefs: {
+      type: 'array',
+      items: nonEmptyStringJsonSchema,
+      uniqueItems: true,
+    },
+    artifactRefs: {
+      type: 'array',
+      items: nonEmptyStringJsonSchema,
+      uniqueItems: true,
+    },
+    finalizedArtifactRefs: {
+      type: 'array',
+      items: nonEmptyStringJsonSchema,
+      uniqueItems: true,
+    },
+  },
+  additionalProperties: false,
+};
+
 export const executionOutputJsonSchemas: Record<string, JsonSchema> = {
   ExecutionOutputCollectionPolicy: executionOutputCollectionPolicyJsonSchema,
   ExecutionOutputCollectionItem: executionOutputCollectionItemJsonSchema,
   ExecutionOutputCollectionPlan: executionOutputCollectionPlanJsonSchema,
+  CollectedExecutionOutput: collectedExecutionOutputJsonSchema,
+  ExecutionOutputCollectionResult: executionOutputCollectionResultJsonSchema,
 };
 
 export const executionOutputCollectionPolicyExample: ExecutionOutputCollectionPolicy = {
@@ -304,6 +430,12 @@ export function validateExecutionOutputCollectionPlan(
   return executionOutputCollectionPlanSchema.parse(input);
 }
 
+export function validateExecutionOutputCollectionResult(
+  input: unknown
+): ExecutionOutputCollectionResult {
+  return executionOutputCollectionResultSchema.parse(input);
+}
+
 export function emptyExecutionOutputSkipCounts(): Record<ExecutionOutputSkipReason, number> {
   return {
     not_included: 0,
@@ -332,6 +464,24 @@ function addDuplicatePatternIssues(
       });
     }
     seen.add(normalized);
+  });
+}
+
+function addUniqueReferenceIssues(
+  values: string[],
+  field: 'existingArtifactRefs' | 'artifactRefs' | 'finalizedArtifactRefs' | 'collected',
+  context: z.RefinementCtx
+): void {
+  const seen = new Set<string>();
+  values.forEach((value, index) => {
+    if (seen.has(value)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field, index],
+        message: 'must not contain duplicate Artifact references',
+      });
+    }
+    seen.add(value);
   });
 }
 

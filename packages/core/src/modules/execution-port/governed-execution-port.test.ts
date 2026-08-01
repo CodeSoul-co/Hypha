@@ -218,6 +218,59 @@ describe('GovernedExecutionPort', () => {
     expect(dispatcher.dispatch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: 'fencing token',
+      mutate: (request: ExecutionDispatchRequest) => {
+        request.activity.fencingToken += 1;
+      },
+    },
+    {
+      name: 'approved input',
+      mutate: (request: ExecutionDispatchRequest) => {
+        if (!('executable' in request.activity.request)) {
+          throw new Error('Expected command execution fixture');
+        }
+        request.activity.request.executable = 'unexpected-executable';
+      },
+    },
+    {
+      name: 'environment revision',
+      mutate: (request: ExecutionDispatchRequest) => {
+        if (!('environmentRef' in request.activity.request)) {
+          throw new Error('Expected command execution fixture');
+        }
+        request.activity.request.environmentRef = {
+          ...request.activity.request.environmentRef,
+          revision: 'environment-revision.replaced',
+        };
+      },
+    },
+    {
+      name: 'approval reference',
+      mutate: (request: ExecutionDispatchRequest) => {
+        request.authorization.approvalRef = 'tool-approval:replacement';
+      },
+    },
+  ])('rejects a changed $name after the authorization await', async ({ mutate }) => {
+    const dispatcher = {
+      dispatch: vi.fn().mockResolvedValue(executionActivityResultExample),
+    };
+    const verifier = {
+      verify: vi.fn().mockImplementation(async (request: ExecutionDispatchRequest) => {
+        mutate(request);
+        return executionAuthorizationVerificationResultExample;
+      }),
+    };
+    const port = new GovernedExecutionPort(verifier, dispatcher, now);
+
+    await expectFrameworkError(
+      port.execute(structuredClone(executionDispatchRequestExample), signal()),
+      'EXECUTION_POLICY_DENIED'
+    );
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid verifier evidence as an internal boundary failure', async () => {
     const { port, dispatcher } = fixture({
       verification: {

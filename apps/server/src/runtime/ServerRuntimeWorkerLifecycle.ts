@@ -2,6 +2,9 @@ import {
   FrameworkError,
   type DurableRuntimeTimerWorker,
   type RuntimeRecoveryService,
+  type SessionCommandWorkerDisposition,
+  type SessionCommandWorkerResult,
+  type SessionCommandType,
   type SessionQueueScope,
 } from '@hypha/core';
 import {
@@ -14,6 +17,14 @@ import {
   type ServerRuntimeTimerSchedulerOptions,
   type ServerRuntimeTimerSweepResult,
 } from './ServerRuntimeTimerScheduler';
+import { type ServerReActContinuationReconciliationSweepResult } from './ServerReActContinuationReconciliationScheduler';
+
+export interface ServerReActContinuationLoop {
+  sweepOnce(signal?: AbortSignal): Promise<ServerReActContinuationReconciliationSweepResult>;
+  start(): void;
+  isRunning(): boolean;
+  close(): Promise<void>;
+}
 
 export interface ServerRuntimeWorkerSources {
   timerWorker: Pick<DurableRuntimeTimerWorker, 'sweep'>;
@@ -27,9 +38,14 @@ export interface ServerRuntimeWorkerBindings {
     runtime: ServerSessionCommandLoop;
     scope?: SessionQueueScope;
   };
+  continuations?: {
+    runtime: ServerReActContinuationLoop;
+  };
 }
 
 export interface ServerSessionCommandLoop {
+  processNext(scope?: SessionQueueScope, signal?: AbortSignal): Promise<SessionCommandWorkerResult>;
+  supportedCommandTypes(): readonly SessionCommandType[];
   start(scope?: SessionQueueScope): void;
   isRunning(): boolean;
   close(): Promise<void>;
@@ -39,6 +55,7 @@ export interface ServerRuntimeWorkers {
   timer: ServerRuntimeTimerScheduler;
   recovery: ServerRuntimeRecoveryScheduler;
   commands?: ServerSessionCommandLoop;
+  continuations?: ServerReActContinuationLoop;
   status(): Readonly<ServerRuntimeWorkerStatus>;
 }
 
@@ -62,7 +79,12 @@ export interface ServerRuntimeWorkerStatus {
   lifecycle: ServerRuntimeWorkerLifecycleState;
   timer: ServerRuntimeWorkerEvidence;
   recovery: ServerRuntimeWorkerEvidence;
-  commands?: Readonly<{ running: boolean }>;
+  commands?: Readonly<{
+    running: boolean;
+    startupPollDisposition: SessionCommandWorkerDisposition;
+    supportedCommandTypes: readonly SessionCommandType[];
+  }>;
+  continuations?: ServerRuntimeWorkerEvidence;
 }
 
 /**
@@ -78,6 +100,8 @@ export class ServerRuntimeWorkerLifecycle {
   private lifecycleState: ServerRuntimeWorkerLifecycleState = 'idle';
   private readonly timerEvidence = mutableEvidence();
   private readonly recoveryEvidence = mutableEvidence();
+  private readonly continuationEvidence = mutableEvidence();
+  private commandStartupPoll?: SessionCommandWorkerResult;
   private closed = false;
 
   constructor(
@@ -101,10 +125,13 @@ export class ServerRuntimeWorkerLifecycle {
   }
 
   isRunning(): boolean {
+    const workers = this.workers;
     return Boolean(
-      this.workers?.timer.isRunning() ||
-      this.workers?.recovery.isRunning() ||
-      this.workers?.commands?.isRunning()
+      workers &&
+      workers.timer.isRunning() &&
+      workers.recovery.isRunning() &&
+      workers.commands?.isRunning() &&
+      workers.continuations?.isRunning()
     );
   }
 
@@ -113,9 +140,23 @@ export class ServerRuntimeWorkerLifecycle {
       lifecycle: this.lifecycleState,
       timer: workerEvidence(this.workers?.timer.isRunning() ?? false, this.timerEvidence),
       recovery: workerEvidence(this.workers?.recovery.isRunning() ?? false, this.recoveryEvidence),
+      ...(this.workers?.continuations === undefined
+        ? {}
+        : {
+            continuations: workerEvidence(
+              this.workers.continuations.isRunning(),
+              this.continuationEvidence
+            ),
+          }),
       ...(this.workers?.commands === undefined
         ? {}
-        : { commands: Object.freeze({ running: this.workers.commands.isRunning() }) }),
+        : {
+            commands: Object.freeze({
+              running: this.workers.commands.isRunning(),
+              startupPollDisposition: this.commandStartupPoll?.disposition ?? 'aborted',
+              supportedCommandTypes: this.workers.commands.supportedCommandTypes(),
+            }),
+          }),
     });
   }
 
@@ -143,13 +184,29 @@ export class ServerRuntimeWorkerLifecycle {
         onError: (error) => this.observeRecoveryFailure(error),
       }),
       ...(this.bindings.commands === undefined ? {} : { commands: this.bindings.commands.runtime }),
+      ...(this.bindings.continuations === undefined
+        ? {}
+        : { continuations: this.bindings.continuations.runtime }),
       status: () => this.status(),
     });
 
     try {
+      // A loop being scheduled is not readiness evidence. Run one bounded
+      // sweep of every durable worker before exposing the lifecycle as ready,
+      // so storage/schema/lease failures fail startup instead of surfacing
+      // after traffic has already been admitted.
+      this.observeTimerSweep(await workers.timer.sweepOnce());
+      this.observeRecoverySweep(await workers.recovery.sweepOnce());
+      if (workers.commands) {
+        this.commandStartupPoll = await workers.commands.processNext(this.bindings.commands?.scope);
+      }
+      if (workers.continuations) {
+        this.observeContinuationSweep(await workers.continuations.sweepOnce());
+      }
       workers.timer.start();
       workers.recovery.start();
       workers.commands?.start(this.bindings.commands?.scope);
+      workers.continuations?.start();
       if (this.closed) {
         throw conflict('Runtime Worker lifecycle closed during startup');
       }
@@ -205,6 +262,13 @@ export class ServerRuntimeWorkerLifecycle {
     this.bindings.recovery.onError?.(error);
   }
 
+  private observeContinuationSweep(
+    result: Readonly<ServerReActContinuationReconciliationSweepResult>
+  ): void {
+    this.continuationEvidence.successfulSweeps += 1;
+    this.continuationEvidence.lastSuccessfulSweepAt = result.checkedAt;
+  }
+
   private assertOpen(): void {
     if (this.closed) throw conflict('Runtime Worker lifecycle is closed');
   }
@@ -215,6 +279,7 @@ async function closeWorkers(workers: Readonly<ServerRuntimeWorkers>): Promise<vo
   // queue from claiming new work while timer/recovery sweeps are draining.
   const results = await Promise.allSettled([
     workers.commands?.close() ?? Promise.resolve(),
+    workers.continuations?.close() ?? Promise.resolve(),
     workers.recovery.close(),
     workers.timer.close(),
   ]);

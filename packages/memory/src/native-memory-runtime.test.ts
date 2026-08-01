@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   InMemoryLocalVectorStoreAdapter,
+  NativeMemoryManagementProvider,
   createNativeMemoryManagementProviderFactory,
   hashMemoryScope,
   memoryManagementProviderSpecExample,
   memoryProfileSpecExample,
   type MemoryAddRequest,
+  type MemoryProfileSpec,
   type NativeMemoryRuntimeResources,
   type RedisLikeWorkingMemoryClient,
   type StructuredQuery,
@@ -82,7 +84,7 @@ class TestRedisClient implements RedisLikeWorkingMemoryClient {
   }
 }
 
-function addRequest(): MemoryAddRequest {
+function addRequest(profile: MemoryProfileSpec = memoryProfileSpecExample): MemoryAddRequest {
   return {
     operationId: 'operation:native:restart',
     principal: {
@@ -92,7 +94,7 @@ function addRequest(): MemoryAddRequest {
       permissionScopes: ['memory:write'],
     },
     scope: { userId: 'user:native', runId: 'run:native' },
-    profileRef: memoryProfileSpecExample,
+    profileRef: profile,
     input: 'durable native memory',
     inputType: 'text',
     memoryType: 'semantic',
@@ -107,24 +109,31 @@ describe('Native Memory durable runtime', () => {
   it('recovers durable outbox and idempotency state after runtime restart', async () => {
     const structuredStore = new TestStructuredStore();
     const vectors = new InMemoryLocalVectorStoreAdapter('memory.vector.local');
+    const profile: MemoryProfileSpec = {
+      ...structuredClone(memoryProfileSpecExample),
+      workingStoreRef: { id: 'memory.store.working.redis', version: '1.0.0' },
+      embeddingProviderRef: { id: 'memory.embedding.local', version: '1.0.0' },
+    };
     const dependencies = {
       structuredStore,
+      structuredStoreId: 'memory.store.record.sqlite',
       redisClient: new TestRedisClient(),
       embeddingProvider: { embed: async () => [[1, 0, 0]] },
+      embeddingProviderId: 'memory.embedding.local',
       vectorStores: [vectors],
       ownerId: 'worker:native',
     };
     const firstCreated = await createNativeMemoryManagementProviderFactory(dependencies).create({
-      profile: memoryProfileSpecExample,
+      profile,
       spec: memoryManagementProviderSpecExample,
     });
     if (!('provider' in firstCreated)) throw new Error('Expected a Native provider installation.');
-    const firstResult = await firstCreated.provider.add(addRequest());
+    const firstResult = await firstCreated.provider.add(addRequest(profile));
     const resources = firstCreated.resources as NativeMemoryRuntimeResources;
     expect(resources.supervisor.status()).toBe('running');
     await resources.workingStore.set({
       id: 'working:restart',
-      scope: addRequest().scope,
+      scope: addRequest(profile).scope,
       value: 'working value',
       createdAt: '2026-07-21T00:00:00.000Z',
       updatedAt: '2026-07-21T00:00:00.000Z',
@@ -134,26 +143,109 @@ describe('Native Memory durable runtime', () => {
 
     const restartedCreated = await createNativeMemoryManagementProviderFactory(dependencies).create(
       {
-        profile: memoryProfileSpecExample,
+        profile,
         spec: memoryManagementProviderSpecExample,
       }
     );
     if (!('provider' in restartedCreated))
       throw new Error('Expected a Native provider installation.');
-    await expect(restartedCreated.provider.add(addRequest())).resolves.toEqual(firstResult);
+    await expect(restartedCreated.provider.add(addRequest(profile))).resolves.toEqual(firstResult);
     await expect(
       vectors.search({
         vector: [1, 0, 0],
         topK: 1,
-        filter: { scopeHash: hashMemoryScope(addRequest().scope) },
+        filter: { scopeHash: hashMemoryScope(addRequest(profile).scope) },
       })
     ).resolves.toHaveLength(1);
     await expect(
+      restartedCreated.provider.search({
+        operationId: 'operation:native:semantic-search',
+        principal: addRequest(profile).principal,
+        scope: addRequest(profile).scope,
+        profileRef: profile,
+        query: 'durable native memory',
+        mode: 'semantic',
+        topK: 1,
+      })
+    ).resolves.toMatchObject([
+      {
+        record: { id: firstResult.records[0]?.id },
+        semanticScore: 1,
+        reasons: ['dense-vector-similarity'],
+      },
+    ]);
+    await expect(
+      restartedCreated.provider.search({
+        operationId: 'operation:native:unsupported-graph',
+        principal: addRequest(profile).principal,
+        scope: addRequest(profile).scope,
+        profileRef: profile,
+        query: 'durable',
+        mode: 'graph',
+      })
+    ).rejects.toMatchObject({ code: 'MEMORY_INVALID_INPUT' });
+    await expect(
       (restartedCreated.resources as NativeMemoryRuntimeResources).workingStore.get(
-        addRequest().scope,
+        addRequest(profile).scope,
         'working:restart'
       )
     ).resolves.toMatchObject({ value: 'working value' });
     await restartedCreated.close?.();
+  });
+
+  it('honors the declared local working store and rejects uncomposed dependencies', async () => {
+    const baseDependencies = {
+      structuredStore: new TestStructuredStore(),
+      structuredStoreId: 'memory.store.record.sqlite',
+      vectorStores: [] as InMemoryLocalVectorStoreAdapter[],
+      ownerId: 'worker:local',
+    };
+    const localProfile: MemoryProfileSpec = {
+      ...structuredClone(memoryProfileSpecExample),
+      workingStoreRef: { id: 'memory.store.working.in-memory', version: '1.0.0' },
+      vectorStoreRefs: undefined,
+    };
+    const created = await createNativeMemoryManagementProviderFactory(baseDependencies).create({
+      profile: localProfile,
+      spec: memoryManagementProviderSpecExample,
+    });
+    if (!('provider' in created)) throw new Error('Expected a Native provider installation.');
+    await expect(
+      (created.resources as NativeMemoryRuntimeResources).workingStore.health()
+    ).resolves.toMatchObject({ status: 'healthy' });
+    await expect(created.provider.add(addRequest(localProfile))).resolves.not.toHaveProperty(
+      'indexJobs'
+    );
+    await expect(
+      (created.provider as NativeMemoryManagementProvider).outboxStore.list()
+    ).resolves.toHaveLength(0);
+    await created.close?.();
+
+    await expect(
+      createNativeMemoryManagementProviderFactory(baseDependencies).create({
+        profile: {
+          ...localProfile,
+          recordStoreRef: { id: 'memory.store.record.mongodb', version: '1.0.0' },
+        },
+        spec: memoryManagementProviderSpecExample,
+      })
+    ).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_NOT_INSTALLED',
+      message: expect.stringContaining('record store memory.store.record.mongodb is not composed'),
+    });
+
+    await expect(
+      createNativeMemoryManagementProviderFactory(baseDependencies).create({
+        profile: {
+          ...localProfile,
+          vectorStoreRefs: [{ id: 'memory.vector.missing', version: '1.0.0' }],
+          embeddingProviderRef: { id: 'memory.embedding.missing', version: '1.0.0' },
+        },
+        spec: memoryManagementProviderSpecExample,
+      })
+    ).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_NOT_INSTALLED',
+      message: expect.stringContaining('vector store memory.vector.missing is not composed'),
+    });
   });
 });

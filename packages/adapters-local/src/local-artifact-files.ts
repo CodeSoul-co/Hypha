@@ -18,6 +18,15 @@ export interface LocalArtifactTempFile {
   sizeBytes: number;
 }
 
+export class LocalArtifactTransferAbortedError extends Error {
+  readonly code = 'LOCAL_ARTIFACT_TRANSFER_ABORTED';
+
+  constructor() {
+    super('Local Artifact transfer was aborted.');
+    this.name = 'LocalArtifactTransferAbortedError';
+  }
+}
+
 export async function prepareLocalArtifactStore(
   rootPath: string
 ): Promise<LocalArtifactStorePaths> {
@@ -39,8 +48,10 @@ export async function prepareLocalArtifactStore(
 export async function writeLocalArtifactTempFile(
   source: ArtifactByteSource,
   paths: LocalArtifactStorePaths,
-  maxBytes: number
+  maxBytes: number,
+  abortSignal?: AbortSignal
 ): Promise<LocalArtifactTempFile> {
+  assertLocalArtifactTransferActive(abortSignal);
   const temporaryPath = path.join(paths.temporary, `upload-${randomUUID()}.tmp`);
   assertContainedPath(paths.root, temporaryPath);
   const handle = await fs.open(temporaryPath, 'wx', 0o600);
@@ -48,15 +59,18 @@ export async function writeLocalArtifactTempFile(
   let sizeBytes = 0;
   try {
     for await (const chunk of toAsyncChunks(source)) {
+      assertLocalArtifactTransferActive(abortSignal);
       if (!(chunk instanceof Uint8Array)) {
         throw new TypeError('Artifact content streams must yield Uint8Array chunks.');
       }
       sizeBytes += chunk.byteLength;
       if (sizeBytes > maxBytes) throw new ArtifactContentLimitError(maxBytes, sizeBytes);
       hash.update(chunk);
-      await writeAll(handle, chunk);
+      await writeAll(handle, chunk, abortSignal);
     }
+    assertLocalArtifactTransferActive(abortSignal);
     await handle.sync();
+    assertLocalArtifactTransferActive(abortSignal);
   } catch (error) {
     await handle.close().catch(() => undefined);
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -95,15 +109,30 @@ export async function publishLocalArtifactBlob(
 
 export async function hashLocalArtifactFile(
   filename: string,
-  root?: string
+  root?: string,
+  abortSignal?: AbortSignal
 ): Promise<{ contentHash: string; sizeBytes: number }> {
+  assertLocalArtifactTransferActive(abortSignal);
   if (root) await ensureSafeLocalArtifactFile(root, filename);
+  assertLocalArtifactTransferActive(abortSignal);
   const hash = createHash('sha256');
   let sizeBytes = 0;
-  for await (const chunk of createReadStream(filename)) {
-    const bytes = chunk as Buffer;
-    sizeBytes += bytes.byteLength;
-    hash.update(bytes);
+  const stream = createReadStream(filename);
+  const abort = (): void => {
+    stream.destroy(new LocalArtifactTransferAbortedError());
+  };
+  abortSignal?.addEventListener('abort', abort, { once: true });
+  try {
+    for await (const chunk of stream) {
+      assertLocalArtifactTransferActive(abortSignal);
+      const bytes = chunk as Buffer;
+      sizeBytes += bytes.byteLength;
+      hash.update(bytes);
+    }
+    assertLocalArtifactTransferActive(abortSignal);
+  } finally {
+    abortSignal?.removeEventListener('abort', abort);
+    if (!stream.destroyed) stream.destroy();
   }
   return { contentHash: `sha256:${hash.digest('hex')}`, sizeBytes };
 }
@@ -111,21 +140,38 @@ export async function hashLocalArtifactFile(
 export function streamLocalArtifactFile(
   filename: string,
   range?: ArtifactByteRange,
-  root?: string
+  root?: string,
+  abortSignal?: AbortSignal
 ): AsyncIterable<Uint8Array> {
   return (async function* chunks(): AsyncIterable<Uint8Array> {
+    assertLocalArtifactTransferActive(abortSignal);
     if (root) await ensureSafeLocalArtifactFile(root, filename);
+    assertLocalArtifactTransferActive(abortSignal);
     const stream = createReadStream(filename, {
       ...(range ? { start: range.start, end: range.endInclusive } : {}),
     });
-    for await (const chunk of stream) yield Uint8Array.from(chunk as Buffer);
+    const abort = (): void => {
+      stream.destroy(new LocalArtifactTransferAbortedError());
+    };
+    abortSignal?.addEventListener('abort', abort, { once: true });
+    try {
+      for await (const chunk of stream) {
+        assertLocalArtifactTransferActive(abortSignal);
+        yield Uint8Array.from(chunk as Buffer);
+      }
+      assertLocalArtifactTransferActive(abortSignal);
+    } finally {
+      abortSignal?.removeEventListener('abort', abort);
+      if (!stream.destroyed) stream.destroy();
+    }
   })();
 }
 
 export async function writeJsonAtomically(
   root: string,
   filename: string,
-  value: unknown
+  value: unknown,
+  options: { ifAbsent?: boolean } = {}
 ): Promise<void> {
   await ensureSafeLocalArtifactDirectory(root, path.dirname(filename));
   const temporaryPath = `${filename}.${randomUUID()}.tmp`;
@@ -134,11 +180,18 @@ export async function writeJsonAtomically(
     await handle.writeFile(`${JSON.stringify(value)}\n`, 'utf8');
     await handle.sync();
     await handle.close();
-    await fs.rename(temporaryPath, filename);
+    if (options.ifAbsent) {
+      // A hard-link publish is atomic across Store instances and fails with
+      // EEXIST when another writer has already claimed the object key.
+      await fs.link(temporaryPath, filename);
+    } else {
+      await fs.rename(temporaryPath, filename);
+    }
   } catch (error) {
     await handle.close().catch(() => undefined);
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -183,7 +236,12 @@ export async function pathExists(filename: string): Promise<boolean> {
 }
 
 export function isNodeError(error: unknown, code: string): boolean {
-  return error instanceof Error && 'code' in error && error.code === code;
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }
 
 export class LocalArtifactIntegrityError extends Error {
@@ -245,14 +303,24 @@ async function safeReadDirectory(directory: string): Promise<import('node:fs').D
   }
 }
 
-async function writeAll(handle: fs.FileHandle, chunk: Uint8Array): Promise<void> {
+async function writeAll(
+  handle: fs.FileHandle,
+  chunk: Uint8Array,
+  abortSignal?: AbortSignal
+): Promise<void> {
   let offset = 0;
   while (offset < chunk.byteLength) {
+    assertLocalArtifactTransferActive(abortSignal);
     const result = await handle.write(chunk, offset, chunk.byteLength - offset, null);
+    assertLocalArtifactTransferActive(abortSignal);
     if (result.bytesWritten <= 0)
       throw new Error('Artifact temporary file write made no progress.');
     offset += result.bytesWritten;
   }
+}
+
+function assertLocalArtifactTransferActive(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) throw new LocalArtifactTransferAbortedError();
 }
 
 async function* toAsyncChunks(source: ArtifactByteSource): AsyncIterable<Uint8Array> {
