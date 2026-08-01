@@ -10,6 +10,7 @@ export const RUNTIME_RECOVERY_CANDIDATE_REASONS = [
   'CHECKPOINT_BEHIND',
   'ACTIVITY_RESULT_UNAPPLIED',
   'ACTIVITY_COMPENSATION_REQUIRED',
+  'ACTIVITY_REDISPATCH_INCOMPLETE',
   'MESSAGE_UNACKED',
   'OUTBOX_UNPUBLISHED',
   'WAIT_WITHOUT_REGISTRATION',
@@ -25,6 +26,7 @@ export const RUNTIME_RECOVERY_SAFE_ACTIONS = [
   'requeue',
   'apply_observation',
   'compensate_activity',
+  'reconcile_redispatch',
   'restore_wait',
   'fire_timer',
   'republish_message',
@@ -79,6 +81,7 @@ export interface RuntimeRecoveryCandidate {
   eventHeadSequence: number;
   projectionSequence?: number;
   activityId?: string;
+  redispatchRequestEventId?: string;
   stateId?: string;
   stateAttempt?: number;
   currentLease?: FencedRunLease;

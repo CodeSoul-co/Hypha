@@ -1,14 +1,22 @@
 import {
   FrameworkError,
   DEFAULT_SESSION_COMMAND_MAX_ATTEMPTS,
+  SESSION_COMMAND_RUN_CANCELLED_CODE,
   SESSION_COMMAND_STATUSES,
   SESSION_COMMAND_MAX_ATTEMPTS_LIMIT,
   SESSION_COMMAND_TYPES,
+  createSessionQueueHealthSnapshot,
   hashCanonicalJson,
+  validateCancelSessionCommandsRequest,
+  validateCancelSessionCommandsResult,
+  validateCloseDeadLetterSessionCommandRequest,
   validateListStuckSessionCommandsRequest,
   validateRedriveDeadLetterSessionCommandRequest,
   validateSessionCommandRecord,
+  type CancelSessionCommandsRequest,
+  type CancelSessionCommandsResult,
   type ClaimSessionCommandRequest,
+  type CloseDeadLetterSessionCommandRequest,
   type CompleteSessionCommandRequest,
   type EnqueueSessionCommandRequest,
   type FailSessionCommandRequest,
@@ -21,6 +29,7 @@ import {
   type SessionCommandClaim,
   type SessionCommandRecord,
   type SessionQueue,
+  type SessionQueueHealthSnapshot,
   type SessionQueueScope,
   type StuckSessionCommand,
 } from '@hypha/core';
@@ -325,6 +334,46 @@ export class SQLiteSessionQueue implements SessionQueue {
     });
   }
 
+  async cancelPending(request: CancelSessionCommandsRequest): Promise<CancelSessionCommandsResult> {
+    const validated = validateCancelSessionCommandsRequest(request);
+    return this.transaction('cancelPending', () => {
+      this.recover(validated.cancelledAt);
+      const result: CancelSessionCommandsResult = {
+        targetRunId: validated.targetRunId,
+        cancelledCommandIds: [],
+        alreadyCancelledCommandIds: [],
+        alreadyTerminalCommandIds: [],
+      };
+      const records = this.rowsForScope(sessionKey(validated.scope))
+        .map((row) => parseRecord(row))
+        .filter(
+          (record) =>
+            record.targetRunId === validated.targetRunId &&
+            record.id !== validated.cancellationCommandId
+        )
+        .sort((left, right) => left.enqueueSequence - right.enqueueSequence);
+      for (const record of records) {
+        if (record.rejectionCode === SESSION_COMMAND_RUN_CANCELLED_CODE) {
+          result.alreadyCancelledCommandIds.push(record.id);
+          continue;
+        }
+        if (!isPending(record)) {
+          result.alreadyTerminalCommandIds.push(record.id);
+          continue;
+        }
+        record.status = 'rejected';
+        record.rejectionCode = SESSION_COMMAND_RUN_CANCELLED_CODE;
+        record.completedAt = validated.cancelledAt;
+        delete record.claimedBy;
+        delete record.claimToken;
+        delete record.leaseExpiresAt;
+        this.updateRecord(validateSessionCommandRecord(record));
+        result.cancelledCommandIds.push(record.id);
+      }
+      return validateCancelSessionCommandsResult(result);
+    });
+  }
+
   async redriveDeadLetter(
     request: RedriveDeadLetterSessionCommandRequest
   ): Promise<SessionCommandRecord> {
@@ -394,6 +443,20 @@ export class SQLiteSessionQueue implements SessionQueue {
           requestedAt,
         },
       });
+      this.updateRecord(
+        validateSessionCommandRecord({
+          ...source,
+          status: 'dead_letter_resolved',
+          deadLetterResolution: {
+            version: '1.0.0',
+            disposition: 'redriven',
+            operatorId: validated.operatorId,
+            reason: validated.reason,
+            resolvedAt: requestedAt,
+            redriveCommandId: record.id,
+          },
+        })
+      );
       this.insertRecord(scopeKey, record);
       this.db
         .prepare(
@@ -402,6 +465,50 @@ export class SQLiteSessionQueue implements SessionQueue {
         )
         .run(scopeKey, validated.idempotencyKey, validated.id, fingerprint);
       return structuredClone(record);
+    });
+  }
+
+  async closeDeadLetter(
+    request: CloseDeadLetterSessionCommandRequest
+  ): Promise<SessionCommandRecord> {
+    const validated = validateCloseDeadLetterSessionCommandRequest(request);
+    const scopeKey = sessionKey(validated.scope);
+    return this.transaction('close dead letter', () => {
+      const record = this.readRecord(validated.commandId);
+      const resolution = {
+        version: '1.0.0' as const,
+        disposition: 'closed' as const,
+        operatorId: validated.operatorId,
+        reason: validated.reason,
+        resolvedAt: validated.closedAt,
+      };
+      if (
+        record &&
+        sessionKey(scopeFromCommand(record)) === scopeKey &&
+        record.status === 'dead_letter_resolved' &&
+        record.deadLetterResolution?.disposition === 'closed' &&
+        hashCanonicalJson(record.deadLetterResolution) === hashCanonicalJson(resolution)
+      ) {
+        return structuredClone(record);
+      }
+      if (
+        !record ||
+        sessionKey(scopeFromCommand(record)) !== scopeKey ||
+        record.status !== 'dead_letter'
+      ) {
+        conflict(
+          'RUNTIME_SESSION_QUEUE_CONFLICT',
+          'Only an unresolved dead-letter command in the requested scope can be closed',
+          { commandId: validated.commandId }
+        );
+      }
+      const updated = validateSessionCommandRecord({
+        ...record,
+        status: 'dead_letter_resolved',
+        deadLetterResolution: resolution,
+      });
+      this.updateRecord(updated);
+      return structuredClone(updated);
     });
   }
 
@@ -442,22 +549,15 @@ export class SQLiteSessionQueue implements SessionQueue {
     }
   }
 
-  async health(): Promise<ProviderHealth> {
+  async health(): Promise<ProviderHealth & { details: SessionQueueHealthSnapshot }> {
     return this.transaction('health', () => {
       const checkedAt = this.timestamp('health.checkedAt');
-      this.recover(checkedAt);
-      const rows = this.pendingRecords();
+      const recoveredExpiredLeases = this.recover(checkedAt);
+      const records = this.allRecords();
       return {
         status: 'healthy',
         checkedAt,
-        details: {
-          commands: Number(
-            this.db.prepare('SELECT COUNT(*) AS count FROM runtime_session_commands').get()
-              ?.count ?? 0
-          ),
-          queued: rows.filter((record) => record.status === 'queued').length,
-          claimed: rows.filter((record) => record.status === 'claimed').length,
-        },
+        details: createSessionQueueHealthSnapshot(records, checkedAt, recoveredExpiredLeases),
       };
     });
   }
@@ -500,7 +600,8 @@ export class SQLiteSessionQueue implements SessionQueue {
     );
   }
 
-  private recover(now: string): void {
+  private recover(now: string): number {
+    let recoveredExpiredLeases = 0;
     for (const record of this.pendingRecords()) {
       let changed = false;
       if (
@@ -508,7 +609,19 @@ export class SQLiteSessionQueue implements SessionQueue {
         record.leaseExpiresAt !== undefined &&
         Date.parse(record.leaseExpiresAt) <= Date.parse(now)
       ) {
+        recoveredExpiredLeases += 1;
         const exhausted = record.attempts >= record.maxAttempts;
+        record.leaseRecoveries = [
+          ...(record.leaseRecoveries ?? []),
+          {
+            version: '1.0.0',
+            previousWorkerId: record.claimedBy!,
+            previousLeaseEpoch: record.leaseEpoch,
+            leaseExpiredAt: record.leaseExpiresAt,
+            recoveredAt: now,
+            disposition: exhausted ? 'dead_lettered' : 'requeued',
+          },
+        ];
         record.status = exhausted ? 'dead_letter' : 'queued';
         if (exhausted) {
           record.rejectionCode = 'claim_lease_expired_after_attempt_budget';
@@ -530,6 +643,16 @@ export class SQLiteSessionQueue implements SessionQueue {
       }
       if (changed) this.updateRecord(validateSessionCommandRecord(record));
     }
+    return recoveredExpiredLeases;
+  }
+
+  private allRecords(): SessionCommandRecord[] {
+    return this.db
+      .prepare(
+        'SELECT record_json, record_hash FROM runtime_session_commands ORDER BY scope_key, enqueue_sequence'
+      )
+      .all()
+      .map((row) => parseRecord(row));
   }
 
   private pendingRecords(scope?: SessionQueueScope): SessionCommandRecord[] {
@@ -941,4 +1064,8 @@ function conflict(
   context?: Record<string, unknown>
 ): never {
   throw new FrameworkError({ code, message, context });
+}
+
+function isPending(record: SessionCommandRecord): boolean {
+  return record.status === 'queued' || record.status === 'claimed';
 }

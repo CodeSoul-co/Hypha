@@ -49,6 +49,10 @@ import {
   RUNTIME_ORCHESTRATION_PROJECTION_VERSION,
 } from './orchestration-projection';
 import type { ProjectionEngine, ProjectionStore } from './projection';
+import type {
+  RuntimeActivityRedispatchCommand,
+  RuntimeActivityRedispatchResult,
+} from './runtime-activity-redispatch-service';
 
 const REQUEUE_STATUSES = new Set([
   'created',
@@ -60,6 +64,13 @@ const REQUEUE_STATUSES = new Set([
   'recovering',
 ]);
 const TERMINAL_ACTIVITY_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const REDISPATCH_BLOCKED_RUN_STATUSES = new Set([
+  'cancelling',
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+]);
 
 export interface RuntimeRecoveryServiceOptions {
   events: EventRuntime;
@@ -68,10 +79,15 @@ export interface RuntimeRecoveryServiceOptions {
   runLeases: RunLeaseStore;
   stateClaims: StateExecutionClaimStore;
   activities: RuntimeActivityReconciliationPort;
+  redispatches: RuntimeActivityRedispatchRecoveryPort;
   cancellations: RuntimeCancellationRecoveryPort;
   requeue: RuntimeRecoveryRequeuePort;
   now?: () => string;
   nextId?: (namespace: string) => string;
+}
+
+export interface RuntimeActivityRedispatchRecoveryPort {
+  redispatch(command: RuntimeActivityRedispatchCommand): Promise<RuntimeActivityRedispatchResult>;
 }
 
 export class RuntimeRecoveryService {
@@ -125,6 +141,24 @@ export class RuntimeRecoveryService {
       const addCandidate = (input: RuntimeRecoveryCandidate): void => {
         if (!completedCandidates.has(input.candidateId)) candidates.push(input);
       };
+      if (!REDISPATCH_BLOCKED_RUN_STATUSES.has(projection.runStatus)) {
+        for (const requestEvent of incompleteRedispatchRequests(streamEvents)) {
+          const payload = payloadRecord(requestEvent);
+          addCandidate(
+            candidate({
+              scope: head.scope,
+              reason: 'ACTIVITY_REDISPATCH_INCOMPLETE',
+              safeAction: 'reconcile_redispatch',
+              eventHeadSequence: head.lastSequence,
+              projectionSequence: record.lastSequence,
+              activityId: requiredString(payload.activityId, 'Redispatch Activity id'),
+              redispatchRequestEventId: requestEvent.id,
+              ...(currentLease === null ? {} : { currentLease }),
+              detectedAt: request.checkedAt,
+            })
+          );
+        }
+      }
       for (const activityId of projection.pendingActivityIds) {
         addCandidate(
           candidate({
@@ -215,6 +249,9 @@ export class RuntimeRecoveryService {
     if (prior.length === 0 && head.lastSequence !== command.candidate.eventHeadSequence) {
       return result(command, 'stale');
     }
+    if (command.candidate.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE') {
+      return this.recoverRedispatch(command);
+    }
     if (command.candidate.reason === 'CANCELLATION_INCOMPLETE') {
       return this.recoverCancellation(command);
     }
@@ -256,6 +293,98 @@ export class RuntimeRecoveryService {
     } finally {
       await this.release(authorization);
     }
+  }
+
+  private async recoverRedispatch(command: RuntimeRecoveryCommand): Promise<RuntimeRecoveryResult> {
+    const request = await this.redispatchRequest(command.candidate);
+    if (!request) return result(command, 'stale');
+    const payload = payloadRecord(request);
+    const metadata = recordValue(request.metadata);
+    if (!metadata) invalid('Redispatch request metadata must be an object');
+    try {
+      const recovered = await this.options.redispatches.redispatch({
+        commandId: requiredString(payload.commandId, 'Redispatch command id'),
+        scope: {
+          ...(request.tenantId === undefined ? {} : { tenantId: request.tenantId }),
+          userId: request.userId,
+          ...(request.workspaceId === undefined ? {} : { workspaceId: request.workspaceId }),
+          sessionId: requiredString(request.sessionId, 'Redispatch Session id'),
+          runId: request.runId,
+          ...(request.agentId === undefined ? {} : { agentId: request.agentId }),
+        },
+        ownerId: command.ownerId,
+        leaseTtlMs: command.leaseTtlMs,
+        taskId: requiredString(payload.taskId, 'Redispatch task id'),
+        expectedTaskRevision: requiredPositiveInteger(
+          metadata.expectedTaskRevision,
+          'Redispatch expected task revision'
+        ),
+        expectedSubjectHash: requiredString(
+          metadata.subjectHash,
+          'Redispatch expected subject hash'
+        ),
+        activityDescriptorRef: requiredString(
+          payload.activityDescriptorRef,
+          'Redispatch Activity descriptor reference'
+        ),
+        activityDescriptorHash: requiredString(
+          payload.activityDescriptorHash,
+          'Redispatch Activity descriptor hash'
+        ),
+        requestedAt: requiredString(payload.requestedAt, 'Redispatch requested timestamp'),
+        idempotencyKey: request.idempotencyKey ?? request.id,
+      });
+      if (recovered.requestEventId !== request.id) {
+        invalid('Redispatch recovery returned a different request Event id');
+      }
+      return validateRuntimeRecoveryResult({
+        candidateId: command.candidate.candidateId,
+        disposition: recovered.receiptReused ? 'reused' : 'recovered',
+        eventIds: [recovered.requestEventId, recovered.receiptEventId],
+        projection: await this.project(command.candidate),
+      });
+    } catch (error) {
+      if (!isFrameworkError(error)) throw error;
+      if (error.code === 'RUNTIME_LEASE_UNAVAILABLE') {
+        return result(command, 'lease_unavailable');
+      }
+      if (error.code === 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED') {
+        return result(command, 'stale');
+      }
+      if (error.code !== 'RUNTIME_ACTIVITY_OUTCOME_UNKNOWN') throw error;
+      const outcome = await this.redispatchOutcomeUnknown(command.candidate, request.id);
+      return validateRuntimeRecoveryResult({
+        candidateId: command.candidate.candidateId,
+        disposition: 'requires_review',
+        eventIds: [request.id, ...(outcome === null ? [] : [outcome.id])],
+        projection: await this.project(command.candidate),
+      });
+    }
+  }
+
+  private async redispatchRequest(
+    candidateInput: RuntimeRecoveryCandidate
+  ): Promise<PersistedFrameworkEvent | null> {
+    const requestEventId = candidateInput.redispatchRequestEventId;
+    if (!requestEventId) invalid('Redispatch recovery candidate is missing request Event id');
+    const requests = await this.options.events.read({
+      scope: streamScope(candidateInput),
+      types: ['activity.redispatch.requested'],
+    });
+    return requests.find((event) => event.id === requestEventId) ?? null;
+  }
+
+  private async redispatchOutcomeUnknown(
+    candidateInput: RuntimeRecoveryCandidate,
+    requestEventId: string
+  ): Promise<PersistedFrameworkEvent | null> {
+    const outcomes = await this.options.events.read({
+      scope: streamScope(candidateInput),
+      types: ['activity.redispatch.outcome_unknown'],
+    });
+    return (
+      outcomes.find((event) => payloadString(event, 'requestEventId') === requestEventId) ?? null
+    );
   }
 
   private async rebuildProjection(
@@ -936,6 +1065,7 @@ export class RuntimeRecoveryService {
 
 function candidate(input: Omit<RuntimeRecoveryCandidate, 'candidateId'>): RuntimeRecoveryCandidate {
   const target =
+    input.redispatchRequestEventId ??
     input.activityId ??
     (input.stateId === undefined || input.stateAttempt === undefined
       ? `run:${input.eventHeadSequence}`
@@ -954,6 +1084,7 @@ function candidateHash(input: RuntimeRecoveryCandidate): string {
       reason: input.reason,
       safeAction: input.safeAction,
       activityId: input.activityId,
+      redispatchRequestEventId: input.redispatchRequestEventId,
       stateId: input.stateId,
       stateAttempt: input.stateAttempt,
     })
@@ -1037,6 +1168,22 @@ function compensationActivityIds(events: PersistedFrameworkEvent[]): string[] {
     .sort();
 }
 
+function incompleteRedispatchRequests(
+  events: PersistedFrameworkEvent[]
+): PersistedFrameworkEvent[] {
+  const acceptedRequestIds = new Set(
+    events
+      .filter((event) => event.type === 'activity.redispatch.accepted')
+      .map((event) => payloadString(event, 'requestEventId'))
+      .filter((requestEventId): requestEventId is string => requestEventId !== undefined)
+  );
+  return events
+    .filter(
+      (event) => event.type === 'activity.redispatch.requested' && !acceptedRequestIds.has(event.id)
+    )
+    .sort((left, right) => left.sequence - right.sequence);
+}
+
 function result(
   command: RuntimeRecoveryCommand,
   disposition: RuntimeRecoveryDisposition
@@ -1077,6 +1224,19 @@ function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0)
+    invalid(`${label} must be a non-empty string`);
+  return value;
+}
+
+function requiredPositiveInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    invalid(`${label} must be a positive integer`);
+  }
+  return value as number;
 }
 
 function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {

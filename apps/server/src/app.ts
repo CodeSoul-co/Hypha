@@ -17,6 +17,7 @@ import {
   getMemoryApplicationService,
   getServerMemoryComposition,
   initializeServerMemoryComposition,
+  sanitizeServerMemoryOperationalError,
 } from './services/ServerMemoryComposition';
 import {
   initSingleUserOwner,
@@ -38,12 +39,19 @@ import {
 } from './services/EventRuntime';
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
+import { createServerProductionRuntime } from './runtime/ServerProductionRuntime';
+import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
+import {
+  bindServerRuntimeReadiness,
+  clearServerRuntimeReadiness,
+} from './services/ServerRuntimeReadiness';
 
 class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
   private server: http.Server | null = null;
   private canonicalRuntime: ServerCanonicalRuntime | null = null;
+  private shutdownCoordinator: ServerShutdownCoordinator | null = null;
 
   constructor() {
     this.app = express();
@@ -51,19 +59,26 @@ class Application {
   }
 
   async initialize(): Promise<void> {
-    // Setup middleware
-    this.setupMiddleware();
+    try {
+      // Setup middleware
+      this.setupMiddleware();
 
-    // Setup routes
-    this.setupRoutes();
+      // Setup routes
+      this.setupRoutes();
 
-    // Setup error handling
-    this.setupErrorHandling();
+      // Setup error handling
+      this.setupErrorHandling();
 
-    // Initialize services
-    await this.initializeServices();
+      // Initialize services
+      await this.initializeServices();
 
-    logger.info('Application initialized successfully');
+      logger.info('Application initialized successfully');
+    } catch (error) {
+      await this.stop().catch((shutdownError) => {
+        logger.error('Failed to clean up after initialization failure:', shutdownError);
+      });
+      throw error;
+    }
   }
 
   private setupMiddleware(): void {
@@ -166,7 +181,37 @@ class Application {
     // Initialize Prompt Manager
     await initializePromptManager();
 
+    // Compose the canonical execution graph only after every adapter, Skill,
+    // Tool, Workflow, and Prompt dependency is ready. Worker startup performs
+    // an initial durable sweep and fails closed before /ready can return 200.
+    await this.activateCanonicalExecution();
+
     logger.info('All services initialized');
+  }
+
+  private async activateCanonicalExecution(): Promise<void> {
+    const runtime = this.canonicalRuntime;
+    if (!runtime) {
+      throw new Error('Canonical Runtime Event authority is not initialized');
+    }
+    const adapters = getEventRuntime().canonicalExecutionAdapters();
+    const workers = runtimeConfig().canonical.workers;
+    const production = createServerProductionRuntime({
+      ...adapters,
+      workerId: workers.workerId,
+      leaseTtlMs: workers.leaseTtlMs,
+      pageLimit: workers.pageLimit,
+      timerPollIntervalMs: workers.timerPollIntervalMs,
+      timerErrorBackoffMs: workers.timerErrorBackoffMs,
+      recoveryPollIntervalMs: workers.recoveryPollIntervalMs,
+      recoveryErrorBackoffMs: workers.recoveryErrorBackoffMs,
+      autoRecoverReasons: workers.autoRecoverReasons,
+    });
+    runtime.composeRuntime(production.execution);
+    const active = await runtime.startWorkers(production.workers);
+    logger.info('Canonical Runtime execution graph activated', {
+      workers: active.status(),
+    });
   }
 
   private async initializeCanonicalRuntime(): Promise<void> {
@@ -192,6 +237,7 @@ class Application {
         humanWaits: composition.humanWaits,
       });
       this.canonicalRuntime = runtime;
+      bindServerRuntimeReadiness(() => runtime.executionReadiness());
       logger.info('Canonical Runtime initialized', {
         migratedEvents: composition.migration.migratedEvents,
         alreadyCanonicalEvents: composition.migration.alreadyCanonicalEvents,
@@ -242,22 +288,29 @@ class Application {
 
   async start(): Promise<void> {
     const { host, port } = this.config.app;
-
-    return new Promise((resolve) => {
-      this.server = this.app.listen(port, host, async () => {
-        logger.info(`Server started`, {
-          host,
-          port,
-          env: this.config.app.env,
-          url: `http://${host}:${port}`,
-        });
-
-        // Startup health check
-        await this.startupHealthCheck(host, port);
-
+    await new Promise<void>((resolve, reject) => {
+      const server = this.app.listen(port, host);
+      this.server = server;
+      const onError = (error: Error) => {
+        server.off('listening', onListening);
+        this.server = null;
+        reject(error);
+      };
+      const onListening = () => {
+        server.off('error', onError);
         resolve();
-      });
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
     });
+    logger.info(`Server started`, {
+      host,
+      port,
+      env: this.config.app.env,
+      url: `http://${host}:${port}`,
+    });
+
+    await this.startupHealthCheck(host, port);
   }
 
   private async startupHealthCheck(host: string, port: number): Promise<void> {
@@ -331,46 +384,60 @@ class Application {
         logger.error(`  Memory      | ${memoryReadiness.state}`);
       }
     } catch (err) {
-      checks.push({ name: 'Memory', status: 'fail', detail: String(err) });
-      logger.error('  Memory      | Error:', err);
+      const safeError = sanitizeServerMemoryOperationalError(err);
+      checks.push({ name: 'Memory', status: 'fail', detail: safeError });
+      logger.error('  Memory      | Error:', safeError);
     }
 
-    // 4. Check canonical Runtime Event authority.
+    // 4. Check both the canonical Event authority and the executable Runtime.
+    // Event-store health alone must never be reported as continuous execution
+    // readiness when the graph or durable workers have not been started.
     try {
       const runtimeHealth = await this.canonicalRuntime?.get().backbone.eventStore.health();
-      const healthy = runtimeHealth?.status === 'healthy';
+      const execution = this.canonicalRuntime?.executionReadiness();
+      const eventStoreHealthy = runtimeHealth?.status === 'healthy';
+      const healthy = eventStoreHealthy && execution?.ready === true;
       checks.push({
         name: 'Runtime',
         status: healthy ? 'pass' : 'fail',
-        detail: runtimeHealth?.message ?? runtimeHealth?.status ?? 'not initialized',
+        detail: !eventStoreHealthy
+          ? (runtimeHealth?.message ?? runtimeHealth?.status ?? 'Event authority not initialized')
+          : (execution?.message ?? 'Runtime execution state is unavailable'),
       });
       if (healthy) {
-        logger.info('  ✅ Runtime     │ Canonical Event store ready');
+        logger.info('  ✅ Runtime     │ Canonical execution workers ready');
       } else {
-        logger.error('  ❌ Runtime     │ Canonical Event store unavailable');
+        logger.error(
+          `  ❌ Runtime     │ ${
+            !eventStoreHealthy
+              ? 'Canonical Event store unavailable'
+              : (execution?.message ?? 'Execution state unavailable')
+          }`
+        );
       }
     } catch (err) {
       checks.push({ name: 'Runtime', status: 'fail', detail: String(err) });
       logger.error('  ❌ Runtime     │ Error:', err);
     }
 
-    // 5. Check API /health endpoint
+    // 5. Check the API readiness endpoint. `/health` is deliberately only a
+    // liveness probe and must not be used as release or traffic readiness.
     try {
-      const response = await fetch(`${apiBase}/health`);
+      const response = await fetch(`${apiBase}/ready`);
       if (response.ok) {
-        checks.push({ name: 'API /health', status: 'pass', detail: '200 OK' });
-        logger.info('  ✅ API Health │ 200 OK');
+        checks.push({ name: 'API /ready', status: 'pass', detail: '200 OK' });
+        logger.info('  ✅ API Ready  │ 200 OK');
       } else {
         checks.push({
-          name: 'API /health',
+          name: 'API /ready',
           status: 'fail',
           detail: `${response.status}`,
         });
-        logger.error(`  ❌ API Health │ ${response.status}`);
+        logger.error(`  ❌ API Ready  │ ${response.status}`);
       }
     } catch (err) {
-      checks.push({ name: 'API /health', status: 'fail', detail: String(err) });
-      logger.error('  ❌ API Health │ Error:', err);
+      checks.push({ name: 'API /ready', status: 'fail', detail: String(err) });
+      logger.error('  ❌ API Ready  │ Error:', err);
     }
 
     // 6. Check LLM Providers
@@ -466,30 +533,34 @@ class Application {
 
   async stop(): Promise<void> {
     logger.info('Shutting down...');
-
-    // Stop accepting new connections
-    if (this.server) {
-      const server = this.server;
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+    if (!this.shutdownCoordinator) {
+      this.shutdownCoordinator = new ServerShutdownCoordinator({
+        stopIntake: async () => {
+          if (!this.server) return;
+          const server = this.server;
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+          this.server = null;
+        },
+        drainWorkersAndReleaseLeases: async () => {
+          destroyEventRuntime();
+          await this.canonicalRuntime?.close();
+          this.canonicalRuntime = null;
+          clearServerRuntimeReadiness();
+          await closeServerMemoryComposition();
+        },
+        closeServicesAndConnections: async () => {
+          await destroyLLM();
+          await destroySkillManager();
+          await destroyToolManager();
+          await destroyWorkflowEngine();
+          await destroyPromptManager();
+          await closeDatabases();
+        },
       });
-      this.server = null;
     }
-
-    // Cleanup services
-    destroyEventRuntime();
-    await this.canonicalRuntime?.close();
-    this.canonicalRuntime = null;
-    await closeServerMemoryComposition();
-    await destroyLLM();
-    await destroySkillManager();
-    await destroyToolManager();
-    await destroyWorkflowEngine();
-    await destroyPromptManager();
-
-    // Close databases
-    await closeDatabases();
-
+    await this.shutdownCoordinator.stop();
     logger.info('Shutdown complete');
   }
 
@@ -531,6 +602,9 @@ async function main() {
     await app.start();
   } catch (error) {
     logger.error('Failed to start application:', error);
+    await app.stop().catch((shutdownError) => {
+      logger.error('Failed to clean up after startup failure:', shutdownError);
+    });
     process.exit(1);
   }
 }

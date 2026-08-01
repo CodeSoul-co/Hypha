@@ -133,6 +133,16 @@ describe('configuration storage taxonomy', () => {
       auditMaxBytes: 256 * 1024 * 1024,
       auditMaxDurationMs: 30_000,
       maxLegacyEvents: 100_000,
+      workers: {
+        workerId: 'server.runtime',
+        leaseTtlMs: 30_000,
+        pageLimit: 100,
+        timerPollIntervalMs: 1_000,
+        timerErrorBackoffMs: 5_000,
+        recoveryPollIntervalMs: 5_000,
+        recoveryErrorBackoffMs: 10_000,
+        autoRecoverReasons: ['PROJECTION_BEHIND'],
+      },
     });
   });
 

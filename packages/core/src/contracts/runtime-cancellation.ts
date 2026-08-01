@@ -2,7 +2,11 @@ import type { RuntimeOrchestrationProjection } from './runtime-projection';
 import type { NormalizedRuntimeError, RuntimePrincipal, RuntimeScope } from './runtime';
 
 export const RUNTIME_CANCELLATION_PROPAGATIONS = ['none', 'children', 'all_descendants'] as const;
-export const RUNTIME_CANCELLATION_TARGET_TYPES = ['activity', 'child_run'] as const;
+export const RUNTIME_CANCELLATION_TARGET_TYPES = [
+  'activity',
+  'child_run',
+  'session_command',
+] as const;
 export const RUNTIME_CANCELLATION_TARGET_STATUSES = [
   'cancelled',
   'already_terminal',

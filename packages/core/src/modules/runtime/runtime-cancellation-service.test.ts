@@ -6,6 +6,10 @@ import type {
 } from '../../contracts/runtime-cancellation';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type { RuntimeScope } from '../../contracts/runtime';
+import type {
+  CancelSessionCommandsRequest,
+  CancelSessionCommandsResult,
+} from '../../contracts/session-queue';
 import type { EventCreateInput, FrameworkEventType } from '../../events';
 import type { JsonSchema } from '../../specs';
 import { hashCanonicalJson } from './canonical-json';
@@ -40,7 +44,12 @@ const cancellationEventTypes: FrameworkEventType[] = [
 
 const payloadSchema: JsonSchema = { type: 'object', additionalProperties: true };
 
-async function fixture(options: { interruptTargetAppendOnce?: boolean } = {}) {
+async function fixture(
+  options: {
+    interruptTargetAppendOnce?: boolean;
+    sessionCommands?: CancelSessionCommandsResult;
+  } = {}
+) {
   let milliseconds = 0;
   let idSequence = 0;
   let interruptTargetAppendOnce = options.interruptTargetAppendOnce ?? false;
@@ -81,6 +90,7 @@ async function fixture(options: { interruptTargetAppendOnce?: boolean } = {}) {
   const runLeases = new InMemoryRunLeaseStore({ now });
   const activityCalls: string[] = [];
   const childCalls: string[] = [];
+  const commandCancellationRequests: CancelSessionCommandsRequest[] = [];
   const activities: RuntimeActivityCancellationPort = {
     cancel: async (request) => {
       activityCalls.push(request.activityId);
@@ -100,6 +110,19 @@ async function fixture(options: { interruptTargetAppendOnce?: boolean } = {}) {
     projections,
     projectionStore,
     runLeases,
+    commands: {
+      cancelPending: async (request) => {
+        commandCancellationRequests.push(request);
+        return (
+          options.sessionCommands ?? {
+            targetRunId: request.targetRunId,
+            cancelledCommandIds: [],
+            alreadyCancelledCommandIds: [],
+            alreadyTerminalCommandIds: [],
+          }
+        );
+      },
+    },
     activities,
     children,
     now,
@@ -122,7 +145,15 @@ async function fixture(options: { interruptTargetAppendOnce?: boolean } = {}) {
     expectedLastSequence: 0,
     idempotencyKey: 'seed.cancellable-run',
   });
-  return { service, events, runLeases, activityCalls, childCalls, now };
+  return {
+    service,
+    events,
+    runLeases,
+    activityCalls,
+    childCalls,
+    commandCancellationRequests,
+    now,
+  };
 }
 
 function command(overrides: Partial<RuntimeCancelCommand> = {}): RuntimeCancelCommand {
@@ -174,6 +205,62 @@ function event(
 }
 
 describe('RuntimeCancellationService', () => {
+  it('cancels only the Run-scoped Session commands and audits every queue outcome', async () => {
+    const target = await fixture({
+      sessionCommands: {
+        targetRunId: scope.runId,
+        cancelledCommandIds: ['command.pending', 'command.claimed'],
+        alreadyCancelledCommandIds: ['command.redelivered'],
+        alreadyTerminalCommandIds: ['command.completed'],
+      },
+    });
+
+    const result = await target.service.cancel(command());
+    expect(target.commandCancellationRequests).toEqual([
+      {
+        version: '1.0.0',
+        scope: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          sessionId: scope.sessionId,
+        },
+        targetRunId: scope.runId,
+        cancellationCommandId: 'cancel.default',
+        reason: 'operator request',
+        cancelledAt: '2026-07-18T10:00:01.000Z',
+      },
+    ]);
+    expect(result.targetResults).toEqual(
+      expect.arrayContaining([
+        {
+          targetType: 'session_command',
+          targetId: 'command.pending',
+          status: 'cancelled',
+        },
+        {
+          targetType: 'session_command',
+          targetId: 'command.claimed',
+          status: 'cancelled',
+        },
+        {
+          targetType: 'session_command',
+          targetId: 'command.redelivered',
+          status: 'cancelled',
+        },
+        {
+          targetType: 'session_command',
+          targetId: 'command.completed',
+          status: 'already_terminal',
+        },
+      ])
+    );
+
+    await expect(target.service.cancel(command())).resolves.toMatchObject({
+      disposition: 'reused',
+    });
+    expect(target.commandCancellationRequests).toHaveLength(1);
+  });
+
   it('fences the active worker, propagates cancellation, and records unresolved Activities', async () => {
     const target = await fixture();
     const activeLease = await target.runLeases.acquire({
