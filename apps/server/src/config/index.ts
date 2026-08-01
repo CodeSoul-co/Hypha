@@ -602,6 +602,21 @@ const configSchema = z.object({
           auditMaxBytes: z.number().int().positive().default(256 * 1024 * 1024),
           auditMaxDurationMs: z.number().int().positive().default(30_000),
           maxLegacyEvents: z.number().int().positive().default(100_000),
+          workers: z
+            .object({
+              workerId: z.string().min(1).default('server.runtime'),
+              leaseTtlMs: z.number().int().positive().default(30_000),
+              pageLimit: z.number().int().positive().max(1000).default(100),
+              timerPollIntervalMs: z.number().int().positive().default(1_000),
+              timerErrorBackoffMs: z.number().int().positive().default(5_000),
+              recoveryPollIntervalMs: z.number().int().positive().default(5_000),
+              recoveryErrorBackoffMs: z.number().int().positive().default(10_000),
+              autoRecoverReasons: z
+                .array(z.enum(['PROJECTION_BEHIND']))
+                .min(1)
+                .default(['PROJECTION_BEHIND']),
+            })
+            .default({}),
         })
         .default({}),
     })

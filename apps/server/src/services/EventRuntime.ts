@@ -508,6 +508,12 @@ export interface EventRuntimeInitialization {
   humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
 }
 
+export interface EventRuntimeCanonicalExecutionAdapters {
+  inference: InferenceProvider;
+  toolRunner: ToolRunner;
+  fsmSpec: FSMProcessSpec;
+}
+
 class EventRuntimeService {
   private readonly events: EventStore & TraceRecorder;
   private readonly humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
@@ -623,6 +629,100 @@ class EventRuntimeService {
 
   unregisterReasoningStrategy(id: string): boolean {
     return this.reasoning.registry.unregister(id);
+  }
+
+  /**
+   * Exposes the Server-owned model and governed Tool adapters to the canonical
+   * Runtime composition without leaking provider SDKs into Runtime packages.
+   */
+  canonicalExecutionAdapters(): Readonly<EventRuntimeCanonicalExecutionAdapters> {
+    return Object.freeze({
+      inference: {
+        id: 'server-canonical-inference',
+        infer: (request: InferenceRequest) => this.inferCanonical(request),
+      },
+      toolRunner: {
+        run: (request: Parameters<ToolRunner['run']>[0]) => this.runCanonicalTool(request),
+        cancelInvocation: (invocationId: string, reason?: string) =>
+          this.toolRunner.cancelInvocation(invocationId, reason),
+      },
+      fsmSpec: this.defaultFsm,
+    });
+  }
+
+  private async inferCanonical(request: InferenceRequest): Promise<InferenceResponse> {
+    const input = canonicalInferenceInput(request.input);
+    const resolved = this.resolveChatModel(request.modelAlias);
+    return this.reasoning.infer({
+      ...request,
+      modelAlias: resolved.model,
+      input: {
+        messages: input.messages,
+        options: {
+          model: resolved.model,
+          ...(input.instructions === undefined ? {} : { systemPrompt: input.instructions }),
+          ...(request.options?.temperature === undefined
+            ? {}
+            : { temperature: request.options.temperature }),
+          ...(request.options?.maxTokens === undefined
+            ? {}
+            : { maxTokens: request.options.maxTokens }),
+          ...(request.options?.topP === undefined ? {} : { topP: request.options.topP }),
+          ...(request.options?.topK === undefined ? {} : { topK: request.options.topK }),
+          ...(request.options?.stop === undefined ? {} : { stopSequences: request.options.stop }),
+          ...(request.tools === undefined
+            ? {}
+            : {
+                tools: request.tools.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description ?? tool.name,
+                  inputSchema: canonicalToolInputSchema(tool.inputSchema),
+                })),
+              }),
+        },
+      },
+      reasoning: { method: 'direct' },
+      metadata: {
+        ...request.metadata,
+        canonicalRuntime: true,
+        provider: resolved.provider,
+        context: input.context,
+      },
+    });
+  }
+
+  private async runCanonicalTool(
+    request: Parameters<ToolRunner['run']>[0]
+  ): Promise<ToolCallResult> {
+    const userId = request.context.userId?.trim();
+    const sessionId = request.context.sessionId?.trim();
+    if (!userId || !sessionId) {
+      throw new FrameworkError({
+        code: 'TOOL_INVALID_INPUT',
+        message: 'Canonical Tool execution requires userId and sessionId scope',
+      });
+    }
+    const toolId = this.registerManagedTool(request.toolId);
+    const contractSnapshotRef =
+      request.context.contractSnapshotRef ??
+      (await this.ensureRunToolSnapshot(request.context.runId));
+    return this.toolRunner.run({
+      ...request,
+      toolId,
+      context: {
+        ...request.context,
+        userId,
+        sessionId,
+        contractSnapshotRef,
+        principal: request.context.principal ?? {
+          id: userId,
+          principalId: userId,
+          type: 'user',
+          userId,
+          permissionScopes: [],
+        },
+      },
+    });
   }
 
   async listAgentPrompts(): Promise<AgentPromptSpec[]> {
@@ -2957,6 +3057,69 @@ function normalizeToolInput(input: unknown): Record<string, unknown> {
     return input as Record<string, unknown>;
   }
   return input === undefined ? {} : { value: input };
+}
+
+function canonicalInferenceInput(input: unknown): {
+  instructions?: string;
+  messages: LLMMessage[];
+  context?: Record<string, unknown>;
+} {
+  const record = asRecord(input);
+  if (!record || !Array.isArray(record.messages)) {
+    throw new FrameworkError({
+      code: 'INFERENCE_INVALID_INPUT',
+      message: 'Canonical inference input requires a messages array',
+    });
+  }
+  const messages = record.messages.map((entry, index): LLMMessage => {
+    const message = asRecord(entry);
+    const content =
+      typeof message?.content === 'string' && message.content.trim() ? message.content : undefined;
+    const role = stringValue(message?.role);
+    if (!message || !content || !role) {
+      throw new FrameworkError({
+        code: 'INFERENCE_INVALID_INPUT',
+        message: `Canonical inference message ${index} is invalid`,
+      });
+    }
+    if (role === 'system' || role === 'user' || role === 'assistant') {
+      return {
+        role,
+        content,
+        ...(stringValue(message.name) === undefined ? {} : { name: stringValue(message.name) }),
+      };
+    }
+    if (role === 'tool') {
+      const name = stringValue(message.name) ?? 'tool';
+      return { role: 'user', content: `[${name} observation]\n${content}` };
+    }
+    if (role === 'developer' || role === 'context' || role === 'memory') {
+      return { role: 'system', content };
+    }
+    throw new FrameworkError({
+      code: 'INFERENCE_INVALID_INPUT',
+      message: `Canonical inference message ${index} has unsupported role`,
+    });
+  });
+  return {
+    messages,
+    ...(stringValue(record.instructions) === undefined
+      ? {}
+      : { instructions: stringValue(record.instructions) }),
+    ...(asRecord(record.context) === undefined ? {} : { context: asRecord(record.context) }),
+  };
+}
+
+function canonicalToolInputSchema(
+  schema: Record<string, unknown>
+): NonNullable<ChatOptions['tools']>[number]['inputSchema'] {
+  if (schema.type !== 'object') {
+    throw new FrameworkError({
+      code: 'INFERENCE_INVALID_INPUT',
+      message: 'Canonical inference Tool schemas must declare type=object',
+    });
+  }
+  return schema as NonNullable<ChatOptions['tools']>[number]['inputSchema'];
 }
 
 function normalizeWorkflowGuardCondition(condition: string): string {

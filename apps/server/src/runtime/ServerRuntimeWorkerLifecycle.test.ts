@@ -9,6 +9,19 @@ import type { ServerRuntimeTimerSchedulerOptions } from './ServerRuntimeTimerSch
 import { ServerRuntimeWorkerLifecycle } from './ServerRuntimeWorkerLifecycle';
 
 describe('ServerRuntimeWorkerLifecycle', () => {
+  it('fails closed when the initial durable sweep cannot complete', async () => {
+    const lifecycle = createLifecycle(
+      jest.fn(async () => {
+        throw new Error('timer storage unavailable');
+      }),
+      jest.fn(async () => recoveryPage())
+    );
+
+    await expect(lifecycle.start()).rejects.toThrow('timer storage unavailable');
+    expect(lifecycle.isRunning()).toBe(false);
+    expect(lifecycle.status().lifecycle).toBe('failed');
+    await lifecycle.close();
+  });
   it('starts one timer and recovery worker set for concurrent callers', async () => {
     const sweep = jest
       .fn<Promise<RuntimeTimerSweepResult>, [RuntimeTimerSweepRequest]>()
@@ -21,23 +34,22 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     const [first, second] = await Promise.all([lifecycle.start(), lifecycle.start()]);
     await waitFor(
       () =>
-        first.status().timer.successfulSweeps === 1 &&
-        first.status().recovery.successfulSweeps === 1
+        first.status().timer.successfulSweeps >= 1 && first.status().recovery.successfulSweeps >= 1
     );
 
     expect(first).toBe(second);
     expect(lifecycle.isRunning()).toBe(true);
-    expect(first.status()).toEqual({
+    expect(first.status()).toMatchObject({
       lifecycle: 'running',
       timer: {
         running: true,
-        successfulSweeps: 1,
+        successfulSweeps: expect.any(Number),
         failedSweeps: 0,
         lastSuccessfulSweepAt: expect.any(String),
       },
       recovery: {
         running: true,
-        successfulSweeps: 1,
+        successfulSweeps: expect.any(Number),
         failedSweeps: 0,
         lastSuccessfulSweepAt: expect.any(String),
       },
@@ -62,18 +74,24 @@ describe('ServerRuntimeWorkerLifecycle', () => {
   it('signals both schedulers and drains their in-flight sweeps before closing', async () => {
     let finishTimer!: (result: RuntimeTimerSweepResult) => void;
     let finishRecovery!: (result: RuntimeRecoveryScanResult) => void;
-    const sweep = jest.fn(
-      () =>
-        new Promise<RuntimeTimerSweepResult>((resolve) => {
-          finishTimer = resolve;
-        })
-    );
-    const scan = jest.fn(
-      () =>
-        new Promise<RuntimeRecoveryScanResult>((resolve) => {
-          finishRecovery = resolve;
-        })
-    );
+    const sweep = jest
+      .fn<Promise<RuntimeTimerSweepResult>, [RuntimeTimerSweepRequest]>()
+      .mockResolvedValueOnce(timerPage())
+      .mockImplementation(
+        () =>
+          new Promise<RuntimeTimerSweepResult>((resolve) => {
+            finishTimer = resolve;
+          })
+      );
+    const scan = jest
+      .fn<Promise<RuntimeRecoveryScanResult>, [RuntimeRecoveryScanRequest]>()
+      .mockResolvedValueOnce(recoveryPage())
+      .mockImplementation(
+        () =>
+          new Promise<RuntimeRecoveryScanResult>((resolve) => {
+            finishRecovery = resolve;
+          })
+      );
     const lifecycle = createLifecycle(sweep, scan);
     const workers = await lifecycle.start();
 
@@ -99,10 +117,12 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     const timerError = new Error('timer dependency unavailable');
     const timerOnError = jest.fn();
     const recoveryOnSweep = jest.fn();
+    const timerSweep = jest
+      .fn<Promise<RuntimeTimerSweepResult>, [RuntimeTimerSweepRequest]>()
+      .mockResolvedValueOnce(timerPage())
+      .mockRejectedValue(timerError);
     const lifecycle = createLifecycle(
-      jest.fn(async () => {
-        throw timerError;
-      }),
+      timerSweep,
       jest.fn(async () => recoveryPage()),
       {
         timer: { now: () => now, onError: timerOnError },
@@ -113,21 +133,20 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     const workers = await lifecycle.start();
     await waitFor(
       () =>
-        workers.status().timer.failedSweeps === 1 &&
-        workers.status().recovery.successfulSweeps === 1
+        workers.status().timer.failedSweeps === 1 && workers.status().recovery.successfulSweeps >= 1
     );
 
-    expect(workers.status()).toEqual({
+    expect(workers.status()).toMatchObject({
       lifecycle: 'running',
       timer: {
         running: true,
-        successfulSweeps: 0,
+        successfulSweeps: 1,
         failedSweeps: 1,
         lastFailedSweepAt: now,
       },
       recovery: {
         running: true,
-        successfulSweeps: 1,
+        successfulSweeps: expect.any(Number),
         failedSweeps: 0,
         lastSuccessfulSweepAt: now,
       },
@@ -173,6 +192,8 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     expect(commands.start).toHaveBeenCalledTimes(1);
     expect(commands.start).toHaveBeenCalledWith({ userId: 'user.1', sessionId: 'session.1' });
     expect(workers.status().commands).toEqual({ running: true });
+    commands.isRunning.mockReturnValue(false);
+    expect(lifecycle.isRunning()).toBe(false);
 
     await lifecycle.close();
     expect(commands.close).toHaveBeenCalledTimes(1);

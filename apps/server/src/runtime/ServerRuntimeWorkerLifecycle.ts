@@ -101,10 +101,12 @@ export class ServerRuntimeWorkerLifecycle {
   }
 
   isRunning(): boolean {
+    const workers = this.workers;
     return Boolean(
-      this.workers?.timer.isRunning() ||
-      this.workers?.recovery.isRunning() ||
-      this.workers?.commands?.isRunning()
+      workers &&
+      workers.timer.isRunning() &&
+      workers.recovery.isRunning() &&
+      (workers.commands === undefined || workers.commands.isRunning())
     );
   }
 
@@ -147,6 +149,12 @@ export class ServerRuntimeWorkerLifecycle {
     });
 
     try {
+      // A loop being scheduled is not readiness evidence. Run one bounded
+      // sweep of every durable worker before exposing the lifecycle as ready,
+      // so storage/schema/lease failures fail startup instead of surfacing
+      // after traffic has already been admitted.
+      this.observeTimerSweep(await workers.timer.sweepOnce());
+      this.observeRecoverySweep(await workers.recovery.sweepOnce());
       workers.timer.start();
       workers.recovery.start();
       workers.commands?.start(this.bindings.commands?.scope);
