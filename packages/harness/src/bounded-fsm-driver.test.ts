@@ -113,6 +113,14 @@ async function fixture(
     projections,
     projectionStore,
     runLeases,
+    commands: {
+      cancelPending: async (request) => ({
+        targetRunId: request.targetRunId,
+        cancelledCommandIds: [],
+        alreadyCancelledCommandIds: [],
+        alreadyTerminalCommandIds: [],
+      }),
+    },
     activities: {
       cancel: async (request) => ({
         targetType: 'activity',

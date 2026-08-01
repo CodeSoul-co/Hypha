@@ -354,6 +354,15 @@ describe('SQLiteSessionQueue', () => {
         attempts: 1,
         maxAttempts: 1,
         rejectionCode: 'claim_lease_expired_after_attempt_budget',
+        leaseRecoveries: [
+          {
+            previousWorkerId: 'worker.stale',
+            previousLeaseEpoch: 1,
+            leaseExpiredAt: '2026-07-22T06:00:01.000Z',
+            recoveredAt: '2026-07-22T06:00:02.000Z',
+            disposition: 'dead_lettered',
+          },
+        ],
       },
     ]);
   });
@@ -439,9 +448,27 @@ describe('SQLiteSessionQueue', () => {
       reopened.redriveDeadLetter({ ...request, reason: 'Different operator decision' })
     ).rejects.toMatchObject({ code: 'RUNTIME_IDEMPOTENCY_CONFLICT' });
     await expect(reopened.list({ scope })).resolves.toMatchObject([
-      { id: 'command.dead', status: 'dead_letter', rejectionCode: 'provider_outage' },
+      {
+        id: 'command.dead',
+        status: 'dead_letter_resolved',
+        rejectionCode: 'provider_outage',
+        deadLetterResolution: {
+          disposition: 'redriven',
+          operatorId: 'operator.1',
+          reason: 'Provider outage resolved',
+          resolvedAt: '2026-07-22T06:01:00.000Z',
+          redriveCommandId: 'command.redrive',
+        },
+      },
       { id: 'command.redrive', status: 'queued' },
     ]);
+    await expect(
+      reopened.redriveDeadLetter({
+        ...request,
+        id: 'command.redrive.again',
+        idempotencyKey: 'redrive.command.dead.2',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
   });
 
   it('atomically converges concurrent redrive requests from separate connections', async () => {
@@ -481,6 +508,108 @@ describe('SQLiteSessionQueue', () => {
     await expect(first.list({ scope })).resolves.toHaveLength(2);
   });
 
+  it('persists an idempotent dead-letter closure across restart', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    await first.enqueue(command('command.dead.close'));
+    const claimed = await first.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await first.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-22T06:00:00.500Z',
+      rejectionCode: 'invalid_payload',
+      deadLetter: true,
+    });
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      commandId: 'command.dead.close',
+      operatorId: 'operator.1',
+      reason: 'Payload inspected; no replay is safe',
+      closedAt: '2026-07-22T06:01:00.000Z',
+    };
+    await expect(first.closeDeadLetter(request)).resolves.toMatchObject({
+      status: 'dead_letter_resolved',
+      deadLetterResolution: {
+        disposition: 'closed',
+        operatorId: 'operator.1',
+        reason: 'Payload inspected; no replay is safe',
+      },
+    });
+    first.close();
+    queues.splice(queues.indexOf(first), 1);
+
+    const reopened = openQueue(filename);
+    await expect(reopened.closeDeadLetter(request)).resolves.toMatchObject({
+      status: 'dead_letter_resolved',
+      deadLetterResolution: { disposition: 'closed' },
+    });
+    await expect(
+      reopened.closeDeadLetter({ ...request, operatorId: 'operator.2' })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(reopened.health()).resolves.toMatchObject({
+      details: {
+        deadLetterCommands: 0,
+        resolvedDeadLetterCommands: 1,
+      },
+    });
+  });
+
+  it('serializes competing dead-letter close and redrive decisions across connections', async () => {
+    const filename = temporaryDatabase();
+    const first = openQueue(filename);
+    const second = openQueue(filename);
+    await first.enqueue(command('command.dead.decision'));
+    const claimed = await first.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await first.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-22T06:00:00.500Z',
+      rejectionCode: 'provider_outage',
+      deadLetter: true,
+    });
+
+    const outcomes = await Promise.allSettled([
+      first.closeDeadLetter({
+        version: '1.0.0',
+        scope,
+        commandId: 'command.dead.decision',
+        operatorId: 'operator.close',
+        reason: 'Close after inspection',
+        closedAt: '2026-07-22T06:01:00.000Z',
+      }),
+      second.redriveDeadLetter({
+        version: '1.0.0',
+        scope,
+        sourceCommandId: 'command.dead.decision',
+        id: 'command.dead.decision.redrive',
+        idempotencyKey: 'redrive.command.dead.decision',
+        operatorId: 'operator.redrive',
+        reason: 'Dependency recovered',
+        requestedAt: '2026-07-22T06:01:00.000Z',
+      }),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const records = await first.list({ scope });
+    const source = records.find((record) => record.id === 'command.dead.decision');
+    expect(source).toMatchObject({ status: 'dead_letter_resolved' });
+    expect(['closed', 'redriven']).toContain(source?.deadLetterResolution?.disposition);
+    expect(records.filter((record) => record.redrive?.sourceCommandId === source?.id)).toHaveLength(
+      source?.deadLetterResolution?.disposition === 'redriven' ? 1 : 0
+    );
+  });
+
   it('detects overdue durable claims without changing their persisted status', async () => {
     const queue = openQueue(temporaryDatabase());
     await queue.enqueue(command('command.stuck'));
@@ -505,6 +634,85 @@ describe('SQLiteSessionQueue', () => {
         graceMs: 600,
       })
     ).resolves.toEqual([]);
+  });
+
+  it('serializes competing lease renewal and takeover requests across connections', async () => {
+    for (const renewalFirst of [true, false]) {
+      const filename = temporaryDatabase();
+      const owner = openQueue(filename);
+      const competitor = openQueue(filename);
+      const commandId = `command.lease-race.${renewalFirst ? 'renew' : 'takeover'}`;
+      await owner.enqueue(command(commandId));
+      const original = await owner.claim({
+        workerId: 'worker.original',
+        now: initialTime,
+        leaseMs: 1_000,
+      });
+      const renew = () =>
+        owner.renew({
+          commandId,
+          workerId: 'worker.original',
+          ...claimIdentity(original!),
+          renewedAt: '2026-07-22T06:00:00.999Z',
+          leaseMs: 1_000,
+        });
+      const takeover = () =>
+        competitor.claim({
+          workerId: 'worker.takeover',
+          now: '2026-07-22T06:00:01.000Z',
+          leaseMs: 1_000,
+        });
+
+      const outcomes = renewalFirst
+        ? await Promise.allSettled([renew(), takeover()])
+        : await Promise.allSettled([takeover(), renew()]);
+      const records = await owner.list({ scope });
+      if (renewalFirst) {
+        expect(outcomes).toMatchObject([
+          { status: 'fulfilled' },
+          { status: 'fulfilled', value: null },
+        ]);
+        expect(records).toMatchObject([
+          {
+            id: commandId,
+            status: 'claimed',
+            claimedBy: 'worker.original',
+            leaseEpoch: 1,
+            leaseExpiresAt: '2026-07-22T06:00:01.999Z',
+          },
+        ]);
+      } else {
+        expect(outcomes).toMatchObject([
+          {
+            status: 'fulfilled',
+            value: {
+              id: commandId,
+              status: 'claimed',
+              claimedBy: 'worker.takeover',
+              leaseEpoch: 2,
+            },
+          },
+          { status: 'rejected', reason: { code: 'RUNTIME_SESSION_QUEUE_CONFLICT' } },
+        ]);
+        expect(records).toMatchObject([
+          {
+            id: commandId,
+            status: 'claimed',
+            claimedBy: 'worker.takeover',
+            leaseEpoch: 2,
+            leaseRecoveries: [
+              {
+                previousWorkerId: 'worker.original',
+                previousLeaseEpoch: 1,
+                leaseExpiredAt: '2026-07-22T06:00:01.000Z',
+                recoveredAt: '2026-07-22T06:00:01.000Z',
+                disposition: 'requeued',
+              },
+            ],
+          },
+        ]);
+      }
+    }
   });
 
   it('persists lease renewal and fences an older same-worker claim after restart', async () => {
@@ -537,7 +745,18 @@ describe('SQLiteSessionQueue', () => {
       now: '2026-07-22T06:00:02.000Z',
       leaseMs: 1_000,
     });
-    expect(secondClaim?.leaseEpoch).toBe(2);
+    expect(secondClaim).toMatchObject({
+      leaseEpoch: 2,
+      leaseRecoveries: [
+        {
+          previousWorkerId: 'worker.same',
+          previousLeaseEpoch: 1,
+          leaseExpiredAt: '2026-07-22T06:00:01.500Z',
+          recoveredAt: '2026-07-22T06:00:02.000Z',
+          disposition: 'requeued',
+        },
+      ],
+    });
     await expect(
       reopened.complete({
         commandId: firstClaim!.id,
@@ -554,6 +773,131 @@ describe('SQLiteSessionQueue', () => {
         completedAt: '2026-07-22T06:00:02.500Z',
       })
     ).resolves.toBeUndefined();
+  });
+
+  it('persists Run-scoped cancellation and rejects a stale claimed owner after restart', async () => {
+    const filename = temporaryDatabase();
+    const queue = openQueue(filename);
+    await queue.enqueue(command('command.claimed', { targetRunId: 'run.cancelled' }));
+    const claimed = await queue.claim({
+      workerId: 'worker.stale',
+      now: initialTime,
+      leaseMs: 10_000,
+    });
+    await queue.enqueue(command('command.queued', { targetRunId: 'run.cancelled' }));
+    await queue.enqueue(command('cancel.default', { targetRunId: 'run.cancelled' }));
+    await queue.enqueue(command('command.other-run', { targetRunId: 'run.other' }));
+
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      targetRunId: 'run.cancelled',
+      cancellationCommandId: 'cancel.default',
+      reason: 'Run cancelled by user',
+      cancelledAt: '2026-07-22T06:00:01.000Z',
+    };
+    await expect(queue.cancelPending(request)).resolves.toEqual({
+      targetRunId: 'run.cancelled',
+      cancelledCommandIds: ['command.claimed', 'command.queued'],
+      alreadyCancelledCommandIds: [],
+      alreadyTerminalCommandIds: [],
+    });
+    queue.close();
+    queues.splice(queues.indexOf(queue), 1);
+
+    const reopened = openQueue(filename);
+    await expect(reopened.cancelPending(request)).resolves.toEqual({
+      targetRunId: 'run.cancelled',
+      cancelledCommandIds: [],
+      alreadyCancelledCommandIds: ['command.claimed', 'command.queued'],
+      alreadyTerminalCommandIds: [],
+    });
+    await expect(
+      reopened.complete({
+        commandId: claimed!.id,
+        workerId: 'worker.stale',
+        ...claimIdentity(claimed!),
+        completedAt: '2026-07-22T06:00:02.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(reopened.list({ scope })).resolves.toMatchObject([
+      {
+        id: 'command.claimed',
+        status: 'rejected',
+        rejectionCode: 'RUNTIME_RUN_CANCELLED',
+      },
+      {
+        id: 'command.queued',
+        status: 'rejected',
+        rejectionCode: 'RUNTIME_RUN_CANCELLED',
+      },
+      { id: 'cancel.default', status: 'queued' },
+      { id: 'command.other-run', status: 'queued' },
+    ]);
+  });
+
+  it('persists health evidence for backlog, takeover, redelivery, and poison commands', async () => {
+    const filename = temporaryDatabase();
+    let now = initialTime;
+    const first = openQueue(filename, { now: () => now });
+    await first.enqueue(command('command.health'));
+    await first.claim({
+      workerId: 'worker.health.first',
+      now,
+      leaseMs: 1_000,
+    });
+    first.close();
+    queues.splice(queues.indexOf(first), 1);
+
+    now = '2026-07-22T06:00:02.000Z';
+    const recovered = openQueue(filename, { now: () => now });
+    await expect(recovered.health()).resolves.toMatchObject({
+      status: 'healthy',
+      checkedAt: now,
+      details: {
+        version: '1.0.0',
+        totalCommands: 1,
+        pendingCommands: 1,
+        queuedCommands: 1,
+        claimedCommands: 0,
+        deadLetterCommands: 0,
+        retryingCommands: 1,
+        redeliveredCommands: 0,
+        recoveredExpiredLeases: 1,
+        leaseRecoveryCount: 1,
+        oldestPendingAgeMs: 2_000,
+      },
+    });
+
+    const secondClaim = await recovered.claim({
+      workerId: 'worker.health.second',
+      now,
+      leaseMs: 1_000,
+    });
+    expect(secondClaim?.leaseEpoch).toBe(2);
+    await recovered.fail({
+      commandId: secondClaim!.id,
+      workerId: 'worker.health.second',
+      ...claimIdentity(secondClaim!),
+      failedAt: now,
+      rejectionCode: 'poison_command',
+      deadLetter: true,
+    });
+    recovered.close();
+    queues.splice(queues.indexOf(recovered), 1);
+
+    now = '2026-07-22T06:00:03.000Z';
+    const reopened = openQueue(filename, { now: () => now });
+    const health = await reopened.health();
+    expect(health.details).toMatchObject({
+      totalCommands: 1,
+      pendingCommands: 0,
+      deadLetterCommands: 1,
+      redeliveredCommands: 1,
+      recoveredExpiredLeases: 0,
+      leaseRecoveryCount: 1,
+    });
+    expect(health.details).not.toHaveProperty('oldestPendingAgeMs');
   });
 
   function openQueue(

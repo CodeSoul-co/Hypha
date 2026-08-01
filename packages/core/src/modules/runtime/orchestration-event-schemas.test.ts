@@ -108,6 +108,24 @@ describe('Runtime orchestration Event schemas', () => {
     ).resolves.toEqual(expect.objectContaining({ valid: true }));
     await expect(
       registry.validate(
+        event('human.review.approved', {
+          taskId: 'human-task.schema',
+          subjectHash: 'sha256:subject',
+          expectedSubjectHash: 'sha256:subject',
+          expectedRevision: 1,
+          approvalRevision: 2,
+          decision: 'approved',
+          decisionCommandId: 'decision.schema',
+          decisionIdempotencyKey: 'decision.schema',
+          waitId: 'wait.schema',
+          pendingActionRef: 'activity.schema',
+          decidedBy: 'reviewer.schema',
+          decidedAt: '2026-07-21T09:01:00.000Z',
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ valid: true }));
+    await expect(
+      registry.validate(
         event('runtime.checkpoint.failed', {
           checkpointId: 'checkpoint.schema',
           error: 'projection unavailable',
@@ -148,6 +166,18 @@ describe('Runtime orchestration Event schemas', () => {
     ).resolves.toMatchObject({
       valid: false,
       issues: [expect.objectContaining({ code: 'schema_not_registered' })],
+    });
+    await expect(
+      registry.validate(
+        event('human.review.approved', {
+          taskId: 'human-task.schema',
+          decision: 'approved',
+          approvalRevision: '2',
+        })
+      )
+    ).resolves.toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ path: '$.approvalRevision', code: 'type' })],
     });
     await expect(
       registry.validate(

@@ -52,11 +52,18 @@ export const runtimeHumanTaskSchema = z
     stateAttempt: z.number().int().positive(),
     status: z.enum(RUNTIME_HUMAN_TASK_STATUSES),
     revision: z.number().int().positive(),
+    decisionEventId: nonEmptyStringSchema.optional(),
+    decisionCommandId: nonEmptyStringSchema.optional(),
+    decisionIdempotencyKey: nonEmptyStringSchema.optional(),
     decidedBy: nonEmptyStringSchema.optional(),
     decidedAt: timestampSchema.optional(),
+    supersededByTaskId: nonEmptyStringSchema.optional(),
   })
   .strict()
-  .superRefine(validateActivityDescriptorReference) satisfies ZodType<RuntimeHumanTask>;
+  .superRefine(validateActivityDescriptorReference)
+  .superRefine((value, context) => {
+    validateSupersededReference(value.status, value.supersededByTaskId, context);
+  }) satisfies ZodType<RuntimeHumanTask>;
 
 export const runtimeHumanTaskDecisionCommandSchema = z
   .object({
@@ -68,10 +75,14 @@ export const runtimeHumanTaskDecisionCommandSchema = z
     expectedSubjectHash: hashSchema,
     decision: z.enum(RUNTIME_HUMAN_TASK_DECISIONS),
     decidedAt: timestampSchema,
+    supersededByTaskId: nonEmptyStringSchema.optional(),
     reason: nonEmptyStringSchema.optional(),
     idempotencyKey: nonEmptyStringSchema.optional(),
   })
-  .strict() satisfies ZodType<RuntimeHumanTaskDecisionCommand>;
+  .strict()
+  .superRefine((value, context) => {
+    validateSupersededReference(value.decision, value.supersededByTaskId, context);
+  }) satisfies ZodType<RuntimeHumanTaskDecisionCommand>;
 
 const nonEmptyStringJsonSchema: JsonSchema = { type: 'string', minLength: 1 };
 const timestampJsonSchema: JsonSchema = { type: 'string', format: 'date-time' };
@@ -133,10 +144,15 @@ export const runtimeHumanTaskJsonSchema: JsonSchema = {
     stateAttempt: { type: 'integer', minimum: 1 },
     status: { type: 'string', enum: [...RUNTIME_HUMAN_TASK_STATUSES] },
     revision: { type: 'integer', minimum: 1 },
+    decisionEventId: nonEmptyStringJsonSchema,
+    decisionCommandId: nonEmptyStringJsonSchema,
+    decisionIdempotencyKey: nonEmptyStringJsonSchema,
     decidedBy: nonEmptyStringJsonSchema,
     decidedAt: timestampJsonSchema,
+    supersededByTaskId: nonEmptyStringJsonSchema,
   },
   additionalProperties: false,
+  allOf: [supersededReferenceJsonSchema('status')],
 };
 
 export const runtimeHumanTaskDecisionCommandJsonSchema: JsonSchema = {
@@ -160,10 +176,12 @@ export const runtimeHumanTaskDecisionCommandJsonSchema: JsonSchema = {
     expectedSubjectHash: hashJsonSchema,
     decision: { type: 'string', enum: [...RUNTIME_HUMAN_TASK_DECISIONS] },
     decidedAt: timestampJsonSchema,
+    supersededByTaskId: nonEmptyStringJsonSchema,
     reason: nonEmptyStringJsonSchema,
     idempotencyKey: nonEmptyStringJsonSchema,
   },
   additionalProperties: false,
+  allOf: [supersededReferenceJsonSchema('decision')],
 };
 
 export const runtimeHumanTaskExample: RuntimeHumanTask = {
@@ -256,4 +274,41 @@ function validateActivityDescriptorReference(
       message: 'activityDescriptorRef and activityDescriptorHash must be provided together',
     });
   }
+}
+
+function validateSupersededReference(
+  terminal: RuntimeHumanTask['status'] | RuntimeHumanTaskDecisionCommand['decision'],
+  supersededByTaskId: string | undefined,
+  context: z.RefinementCtx
+): void {
+  if (terminal === 'superseded' && supersededByTaskId === undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['supersededByTaskId'],
+      message: 'supersededByTaskId is required when a human task is superseded',
+    });
+  }
+  if (terminal !== 'superseded' && supersededByTaskId !== undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['supersededByTaskId'],
+      message: 'supersededByTaskId is only valid when a human task is superseded',
+    });
+  }
+}
+
+function supersededReferenceJsonSchema(terminalProperty: 'status' | 'decision'): JsonSchema {
+  return {
+    if: {
+      required: [terminalProperty],
+      properties: {
+        [terminalProperty]: { const: 'superseded' },
+      },
+    },
+    then: {
+      required: ['supersededByTaskId'],
+      properties: { supersededByTaskId: nonEmptyStringJsonSchema },
+    },
+    else: { not: { required: ['supersededByTaskId'] } },
+  };
 }

@@ -53,6 +53,24 @@ describe('GET /api/v1/health', () => {
   });
 });
 
+describe('GET /api/v1/ready', () => {
+  it('reports ready only after the canonical graph and durable workers pass startup', async () => {
+    const r = await request(app).get('/api/v1/ready');
+
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      data: {
+        status: 'ready',
+        runtime: {
+          ready: true,
+          state: 'workers_running',
+        },
+      },
+    });
+  });
+});
+
 describe('runtime reasoning and agent prompt registries', () => {
   it('lists registered reasoning strategies with official source metadata', async () => {
     const r = await request(app)
