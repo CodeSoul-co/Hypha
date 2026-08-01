@@ -478,7 +478,8 @@ describe('GET /api/v1/tools (bug 9)', () => {
   });
 
   it('writes and executes an allowlisted file through governed runtime events', async () => {
-    const scriptPath = 'data/workspace/bin/hypha-integration-print.js';
+    const workspaceRoot = path.resolve('data/workspace');
+    const scriptPath = 'bin/hypha-integration-print.js';
     try {
       const write = await request(app)
         .post('/api/v1/tools/execute')
@@ -504,7 +505,7 @@ describe('GET /api/v1/tools (bug 9)', () => {
             operation: 'execute',
             path: scriptPath,
             args: ['hypha; echo unsafe'],
-            cwd: 'data/workspace',
+            cwd: '.',
           },
         });
       expect(execute.status).toBe(200);
@@ -531,7 +532,7 @@ describe('GET /api/v1/tools (bug 9)', () => {
         ])
       );
     } finally {
-      await fs.rm(path.resolve(scriptPath), { force: true });
+      await fs.rm(path.resolve(workspaceRoot, scriptPath), { force: true });
     }
   });
 });
