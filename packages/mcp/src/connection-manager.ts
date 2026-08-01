@@ -1187,7 +1187,8 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
       negotiatedProtocolVersion: this.negotiatedProtocolVersion,
       serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
       serverCapabilities: this.client.getServerCapabilities() as
-        Record<string, unknown> | undefined,
+        | Record<string, unknown>
+        | undefined,
     };
   }
 
