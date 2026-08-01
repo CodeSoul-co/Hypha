@@ -2,6 +2,9 @@ import {
   FrameworkError,
   type DurableRuntimeTimerWorker,
   type RuntimeRecoveryService,
+  type SessionCommandWorkerDisposition,
+  type SessionCommandWorkerResult,
+  type SessionCommandType,
   type SessionQueueScope,
 } from '@hypha/core';
 import {
@@ -30,6 +33,8 @@ export interface ServerRuntimeWorkerBindings {
 }
 
 export interface ServerSessionCommandLoop {
+  processNext(scope?: SessionQueueScope, signal?: AbortSignal): Promise<SessionCommandWorkerResult>;
+  supportedCommandTypes(): readonly SessionCommandType[];
   start(scope?: SessionQueueScope): void;
   isRunning(): boolean;
   close(): Promise<void>;
@@ -62,7 +67,11 @@ export interface ServerRuntimeWorkerStatus {
   lifecycle: ServerRuntimeWorkerLifecycleState;
   timer: ServerRuntimeWorkerEvidence;
   recovery: ServerRuntimeWorkerEvidence;
-  commands?: Readonly<{ running: boolean }>;
+  commands?: Readonly<{
+    running: boolean;
+    startupPollDisposition: SessionCommandWorkerDisposition;
+    supportedCommandTypes: readonly SessionCommandType[];
+  }>;
 }
 
 /**
@@ -78,6 +87,7 @@ export class ServerRuntimeWorkerLifecycle {
   private lifecycleState: ServerRuntimeWorkerLifecycleState = 'idle';
   private readonly timerEvidence = mutableEvidence();
   private readonly recoveryEvidence = mutableEvidence();
+  private commandStartupPoll?: SessionCommandWorkerResult;
   private closed = false;
 
   constructor(
@@ -106,7 +116,7 @@ export class ServerRuntimeWorkerLifecycle {
       workers &&
       workers.timer.isRunning() &&
       workers.recovery.isRunning() &&
-      (workers.commands === undefined || workers.commands.isRunning())
+      workers.commands?.isRunning()
     );
   }
 
@@ -117,7 +127,13 @@ export class ServerRuntimeWorkerLifecycle {
       recovery: workerEvidence(this.workers?.recovery.isRunning() ?? false, this.recoveryEvidence),
       ...(this.workers?.commands === undefined
         ? {}
-        : { commands: Object.freeze({ running: this.workers.commands.isRunning() }) }),
+        : {
+            commands: Object.freeze({
+              running: this.workers.commands.isRunning(),
+              startupPollDisposition: this.commandStartupPoll?.disposition ?? 'aborted',
+              supportedCommandTypes: this.workers.commands.supportedCommandTypes(),
+            }),
+          }),
     });
   }
 
@@ -155,6 +171,9 @@ export class ServerRuntimeWorkerLifecycle {
       // after traffic has already been admitted.
       this.observeTimerSweep(await workers.timer.sweepOnce());
       this.observeRecoverySweep(await workers.recovery.sweepOnce());
+      if (workers.commands) {
+        this.commandStartupPoll = await workers.commands.processNext(this.bindings.commands?.scope);
+      }
       workers.timer.start();
       workers.recovery.start();
       workers.commands?.start(this.bindings.commands?.scope);

@@ -5,8 +5,10 @@ import type {
   MemoryProviderTelemetry,
   MemoryRuntimeCompositionReceipt,
 } from '@hypha/memory';
+import { InMemoryEventStore } from '@hypha/core';
 import { MemoryOperationalMetrics } from '@hypha/memory';
 import {
+  createServerMemoryEventPublisher,
   createServerMemoryTelemetry,
   estimateServerMemoryOperation,
   resolveMongoTransactionMode,
@@ -58,6 +60,61 @@ function runtime(
 }
 
 describe('ServerMemoryComposition', () => {
+  it('persists sanitized and scoped Memory lifecycle events into the Event fact store', async () => {
+    const events = new InMemoryEventStore();
+    const publisher = createServerMemoryEventPublisher(events, () => '2026-08-01T00:00:00.000Z');
+    const context = {
+      tenantId: 'tenant:test',
+      userId: 'user:test',
+      workspaceId: 'workspace:test',
+      sessionId: 'session:test',
+      runId: 'run:test',
+      stepId: 'step:test',
+      agentId: 'agent:test',
+    };
+    const payload = {
+      operationId: 'operation:test',
+      profileId: 'memory.default',
+      providerId: 'memory.provider.native',
+      scopeHash: 'sha256:scope',
+      status: 'requested',
+      metadata: {
+        content: 'must-not-enter-events',
+        safe: 'retained',
+      },
+    };
+
+    const eventId = await publisher.publish('memory.activity.requested', payload, context);
+    await expect(publisher.publish('memory.activity.requested', payload, context)).resolves.toBe(
+      eventId
+    );
+
+    const persisted = await events.list({ userId: 'user:test', runId: 'run:test' });
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      id: eventId,
+      type: 'memory.activity.requested',
+      version: '1.0.0',
+      tenantId: 'tenant:test',
+      userId: 'user:test',
+      workspaceId: 'workspace:test',
+      sessionId: 'session:test',
+      runId: 'run:test',
+      stepId: 'step:test',
+      agentId: 'agent:test',
+      operationId: 'operation:test',
+      timestamp: '2026-08-01T00:00:00.000Z',
+      payload: {
+        operationId: 'operation:test',
+        profileId: 'memory.default',
+        providerId: 'memory.provider.native',
+        scopeHash: 'sha256:scope',
+        status: 'requested',
+        metadata: { safe: 'retained' },
+      },
+    });
+  });
+
   it('registers one canonical service and shares concurrent startup', async () => {
     const bootstrap = jest.fn(async () => runtime());
     const composition = new ServerMemoryComposition({ bootstrap });

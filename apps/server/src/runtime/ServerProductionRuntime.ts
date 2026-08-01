@@ -26,6 +26,7 @@ export interface ServerProductionRuntimeOptions {
   recoveryPollIntervalMs: number;
   recoveryErrorBackoffMs: number;
   autoRecoverReasons: readonly RuntimeRecoveryCandidateReason[];
+  cancellations: RuntimeCancellationRecoveryPort;
 }
 
 export interface ServerProductionRuntimeBindings {
@@ -54,7 +55,7 @@ export function createServerProductionRuntime(
       executeState: (input: BoundedStateExecutorInput) => transitions.executeState(input),
       recoveryActivities: failClosedActivityRecovery(),
       recoveryRedispatches: failClosedRedispatchRecovery(),
-      recoveryCancellations: failClosedCancellationRecovery(),
+      recoveryCancellations: options.cancellations,
       recoveryRequeue: failClosedRequeueRecovery(),
     },
     workers: {
@@ -91,12 +92,6 @@ function failClosedActivityRecovery(): RuntimeActivityReconciliationPort {
 function failClosedRedispatchRecovery(): RuntimeActivityRedispatchRecoveryPort {
   return {
     redispatch: async () => unsupported('Activity redispatch provider is not bound'),
-  };
-}
-
-function failClosedCancellationRecovery(): RuntimeCancellationRecoveryPort {
-  return {
-    cancel: async () => unsupported('Cancellation recovery provider is not bound'),
   };
 }
 

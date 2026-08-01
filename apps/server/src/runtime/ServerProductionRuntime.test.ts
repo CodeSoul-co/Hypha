@@ -7,6 +7,7 @@ describe('ServerProductionRuntime', () => {
   it('binds configured durable workers to the Server execution adapters', () => {
     const inference = { id: 'inference.test', infer: jest.fn() } as InferenceProvider;
     const toolRunner = { run: jest.fn() } as ToolRunner;
+    const cancellations = { cancel: jest.fn() };
 
     const product = createServerProductionRuntime({
       inference,
@@ -20,12 +21,14 @@ describe('ServerProductionRuntime', () => {
       recoveryPollIntervalMs: 2_000,
       recoveryErrorBackoffMs: 10_000,
       autoRecoverReasons: ['PROJECTION_BEHIND'],
+      cancellations,
     });
 
     expect(product.execution).toMatchObject({
       inference,
       toolRunner,
       fsmSpec: defaultReActFSMProcessSpec,
+      recoveryCancellations: cancellations,
     });
     expect(product.workers).toEqual({
       timer: {
@@ -59,6 +62,7 @@ describe('ServerProductionRuntime', () => {
       recoveryPollIntervalMs: 2_000,
       recoveryErrorBackoffMs: 10_000,
       autoRecoverReasons: ['PROJECTION_BEHIND'],
+      cancellations: { cancel: jest.fn() },
     });
     const invocation = {
       activityId: 'activity.1',

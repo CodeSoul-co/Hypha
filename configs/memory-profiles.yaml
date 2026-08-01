@@ -20,9 +20,6 @@ profiles:
       vectorStoreRefs:
         - id: memory.vector.local
           version: '1.0.0'
-      artifactStoreRef:
-        id: memory.artifact.local
-        version: '1.0.0'
       embeddingProviderRef:
         id: memory.embedding.local
         version: '1.0.0'
@@ -68,7 +65,6 @@ profiles:
         workingStoreRef: memory.store.working.in-memory
         recordStoreRef: memory.store.record.sqlite
         vectorStoreRef: memory.vector.local
-        artifactStoreRef: memory.artifact.local
         embeddingProviderRef: memory.embedding.local
       capabilities: &native-capabilities
         add: true
@@ -111,9 +107,6 @@ profiles:
       vectorStoreRefs:
         - id: memory.vector.local
           version: '1.0.0'
-      artifactStoreRef:
-        id: memory.artifact.local
-        version: '1.0.0'
       embeddingProviderRef:
         id: memory.embedding.local
         version: '1.0.0'
@@ -137,7 +130,6 @@ profiles:
         workingStoreRef: memory.store.working.redis
         recordStoreRef: memory.store.record.mongodb
         vectorStoreRef: memory.vector.local
-        artifactStoreRef: memory.artifact.local
         embeddingProviderRef: memory.embedding.local
         outboxStoreRef: memory.store.outbox.mongodb
       capabilities: *native-capabilities

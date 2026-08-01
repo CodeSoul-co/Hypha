@@ -44,6 +44,8 @@ storage:
       db: "${REDIS_DB:0}"
       keyPrefix: "${REDIS_KEY_PREFIX:hypha:}"
       tls: "${REDIS_TLS:false}"
+    # The stock Server does not register a Kafka adapter yet. Setting enabled
+    # to true is rejected at startup instead of reporting a false integration.
     kafka:
       enabled: "${KAFKA_ENABLED:false}"
       deployment: "${KAFKA_DEPLOYMENT:local}"
@@ -62,6 +64,8 @@ storage:
       sqliteMode: "${HYPHA_SQLITE_MODE:auto}"
       eventDbPath: "${HYPHA_STORAGE_EVENT_DB:./data/runtime/events/hypha-runtime-events.sqlite}"
       structuredDbPath: "${HYPHA_STORAGE_STRUCTURED_DB:./data/runtime/structured/hypha-structured.sqlite}"
+    # This profile is an extension contract. The stock Server rejects enabled
+    # until a concrete Postgres adapter, lifecycle, and readiness probe exist.
     postgres:
       enabled: "${POSTGRES_ENABLED:false}"
       deployment: "${POSTGRES_DEPLOYMENT:local}"
@@ -80,6 +84,8 @@ storage:
       enabled: true
       deployment: "local"
       path: "${HYPHA_STORAGE_VECTOR_INDEX:./data/storage/vector/hypha-vectors.json}"
+    # Remote vector profiles below are extension contracts. The stock Server
+    # rejects enabled until their concrete adapters are composed.
     qdrant:
       enabled: "${QDRANT_ENABLED:false}"
       deployment: "${QDRANT_DEPLOYMENT:self_hosted}"
@@ -110,6 +116,8 @@ storage:
       enabled: true
       deployment: "local"
       rootPath: "${HYPHA_STORAGE_ARTIFACT_ROOT:./data/storage/artifacts}"
+    # The stock Server currently composes only the local filesystem artifact
+    # store and rejects S3 enablement until a concrete adapter is registered.
     s3:
       enabled: "${S3_ARTIFACTS_ENABLED:false}"
       deployment: "${S3_ARTIFACTS_DEPLOYMENT:managed}"
@@ -689,8 +697,8 @@ tools:
       timeoutMs: "${HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS:30000}"
       maxOutputBytes: "${HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES:1048576}"
   # The local stdio example is a real child-process MCP server and is the
-  # default product-development path. The classic in-process fixture remains
-  # optional for deterministic compatibility tests only.
+  # default product-development path. In-process fixtures are test-only and
+  # are intentionally absent from deployable configuration.
   mcpServers:
     - id: "local-example"
       name: "Hypha Local MCP Example"
@@ -703,11 +711,6 @@ tools:
       protocolVersionPolicy:
         allowedVersions: ["2025-11-25"]
         rejectUnknown: true
-    - id: "classic"
-      name: "Classic MCP Fixture"
-      mode: "fixture"
-      autoConnect: true
-      required: false
 
 workflows:
   configPath: "./configs/workflows"
@@ -733,6 +736,13 @@ runtime:
       timerErrorBackoffMs: 5000
       recoveryPollIntervalMs: 5000
       recoveryErrorBackoffMs: 10000
+      commandArtifactRoot: "${HYPHA_SESSION_COMMAND_ARTIFACT_ROOT:./data/runtime/session-command-artifacts}"
+      commandLeaseMs: 30000
+      commandPollIntervalMs: 100
+      commandErrorBackoffMs: 1000
+      commandRenewalIntervalMs: 10000
+      commandMaxHandlerDurationMs: 300000
+      commandShutdownDrainMs: 30000
       autoRecoverReasons:
         - "PROJECTION_BEHIND"
 

@@ -36,6 +36,16 @@ describe('SkillManager signed remote registry composition', () => {
 
     await manager.initialize();
 
+    expect(manager.readiness()).toEqual({
+      initialized: true,
+      enabled: true,
+      required: true,
+      status: 'ready',
+      configuredRefs: 1,
+      loadedSkills: 2,
+      failures: [],
+    });
+
     expect(manager.getSkill('common.http')?.spec).toMatchObject({
       version: '2.1.0',
       trustLevel: 'trusted',
@@ -87,6 +97,20 @@ describe('SkillManager signed remote registry composition', () => {
     });
 
     await expect(manager.initialize()).rejects.toThrow('dependency lock mismatch');
+    expect(manager.readiness()).toMatchObject({
+      initialized: false,
+      enabled: true,
+      required: true,
+      status: 'failed',
+      loadedSkills: 0,
+      failures: [
+        expect.objectContaining({
+          skillId: 'cloud.search',
+          version: '1.0.0',
+          error: expect.stringContaining('dependency lock mismatch'),
+        }),
+      ],
+    });
     expect(manager.getSkill('common.http')).toBeNull();
     expect(manager.getSkill('cloud.search')).toBeNull();
   });
@@ -117,6 +141,33 @@ describe('SkillManager signed remote registry composition', () => {
 
     await expect(manager.initialize()).rejects.toThrow('outside the verified single-file bundle');
     expect(manager.getSkill('cloud.search')).toBeNull();
+  });
+
+  it('reports an optional remote registry failure as degraded instead of hiding it', async () => {
+    const manager = new SkillManager({
+      dirs: [],
+      remoteRegistry: {
+        client: fakeClient(new Map(), new Map()),
+        refs: [{ id: 'optional.skill', version: '1.0.0', required: false }],
+      },
+    });
+
+    await expect(manager.initialize()).resolves.toBeUndefined();
+    expect(manager.readiness()).toEqual({
+      initialized: true,
+      enabled: true,
+      required: false,
+      status: 'degraded',
+      configuredRefs: 1,
+      loadedSkills: 0,
+      failures: [
+        {
+          skillId: 'optional.skill',
+          version: '1.0.0',
+          error: 'Missing fixture optional.skill@1.0.0',
+        },
+      ],
+    });
   });
 });
 

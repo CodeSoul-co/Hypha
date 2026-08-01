@@ -1,5 +1,6 @@
 ﻿import Redis from 'ioredis';
 import mongoose, { type Connection } from 'mongoose';
+import { createConnection as createNetConnection } from 'node:net';
 import {
   InMemoryLocalVectorStoreAdapter,
   IndexOutboxWorker,
@@ -177,10 +178,15 @@ async function closeRedis(client?: Redis): Promise<void> {
 
 describeTopology('Native Redis + MongoDB production topology acceptance', () => {
   let connection: Connection;
+  let topologyReady = false;
   const prefixes: string[] = [];
   const redisNamespaces: string[] = [];
 
   beforeAll(async () => {
+    await assertTopologyEndpointsReachable([
+      ...mongoEndpoints(mongoUri),
+      ...sentinels.map(({ host, port }) => ({ host, port })),
+    ]);
     connection = await mongoose
       .createConnection(mongoUri, {
         serverSelectionTimeoutMS: 20_000,
@@ -192,9 +198,15 @@ describeTopology('Native Redis + MongoDB production topology acceptance', () => 
     expect(hello.setName).toBe('hypha-rs');
     expect(hello.isWritablePrimary).toBe(true);
     expect(hello.hosts).toHaveLength(3);
+    topologyReady = true;
   });
 
   afterEach(async () => {
+    if (!topologyReady) {
+      prefixes.length = 0;
+      redisNamespaces.length = 0;
+      return;
+    }
     if (connection?.readyState === 1 && connection.db) {
       const collections = await connection.db.collections();
       for (const collection of collections) {
@@ -222,7 +234,7 @@ describeTopology('Native Redis + MongoDB production topology acceptance', () => 
   });
 
   afterAll(async () => {
-    await connection?.close();
+    if (topologyReady) await connection?.close();
   });
 
   it('atomically commits record/history/outbox and retries transient and commit-timeout failures', async () => {
@@ -742,3 +754,63 @@ describeTopology('Native Redis + MongoDB production topology acceptance', () => 
     }
   });
 });
+
+async function assertTopologyEndpointsReachable(
+  endpoints: ReadonlyArray<{ host: string; port: number }>,
+  timeoutMs = 5_000
+): Promise<void> {
+  const failures = (
+    await Promise.all(
+      endpoints.map(async (endpoint) => {
+        try {
+          await connectTcp(endpoint, timeoutMs);
+          return undefined;
+        } catch {
+          return `${endpoint.host}:${endpoint.port}`;
+        }
+      })
+    )
+  ).filter((endpoint): endpoint is string => endpoint !== undefined);
+  if (failures.length > 0) {
+    throw new Error(
+      `Native Memory production topology is unavailable at: ${failures.join(', ')}. ` +
+        'Start configs/memory/native-production-test/compose.yaml before running this required gate.'
+    );
+  }
+}
+
+function connectTcp(endpoint: { host: string; port: number }, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = createNetConnection(endpoint);
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+    socket.setTimeout(timeoutMs, () => finish(new Error('TCP preflight timed out.')));
+    socket.once('connect', () => finish());
+    socket.once('error', (error) => finish(error));
+  });
+}
+
+function mongoEndpoints(uri: string): Array<{ host: string; port: number }> {
+  const authority = uri
+    .replace(/^mongodb(?:\+srv)?:\/\//u, '')
+    .split('/')[0]
+    ?.split('@')
+    .at(-1);
+  if (!authority) throw new Error('Native Memory MongoDB URI does not contain any hosts.');
+  return authority.split(',').map((entry) => {
+    const match = /^(?:\[([^\]]+)\]|([^:]+))(?::([0-9]+))?$/u.exec(entry);
+    if (!match) throw new Error(`Native Memory MongoDB endpoint is invalid: ${entry}`);
+    const port = Number(match[3] ?? 27017);
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(`Native Memory MongoDB port is invalid: ${entry}`);
+    }
+    return { host: match[1] ?? match[2]!, port };
+  });
+}

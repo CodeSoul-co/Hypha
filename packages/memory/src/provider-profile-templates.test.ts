@@ -40,13 +40,13 @@ describe('public memory provider profile templates', () => {
       workingStoreRef: { id: 'memory.store.working.in-memory' },
       recordStoreRef: { id: 'memory.store.record.sqlite' },
       vectorStoreRefs: [{ id: 'memory.vector.local' }],
-      artifactStoreRef: { id: 'memory.artifact.local' },
+      embeddingProviderRef: { id: 'memory.embedding.local' },
     });
     expect(parsed.profiles['native-default']?.profile).toMatchObject({
       workingStoreRef: { id: 'memory.store.working.redis' },
       recordStoreRef: { id: 'memory.store.record.mongodb' },
       vectorStoreRefs: [{ id: 'memory.vector.local' }],
-      artifactStoreRef: { id: 'memory.artifact.local' },
+      embeddingProviderRef: { id: 'memory.embedding.local' },
     });
 
     const serialized = JSON.stringify(parsed);
