@@ -140,23 +140,27 @@ WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-`config.yaml` enables the in-process classic MCP fixture by default:
+`config.yaml` enables the real local stdio MCP example by default:
 
 ```yaml
 tools:
   mcpServers:
-    - id: 'classic'
-      name: 'Classic MCP Fixture'
-      mode: 'fixture'
+    - id: 'local-example'
+      name: 'Hypha Local MCP Example'
+      mode: 'local'
+      command: 'node'
+      args: ['./examples/mcp/local-stdio-server.cjs']
       autoConnect: true
+      required: true
 ```
 
-The fixture exposes `filesystem.read_file`, `fetch.fetch`, `time.now`,
-`search.web_search`, `baidu.web_search`, and `so360.web_search` through the
-same governed `/tools/execute` path as remote or stdio MCP servers. Replace
-`mode: "fixture"` with `mode: "local"` plus `command`/`args`, or
-`mode: "remote"` plus `endpoint` and optional `authToken` for deployment MCP
-servers.
+The server discovers `hash_reference`, but the trust policy keeps a newly
+discovered capability unavailable until it is explicitly approved through the
+MCP capability API. After approval it uses the same governed `/tools/execute`
+path as remote MCP servers. Configure other local servers with `mode: "local"`
+plus `command`/`args`, or remote servers with `mode: "remote"` plus `endpoint`
+and a Secret reference. In-process fixture mode is reserved for tests and is
+rejected when `NODE_ENV=production`.
 
 Tool result caching is disabled by default. Use the bounded in-process Store for one process, or
 the configured Redis connection for multi-process/local/cloud deployments:

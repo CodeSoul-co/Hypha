@@ -758,6 +758,15 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
+    if (process.env.NODE_ENV === 'production' && config.mode === 'fixture') {
+      throw Object.assign(
+        new Error(`MCP fixture mode is not available in production: ${config.id}`),
+        {
+          code: 'MCP_FIXTURE_FORBIDDEN_IN_PRODUCTION',
+          serverId: config.id,
+        }
+      );
+    }
     const required = config.required !== false;
     this.mcpServerModes.set(config.id, config.mode);
     const connectionProfileRef = config.connectionProfileRef ?? config.id;
@@ -859,9 +868,16 @@ export class ToolManager {
         : new ManagedMCPClient(config.id, config.name, this.connectionManager);
 
     this.mcpClients.set(config.id, client);
-    this.mcpServerStates.set(config.id, { status: 'ready', required });
+    const startsDuringInitialization = config.autoStart === true || config.autoConnect === true;
+    this.mcpServerStates.set(config.id, {
+      status: startsDuringInitialization ? 'degraded' : required ? 'failed' : 'degraded',
+      required,
+      error: startsDuringInitialization
+        ? 'MCP server initialization has not completed'
+        : 'MCP server is configured but not connected',
+    });
 
-    if (config.autoStart || config.autoConnect) {
+    if (startsDuringInitialization) {
       try {
         await client.connect();
         await this.mcpCatalogs.get(config.id)?.refresh(config.id, 'server-auto-connect');
