@@ -19,7 +19,10 @@ import { createRuntimeOrchestrationProjectionDefinition } from './orchestration-
 import { InMemoryProjectionStore, ProjectionEngine } from './projection';
 import { InMemoryRunLeaseStore } from './run-lease-store';
 import { RuntimeCancellationService } from './runtime-cancellation-service';
-import { RuntimeRecoveryService } from './runtime-recovery-service';
+import {
+  RuntimeRecoveryService,
+  type RuntimeActivityRedispatchRecoveryPort,
+} from './runtime-recovery-service';
 import { InMemoryStateExecutionClaimStore } from './state-execution-claim-store';
 
 const scope: RuntimeScope = {
@@ -30,12 +33,15 @@ const scope: RuntimeScope = {
   runId: 'run.recovery',
   agentId: 'agent.recovery',
 };
+const redispatchSubjectHash = `sha256:${'a'.repeat(64)}`;
+const redispatchDescriptorHash = `sha256:${'b'.repeat(64)}`;
 
 const recoveryEventTypes: FrameworkEventType[] = [
   'run.created',
   'run.started',
   'run.cancel.requested',
   'run.cancelling',
+  'run.failed',
   'run.cancelled',
   'fsm.state.entered',
   'runtime.activity.requested',
@@ -46,6 +52,9 @@ const recoveryEventTypes: FrameworkEventType[] = [
   'runtime.activity.compensation.requested',
   'runtime.activity.compensation.completed',
   'runtime.activity.compensation.failed',
+  'activity.redispatch.requested',
+  'activity.redispatch.accepted',
+  'activity.redispatch.outcome_unknown',
   'runtime.cancellation.propagated',
   'runtime.cancellation.failed',
   'recovery.case.opened',
@@ -59,6 +68,7 @@ async function fixture(
   overrides: {
     activities?: RuntimeActivityReconciliationPort;
     requeue?: RuntimeRecoveryRequeuePort;
+    redispatchBehavior?: 'accepted' | 'unknown' | 'lease_unavailable';
   } = {}
 ) {
   let milliseconds = 0;
@@ -82,6 +92,7 @@ async function fixture(
   const stateClaims = new InMemoryStateExecutionClaimStore({ runLeaseStore: runLeases, now });
   const activityCalls = { reconcile: 0, retry: 0, compensate: 0 };
   const requeueCalls: string[] = [];
+  const redispatchCalls: Parameters<RuntimeActivityRedispatchRecoveryPort['redispatch']>[0][] = [];
   const activities: RuntimeActivityReconciliationPort =
     overrides.activities ??
     ({
@@ -131,6 +142,14 @@ async function fixture(
     projections,
     projectionStore,
     runLeases,
+    commands: {
+      cancelPending: async (request) => ({
+        targetRunId: request.targetRunId,
+        cancelledCommandIds: [],
+        alreadyCancelledCommandIds: [],
+        alreadyTerminalCommandIds: [],
+      }),
+    },
     activities: {
       cancel: async (request) => ({
         targetType: 'activity',
@@ -149,18 +168,57 @@ async function fixture(
     now,
     nextId,
   });
-  const recovery = new RuntimeRecoveryService({
-    events,
-    projections,
-    projectionStore,
-    runLeases,
-    stateClaims,
-    activities,
-    cancellations,
-    requeue,
-    now,
-    nextId,
-  });
+  const redispatches: RuntimeActivityRedispatchRecoveryPort = {
+    redispatch: async (command) => {
+      redispatchCalls.push(command);
+      const request = (
+        await events.read({
+          scope: streamScope(),
+          types: ['activity.redispatch.requested'],
+        })
+      ).find((item) => item.payload && item.id === 'seed.redispatch.requested');
+      if (!request) throw new Error('Redispatch request fixture is missing');
+      if (overrides.redispatchBehavior === 'lease_unavailable') {
+        throw new FrameworkError({
+          code: 'RUNTIME_LEASE_UNAVAILABLE',
+          message: 'fixture lease unavailable',
+        });
+      }
+      if (overrides.redispatchBehavior === 'unknown') {
+        await appendRedispatchOutcome(events, request, now());
+        throw new FrameworkError({
+          code: 'RUNTIME_ACTIVITY_OUTCOME_UNKNOWN',
+          message: 'fixture redispatch outcome is unknown',
+        });
+      }
+      await appendRedispatchAccepted(events, request, now());
+      return {
+        commandId: command.commandId,
+        requestEventId: request.id,
+        receiptEventId: 'seed.redispatch.accepted',
+        activityCommandId: 'activity-command.recovered',
+        eventReused: true,
+        receiptReused: false,
+        commandReused: true,
+        reconciled: true,
+      };
+    },
+  };
+  const createRecovery = () =>
+    new RuntimeRecoveryService({
+      events,
+      projections,
+      projectionStore,
+      runLeases,
+      stateClaims,
+      activities,
+      redispatches,
+      cancellations,
+      requeue,
+      now,
+      nextId,
+    });
+  const recovery = createRecovery();
   await events.append({
     scope: streamScope(),
     events: [
@@ -181,8 +239,119 @@ async function fixture(
     stateClaims,
     activityCalls,
     requeueCalls,
+    redispatchCalls,
+    createRecovery,
     now,
   };
+}
+
+async function appendRedispatchRequest(target: Awaited<ReturnType<typeof fixture>>) {
+  const head = await target.events.getStreamHead(streamScope());
+  await target.events.append({
+    scope: streamScope(),
+    events: [
+      event(
+        'seed.redispatch.requested',
+        'activity.redispatch.requested',
+        {
+          commandId: 'redispatch.command.recovery',
+          taskId: 'human-task.recovery',
+          activityId: 'activity.redispatch.recovery',
+          activityKind: 'tool',
+          activityDescriptorRef: 'activity-descriptor.recovery',
+          activityDescriptorHash: redispatchDescriptorHash,
+          idempotencyKey: 'activity.redispatch.recovery',
+          requestedAt: '2026-07-18T12:00:30.000Z',
+        },
+        target.now(),
+        {
+          operationId: 'activity-redispatch:recovery',
+          idempotencyKey: 'activity-redispatch:recovery',
+          metadata: {
+            expectedTaskRevision: 2,
+            subjectHash: redispatchSubjectHash,
+          },
+        }
+      ),
+    ],
+    expectedLastSequence: head!.lastSequence,
+    expectedRunRevision: head!.runRevision,
+    idempotencyKey: 'seed.redispatch.requested',
+  });
+}
+
+async function appendRedispatchAccepted(
+  events: DurableEventRuntime,
+  request: Awaited<ReturnType<DurableEventRuntime['read']>>[number],
+  timestamp: string
+) {
+  const head = await events.getStreamHead(streamScope());
+  await events.append({
+    scope: streamScope(),
+    events: [
+      event(
+        'seed.redispatch.accepted',
+        'activity.redispatch.accepted',
+        {
+          taskId: 'human-task.recovery',
+          activityId: 'activity.redispatch.recovery',
+          activityDescriptorRef: 'activity-descriptor.recovery',
+          activityDescriptorHash: redispatchDescriptorHash,
+          redispatchCommandId: request.operationId,
+          activityCommandId: 'activity-command.recovered',
+          requestEventId: request.id,
+          approvalEventId: 'human-review.approved',
+          commandReused: true,
+          source: 'reconcile',
+          acceptedAt: timestamp,
+        },
+        timestamp,
+        {
+          operationId: request.operationId,
+          idempotencyKey: `${request.operationId}:accepted`,
+        }
+      ),
+    ],
+    expectedLastSequence: head!.lastSequence,
+    expectedRunRevision: head!.runRevision,
+    idempotencyKey: 'seed.redispatch.accepted',
+  });
+}
+
+async function appendRedispatchOutcome(
+  events: DurableEventRuntime,
+  request: Awaited<ReturnType<DurableEventRuntime['read']>>[number],
+  timestamp: string
+) {
+  const head = await events.getStreamHead(streamScope());
+  await events.append({
+    scope: streamScope(),
+    events: [
+      event(
+        'seed.redispatch.outcome-unknown',
+        'activity.redispatch.outcome_unknown',
+        {
+          taskId: 'human-task.recovery',
+          activityId: 'activity.redispatch.recovery',
+          activityDescriptorRef: 'activity-descriptor.recovery',
+          activityDescriptorHash: redispatchDescriptorHash,
+          redispatchCommandId: request.operationId,
+          requestEventId: request.id,
+          approvalEventId: 'human-review.approved',
+          reason: 'provider acknowledgement unavailable',
+          detectedAt: timestamp,
+        },
+        timestamp,
+        {
+          operationId: request.operationId,
+          idempotencyKey: `${request.operationId}:outcome-unknown`,
+        }
+      ),
+    ],
+    expectedLastSequence: head!.lastSequence,
+    expectedRunRevision: head!.runRevision,
+    idempotencyKey: 'seed.redispatch.outcome-unknown',
+  });
 }
 
 function event(
@@ -337,6 +506,131 @@ async function seedExpiredStateClaim(target: Awaited<ReturnType<typeof fixture>>
 }
 
 describe('RuntimeRecoveryService', () => {
+  it('discovers an orphaned redispatch intent after restart and reconciles it once', async () => {
+    const target = await fixture();
+    await appendRedispatchRequest(target);
+    await project(target);
+
+    const restartedRecovery = target.createRecovery();
+    const firstScan = await restartedRecovery.scan({
+      checkedAt: '2026-07-18T12:01:00.000Z',
+      limit: 100,
+    });
+    const repeatedScan = await restartedRecovery.scan({
+      checkedAt: '2026-07-18T12:01:01.000Z',
+      limit: 100,
+    });
+    const candidate = firstScan.candidates.find(
+      (item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE'
+    )!;
+
+    expect(candidate).toMatchObject({
+      safeAction: 'reconcile_redispatch',
+      activityId: 'activity.redispatch.recovery',
+      redispatchRequestEventId: 'seed.redispatch.requested',
+    });
+    expect(
+      repeatedScan.candidates.find((item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE')
+        ?.candidateId
+    ).toBe(candidate.candidateId);
+    await expect(restartedRecovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'recovered',
+      eventIds: ['seed.redispatch.requested', 'seed.redispatch.accepted'],
+    });
+    expect(target.redispatchCalls).toHaveLength(1);
+    expect(target.redispatchCalls[0]).toMatchObject({
+      commandId: 'redispatch.command.recovery',
+      taskId: 'human-task.recovery',
+      expectedTaskRevision: 2,
+      expectedSubjectHash: redispatchSubjectHash,
+      activityDescriptorRef: 'activity-descriptor.recovery',
+      activityDescriptorHash: redispatchDescriptorHash,
+      scope,
+    });
+    expect(
+      (await scan(target)).candidates.some(
+        (item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE'
+      )
+    ).toBe(false);
+  });
+
+  it('fails closed when orphaned redispatch reconciliation remains unknown', async () => {
+    const target = await fixture({ redispatchBehavior: 'unknown' });
+    await appendRedispatchRequest(target);
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE'
+    )!;
+
+    await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'requires_review',
+      eventIds: ['seed.redispatch.requested', 'seed.redispatch.outcome-unknown'],
+    });
+    await project(target);
+    expect(
+      (await scan(target)).candidates.some((item) => item.candidateId === candidate.candidateId)
+    ).toBe(true);
+    expect(target.redispatchCalls).toHaveLength(1);
+  });
+
+  it('does not recover an incomplete redispatch after cancellation starts', async () => {
+    const target = await fixture();
+    await appendRedispatchRequest(target);
+    const head = await target.events.getStreamHead(streamScope());
+    await target.events.append({
+      scope: streamScope(),
+      events: [
+        event(
+          'seed.cancel.requested',
+          'run.cancel.requested',
+          {
+            commandId: 'cancel.blocks-redispatch',
+            principalId: 'operator.recovery',
+            reason: 'operator cancelled the Run',
+            requestedAt: target.now(),
+          },
+          target.now()
+        ),
+        event(
+          'seed.run.cancelling',
+          'run.cancelling',
+          { commandId: 'cancel.blocks-redispatch' },
+          target.now()
+        ),
+      ],
+      expectedLastSequence: head!.lastSequence,
+      expectedRunRevision: head!.runRevision,
+      idempotencyKey: 'seed.cancel.blocks-redispatch',
+    });
+    await project(target);
+
+    expect(
+      (await scan(target)).candidates.some(
+        (item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE'
+      )
+    ).toBe(false);
+    expect(target.redispatchCalls).toHaveLength(0);
+  });
+
+  it('reports lease contention without dispatching a second recovery action', async () => {
+    const target = await fixture({ redispatchBehavior: 'lease_unavailable' });
+    await appendRedispatchRequest(target);
+    await project(target);
+    const candidate = (await scan(target)).candidates.find(
+      (item) => item.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE'
+    )!;
+
+    await expect(target.recovery.recover(recoveryCommand(candidate))).resolves.toMatchObject({
+      disposition: 'lease_unavailable',
+      eventIds: [],
+    });
+    expect(
+      (await target.events.read({ scope: streamScope() })).filter(
+        (item) => item.type === 'activity.redispatch.accepted'
+      )
+    ).toHaveLength(0);
+  });
+
   it('detects projection lag, rebuilds from Events, and reuses the recovery receipt', async () => {
     const target = await fixture();
     const detected = await scan(target);

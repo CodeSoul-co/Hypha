@@ -7,14 +7,22 @@ import type {
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type { RuntimeScope } from '../../contracts/runtime';
 import type { RuntimeHumanTaskRequest } from '../../contracts/runtime-human-task';
-import { validateRuntimeHumanTaskRequest } from '../../contracts/runtime-human-task-schemas';
+import type { RuntimeHumanTaskDecisionCommand } from '../../contracts/runtime-human-task';
+import {
+  validateRuntimeHumanTaskDecisionCommand,
+  validateRuntimeHumanTaskRequest,
+} from '../../contracts/runtime-human-task-schemas';
 import { FrameworkError, isFrameworkError } from '../../errors';
 import { hashCanonicalJson } from './canonical-json';
 import type { EventRuntime } from './event-runtime';
 import type { EventStreamScope } from './event-store';
 import { createRuntimeOrchestrationProjectionDefinition } from './orchestration-projection';
 import type { ProjectionEngine, ProjectionStore } from './projection';
-import { projectRuntimeHumanTasks } from './runtime-human-task';
+import {
+  assertRuntimeHumanTaskDecision,
+  projectRuntimeHumanTasks,
+  runtimeHumanTaskResolutionEventId,
+} from './runtime-human-task';
 
 export interface RuntimeHumanWaitCreateCommand {
   commandId: string;
@@ -37,8 +45,23 @@ export interface RuntimeHumanWaitResolveCommand {
   waitId?: string;
   pendingActionRef: string;
   principalId: string;
-  decision: 'approved' | 'rejected';
+  decision: 'approved' | 'rejected' | 'expired' | 'cancelled';
   resolvedAt: string;
+  humanTaskDecision?: RuntimeHumanTaskDecisionCommand;
+  idempotencyKey?: string;
+}
+
+export interface RuntimeHumanWaitSupersedeCommand {
+  commandId: string;
+  scope: RuntimeScope;
+  ownerId: string;
+  leaseTtlMs: number;
+  waitId?: string;
+  pendingActionRef: string;
+  principalId: string;
+  supersededAt: string;
+  humanTaskDecision: RuntimeHumanTaskDecisionCommand;
+  replacementTask: RuntimeHumanTaskRequest;
   idempotencyKey?: string;
 }
 
@@ -59,7 +82,11 @@ export interface RuntimeHumanWaitServiceOptions {
   nextId?: (namespace: string) => string;
 }
 
-type HumanWaitCommand = RuntimeHumanWaitCreateCommand | RuntimeHumanWaitResolveCommand;
+type HumanWaitCommand =
+  | RuntimeHumanWaitCreateCommand
+  | RuntimeHumanWaitResolveCommand
+  | RuntimeHumanWaitSupersedeCommand;
+type HumanWaitOperation = 'create' | 'resolve' | 'supersede';
 
 export class RuntimeHumanWaitService {
   private readonly now: () => string;
@@ -81,9 +108,14 @@ export class RuntimeHumanWaitService {
     return this.execute(input, 'resolve');
   }
 
+  supersede(input: RuntimeHumanWaitSupersedeCommand): Promise<RuntimeHumanWaitResult> {
+    validateSupersede(input);
+    return this.execute(input, 'supersede');
+  }
+
   private async execute(
     command: HumanWaitCommand,
-    operation: 'create' | 'resolve'
+    operation: HumanWaitOperation
   ): Promise<RuntimeHumanWaitResult> {
     const commandHash = logicalCommandHash(command);
     const prior = await this.findPrior(command, operation, commandHash);
@@ -108,7 +140,19 @@ export class RuntimeHumanWaitService {
               commandHash,
               streamEvents
             )
-          : this.resolveEvents(command as RuntimeHumanWaitResolveCommand, projection, commandHash);
+          : operation === 'resolve'
+            ? this.resolveEvents(
+                command as RuntimeHumanWaitResolveCommand,
+                projection,
+                commandHash,
+                streamEvents
+              )
+            : this.supersedeEvents(
+                command as RuntimeHumanWaitSupersedeCommand,
+                projection,
+                commandHash,
+                streamEvents
+              );
       const scope = streamScope(command.scope);
       const head = await this.options.events.getStreamHead(scope);
       if (!head) conflict('RUNTIME_RUN_NOT_FOUND', 'Run Event stream does not exist', command);
@@ -217,7 +261,8 @@ export class RuntimeHumanWaitService {
   private resolveEvents(
     command: RuntimeHumanWaitResolveCommand,
     projection: RuntimeOrchestrationProjection,
-    commandHash: string
+    commandHash: string,
+    streamEvents: PersistedFrameworkEvent[]
   ): EventCreateInput[] {
     const pending = projection.pendingWait;
     if (projection.runStatus !== 'waiting_human' || pending?.type !== 'human') {
@@ -240,6 +285,12 @@ export class RuntimeHumanWaitService {
       );
     }
     const waitId = pending.waitId;
+    const taskResolution = this.humanTaskResolutionEvent(
+      command,
+      projection,
+      streamEvents,
+      commandHash
+    );
     const requested = this.event(
       command,
       'resolve',
@@ -260,12 +311,30 @@ export class RuntimeHumanWaitService {
         commandId: command.commandId,
         commandHash,
         waitId,
-        resolution: 'manual',
+        resolution: humanWaitResolution(command.decision),
         resolvedAt: command.resolvedAt,
       },
       projection,
       command.resolvedAt
     );
+    if (command.decision !== 'approved') {
+      const terminal = this.event(
+        command,
+        'resolve',
+        command.decision === 'cancelled' ? 'run.cancelled' : 'run.failed',
+        {
+          commandId: command.commandId,
+          commandHash,
+          terminalState: projection.currentState,
+          reason: `human_review_${command.decision}`,
+          waitId,
+          pendingActionRef: command.pendingActionRef,
+        },
+        projection,
+        command.resolvedAt
+      );
+      return [...(taskResolution ? [taskResolution] : []), requested, resolved, terminal];
+    }
     const resumed = this.event(
       command,
       'resolve',
@@ -302,12 +371,234 @@ export class RuntimeHumanWaitService {
       command.resolvedAt,
       projection.stateAttempt + 1
     );
-    return [requested, resolved, resumed, entered];
+    return [...(taskResolution ? [taskResolution] : []), requested, resolved, resumed, entered];
+  }
+
+  private humanTaskResolutionEvent(
+    command: RuntimeHumanWaitResolveCommand,
+    projection: RuntimeOrchestrationProjection,
+    streamEvents: PersistedFrameworkEvent[],
+    commandHash: string
+  ): EventCreateInput | undefined {
+    const decision = command.humanTaskDecision;
+    const tasks = projectRuntimeHumanTasks(streamEvents);
+    const pendingTasks = tasks.filter(
+      (task) =>
+        task.status === 'pending' &&
+        task.stateId === projection.currentState &&
+        task.stateAttempt === projection.stateAttempt
+    );
+    if (!decision) {
+      if (pendingTasks.length > 0) {
+        conflict(
+          'HUMAN_TASK_DECISION_REQUIRED',
+          'Resolving a Human Wait with pending HumanTasks requires a terminal decision',
+          command,
+          { pendingTaskIds: pendingTasks.map((task) => task.taskId) }
+        );
+      }
+      return undefined;
+    }
+    if (decision.decision !== command.decision) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task decision does not match the Wait resolution',
+        command
+      );
+    }
+    const task = assertRuntimeHumanTaskDecision(
+      tasks.find((candidate) => candidate.taskId === decision.taskId),
+      decision
+    );
+    if (task.stateId !== projection.currentState || task.stateAttempt !== projection.stateAttempt) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task decision does not belong to the pending State attempt',
+        command,
+        {
+          taskId: task.taskId,
+          taskStateId: task.stateId,
+          taskStateAttempt: task.stateAttempt,
+          currentStateId: projection.currentState,
+          currentStateAttempt: projection.stateAttempt,
+        }
+      );
+    }
+    if (!sameScope(command.scope, decision.scope)) {
+      conflict('RUNTIME_RUN_CONFLICT', 'Human task decision scope does not match the Run', command);
+    }
+    const terminal = this.event(
+      command,
+      'resolve',
+      terminalHumanReviewEvent(command.decision),
+      {
+        commandId: command.commandId,
+        commandHash,
+        taskId: task.taskId,
+        subjectRef: task.subjectRef,
+        subjectHash: task.subjectHash,
+        expectedRevision: decision.expectedRevision,
+        expectedSubjectHash: decision.expectedSubjectHash,
+        approvalRevision: decision.expectedRevision + 1,
+        decisionCommandId: decision.commandId,
+        ...(decision.idempotencyKey === undefined
+          ? {}
+          : { decisionIdempotencyKey: decision.idempotencyKey }),
+        waitId: projection.pendingWait?.waitId,
+        pendingActionRef: command.pendingActionRef,
+        resolutionOperationId: humanWaitOperationId('resolve', command.commandId),
+        decidedBy: decision.principal.principalId,
+        decidedAt: decision.decidedAt,
+        decision: decision.decision,
+        principal: decision.principal,
+        scope: decision.scope,
+        ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+      },
+      projection,
+      decision.decidedAt
+    );
+    return {
+      ...terminal,
+      id: runtimeHumanTaskResolutionEventId({
+        runId: command.scope.runId,
+        taskId: task.taskId,
+        expectedRevision: decision.expectedRevision,
+      }),
+    };
+  }
+
+  private supersedeEvents(
+    command: RuntimeHumanWaitSupersedeCommand,
+    projection: RuntimeOrchestrationProjection,
+    commandHash: string,
+    streamEvents: PersistedFrameworkEvent[]
+  ): EventCreateInput[] {
+    const pending = projection.pendingWait;
+    if (projection.runStatus !== 'waiting_human' || pending?.type !== 'human') {
+      conflict('RUNTIME_RUN_CONFLICT', 'Run is not waiting for Human review', command);
+    }
+    if (
+      (command.waitId !== undefined && pending.waitId !== command.waitId) ||
+      pending.pendingActionRef !== command.pendingActionRef
+    ) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task supersession does not match the pending Wait',
+        command,
+        {
+          expectedWaitId: pending.waitId,
+          actualWaitId: command.waitId,
+          expectedPendingActionRef: pending.pendingActionRef,
+          actualPendingActionRef: command.pendingActionRef,
+        }
+      );
+    }
+    const decision = command.humanTaskDecision;
+    if (decision.decision !== 'superseded') {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task supersession requires a superseded decision',
+        command
+      );
+    }
+    if (!sameScope(command.scope, decision.scope)) {
+      conflict('RUNTIME_RUN_CONFLICT', 'Human task decision scope does not match the Run', command);
+    }
+    if (decision.principal.principalId !== command.principalId) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task decision principal does not match the superseding principal',
+        command
+      );
+    }
+    if (decision.supersededByTaskId !== command.replacementTask.taskId) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Human task supersession does not reference the replacement task',
+        command
+      );
+    }
+    const tasks = projectRuntimeHumanTasks(streamEvents);
+    const task = assertRuntimeHumanTaskDecision(
+      tasks.find((candidate) => candidate.taskId === decision.taskId),
+      decision
+    );
+    if (tasks.some((candidate) => candidate.taskId === command.replacementTask.taskId)) {
+      conflict('RUNTIME_RUN_CONFLICT', 'Replacement Human task already exists', command);
+    }
+    if (
+      task.kind !== command.replacementTask.kind ||
+      task.activityDescriptorRef !== command.replacementTask.activityDescriptorRef ||
+      task.activityDescriptorHash !== command.replacementTask.activityDescriptorHash
+    ) {
+      conflict(
+        'RUNTIME_RUN_CONFLICT',
+        'Replacement Human task must preserve the pending Activity identity',
+        command
+      );
+    }
+    const terminal = this.event(
+      command,
+      'supersede',
+      'human.review.superseded',
+      {
+        commandId: command.commandId,
+        commandHash,
+        taskId: task.taskId,
+        subjectRef: task.subjectRef,
+        subjectHash: task.subjectHash,
+        expectedRevision: decision.expectedRevision,
+        expectedSubjectHash: decision.expectedSubjectHash,
+        approvalRevision: decision.expectedRevision + 1,
+        decisionCommandId: decision.commandId,
+        ...(decision.idempotencyKey === undefined
+          ? {}
+          : { decisionIdempotencyKey: decision.idempotencyKey }),
+        waitId: projection.pendingWait?.waitId,
+        pendingActionRef: command.pendingActionRef,
+        resolutionOperationId: humanWaitOperationId('supersede', command.commandId),
+        decidedBy: decision.principal.principalId,
+        decidedAt: decision.decidedAt,
+        decision: decision.decision,
+        supersededByTaskId: command.replacementTask.taskId,
+        principal: decision.principal,
+        scope: decision.scope,
+        ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+      },
+      projection,
+      decision.decidedAt
+    );
+    const requested = this.event(
+      command,
+      'supersede',
+      'human.review.requested',
+      {
+        ...command.replacementTask,
+        runId: command.scope.runId,
+        stateId: projection.currentState,
+        stateAttempt: projection.stateAttempt,
+        status: 'pending',
+        revision: 1,
+      },
+      projection,
+      command.replacementTask.requestedAt
+    );
+    return [
+      {
+        ...terminal,
+        id: runtimeHumanTaskResolutionEventId({
+          runId: command.scope.runId,
+          taskId: task.taskId,
+          expectedRevision: decision.expectedRevision,
+        }),
+      },
+      requested,
+    ];
   }
 
   private event(
     command: HumanWaitCommand,
-    operation: 'create' | 'resolve',
+    operation: HumanWaitOperation,
     type: EventCreateInput['type'],
     payload: Record<string, unknown>,
     projection: RuntimeOrchestrationProjection,
@@ -334,8 +625,12 @@ export class RuntimeHumanWaitService {
       payload,
       metadata: {
         stateAttempt,
-        ...(operation === 'resolve'
-          ? { principalId: (command as RuntimeHumanWaitResolveCommand).principalId }
+        ...(operation !== 'create'
+          ? {
+              principalId: (
+                command as RuntimeHumanWaitResolveCommand | RuntimeHumanWaitSupersedeCommand
+              ).principalId,
+            }
           : {}),
       },
     };
@@ -343,7 +638,7 @@ export class RuntimeHumanWaitService {
 
   private async findPrior(
     command: HumanWaitCommand,
-    operation: 'create' | 'resolve',
+    operation: HumanWaitOperation,
     commandHash: string
   ): Promise<RuntimeHumanWaitResult | null> {
     const events = await this.options.events.read({ scope: streamScope(command.scope) });
@@ -381,7 +676,7 @@ export class RuntimeHumanWaitService {
 
   private async acquireRunLease(
     command: HumanWaitCommand,
-    operation: 'create' | 'resolve'
+    operation: HumanWaitOperation
   ): Promise<FencedRunLease | null> {
     const requestedLeaseId = this.nextId('runtime-human-wait-lease');
     return this.options.runLeases.acquire({
@@ -441,6 +736,31 @@ function validateResolve(command: RuntimeHumanWaitResolveCommand): void {
   required(command.pendingActionRef, 'pendingActionRef');
   required(command.principalId, 'principalId');
   validTimestamp(command.resolvedAt, 'resolvedAt');
+  if (command.humanTaskDecision) {
+    validateRuntimeHumanTaskDecisionCommand(command.humanTaskDecision);
+    if (command.humanTaskDecision.principal.principalId !== command.principalId) {
+      invalid('humanTaskDecision principal must match principalId');
+    }
+    if (command.humanTaskDecision.decidedAt !== command.resolvedAt) {
+      invalid('humanTaskDecision.decidedAt must equal resolvedAt');
+    }
+  }
+}
+
+function validateSupersede(command: RuntimeHumanWaitSupersedeCommand): void {
+  validateCommon(command);
+  if (command.waitId !== undefined) required(command.waitId, 'waitId');
+  required(command.pendingActionRef, 'pendingActionRef');
+  required(command.principalId, 'principalId');
+  validTimestamp(command.supersededAt, 'supersededAt');
+  validateRuntimeHumanTaskDecisionCommand(command.humanTaskDecision);
+  validateRuntimeHumanTaskRequest(command.replacementTask);
+  if (command.humanTaskDecision.decidedAt !== command.supersededAt) {
+    invalid('humanTaskDecision.decidedAt must equal supersededAt');
+  }
+  if (Date.parse(command.replacementTask.requestedAt) < Date.parse(command.supersededAt)) {
+    invalid('replacementTask.requestedAt cannot be earlier than supersededAt');
+  }
 }
 
 function validateCommon(command: HumanWaitCommand): void {
@@ -461,7 +781,7 @@ function logicalCommandHash(command: HumanWaitCommand): string {
   return hashCanonicalJson(logical);
 }
 
-function humanWaitOperationId(operation: 'create' | 'resolve', commandId: string): string {
+function humanWaitOperationId(operation: HumanWaitOperation, commandId: string): string {
   return `runtime-human-wait:${operation}:${commandId}`;
 }
 
@@ -471,6 +791,46 @@ function streamScope(scope: RuntimeScope): EventStreamScope {
     userId: scope.userId,
     runId: scope.runId,
   };
+}
+
+function sameScope(left: RuntimeScope, right: RuntimeScope): boolean {
+  return (
+    left.tenantId === right.tenantId &&
+    left.userId === right.userId &&
+    left.workspaceId === right.workspaceId &&
+    left.sessionId === right.sessionId &&
+    left.runId === right.runId &&
+    left.agentId === right.agentId
+  );
+}
+
+function terminalHumanReviewEvent(
+  decision: RuntimeHumanWaitResolveCommand['decision']
+): Extract<
+  EventCreateInput['type'],
+  | 'human.review.approved'
+  | 'human.review.rejected'
+  | 'human.review.expired'
+  | 'human.review.cancelled'
+> {
+  switch (decision) {
+    case 'approved':
+      return 'human.review.approved';
+    case 'rejected':
+      return 'human.review.rejected';
+    case 'expired':
+      return 'human.review.expired';
+    case 'cancelled':
+      return 'human.review.cancelled';
+  }
+}
+
+function humanWaitResolution(
+  decision: RuntimeHumanWaitResolveCommand['decision']
+): 'manual' | 'cancelled' | 'expired' {
+  if (decision === 'cancelled') return 'cancelled';
+  if (decision === 'expired') return 'expired';
+  return 'manual';
 }
 
 function authorizationFor(lease: FencedRunLease): RunLeaseAuthorization {
