@@ -895,6 +895,7 @@ export * from './managed-store';
 export * from './structured-managed-store';
 export * from './structured-memory-persistence';
 export * from './index-outbox';
+export * from './structured-vector-store';
 export * from './lifecycle-workers';
 export * from './dead-letter-management';
 export * from './external-provider-operations';

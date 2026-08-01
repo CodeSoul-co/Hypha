@@ -12,6 +12,8 @@ import type {
 import type { ManagedMemorySearchResult, MemorySearchFilter } from './operations';
 import type { MemoryExtractionSourceRef } from './lifecycle-contracts';
 import type { ManagedMemoryRecordStore } from './managed-store';
+import type { EmbeddingProvider } from './index';
+import type { ManagedVectorStoreAdapter } from './index-outbox';
 import { hashMemoryScope, memoryError, sha256 } from './memory-utils';
 
 export interface NormalizedMemoryQuery {
@@ -28,6 +30,7 @@ export interface NormalizedMemoryQuery {
     to?: string;
   };
   requestedTypes?: ManagedMemoryType[];
+  mode?: 'structured' | 'semantic' | 'keyword' | 'hybrid' | 'graph';
   profileRevision: string;
   queryHash: string;
 }
@@ -290,6 +293,7 @@ export class StructuredMemoryCandidateGenerator implements MemoryCandidateGenera
   constructor(private readonly store: ManagedMemoryRecordStore) {}
 
   async generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]> {
+    if (request.query.mode === 'semantic' || request.query.mode === 'keyword') return [];
     const records = await this.store.list({
       scope: request.query.scope,
       filter: request.filter,
@@ -315,6 +319,7 @@ export class KeywordMemoryCandidateGenerator implements MemoryCandidateGenerator
   constructor(private readonly store: ManagedMemoryRecordStore) {}
 
   async generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]> {
+    if (request.query.mode === 'semantic' || request.query.mode === 'structured') return [];
     const query = request.query.normalizedQuery?.trim().toLowerCase();
     if (!query) return [];
     const records = await this.store.list({
@@ -346,6 +351,50 @@ export class KeywordMemoryCandidateGenerator implements MemoryCandidateGenerator
   }
 }
 
+export interface DenseMemoryCandidateGeneratorOptions {
+  store: ManagedVectorStoreAdapter;
+  embeddings: EmbeddingProvider;
+}
+
+/** Generates scope-fenced dense candidates from the configured vector projection. */
+export class DenseMemoryCandidateGenerator implements MemoryCandidateGenerator {
+  readonly id: string;
+  readonly type = 'dense' as const;
+
+  constructor(private readonly options: DenseMemoryCandidateGeneratorOptions) {
+    this.id = `memory.generator.dense.${options.store.id}`;
+  }
+
+  async generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]> {
+    if (
+      request.query.mode === 'structured' ||
+      request.query.mode === 'keyword' ||
+      request.query.mode === 'graph'
+    ) {
+      return [];
+    }
+    let vector = request.query.queryEmbedding;
+    if (!vector && request.query.normalizedQuery) {
+      [vector] = await this.options.embeddings.embed([request.query.normalizedQuery]);
+    }
+    if (!vector?.length) return [];
+    const results = await this.options.store.search({
+      vector,
+      topK: request.limit,
+      filter: { scopeHash: hashMemoryScope(request.query.scope) },
+    });
+    return results.map((result) => ({
+      memoryId: result.id,
+      generatorId: this.id,
+      generatorType: this.type,
+      rawScore: result.score,
+      normalizedScore: result.score,
+      matchedFields: ['vector'],
+      reasons: ['dense-vector-similarity'],
+    }));
+  }
+}
+
 export function normalizeMemoryQuery(
   input: Omit<NormalizedMemoryQuery, 'queryHash'>
 ): NormalizedMemoryQuery {
@@ -362,6 +411,7 @@ export function normalizeMemoryQuery(
       entities: input.entities,
       temporalIntent: input.temporalIntent,
       requestedTypes: input.requestedTypes,
+      mode: input.mode,
       profileRevision: input.profileRevision,
     }),
   };
