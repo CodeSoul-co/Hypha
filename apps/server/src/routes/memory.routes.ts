@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { authMiddleware, apiKeyMiddleware } from '../middleware/auth';
-import { getServerMemoryOperations } from '../services/ServerMemoryOperations';
+import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
+import { getPermanentMemory } from '../core/memory/PermanentMemory';
 import { HTTP_STATUS } from '../constants';
 
 const router = Router();
@@ -31,15 +32,15 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const messages = await memory.getMessages(
+    const tempMemory = getTemporaryMemory();
+    const messages = await tempMemory.getMessages(
       sessionId,
       limit ? parseInt(limit as string) : undefined,
-      userId
+      userId,
     );
 
     // Get session info
-    const sessionInfo = await memory.getSessionInfo(sessionId, userId);
+    const sessionInfo = await tempMemory.getSessionInfo(sessionId, userId);
 
     res.json({
       success: true,
@@ -49,7 +50,7 @@ router.get(
         ...sessionInfo,
       },
     });
-  })
+  }),
 );
 
 // Get all sessions for user
@@ -65,14 +66,14 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const sessions = await memory.getAllSessions(userId);
+    const tempMemory = getTemporaryMemory();
+    const sessions = await tempMemory.getAllSessions(userId);
 
     res.json({
       success: true,
       data: sessions,
     });
-  })
+  }),
 );
 
 // Clear temporary memory
@@ -89,14 +90,14 @@ router.delete(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    await memory.clearMessages(sessionId, userId);
+    const tempMemory = getTemporaryMemory();
+    await tempMemory.clearMessages(sessionId, userId);
 
     res.json({
       success: true,
       message: 'Temporary memory cleared',
     });
-  })
+  }),
 );
 
 // Permanent Memory Routes
@@ -106,7 +107,8 @@ router.get(
   '/permanent',
   asyncHandler(async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { page, pageSize, agentId, isArchived, startDate, endDate } = req.query;
+    const { page, pageSize, agentId, isArchived, startDate, endDate } =
+      req.query;
 
     if (!userId) {
       return res.status(401).json({
@@ -115,8 +117,8 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const conversations = await memory.listConversations(userId, {
+    const permanentMemory = getPermanentMemory();
+    const conversations = await permanentMemory.listConversations(userId, {
       page: page ? parseInt(page as string) : 1,
       pageSize: pageSize ? parseInt(pageSize as string) : 20,
       agentId: agentId as string,
@@ -129,7 +131,7 @@ router.get(
       success: true,
       data: conversations,
     });
-  })
+  }),
 );
 
 // Get conversation
@@ -146,8 +148,8 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const conversation = await memory.getConversation(id, userId);
+    const permanentMemory = getPermanentMemory();
+    const conversation = await permanentMemory.getConversation(id);
 
     if (!conversation || conversation.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -160,7 +162,7 @@ router.get(
       success: true,
       data: conversation,
     });
-  })
+  }),
 );
 
 // Get conversation messages
@@ -178,8 +180,8 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const conversation = await memory.getConversation(id, userId);
+    const permanentMemory = getPermanentMemory();
+    const conversation = await permanentMemory.getConversation(id);
     if (!conversation || conversation.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
@@ -187,7 +189,7 @@ router.get(
       });
     }
 
-    const messages = await memory.getConversationMessages(conversation, {
+    const messages = await permanentMemory.getMessages(id, {
       page: page ? parseInt(page as string) : 1,
       pageSize: pageSize ? parseInt(pageSize as string) : 50,
       roles: roles ? ((roles as string).split(',') as any) : undefined,
@@ -197,7 +199,7 @@ router.get(
       success: true,
       data: messages,
     });
-  })
+  }),
 );
 
 // Create conversation
@@ -205,7 +207,8 @@ router.post(
   '/permanent',
   asyncHandler(async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { sessionId, agentId, modelId, modelProvider, title, tags } = req.body;
+    const { sessionId, agentId, modelId, modelProvider, title, tags } =
+      req.body;
 
     if (!userId) {
       return res.status(401).json({
@@ -214,8 +217,8 @@ router.post(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const conversation = await memory.createConversation({
+    const permanentMemory = getPermanentMemory();
+    const conversation = await permanentMemory.createConversation({
       userId,
       sessionId,
       agentId: agentId || 'default',
@@ -230,7 +233,7 @@ router.post(
       success: true,
       data: conversation,
     });
-  })
+  }),
 );
 
 // Update conversation
@@ -248,8 +251,8 @@ router.put(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const existing = await memory.getConversation(id, userId);
+    const permanentMemory = getPermanentMemory();
+    const existing = await permanentMemory.getConversation(id);
     if (!existing || existing.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
@@ -257,7 +260,7 @@ router.put(
       });
     }
 
-    const conversation = await memory.updateConversation(id, userId, {
+    const conversation = await permanentMemory.updateConversation(id, {
       title,
       tags,
       isArchived,
@@ -274,7 +277,7 @@ router.put(
       success: true,
       data: conversation,
     });
-  })
+  }),
 );
 
 // Delete conversation
@@ -291,8 +294,8 @@ router.delete(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const existing = await memory.getConversation(id, userId);
+    const permanentMemory = getPermanentMemory();
+    const existing = await permanentMemory.getConversation(id);
     if (!existing || existing.userId !== userId) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
@@ -300,7 +303,7 @@ router.delete(
       });
     }
 
-    const deleted = await memory.deleteConversation(id, userId);
+    const deleted = await permanentMemory.deleteConversation(id);
 
     if (!deleted) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -313,7 +316,7 @@ router.delete(
       success: true,
       message: 'Conversation deleted',
     });
-  })
+  }),
 );
 
 // Search conversations
@@ -340,17 +343,21 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const results = await memory.searchConversations(userId, q as string, {
-      page: page ? parseInt(page as string) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string) : 20,
-    });
+    const permanentMemory = getPermanentMemory();
+    const results = await permanentMemory.searchConversations(
+      userId,
+      q as string,
+      {
+        page: page ? parseInt(page as string) : 1,
+        pageSize: pageSize ? parseInt(pageSize as string) : 20,
+      },
+    );
 
     res.json({
       success: true,
       data: results,
     });
-  })
+  }),
 );
 
 // Search messages
@@ -377,8 +384,8 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const results = await memory.searchMessages(userId, q as string, {
+    const permanentMemory = getPermanentMemory();
+    const results = await permanentMemory.searchMessages(userId, q as string, {
       page: page ? parseInt(page as string) : 1,
       pageSize: pageSize ? parseInt(pageSize as string) : 20,
     });
@@ -387,7 +394,7 @@ router.get(
       success: true,
       data: results,
     });
-  })
+  }),
 );
 
 // Get memory stats
@@ -403,14 +410,14 @@ router.get(
       });
     }
 
-    const memory = getServerMemoryOperations('memory-routes');
-    const stats = await memory.stats(userId);
+    const permanentMemory = getPermanentMemory();
+    const stats = await permanentMemory.getConversationStats(userId);
 
     res.json({
       success: true,
       data: stats,
     });
-  })
+  }),
 );
 
 export default router;

@@ -25,7 +25,5 @@ export default defineConfig({
   test: {
     include: ['packages/**/*.test.ts'],
     environment: 'node',
-    // Real local transports and native-store setup can cross the 5s Vitest default on Node 18.
-    testTimeout: 10_000,
   },
 });

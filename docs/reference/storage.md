@@ -30,9 +30,10 @@ const storage = createLocalStorageBackbone({
 `SQLiteEventStore` also supports trace exchange as JSONL:
 
 ```ts
-const count = await storage.eventStore.exportJsonl('./data/runtime/events/run_1.events.jsonl', {
-  runId: 'run_1',
-});
+const count = await storage.eventStore.exportJsonl(
+  './data/runtime/events/run_1.events.jsonl',
+  { runId: 'run_1' }
+);
 
 await storage.eventStore.importJsonl('./data/runtime/events/run_1.events.jsonl');
 ```
@@ -75,22 +76,6 @@ const kafka = createKafkaStorageProfile({ deployment: 'self_hosted' });
 const qdrant = createQdrantStorageProfile({ host: 'localhost', port: 6333 });
 const pinecone = createPineconeStorageProfile();
 ```
-
-## Storage Recovery Contract
-
-`classifyStorageFailure(error, context)` normalizes relational, document, event, object, vector,
-lease, and transaction failures into `RecoveryFailure`. The context declares the operation,
-provider, role, engine, resource key, expected/observed revision, idempotency key, and any known
-side-effect state. The classifier recognizes authentication/authorization/policy failures,
-timeouts, rate limits, capacity limits, revision/CAS/ETag/deadlock/lease conflicts, unavailable
-dependencies, and corruption or checksum invariants.
-
-Storage mutations default to `sideEffectState: "unknown"` unless a durable receipt or the caller
-proves `not_started` or `committed`. `adviseStorageRecovery()` therefore requires receipt,
-transaction, lease, revision, or idempotency reconciliation before replaying ambiguous writes.
-Known committed mutations use a declared compensation or human review; integrity failures are
-quarantined and derived caches are invalidated. Read-only operations may retry within the shared
-FSM circuit budget and may use only a replica with compatible consistency and durability.
 
 ## Configuration Taxonomy
 

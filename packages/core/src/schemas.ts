@@ -82,7 +82,6 @@ export const versionedSpecSchema = z.object({
 export const specRefSchema = z.object({
   id: z.string().min(1),
   version: z.string().min(1).optional(),
-  revision: z.string().min(1).optional(),
 }) satisfies ZodType<SpecRef>;
 
 export const specMetadataSchema = z.object({
@@ -125,9 +124,6 @@ export const timeoutPolicySpecSchema = z.object({
 export const retryPolicySpecSchema = z.object({
   maxAttempts: z.number().int().positive(),
   backoffMs: z.number().int().nonnegative().optional(),
-  maxBackoffMs: z.number().int().nonnegative().optional(),
-  jitterRatio: z.number().min(0).max(1).optional(),
-  maxElapsedMs: z.number().int().positive().optional(),
   retryableCodes: z.array(z.string()).optional(),
 }) satisfies ZodType<RetryPolicySpec>;
 

@@ -1,5 +1,4 @@
 import { validateDomainPackSpec } from '@hypha/domain';
-import { validateFSMProcessSpec } from '@hypha/fsm';
 import { getEventRuntime } from '../../services/EventRuntime';
 import { normalizeWorkflowExecutionContext } from './context';
 import { WorkflowEngine } from './WorkflowEngine';
@@ -110,34 +109,6 @@ describe('WorkflowEngine conditional execution', () => {
       defaultWorkflowRef: 'runtime-contract',
     });
     expect(runtimeSpec.fsm.initialState).toBe('prepare');
-  });
-
-  it('deduplicates equivalent branch and default FSM transitions', () => {
-    const workflow: WorkflowDefinition = {
-      name: 'runtime-duplicate-transition',
-      version: '1.0.0',
-      stages: [
-        {
-          id: 'gate',
-          type: 'conditional',
-          next: 'end',
-          branches: [
-            { condition: 'true', then: 'execute' },
-            { condition: 'false', then: 'end' },
-          ],
-        },
-        { id: 'execute', type: 'tool-call', next: 'end' },
-      ],
-    };
-
-    const { fsm } = getEventRuntime().createRuntimeSpecFromWorkflow(workflow);
-
-    expect(() => validateFSMProcessSpec(fsm)).not.toThrow();
-    expect(
-      fsm.transitions.filter(
-        (transition) => transition.from === 'gate' && transition.to === 'Completed'
-      )
-    ).toHaveLength(1);
   });
 });
 

@@ -1,8 +1,6 @@
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
-import { LocalWorkspaceRuntime } from '@hypha/adapters-local';
 import FilesystemTool, { type FilesystemToolConfig } from './FilesystemTool';
 
 describe('FilesystemTool', () => {
@@ -24,15 +22,8 @@ describe('FilesystemTool', () => {
         maxOutputBytes: 8192,
       },
     };
-    const workspace = new LocalWorkspaceRuntime(config);
-    await workspace.initialize();
-    tool = new FilesystemTool(workspace, config);
-  });
-
-  it('keeps process and filesystem implementations outside the Tool handler', () => {
-    const source = fsSync.readFileSync(path.join(__dirname, 'FilesystemTool.ts'), 'utf-8');
-    expect(source).not.toMatch(/child_process|fs\/promises|from ['"]fs['"]/);
-    expect(source).toContain('WorkspaceRuntimePort');
+    tool = new FilesystemTool(config);
+    await tool.onLoad();
   });
 
   afterEach(async () => {
@@ -64,13 +55,13 @@ describe('FilesystemTool', () => {
   it('writes executable files and runs them without shell argument expansion', async () => {
     const write = await tool.execute({
       operation: 'write',
-      path: 'workspace/bin/print-arg.js',
-      content: 'process.stdout.write(process.argv[2]);\n',
+      path: 'workspace/bin/print-arg.sh',
+      content: '#!/bin/sh\nprintf "%s" "$1"\n',
       executable: true,
     });
     const execute = await tool.execute({
       operation: 'execute',
-      path: 'workspace/bin/print-arg.js',
+      path: 'workspace/bin/print-arg.sh',
       args: ['hypha; echo unsafe'],
       cwd: 'workspace',
     });
@@ -85,15 +76,9 @@ describe('FilesystemTool', () => {
   it('rejects symlinks that escape configured read paths', async () => {
     const outsideFile = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(outsideFile, 'secret', 'utf-8');
-    const linkPath = path.join(root, process.platform === 'win32' ? 'escape' : 'escape.txt');
-    const requestedPath = process.platform === 'win32' ? 'escape/secret.txt' : 'escape.txt';
-    if (process.platform === 'win32') {
-      await fs.symlink(outsideRoot, linkPath, 'junction');
-    } else {
-      await fs.symlink(outsideFile, linkPath);
-    }
+    await fs.symlink(outsideFile, path.join(root, 'escape.txt'));
 
-    const result = await tool.execute({ operation: 'read', path: requestedPath });
+    const result = await tool.execute({ operation: 'read', path: 'escape.txt' });
 
     expect(result).toMatchObject({ success: false });
     expect(result.error).toContain('outside configured read paths');
