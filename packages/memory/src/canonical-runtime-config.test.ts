@@ -132,7 +132,6 @@ describe('canonical Memory runtime configuration', () => {
     });
     await expect(runtime.provider.health()).resolves.toMatchObject({ status: 'healthy' });
     expect(resolveReference.mock.calls.map(([reference]) => reference).sort()).toEqual([
-      'memory.artifact.local',
       'memory.connection.native-default',
       'memory.embedding.local',
       'memory.store.outbox.mongodb',

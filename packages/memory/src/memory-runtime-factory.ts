@@ -82,6 +82,17 @@ export const memoryRuntimeConfigSchema: ZodType<MemoryRuntimeConfig> = z
           message: 'Memory profile managementProviderRef must select its management spec.',
         });
       }
+      if (entry.management.type === 'native') {
+        for (const mismatch of nativeReferenceMismatches(entry.profile, entry.management.config)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['profiles', key, 'management', 'config', mismatch.key],
+            message:
+              `Native Memory ${mismatch.key} must match the profile dependency ` +
+              `${mismatch.expected ?? '(undeclared)'}; received ${mismatch.actual}.`,
+          });
+        }
+      }
       const secretPath = findInlineSecret(entry.management.config);
       if (secretPath) {
         context.addIssue({
@@ -429,6 +440,38 @@ function sameProviderRef(
     (ref.version === undefined || ref.version === provider.version) &&
     (ref.revision === undefined || ref.revision === provider.revision)
   );
+}
+
+function nativeReferenceMismatches(
+  profile: MemoryProfileSpec,
+  config: Record<string, unknown> | undefined
+): Array<{ key: string; expected: string | undefined; actual: string }> {
+  if (!config) return [];
+  const expectedByKey: Record<string, string | undefined> = {
+    workingStoreRef: profile.workingStoreRef?.id,
+    recordStoreRef: profile.recordStoreRef.id,
+    artifactStoreRef: profile.artifactStoreRef?.id,
+    embeddingProviderRef: profile.embeddingProviderRef?.id,
+  };
+  const mismatches: Array<{ key: string; expected: string | undefined; actual: string }> = [];
+  for (const [key, expected] of Object.entries(expectedByKey)) {
+    const actual = config[key];
+    if (typeof actual === 'string' && actual !== expected) {
+      mismatches.push({ key, expected, actual });
+    }
+  }
+  const vectorStoreRef = config.vectorStoreRef;
+  if (
+    typeof vectorStoreRef === 'string' &&
+    !(profile.vectorStoreRefs ?? []).some((reference) => reference.id === vectorStoreRef)
+  ) {
+    mismatches.push({
+      key: 'vectorStoreRef',
+      expected: profile.vectorStoreRefs?.map((reference) => reference.id).join(', '),
+      actual: vectorStoreRef,
+    });
+  }
+  return mismatches;
 }
 
 function validateDeclaredCapabilities(

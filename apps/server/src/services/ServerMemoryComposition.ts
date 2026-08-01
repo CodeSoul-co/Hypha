@@ -376,28 +376,31 @@ async function createProductionMemoryRuntime(eventStore: EventStore): Promise<Me
   const loaded = await loader.load(document);
   const selected = loaded.config.profiles[loaded.config.activeProfile];
   const redis = getRedisClient();
-  if (selected.management.type === 'native' && !redis) {
+  if (
+    selected.management.type === 'native' &&
+    selected.profile.workingStoreRef?.id === 'memory.store.working.redis' &&
+    !redis
+  ) {
     throw memoryError(
       'MEMORY_STORE_UNAVAILABLE',
       'The active Native Memory profile requires initialized Redis storage.'
     );
   }
-  const registry = new MemoryManagementProviderRegistry();
-  if (redis) {
-    registry.register(
+  const registry = new MemoryManagementProviderRegistry()
+    .register(
       createNativeMemoryManagementProviderFactory({
         structuredStore,
-        redisClient: redis as unknown as RedisLikeWorkingMemoryClient,
+        structuredStoreId: 'memory.store.record.mongodb',
+        redisClient: redis as unknown as RedisLikeWorkingMemoryClient | undefined,
         embeddingProvider: new LocalHashEmbeddingProvider(),
+        embeddingProviderId: 'memory.embedding.local',
         vectorStores: [vectorStore],
         ownerId: `server:${process.pid}`,
         workingMemoryNamespace: 'hypha:memory:working',
         onIndexEvent: (event) => serverMemoryOperationalMetrics.observeIndexEvent(event),
         onLifecycleEvent: (event) => serverMemoryOperationalMetrics.observeLifecycleEvent(event),
       })
-    );
-  }
-  registry
+    )
     .register(createMem0OssMemoryProviderFactory())
     .register(createHindsightLocalMemoryProviderFactory())
     .register(createMem0PlatformMemoryProviderFactory())
