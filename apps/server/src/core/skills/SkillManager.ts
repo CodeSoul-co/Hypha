@@ -1,14 +1,18 @@
 import path from 'path';
 import os from 'os';
+import syncFs from 'fs';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import {
   DefaultSkillPolicy,
   SkillContextLoader,
+  HttpsSkillRegistryClient,
   SkillRegistry,
   SkillSelector,
   loadSkillMarkdownFile,
+  parseSkillMarkdown,
   type LoadedSkillContext,
+  type SignedSkillRegistryEntry,
   type SkillRef,
   type SkillResolutionContext,
   type SkillSpec,
@@ -49,6 +53,28 @@ export interface ResolveServerSkillsInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface ServerRemoteSkillRegistryRef {
+  id: string;
+  version: string;
+  required: boolean;
+}
+
+export interface ServerRemoteSkillRegistryClient {
+  resolve(skillId: string, version: string): Promise<SignedSkillRegistryEntry>;
+  download(entry: SignedSkillRegistryEntry): Promise<{
+    entry: SignedSkillRegistryEntry;
+    content: Uint8Array;
+  }>;
+}
+
+export interface ServerRemoteSkillRegistryBinding {
+  client: ServerRemoteSkillRegistryClient;
+  refs: ServerRemoteSkillRegistryRef[];
+  required?: boolean;
+  maxSkills?: number;
+  maxDependencyDepth?: number;
+}
+
 /**
  * Server composition adapter for the package-level Skill pipeline.
  * It owns no second selector or execution loop.
@@ -57,9 +83,11 @@ export class SkillManager {
   private skills = new Map<string, RegisteredSkill>();
   private registry = new SkillRegistry();
   private readonly dirs: string[];
+  private readonly remoteRegistry?: ServerRemoteSkillRegistryBinding;
 
-  constructor(opts?: { dirs?: string[] }) {
-    const configDirs = getConfig().skills.dirs;
+  constructor(opts?: { dirs?: string[]; remoteRegistry?: ServerRemoteSkillRegistryBinding }) {
+    const skillConfig = getConfig().skills;
+    const configDirs = skillConfig.dirs;
     const separator = process.platform === 'win32' ? ';' : ':';
     const envDirs = (process.env.HYPHA_SKILLS_DIR || '')
       .split(separator)
@@ -69,10 +97,16 @@ export class SkillManager {
     // Loading is low-to-high precedence: builtins are fallback, installed user Skills win.
     this.dirs = Array.from(
       new Set(
-        [DEFAULT_BUILTIN_DIR, ...(configDirs ?? []), ...envDirs, ...(opts?.dirs ?? []), skillDataRoot()]
-          .map((directory) => path.resolve(directory.replace(/^~/, home)))
+        [
+          DEFAULT_BUILTIN_DIR,
+          ...(configDirs ?? []),
+          ...envDirs,
+          ...(opts?.dirs ?? []),
+          skillDataRoot(),
+        ].map((directory) => path.resolve(directory.replace(/^~/, home)))
       )
     );
+    this.remoteRegistry = opts?.remoteRegistry ?? createRemoteRegistryBinding(skillConfig);
   }
 
   getDirs(): string[] {
@@ -107,9 +141,11 @@ export class SkillManager {
         }
       }
     }
+    await this.loadRemoteSkills();
     logger.info('SkillManager initialized with package Skill registry', {
       skillCount: this.skills.size,
       dirs: this.dirs,
+      remoteRegistryEnabled: this.remoteRegistry !== undefined,
     });
   }
 
@@ -137,6 +173,117 @@ export class SkillManager {
         shouldContinue: false,
         error: `Skill ${spec.id} is procedural context and cannot execute as a hidden workflow handler.`,
       }),
+    });
+  }
+
+  private async loadRemoteSkills(): Promise<void> {
+    if (!this.remoteRegistry) return;
+    const loaded = new Map<string, SkillSpec>();
+    for (const ref of this.remoteRegistry.refs) {
+      try {
+        const staged = new Map<string, SkillSpec>();
+        await this.loadRemoteSkillTree(ref.id, ref.version, staged, [], 0);
+        for (const [key, spec] of staged) {
+          const conflicting = [...loaded.values()].find(
+            (candidate) => candidate.id === spec.id && candidate.version !== spec.version
+          );
+          if (conflicting) {
+            throw new Error(
+              `Remote Skill version conflict: ${spec.id}@${conflicting.version} and ${spec.id}@${spec.version}`
+            );
+          }
+          if (loaded.size >= (this.remoteRegistry.maxSkills ?? 128) && !loaded.has(key)) {
+            throw new Error('Remote Skill startup exceeded its configured package limit');
+          }
+          loaded.set(key, spec);
+        }
+      } catch (error) {
+        if (this.remoteRegistry.required || ref.required) throw error;
+        logger.warn('Optional remote Skill failed closed during startup', {
+          skillId: ref.id,
+          version: ref.version,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    for (const spec of loaded.values()) {
+      this.registerPackageSkill(spec, `remote-registry:${spec.id}@${spec.version}`);
+    }
+  }
+
+  private async loadRemoteSkillTree(
+    skillId: string,
+    version: string,
+    staged: Map<string, SkillSpec>,
+    stack: string[],
+    depth: number
+  ): Promise<void> {
+    const binding = this.remoteRegistry;
+    if (!binding) return;
+    const key = `${skillId}@${version}`;
+    if (staged.has(key)) return;
+    if (stack.includes(key)) {
+      throw new Error(`Remote Skill dependency cycle detected: ${[...stack, key].join(' -> ')}`);
+    }
+    if (depth > (binding.maxDependencyDepth ?? 8)) {
+      throw new Error(`Remote Skill dependency depth exceeded for ${key}`);
+    }
+    if (staged.size >= (binding.maxSkills ?? 128)) {
+      throw new Error('Remote Skill startup exceeded its configured package limit');
+    }
+
+    const entry = await binding.client.resolve(skillId, version);
+    const bundle = await binding.client.download(entry);
+    if (bundle.entry.manifest.skillId !== skillId || bundle.entry.manifest.version !== version) {
+      throw new Error(`Remote Skill bundle identity does not match ${key}`);
+    }
+    const raw = decodeRemoteSkill(bundle.content, key);
+    const parsed = parseSkillMarkdown(raw, `${skillId}/${version}/SKILL.md`);
+    if (parsed.spec.id !== skillId || parsed.spec.version !== version) {
+      throw new Error(`Remote Skill content identity does not match signed manifest ${key}`);
+    }
+    if (
+      (parsed.spec.references?.length ?? 0) > 0 ||
+      (parsed.spec.scripts?.length ?? 0) > 0 ||
+      (parsed.spec.assets?.length ?? 0) > 0
+    ) {
+      throw new Error(
+        `Remote Skill ${key} declares assets outside the verified single-file bundle`
+      );
+    }
+
+    const nextStack = [...stack, key];
+    for (const dependency of entry.manifest.dependencies) {
+      const dependencyEntry = await binding.client.resolve(dependency.id, dependency.version);
+      if (dependencyEntry.manifest.contentSha256 !== dependency.contentSha256) {
+        throw new Error(
+          `Remote Skill dependency lock mismatch: ${dependency.id}@${dependency.version}`
+        );
+      }
+      await this.loadRemoteSkillTree(
+        dependency.id,
+        dependency.version,
+        staged,
+        nextStack,
+        depth + 1
+      );
+    }
+
+    const { filePath: _localFilePath, ...parsedProvenance } = parsed.spec.provenance ?? {};
+    staged.set(key, {
+      ...parsed.spec,
+      trustLevel: 'trusted',
+      provenance: {
+        ...parsedProvenance,
+        source: 'signed-remote-registry',
+        publisherId: entry.manifest.publisherId,
+        contentSha256: entry.manifest.contentSha256,
+        registryRevision: entry.manifest.revision,
+        transparencyLogId: entry.transparency.logId,
+        transparencyLogIndex: entry.transparency.logIndex,
+        dependencyLocks: entry.manifest.dependencies,
+        sbom: entry.manifest.sbom,
+      },
     });
   }
 
@@ -213,6 +360,68 @@ export class SkillManager {
     const registry = new SkillRegistry();
     for (const skill of this.skills.values()) registry.register(skill.spec);
     this.registry = registry;
+  }
+}
+
+function createRemoteRegistryBinding(
+  config: ReturnType<typeof getConfig>['skills']
+): ServerRemoteSkillRegistryBinding | undefined {
+  const remote = config.remoteRegistry;
+  if (!remote.enabled) return undefined;
+  if (!remote.endpoint) {
+    throw new Error('skills.remoteRegistry.endpoint is required when the registry is enabled');
+  }
+  if (remote.required && remote.refs.length === 0) {
+    throw new Error('skills.remoteRegistry.refs cannot be empty when the registry is required');
+  }
+  if (remote.required && remote.authorizationEnv && !process.env[remote.authorizationEnv]?.trim()) {
+    throw new Error(
+      `Required remote Skill registry credential is missing: ${remote.authorizationEnv}`
+    );
+  }
+  const publisherKeys = readPublicKeyFiles(remote.publisherKeyFiles);
+  const transparencyLogKeys = readPublicKeyFiles(remote.transparencyLogKeyFiles);
+  const client = new HttpsSkillRegistryClient({
+    endpoint: remote.endpoint,
+    publisherKeys,
+    transparencyLogKeys,
+    tenantId: remote.tenantId,
+    artifactOrigins: remote.artifactOrigins,
+    maxMetadataBytes: remote.maxMetadataBytes,
+    maxBundleBytes: remote.maxBundleBytes,
+    timeoutMs: remote.timeoutMs,
+    maxAttempts: remote.maxAttempts,
+    authorization: remote.authorizationEnv
+      ? () => process.env[remote.authorizationEnv!]?.trim() ?? ''
+      : undefined,
+  });
+  return {
+    client,
+    refs: remote.refs,
+    required: remote.required,
+    maxSkills: remote.maxSkills,
+    maxDependencyDepth: remote.maxDependencyDepth,
+  };
+}
+
+function readPublicKeyFiles(files: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(files).map(([id, filePath]) => {
+      const resolved = path.resolve(filePath.replace(/^~/, os.homedir()));
+      const stat = syncFs.statSync(resolved);
+      if (!stat.isFile() || stat.size > 64 * 1024) {
+        throw new Error(`Remote Skill public key file is invalid: ${id}`);
+      }
+      return [id, syncFs.readFileSync(resolved, 'utf8')];
+    })
+  );
+}
+
+function decodeRemoteSkill(content: Uint8Array, key: string): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(content).replace(/^\uFEFF/u, '');
+  } catch {
+    throw new Error(`Remote Skill ${key} is not valid UTF-8`);
   }
 }
 
