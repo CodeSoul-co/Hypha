@@ -634,6 +634,25 @@ skills:
   dirs:
     - "~/.hypha/skills" # user-installed skills
   autoLoad: true
+  # Signed remote registries are opt-in. Configure only public-key file paths
+  # here; bearer credentials are resolved from authorizationEnv on every
+  # request so token rotation does not require a Server restart.
+  remoteRegistry:
+    enabled: "${HYPHA_SKILL_REGISTRY_ENABLED:false}"
+    required: "${HYPHA_SKILL_REGISTRY_REQUIRED:false}"
+    endpoint: "${HYPHA_SKILL_REGISTRY_ENDPOINT:}"
+    tenantId: "${HYPHA_SKILL_REGISTRY_TENANT_ID:}"
+    authorizationEnv: "HYPHA_SKILL_REGISTRY_AUTHORIZATION"
+    publisherKeyFiles: {}
+    transparencyLogKeyFiles: {}
+    artifactOrigins: []
+    refs: []
+    timeoutMs: 10000
+    maxAttempts: 3
+    maxMetadataBytes: 262144
+    maxBundleBytes: 2097152
+    maxSkills: 128
+    maxDependencyDepth: 8
 
 tools:
   # Profiles contain only declarative references. Executable plugin/execution

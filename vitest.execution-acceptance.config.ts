@@ -1,5 +1,24 @@
+import path from 'node:path';
 import { configDefaults, defineConfig } from 'vitest/config';
-import path from 'path';
+
+const acceptanceSuites = {
+  postgres: ['packages/adapters-local/src/postgres-execution-store.real.test.ts'],
+  s3: ['packages/adapters-local/src/s3-execution-artifact-store.real.test.ts'],
+  docker: [
+    'packages/adapters-local/src/docker-container-cleanup.real.test.ts',
+    'packages/adapters-local/src/docker-execution-coordinator.real.test.ts',
+    'packages/adapters-local/src/docker-sandbox-provider.real.test.ts',
+  ],
+  'docker-restart': ['packages/adapters-local/src/docker-daemon-restart-recovery.real.test.ts'],
+  remote: ['packages/adapters-local/src/remote-sandbox-provider.real.test.ts'],
+} as const;
+
+const suite = process.env.HYPHA_EXECUTION_ACCEPTANCE_SUITE;
+if (!suite || !Object.hasOwn(acceptanceSuites, suite)) {
+  throw new Error(
+    `HYPHA_EXECUTION_ACCEPTANCE_SUITE must be one of: ${Object.keys(acceptanceSuites).join(', ')}`
+  );
+}
 
 export default defineConfig({
   resolve: {
@@ -22,14 +41,12 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/**/*.test.ts'],
-    // External provider suites have their own required, zero-skip release gates.
-    // Keeping them out of the deterministic package-contract project prevents
-    // a missing Docker daemon or credential from being reported as a skipped
-    // package contract (or from running a top-level fixture hook by accident).
-    exclude: [...configDefaults.exclude, '**/*.real.test.ts'],
+    include: acceptanceSuites[suite as keyof typeof acceptanceSuites],
+    exclude: configDefaults.exclude,
     environment: 'node',
-    // Real local transports and native-store setup can cross the 5s Vitest default on Node 18.
-    testTimeout: 10_000,
+    fileParallelism: false,
+    maxWorkers: 1,
+    testTimeout: 120_000,
+    hookTimeout: 120_000,
   },
 });
