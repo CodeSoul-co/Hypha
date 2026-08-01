@@ -35,7 +35,7 @@ Local runtime records, indexes, artifacts, and detailed system logs are written 
 | --------------------------- | -------------------------------------------------------------------------------- |
 | `storage.document.mongodb`  | MongoDB permanent conversation memory and user-owned records.                    |
 | `storage.messaging.redis`   | Redis temporary memory, streams, cache, and queue-ready messaging.               |
-| `storage.messaging.kafka`   | Optional Kafka queue/pub-sub integration point.                                  |
+| `storage.messaging.kafka`   | Extension contract; not composed by the stock Server.                            |
 | `storage.relational.sqlite` | `data/runtime/events/` and `data/runtime/structured/` with SQLite/JSON fallback. |
 | `storage.vector.local`      | `data/storage/vector/` JSON-backed semantic index.                               |
 | `storage.artifacts.local`   | `data/storage/artifacts/` filesystem-backed artifact store.                      |
@@ -216,7 +216,7 @@ REDIS_DEPLOYMENT=cloud
 REDIS_TLS=true
 ```
 
-Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` but disabled by default. Enable them through `.env` only when a concrete adapter is available for the deployment.
+Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` as extension contracts and disabled by default. The stock Server rejects attempts to enable them. A deployment that supplies one must register its concrete adapter, lifecycle cleanup, readiness probe, failure-injection tests, and real-environment acceptance in the same integration before removing that guard.
 
 Do not commit `.env`, `data/`, root `logs/`, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 
