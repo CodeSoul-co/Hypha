@@ -199,30 +199,36 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         existing,
         this.now()
       );
+      const targetVectorStoreIds = this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [];
+      const indexJobId = `${request.operationId}:${record.versionId}:index`;
       await this.persistence.transaction(async ({ recordStore, outboxStore }) => {
         if (record.revision === 1) await recordStore.create(record);
         else await recordStore.createVersion(record, record.revision - 1);
-        await outboxStore.enqueue({
-          id: `${request.operationId}:${record.versionId}:index`,
-          operationId: request.operationId,
-          memoryId: record.id,
-          memoryVersionId: record.versionId,
-          memoryRevision: record.revision,
-          scopeHash: record.scopeHash,
-          action: 'upsert',
-          targetVectorStoreIds: this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [],
-          state: 'pending',
-          attempts: 0,
-          availableAt: this.now(),
-          createdAt: this.now(),
-          updatedAt: this.now(),
-        });
+        if (targetVectorStoreIds.length > 0) {
+          await outboxStore.enqueue({
+            id: indexJobId,
+            operationId: request.operationId,
+            memoryId: record.id,
+            memoryVersionId: record.versionId,
+            memoryRevision: record.revision,
+            scopeHash: record.scopeHash,
+            action: 'upsert',
+            targetVectorStoreIds,
+            state: 'pending',
+            attempts: 0,
+            availableAt: this.now(),
+            createdAt: this.now(),
+            updatedAt: this.now(),
+          });
+        }
       });
       const result: ManagedMemoryWriteResult = {
         operationId: request.operationId,
         status: 'committed',
         records: [record],
-        indexJobs: [{ id: `${request.operationId}:${record.versionId}:index`, state: 'pending' }],
+        ...(targetVectorStoreIds.length > 0
+          ? { indexJobs: [{ id: indexJobId, state: 'pending' as const }] }
+          : {}),
       };
       if (key) await this.idempotencyStore.set(scopeHash, key, result);
       await this.trace('memory.write.committed', request.operationId, request.scope, {
@@ -328,29 +334,34 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
       ],
     };
     const indexJobId = `${request.operationId}:${updated.versionId}:index`;
+    const targetVectorStoreIds = this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [];
     await this.persistence.transaction(async ({ recordStore, outboxStore }) => {
       await recordStore.createVersion(updated, request.expectedRevision!);
-      await outboxStore.enqueue({
-        id: indexJobId,
-        operationId: request.operationId,
-        memoryId: updated.id,
-        memoryVersionId: updated.versionId,
-        memoryRevision: updated.revision,
-        scopeHash,
-        action: 'upsert',
-        targetVectorStoreIds: this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [],
-        state: 'pending',
-        attempts: 0,
-        availableAt: this.now(),
-        createdAt: this.now(),
-        updatedAt: this.now(),
-      });
+      if (targetVectorStoreIds.length > 0) {
+        await outboxStore.enqueue({
+          id: indexJobId,
+          operationId: request.operationId,
+          memoryId: updated.id,
+          memoryVersionId: updated.versionId,
+          memoryRevision: updated.revision,
+          scopeHash,
+          action: 'upsert',
+          targetVectorStoreIds,
+          state: 'pending',
+          attempts: 0,
+          availableAt: this.now(),
+          createdAt: this.now(),
+          updatedAt: this.now(),
+        });
+      }
     });
     const result: ManagedMemoryWriteResult = {
       operationId: request.operationId,
       status: 'committed',
       records: [updated],
-      indexJobs: [{ id: indexJobId, state: 'pending' }],
+      ...(targetVectorStoreIds.length > 0
+        ? { indexJobs: [{ id: indexJobId, state: 'pending' as const }] }
+        : {}),
     };
     if (request.idempotencyKey) {
       await this.idempotencyStore.set(scopeHash, request.idempotencyKey, result);
@@ -370,6 +381,7 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
         (record) => record.id
       );
     const deleted: string[] = [];
+    const targetVectorStoreIds = this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [];
     for (const id of targets) {
       const current = await this.recordStore.get(id, request.scope);
       if (!current) continue;
@@ -389,21 +401,23 @@ export class NativeMemoryManagementProvider implements MemoryManagementProvider 
           versionId = tombstone.versionId;
           memoryRevision = tombstone.revision;
         }
-        await outboxStore.enqueue({
-          id: `${request.operationId}:${id}:delete`,
-          operationId: request.operationId,
-          memoryId: id,
-          memoryVersionId: versionId,
-          memoryRevision,
-          scopeHash: current.scopeHash,
-          action: 'delete',
-          targetVectorStoreIds: this.options.profile.vectorStoreRefs?.map((ref) => ref.id) ?? [],
-          state: 'pending',
-          attempts: 0,
-          availableAt: this.now(),
-          createdAt: this.now(),
-          updatedAt: this.now(),
-        });
+        if (targetVectorStoreIds.length > 0) {
+          await outboxStore.enqueue({
+            id: `${request.operationId}:${id}:delete`,
+            operationId: request.operationId,
+            memoryId: id,
+            memoryVersionId: versionId,
+            memoryRevision,
+            scopeHash: current.scopeHash,
+            action: 'delete',
+            targetVectorStoreIds,
+            state: 'pending',
+            attempts: 0,
+            availableAt: this.now(),
+            createdAt: this.now(),
+            updatedAt: this.now(),
+          });
+        }
       });
       deleted.push(id);
     }
