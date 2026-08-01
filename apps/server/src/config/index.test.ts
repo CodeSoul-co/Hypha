@@ -20,6 +20,11 @@ const trackedEnv = [
   'HYPHA_STORAGE_ARTIFACT_ROOT',
   'HYPHA_SYSTEM_LOG_PATH',
   'KAFKA_ENABLED',
+  'POSTGRES_ENABLED',
+  'QDRANT_ENABLED',
+  'CHROMA_ENABLED',
+  'PINECONE_ENABLED',
+  'S3_ARTIFACTS_ENABLED',
   'HYPHA_INFERENCE_DEFAULT_BACKEND',
   'HYPHA_INFERENCE_RUNTIME_PROVIDER',
   'HYPHA_LOCAL_INFERENCE_ENABLED',
@@ -81,13 +86,12 @@ describe('configuration storage taxonomy', () => {
     process.env.HYPHA_STORAGE_EVENT_DB = './data/events.test.sqlite';
     process.env.HYPHA_STORAGE_VECTOR_INDEX = './data/vectors.test.json';
     process.env.HYPHA_SYSTEM_LOG_PATH = './data/logs/test-system.log';
-    process.env.KAFKA_ENABLED = 'true';
 
     const config = reloadConfig();
 
     expect(config.storage.document.mongodb.host).toBe('mongo.local');
     expect(config.storage.messaging.redis.host).toBe('redis.local');
-    expect(config.storage.messaging.kafka.enabled).toBe(true);
+    expect(config.storage.messaging.kafka.enabled).toBe(false);
     expect(config.storage.relational.sqlite.eventDbPath).toBe('./data/events.test.sqlite');
     expect(config.storage.vector.local.path).toBe('./data/vectors.test.json');
     expect(config.logging.outputs?.[1]?.path).toBe('./data/logs/test-system.log');
@@ -123,6 +127,19 @@ describe('configuration storage taxonomy', () => {
     expect(profiles).toContain('storage.redis.messaging');
     expect(profiles).toContain('storage.sqlite.events');
     expect(profiles).toContain('storage.local-vector.semantic');
+  });
+
+  it.each([
+    ['Kafka', 'KAFKA_ENABLED'],
+    ['Postgres', 'POSTGRES_ENABLED'],
+    ['Qdrant', 'QDRANT_ENABLED'],
+    ['Chroma', 'CHROMA_ENABLED'],
+    ['Pinecone', 'PINECONE_ENABLED'],
+    ['S3 Artifact Storage', 'S3_ARTIFACTS_ENABLED'],
+  ])('rejects %s as enabled until the Server has a concrete composition', (_name, envName) => {
+    process.env[envName] = 'true';
+
+    expect(() => reloadConfig()).toThrow('Invalid configuration');
   });
 
   it('loads bounded canonical Runtime startup limits', () => {
