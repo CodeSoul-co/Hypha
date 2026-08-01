@@ -144,10 +144,12 @@ export class OllamaAdapter implements ILLMAdapter {
   }
 
   async createToolCall(messages: LLMMessage[], tools: ToolDefinition[], options?: ChatOptions): Promise<ChatResponse> {
-    // Ollama has limited tool calling support
-    // We'll simulate it with a regular chat
-    logger.warn('Ollama does not natively support tool calling. Using regular chat.');
-    return this.chat(messages, options);
+    void messages;
+    void tools;
+    void options;
+    throw new Error(
+      'Ollama tool calling is not composed by this adapter; use chat without tools or install a tool-capable provider adapter.'
+    );
   }
 
   async listModels(): Promise<ModelInfo[]> {
