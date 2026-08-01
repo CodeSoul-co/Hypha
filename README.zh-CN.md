@@ -73,11 +73,11 @@ scheduler。需要在进程重启后继续自主执行的应用必须显式装�
 
 Hypha 使用同一套 FSM 恢复契约协调 inference、tool、MCP、memory、execution、storage、消息投递、policy 与 cache 异常。参与模块按依赖顺序执行，已经完成的上游不会重复运行；系统通过稳定的 receipt、revision、hash 或 provider state 判断是否真正取得进展，而不是把再次循环视为进展。有界重试、对账、兼容 fallback、降级、补偿、人工复核、隔离、取消和失败都具有显式策略与 trace event。
 
-写入结果不确定时必须先对账再决定是否重放。可选 cache 失败时可以 bypass，但不能改变源操作结果；WorkCache 只保存具有用户作用域、与 policy/spec/provider revision 匹配并重新校验过的恢复知识，用作加速提示。Event log 与 FSM snapshot 始终是真相源。详见 [FSM 异常恢复](docs/architecture/fsm-recovery.md)。
+写入结果不确定时必须先对账再决定是否重放。可选 cache 失败时可以 bypass，但不能改变源操作结果；WorkCache 只保存与 policy/spec/provider revision 匹配并重新校验过的恢复知识，用作加速提示。Event log 与 FSM snapshot 始终是真相源。详见 [FSM 异常恢复](docs/architecture/fsm-recovery.md)。
 
 ## Inference Runtime
 
-Agent inference 由 `@hypha/inference` 提供：prompt 编译、prefix 分段、具备用户作用域与容量边界的 Plasmod cache 协调、backend 路由和统一响应。默认物理 backend 是 SGLang，同时通过同一套 backend registry 支持 vLLM、llama.cpp 和 OpenAI API。
+Agent inference 由 `@hypha/inference` 提供：prompt 编译、prefix 分段、Plasmod cache 协调、backend 路由和统一响应。默认物理 backend 是 SGLang，同时通过同一套 backend registry 支持 vLLM、llama.cpp 和 OpenAI API。
 
 默认 backend 与 endpoint 在 `config.yaml` 或 `.env` 中配置，例如 `HYPHA_INFERENCE_DEFAULT_BACKEND=sglang` 和 `SGLANG_BASE_URL=http://localhost:30000`。
 
@@ -87,17 +87,9 @@ Hypha Serving Cache 是 LLM provider 调用前后的轻量 middleware。它提�
 
 exact cache key 来自已解析的 provider、model、system 或 prefix content、messages、tools/function schema、生成参数，以及可选 scope 字段，例如 `userId`、`sessionId`、`projectId` 和 `domainPackId`。`requestId`、timestamp 和 `undefined` 值不会进入 key。
 
-通过 `HYPHA_SERVING_CACHE=memory`、`sqlite` 或 `redis` 开启；默认 `off` 保持 provider 原路径。默认策略要求 `userId`，限制 entry 大小和 store 延迟，合并同 key 的并发 miss，并且只持久化安全响应投影；streaming 始终 bypass。SQLite 使用 `HYPHA_SERVING_CACHE_SQLITE_PATH`，Redis 使用已配置的 Redis 部署。
+通过 `HYPHA_SERVING_CACHE=memory` 或 `HYPHA_SERVING_CACHE=sqlite` 开启；默认 `off` 会保持 provider 原路径。`HYPHA_SERVING_CACHE_MODE` 支持 `off`、`read`、`write` 和 `readwrite`，`HYPHA_SERVING_CACHE_TTL_MS` 控制过期时间，SQLite 文件路径由 `HYPHA_SERVING_CACHE_SQLITE_PATH` 设置。
 
 运行时 trace 可能包含 `llm.cache.lookup`、`llm.cache.hit`、`llm.cache.miss`、`llm.cache.write` 和 `llm.cache.bypass`。当前版本中 streaming request 会 bypass cache。本层不实现 semantic cache、cache tree、WorkCache 调度、provider KV cache 管理或 CPU/GPU cache migration。
-
-## WorkCache
-
-`@hypha/workcache` 是从事件流派生的类型化运行时缓存，用于复用 agent 运行过程中的 artifact。它消费现有 Hypha events，将事件映射到 `PlanTree`、`ComputationTree`、`ToolTree`、`ObservationTree`、`VerificationTree`、`MemoryTree`、`RecoveryTree` 或 `PromptPrefixTree`，并存储 `CacheBlock`，不改变 DomainPack、Session、Run 或 Event 语义。
-
-内置 Server 默认使用 `HYPHA_WORKCACHE=memory`。设为 `off` 可关闭，`sqlite` 提供本地持久化，`redis` 提供共享存储和跨实例失效。Cache key 与 block 默认按用户隔离，`unknown` validity 不会命中，store 和 WorkGraph 历史均有容量上限。`HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` 控制 prompt prefix materialization 预算。
-
-WorkCache 与 Serving Cache 分离。Serving Cache 复用 exact LLM API response；WorkCache 组织 event-derived runtime artifacts。Tool block 只允许 read-only side effect、稳定 args、permission scope 和 validity metadata。Verification block 需要严格的 source、test、environment hash。Recovery block 只是带 revision 匹配和过期时间的策略提示，不能替代 FSM、Event 或 receipt 证据。
 
 ## 受治理的 Tool 与 MCP
 

@@ -366,103 +366,25 @@ DomainPack schema, or tool/MCP execution contracts.
 
 Core exports:
 
-| Export                    | Purpose                                                                            |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| `CacheStore`              | Minimal async store interface: `get`, `set`, `delete`, `clear`.                    |
-| `CacheEntry`              | Persisted `key`, `value`, timestamps, optional metadata.                           |
-| `CacheMetadata`           | Provider/model/cache type, request hash, tool hash, prefix data.                   |
-| `CachePolicy`             | `enabled`, `mode`, TTL, error/stream/no-cache behavior.                            |
-| `ServingCacheManager`     | Key generation, lookup, expiry enforcement, and writes.                            |
-| `CachedLLMProvider`       | Provider wrapper that applies exact cache policy.                                  |
-| `PrefixCacheShapeTracker` | Compares stable prefix shape per provider/model/scope and reports changed reasons. |
-| `MemoryCacheStore`        | In-memory store for tests and local experiments.                                   |
-| `SQLiteCacheStore`        | Persistent local store backed by `cache_entries`.                                  |
+| Export                | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `CacheStore`          | Minimal async store interface: `get`, `set`, `delete`, `clear`.  |
+| `CacheEntry`          | Persisted `key`, `value`, timestamps, optional metadata.         |
+| `CacheMetadata`       | Provider/model/cache type, request hash, tool hash, prefix data. |
+| `CachePolicy`         | `enabled`, `mode`, TTL, error/stream/no-cache behavior.          |
+| `ServingCacheManager` | Key generation, lookup, expiry enforcement, and writes.          |
+| `CachedLLMProvider`   | Provider wrapper that applies exact cache policy.                |
+| `MemoryCacheStore`    | In-memory store for tests and local experiments.                 |
+| `SQLiteCacheStore`    | Persistent local store backed by `cache_entries`.                |
 
 `LLMCacheKeyInput` fields are `provider`, `model`, `messages`, optional
-`system`, optional `tools`, optional `params`, optional `cacheScope`, and
-optional `promptBlocks`. `promptBlocks` describes already-rendered stable
-prompt components such as prompt templates, system blocks, tool schemas,
-project context, DomainPack context, or memory. It is prefix metadata for
-WorkCache and does not change the exact response cache key unless the rendered
-content also changes in `system`, `messages`, `tools`, or params.
+`system`, optional `tools`, optional `params`, and optional `cacheScope`.
 `CacheScope` may include `tenantId`, `userId`, `projectId`, `sessionId`, and
 `domainPackId`.
-
-Trace payloads may include `prefixCache`, with `prefixHash`,
-`toolSchemaHash`, `domainPackHash`, `dynamicSuffixHash`,
-`stablePrefixChanged`, `dynamicSuffixChanged`, and `changedReasons`. Provider
-usage may include `cacheHitTokens` and `cacheMissTokens`; DeepSeek
-`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` and OpenAI-compatible
-`prompt_tokens_details.cached_tokens` are normalized into these fields. This is
-provider-side prefix cache observability, not a local KV cache.
 
 Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
 `llm.cache.write`, and `llm.cache.bypass`. Streaming requests always bypass
 cache in the first version.
-
-## WorkCache
-
-`@hypha/workcache` exposes an event-derived typed runtime cache. It consumes
-existing `FrameworkEvent` records and writes `CacheBlock<T>` entries into
-primary trees without changing Session, Run, Event, DomainPack, or Serving
-Cache contracts.
-
-Core exports:
-
-| Export                            | Purpose                                                                                         |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `RuntimeTypeDefinition`           | Declares source event types, work node type, primary tree, and materializer.                    |
-| `NormalizedWorkEvent`             | Source event plus normalized tree/node metadata.                                                |
-| `WorkGraphNode`, `WorkGraphEdge`  | Graph-compatible node and dependency records.                                                   |
-| `CacheBlock<T>`                   | Persisted typed artifact with source event, validity, provenance, utility, TTL, and cache key.  |
-| `CacheTree<T>`                    | Tree interface for lookup, write, invalidate, and list.                                         |
-| `TypedCacheForest`                | Store-backed collection of typed cache trees.                                                   |
-| `WorkCacheManager`                | Ingests events, enforces TTL/validity rules, and returns derived audit events.                  |
-| `WorkCachePolicy`                 | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
-| `WorkCacheRecoveryKnowledgeStore` | Revision-safe `RecoveryKnowledgePort` backed by `RecoveryTree` blocks.                          |
-| `MemoryWorkCacheStore`            | In-memory store.                                                                                |
-| `SQLiteWorkCacheStore`            | Bounded persistent store backed by `workcache_blocks`.                                          |
-| `RedisWorkCacheStore`             | Shared, TTL-aware store with atomic latest-key maintenance.                                     |
-| `TimeoutWorkCacheStore`           | Bounds provider-neutral store calls.                                                            |
-| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                    |
-
-Default source event alignment:
-
-| Source event group                                                                                               | Primary tree       |
-| ---------------------------------------------------------------------------------------------------------------- | ------------------ |
-| `agent.reasoning.completed`, `thinking.completed`, `agent.deliberation.completed`, `reasoning.decision.recorded` | `PlanTree`         |
-| `inference.completed`, `model.call.completed`                                                                    | `ComputationTree`  |
-| `tool.call.completed`, `mcp.call.completed`                                                                      | `ToolTree`         |
-| `context.build.completed`, `context.compacted`                                                                   | `ObservationTree`  |
-| `eval.completed`, `regression.completed`                                                                         | `VerificationTree` |
-| `memory.read.completed`, `memory.write.committed`                                                                | `MemoryTree`       |
-| `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `RecoveryTree`     |
-| `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
-
-Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite|redis`,
-`HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
-per-tree TTL fields under `workCache.trees` in `config.yaml`. The default
-scope requirement is `user`; `unknown` validity is a miss, not a reusable hit.
-
-`PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
-prompt block. A block value contains `id`, `type`, `hash`, `content`,
-`tokenEstimate`, `order`, `prefixHash`, optional template fields, and metadata.
-It does not store the complete `llm.cache.write` event or a full prompt event
-payload. `WorkCacheManager.materializePromptPrefix()` selects the requested or
-latest `prefixHash`, orders its blocks, applies the prompt token budget, and
-assembles the runtime prefix string.
-
-Derived audit events are `workcache.lookup`, `workcache.hit`,
-`workcache.miss`, `workcache.write`, `workcache.invalidate`,
-`workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
-`sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
-
-`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by structured
-tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
-policy/spec/provider revision. Core exports strict Zod and JSON Schemas for scoped recovery
-knowledge. Values include strategy, outcome, evidence hash, expiry, and verified/negative
-validation. Unscoped, malformed, expired, or mismatched blocks are rejected or removed; the runtime
-supervisor revalidates hits and remains the only component that advances the FSM case.
 
 ## Inference
 

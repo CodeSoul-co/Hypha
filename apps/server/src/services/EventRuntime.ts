@@ -111,29 +111,13 @@ import {
   type ServingCacheEvent,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
-import {
-  MemoryWorkCacheStore,
-  NoopWorkCacheStore,
-  RedisWorkCacheInvalidationBus,
-  RedisWorkCacheStore,
-  SQLiteWorkCacheStore,
-  ThinkingCache,
-  ThinkingCachedReasoningProvider,
-  WorkCachedInferenceProvider,
-  WorkCacheManager,
-  type WorkCacheAuditEvent,
-  type RedisWorkCacheClient,
-  type RedisWorkCachePubSubClient,
-  type WorkCacheStore,
-} from '@hypha/workcache';
-import { inferenceConfig, storageConfig, toolResultCacheConfig, workCacheConfig } from '../config';
+import { inferenceConfig, storageConfig, toolResultCacheConfig } from '../config';
 import { getRedisClient } from './database';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
-import { createCacheRedisClient } from './cacheRedis';
 
 interface RuntimeRunContext {
   runId: string;
@@ -212,7 +196,6 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   async infer(
     request: InferenceRequest<LLMInferenceInput>
   ): Promise<InferenceResponse<ChatResponse>> {
-    await getLLMManager().ensureReady();
     const systemPrompt =
       [request.resolvedPrefixContent, request.input.options?.systemPrompt]
         .filter(Boolean)
@@ -250,7 +233,6 @@ class ServerLLMInferenceProvider implements InferenceProvider {
   async *stream(
     request: InferenceRequest<LLMInferenceInput>
   ): AsyncIterable<InferenceResponse<StreamChunk>> {
-    await getLLMManager().ensureReady();
     const systemPrompt =
       [request.resolvedPrefixContent, request.input.options?.systemPrompt]
         .filter(Boolean)
@@ -285,16 +267,14 @@ class ServerLLMInferenceProvider implements InferenceProvider {
 }
 
 class PipelineChatInferenceProvider implements InferenceProvider {
-  readonly id: string;
+  readonly id = 'server-inference-backend';
 
   constructor(
     private readonly pipeline: HyphaInferencePipeline,
     private readonly backendId: string,
     private readonly driver?: LocalInferenceDriver,
     private readonly autoStart = false
-  ) {
-    this.id = `server-inference-backend:${backendId}`;
-  }
+  ) {}
 
   async infer(
     request: InferenceRequest<LLMInferenceInput>
@@ -540,9 +520,6 @@ class EventRuntimeService {
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
   private readonly reasoning: ReasoningOrchestrator;
-  private readonly reasoningInference: ThinkingCachedReasoningProvider;
-  private readonly workCache: WorkCacheManager;
-  private readonly runEventClock = new Map<string, number>();
   private readonly defaultDomainPack = createDefaultDomainPack();
   private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
   private readonly toolRegistry = new ToolRegistry();
@@ -606,53 +583,33 @@ class EventRuntimeService {
               defaultTtlMs: toolCacheConfig.redisDefaultTtlMs,
             })
           : undefined;
-    this.toolRunner = new GovernedToolRunner(
-      this.toolRegistry,
-      this.createWorkCacheAwareTraceRecorder(),
-      undefined,
-      {
-        approvalStore: toolRuntimeStore,
-        invocationStore: toolRuntimeStore,
-        artifactPort,
-        snapshotStore: this.toolSnapshotStore,
-        observationPort,
-        telemetry: this.toolTelemetry,
-        resultCache: toolResultCache,
-        resultCacheFailureMode: toolCacheConfig.failureMode,
-        resultCacheTimeoutMs: toolCacheConfig.operationTimeoutMs,
-        resultCacheMaxEntryBytes: toolCacheConfig.maxEntryBytes,
-      }
-    );
+    this.toolRunner = new GovernedToolRunner(this.toolRegistry, this.events, undefined, {
+      approvalStore: toolRuntimeStore,
+      invocationStore: toolRuntimeStore,
+      artifactPort,
+      snapshotStore: this.toolSnapshotStore,
+      observationPort,
+      telemetry: this.toolTelemetry,
+      resultCache: toolResultCache,
+      resultCacheFailureMode: toolCacheConfig.failureMode,
+      resultCacheTimeoutMs: toolCacheConfig.operationTimeoutMs,
+      resultCacheMaxEntryBytes: toolCacheConfig.maxEntryBytes,
+    });
     this.runtime = new EventFirstRuntime(this.events);
-    this.workCache = createWorkCacheManager();
-    this.recoveryKnowledge = this.workCache.getRecoveryKnowledgePort();
     this.inference = new InferenceManager({
       prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
       onRecoveryFailure: (failure) => this.recordBypassedCacheFailure(failure),
     });
-    const runtimeInferenceProvider = createRuntimeInferenceProvider((event) =>
+    const inferenceProvider = createRuntimeInferenceProvider((event) =>
       this.recordServingCacheEvent(event)
     );
-    const thinkingCache = new ThinkingCache({
-      manager: this.workCache,
-      trace: (event) => this.appendWorkCacheEvent(event),
-    });
-    const inferenceProvider = new WorkCachedInferenceProvider({
-      provider: runtimeInferenceProvider,
-      thinkingCache,
-    });
     this.inferenceProviderId = inferenceProvider.id;
     this.inference.register(inferenceProvider);
     this.reasoning = new ReasoningOrchestrator({
       id: 'server-inference-router',
       infer: (request) => this.inference.infer(this.inferenceProviderId, request),
       stream: (request) => this.inference.stream(this.inferenceProviderId, request),
-    });
-    this.reasoningInference = new ThinkingCachedReasoningProvider({
-      provider: this.reasoning,
-      thinkingCache,
-      resolveStrategy: (id) => this.reasoning.registry.get(id)?.descriptor,
     });
   }
 
@@ -850,7 +807,7 @@ class EventRuntimeService {
           id: 'inference-primary',
           module: 'inference',
           execute: async () => {
-            const output = await this.reasoningInference.infer(inferenceRequest);
+            const output = await this.reasoning.infer(inferenceRequest);
             return {
               output,
               evidence: {
@@ -953,7 +910,8 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
-    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const availableToolIds =
+      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
@@ -1261,7 +1219,7 @@ class EventRuntimeService {
         reasoning.method === 'got' ||
         reasoning.method === 'self_consistency'
       ) {
-        const response = await this.reasoningInference.infer({ ...inferenceRequest, reasoning });
+        const response = await this.reasoning.infer({ ...inferenceRequest, reasoning });
         const chat = response.output as ChatResponse;
         if (chat.content) yield { type: 'content', content: chat.content };
         yield { type: 'done', usage: chat.usage };
@@ -1287,7 +1245,7 @@ class EventRuntimeService {
         return;
       }
 
-      for await (const response of this.reasoningInference.stream!({
+      for await (const response of this.reasoning.stream({
         ...inferenceRequest,
         reasoning,
       })) {
@@ -1594,7 +1552,8 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
+      sourceCapabilityHash:
+        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -2799,7 +2758,7 @@ class EventRuntimeService {
     options: { stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = this.requireRun(runId);
-    const event = await this.runtime.appendRunEvent({
+    await this.runtime.appendRunEvent({
       id: `${runId}:${type}:${generateId()}`,
       type,
       runId,
@@ -2808,7 +2767,7 @@ class EventRuntimeService {
       payload,
       stepId: options.stepId,
       fsmState: options.fsmState,
-      timestamp: this.nextEventTimestamp(runId, timestamp),
+      timestamp,
       metadata: {
         userId: context.userId,
         clientSessionId: context.clientSessionId,
@@ -2816,78 +2775,6 @@ class EventRuntimeService {
         ...(options.fsmState ? { fsmState: options.fsmState } : {}),
       },
     });
-    await this.recordWorkCacheEvents(event);
-  }
-
-  private async recordWorkCacheEvents(sourceEvent: FrameworkEvent): Promise<void> {
-    if (sourceEvent.type.startsWith('workcache.')) return;
-    try {
-      const derivedEvents = await this.workCache.ingest(sourceEvent);
-      for (const event of derivedEvents) {
-        await this.appendWorkCacheEvent(event);
-      }
-    } catch (error) {
-      logger.warn('WorkCache derivation failed without masking the source event', {
-        sourceEventId: sourceEvent.id,
-        sourceEventType: sourceEvent.type,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private async appendWorkCacheEvent(event: WorkCacheAuditEvent): Promise<void> {
-    const context = this.requireRun(event.runId);
-    await this.runtime.appendRunEvent({
-      id: `${event.runId}:${event.type}:${generateId()}`,
-      type: event.type,
-      runId: event.runId,
-      sessionId: context.sessionId,
-      userId: context.userId,
-      payload: event.payload,
-      stepId: event.stepId,
-      timestamp: this.nextEventTimestamp(event.runId, event.timestamp),
-      metadata: {
-        userId: context.userId,
-        clientSessionId: context.clientSessionId,
-        sourceEventId: event.payload.sourceEventId,
-        sourceEventType: event.payload.sourceEventType,
-        treeType: event.payload.treeType,
-        blockId: event.payload.blockId,
-        cacheKey: event.payload.cacheKey,
-      },
-    });
-  }
-
-  private nextEventTimestamp(runId: string, timestamp?: string): string {
-    const parsed = timestamp ? Date.parse(timestamp) : NaN;
-    const requested = Number.isFinite(parsed) ? parsed : Date.now();
-    const previous = this.runEventClock.get(runId) ?? 0;
-    const next = Math.max(requested, previous + 1);
-    this.runEventClock.set(runId, next);
-    return new Date(next).toISOString();
-  }
-
-  private createWorkCacheAwareTraceRecorder(): TraceRecorder {
-    return {
-      record: async (event) => {
-        const context = this.runs.get(event.runId);
-        const scopedEvent: FrameworkEvent = context
-          ? {
-              ...event,
-              userId: event.userId ?? context.userId,
-              sessionId: event.sessionId ?? context.sessionId,
-              metadata: {
-                ...event.metadata,
-                userId: event.userId ?? context.userId,
-                clientSessionId: context.clientSessionId,
-                domainPackId: context.domainPackId,
-              },
-            }
-          : event;
-        await this.events.record(scopedEvent);
-        await this.recordWorkCacheEvents(scopedEvent);
-      },
-    };
   }
 
   private requireRun(runId: string): RuntimeRunContext {
@@ -3050,63 +2937,6 @@ function inferFailedState(fsm: FSMProcessSpec): string {
 
 function resolveRuntimePath(filePath: string): string {
   return path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
-}
-
-let sharedMemoryWorkCacheStore: MemoryWorkCacheStore | undefined;
-const sharedSQLiteWorkCacheStores = new Map<string, SQLiteWorkCacheStore>();
-
-function createWorkCacheManager(): WorkCacheManager {
-  const config = workCacheConfig();
-  return new WorkCacheManager({
-    store: createWorkCacheStore(config),
-    invalidationBus:
-      config.store === 'redis'
-        ? new RedisWorkCacheInvalidationBus({
-            publisher: createCacheRedisClient() as unknown as RedisWorkCachePubSubClient,
-            subscriber: createCacheRedisClient() as unknown as RedisWorkCachePubSubClient,
-            channel: config.redis.invalidationChannel,
-            closeClients: true,
-          })
-        : undefined,
-    policy: {
-      enabled: config.enabled,
-      store: config.store,
-      failureMode: config.failureMode,
-      scopeRequirement: config.scopeRequirement,
-      operationTimeoutMs: config.operationTimeoutMs,
-      maxBlockBytes: config.maxBlockBytes,
-      promptBudgetTokens: config.promptBudgetTokens,
-      unknownEventPolicy: config.unknownEventPolicy,
-      allowExtensionEvents: config.allowExtensionEvents,
-      trees: config.trees,
-    },
-  });
-}
-
-function createWorkCacheStore(config: ReturnType<typeof workCacheConfig>): WorkCacheStore {
-  switch (config.store) {
-    case 'memory':
-      sharedMemoryWorkCacheStore =
-        sharedMemoryWorkCacheStore ?? new MemoryWorkCacheStore(config.memory);
-      return sharedMemoryWorkCacheStore;
-    case 'sqlite': {
-      const filename = resolveRuntimePath(config.sqlite.path);
-      const existing = sharedSQLiteWorkCacheStores.get(filename);
-      if (existing) return existing;
-      const next = new SQLiteWorkCacheStore({ filename });
-      sharedSQLiteWorkCacheStores.set(filename, next);
-      return next;
-    }
-    case 'redis':
-      return new RedisWorkCacheStore({
-        client: createCacheRedisClient() as unknown as RedisWorkCacheClient,
-        prefix: config.redis.prefix,
-        closeClient: true,
-      });
-    case 'off':
-    default:
-      return new NoopWorkCacheStore();
-  }
 }
 
 function summarizeValue(value: unknown): Record<string, unknown> {

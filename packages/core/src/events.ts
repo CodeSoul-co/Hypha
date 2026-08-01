@@ -9,7 +9,9 @@ export type RuntimeActivityEventType =
   | 'runtime.activity.compensation.requested'
   | 'runtime.activity.compensation.completed'
   | 'runtime.activity.compensation.failed'
-  | 'activity.redispatch.requested';
+  | 'activity.redispatch.requested'
+  | 'activity.redispatch.accepted'
+  | 'activity.redispatch.outcome_unknown';
 
 export type FrameworkEventType =
   | 'session.created'
@@ -73,13 +75,6 @@ export type FrameworkEventType =
   | 'llm.cache.miss'
   | 'llm.cache.write'
   | 'llm.cache.bypass'
-  | 'workcache.lookup'
-  | 'workcache.hit'
-  | 'workcache.miss'
-  | 'workcache.write'
-  | 'workcache.invalidate'
-  | 'workcache.bypass'
-  | 'workcache.prefix.materialized'
   | 'tool.call.requested'
   | 'tool.authorization.checked'
   | 'tool.invocation.state.changed'
@@ -228,6 +223,7 @@ export type FrameworkEventType =
   | 'human.review.rejected'
   | 'human.review.expired'
   | 'human.review.cancelled'
+  | 'human.review.superseded'
   | 'human.review.resume.started'
   | 'human.review.resume.revalidated'
   | 'human.review.resume.failed'

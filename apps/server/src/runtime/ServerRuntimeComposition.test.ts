@@ -1,10 +1,16 @@
+import { readFileSync } from 'fs';
+import path from 'path';
+
 import {
   DurableEventRuntime,
   DurableRuntimeTimerWorker,
+  InMemoryTelemetryRecorder,
   InMemoryEventStore,
   InMemoryDurableEventStore,
   InMemoryEventSchemaRegistry,
   InMemoryRunLeaseStore,
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
   RuntimeRecoveryService,
   registerRuntimeOrchestrationEventSchemas,
   type RuntimeCancelResult,
@@ -58,6 +64,11 @@ describe('createServerRuntimeComposition', () => {
       id: 'inference.test',
       infer: jest.fn(),
     } as InferenceProvider;
+    const recorder = new InMemoryTelemetryRecorder();
+    const operationalTelemetry = new RuntimeOperationalTelemetry({
+      recorder,
+      now: () => '2026-07-31T06:00:02.000Z',
+    });
 
     const composition = createServerRuntimeComposition({
       backbone,
@@ -75,10 +86,16 @@ describe('createServerRuntimeComposition', () => {
           throw new Error('not configured');
         },
       },
+      recoveryRedispatches: {
+        redispatch: async () => {
+          throw new Error('not configured');
+        },
+      },
       recoveryCancellations: {
         cancel: async () => ({}) as RuntimeCancelResult,
       },
       recoveryRequeue: { requeue: async () => undefined },
+      operationalTelemetry,
     });
 
     expect(Object.isFrozen(composition)).toBe(true);
@@ -88,6 +105,13 @@ describe('createServerRuntimeComposition', () => {
     expect(composition.recoveryService).toBeInstanceOf(RuntimeRecoveryService);
     expect(composition.fsmDriver).toBeInstanceOf(FencedBoundedFSMDriver);
     expect(composition.reactRunner).toBeInstanceOf(HarnessedReActFSMRunner);
+    expect(
+      (
+        composition.timerWorker as unknown as {
+          options: { operationalTelemetry?: RuntimeOperationalTelemetry };
+        }
+      ).options.operationalTelemetry
+    ).toBe(operationalTelemetry);
     expect(
       composition.scopedReActRunners.create({} as ReActAgentRuntime, { inference })
     ).toBeInstanceOf(ReActRunner);
@@ -133,8 +157,44 @@ describe('createServerRuntimeComposition', () => {
         payload: { output: 'legacy-owner-event' },
       })
     ).rejects.toMatchObject({ code: 'RUNTIME_EVENT_FAMILY_NOT_MIGRATED' });
+    const checkpoint = {
+      version: '1.0.0' as const,
+      runId: 'run.test',
+      stepId: 'react',
+      scopeHash: `sha256:${'1'.repeat(64)}`,
+      agentRef: { id: 'agent.test', version: '1.0.0' },
+      nextPhase: 'reason' as const,
+      messages: [{ role: 'user' as const, content: 'continue' }],
+      iterations: 2,
+      modelCalls: 2,
+      toolCalls: 1,
+      totalTokens: 100,
+      toolInvocationSequence: 1,
+      stepSequence: 5,
+      consecutiveNoProgress: 2,
+      lastProgressFingerprint: `sha256:${'2'.repeat(64)}`,
+      createdAt: '2026-07-31T06:00:00.000Z',
+      updatedAt: '2026-07-31T06:00:00.000Z',
+    };
+    const context = {
+      runId: checkpoint.runId,
+      sessionId: 'session.test',
+      userId: 'user.test',
+    };
+
+    await composition.runManager.recordReactContinuationCheckpoint(context, checkpoint);
+    await composition.runManager.recordReactContinuationResumed(
+      context,
+      checkpoint,
+      '2026-07-31T06:00:02.000Z'
+    );
+
+    expect(recorder.sum(RUNTIME_OPERATIONAL_METRIC_NAMES.noProgressFingerprintTotal)).toBe(1);
+    expect(recorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.continuationLatencyMs)[0]?.value).toBe(
+      2_000
+    );
+    expect(JSON.stringify(recorder.list())).not.toContain(checkpoint.runId);
+    expect(JSON.stringify(recorder.list())).not.toContain(checkpoint.lastProgressFingerprint);
     await expect(legacyEvents.list()).resolves.toHaveLength(0);
   });
 });
-import { readFileSync } from 'fs';
-import path from 'path';

@@ -31,7 +31,7 @@ jobs:
       - run: npm ci
       - name: Skill filesystem and server composition
         run: >-
-          npm exec -- jest --selectProjects unit --runInBand --forceExit
+          npm run test:unit -- --runInBand
           apps/server/src/services/SkillInstallFilesystem.test.ts
           apps/server/src/services/SecretResolver.test.ts
           apps/server/src/core/tools/ToolManager.test.ts

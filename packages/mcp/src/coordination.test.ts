@@ -13,13 +13,7 @@ class FakeRedis {
     return this.strings.get(key) ?? null;
   }
 
-  async set(
-    key: string,
-    value: string,
-    mode?: 'PX',
-    _ttlMs?: number,
-    condition?: 'NX'
-  ) {
+  async set(key: string, value: string, mode?: 'PX', _ttlMs?: number, condition?: 'NX') {
     if (mode === 'PX' && condition === 'NX' && this.strings.has(key)) return null;
     this.strings.set(key, value);
     return 'OK';
@@ -37,7 +31,7 @@ class FakeRedis {
     return Array.from(this.sets.get(key) ?? []);
   }
 
-  async eval(_script: string, numberOfKeys: number, ...args: Array<string | number>) {
+  async eval(script: string, numberOfKeys: number, ...args: Array<string | number>) {
     if (numberOfKeys === 3) {
       const [recordKey, allKey, serverKey, expected, next, id] = args.map(String);
       const current = this.strings.get(recordKey);
@@ -49,7 +43,7 @@ class FakeRedis {
     }
     const [key, expected] = args.map(String);
     if (this.strings.get(key) !== expected) return 0;
-    this.strings.delete(key);
+    if (script.includes("'DEL'")) this.strings.delete(key);
     return 1;
   }
 }
@@ -105,6 +99,10 @@ describe('MCP Redis multi-worker coordination', () => {
       ttlMs: 30_000,
     });
     expect(successor).not.toBeNull();
+    await expect(first?.assertCurrent()).rejects.toMatchObject({
+      code: 'MCP_BULKHEAD_REJECTED',
+    });
+    await expect(successor?.assertCurrent()).resolves.toBeUndefined();
     await first?.release();
     expect(redis.strings.has(key)).toBe(true);
     await successor?.release();
