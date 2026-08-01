@@ -686,10 +686,11 @@ tools:
     namespace: "${HYPHA_TOOL_RESULT_CACHE_NAMESPACE:tool-result-cache:v1}"
   configPath: "./configs/tools.yaml"
   filesystem:
-    # Relative paths resolve from workingDirectory. Lists are comma-separated
-    # when supplied through environment variables.
-    workingDirectory: "${HYPHA_FILESYSTEM_WORKING_DIRECTORY:.}"
-    readPaths: "${HYPHA_FILESYSTEM_READ_PATHS:.}"
+    # Configured roots resolve from the Server process directory; Tool request
+    # paths resolve from workingDirectory. Keep the workspace outside Runtime,
+    # credential, repository metadata, and other framework control-plane roots.
+    workingDirectory: "${HYPHA_FILESYSTEM_WORKING_DIRECTORY:./data/workspace}"
+    readPaths: "${HYPHA_FILESYSTEM_READ_PATHS:./data/workspace}"
     writePaths: "${HYPHA_FILESYSTEM_WRITE_PATHS:./data/workspace}"
     executePaths: "${HYPHA_FILESYSTEM_EXECUTE_PATHS:./data/workspace/bin}"
     execution:
