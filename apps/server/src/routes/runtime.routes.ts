@@ -74,6 +74,15 @@ const sessionCommandListQuerySchema = z
   })
   .strict();
 
+const humanTaskDecisionSchema = z
+  .object({
+    decision: z.enum(['approved', 'rejected']),
+    expectedRevision: z.number().int().positive(),
+    expectedSubjectHash: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+    reason: z.string().trim().min(1).max(16_384).optional(),
+  })
+  .strict();
+
 router.post(
   '/sessions/:sessionId/commands/start-run',
   asyncHandler(async (req: Request, res: Response) => {
@@ -238,6 +247,57 @@ router.get(
     if (!(await requireRunAccess(req, res))) return;
     const events = await getEventRuntime().listEvents(req.params.runId);
     res.json({ success: true, data: events });
+  })
+);
+
+router.get(
+  '/runs/:runId/human-tasks',
+  asyncHandler(async (req: Request, res: Response) => {
+    const run = await requireRunAccess(req, res);
+    if (!run) return;
+    const tasks = await getEventRuntime().listOwnedRuntimeHumanTasks(req.params.runId, run.userId);
+    res.json({ success: true, data: tasks });
+  })
+);
+
+router.post(
+  '/runs/:runId/human-tasks/:taskId/decision',
+  asyncHandler(async (req: Request, res: Response) => {
+    const run = await requireRunAccess(req, res);
+    if (!run) return;
+    const principalId = authenticatedUserId(req);
+    if (!principalId) return unauthorized(res);
+    const idempotencyKey = req.get('Idempotency-Key')?.trim();
+    if (!idempotencyKey || idempotencyKey.length > 256) {
+      return invalidSessionCommand(
+        res,
+        'A 1 to 256 character Idempotency-Key is required for a HumanTask decision'
+      );
+    }
+    const parsed = humanTaskDecisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(
+        res,
+        'HumanTask decision body is invalid',
+        parsed.error.flatten()
+      );
+    }
+    const taskId = req.params.taskId.trim();
+    if (!taskId || taskId.length > 512) {
+      return invalidSessionCommand(res, 'taskId must contain 1 to 512 characters');
+    }
+    const task = await getEventRuntime().decideOwnedRuntimeHumanTask({
+      runId: req.params.runId,
+      ownerUserId: run.userId,
+      principalId,
+      taskId,
+      expectedRevision: parsed.data.expectedRevision,
+      expectedSubjectHash: parsed.data.expectedSubjectHash,
+      decision: parsed.data.decision,
+      ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
+      idempotencyKey,
+    });
+    res.json({ success: true, data: task });
   })
 );
 

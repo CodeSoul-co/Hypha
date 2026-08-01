@@ -17,6 +17,14 @@ import {
   type ServerRuntimeTimerSchedulerOptions,
   type ServerRuntimeTimerSweepResult,
 } from './ServerRuntimeTimerScheduler';
+import { type ServerReActContinuationReconciliationSweepResult } from './ServerReActContinuationReconciliationScheduler';
+
+export interface ServerReActContinuationLoop {
+  sweepOnce(signal?: AbortSignal): Promise<ServerReActContinuationReconciliationSweepResult>;
+  start(): void;
+  isRunning(): boolean;
+  close(): Promise<void>;
+}
 
 export interface ServerRuntimeWorkerSources {
   timerWorker: Pick<DurableRuntimeTimerWorker, 'sweep'>;
@@ -29,6 +37,9 @@ export interface ServerRuntimeWorkerBindings {
   commands?: {
     runtime: ServerSessionCommandLoop;
     scope?: SessionQueueScope;
+  };
+  continuations?: {
+    runtime: ServerReActContinuationLoop;
   };
 }
 
@@ -44,6 +55,7 @@ export interface ServerRuntimeWorkers {
   timer: ServerRuntimeTimerScheduler;
   recovery: ServerRuntimeRecoveryScheduler;
   commands?: ServerSessionCommandLoop;
+  continuations?: ServerReActContinuationLoop;
   status(): Readonly<ServerRuntimeWorkerStatus>;
 }
 
@@ -72,6 +84,7 @@ export interface ServerRuntimeWorkerStatus {
     startupPollDisposition: SessionCommandWorkerDisposition;
     supportedCommandTypes: readonly SessionCommandType[];
   }>;
+  continuations?: ServerRuntimeWorkerEvidence;
 }
 
 /**
@@ -87,6 +100,7 @@ export class ServerRuntimeWorkerLifecycle {
   private lifecycleState: ServerRuntimeWorkerLifecycleState = 'idle';
   private readonly timerEvidence = mutableEvidence();
   private readonly recoveryEvidence = mutableEvidence();
+  private readonly continuationEvidence = mutableEvidence();
   private commandStartupPoll?: SessionCommandWorkerResult;
   private closed = false;
 
@@ -116,7 +130,8 @@ export class ServerRuntimeWorkerLifecycle {
       workers &&
       workers.timer.isRunning() &&
       workers.recovery.isRunning() &&
-      workers.commands?.isRunning()
+      workers.commands?.isRunning() &&
+      workers.continuations?.isRunning()
     );
   }
 
@@ -125,6 +140,14 @@ export class ServerRuntimeWorkerLifecycle {
       lifecycle: this.lifecycleState,
       timer: workerEvidence(this.workers?.timer.isRunning() ?? false, this.timerEvidence),
       recovery: workerEvidence(this.workers?.recovery.isRunning() ?? false, this.recoveryEvidence),
+      ...(this.workers?.continuations === undefined
+        ? {}
+        : {
+            continuations: workerEvidence(
+              this.workers.continuations.isRunning(),
+              this.continuationEvidence
+            ),
+          }),
       ...(this.workers?.commands === undefined
         ? {}
         : {
@@ -161,6 +184,9 @@ export class ServerRuntimeWorkerLifecycle {
         onError: (error) => this.observeRecoveryFailure(error),
       }),
       ...(this.bindings.commands === undefined ? {} : { commands: this.bindings.commands.runtime }),
+      ...(this.bindings.continuations === undefined
+        ? {}
+        : { continuations: this.bindings.continuations.runtime }),
       status: () => this.status(),
     });
 
@@ -174,9 +200,13 @@ export class ServerRuntimeWorkerLifecycle {
       if (workers.commands) {
         this.commandStartupPoll = await workers.commands.processNext(this.bindings.commands?.scope);
       }
+      if (workers.continuations) {
+        this.observeContinuationSweep(await workers.continuations.sweepOnce());
+      }
       workers.timer.start();
       workers.recovery.start();
       workers.commands?.start(this.bindings.commands?.scope);
+      workers.continuations?.start();
       if (this.closed) {
         throw conflict('Runtime Worker lifecycle closed during startup');
       }
@@ -232,6 +262,13 @@ export class ServerRuntimeWorkerLifecycle {
     this.bindings.recovery.onError?.(error);
   }
 
+  private observeContinuationSweep(
+    result: Readonly<ServerReActContinuationReconciliationSweepResult>
+  ): void {
+    this.continuationEvidence.successfulSweeps += 1;
+    this.continuationEvidence.lastSuccessfulSweepAt = result.checkedAt;
+  }
+
   private assertOpen(): void {
     if (this.closed) throw conflict('Runtime Worker lifecycle is closed');
   }
@@ -242,6 +279,7 @@ async function closeWorkers(workers: Readonly<ServerRuntimeWorkers>): Promise<vo
   // queue from claiming new work while timer/recovery sweeps are draining.
   const results = await Promise.allSettled([
     workers.commands?.close() ?? Promise.resolve(),
+    workers.continuations?.close() ?? Promise.resolve(),
     workers.recovery.close(),
     workers.timer.close(),
   ]);

@@ -171,6 +171,27 @@ describe('Server production ReAct execution', () => {
         throw outcomes.at(-1)?.error;
       }
       expect(outcomes.at(-1)?.status).toBe('suspended');
+      const resolvedScopeHash = reActContinuationScopeHash({
+        ...prepared.context,
+        runId: start.targetRunId!,
+      });
+      const suspendedCheckpoint = await checkpoints.get(
+        start.targetRunId!,
+        'react',
+        resolvedScopeHash
+      );
+      expect(suspendedCheckpoint).not.toBeNull();
+      await expect(
+        execution.buildContinuationPayload(suspendedCheckpoint!, '2026-08-01T12:00:00.000Z')
+      ).resolves.toMatchObject({
+        runId: start.targetRunId,
+        sessionId: 'session.1',
+        userId: 'user.1',
+        checkpointSequence: suspendedCheckpoint!.stepSequence,
+        checkpointHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+        globalBudget: { iterations: 4, modelCalls: 4, toolCalls: 4, totalTokens: 100 },
+        createdAt: '2026-08-01T12:00:00.000Z',
+      });
       expect(
         (await commands.listSessionCommands({ userId: 'user.1', sessionId: 'session.1' })).map(
           (command) => command.commandType
@@ -185,10 +206,6 @@ describe('Server production ReAct execution', () => {
       expect(runStatus).toBe('completed');
       expect(inferenceCall).toBe(3);
       expect(syncMemory).toHaveBeenCalledTimes(3);
-      const resolvedScopeHash = reActContinuationScopeHash({
-        ...prepared.context,
-        runId: start.targetRunId!,
-      });
       await expect(
         checkpoints.get(start.targetRunId!, 'react', resolvedScopeHash)
       ).resolves.toBeNull();
