@@ -46,6 +46,8 @@ export interface MemoryIndexOutboxRecord {
   operationId: string;
   memoryId: string;
   memoryVersionId: string;
+  /** Logical Memory revision; distinct from this outbox record's lease fencing token. */
+  memoryRevision?: number;
   scopeHash: string;
   action: 'upsert' | 'delete' | 'reindex';
   targetVectorStoreIds: string[];

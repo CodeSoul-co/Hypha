@@ -149,6 +149,33 @@ describe('Native Memory durable runtime', () => {
       })
     ).resolves.toHaveLength(1);
     await expect(
+      restartedCreated.provider.search({
+        operationId: 'operation:native:semantic-search',
+        principal: addRequest().principal,
+        scope: addRequest().scope,
+        profileRef: memoryProfileSpecExample,
+        query: 'durable native memory',
+        mode: 'semantic',
+        topK: 1,
+      })
+    ).resolves.toMatchObject([
+      {
+        record: { id: firstResult.records[0]?.id },
+        semanticScore: 1,
+        reasons: ['dense-vector-similarity'],
+      },
+    ]);
+    await expect(
+      restartedCreated.provider.search({
+        operationId: 'operation:native:unsupported-graph',
+        principal: addRequest().principal,
+        scope: addRequest().scope,
+        profileRef: memoryProfileSpecExample,
+        query: 'durable',
+        mode: 'graph',
+      })
+    ).rejects.toMatchObject({ code: 'MEMORY_INVALID_INPUT' });
+    await expect(
       (restartedCreated.resources as NativeMemoryRuntimeResources).workingStore.get(
         addRequest().scope,
         'working:restart'
