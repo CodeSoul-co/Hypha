@@ -2,12 +2,17 @@ const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const {
   CallToolRequestSchema,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
+  ReadResourceRequestSchema,
 } = require('@modelcontextprotocol/sdk/types.js');
 
 const server = new Server(
   { name: 'hypha-local-example', version: '1.0.0' },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}, resources: {}, prompts: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -48,6 +53,65 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return {
     content: [{ type: 'text', text: JSON.stringify(output) }],
     structuredContent: output,
+  };
+});
+
+server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  resources: [
+    {
+      uri: 'hypha://framework/runtime-contract',
+      name: 'Hypha Runtime Contract',
+      description: 'A local framework resource exposed through a real MCP process.',
+      mimeType: 'application/json',
+    },
+  ],
+}));
+
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: [],
+}));
+
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+  if (request.params.uri !== 'hypha://framework/runtime-contract') {
+    throw new Error(`Unknown local example Resource: ${request.params.uri}`);
+  }
+  return {
+    contents: [
+      {
+        uri: request.params.uri,
+        mimeType: 'application/json',
+        text: JSON.stringify({ runtime: 'react-fsm', eventSourceOfTruth: true }),
+      },
+    ],
+  };
+});
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: [
+    {
+      name: 'runtime_diagnostic',
+      description: 'Build a provider-neutral runtime diagnostic instruction.',
+      arguments: [{ name: 'component', required: true }],
+    },
+  ],
+}));
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  if (request.params.name !== 'runtime_diagnostic') {
+    throw new Error(`Unknown local example Prompt: ${request.params.name}`);
+  }
+  const component = String(request.params.arguments?.component ?? 'runtime');
+  return {
+    description: 'Hypha runtime diagnostic instruction.',
+    messages: [
+      {
+        role: 'user',
+        content: {
+          type: 'text',
+          text: `Inspect ${component} through the ReAct + FSM runtime and return trace evidence.`,
+        },
+      },
+    ],
   };
 });
 

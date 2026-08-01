@@ -1209,6 +1209,7 @@ export class ToolManager {
     approvedBy: string;
     restrictions?: string[];
     expiresAt?: string;
+    sideEffectLevel?: HyphaToolSpec['sideEffectLevel'];
   }): Promise<void> {
     const catalog = this.mcpCatalogs.get(request.serverId);
     if (!catalog) throw new Error(`MCP server not found: ${request.serverId}`);

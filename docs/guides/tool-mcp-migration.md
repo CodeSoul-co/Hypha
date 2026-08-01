@@ -9,7 +9,9 @@
 4. Inject persistent Invocation and Approval stores, Event/Trace recorder, Artifact port, contract
    snapshot store, Observation port, cache, receipt reconciler, and telemetry as required.
 5. For MCP, register a connection profile, discover into `MCPCapabilityCatalog`, approve trust and
-   drift, import stable Tool IDs, and create a Run snapshot before execution.
+   drift, classify undeclared Tool side effects during approval, import stable Tool IDs, and create
+   a Run snapshot before execution. Never validate a Tool output schema against the MCP transport
+   envelope; validate its `structuredContent` domain value.
 6. Preserve legacy flat Tool fields only during transition. New integrations should use the
    structured governed contract exports and their Zod/JSON Schema definitions.
 7. Validate restart recovery, approval resume, same-key conflict, cancellation, provider timeout,
@@ -17,3 +19,6 @@
 
 Server API consumers can query `/api/v1/tools/:id`, `/api/v1/tool-invocations/:id`, cancel an
 Invocation, decide approvals, and inspect `/api/v1/mcp/servers`, `/capabilities`, and `/drifts`.
+Approved Resource reads and Prompt renders use `/api/v1/mcp/servers/:serverId/resources/read` and
+`/api/v1/mcp/servers/:serverId/prompts/:name/render`; the server creates and returns the canonical
+`runId` instead of trusting a caller-supplied execution scope.
