@@ -917,9 +917,11 @@ describe('@hypha/mcp normalization', () => {
   it('rejects Resource and Prompt results cancelled or expired while awaiting the server', async () => {
     let now = '2026-07-23T00:00:00.000Z';
     let resolveResource:
-      ((value: { contents: Array<{ uri: string; text: string }> }) => void) | undefined;
+      | ((value: { contents: Array<{ uri: string; text: string }> }) => void)
+      | undefined;
     let resolvePrompt:
-      ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+      | ((value: { messages: Array<{ role: string; content: string }> }) => void)
+      | undefined;
     const factory: MCPConnectionSessionFactory = {
       create() {
         return {
