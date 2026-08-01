@@ -1,4 +1,5 @@
 import { ClaudeAdapter } from '../../apps/server/src/core/llm/adapters/ClaudeAdapter';
+import { OllamaAdapter } from '../../apps/server/src/core/llm/adapters/OllamaAdapter';
 import {
   createLLMManagerModelProvider,
   LLMManager,
@@ -52,6 +53,19 @@ describe('LLM Adapters', () => {
       await adapter.initialize();
       const healthy = await adapter.healthCheck();
       expect(typeof healthy).toBe('boolean');
+    });
+  });
+
+  describe('OllamaAdapter', () => {
+    it('fails closed instead of disguising normal chat as a tool call', async () => {
+      const adapter = new OllamaAdapter();
+
+      await expect(
+        adapter.createToolCall(
+          [{ role: 'user', content: 'Call a tool.' }],
+          [{ name: 'lookup', description: 'Lookup', inputSchema: { type: 'object' } }]
+        )
+      ).rejects.toThrow('Ollama tool calling is not composed');
     });
   });
 
