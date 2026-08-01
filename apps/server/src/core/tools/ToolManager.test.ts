@@ -25,6 +25,16 @@ function managedClient(tool: ToolDefinition): MCPClient {
 }
 
 describe('ToolManager MCP governance boundary', () => {
+  it('fails operational readiness before initialization instead of accepting empty state', () => {
+    expect(new ToolManager().operationalReadiness()).toEqual({
+      initialized: false,
+      ready: false,
+      status: 'not_initialized',
+      profiles: {},
+      mcpServers: {},
+    });
+  });
+
   it('does not expose a managed SDK-discovered tool until its approved revision is imported', () => {
     const manager = new ToolManager();
     const discovered: ToolDefinition = {

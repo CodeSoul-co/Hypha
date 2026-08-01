@@ -335,6 +335,7 @@ class FixtureMCPClient implements MCPClient {
 }
 
 export class ToolManager {
+  private initialized = false;
   private tools: Map<string, ToolRegistration> = new Map();
   private mcpClients: Map<string, MCPClient> = new Map();
   private readonly secretResolver = new EnvironmentSecretResolver();
@@ -415,6 +416,7 @@ export class ToolManager {
   ) {}
 
   async initialize(): Promise<void> {
+    this.initialized = false;
     registerBuiltinToolProfileBindings(this.profileBindings);
     const config = getConfig();
 
@@ -458,6 +460,7 @@ export class ToolManager {
       toolCount: this.tools.size,
       mcpServerCount: this.mcpClients.size,
     });
+    this.initialized = true;
   }
 
   private async loadToolsFromConfig(configPath: string): Promise<void> {
@@ -487,6 +490,7 @@ export class ToolManager {
   }
 
   async destroy(): Promise<void> {
+    this.initialized = false;
     // Disconnect all MCP clients
     for (const [id, client] of this.mcpClients) {
       await client.disconnect();
@@ -1299,6 +1303,33 @@ export class ToolManager {
     }
   > {
     return Object.fromEntries(this.mcpServerStates);
+  }
+
+  operationalReadiness(): {
+    initialized: boolean;
+    ready: boolean;
+    status: 'not_initialized' | 'ready' | 'degraded' | 'failed';
+    profiles: ReturnType<ToolManager['profileReadiness']>;
+    mcpServers: ReturnType<ToolManager['mcpServerReadiness']>;
+  } {
+    const profiles = this.profileReadiness();
+    const mcpServers = this.mcpServerReadiness();
+    if (!this.initialized) {
+      return { initialized: false, ready: false, status: 'not_initialized', profiles, mcpServers };
+    }
+    const requiredFailure =
+      Object.values(profiles).some((state) => state.required && state.status !== 'ready') ||
+      Object.values(mcpServers).some((state) => state.required && state.status !== 'ready');
+    const degraded =
+      Object.values(profiles).some((state) => state.status !== 'ready') ||
+      Object.values(mcpServers).some((state) => state.status !== 'ready');
+    return {
+      initialized: true,
+      ready: !requiredFailure,
+      status: requiredFailure ? 'failed' : degraded ? 'degraded' : 'ready',
+      profiles,
+      mcpServers,
+    };
   }
 
   private superviseMCPReconnect(serverId: string): Promise<void> {

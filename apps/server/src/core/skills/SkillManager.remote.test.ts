@@ -37,6 +37,7 @@ describe('SkillManager signed remote registry composition', () => {
     await manager.initialize();
 
     expect(manager.readiness()).toEqual({
+      initialized: true,
       enabled: true,
       required: true,
       status: 'ready',
@@ -97,6 +98,7 @@ describe('SkillManager signed remote registry composition', () => {
 
     await expect(manager.initialize()).rejects.toThrow('dependency lock mismatch');
     expect(manager.readiness()).toMatchObject({
+      initialized: false,
       enabled: true,
       required: true,
       status: 'failed',
@@ -152,6 +154,7 @@ describe('SkillManager signed remote registry composition', () => {
 
     await expect(manager.initialize()).resolves.toBeUndefined();
     expect(manager.readiness()).toEqual({
+      initialized: true,
       enabled: true,
       required: false,
       status: 'degraded',

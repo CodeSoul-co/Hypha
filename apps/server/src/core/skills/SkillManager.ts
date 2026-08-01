@@ -76,6 +76,7 @@ export interface ServerRemoteSkillRegistryBinding {
 }
 
 export interface ServerSkillRegistryReadiness {
+  initialized: boolean;
   enabled: boolean;
   required: boolean;
   status: 'disabled' | 'ready' | 'degraded' | 'failed';
@@ -89,6 +90,7 @@ export interface ServerSkillRegistryReadiness {
  * It owns no second selector or execution loop.
  */
 export class SkillManager {
+  private initialized = false;
   private skills = new Map<string, RegisteredSkill>();
   private registry = new SkillRegistry();
   private readonly dirs: string[];
@@ -129,10 +131,11 @@ export class SkillManager {
   }
 
   readiness(): ServerSkillRegistryReadiness {
-    return structuredClone(this.remoteRegistryReadiness);
+    return structuredClone({ ...this.remoteRegistryReadiness, initialized: this.initialized });
   }
 
   async initialize(): Promise<void> {
+    this.initialized = false;
     this.skills.clear();
     this.registry = new SkillRegistry();
     this.remoteRegistryReadiness = initialRemoteRegistryReadiness(this.remoteRegistry);
@@ -163,9 +166,11 @@ export class SkillManager {
       dirs: this.dirs,
       remoteRegistryEnabled: this.remoteRegistry !== undefined,
     });
+    this.initialized = true;
   }
 
   async destroy(): Promise<void> {
+    this.initialized = false;
     this.skills.clear();
     this.registry = new SkillRegistry();
     this.remoteRegistryReadiness = initialRemoteRegistryReadiness(undefined);
@@ -406,6 +411,7 @@ function initialRemoteRegistryReadiness(
 ): ServerSkillRegistryReadiness {
   if (!binding) {
     return {
+      initialized: false,
       enabled: false,
       required: false,
       status: 'disabled',
@@ -415,6 +421,7 @@ function initialRemoteRegistryReadiness(
     };
   }
   return {
+    initialized: false,
     enabled: true,
     required: binding.required === true || binding.refs.some((ref) => ref.required),
     status: 'degraded',
