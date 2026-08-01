@@ -44,6 +44,7 @@ export const runtimeRecoveryCandidateSchema = z
     eventHeadSequence: z.number().int().nonnegative(),
     projectionSequence: z.number().int().nonnegative().optional(),
     activityId: nonEmptyStringSchema.optional(),
+    redispatchRequestEventId: nonEmptyStringSchema.optional(),
     stateId: nonEmptyStringSchema.optional(),
     stateAttempt: z.number().int().positive().optional(),
     currentLease: fencedRunLeaseSchema.optional(),
@@ -52,13 +53,27 @@ export const runtimeRecoveryCandidateSchema = z
   .strict()
   .superRefine((candidate, context) => {
     if (
-      ['ACTIVITY_RESULT_UNAPPLIED', 'ACTIVITY_COMPENSATION_REQUIRED'].includes(candidate.reason) &&
+      [
+        'ACTIVITY_RESULT_UNAPPLIED',
+        'ACTIVITY_COMPENSATION_REQUIRED',
+        'ACTIVITY_REDISPATCH_INCOMPLETE',
+      ].includes(candidate.reason) &&
       !candidate.activityId
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['activityId'],
         message: 'Activity recovery candidates require activityId',
+      });
+    }
+    if (
+      candidate.reason === 'ACTIVITY_REDISPATCH_INCOMPLETE' &&
+      !candidate.redispatchRequestEventId
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['redispatchRequestEventId'],
+        message: 'Incomplete Activity redispatch candidates require redispatchRequestEventId',
       });
     }
     if (
@@ -184,6 +199,7 @@ export const runtimeRecoveryCandidateJsonSchema: JsonSchema = {
     eventHeadSequence: { type: 'integer', minimum: 0 },
     projectionSequence: { type: 'integer', minimum: 0 },
     activityId: nonEmptyStringJsonSchema,
+    redispatchRequestEventId: nonEmptyStringJsonSchema,
     stateId: nonEmptyStringJsonSchema,
     stateAttempt: { type: 'integer', minimum: 1 },
     currentLease: fencedRunLeaseJsonSchema,
@@ -194,7 +210,11 @@ export const runtimeRecoveryCandidateJsonSchema: JsonSchema = {
       if: {
         properties: {
           reason: {
-            enum: ['ACTIVITY_RESULT_UNAPPLIED', 'ACTIVITY_COMPENSATION_REQUIRED'],
+            enum: [
+              'ACTIVITY_RESULT_UNAPPLIED',
+              'ACTIVITY_COMPENSATION_REQUIRED',
+              'ACTIVITY_REDISPATCH_INCOMPLETE',
+            ],
           },
         },
         required: ['reason'],
@@ -202,6 +222,16 @@ export const runtimeRecoveryCandidateJsonSchema: JsonSchema = {
       then: {
         required: ['activityId'],
         properties: { activityId: nonEmptyStringJsonSchema },
+      },
+    },
+    {
+      if: {
+        properties: { reason: { const: 'ACTIVITY_REDISPATCH_INCOMPLETE' } },
+        required: ['reason'],
+      },
+      then: {
+        required: ['redispatchRequestEventId'],
+        properties: { redispatchRequestEventId: nonEmptyStringJsonSchema },
       },
     },
     {

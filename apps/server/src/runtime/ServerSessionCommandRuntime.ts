@@ -15,6 +15,7 @@ import {
   type SessionCommandWorkerResult,
   type SessionQueue,
   type SessionQueueScope,
+  type RuntimeOperationalTelemetry,
 } from '@hypha/core';
 import type {
   EnqueueReActContinuationCommandRequest,
@@ -78,6 +79,8 @@ export interface ServerSessionCommandRuntimeOptions<
   maxHandlerDurationMs?: number;
   shutdownDrainMs?: number;
   now?: () => string;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
   classifyFailure?: ServerSessionCommandFailureClassifier;
   onResult?: (result: SessionCommandWorkerResult) => void;
   onError?: (error: unknown) => void;
@@ -110,6 +113,10 @@ export class ServerSessionCommandRuntime<TPayloads extends ServerSessionCommandP
       ...(options.onLeaseRenewalFailure === undefined
         ? {}
         : { onLeaseRenewalFailure: options.onLeaseRenewalFailure }),
+      ...(options.operationalTelemetry === undefined
+        ? {}
+        : { operationalTelemetry: options.operationalTelemetry }),
+      ...(options.monotonicNow === undefined ? {} : { monotonicNow: options.monotonicNow }),
     });
     this.scheduler = new DurableSessionCommandScheduler({
       worker: this.worker,

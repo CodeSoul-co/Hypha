@@ -16,9 +16,16 @@ export const RUNTIME_HUMAN_TASK_STATUSES = [
   'rejected',
   'expired',
   'cancelled',
+  'superseded',
 ] as const;
 
-export const RUNTIME_HUMAN_TASK_DECISIONS = ['approved', 'rejected', 'cancelled'] as const;
+export const RUNTIME_HUMAN_TASK_DECISIONS = [
+  'approved',
+  'rejected',
+  'expired',
+  'cancelled',
+  'superseded',
+] as const;
 
 export type RuntimeHumanTaskKind = (typeof RUNTIME_HUMAN_TASK_KINDS)[number];
 export type RuntimeHumanTaskStatus = (typeof RUNTIME_HUMAN_TASK_STATUSES)[number];
@@ -43,8 +50,12 @@ export interface RuntimeHumanTask {
   providerRevision?: string;
   activityDescriptorRef?: string;
   activityDescriptorHash?: string;
+  decisionEventId?: string;
+  decisionCommandId?: string;
+  decisionIdempotencyKey?: string;
   decidedBy?: string;
   decidedAt?: string;
+  supersededByTaskId?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
 }
@@ -76,6 +87,7 @@ export interface RuntimeHumanTaskDecisionCommand {
   expectedSubjectHash: string;
   decision: RuntimeHumanTaskDecision;
   decidedAt: string;
+  supersededByTaskId?: string;
   reason?: string;
   idempotencyKey?: string;
 }
