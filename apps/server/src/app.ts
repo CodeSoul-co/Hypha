@@ -209,9 +209,13 @@ class Application {
     });
     runtime.composeRuntime(production.execution);
     const active = await runtime.startWorkers(production.workers);
-    logger.info('Canonical Runtime execution graph activated', {
+    logger.info('Canonical Runtime maintenance workers activated', {
       workers: active.status(),
     });
+    const readiness = runtime.executionReadiness();
+    if (!readiness.ready) {
+      logger.warn('Canonical Runtime remains unavailable for execution traffic', { readiness });
+    }
   }
 
   private async initializeCanonicalRuntime(): Promise<void> {

@@ -54,17 +54,17 @@ describe('GET /api/v1/health', () => {
 });
 
 describe('GET /api/v1/ready', () => {
-  it('reports ready only after the canonical graph and durable workers pass startup', async () => {
+  it('fails closed while the production Session Command worker is not configured', async () => {
     const r = await request(app).get('/api/v1/ready');
 
-    expect(r.status).toBe(200);
+    expect(r.status).toBe(503);
     expect(r.body).toMatchObject({
-      success: true,
+      success: false,
       data: {
-        status: 'ready',
+        status: 'not_ready',
         runtime: {
-          ready: true,
-          state: 'workers_running',
+          ready: false,
+          state: 'maintenance_workers_running',
         },
       },
     });

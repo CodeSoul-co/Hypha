@@ -106,7 +106,7 @@ export class ServerRuntimeWorkerLifecycle {
       workers &&
       workers.timer.isRunning() &&
       workers.recovery.isRunning() &&
-      (workers.commands === undefined || workers.commands.isRunning())
+      workers.commands?.isRunning()
     );
   }
 

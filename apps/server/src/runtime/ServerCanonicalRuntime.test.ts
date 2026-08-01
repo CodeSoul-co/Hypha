@@ -170,6 +170,22 @@ describe('ServerCanonicalRuntime', () => {
     );
   });
 
+  it('keeps execution readiness closed when only maintenance workers are configured', async () => {
+    const service = createService(new InMemoryEventStore());
+    await service.initialize();
+    service.composeRuntime(executionBindings());
+
+    await service.startWorkers(maintenanceWorkerBindings());
+
+    expect(service.areWorkersRunning()).toBe(false);
+    expect(service.executionReadiness()).toEqual({
+      ready: false,
+      state: 'maintenance_workers_running',
+      message:
+        'Canonical Runtime maintenance workers are running, but the durable Session Command worker is not configured',
+    });
+  });
+
   function createService(
     legacyEvents: InMemoryEventStore,
     maxLegacyEvents = 100,
@@ -227,6 +243,14 @@ function executionBindings(): ServerRuntimeCompositionBindings {
 }
 
 function workerBindings(): ServerRuntimeWorkerBindings {
+  let running = true;
+  const commands = {
+    start: jest.fn(),
+    isRunning: jest.fn(() => running),
+    close: jest.fn(async () => {
+      running = false;
+    }),
+  };
   return {
     timer: {
       ownerId: 'runtime.timer.server',
@@ -241,7 +265,13 @@ function workerBindings(): ServerRuntimeWorkerBindings {
       pollIntervalMs: 60_000,
       autoRecoverReasons: ['PROJECTION_BEHIND'],
     },
+    commands: { runtime: commands },
   };
+}
+
+function maintenanceWorkerBindings(): ServerRuntimeWorkerBindings {
+  const { commands: _commands, ...bindings } = workerBindings();
+  return bindings;
 }
 
 function event(id: string, type: Parameters<typeof createFrameworkEvent>[0]['type']) {

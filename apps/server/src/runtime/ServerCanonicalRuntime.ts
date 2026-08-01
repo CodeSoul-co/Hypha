@@ -54,6 +54,7 @@ export type ServerRuntimeExecutionState =
   | 'not_initialized'
   | 'event_authority_ready'
   | 'execution_graph_ready'
+  | 'maintenance_workers_running'
   | 'workers_running'
   | 'closed';
 
@@ -262,11 +263,24 @@ export class ServerCanonicalRuntime {
         message: 'Canonical Runtime execution graph is not composed',
       });
     }
+    const workerStatus = this.workerLifecycle?.status();
+    if (
+      workerStatus?.timer.running === true &&
+      workerStatus.recovery.running === true &&
+      workerStatus.commands === undefined
+    ) {
+      return Object.freeze({
+        ready: false,
+        state: 'maintenance_workers_running',
+        message:
+          'Canonical Runtime maintenance workers are running, but the durable Session Command worker is not configured',
+      });
+    }
     if (!this.areWorkersRunning()) {
       return Object.freeze({
         ready: false,
         state: 'execution_graph_ready',
-        message: 'Canonical Runtime durable workers are not running',
+        message: 'Canonical Runtime durable execution workers are not running',
       });
     }
     return Object.freeze({
