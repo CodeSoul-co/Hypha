@@ -268,7 +268,7 @@ function environment(): ExecutionEnvironmentSpec {
       maxStderrBytes: 1_024,
       maxCombinedOutputBytes: 2_048,
       maxExecutionSeconds: 2,
-      maxIdleSeconds: 10,
+      maxIdleSeconds: 1,
     },
     filesystem: { rootFilesystem: 'writable', mounts: [], allowHostPathMounts: false },
     network: { mode: 'enabled', dnsPolicy: 'system' },

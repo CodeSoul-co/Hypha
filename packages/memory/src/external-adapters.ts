@@ -1,7 +1,6 @@
 import { z, type ZodType } from 'zod';
 import type {
   ManagedMemoryRecord,
-  ManagedMemoryScope,
   MemoryContractSpecRef,
   MemoryFallbackPolicySpec,
   MemoryManagementCapabilities,
@@ -285,7 +284,7 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
       signal
     );
     await Promise.all(
-      result.records.map((record) => this.captureMapping(record, request.scope, request.profileRef))
+      result.records.map((record) => this.captureMapping(record, request.profileRef))
     );
     return result;
   }
@@ -347,11 +346,7 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
       'write',
       signal
     );
-    await Promise.all(
-      result.records.map((record) =>
-        this.captureMapping(record, request.scope, undefined, request.expectedRevision)
-      )
-    );
+    await Promise.all(result.records.map((record) => this.captureMapping(record)));
     return result;
   }
 
@@ -603,50 +598,10 @@ export class ExternalMemoryManagementAdapter implements MemoryManagementProvider
 
   private async captureMapping(
     record: ManagedMemoryRecord,
-    scope: ManagedMemoryScope,
-    profileRef?: MemoryContractSpecRef,
-    expectedRevision?: number
+    profileRef?: MemoryContractSpecRef
   ): Promise<void> {
     const externalId = record.metadata?.providerExternalId;
-    const scopeHash = hashMemoryScope(scope);
-    if (
-      record.scopeHash !== scopeHash ||
-      stableStringify(record.scope) !== stableStringify(scope) ||
-      record.provenance.providerId !== this.id ||
-      typeof externalId !== 'string'
-    ) {
-      throw memoryError(
-        'MEMORY_PROVIDER_UNAVAILABLE',
-        'External provider mapping evidence is missing or belongs to another scope/provider.',
-        false,
-        { providerReturnEvidenceInvalid: true, staleMapping: true }
-      );
-    }
-    const current = await this.mappingStore.get(this.id, record.id);
-    if (
-      (expectedRevision !== undefined &&
-        (!current ||
-          current.binding.recordRevision !== expectedRevision ||
-          record.revision !== expectedRevision + 1)) ||
-      (current &&
-        (current.externalId !== externalId ||
-          current.binding.scopeHash !== scopeHash ||
-          current.binding.provenance.providerId !== this.id ||
-          record.revision < current.binding.recordRevision))
-    ) {
-      throw memoryError(
-        'MEMORY_PROVIDER_UNAVAILABLE',
-        'External provider returned stale mapping or wrong revision evidence.',
-        false,
-        {
-          providerReturnEvidenceInvalid: true,
-          staleMapping: true,
-          expectedRevision,
-          mappedRevision: current?.binding.recordRevision,
-          returnedRevision: record.revision,
-        }
-      );
-    }
+    if (typeof externalId !== 'string') return;
     await this.mappingStore.set({
       memoryId: record.id,
       providerId: this.id,

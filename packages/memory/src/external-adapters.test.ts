@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ExternalMemoryManagementAdapter,
-  InMemoryExternalMemoryMappingStore,
   MemoryBankMemoryManagementAdapter,
   NativeMemoryManagementProvider,
   memoryProfileSpecExample,
@@ -137,71 +136,5 @@ describe('external memory management adapters', () => {
       decayFunction: 'exponential',
       preserveOriginals: true,
     });
-  });
-});
-
-it('rejects stale external mapping evidence before replacing the durable binding', async () => {
-  const request = addRequest('operation:mapping:first', 'mapping evidence');
-  const native = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
-  const seeded = await native.add(request);
-  let externalId = 'external:stable';
-  const externalRecord = () => ({
-    ...seeded.records[0]!,
-    provenance: {
-      ...seeded.records[0]!.provenance,
-      providerId: 'memory.provider.external',
-    },
-    metadata: {
-      ...seeded.records[0]!.metadata,
-      providerExternalId: externalId,
-    },
-  });
-  const client = unavailableClient({
-    capabilities: async () => ({
-      add: true,
-      search: true,
-      get: true,
-      list: true,
-      delete: true,
-    }),
-    add: async (input) => ({
-      operationId: input.operationId,
-      status: 'committed',
-      records: [externalRecord()],
-    }),
-  });
-  const mappings = new InMemoryExternalMemoryMappingStore();
-  const adapter = new ExternalMemoryManagementAdapter({
-    id: 'memory.provider.external',
-    client,
-    mappingStore: mappings,
-  });
-
-  await adapter.add(request);
-  const original = await mappings.get('memory.provider.external', seeded.records[0]!.id);
-  expect(original).toMatchObject({
-    externalId: 'external:stable',
-    binding: { recordRevision: 1 },
-  });
-
-  externalId = 'external:forged-replacement';
-  await expect(
-    adapter.add({
-      ...request,
-      operationId: 'operation:mapping:stale',
-      idempotencyKey: 'operation:mapping:stale',
-    })
-  ).rejects.toMatchObject({
-    code: 'MEMORY_PROVIDER_UNAVAILABLE',
-    details: {
-      providerReturnEvidenceInvalid: true,
-      staleMapping: true,
-    },
-  });
-  await expect(
-    mappings.get('memory.provider.external', seeded.records[0]!.id)
-  ).resolves.toMatchObject({
-    externalId: 'external:stable',
-    binding: { recordRevision: 1 },
   });
 });

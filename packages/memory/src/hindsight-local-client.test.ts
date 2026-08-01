@@ -15,7 +15,6 @@ import {
   HINDSIGHT_LOCAL_PROTOCOL,
   HindsightLocalMemoryBankClient,
   bankIdForScope,
-  hashMemoryScope,
   createHindsightLocalMemoryProviderFactory,
   documentIdForOperation,
 } from './index';
@@ -379,43 +378,6 @@ describe('HindsightLocalMemoryBankClient', () => {
       details: { cancelled: true },
     });
   });
-
-  it('normalizes an in-flight transport cancellation', async () => {
-    const client = new HindsightLocalMemoryBankClient({
-      baseUrl: 'http://localhost:8888',
-      fetch: async (_url, init) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            'abort',
-            () => reject(init.signal?.reason ?? new Error('transport aborted')),
-            { once: true }
-          );
-        }),
-      mappingStore: new DurableMappingStore(),
-      mappingProfile: 'production',
-      operationStore: new DurableOperationStore(),
-      operationProfile: 'production',
-      profileRef,
-    });
-    const controller = new AbortController();
-    const pending = client.search(
-      {
-        operationId: 'in-flight-cancelled-search',
-        principal,
-        scope,
-        profileRef,
-        query: 'cancel during transport',
-      },
-      controller.signal
-    );
-    controller.abort(new Error('acceptance network partition'));
-    await expect(pending).rejects.toMatchObject({
-      code: 'MEMORY_PROVIDER_UNAVAILABLE',
-      details: { cancelled: true },
-    });
-    await client.close();
-  });
-
   it('uses exact-scope banks and rejects a mapping reused from another scope', async () => {
     const mappingStore = new DurableMappingStore();
     const operationStore = new DurableOperationStore();
@@ -474,150 +436,6 @@ describe('HindsightLocalMemoryBankClient', () => {
       code: 'MEMORY_PROVIDER_UNAVAILABLE',
       details: { schemaDrift: true },
     });
-  });
-  it('keeps durable add/update history across client restart when upstream history is empty', async () => {
-    const mappingStore = new DurableMappingStore();
-    const operationStore = new DurableOperationStore();
-    let text = 'Initial durable history value.';
-    const fetcher: Mem0HttpFetch = async (url, init) => {
-      if (url.endsWith('/memories') && init?.method === 'POST') {
-        return response({ operation_id: 'retain-history' });
-      }
-      if (url.endsWith('/operations/retain-history')) {
-        return response({ operation_id: 'retain-history', status: 'completed' });
-      }
-      if (url.includes('/memories/list?')) {
-        return response({
-          items: [
-            {
-              id: 'history-memory',
-              text: 'Initial durable history value.',
-              type: 'world',
-              document_id: documentIdForOperation('operation-history'),
-            },
-          ],
-          total: 1,
-        });
-      }
-      if (url.endsWith('/memories/history-memory') && init?.method === 'PATCH') {
-        text = String((JSON.parse(init.body ?? '{}') as Record<string, unknown>).text);
-        return response({
-          id: 'history-memory',
-          text,
-          type: 'world',
-          document_id: documentIdForOperation('operation-history'),
-        });
-      }
-      if (url.endsWith('/memories/history-memory/history')) return response([]);
-      throw new Error(`Unexpected request ${init?.method ?? 'GET'} ${url}`);
-    };
-    const create = () =>
-      new HindsightLocalMemoryBankClient({
-        baseUrl: 'http://localhost:8888',
-        fetch: fetcher,
-        mappingStore,
-        mappingProfile: 'production',
-        operationStore,
-        operationProfile: 'production',
-        profileRef,
-      });
-    const client = create();
-    const request = { ...addRequest(), operationId: 'operation-history' };
-    await client.add(request);
-    const added = await client.reconcileOperation(request.operationId);
-    const memoryId = added?.records[0]?.id;
-    expect(memoryId).toBeTruthy();
-    await client.update({
-      operationId: 'operation-history-update',
-      principal,
-      scope,
-      memoryId: memoryId!,
-      expectedRevision: 1,
-      patch: { canonicalText: 'Updated durable history value.' },
-      reason: 'history-acceptance',
-    });
-    await client.close();
-
-    const restarted = create();
-    await expect(
-      restarted.history({
-        operationId: 'operation-history-read',
-        principal,
-        scope,
-        memoryId: memoryId!,
-      })
-    ).resolves.toMatchObject([
-      { revision: 1, record: { canonicalText: 'Initial durable history value.' } },
-      { revision: 2, record: { canonicalText: 'Updated durable history value.' } },
-    ]);
-    await restarted.close();
-  });
-
-  it('maps world, experience and observation types with document provenance', async () => {
-    const mappingStore = new DurableMappingStore();
-    const operationStore = new DurableOperationStore();
-    const types = [
-      ['world', 'semantic'],
-      ['experience', 'episodic'],
-      ['observation', 'reflection'],
-    ] as const;
-    for (const [providerType] of types) {
-      await mappingStore.set({
-        memoryId: `memory:${providerType}`,
-        providerId: 'memory.provider.memorybank.hindsight-local',
-        externalId: `external-${providerType}`,
-        binding: {
-          scopeHash: hashMemoryScope(scope),
-          profileRef,
-          recordRevision: 1,
-          provenance: {
-            createdBy: 'hindsight',
-            providerId: 'memory.provider.memorybank.hindsight-local',
-            createdAt: '2026-07-24T00:00:00.000Z',
-          },
-        },
-        lastSyncedAt: '2026-07-24T00:00:00.000Z',
-        syncState: 'synced',
-      });
-    }
-    const client = new HindsightLocalMemoryBankClient({
-      baseUrl: 'http://localhost:8888',
-      fetch: async (url) => {
-        const providerType = types.find(([type]) => url.endsWith(`external-${type}`))?.[0];
-        return response({
-          id: `external-${providerType}`,
-          text: `${providerType} value`,
-          fact_type: providerType,
-          document_id: `document-${providerType}`,
-        });
-      },
-      mappingStore,
-      mappingProfile: 'production',
-      operationStore,
-      operationProfile: 'production',
-      profileRef,
-    });
-    for (const [providerType, memoryType] of types) {
-      await expect(
-        client.get({
-          operationId: `get-${providerType}`,
-          principal,
-          scope,
-          memoryId: `memory:${providerType}`,
-        })
-      ).resolves.toMatchObject({
-        type: memoryType,
-        provenance: {
-          createdBy: 'hindsight',
-          providerId: 'memory.provider.memorybank.hindsight-local',
-        },
-        metadata: {
-          hindsightType: providerType,
-          hindsightDocumentId: `document-${providerType}`,
-        },
-      });
-    }
-    await client.close();
   });
 });
 

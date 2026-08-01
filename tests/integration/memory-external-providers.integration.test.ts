@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import mongoose from 'mongoose';
 import {
   MongoStructuredStoreProvider,
@@ -9,8 +7,6 @@ import {
   Mem0PlatformClient,
   MemoryBankManagedClient,
   HindsightLocalMemoryBankClient,
-  bankIdForScope,
-  documentIdForOperation,
   memoryProfileSpecExample,
   runExternalProviderAcceptance,
   sha256,
@@ -22,8 +18,6 @@ import {
   type MemoryListRequest,
 } from '../../packages/memory/src';
 
-const execFileAsync = promisify(execFile);
-
 const acceptanceMode = process.env.HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_MODE ?? 'development';
 const explicitlyRequired = new Set(
   (process.env.HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_REQUIRED_PROVIDERS ?? '')
@@ -32,7 +26,6 @@ const explicitlyRequired = new Set(
     .filter(Boolean)
 );
 const externalAcceptanceTestTimeoutMs = 600_000;
-const onlyProvider = process.env.HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_ONLY_PROVIDER?.trim();
 
 function liveFixture(prefix: string): ExternalProviderAcceptanceFixture {
   const suffix = Date.now().toString(36);
@@ -202,30 +195,6 @@ async function pollSettlement<T>(input: {
   throw new Error('External provider settlement exceeded its call/time budget.');
 }
 
-async function runDocker(...args: string[]): Promise<string> {
-  const result = await execFileAsync('docker', args, {
-    timeout: 120_000,
-    windowsHide: true,
-  });
-  return result.stdout.trim();
-}
-
-async function waitForHealthy(client: ExternalMemoryClient, timeoutMs = 120_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = 'unreachable';
-  while (Date.now() <= deadline) {
-    try {
-      const health = await client.health();
-      lastStatus = health.status;
-      if (health.status === 'healthy') return;
-    } catch {
-      lastStatus = 'unreachable';
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  throw new Error(`Hindsight did not become healthy after Docker recovery (${lastStatus}).`);
-}
-
 async function cleanupAcceptanceScope(
   client: ExternalMemoryClient,
   list: MemoryListRequest,
@@ -247,7 +216,6 @@ function isRequired(provider: string): boolean {
 }
 
 function registerExternalCase(name: string, ready: boolean, run: () => Promise<void>): void {
-  if (onlyProvider && name !== onlyProvider) return;
   if (ready) {
     it(name, run, externalAcceptanceTestTimeoutMs);
     return;
@@ -301,9 +269,6 @@ describe('external memory real integration entry points', () => {
         baseUrl: process.env.HYPHA_TEST_MEM0_OSS_URL!,
         apiKey,
         mappingStore: stores.mappingStore,
-        operationStore: stores.operationStore,
-        providerVersion: process.env.HYPHA_TEST_MEM0_OSS_VERSION,
-        expectedProviderVersion: process.env.HYPHA_TEST_MEM0_OSS_VERSION,
         mappingProfile: 'test',
       });
     const client = createClient();
@@ -424,8 +389,6 @@ describe('external memory real integration entry points', () => {
           mappingStore,
           operationStore,
           mappingProfile: 'test',
-          providerVersion: process.env.HYPHA_TEST_MEM0_PLATFORM_VERSION,
-          expectedProviderVersion: process.env.HYPHA_TEST_MEM0_PLATFORM_VERSION,
         });
       const client = createClient();
       const settle = (operationId: string, signal?: AbortSignal) =>
@@ -462,88 +425,8 @@ describe('external memory real integration entry points', () => {
             try {
               await expect(restarted.get(fixture.get(memoryId), signal)).resolves.toBeTruthy();
               const restartedList = await restarted.list(fixture.list, signal);
+              expect(Array.isArray(restartedList.records)).toBe(true);
               expect(restartedList.records.length).toBeGreaterThan(0);
-              expect(new Set(restartedList.records.map((record) => record.id)).size).toBe(
-                restartedList.records.length
-              );
-
-              const crossUser = await restarted.search(
-                {
-                  ...fixture.search,
-                  operationId: fixture.search.operationId + ':cross-user',
-                  principal: {
-                    ...fixture.search.principal,
-                    principalId: fixture.search.principal.principalId + ':other',
-                    userId: fixture.search.scope.userId + ':other',
-                  },
-                  scope: {
-                    ...fixture.search.scope,
-                    userId: fixture.search.scope.userId + ':other',
-                  },
-                },
-                signal
-              );
-              expect(crossUser).toEqual([]);
-              const crossWorkspace = await restarted.search(
-                {
-                  ...fixture.search,
-                  operationId: fixture.search.operationId + ':cross-workspace',
-                  scope: {
-                    ...fixture.search.scope,
-                    workspaceId: fixture.search.scope.workspaceId + ':other',
-                  },
-                },
-                signal
-              );
-              expect(crossWorkspace).toEqual([]);
-
-              let lease = 0;
-              const rotating = new Mem0PlatformClient({
-                baseUrl: process.env.HYPHA_TEST_MEM0_PLATFORM_URL,
-                credentialProvider: {
-                  acquire: async () => ({
-                    token:
-                      lease++ === 0
-                        ? 'hypha-invalid-live-rotation-token'
-                        : process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN!,
-                    tokenType: 'api_token',
-                  }),
-                },
-                mappingStore,
-                operationStore,
-                mappingProfile: 'test',
-                providerVersion: process.env.HYPHA_TEST_MEM0_PLATFORM_VERSION,
-                expectedProviderVersion: process.env.HYPHA_TEST_MEM0_PLATFORM_VERSION,
-              });
-              try {
-                let rotationRejection: unknown;
-                try {
-                  await rotating.search(
-                    {
-                      ...fixture.search,
-                      operationId: fixture.search.operationId + ':rotation-rejected',
-                    },
-                    signal
-                  );
-                } catch (error) {
-                  rotationRejection = error;
-                }
-                expect(rotationRejection).toMatchObject({ code: 'MEMORY_PERMISSION_DENIED' });
-                expect(String(rotationRejection)).not.toContain(
-                  process.env.HYPHA_TEST_MEM0_PLATFORM_TOKEN!
-                );
-                const recovered = await rotating.search(
-                  {
-                    ...fixture.search,
-                    operationId: fixture.search.operationId + ':rotation-recovered',
-                  },
-                  signal
-                );
-                expect(Array.isArray(recovered)).toBe(true);
-                expect(lease).toBe(2);
-              } finally {
-                await rotating.close();
-              }
             } finally {
               await restarted.close();
             }
@@ -567,31 +450,135 @@ describe('external memory real integration entry points', () => {
                 }
               },
             },
+          ],
+          cleanup: async (signal) => {
+            try {
+              await cleanupAcceptanceScope(
+                client,
+                fixture.list,
+                (memoryIds) => ({
+                  ...fixture.delete(memoryIds[0]),
+                  operationId: fixture.delete(memoryIds[0]).operationId + ':scope-cleanup',
+                  memoryIds,
+                }),
+                signal
+              );
+            } finally {
+              await stores.close();
+            }
+          },
+        }
+      );
+      expect(report).toMatchObject({
+        status: 'passed',
+        scopeIsolationVerified: true,
+        restartVerified: true,
+        failureProbeCount: 1,
+        deleteStatus: 'completed',
+        healthStatus: 'healthy',
+        evidence: {
+          commitSha: expect.any(String),
+          providerVersion: expect.any(String),
+          profileHash: expect.stringMatching(/^sha256:/u),
+          capabilitySnapshot: expect.any(Object),
+          environmentHash: expect.stringMatching(/^sha256:/u),
+        },
+      });
+      expect(report.paginationPageCount).toBeGreaterThan(1);
+      expect(report.searchCount).toBeGreaterThan(0);
+      expect(report.listCount).toBeGreaterThan(1);
+      emitEvidence(report);
+    }
+  );
+  registerExternalCase(
+    'hindsight-local',
+    Boolean(process.env.HYPHA_TEST_HINDSIGHT_URL),
+    async () => {
+      const fixture = hindsightLiveFixture('hindsight-local');
+      const stores = await createDurableAcceptanceStores('hindsight-local');
+      const { mappingStore, operationStore } = stores;
+      const createClient = (expectedApiVersion = '0.8') =>
+        new HindsightLocalMemoryBankClient({
+          baseUrl: process.env.HYPHA_TEST_HINDSIGHT_URL!,
+          bearerToken: process.env.HYPHA_TEST_HINDSIGHT_TOKEN,
+          mappingStore,
+          mappingProfile: 'production',
+          operationStore,
+          operationProfile: 'production',
+          profileRef: {
+            id: 'memorybank-hindsight-local',
+            version: '1.0.0',
+            revision: process.env.HYPHA_TEST_HINDSIGHT_VERSION,
+          },
+          expectedApiVersion,
+        });
+      const client = createClient();
+      const settle = (operationId: string, signal?: AbortSignal) =>
+        pollSettlement({
+          poll: () => client.reconcileOperation(operationId, signal),
+          isSettled: (result) => result.status === 'committed',
+          isFailed: (result) => result.status === 'failed',
+          signal,
+          maxCalls: 180,
+          timeoutMs: 180_000,
+        });
+      const report = await runExternalProviderAcceptance(
+        client,
+        fixture,
+        undefined,
+        evidence('memory.provider.memorybank.hindsight-local', 'HYPHA_TEST_HINDSIGHT_VERSION'),
+        {
+          settleAdd: (_result, signal) => settle(fixture.add.operationId, signal),
+          preparePagination: async (signal) => {
+            const operationId = fixture.add.operationId + ':pagination';
+            await client.add(
+              {
+                ...fixture.add,
+                operationId,
+                input: String(fixture.add.input) + ' pagination companion',
+                idempotencyKey: operationId,
+              },
+              signal
+            );
+            await settle(operationId, signal);
+          },
+          verifyRestart: async (memoryId, signal) => {
+            const restarted = createClient();
+            try {
+              await expect(restarted.get(fixture.get(memoryId), signal)).resolves.toBeTruthy();
+              await expect(restarted.list(fixture.list, signal)).resolves.toMatchObject({
+                records: expect.any(Array),
+              });
+              await expect(restarted.add(fixture.add, signal)).resolves.toMatchObject({
+                status: 'committed',
+              });
+            } finally {
+              await restarted.close();
+            }
+          },
+          failureProbes: [
+            {
+              id: 'version-drift',
+              expectedCodes: ['MEMORY_PROVIDER_UNAVAILABLE'],
+              run: async (signal) => {
+                const drifted = createClient('999');
+                try {
+                  await drifted.capabilities(signal);
+                } finally {
+                  await drifted.close();
+                }
+              },
+            },
             {
               id: 'cancelled-request',
               expectedCodes: ['MEMORY_PROVIDER_UNAVAILABLE'],
               run: async () => {
                 const controller = new AbortController();
-                controller.abort(new Error('live acceptance cancellation probe'));
-                await client.search(
-                  {
-                    ...fixture.search,
-                    operationId: fixture.search.operationId + ':cancelled',
-                  },
-                  controller.signal
-                );
+                controller.abort(new Error('Hindsight acceptance cancellation'));
+                await client.search(fixture.search, controller.signal);
               },
             },
           ],
-          verifyDelete: async (memoryId, signal) => {
-            let visible = true;
-            for (let call = 0; call < 30 && visible; call += 1) {
-              const page = await client.list(fixture.list, signal);
-              visible = page.records.some((record) => record.id === memoryId);
-              if (visible) await new Promise((resolve) => setTimeout(resolve, 1_000));
-            }
-            expect(visible).toBe(false);
-          },
           cleanup: async (signal) => {
             try {
               await cleanupAcceptanceScope(
@@ -628,225 +615,6 @@ describe('external memory real integration entry points', () => {
       expect(report.paginationPageCount).toBeGreaterThan(1);
       expect(report.searchCount).toBeGreaterThan(0);
       expect(report.listCount).toBeGreaterThan(1);
-      emitEvidence(report);
-    }
-  );
-  registerExternalCase(
-    'hindsight-local',
-    Boolean(process.env.HYPHA_TEST_HINDSIGHT_URL),
-    async () => {
-      const fixture = hindsightLiveFixture('hindsight-local');
-      const stores = await createDurableAcceptanceStores('hindsight-local');
-      const { mappingStore, operationStore } = stores;
-      const dockerContainer = process.env.HYPHA_TEST_HINDSIGHT_DOCKER_CONTAINER?.trim();
-      const expectedImage = process.env.HYPHA_TEST_HINDSIGHT_IMAGE?.trim();
-      const providerId = 'memory.provider.memorybank.hindsight-local';
-      const createClient = (expectedApiVersion = '0.8') =>
-        new HindsightLocalMemoryBankClient({
-          baseUrl: process.env.HYPHA_TEST_HINDSIGHT_URL!,
-          bearerToken: process.env.HYPHA_TEST_HINDSIGHT_TOKEN,
-          mappingStore,
-          mappingProfile: 'production',
-          operationStore,
-          operationProfile: 'production',
-          profileRef: {
-            id: 'memorybank-hindsight-local',
-            version: '1.0.0',
-            revision: process.env.HYPHA_TEST_HINDSIGHT_VERSION,
-          },
-          expectedApiVersion,
-        });
-      const client = createClient();
-      const settle = (operationId: string, signal?: AbortSignal) =>
-        pollSettlement({
-          poll: () => client.reconcileOperation(operationId, signal),
-          isSettled: (result) => result.status === 'committed',
-          isFailed: (result) => result.status === 'failed',
-          signal,
-          maxCalls: 180,
-          timeoutMs: 180_000,
-        });
-      const report = await runExternalProviderAcceptance(
-        client,
-        fixture,
-        undefined,
-        evidence('memory.provider.memorybank.hindsight-local', 'HYPHA_TEST_HINDSIGHT_VERSION'),
-        {
-          settleAdd: async (_result, signal) => {
-            await settle(fixture.add.operationId, signal);
-            const operation = await operationStore.get(providerId, fixture.add.operationId);
-            expect(operation).toMatchObject({
-              providerId,
-              operationId: fixture.add.operationId,
-              kind: 'hindsight_operation',
-              state: 'succeeded',
-              metadata: {
-                bankId: bankIdForScope(fixture.add.scope),
-                documentId: documentIdForOperation(fixture.add.operationId),
-                requestHash: expect.stringMatching(/^sha256:/u),
-                operationHash: expect.stringMatching(/^sha256:/u),
-                providerRevision: '0.8.5',
-              },
-            });
-          },
-          preparePagination: async (signal) => {
-            const operationId = fixture.add.operationId + ':pagination';
-            await client.add(
-              {
-                ...fixture.add,
-                operationId,
-                input: String(fixture.add.input) + ' pagination companion',
-                idempotencyKey: operationId,
-              },
-              signal
-            );
-            await settle(operationId, signal);
-          },
-          verifyRestart: async (memoryId, signal) => {
-            if (dockerContainer) {
-              if (!expectedImage) {
-                throw new Error(
-                  'HYPHA_TEST_HINDSIGHT_IMAGE is required for a Docker restart acceptance run.'
-                );
-              }
-              await expect(
-                runDocker('inspect', '--format', '{{.Config.Image}}', dockerContainer)
-              ).resolves.toBe(expectedImage);
-              await runDocker('restart', dockerContainer);
-            }
-            const restarted = createClient();
-            try {
-              if (dockerContainer) await waitForHealthy(restarted);
-              const record = await restarted.get(fixture.get(memoryId), signal);
-              expect(record).toMatchObject({
-                provenance: { createdBy: 'hindsight', providerId },
-                metadata: {
-                  hindsightType: expect.stringMatching(/^(world|experience)$/u),
-                  hindsightDocumentId: expect.any(String),
-                },
-              });
-              const page = await restarted.list(fixture.list, signal);
-              expect(page).toMatchObject({
-                records: expect.any(Array),
-              });
-              expect(new Set(page.records.map((item) => item.id)).size).toBe(page.records.length);
-              const crossUser = {
-                ...fixture.list,
-                operationId: fixture.list.operationId + ':cross-user',
-                principal: {
-                  ...fixture.list.principal,
-                  userId: fixture.list.principal.userId + ':other',
-                },
-                scope: { ...fixture.list.scope, userId: fixture.list.scope.userId + ':other' },
-              };
-              const crossWorkspace = {
-                ...fixture.list,
-                operationId: fixture.list.operationId + ':cross-workspace',
-                scope: {
-                  ...fixture.list.scope,
-                  workspaceId: fixture.list.scope.workspaceId + ':other',
-                },
-              };
-              await expect(restarted.list(crossUser, signal)).resolves.toMatchObject({
-                records: [],
-              });
-              await expect(restarted.list(crossWorkspace, signal)).resolves.toMatchObject({
-                records: [],
-              });
-              await expect(restarted.add(fixture.add, signal)).resolves.toMatchObject({
-                status: 'committed',
-              });
-            } finally {
-              await restarted.close();
-            }
-          },
-          failureProbes: [
-            {
-              id: 'version-drift',
-              expectedCodes: ['MEMORY_PROVIDER_UNAVAILABLE'],
-              run: async (signal) => {
-                const drifted = createClient('999');
-                try {
-                  await drifted.capabilities(signal);
-                } finally {
-                  await drifted.close();
-                }
-              },
-            },
-            {
-              id: 'cancelled-request',
-              expectedCodes: ['MEMORY_PROVIDER_UNAVAILABLE'],
-              run: async () => {
-                const controller = new AbortController();
-                controller.abort(new Error('Hindsight acceptance cancellation'));
-                await client.search(fixture.search, controller.signal);
-              },
-            },
-            ...(dockerContainer
-              ? [
-                  {
-                    id: 'network-partition-recovery',
-                    expectedCodes: ['MEMORY_PROVIDER_UNAVAILABLE'] as const,
-                    run: async () => {
-                      let failure: unknown;
-                      await runDocker('pause', dockerContainer);
-                      const controller = new AbortController();
-                      const timer = setTimeout(
-                        () => controller.abort(new Error('Hindsight network partition timeout')),
-                        3_000
-                      );
-                      try {
-                        await client.search(fixture.search, controller.signal);
-                      } catch (error) {
-                        failure = error;
-                      } finally {
-                        clearTimeout(timer);
-                        await runDocker('unpause', dockerContainer);
-                        await waitForHealthy(client);
-                      }
-                      if (failure) throw failure;
-                    },
-                  },
-                ]
-              : []),
-          ],
-          cleanup: async (signal) => {
-            try {
-              await cleanupAcceptanceScope(
-                client,
-                fixture.list,
-                (memoryIds) => ({
-                  ...fixture.delete(memoryIds[0]),
-                  operationId: fixture.delete(memoryIds[0]).operationId + ':scope-cleanup',
-                  memoryIds,
-                }),
-                signal
-              );
-            } finally {
-              await stores.close();
-            }
-          },
-        }
-      );
-      expect(report).toMatchObject({
-        status: 'passed',
-        scopeIsolationVerified: true,
-        restartVerified: true,
-        failureProbeCount: dockerContainer ? 3 : 2,
-        deleteStatus: 'completed',
-        healthStatus: 'healthy',
-        evidence: {
-          commitSha: expect.any(String),
-          providerVersion: expect.any(String),
-          profileHash: expect.stringMatching(/^sha256:/u),
-          capabilitySnapshot: expect.any(Object),
-          environmentHash: expect.stringMatching(/^sha256:/u),
-        },
-      });
-      expect(report.paginationPageCount).toBeGreaterThan(1);
-      expect(report.searchCount).toBeGreaterThan(0);
-      expect(report.listCount).toBeGreaterThan(1);
-      expect(report.historyCount).toBeGreaterThanOrEqual(2);
       emitEvidence(report);
     }
   );

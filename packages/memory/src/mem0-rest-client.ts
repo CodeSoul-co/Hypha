@@ -26,11 +26,6 @@ import {
   type ExternalMemoryMappingRuntimeProfile,
   type ExternalMemoryMappingStore,
 } from './external-adapters';
-import {
-  createExternalProviderOperation,
-  resolveExternalProviderOperationStore,
-  type ExternalProviderOperationStore,
-} from './external-provider-operations';
 import { createExternalMemoryId } from './external-memory-identity';
 import { beginProviderPage, finishProviderPage } from './provider-pagination';
 import { normalizeExternalProviderBaseUrl } from './external-provider-url';
@@ -40,7 +35,6 @@ export interface Mem0HttpResponse {
   ok: boolean;
   status: number;
   statusText: string;
-  headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
   text(): Promise<string>;
 }
@@ -65,11 +59,6 @@ export interface Mem0OssClientOptions {
   now?: () => Date;
   mappingStore?: ExternalMemoryMappingStore;
   mappingProfile?: ExternalMemoryMappingRuntimeProfile;
-  operationStore?: ExternalProviderOperationStore;
-  operationProfile?: ExternalMemoryMappingRuntimeProfile;
-  providerVersion?: string;
-  expectedProviderVersion?: string;
-  expectedCapabilities?: Partial<MemoryManagementCapabilities>;
   listPaginationMode?: 'top-k-offset' | 'provider-cursor';
   allowInsecureForTests?: boolean;
 }
@@ -100,41 +89,10 @@ export class Mem0OssClient implements ExternalMemoryClient {
   private readonly providerId: string;
   private readonly now: () => Date;
   private readonly mappingStore: ExternalMemoryMappingStore;
-  private readonly operationStore: ExternalProviderOperationStore;
   private readonly inFlight = new Set<AbortController>();
   private closed = false;
 
   constructor(private readonly options: Mem0OssClientOptions) {
-    if (
-      options.expectedProviderVersion &&
-      options.providerVersion !== options.expectedProviderVersion
-    ) {
-      throw memoryError(
-        'MEMORY_PROVIDER_NOT_INSTALLED',
-        'Mem0 OSS version mismatch: expected ' +
-          options.expectedProviderVersion +
-          ', observed ' +
-          (options.providerVersion ?? '<missing>') +
-          '.'
-      );
-    }
-    for (const [capability, expected] of Object.entries(options.expectedCapabilities ?? {})) {
-      const observed = mem0RestCapabilities[
-        capability as keyof MemoryManagementCapabilities
-      ] as boolean;
-      if (observed !== expected) {
-        throw memoryError(
-          'MEMORY_PROVIDER_NOT_INSTALLED',
-          'Mem0 OSS capability drift: ' +
-            capability +
-            ' expected ' +
-            String(expected) +
-            ', observed ' +
-            String(observed) +
-            '.'
-        );
-      }
-    }
     this.baseUrl = normalizeExternalProviderBaseUrl(options.baseUrl, {
       providerName: 'Mem0 OSS',
       allowLoopbackHttp: true,
@@ -151,11 +109,9 @@ export class Mem0OssClient implements ExternalMemoryClient {
     this.fetcher = fetcher;
     this.providerId = options.providerId ?? 'memory.provider.mem0.rest';
     this.now = options.now ?? (() => new Date());
-    const persistenceProfile = options.mappingProfile ?? 'ephemeral';
-    this.mappingStore = resolveExternalMemoryMappingStore(options.mappingStore, persistenceProfile);
-    this.operationStore = resolveExternalProviderOperationStore(
-      options.operationStore,
-      options.operationProfile ?? 'ephemeral'
+    this.mappingStore = resolveExternalMemoryMappingStore(
+      options.mappingStore,
+      options.mappingProfile ?? 'ephemeral'
     );
   }
 
@@ -164,40 +120,6 @@ export class Mem0OssClient implements ExternalMemoryClient {
   }
 
   async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
-    try {
-      return await this.addOnce(request, signal);
-    } catch (error) {
-      if (isUnknownWriteOutcome(error)) {
-        await this.operationStore.set(
-          createExternalProviderOperation({
-            providerId: this.providerId,
-            operationId: request.operationId,
-            kind: 'unknown_write',
-            state: 'reconcile_required',
-            scope: request.scope,
-            profileRef: request.profileRef,
-            principal: {
-              principalId: request.principal.principalId,
-              userId: request.principal.userId,
-            },
-            now: this.now().toISOString(),
-          })
-        );
-        throw memoryError(
-          'MEMORY_PROVIDER_UNAVAILABLE',
-          'Mem0 OSS write outcome is unknown and quarantined for reconciliation.',
-          false,
-          { operationId: request.operationId, quarantined: true }
-        );
-      }
-      throw error;
-    }
-  }
-
-  private async addOnce(
-    request: MemoryAddRequest,
-    signal?: AbortSignal
-  ): Promise<ManagedMemoryWriteResult> {
     const scopeHash = hashMemoryScope(request.scope);
     const metadata = {
       ...request.metadata,
@@ -245,7 +167,7 @@ export class Mem0OssClient implements ExternalMemoryClient {
       method: 'POST',
       body: {
         query: request.query ?? '',
-        filters: toMem0SearchScope(request.scope),
+        filters: toMem0Scope(request.scope),
         top_k: request.topK,
       },
       signal,
@@ -489,39 +411,6 @@ export class Mem0OssClient implements ExternalMemoryClient {
       });
   }
 
-  async reconcile(operationId: string, signal?: AbortSignal): Promise<ManagedMemorySearchResult[]> {
-    const operation = await this.operationStore.get(this.providerId, operationId);
-    if (!operation || operation.state !== 'reconcile_required') return [];
-    const listed = await this.list(
-      {
-        operationId: operationId + ':reconcile',
-        principal: {
-          principalId: operation.principal.principalId,
-          type: 'user',
-          userId: operation.principal.userId,
-          permissionScopes: ['memory:read'],
-        },
-        scope: operation.scope,
-        filter: { metadata: { _hypha_operation_id: operationId } },
-        pagination: { limit: 100, maxPages: 1, maxCalls: 1 },
-      },
-      signal
-    );
-    const results = listed.records.map((record) => ({
-      record,
-      reasons: ['mem0_oss_unknown_write_reconciled'],
-    }));
-    if (results.length > 0) {
-      await this.operationStore.set({
-        ...operation,
-        state: 'succeeded',
-        attempts: operation.attempts + 1,
-        updatedAt: this.now().toISOString(),
-      });
-    }
-    return results;
-  }
-
   async health(signal?: AbortSignal): Promise<ProviderHealth> {
     const startedAt = this.now().getTime();
     try {
@@ -754,18 +643,6 @@ function toMem0Scope(scope: ManagedMemoryScope): Record<string, string> {
       ['run_id', scope.runId],
     ].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   );
-}
-
-function isUnknownWriteOutcome(error: unknown): boolean {
-  if (error instanceof Error) return error.name === 'AbortError' || error.name === 'TimeoutError';
-  if (!error || typeof error !== 'object') return false;
-  const value = error as { code?: string; details?: Record<string, unknown> };
-  return value.code === 'MEMORY_PROVIDER_TIMEOUT' || value.details?.status === undefined;
-}
-
-function toMem0SearchScope(scope: ManagedMemoryScope): Record<string, string> {
-  const { app_id: _unsupportedWorkspaceFilter, ...searchScope } = toMem0Scope(scope);
-  return searchScope;
 }
 
 function toMem0Messages(input: unknown): Array<{ role: string; content: string }> {

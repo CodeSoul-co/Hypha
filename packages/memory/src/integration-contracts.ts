@@ -16,7 +16,6 @@ import type {
 import type { ManagedMemorySearchRequest, MemoryManagementProvider } from './operations';
 import { hashMemoryScope, normalizeMemoryError, sha256 } from './memory-utils';
 import type { MemoryEventContext, MemoryEventPublisher } from './memory-events';
-import type { MemoryProviderReturnEvidence } from './provider-return-evidence';
 
 export type MemoryActivityOperation =
   | 'add'
@@ -50,7 +49,6 @@ export interface MemoryActivityResult {
   contextEnvelopeRef?: string;
   eventIds: string[];
   error?: NormalizedMemoryError;
-  evidence?: MemoryProviderReturnEvidence;
   output?: unknown;
 }
 
@@ -436,7 +434,6 @@ export interface DomainMemoryDependencySnapshot {
 
 export interface MemoryCacheValidityInput {
   memoryProfileRevision: string;
-  mutationGeneration: string;
   contextProfileRevision?: string;
   scopeHash: string;
   queryHash?: string;
@@ -453,7 +450,6 @@ export interface MemoryCacheInvalidation {
   reason: 'created' | 'updated' | 'invalidated' | 'deleted' | 'provider_revision';
   memoryIds: string[];
   memoryVersionIds?: string[];
-  mutationGeneration: string;
   validityHash: string;
 }
 

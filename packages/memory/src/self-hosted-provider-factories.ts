@@ -6,7 +6,6 @@ import {
   type MemoryManagementProviderRegistry,
 } from './memory-runtime-factory';
 import { Mem0OssClient, type Mem0HttpFetch, type Mem0OssClientOptions } from './mem0-rest-client';
-import type { ExternalProviderOperationStore } from './external-provider-operations';
 import { memoryError } from './memory-utils';
 
 export const MEM0_OSS_FACTORY_ID = 'memory.factory.mem0.oss-rest' as const;
@@ -15,7 +14,6 @@ export interface Mem0OssConnection {
   baseUrl: string;
   apiKey?: string;
   authMode?: Mem0OssClientOptions['authMode'];
-  providerVersion?: string;
   fetch?: Mem0HttpFetch;
 }
 
@@ -55,7 +53,6 @@ function createMem0OssInstallation(
   const config = asObject(context.spec.config);
   const connection = resolveConnection(context, config, options.fetch);
   const mappingStore = resolveMappingStore(context, config);
-  const operationStore = resolveOperationStore(context, config);
   const client = new Mem0OssClient({
     baseUrl: connection.baseUrl,
     apiKey: connection.apiKey,
@@ -63,11 +60,6 @@ function createMem0OssInstallation(
     fetch: connection.fetch,
     providerId: context.spec.id,
     mappingStore,
-    operationStore,
-    operationProfile: 'production',
-    providerVersion: connection.providerVersion,
-    expectedProviderVersion: readString(config, 'expectedProviderVersion'),
-    expectedCapabilities: context.spec.capabilities,
     mappingProfile: 'production',
     listPaginationMode:
       readString(config, 'listPaginationMode') === 'provider-cursor'
@@ -110,7 +102,6 @@ function resolveConnection(
       baseUrl: connection.baseUrl,
       apiKey: connection.apiKey,
       authMode: connection.authMode,
-      providerVersion: connection.providerVersion,
       fetch: connection.fetch ?? defaultFetch,
     };
   }
@@ -144,32 +135,6 @@ function resolveMappingStore(
     );
   }
   return candidate as ExternalMemoryMappingStore;
-}
-
-function resolveOperationStore(
-  context: MemoryManagementProviderFactoryContext,
-  config: Record<string, unknown>
-): ExternalProviderOperationStore {
-  const reference = readString(config, 'operationStoreRef');
-  const value = reference ? context.references?.get(reference) : undefined;
-  const candidate = value as Partial<ExternalProviderOperationStore> | undefined;
-  if (
-    !reference ||
-    !candidate ||
-    candidate.durability !== 'durable' ||
-    typeof candidate.get !== 'function' ||
-    typeof candidate.claim !== 'function' ||
-    typeof candidate.set !== 'function' ||
-    typeof candidate.listRecoverable !== 'function'
-  ) {
-    throw memoryError(
-      'MEMORY_PROVIDER_NOT_INSTALLED',
-      'Mem0 OSS durable operation store ' +
-        (reference ?? '<missing>') +
-        ' is not resolved or incompatible.'
-    );
-  }
-  return candidate as ExternalProviderOperationStore;
 }
 
 function asObject(value: unknown): Record<string, unknown> {

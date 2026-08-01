@@ -149,14 +149,6 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
     const bankId = bankIdForScope(request.scope);
     const documentId = documentIdForOperation(request.operationId);
     const requestHash = sha256(request);
-    const operationHash = sha256({
-      providerId: this.providerId,
-      operationId: request.operationId,
-      scopeHash: hashMemoryScope(request.scope),
-      bankId,
-      documentId,
-      requestHash,
-    });
     const now = this.now().toISOString();
     const candidate = createExternalProviderOperation({
       providerId: this.providerId,
@@ -170,13 +162,7 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         userId: request.principal.userId,
       },
       deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
-      metadata: {
-        bankId,
-        documentId,
-        requestHash,
-        operationHash,
-        providerRevision: HINDSIGHT_LOCAL_VERSION,
-      },
+      metadata: { bankId, documentId, requestHash, providerRevision: HINDSIGHT_LOCAL_VERSION },
       now,
     });
     const claimed = await this.operationStore.claim(candidate);
@@ -286,18 +272,8 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
     const storedHash = readString(metadata, 'requestHash');
     const bankId = readString(metadata, 'bankId');
     const documentId = readString(metadata, 'documentId');
-    const operationHash = readString(metadata, 'operationHash');
-    const expectedOperationHash = sha256({
-      providerId: operation.providerId,
-      operationId: operation.operationId,
-      scopeHash: operation.scopeHash,
-      bankId,
-      documentId,
-      requestHash,
-    });
     if (
       storedHash !== requestHash ||
-      operationHash !== expectedOperationHash ||
       operation.scopeHash !== hashMemoryScope(operation.scope) ||
       bankId !== bankIdForScope(operation.scope) ||
       documentId !== documentIdForOperation(operation.operationId)
@@ -752,39 +728,28 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
 
   async history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]> {
     assertPrincipalScope(request.principal.userId, request.scope);
-    const mapping = await this.resolveMapping(request.memoryId, request.scope);
+    const externalId = await this.resolveExternalId(request.memoryId, request.scope);
     const body = await this.request(
-      `/v1/default/banks/${encodeURIComponent(bankIdForScope(request.scope))}/memories/${encodeURIComponent(mapping.externalId)}/history`,
+      `/v1/default/banks/${encodeURIComponent(bankIdForScope(request.scope))}/memories/${encodeURIComponent(externalId)}/history`,
       { signal }
     );
     const object = asObject(body);
     const values = Array.isArray(body)
       ? body
       : asArray(object.items ?? object.history ?? object.versions);
-    const versions = new Map<number, MemoryVersion>();
-    for (const [index, value] of values.entries()) {
-      const item = { id: mapping.externalId, ...asObject(value) };
-      const revision = readNumber(item, 'revision') ?? index + 1;
-      const record = this.toRecord(item, request.scope, {
+    return values.map((item, index) => {
+      const record = this.toRecord(asObject(item), request.scope, {
         type: 'derived',
         sourceId: 'hindsight:history',
       });
-      versions.set(revision, {
+      const revision = readNumber(asObject(item), 'revision') ?? index + 1;
+      return {
         memoryId: request.memoryId,
-        versionId: readString(item, 'version_id') ?? `${request.memoryId}:v${revision}`,
+        versionId: readString(asObject(item), 'version_id') ?? `${request.memoryId}:v${revision}`,
         revision,
-        record: {
-          ...record,
-          id: request.memoryId,
-          versionId: `${request.memoryId}:v${revision}`,
-          revision,
-        },
-      });
-    }
-    for (const version of durableHistory(mapping.metadata, request.memoryId, request.scope)) {
-      versions.set(version.revision, version);
-    }
-    return [...versions.values()].sort((left, right) => left.revision - right.revision);
+        record: { ...record, id: request.memoryId, revision },
+      };
+    });
   }
 
   async health(signal?: AbortSignal): Promise<ProviderHealth> {
@@ -888,7 +853,7 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         'Hindsight response metadata belongs to a different Hypha scope.'
       );
     }
-    const hindsightType = readString(item, 'type') ?? readString(item, 'fact_type');
+    const hindsightType = readString(item, 'type');
     const status = readString(item, 'state') === 'invalidated' ? 'invalidated' : 'active';
     const revision = readNumber(item, 'revision') ?? 1;
     return {
@@ -921,31 +886,16 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         hindsightType,
         hindsightContext: item.context,
         hindsightEntities: item.entities,
-        hindsightDocumentId: readString(item, 'document_id'),
       },
     };
   }
 
   private async remember(records: ManagedMemoryRecord[]): Promise<void> {
     for (const record of records) {
-      const current = await this.mappingStore.get(this.providerId, record.id);
-      if (current && current.binding.recordRevision > record.revision) continue;
-      const versions = new Map(
-        durableHistory(current?.metadata, record.id, record.scope).map((version) => [
-          version.revision,
-          version,
-        ])
-      );
-      versions.set(record.revision, {
-        memoryId: record.id,
-        versionId: `${record.id}:v${record.revision}`,
-        revision: record.revision,
-        record: { ...record, versionId: `${record.id}:v${record.revision}` },
-      });
       await this.mappingStore.set({
         memoryId: record.id,
         providerId: this.providerId,
-        externalId: String(record.metadata?.providerExternalId ?? current?.externalId),
+        externalId: String(record.metadata?.providerExternalId),
         binding: {
           scopeHash: record.scopeHash,
           profileRef: this.profileRef,
@@ -955,11 +905,9 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
         lastSyncedAt: this.now().toISOString(),
         syncState: record.status === 'invalidated' ? 'deleted' : 'synced',
         metadata: {
-          ...current?.metadata,
           scope: record.scope,
           bankId: bankIdForScope(record.scope),
           providerRevision: HINDSIGHT_LOCAL_VERSION,
-          history: [...versions.values()].sort((left, right) => left.revision - right.revision),
         },
       });
     }
@@ -1031,51 +979,11 @@ export class HindsightLocalMemoryBankClient implements ExternalMemoryClient {
           { schemaDrift: true }
         );
       }
-    } catch (error) {
-      if (controller.signal.aborted) {
-        throw memoryError(
-          'MEMORY_PROVIDER_UNAVAILABLE',
-          'Hindsight request was cancelled.',
-          false,
-          { cancelled: true }
-        );
-      }
-      throw normalizeMemoryError(error, 'MEMORY_PROVIDER_UNAVAILABLE');
     } finally {
       init.signal?.removeEventListener('abort', abort);
       this.inFlight.delete(controller);
     }
   }
-}
-function durableHistory(
-  metadata: Record<string, unknown> | undefined,
-  memoryId: string,
-  scope: ManagedMemoryScope
-): MemoryVersion[] {
-  const scopeHash = hashMemoryScope(scope);
-  return asArray(asObject(metadata).history)
-    .map((entry) => {
-      const value = asObject(entry);
-      const revision = readNumber(value, 'revision');
-      const versionId = readString(value, 'versionId');
-      const record = asObject(value.record);
-      if (
-        !revision ||
-        !versionId ||
-        readString(value, 'memoryId') !== memoryId ||
-        readString(record, 'id') !== memoryId ||
-        readString(record, 'scopeHash') !== scopeHash
-      ) {
-        return null;
-      }
-      return {
-        memoryId,
-        versionId,
-        revision,
-        record: record as unknown as ManagedMemoryRecord,
-      };
-    })
-    .filter((version): version is MemoryVersion => version !== null);
 }
 
 export function bankIdForScope(scope: ManagedMemoryScope): string {
@@ -1171,7 +1079,11 @@ function classifyHindsightRoute(path: string, body?: unknown): string {
   return 'unknown';
 }
 
-function normalizeHttpError(response: Mem0HttpResponse, method: string, route: string) {
+function normalizeHttpError(
+  response: Mem0HttpResponse,
+  method: string,
+  route: string
+) {
   const code =
     response.status === 401 || response.status === 403
       ? 'MEMORY_PERMISSION_DENIED'

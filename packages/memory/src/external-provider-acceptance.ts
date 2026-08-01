@@ -42,7 +42,6 @@ export interface ExternalProviderAcceptanceHooks {
   settleAdd?(result: ManagedMemoryWriteResult, signal?: AbortSignal): Promise<void>;
   preparePagination?(signal?: AbortSignal): Promise<void>;
   verifyRestart?(memoryId: string, signal?: AbortSignal): Promise<void>;
-  verifyDelete?(memoryId: string, signal?: AbortSignal): Promise<void>;
   failureProbes?: readonly ExternalProviderFailureProbe[];
   cleanup?(signal?: AbortSignal): Promise<void>;
 }
@@ -229,7 +228,6 @@ export async function runExternalProviderAcceptance(
         `External provider acceptance cleanup ended with ${deleteStatus}.`
       );
     }
-    await hooks.verifyDelete?.(memoryId, signal);
     const health = await client.health(signal);
     if (health.status !== 'healthy') {
       throw memoryError(

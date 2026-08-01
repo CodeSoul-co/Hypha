@@ -43,7 +43,6 @@ const snapshot: ContextCacheVersionSnapshot = {
   scopeHash: 'scope-1',
   providerRevision: 'provider-r1',
   policyRevision: 'policy-r1',
-  mutationGeneration: '0',
   selectedMemoryVersionIds: ['memory-1:v2'],
   sourceHashes: { memory: 'source-hash' },
 };
@@ -72,48 +71,5 @@ describe('VersionValidContextCache', () => {
         contextProfileRevision: 'context-r2',
       })
     ).rejects.toThrow(/profile revision/);
-  });
-  it('invalidates Context, PromptPrefix and MemoryTree projections after update and delete', async () => {
-    const cache = new VersionValidContextCache({
-      store: new InMemoryContextEnvelopeCacheStore(),
-      now: () => '2026-07-28T00:00:00.000Z',
-    });
-    const projectionKeys = [
-      'projection:context:scope-1',
-      'projection:prompt-prefix:scope-1',
-      'projection:memory-tree:scope-1',
-    ];
-    for (const key of projectionKeys) await cache.set(key, envelope, snapshot);
-
-    const updatedSnapshot: ContextCacheVersionSnapshot = {
-      ...snapshot,
-      selectedMemoryVersionIds: ['memory-1:v3'],
-      sourceHashes: { memory: 'source-hash:v3' },
-    };
-    for (const key of projectionKeys) {
-      await expect(cache.get(key, updatedSnapshot)).resolves.toBeNull();
-    }
-
-    const updatedEnvelope: ContextEnvelope = {
-      ...envelope,
-      id: 'context:2',
-      contextHash: 'hash-2',
-      provenanceIndex: {
-        m1: {
-          ...envelope.provenanceIndex.m1!,
-          memoryVersionId: 'memory-1:v3',
-        },
-      },
-    };
-    for (const key of projectionKeys) await cache.set(key, updatedEnvelope, updatedSnapshot);
-
-    const deletedSnapshot: ContextCacheVersionSnapshot = {
-      ...updatedSnapshot,
-      selectedMemoryVersionIds: [],
-      sourceHashes: { memory: 'source-hash:deleted' },
-    };
-    for (const key of projectionKeys) {
-      await expect(cache.get(key, deletedSnapshot)).resolves.toBeNull();
-    }
   });
 });

@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   InMemoryExternalMemoryMappingStore,
-  InMemoryExternalProviderOperationStore,
   createMem0OssMemoryProviderFactory,
   memoryManagementProviderSpecExample,
   memoryProfileSpecExample,
   type ExternalMemoryMappingStore,
-  type ExternalProviderOperationStore,
   type MemoryManagementProviderFactoryContext,
   type MemoryManagementProviderInstallation,
   type Mem0HttpResponse,
@@ -28,12 +26,6 @@ function durableMappingStore(): ExternalMemoryMappingStore {
   });
 }
 
-function durableOperationStore(): ExternalProviderOperationStore {
-  return Object.assign(new InMemoryExternalProviderOperationStore(), {
-    durability: 'durable' as const,
-  });
-}
-
 function context(references: ReadonlyMap<string, unknown>): MemoryManagementProviderFactoryContext {
   return {
     profile: { ...memoryProfileSpecExample, id: 'profile:mem0-oss' },
@@ -43,30 +35,9 @@ function context(references: ReadonlyMap<string, unknown>): MemoryManagementProv
       type: 'mem0',
       deployment: 'self_hosted',
       connectionRef: 'connection:mem0-oss',
-      capabilities: {
-        add: true,
-        search: true,
-        get: true,
-        list: true,
-        update: true,
-        delete: true,
-        deleteByFilter: true,
-        history: true,
-        summarize: false,
-        consolidate: false,
-        decay: false,
-        reinforce: false,
-        conflictDetection: true,
-        hybridSearch: false,
-        graphRelations: false,
-        asyncWrite: false,
-        batchOperations: false,
-      },
       config: {
         protocol: 'mem0-oss-rest',
         mappingStoreRef: 'mapping:durable',
-        operationStoreRef: 'operation:durable',
-        expectedProviderVersion: 'b357a5a1b03c299ec8229c268e63cfac0f7c6566',
       },
     },
     references,
@@ -94,12 +65,10 @@ describe('Mem0 OSS provider factory', () => {
           {
             baseUrl: 'http://127.0.0.1:8765',
             apiKey: 'local-secret',
-            providerVersion: 'b357a5a1b03c299ec8229c268e63cfac0f7c6566',
             fetch,
           },
         ],
         ['mapping:durable', durableMappingStore()],
-        ['operation:durable', durableOperationStore()],
       ])
     );
 

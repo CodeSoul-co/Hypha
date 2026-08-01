@@ -12,9 +12,6 @@ services:
       - '127.0.0.1:${HYPHA_MEM0_OSS_PORT:-8888}:8000'
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      MEM0_DEFAULT_LLM_MODEL: ${MEM0_DEFAULT_LLM_MODEL:-openai/gpt-4.1-nano}
-      MEM0_DEFAULT_EMBEDDER_MODEL: ${MEM0_DEFAULT_EMBEDDER_MODEL:-openai/text-embedding-3-small}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: '5432'
       POSTGRES_DB: postgres
@@ -28,8 +25,6 @@ services:
       MEM0_TELEMETRY: ${MEM0_TELEMETRY:-false}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUNBUFFERED: '1'
-    volumes:
-      - mem0-history:/app/history
     command:
       - sh
       - -c
@@ -80,4 +75,3 @@ services:
 
 volumes:
   mem0-postgres:
-  mem0-history:

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   InMemoryExternalMemoryMappingStore,
-  InMemoryExternalProviderOperationStore,
   Mem0OssClient,
   Mem0RestClient,
   createExternalMemoryId,
@@ -148,13 +147,11 @@ describe('Mem0 REST client', () => {
       query: 'blue',
       filters: {
         user_id: 'user:mem0',
+        app_id: 'workspace:mem0',
         run_id: 'run:mem0',
       },
       top_k: 5,
     });
-    expect(requests.find((request) => request.url.endsWith('/search'))?.body).not.toHaveProperty(
-      'filters.app_id'
-    );
     await expect(
       client.get({
         operationId: 'operation:mem0:get',
@@ -165,26 +162,6 @@ describe('Mem0 REST client', () => {
     ).resolves.toMatchObject({ id: memoryId });
     expect(requests.some((request) => request.url.endsWith('/memories/mem0%3A1'))).toBe(true);
     await expect(client.health()).resolves.toMatchObject({ status: 'healthy' });
-  });
-
-  it('fails closed on provider version or capability drift', () => {
-    expect(
-      () =>
-        new Mem0OssClient({
-          baseUrl: 'http://127.0.0.1:8888',
-          providerVersion: 'older',
-          expectedProviderVersion: 'b357a5a1',
-        })
-    ).toThrow(/version mismatch/u);
-    expect(
-      () =>
-        new Mem0OssClient({
-          baseUrl: 'http://127.0.0.1:8888',
-          providerVersion: 'b357a5a1',
-          expectedProviderVersion: 'b357a5a1',
-          expectedCapabilities: { search: false },
-        })
-    ).toThrow(/capability drift/u);
   });
 
   it('allows loopback HTTP but rejects credential-bearing cleartext remote endpoints', () => {
@@ -445,62 +422,6 @@ describe('Mem0 REST client', () => {
       { code: 'MEMORY_PROVIDER_UNAVAILABLE', details: { schemaDrift: true } }
     );
   });
-  it('journals an unknown write outcome and reconciles it without replaying the write', async () => {
-    const operationStore = new InMemoryExternalProviderOperationStore();
-    let storedMetadata: Record<string, unknown> = {};
-    let postCount = 0;
-    const client = new Mem0OssClient({
-      baseUrl: 'http://127.0.0.1:8888',
-      operationStore,
-      fetch: async (url, init) => {
-        if (url.endsWith('/memories') && init?.method === 'POST') {
-          postCount += 1;
-          const body = JSON.parse(init.body ?? '{}') as { metadata?: Record<string, unknown> };
-          storedMetadata = body.metadata ?? {};
-          return {
-            ...jsonResponse({}),
-            json: async () => {
-              const error = new Error('response lost after provider commit');
-              error.name = 'TimeoutError';
-              throw error;
-            },
-          };
-        }
-        if (url.includes('/memories?')) {
-          return jsonResponse({
-            results: [
-              {
-                id: 'mem0:unknown-write',
-                memory: 'User prefers blue.',
-                metadata: storedMetadata,
-              },
-            ],
-          });
-        }
-        throw new Error('Unexpected request: ' + url);
-      },
-    });
-    const request = {
-      ...addRequest('operation:mem0:unknown-write'),
-      extractionMode: 'none' as const,
-    };
-
-    await expect(client.add(request)).rejects.toMatchObject({
-      code: 'MEMORY_PROVIDER_UNAVAILABLE',
-      details: { operationId: request.operationId, quarantined: true },
-    });
-    await expect(
-      operationStore.get('memory.provider.mem0.rest', request.operationId)
-    ).resolves.toMatchObject({ state: 'reconcile_required', kind: 'unknown_write' });
-
-    const reconciled = await client.reconcile(request.operationId);
-    expect(reconciled).toHaveLength(1);
-    expect(postCount).toBe(1);
-    await expect(
-      operationStore.get('memory.provider.mem0.rest', request.operationId)
-    ).resolves.toMatchObject({ state: 'succeeded', attempts: 1 });
-  });
-
   it('normalizes a pre-aborted request without calling Mem0', async () => {
     let called = false;
     const client = new Mem0OssClient({
