@@ -644,7 +644,7 @@ class Application {
           // Memory workers may emit terminal lifecycle facts while draining,
           // so the canonical Event authority must outlive Memory shutdown.
           await closeServerMemoryComposition();
-          destroyEventRuntime();
+          await destroyEventRuntime();
           await this.canonicalRuntime?.close();
           this.canonicalRuntime = null;
           await this.runtimeArtifacts?.close?.();

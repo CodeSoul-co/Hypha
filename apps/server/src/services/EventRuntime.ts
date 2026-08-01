@@ -642,6 +642,7 @@ class EventRuntimeService {
     Readonly<EffectiveAgentCapabilitySnapshot>
   >();
   private recoveryKnowledge?: RecoveryKnowledgePort;
+  private closePromise?: Promise<void>;
 
   constructor(options?: EventRuntimeInitialization) {
     const sqliteStorage = storageConfig().relational.sqlite;
@@ -741,6 +742,11 @@ class EventRuntimeService {
       thinkingCache,
       resolveStrategy: (id) => this.reasoning.registry.get(id)?.descriptor,
     });
+  }
+
+  close(): Promise<void> {
+    this.closePromise ??= this.workCache.close();
+    return this.closePromise;
   }
 
   listReasoningStrategies(): ReasoningStrategyDescriptor[] {
@@ -5157,6 +5163,8 @@ export function getEventRuntime(): EventRuntimeService {
   return service;
 }
 
-export function destroyEventRuntime(): void {
+export async function destroyEventRuntime(): Promise<void> {
+  const current = service;
   service = null;
+  await current?.close();
 }
