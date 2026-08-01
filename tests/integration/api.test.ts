@@ -54,17 +54,17 @@ describe('GET /api/v1/health', () => {
 });
 
 describe('GET /api/v1/ready', () => {
-  it('fails closed while the canonical execution graph and workers are not composed', async () => {
+  it('reports ready only after the canonical graph and durable workers pass startup', async () => {
     const r = await request(app).get('/api/v1/ready');
 
-    expect(r.status).toBe(503);
+    expect(r.status).toBe(200);
     expect(r.body).toMatchObject({
-      success: false,
+      success: true,
       data: {
-        status: 'not_ready',
+        status: 'ready',
         runtime: {
-          ready: false,
-          state: 'event_authority_ready',
+          ready: true,
+          state: 'workers_running',
         },
       },
     });
