@@ -53,6 +53,24 @@ describe('GET /api/v1/health', () => {
   });
 });
 
+describe('GET /api/v1/ready', () => {
+  it('fails closed while the canonical execution graph and workers are not composed', async () => {
+    const r = await request(app).get('/api/v1/ready');
+
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({
+      success: false,
+      data: {
+        status: 'not_ready',
+        runtime: {
+          ready: false,
+          state: 'event_authority_ready',
+        },
+      },
+    });
+  });
+});
+
 describe('runtime reasoning and agent prompt registries', () => {
   it('lists registered reasoning strategies with official source metadata', async () => {
     const r = await request(app)

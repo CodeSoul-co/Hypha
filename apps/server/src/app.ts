@@ -17,6 +17,7 @@ import {
   getMemoryApplicationService,
   getServerMemoryComposition,
   initializeServerMemoryComposition,
+  sanitizeServerMemoryOperationalError,
 } from './services/ServerMemoryComposition';
 import {
   initSingleUserOwner,
@@ -38,12 +39,18 @@ import {
 } from './services/EventRuntime';
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
+import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
+import {
+  bindServerRuntimeReadiness,
+  clearServerRuntimeReadiness,
+} from './services/ServerRuntimeReadiness';
 
 class Application {
   private app: Express;
   private config: ReturnType<typeof getConfig>;
   private server: http.Server | null = null;
   private canonicalRuntime: ServerCanonicalRuntime | null = null;
+  private shutdownCoordinator: ServerShutdownCoordinator | null = null;
 
   constructor() {
     this.app = express();
@@ -192,6 +199,7 @@ class Application {
         humanWaits: composition.humanWaits,
       });
       this.canonicalRuntime = runtime;
+      bindServerRuntimeReadiness(() => runtime.executionReadiness());
       logger.info('Canonical Runtime initialized', {
         migratedEvents: composition.migration.migratedEvents,
         alreadyCanonicalEvents: composition.migration.alreadyCanonicalEvents,
@@ -331,8 +339,9 @@ class Application {
         logger.error(`  Memory      | ${memoryReadiness.state}`);
       }
     } catch (err) {
-      checks.push({ name: 'Memory', status: 'fail', detail: String(err) });
-      logger.error('  Memory      | Error:', err);
+      const safeError = sanitizeServerMemoryOperationalError(err);
+      checks.push({ name: 'Memory', status: 'fail', detail: safeError });
+      logger.error('  Memory      | Error:', safeError);
     }
 
     // 4. Check both the canonical Event authority and the executable Runtime.
@@ -366,23 +375,24 @@ class Application {
       logger.error('  ❌ Runtime     │ Error:', err);
     }
 
-    // 5. Check API /health endpoint
+    // 5. Check the API readiness endpoint. `/health` is deliberately only a
+    // liveness probe and must not be used as release or traffic readiness.
     try {
-      const response = await fetch(`${apiBase}/health`);
+      const response = await fetch(`${apiBase}/ready`);
       if (response.ok) {
-        checks.push({ name: 'API /health', status: 'pass', detail: '200 OK' });
-        logger.info('  ✅ API Health │ 200 OK');
+        checks.push({ name: 'API /ready', status: 'pass', detail: '200 OK' });
+        logger.info('  ✅ API Ready  │ 200 OK');
       } else {
         checks.push({
-          name: 'API /health',
+          name: 'API /ready',
           status: 'fail',
           detail: `${response.status}`,
         });
-        logger.error(`  ❌ API Health │ ${response.status}`);
+        logger.error(`  ❌ API Ready  │ ${response.status}`);
       }
     } catch (err) {
-      checks.push({ name: 'API /health', status: 'fail', detail: String(err) });
-      logger.error('  ❌ API Health │ Error:', err);
+      checks.push({ name: 'API /ready', status: 'fail', detail: String(err) });
+      logger.error('  ❌ API Ready  │ Error:', err);
     }
 
     // 6. Check LLM Providers
@@ -478,30 +488,34 @@ class Application {
 
   async stop(): Promise<void> {
     logger.info('Shutting down...');
-
-    // Stop accepting new connections
-    if (this.server) {
-      const server = this.server;
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+    if (!this.shutdownCoordinator) {
+      this.shutdownCoordinator = new ServerShutdownCoordinator({
+        stopIntake: async () => {
+          if (!this.server) return;
+          const server = this.server;
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+          this.server = null;
+        },
+        drainWorkersAndReleaseLeases: async () => {
+          destroyEventRuntime();
+          await this.canonicalRuntime?.close();
+          this.canonicalRuntime = null;
+          clearServerRuntimeReadiness();
+          await closeServerMemoryComposition();
+        },
+        closeServicesAndConnections: async () => {
+          await destroyLLM();
+          await destroySkillManager();
+          await destroyToolManager();
+          await destroyWorkflowEngine();
+          await destroyPromptManager();
+          await closeDatabases();
+        },
       });
-      this.server = null;
     }
-
-    // Cleanup services
-    destroyEventRuntime();
-    await this.canonicalRuntime?.close();
-    this.canonicalRuntime = null;
-    await closeServerMemoryComposition();
-    await destroyLLM();
-    await destroySkillManager();
-    await destroyToolManager();
-    await destroyWorkflowEngine();
-    await destroyPromptManager();
-
-    // Close databases
-    await closeDatabases();
-
+    await this.shutdownCoordinator.stop();
     logger.info('Shutdown complete');
   }
 
