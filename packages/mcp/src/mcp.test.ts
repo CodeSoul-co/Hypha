@@ -867,6 +867,53 @@ describe('@hypha/mcp normalization', () => {
     });
   });
 
+  it('rejects an oversized Tool frame before it can enter governed observations', async () => {
+    const manager = new MCPConnectionManager({
+      sessionFactory: {
+        create() {
+          return {
+            async connect() {
+              return { negotiatedProtocolVersion: '2025-11-25' };
+            },
+            async listCapabilities() {
+              return [];
+            },
+            async callTool() {
+              return { content: 'x'.repeat(2_048) };
+            },
+            async ping() {},
+            async close() {},
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'bounded-frame',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: { maxToolResultBytes: 512 },
+    });
+
+    await expect(
+      manager.call({
+        serverId: 'bounded-frame',
+        capabilityId: 'oversized',
+        input: {},
+        context: {
+          runId: 'run.frame',
+          stepId: 'step.frame',
+          invocationId: 'invocation.frame',
+        },
+      })
+    ).rejects.toMatchObject({
+      code: 'MCP_CONTENT_TOO_LARGE',
+      retryable: false,
+    });
+    await expect(manager.get('bounded-frame')).resolves.toMatchObject({
+      activeRequestCount: 0,
+    });
+  });
+
   it('rejects Resource and Prompt results cancelled or expired while awaiting the server', async () => {
     let now = '2026-07-23T00:00:00.000Z';
     let resolveResource:

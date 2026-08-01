@@ -164,7 +164,7 @@ export class DurableSessionCommandWorker {
       if (!(await this.verifyClaim(claim, handlerController))) {
         return result(command, 'lease_lost', 'session_command_claim_lost');
       }
-      return this.applyOutcome(command, claim, outcome);
+      return await this.applyOutcome(command, claim, outcome);
     } catch {
       heartbeatController.abort();
       await heartbeat;

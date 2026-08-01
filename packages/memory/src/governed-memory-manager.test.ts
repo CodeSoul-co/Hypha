@@ -4,9 +4,11 @@ import {
   GovernedMemoryManager,
   InMemoryMemoryLifecycleTaskStore,
   NativeMemoryManagementProvider,
+  hashMemoryScope,
   memoryProfileSpecExample,
   registerMemoryManagementProviderHandlers,
   type MemoryAddRequest,
+  type MemoryActivityPort,
   type MemoryEventType,
   type MemoryPrincipal,
 } from './index';
@@ -62,12 +64,10 @@ function activityPort(allowed: boolean) {
   };
 }
 
-function manager(
-  port: DefaultMemoryActivityPort,
-  reconciliationStore?: InMemoryMemoryLifecycleTaskStore
-) {
+function manager(port: MemoryActivityPort, reconciliationStore?: InMemoryMemoryLifecycleTaskStore) {
   return new GovernedMemoryManager({
     activities: port,
+    providerId: 'memory.provider.native',
     profileRef: memoryProfileSpecExample,
     eventContext: {
       runId: scope.runId,
@@ -142,11 +142,109 @@ describe('GovernedMemoryManager', () => {
       state: 'pending',
       payload: { providerId: 'memory.provider.remote', operation: 'delete' },
     });
+
     expect(governance.publish.mock.calls.map(([type]) => type)).toEqual([
       'memory.activity.requested',
       'memory.activity.completed',
       'memory.activity.requested',
       'memory.activity.completed',
+    ]);
+  });
+  it('rejects a completed Manager result that is missing Provider evidence', async () => {
+    const request = addRequest('operation:governed:missing-evidence');
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const output = await provider.add(request);
+    const activities: MemoryActivityPort = {
+      execute: async () => ({
+        operationId: request.operationId,
+        status: 'completed',
+        eventIds: [],
+        output,
+      }),
+    };
+
+    await expect(manager(activities).add(request)).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      details: { providerReturnEvidenceInvalid: true },
+    });
+  });
+
+  it('rejects forged scope evidence before completed events or success side effects', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const request = addRequest('operation:governed:forged-scope');
+    const genuine = await provider.add(request);
+    const forgedScope = { ...scope, workspaceId: 'workspace:forged' };
+    vi.spyOn(provider, 'add').mockResolvedValue({
+      ...genuine,
+      operationId: request.operationId,
+      records: genuine.records.map((record) => ({
+        ...record,
+        scope: forgedScope,
+        scopeHash: hashMemoryScope(forgedScope),
+      })),
+    });
+    const governance = activityPort(true);
+    const cacheWrite = vi.fn();
+    const fsmSnapshotWrite = vi.fn();
+    const contextReferenceWrite = vi.fn();
+    governance.afterExecute.mockImplementation(async (_activity, result) => {
+      if (result.status === 'completed') {
+        cacheWrite();
+        fsmSnapshotWrite();
+        contextReferenceWrite();
+      }
+    });
+    registerMemoryManagementProviderHandlers(governance.port, provider);
+
+    await expect(manager(governance.port).add(request)).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      details: { providerReturnEvidenceInvalid: true },
+    });
+    expect(governance.publish.mock.calls.map(([type]) => type)).toEqual([
+      'memory.activity.requested',
+      'memory.activity.failed',
+    ]);
+    const failedResult = governance.afterExecute.mock.calls[0]?.[1];
+    expect(failedResult).toMatchObject({
+      status: 'failed',
+      error: { details: { providerReturnEvidenceInvalid: true } },
+    });
+    expect(failedResult).not.toHaveProperty('output');
+    expect(cacheWrite).not.toHaveBeenCalled();
+    expect(fsmSnapshotWrite).not.toHaveBeenCalled();
+    expect(contextReferenceWrite).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Provider update that returns the wrong logical revision', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const seedRequest = addRequest('operation:governed:wrong-revision:seed');
+    const seeded = await provider.add(seedRequest);
+    const memoryId = seeded.records[0]!.id;
+    vi.spyOn(provider, 'update').mockResolvedValue({
+      operationId: 'operation:governed:wrong-revision',
+      status: 'committed',
+      records: seeded.records,
+    });
+    const governance = activityPort(true);
+    registerMemoryManagementProviderHandlers(governance.port, provider);
+
+    await expect(
+      manager(governance.port).update({
+        operationId: 'operation:governed:wrong-revision',
+        principal,
+        scope,
+        memoryId,
+        expectedRevision: 1,
+        patch: { canonicalText: 'must be revision two' },
+        reason: 'negative evidence test',
+      })
+    ).rejects.toMatchObject({
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      details: { providerReturnEvidenceInvalid: true },
+    });
+    expect(governance.publish.mock.calls.map(([type]) => type)).toEqual([
+      'memory.activity.requested',
+      'memory.activity.failed',
     ]);
   });
 });

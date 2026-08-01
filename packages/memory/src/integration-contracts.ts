@@ -16,6 +16,7 @@ import type {
 import type { ManagedMemorySearchRequest, MemoryManagementProvider } from './operations';
 import { hashMemoryScope, normalizeMemoryError, sha256 } from './memory-utils';
 import type { MemoryEventContext, MemoryEventPublisher } from './memory-events';
+import type { MemoryProviderReturnEvidence } from './provider-return-evidence';
 
 export type MemoryActivityOperation =
   | 'add'
@@ -49,6 +50,7 @@ export interface MemoryActivityResult {
   contextEnvelopeRef?: string;
   eventIds: string[];
   error?: NormalizedMemoryError;
+  evidence?: MemoryProviderReturnEvidence;
   output?: unknown;
 }
 
