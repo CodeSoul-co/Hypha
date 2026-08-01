@@ -66,6 +66,36 @@ describe('GET /api/v1/ready', () => {
           ready: false,
           state: 'maintenance_workers_running',
         },
+        components: {
+          runtime: { ready: false },
+          storage: { ready: true, mongodb: true, redis: true },
+          memory: { ready: true },
+          llm: { ready: false, availableProviders: [] },
+          tools: { initialized: true, ready: true },
+          skills: { initialized: true, ready: true },
+        },
+      },
+    });
+  });
+});
+
+describe('GET /api/v1/status', () => {
+  it('reports observed product readiness without hard-coded provider health', async () => {
+    const r = await request(app).get('/api/v1/status');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      data: {
+        service: 'hypha',
+        readiness: {
+          ready: false,
+          status: 'not_ready',
+          components: {
+            runtime: { ready: false },
+            llm: { ready: false, availableProviders: [] },
+          },
+        },
+        llm: { availableProviders: [] },
       },
     });
   });
