@@ -48,10 +48,13 @@ describe('ToolProfileBindingRegistry', () => {
 
     expect(registry.pluginRevisions()).toEqual({ 'trusted.hash': '1.0.0' });
     await expect(
-      registry.pluginHandlers()['trusted.hash']!({ value: 'hello' }, {
-        runId: 'run.test',
-        stepId: 'step.test',
-      })
+      registry.pluginHandlers()['trusted.hash']!(
+        { value: 'hello' },
+        {
+          runId: 'run.test',
+          stepId: 'step.test',
+        }
+      )
     ).resolves.toEqual({
       algorithm: 'sha256',
       digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
