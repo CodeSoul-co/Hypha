@@ -40,6 +40,10 @@ import {
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
+import {
+  bindServerRuntimeReadiness,
+  clearServerRuntimeReadiness,
+} from './services/ServerRuntimeReadiness';
 
 class Application {
   private app: Express;
@@ -195,6 +199,7 @@ class Application {
         humanWaits: composition.humanWaits,
       });
       this.canonicalRuntime = runtime;
+      bindServerRuntimeReadiness(() => runtime.executionReadiness());
       logger.info('Canonical Runtime initialized', {
         migratedEvents: composition.migration.migratedEvents,
         alreadyCanonicalEvents: composition.migration.alreadyCanonicalEvents,
@@ -370,23 +375,24 @@ class Application {
       logger.error('  ❌ Runtime     │ Error:', err);
     }
 
-    // 5. Check API /health endpoint
+    // 5. Check the API readiness endpoint. `/health` is deliberately only a
+    // liveness probe and must not be used as release or traffic readiness.
     try {
-      const response = await fetch(`${apiBase}/health`);
+      const response = await fetch(`${apiBase}/ready`);
       if (response.ok) {
-        checks.push({ name: 'API /health', status: 'pass', detail: '200 OK' });
-        logger.info('  ✅ API Health │ 200 OK');
+        checks.push({ name: 'API /ready', status: 'pass', detail: '200 OK' });
+        logger.info('  ✅ API Ready  │ 200 OK');
       } else {
         checks.push({
-          name: 'API /health',
+          name: 'API /ready',
           status: 'fail',
           detail: `${response.status}`,
         });
-        logger.error(`  ❌ API Health │ ${response.status}`);
+        logger.error(`  ❌ API Ready  │ ${response.status}`);
       }
     } catch (err) {
-      checks.push({ name: 'API /health', status: 'fail', detail: String(err) });
-      logger.error('  ❌ API Health │ Error:', err);
+      checks.push({ name: 'API /ready', status: 'fail', detail: String(err) });
+      logger.error('  ❌ API Ready  │ Error:', err);
     }
 
     // 6. Check LLM Providers
@@ -496,6 +502,7 @@ class Application {
           destroyEventRuntime();
           await this.canonicalRuntime?.close();
           this.canonicalRuntime = null;
+          clearServerRuntimeReadiness();
           await closeServerMemoryComposition();
         },
         closeServicesAndConnections: async () => {
