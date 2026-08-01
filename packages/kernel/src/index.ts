@@ -1424,12 +1424,14 @@ export class ReActRunner {
         }
         if (action.type === 'human_review') {
           await pushStep('human_review', action);
+          const reviewCheckpoint = await persistCheckpoint('reason');
           await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
             steps,
             finalAction: action,
+            checkpoint: reviewCheckpoint,
           };
         }
 
@@ -1444,12 +1446,14 @@ export class ReActRunner {
           await pushStep('verify', observation, verifiedAction);
           if (verifiedAction.type === 'human_review') {
             await pushStep('human_review', verifiedAction);
+            const reviewCheckpoint = await persistCheckpoint('reason');
             await clearCheckpoint();
             return {
               runId: context.runId,
               status: 'human_review_required',
               steps,
               finalAction: verifiedAction,
+              checkpoint: reviewCheckpoint,
             };
           }
           if (verifiedAction.type !== 'finish' && verifiedAction.type !== 'model') {
@@ -1506,12 +1510,14 @@ export class ReActRunner {
             reason: 'Tool action requires human review.',
           };
           await pushStep('human_review', observation, humanReviewAction);
+          const reviewCheckpoint = await persistCheckpoint('reason');
           await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
             steps,
             finalAction: humanReviewAction,
+            checkpoint: reviewCheckpoint,
           };
         }
 
@@ -1521,12 +1527,14 @@ export class ReActRunner {
         await pushStep('memory_sync', { source: observation.source });
         if (action.type === 'human_review') {
           await pushStep('human_review', action);
+          const reviewCheckpoint = await persistCheckpoint('reason');
           await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
             steps,
             finalAction: action,
+            checkpoint: reviewCheckpoint,
           };
         }
         if (consecutiveNoProgress >= budget.maxConsecutiveNoProgress) {

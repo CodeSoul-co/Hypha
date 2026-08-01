@@ -42,6 +42,8 @@ import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
 import { createServerProductionRuntime } from './runtime/ServerProductionRuntime';
 import { createServerProductionSessionCommands } from './runtime/ServerProductionSessionCommands';
 import { ServerProductionReActExecution } from './runtime/ServerProductionReActExecution';
+import { ServerReActContinuationReconciler } from './runtime/ServerReActContinuationReconciler';
+import { ServerReActContinuationReconciliationScheduler } from './runtime/ServerReActContinuationReconciliationScheduler';
 import { LocalFilesystemExecutionArtifactStore } from '@hypha/adapters-local';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 import {
@@ -54,6 +56,7 @@ class Application {
   private config: ReturnType<typeof getConfig>;
   private server: http.Server | null = null;
   private canonicalRuntime: ServerCanonicalRuntime | null = null;
+  private runtimeArtifacts: LocalFilesystemExecutionArtifactStore | null = null;
   private shutdownCoordinator: ServerShutdownCoordinator | null = null;
 
   constructor() {
@@ -220,6 +223,7 @@ class Application {
       id: 'artifact-store.local-filesystem.session-commands',
       rootPath: workers.commandArtifactRoot,
     });
+    this.runtimeArtifacts = commandArtifacts;
     const react = new ServerProductionReActExecution({
       artifacts: commandArtifacts,
       checkpoints: composition.reactCheckpoints,
@@ -265,9 +269,37 @@ class Application {
       onError: (error) => logger.error('Session Command worker polling failed', error),
     });
     getEventRuntime().bindSessionCommandIngress(commands);
+    const continuationReconciler = new ServerReActContinuationReconciler({
+      events: composition.events,
+      queue: composition.sessionQueue,
+      checkpoints: composition.reactCheckpoints,
+      scheduler: commands.continuationScheduler(),
+      payloadFactory: {
+        build: ({ checkpoint }) => react.buildContinuationPayload(checkpoint),
+      },
+      quarantine: {
+        quarantine: ({ evidence, reason, commandIds }) =>
+          getEventRuntime().recordCanonicalReActContinuationQuarantine({
+            runId: evidence.runId,
+            stepId: evidence.stepId,
+            evidenceEventId: evidence.eventId,
+            evidenceTimestamp: evidence.suspendedAt,
+            reason,
+            commandIds,
+          }),
+      },
+    });
+    const continuationReconciliation = new ServerReActContinuationReconciliationScheduler({
+      reconciler: continuationReconciler,
+      pageLimit: workers.pageLimit,
+      pollIntervalMs: workers.recoveryPollIntervalMs,
+      errorBackoffMs: workers.recoveryErrorBackoffMs,
+      onError: (error) => logger.error('ReAct continuation reconciliation failed', error),
+    });
     const active = await runtime.startWorkers({
       ...production.workers,
       commands: { runtime: commands },
+      continuations: { runtime: continuationReconciliation },
     });
     logger.info('Canonical Runtime durable workers activated', {
       workers: active.status(),
@@ -615,6 +647,8 @@ class Application {
           destroyEventRuntime();
           await this.canonicalRuntime?.close();
           this.canonicalRuntime = null;
+          await this.runtimeArtifacts?.close?.();
+          this.runtimeArtifacts = null;
           clearServerRuntimeReadiness();
         },
         closeServicesAndConnections: async () => {

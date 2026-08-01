@@ -153,6 +153,74 @@ describe('Server EventRuntime canonical integration', () => {
     });
     await runtime.transition(run.runId, 'ContextBuilt', { approval: 'approved' });
     await runtime.record(run.runId, 'model.call.completed', { output: 'observed' }, 'model-1');
+
+    const governedReview = await runtime.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.governed-review',
+    });
+    const governedSubjectHash = `sha256:${'7'.repeat(64)}`;
+    await runtime.waitForHumanReview(governedReview.runId, {
+      waitId: 'wait.governed-review',
+      pendingActionRef: 'task.governed-review',
+      reason: 'A governed decision is required',
+      humanTasks: [
+        {
+          taskId: 'task.governed-review',
+          kind: 'policy',
+          subjectRef: 'react:governed-review@1',
+          subjectHash: governedSubjectHash,
+          requestedBy: 'agent.runtime',
+          allowedDecisionScopes: ['runtime.human-task.decide'],
+          requestedAt: '2026-07-26T00:00:02.000Z',
+        },
+      ],
+    });
+    await expect(
+      runtime.listOwnedRuntimeHumanTasks(governedReview.runId, 'foreign.user')
+    ).rejects.toMatchObject({ code: 'RUNTIME_RUN_ACCESS_DENIED' });
+    await expect(
+      runtime.decideOwnedRuntimeHumanTask({
+        runId: governedReview.runId,
+        ownerUserId: 'user.integration',
+        principalId: 'user.integration',
+        taskId: 'task.governed-review',
+        expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'8'.repeat(64)}`,
+        decision: 'approved',
+        idempotencyKey: 'decision.governed-review.tampered',
+      })
+    ).rejects.toMatchObject({ code: 'HUMAN_TASK_SUBJECT_MISMATCH' });
+    await expect(
+      runtime.decideOwnedRuntimeHumanTask({
+        runId: governedReview.runId,
+        ownerUserId: 'user.integration',
+        principalId: 'user.integration',
+        taskId: 'task.governed-review',
+        expectedRevision: 1,
+        expectedSubjectHash: governedSubjectHash,
+        decision: 'approved',
+        reason: 'Approved after inspecting the bounded plan.',
+        idempotencyKey: 'decision.governed-review',
+      })
+    ).resolves.toMatchObject({
+      taskId: 'task.governed-review',
+      status: 'approved',
+      revision: 2,
+      decidedBy: 'user.integration',
+    });
+    await expect(
+      runtime.decideOwnedRuntimeHumanTask({
+        runId: governedReview.runId,
+        ownerUserId: 'user.integration',
+        principalId: 'user.integration',
+        taskId: 'task.governed-review',
+        expectedRevision: 1,
+        expectedSubjectHash: governedSubjectHash,
+        decision: 'approved',
+        reason: 'Approved after inspecting the bounded plan.',
+        idempotencyKey: 'decision.governed-review',
+      })
+    ).resolves.toMatchObject({ taskId: 'task.governed-review', status: 'approved', revision: 2 });
     const cacheFailure: RecoveryFailure = {
       id: 'cache-failure.integration',
       module: 'cache',

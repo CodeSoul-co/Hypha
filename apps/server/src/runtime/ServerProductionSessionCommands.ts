@@ -61,7 +61,9 @@ export class ServerProductionSessionCommands
   implements ServerSessionCommandLoop, ServerStartRunCommandIngress
 {
   private readonly artifacts: ArtifactStoreProvider;
+  private readonly ownsArtifacts: boolean;
   private readonly runtime: ServerSessionCommandRuntime<ProductionCommandPayloads>;
+  private readonly reactContinuationScheduler?: ReActContinuationScheduler;
   private closed = false;
 
   constructor(private readonly options: ServerProductionSessionCommandsOptions) {
@@ -74,7 +76,9 @@ export class ServerProductionSessionCommands
         id: 'artifact-store.local-filesystem.session-commands',
         rootPath: options.artifactRoot!,
       });
+    this.ownsArtifacts = options.artifacts === undefined;
     const scheduler = options.react ? this.createContinuationScheduler() : undefined;
+    this.reactContinuationScheduler = scheduler;
     const supervisor = scheduler
       ? new LongHorizonReActSupervisor({ runner: unavailableSupervisorRunner(), scheduler })
       : undefined;
@@ -224,12 +228,22 @@ export class ServerProductionSessionCommands
     return this.runtime.isRunning();
   }
 
+  continuationScheduler(): ReActContinuationScheduler {
+    if (!this.reactContinuationScheduler) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'ReAct continuation scheduler is not composed',
+      });
+    }
+    return this.reactContinuationScheduler;
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     const results = await Promise.allSettled([
       this.runtime.close(),
-      this.artifacts.close?.() ?? Promise.resolve(),
+      this.ownsArtifacts ? (this.artifacts.close?.() ?? Promise.resolve()) : Promise.resolve(),
     ]);
     const failures = results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')

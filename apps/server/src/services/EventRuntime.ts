@@ -12,6 +12,7 @@ import {
   hashCanonicalJson,
   InMemoryTelemetryRecorder,
   FrameworkError,
+  projectRuntimeHumanTasks,
   recoveryFailureFingerprint,
   stableRecoveryHash,
   type FrameworkEvent,
@@ -32,6 +33,8 @@ import {
   type RuntimeChildRunListRequest,
   type RuntimeChildRunCancellationPort,
   type RuntimeHumanWaitService,
+  type RuntimeHumanTask,
+  type RuntimeHumanTaskRequest,
   type ReActQuantumDescriptor,
   type SessionCommandRecord,
   type SessionQueueScope,
@@ -1539,11 +1542,11 @@ class EventRuntimeService {
     }
     if (result.status === 'human_review_required') {
       await this.enterCanonicalReActHumanReview(runId, 'react-human-review');
-      await this.waitForHumanReview(runId, {
-        waitId: canonicalReActHumanWaitId(runId, result),
-        reason: result.finalAction?.reason ?? 'Canonical ReAct requires Human review',
-        finalAction: safeSerialize(result.finalAction),
-      });
+      await this.createCanonicalReActHumanReview(
+        runId,
+        result,
+        result.finalAction?.reason ?? 'Canonical ReAct requires Human review'
+      );
       return;
     }
     if (result.status === 'cancelled') {
@@ -1587,12 +1590,61 @@ class EventRuntimeService {
     );
     if (result.suspension.requiresHumanReview || !result.suspension.retryable) {
       await this.enterCanonicalReActHumanReview(runId, result.suspension.reason);
-      await this.waitForHumanReview(runId, {
-        waitId: canonicalReActHumanWaitId(runId, result),
-        reason: result.suspension.reason,
-        checkpointRef: `react-checkpoint:${result.checkpoint.runId}:${result.checkpoint.stepId}:${result.checkpoint.stepSequence}`,
+      await this.createCanonicalReActHumanReview(runId, result, result.suspension.reason);
+    }
+  }
+
+  private async createCanonicalReActHumanReview(
+    runId: string,
+    result: Readonly<ReActRunResult>,
+    reason: string
+  ): Promise<void> {
+    const checkpoint = result.checkpoint;
+    if (!checkpoint) {
+      throw new FrameworkError({
+        code: 'RUNTIME_CHECKPOINT_FAILED',
+        message: 'Canonical ReAct Human review is missing its retained checkpoint',
       });
     }
+    const checkpointHash = hashCanonicalJson(checkpoint);
+    const taskId = `react-review:${runId}:${checkpoint.stepId}:${checkpoint.stepSequence}`;
+    const waitId = canonicalReActHumanWaitId(runId, result);
+    const priorTask = (await this.events.list({ runId })).find(
+      (event) =>
+        event.type === 'human.review.requested' &&
+        stringValue(asRecord(event.payload)?.taskId) === taskId
+    );
+    const requestedAt =
+      stringValue(asRecord(priorTask?.payload)?.requestedAt) ?? new Date().toISOString();
+    const subjectHash = hashCanonicalJson({
+      checkpointHash,
+      finalAction: safeSerialize(result.finalAction) ?? null,
+    });
+    const humanTask: RuntimeHumanTaskRequest = {
+      taskId,
+      kind: 'policy',
+      subjectRef: `react:${runId}:${checkpoint.stepId}@${checkpoint.stepSequence}`,
+      subjectHash,
+      requestedBy: 'agent.runtime',
+      allowedDecisionScopes: ['runtime.human-task.decide'],
+      requestedAt,
+      checkpointRef: `react-checkpoint:${checkpoint.runId}:${checkpoint.stepId}:${checkpoint.stepSequence}`,
+      reason,
+      metadata: {
+        resumeMode: 'react_feedback',
+        stepId: checkpoint.stepId,
+        scopeHash: checkpoint.scopeHash,
+        checkpointSequence: checkpoint.stepSequence,
+        checkpointHash,
+      },
+    };
+    await this.waitForHumanReview(runId, {
+      waitId,
+      pendingActionRef: taskId,
+      reason,
+      humanTasks: [humanTask],
+      finalAction: safeSerialize(result.finalAction),
+    });
   }
 
   private async enterCanonicalReActHumanReview(runId: string, reason: string): Promise<void> {
@@ -2996,17 +3048,29 @@ class EventRuntimeService {
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
     const context = await this.requireRun(runId);
-    const waitId =
-      typeof payload.waitId === 'string' && payload.waitId.trim()
-        ? payload.waitId
-        : `human-review:${generateId()}`;
+    const providedWaitId =
+      typeof payload.waitId === 'string' && payload.waitId.trim() ? payload.waitId : undefined;
     const pendingActionRef =
       typeof payload.pendingActionRef === 'string' && payload.pendingActionRef.trim()
         ? payload.pendingActionRef
         : typeof payload.invocationId === 'string' && payload.invocationId.trim()
           ? payload.invocationId
-          : waitId;
+          : (providedWaitId ??
+            `human-action:${hashCanonicalJson({ runId, payload: safeSerialize(payload) ?? null }).slice('sha256:'.length)}`);
+    const waitId =
+      providedWaitId ??
+      `human-review:${hashCanonicalJson({ runId, pendingActionRef }).slice('sha256:'.length)}`;
     if (this.humanWaits) {
+      const humanTasks = Array.isArray(payload.humanTasks)
+        ? (payload.humanTasks as RuntimeHumanTaskRequest[])
+        : undefined;
+      const priorWait = (await this.events.list({ runId })).find(
+        (event) =>
+          event.type === 'runtime.wait.created' &&
+          stringValue(asRecord(event.payload)?.waitId) === waitId
+      );
+      const requestedAt =
+        stringValue(asRecord(priorWait?.payload)?.createdAt) ?? new Date().toISOString();
       const result = await this.humanWaits.create({
         commandId: `create:${waitId}`,
         scope: {
@@ -3022,7 +3086,8 @@ class EventRuntimeService {
           typeof payload.reason === 'string' && payload.reason.trim()
             ? payload.reason
             : 'Human review required',
-        requestedAt: new Date().toISOString(),
+        requestedAt,
+        ...(humanTasks === undefined ? {} : { humanTasks }),
         idempotencyKey: `create:${waitId}`,
       });
       if (result.disposition === 'lease_unavailable') {
@@ -3034,6 +3099,173 @@ class EventRuntimeService {
       return;
     }
     await this.append(runId, 'run.waiting_human', { ...payload, waitId });
+  }
+
+  async listOwnedRuntimeHumanTasks(
+    runId: string,
+    ownerUserId: string
+  ): Promise<RuntimeHumanTask[]> {
+    const context = await this.requireRun(runId);
+    if (context.userId !== ownerUserId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_ACCESS_DENIED',
+        message: 'Runtime Run belongs to another user',
+      });
+    }
+    return projectRuntimeHumanTasks(await this.events.list({ runId }));
+  }
+
+  async decideOwnedRuntimeHumanTask(input: {
+    runId: string;
+    ownerUserId: string;
+    principalId: string;
+    taskId: string;
+    expectedRevision: number;
+    expectedSubjectHash: string;
+    decision: 'approved' | 'rejected';
+    reason?: string;
+    idempotencyKey: string;
+  }): Promise<RuntimeHumanTask> {
+    if (!this.humanWaits) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Canonical Human Wait service is not bound',
+      });
+    }
+    const context = await this.requireRun(input.runId);
+    if (context.userId !== input.ownerUserId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_ACCESS_DENIED',
+        message: 'Runtime Run belongs to another user',
+      });
+    }
+    const events = await this.events.list({ runId: input.runId });
+    const task = projectRuntimeHumanTasks(events).find(
+      (candidate) => candidate.taskId === input.taskId
+    );
+    if (!task) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_NOT_FOUND',
+        message: 'HumanTask was not found',
+      });
+    }
+    const waitCreated = [...events].reverse().find((event) => {
+      if (event.type !== 'runtime.wait.created') return false;
+      const payload = asRecord(event.payload);
+      const wait = asRecord(payload?.wait);
+      return stringValue(wait?.pendingActionRef) === input.taskId;
+    });
+    const waitPayload = asRecord(waitCreated?.payload);
+    const waitId = stringValue(waitPayload?.waitId);
+    if (!waitId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+        message: 'HumanTask is missing its durable Wait evidence',
+      });
+    }
+    const priorDecision = events.find((event) => {
+      if (
+        event.type !== 'human.review.approved' &&
+        event.type !== 'human.review.rejected' &&
+        event.type !== 'human.review.expired' &&
+        event.type !== 'human.review.cancelled'
+      ) {
+        return false;
+      }
+      const payload = asRecord(event.payload);
+      return (
+        stringValue(payload?.taskId) === input.taskId &&
+        stringValue(payload?.decisionIdempotencyKey) === input.idempotencyKey
+      );
+    });
+    const resolvedAt =
+      stringValue(asRecord(priorDecision?.payload)?.decidedAt) ?? new Date().toISOString();
+    const commandDigest = hashCanonicalJson({
+      runId: input.runId,
+      taskId: input.taskId,
+      idempotencyKey: input.idempotencyKey,
+    }).slice('sha256:'.length);
+    const commandId = `human-task-decision:${commandDigest}`;
+    const result = await this.humanWaits.resolve({
+      commandId,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: input.runId,
+      },
+      ownerId: this.humanWaitOwnerId,
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      waitId,
+      pendingActionRef: input.taskId,
+      principalId: input.principalId,
+      decision: input.decision,
+      resolvedAt,
+      humanTaskDecision: {
+        commandId,
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          runId: input.runId,
+        },
+        principal: {
+          principalId: input.principalId,
+          type: 'user',
+          userId: input.principalId,
+          permissionScopes: ['runtime.human-task.decide'],
+        },
+        taskId: input.taskId,
+        expectedRevision: input.expectedRevision,
+        expectedSubjectHash: input.expectedSubjectHash,
+        decision: input.decision,
+        decidedAt: resolvedAt,
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        idempotencyKey: input.idempotencyKey,
+      },
+      idempotencyKey: input.idempotencyKey,
+    });
+    if (result.disposition === 'lease_unavailable') {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: `Run ${input.runId} Human Wait Lease is unavailable`,
+      });
+    }
+    const resolved = projectRuntimeHumanTasks(await this.events.list({ runId: input.runId })).find(
+      (candidate) => candidate.taskId === input.taskId
+    );
+    if (!resolved) {
+      throw new FrameworkError({
+        code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+        message: 'HumanTask decision did not produce a durable task projection',
+      });
+    }
+    return resolved;
+  }
+
+  async recordCanonicalReActContinuationQuarantine(input: {
+    runId: string;
+    stepId: string;
+    evidenceEventId: string;
+    evidenceTimestamp: string;
+    reason: string;
+    commandIds: readonly string[];
+  }): Promise<void> {
+    const digest = hashCanonicalJson({
+      evidenceEventId: input.evidenceEventId,
+      reason: input.reason,
+      commandIds: [...input.commandIds],
+    }).slice('sha256:'.length);
+    await this.append(
+      input.runId,
+      'react.continuation.quarantined',
+      {
+        evidenceEventId: input.evidenceEventId,
+        reason: input.reason,
+        commandIds: [...input.commandIds],
+        quarantinedAt: input.evidenceTimestamp,
+      },
+      undefined,
+      { eventId: `react-continuation-quarantine:${digest}`, stepId: input.stepId }
+    );
   }
 
   async projectWorkflowExecution(executionId: string): Promise<WorkflowExecutionProjection | null> {
@@ -3120,9 +3352,13 @@ class EventRuntimeService {
     decision: 'approved' | 'rejected'
   ): Promise<void> {
     if (!this.humanWaits) return;
-    const resolvedAt = new Date().toISOString();
+    const commandId = `resolve:${pendingActionRef}:${decision}`;
+    const prior = (await this.events.list({ runId: context.runId })).find(
+      (event) => event.operationId === `runtime-human-wait:resolve:${commandId}`
+    );
+    const resolvedAt = prior?.timestamp ?? new Date().toISOString();
     const result = await this.humanWaits.resolve({
-      commandId: `resolve:${pendingActionRef}:${decision}`,
+      commandId,
       scope: {
         userId: context.userId,
         sessionId: context.sessionId,

@@ -244,6 +244,7 @@ function executionBindings(): ServerRuntimeCompositionBindings {
 
 function workerBindings(): ServerRuntimeWorkerBindings {
   let running = true;
+  let continuationRunning = true;
   const commands = {
     processNext: jest.fn(async () => ({ disposition: 'idle' as const })),
     supportedCommandTypes: jest.fn(() => ['continue_react' as const]),
@@ -268,11 +269,28 @@ function workerBindings(): ServerRuntimeWorkerBindings {
       autoRecoverReasons: ['PROJECTION_BEHIND'],
     },
     commands: { runtime: commands },
+    continuations: {
+      runtime: {
+        sweepOnce: jest.fn(async () => ({
+          checkedAt: '2026-07-26T00:00:00.000Z',
+          pages: 1,
+          scannedRuns: 0,
+          scheduled: 0,
+          reused: 0,
+          quarantined: 0,
+        })),
+        start: jest.fn(),
+        isRunning: jest.fn(() => continuationRunning),
+        close: jest.fn(async () => {
+          continuationRunning = false;
+        }),
+      },
+    },
   };
 }
 
 function maintenanceWorkerBindings(): ServerRuntimeWorkerBindings {
-  const { commands: _commands, ...bindings } = workerBindings();
+  const { commands: _commands, continuations: _continuations, ...bindings } = workerBindings();
   return bindings;
 }
 

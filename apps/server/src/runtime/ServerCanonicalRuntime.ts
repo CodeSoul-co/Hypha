@@ -308,6 +308,7 @@ export class ServerCanonicalRuntime {
     const continuousExecutionReady =
       workerStatus?.commands?.running === true &&
       workerStatus.commands.supportedCommandTypes.includes('continue_react');
+    const continuationRepairReady = workerStatus?.continuations?.running === true;
     if (
       workerStatus?.timer.running === true &&
       workerStatus.recovery.running === true &&
@@ -320,6 +321,14 @@ export class ServerCanonicalRuntime {
           workerStatus.commands === undefined
             ? 'Canonical Runtime maintenance workers are running, but the durable Session Command worker is not configured'
             : 'Canonical Runtime Session Command worker is running, but continue_react is not composed',
+      });
+    }
+    if (continuousExecutionReady && !continuationRepairReady) {
+      return Object.freeze({
+        ready: false,
+        state: 'execution_graph_ready',
+        message:
+          'Canonical Runtime continuation command worker is running, but durable continuation reconciliation is not configured',
       });
     }
     if (!this.areWorkersRunning()) {

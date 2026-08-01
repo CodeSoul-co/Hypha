@@ -1,6 +1,9 @@
 import {
   FrameworkError,
+  hashCanonicalJson,
+  validateContinueReActCommandPayload,
   validateReActQuantumDescriptor,
+  type ContinueReActCommandPayloadV1,
   type InitialReActQuantumDescriptor,
   type ReActGlobalBudget,
   type ReActQuantumDescriptor,
@@ -98,8 +101,21 @@ export class ServerProductionReActExecution {
           this.createRunner(descriptor, snapshot, signal),
       },
       outcomeRecorder: {
-        record: async ({ descriptor, react }) =>
-          options.source.recordOutcome(descriptor.runId, react),
+        record: async ({ descriptor, react }) => {
+          if (react.status !== 'human_review_required' || react.checkpoint) {
+            await options.source.recordOutcome(descriptor.runId, react);
+            return;
+          }
+          const checkpoint = await options.checkpoints.get(
+            descriptor.runId,
+            descriptor.stepId,
+            descriptor.scopeHash
+          );
+          if (!checkpoint) {
+            corrupt('Human review outcome is missing its retained ReAct checkpoint');
+          }
+          await options.source.recordOutcome(descriptor.runId, { ...react, checkpoint });
+        },
       },
       quantumIterations: this.limits.quantumIterations,
       now: this.now,
@@ -126,6 +142,7 @@ export class ServerProductionReActExecution {
     }
     const createdAt = timestamp(this.now(), 'ReAct preparation clock');
     const scopeHash = scopeHashFor(prepared);
+    const globalBudget = resolveBudget(input, this.limits);
     const promptSnapshotRef = `artifact:${this.options.artifacts.id}:runtime/react-context/${scopeHash.slice('sha256:'.length)}.json#/context/agent`;
     const memoryContextRef = prepared.memoryContextRef
       ? `artifact:${this.options.artifacts.id}:runtime/react-context/${scopeHash.slice('sha256:'.length)}.json#/context/metadata/memoryContext`
@@ -138,6 +155,12 @@ export class ServerProductionReActExecution {
       capabilitySnapshotRef: prepared.capabilitySnapshotRef,
       capabilitySnapshotHash: prepared.capabilitySnapshotHash,
       ...(memoryContextRef === undefined ? {} : { memoryContextRef }),
+      sessionId: input.sessionId,
+      userId: input.userId,
+      globalBudget,
+      ...(input.react?.deadlineAt === undefined ? {} : { deadlineAt: input.react.deadlineAt }),
+      cancellationRevision: 0,
+      descriptorCreatedAt: createdAt,
     };
     const snapshot: ReActContextSnapshot = {
       version: '1.0.0',
@@ -180,11 +203,55 @@ export class ServerProductionReActExecution {
       capabilitySnapshotRef: prepared.capabilitySnapshotRef,
       capabilitySnapshotHash: prepared.capabilitySnapshotHash,
       ...(memoryContextRef === undefined ? {} : { memoryContextRef }),
-      globalBudget: resolveBudget(input, this.limits),
+      globalBudget,
       ...(input.react?.deadlineAt === undefined ? {} : { deadlineAt: input.react.deadlineAt }),
       cancellationRevision: 0,
       createdAt,
     }) as InitialReActQuantumDescriptor;
+  }
+
+  /** Rebuilds a continuation envelope only from durable Context and checkpoint evidence. */
+  async buildContinuationPayload(
+    checkpoint: Readonly<ReActContinuationCheckpoint>,
+    createdAt = this.now()
+  ): Promise<ContinueReActCommandPayloadV1> {
+    const snapshot = await this.snapshots.get(checkpoint.scopeHash);
+    if (!snapshot) corrupt('Canonical ReAct Context snapshot is missing during reconciliation');
+    if (
+      snapshot.runId !== checkpoint.runId ||
+      snapshot.stepId !== checkpoint.stepId ||
+      snapshot.scopeHash !== checkpoint.scopeHash ||
+      snapshot.agentRef.id !== checkpoint.agentRef.id ||
+      snapshot.agentRef.version !== checkpoint.agentRef.version
+    ) {
+      corrupt('Canonical ReAct checkpoint does not match its Context snapshot');
+    }
+    const evidence = evidenceFrom(snapshot);
+    return validateContinueReActCommandPayload({
+      version: '1.0.0',
+      runId: checkpoint.runId,
+      sessionId: evidence.sessionId,
+      userId: evidence.userId,
+      stepId: checkpoint.stepId,
+      checkpointRef: `react-checkpoint:${checkpoint.runId}:${checkpoint.stepId}:${checkpoint.stepSequence}`,
+      checkpointHash: hashCanonicalJson(checkpoint),
+      checkpointSequence: checkpoint.stepSequence,
+      scopeHash: checkpoint.scopeHash,
+      agentRef: checkpoint.agentRef,
+      domainPackRef: evidence.domainPackRef,
+      ...(evidence.workflowRef === undefined ? {} : { workflowRef: evidence.workflowRef }),
+      promptSnapshotRef: evidence.promptSnapshotRef,
+      promptSnapshotHash: evidence.promptSnapshotHash,
+      capabilitySnapshotRef: evidence.capabilitySnapshotRef,
+      capabilitySnapshotHash: evidence.capabilitySnapshotHash,
+      ...(evidence.memoryContextRef === undefined
+        ? {}
+        : { memoryContextRef: evidence.memoryContextRef }),
+      globalBudget: evidence.globalBudget,
+      ...(evidence.deadlineAt === undefined ? {} : { deadlineAt: evidence.deadlineAt }),
+      cancellationRevision: evidence.cancellationRevision,
+      createdAt: timestamp(createdAt, 'ReAct continuation reconciliation clock'),
+    });
   }
 
   async failBeforeQuantum(runId: string, error: unknown, signal?: AbortSignal): Promise<void> {
@@ -359,6 +426,8 @@ function evidenceFrom(snapshot: Readonly<ReActContextSnapshot>): PreparedEvidenc
   }
   const evidence = value as Partial<PreparedEvidence>;
   for (const key of [
+    'sessionId',
+    'userId',
     'promptSnapshotRef',
     'promptSnapshotHash',
     'capabilitySnapshotRef',
@@ -374,15 +443,38 @@ function evidenceFrom(snapshot: Readonly<ReActContextSnapshot>): PreparedEvidenc
   ) {
     corrupt('Canonical ReAct Context evidence has an invalid memoryContextRef');
   }
+  if (!evidence.domainPackRef || typeof evidence.domainPackRef !== 'object') {
+    corrupt('Canonical ReAct Context evidence is missing domainPackRef');
+  }
+  if (!evidence.globalBudget || typeof evidence.globalBudget !== 'object') {
+    corrupt('Canonical ReAct Context evidence is missing globalBudget');
+  }
+  if (!Number.isSafeInteger(evidence.cancellationRevision) || evidence.cancellationRevision! < 0) {
+    corrupt('Canonical ReAct Context evidence has an invalid cancellationRevision');
+  }
+  if (
+    typeof evidence.descriptorCreatedAt !== 'string' ||
+    !Number.isFinite(Date.parse(evidence.descriptorCreatedAt))
+  ) {
+    corrupt('Canonical ReAct Context evidence has an invalid descriptorCreatedAt');
+  }
   return evidence as PreparedEvidence;
 }
 
 interface PreparedEvidence {
+  sessionId: string;
+  userId: string;
+  domainPackRef: InitialReActQuantumDescriptor['domainPackRef'];
+  workflowRef?: InitialReActQuantumDescriptor['workflowRef'];
   promptSnapshotRef: string;
   promptSnapshotHash: string;
   capabilitySnapshotRef: string;
   capabilitySnapshotHash: string;
   memoryContextRef?: string;
+  globalBudget: ReActGlobalBudget;
+  deadlineAt?: string;
+  cancellationRevision: number;
+  descriptorCreatedAt: string;
 }
 
 function fsmStateFor(step: Readonly<ReActStep>): string | undefined {
