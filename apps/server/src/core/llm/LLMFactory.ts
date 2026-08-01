@@ -29,11 +29,13 @@ import {
   CachedLLMProvider,
   MemoryCacheStore,
   NoopCacheStore,
+  RedisCacheStore,
   ServingCacheManager,
   SQLiteCacheStore,
   type CachePolicy,
   type CacheScope,
   type CacheStore,
+  type RedisCacheClient,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
@@ -41,6 +43,7 @@ import { GeminiAdapter } from './adapters/GeminiAdapter';
 import { OllamaAdapter } from './adapters/OllamaAdapter';
 import { llmConfig, getConfig, servingCacheConfig } from '../../config';
 import { logger } from '../../utils/logger';
+import { createCacheRedisClient } from '../../services/cacheRedis';
 
 // OpenAI compatible provider configurations
 interface CompatibleProviderConfig {
@@ -429,6 +432,7 @@ export class LLMManager {
   }
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<ChatResponse> {
+    await this.ensureReady();
     const provider = options?.model
       ? this.getProviderFromModel(options.model)
       : this.defaultProvider;
@@ -445,6 +449,7 @@ export class LLMManager {
   }
 
   async *streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk> {
+    await this.ensureReady();
     const provider = options?.model
       ? this.getProviderFromModel(options.model)
       : this.defaultProvider;
@@ -559,6 +564,22 @@ export class LLMManager {
     return models[0]?.id;
   }
 
+  async ensureReady(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+    if (this.adapters.size === 0 || this.adapters.has(this.defaultProvider)) {
+      return;
+    }
+    const fallback = this.adapters.keys().next().value as string | undefined;
+    if (!fallback) return;
+    logger.warn(
+      `Configured defaultProvider="${this.defaultProvider}" is not initialized (missing API key?). ` +
+        `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`
+    );
+    await this.setDefaultProvider(fallback);
+  }
+
   async isModelEnabled(modelId: string): Promise<boolean> {
     const allModels = await this.listAllModels();
     return allModels.some((m) => m.id === modelId);
@@ -654,20 +675,28 @@ function wrapWithServingCache(
     enabled: true,
     mode: config.mode,
     ttlMs: config.ttlMs,
-    cacheErrors: config.cacheErrors,
-    cacheStreaming: config.cacheStreaming,
     respectNoCache: config.respectNoCache,
+    failureMode: config.failureMode,
+    scopeRequirement: config.scopeRequirement,
+    operationTimeoutMs: config.operationTimeoutMs,
+    singleflight: config.singleflight,
+    maxEntryBytes: config.maxEntryBytes,
+    circuitBreaker: config.circuitBreaker,
   };
   const cache = new ServingCacheManager({
-    store: createServingCacheStore(config.store, config.sqlite.path),
+    store: createServingCacheStore(config),
     policy,
   });
   return new CachedLLMProvider(provider, cache, {
     policy,
     trace,
-    providerResolver: (request) =>
-      stringFromRecord(request.metadata, 'provider') ??
-      manager.getProviderFromModel(request.modelAlias || manager.getDefaultModel()),
+    providerResolver: (request) => {
+      const metadataProvider = stringFromRecord(request.metadata, 'provider');
+      if (metadataProvider && manager.isProviderAvailable(metadataProvider)) {
+        return metadataProvider;
+      }
+      return manager.getProviderFromModel(request.modelAlias || manager.getDefaultModel());
+    },
     modelResolver: (request) => request.modelAlias || manager.getDefaultModel(),
     scopeResolver: (request) => servingCacheScopeForRequest(request),
     paramsResolver: (request) => ({
@@ -679,22 +708,26 @@ function wrapWithServingCache(
   });
 }
 
-function createServingCacheStore(
-  store: ReturnType<typeof servingCacheConfig>['store'],
-  sqlitePath: string
-): CacheStore {
-  switch (store) {
+function createServingCacheStore(config: ReturnType<typeof servingCacheConfig>): CacheStore {
+  switch (config.store) {
     case 'memory':
-      sharedMemoryServingCacheStore = sharedMemoryServingCacheStore ?? new MemoryCacheStore();
+      sharedMemoryServingCacheStore =
+        sharedMemoryServingCacheStore ?? new MemoryCacheStore(config.memory);
       return sharedMemoryServingCacheStore;
     case 'sqlite': {
-      const filename = path.resolve(process.cwd(), sqlitePath);
+      const filename = path.resolve(process.cwd(), config.sqlite.path);
       const existing = sharedSQLiteServingCacheStores.get(filename);
       if (existing) return existing;
-      const next = new SQLiteCacheStore({ filename });
+      const next = new SQLiteCacheStore({ filename, maxEntries: config.sqlite.maxEntries });
       sharedSQLiteServingCacheStores.set(filename, next);
       return next;
     }
+    case 'redis':
+      return new RedisCacheStore({
+        client: createCacheRedisClient() as unknown as RedisCacheClient,
+        prefix: config.redis.prefix,
+        closeClient: true,
+      });
     case 'noop':
     case 'off':
     default:
@@ -765,6 +798,8 @@ export function modelResponseToChatResponse(
           inputTokens: response.usage.inputTokens ?? 0,
           outputTokens: response.usage.outputTokens ?? 0,
           totalTokens: response.usage.totalTokens ?? 0,
+          cacheHitTokens: response.usage.cacheHitTokens,
+          cacheMissTokens: response.usage.cacheMissTokens,
         }
       : undefined,
     toolCalls: response.toolCalls?.map((toolCall) => ({
@@ -1009,6 +1044,8 @@ function legacyUsageToModelUsage(usage: NonNullable<ChatResponse['usage']>): Mod
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens,
+    cacheHitTokens: usage.cacheHitTokens,
+    cacheMissTokens: usage.cacheMissTokens,
   };
 }
 
@@ -1017,6 +1054,8 @@ function modelUsageToLegacyUsage(usage: ModelUsage): NonNullable<ChatResponse['u
     inputTokens: usage.inputTokens ?? 0,
     outputTokens: usage.outputTokens ?? 0,
     totalTokens: usage.totalTokens ?? 0,
+    cacheHitTokens: usage.cacheHitTokens,
+    cacheMissTokens: usage.cacheMissTokens,
   };
 }
 

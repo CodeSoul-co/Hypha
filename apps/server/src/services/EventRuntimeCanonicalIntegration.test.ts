@@ -118,12 +118,20 @@ describe('Server EventRuntime canonical integration', () => {
         }),
       }),
     ]);
-    await expect(legacyEvents.list({ runId: run.runId })).resolves.toEqual([
-      expect.objectContaining({
-        type: 'model.call.completed',
-        payload: { output: 'observed' },
-      }),
-    ]);
+    await expect(legacyEvents.list({ runId: run.runId })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'model.call.completed',
+          payload: { output: 'observed' },
+        }),
+        expect.objectContaining({
+          type: 'workcache.bypass',
+          payload: expect.objectContaining({
+            reason: 'scope_missing',
+          }),
+        }),
+      ])
+    );
     await expect(
       composition.events.list({ runId: run.runId, type: 'recovery.case.opened' })
     ).resolves.toEqual([

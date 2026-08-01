@@ -36,10 +36,6 @@ describe('Memory operational metrics and redaction', () => {
       type: 'memory.cache.bypass',
       providerId: 'provider:test',
       scopeHash: 'scope:secret',
-      reason: 'store_unavailable',
-    });
-    metrics.record('scope_rejection', 1, {
-      providerId: 'provider:test',
       reason: 'scope_incomplete',
     });
 

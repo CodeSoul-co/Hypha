@@ -84,6 +84,28 @@ describe('PromptManager', () => {
     expect(manager.render('cached-defaults', {}, 'system')).toBe('Hello Assistant from .');
   });
 
+  it('invalidates cached template content when a registration is replaced', () => {
+    const manager = new PromptManager(undefined, true);
+    manager.register({
+      id: 'replaceable',
+      name: 'Replaceable',
+      category: 'system',
+      content: 'version one',
+      variables: [],
+    });
+    expect(manager.render('replaceable', {}, 'system')).toBe('version one');
+
+    manager.register({
+      id: 'replaceable',
+      name: 'Replaceable',
+      category: 'system',
+      content: 'version two',
+      variables: [],
+    });
+
+    expect(manager.render('replaceable', {}, 'system')).toBe('version two');
+  });
+
   it('reports unresolved prompt variables during validated renders', () => {
     const manager = new PromptManager(undefined, false);
     manager.register({

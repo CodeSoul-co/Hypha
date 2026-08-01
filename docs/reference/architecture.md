@@ -67,6 +67,7 @@ Allowed examples:
 apps/server -> @hypha/domain -> @hypha/fsm -> @hypha/core
 apps/server -> @hypha/kernel -> @hypha/inference -> @hypha/models
 apps/server -> @hypha/serving-cache -> @hypha/models
+apps/server -> @hypha/workcache -> @hypha/core
 apps/server -> @hypha/tools -> @hypha/core
 apps/server -> @hypha/storage -> @hypha/core
 ```
@@ -91,16 +92,70 @@ Agent inference is a packages-layer pipeline: `PromptCompiler` normalizes runtim
 ## Serving Cache
 
 `@hypha/serving-cache` wraps `ModelProvider.generate()` when
-`HYPHA_SERVING_CACHE=memory` or `sqlite`. It computes an exact request key from
+`HYPHA_SERVING_CACHE=memory`, `sqlite`, or `redis`. It computes an exact request key from
 provider, model, system/prefix content, messages, tools, generation params, and
-scope metadata. Fresh hits return the cached `ModelResponse`; misses call the
-inner provider and may write the response. Streaming requests bypass cache in
-the first version.
+scope metadata. The default policy requires a user scope. Misses call the
+inner provider and may write a bounded `CachedModelResponseProjection`; hits
+hydrate a new response id and never restore provider raw payloads or arbitrary
+metadata. Streaming requests always bypass cache.
 
 The layer records prompt prefix metadata and emits `llm.cache.lookup`,
 `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`
 events through the runtime trace bridge. It is not a semantic cache, WorkCache,
 or provider KV cache.
+
+For provider-side prefix cache, the layer keeps request shape stable by sorting
+tool schemas and tracking stable prefix hashes per provider/model/scope. It
+records `prefixCache.changedReasons` and provider usage `cacheHitTokens` /
+`cacheMissTokens` when available, but the physical prefix cache remains inside
+the model provider.
+
+## WorkCache
+
+`@hypha/workcache` consumes existing runtime events and materializes typed
+`CacheBlock` records in a hot-indexed `TypedCacheForest`. Its default registry
+aligns only current Hypha events to primary trees: planning/reasoning events to
+`PlanTree`, model/inference completions to `ComputationTree`, tool and MCP
+completions to `ToolTree`, context and message bus events to
+`ObservationTree`, evaluation and regression completions to
+`VerificationTree`, memory events to `MemoryTree`, and serving-cache prefix
+metadata on `llm.cache.write` to `PromptPrefixTree`.
+
+WorkCache also maintains a rebuildable `WorkGraph` from source events. Each
+normalized event becomes one typed work node, dependency edges are derived from
+input refs, provenance, environment deps, and cache links, and `DemandSignal`
+records update tree-local block utility. The cache tree runtime model is a
+three-layer structure: source events as the rebuildable log, bounded CPU memory
+for the current WorkGraph plus hot cache index, and memory/SQLite/Redis as the
+backing store. Keys and blocks are scoped, unknown validity is not reusable,
+store operations are time-bounded, and Redis invalidation updates peer hot
+indexes.
+
+PromptPrefixTree is managed at prompt-block granularity. Serving Cache
+`llm.cache.write` metadata is split into stable `system`, `tool-schema`,
+`prompt-template`, `project-context`, `domain-pack`, or `memory` blocks. The
+tree stores each block's content, hash, order, prefix hash, and template
+metadata; it does not store the complete source event payload. Prefix
+materialization selects a prefix group and assembles ordered blocks under the
+configured token budget.
+
+The bundled server configuration enables it with `HYPHA_WORKCACHE=memory`. Set
+`HYPHA_WORKCACHE=off` to disable it, `HYPHA_WORKCACHE=sqlite` to persist locally,
+or `HYPHA_WORKCACHE=redis` for a shared store. Derived audit events are `workcache.lookup`, `workcache.hit`,
+`workcache.miss`, `workcache.write`, `workcache.invalidate`,
+`workcache.bypass`, and `workcache.prefix.materialized`. Each event links back
+to the source event id/type, tree type, block id, and cache key.
+
+WorkCache does not replace `@hypha/serving-cache`, does not alter DomainPack or
+agent interfaces, and does not implement MessageTree or KVPrefixTree in V1.
+
+`RecoveryTree` is the recovery-specific cache boundary. It consumes completed/resolved/escalated
+recovery events and exposes a `RecoveryKnowledgePort` through `WorkCacheManager`. Keys include the
+tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
+policy/spec/provider revisions. Strict runtime validation rejects unscoped or malformed persisted
+hints; expiry or revision drift deletes stale blocks only inside the same scope. A hit is a
+revalidated strategy hint only—the FSM snapshot, events, and provider receipts still determine
+whether recovery succeeded.
 
 ## Extension Boundaries
 

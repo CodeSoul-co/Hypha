@@ -933,6 +933,7 @@ export * from './integration-schema';
 export * from './integration-json-schema';
 export * from './managed-search-cache';
 export * from './context-cache-validity';
+export * from './memory-projection-invalidation';
 export * from './memory-operational-metrics';
 
 export * from './hybrid';
