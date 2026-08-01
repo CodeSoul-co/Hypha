@@ -10,12 +10,7 @@ export const PROMPT_PROFILE_SOURCES = [
   'mcp',
   'user',
 ] as const;
-export const PROMPT_PROFILE_STATUSES = [
-  'draft',
-  'in_review',
-  'active',
-  'deprecated',
-] as const;
+export const PROMPT_PROFILE_STATUSES = ['draft', 'in_review', 'active', 'deprecated'] as const;
 
 export type PromptProfileSource = (typeof PROMPT_PROFILE_SOURCES)[number];
 export type PromptProfileStatus = (typeof PROMPT_PROFILE_STATUSES)[number];
@@ -37,11 +32,17 @@ export interface PromptProfileInput {
   description?: string;
   layers: PromptProfileLayer[];
   variableNames?: string[];
-  scope?: 'global' | 'tenant' | 'owner';
+  scope?: 'global' | 'tenant' | 'owner' | 'user' | 'agent' | 'domain' | 'session' | 'run';
   tenantId?: string;
   ownerId?: string;
+  userId?: string;
+  sessionId?: string;
+  runId?: string;
   agentIds?: string[];
   domainIds?: string[];
+  policyRevision?: string;
+  dependencySnapshotHash?: string;
+  approvalExpiresAt?: string;
   maxInlineBytes?: number;
   metadata?: Record<string, unknown>;
 }
@@ -70,8 +71,11 @@ export interface PromptProfileRef {
 export interface PromptProfilePrincipal {
   principalId: string;
   tenantId?: string;
+  userId?: string;
   agentId?: string;
   domainId?: string;
+  sessionId?: string;
+  runId?: string;
 }
 
 export interface PromptProfileArtifactPort {
@@ -132,11 +136,22 @@ export const promptProfileInputSchema = z
     description: z.string().optional(),
     layers: z.array(promptProfileLayerSchema).min(1),
     variableNames: z.array(z.string().min(1)).optional(),
-    scope: z.enum(['global', 'tenant', 'owner']).optional(),
+    scope: z
+      .enum(['global', 'tenant', 'owner', 'user', 'agent', 'domain', 'session', 'run'])
+      .optional(),
     tenantId: z.string().min(1).optional(),
     ownerId: z.string().min(1).optional(),
+    userId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+    runId: z.string().min(1).optional(),
     agentIds: z.array(z.string().min(1)).min(1).optional(),
     domainIds: z.array(z.string().min(1)).min(1).optional(),
+    policyRevision: z.string().min(1).optional(),
+    dependencySnapshotHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+    approvalExpiresAt: z.string().datetime({ offset: true }).optional(),
     maxInlineBytes: z.number().int().positive().optional(),
     metadata: z.record(z.unknown()).optional(),
   })
@@ -155,6 +170,33 @@ export const promptProfileInputSchema = z
         code: z.ZodIssueCode.custom,
         path: ['ownerId'],
         message: 'ownerId is required for owner-scoped Prompt Profiles',
+      });
+    }
+    for (const [requiredScope, field] of [
+      ['user', 'userId'],
+      ['session', 'sessionId'],
+      ['run', 'runId'],
+    ] as const) {
+      if (scope === requiredScope && !profile[field]) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} is required for ${requiredScope}-scoped Prompt Profiles`,
+        });
+      }
+    }
+    if (scope === 'agent' && !profile.agentIds?.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['agentIds'],
+        message: 'agentIds is required for agent-scoped Prompt Profiles',
+      });
+    }
+    if (scope === 'domain' && !profile.domainIds?.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['domainIds'],
+        message: 'domainIds is required for domain-scoped Prompt Profiles',
       });
     }
     const layerIds = new Set<string>();
@@ -271,16 +313,10 @@ export class PromptProfileRegistry {
     ref: Required<PromptProfileRef>,
     input: { expectedLifecycleRevision: number; activatedBy: string }
   ): PromptProfile {
-    const activated = this.transition(
-      ref,
-      input.expectedLifecycleRevision,
-      'in_review',
-      'active',
-      {
-        activatedBy: input.activatedBy,
-        activatedAt: this.now(),
-      }
-    );
+    const activated = this.transition(ref, input.expectedLifecycleRevision, 'in_review', 'active', {
+      activatedBy: input.activatedBy,
+      activatedAt: this.now(),
+    });
     for (const profile of this.profiles.values()) {
       if (
         profile.id === activated.id &&
@@ -309,13 +345,17 @@ export class PromptProfileRegistry {
     if (current.status !== 'active' && current.status !== 'in_review') {
       lifecycleError(current, `cannot deprecate a ${current.status} Prompt Profile`);
     }
-    const deprecated = this.replaceProfile(current, {
-      status: 'deprecated',
-      lifecycleRevision: current.lifecycleRevision + 1,
-      deprecatedBy: input.deprecatedBy,
-      deprecatedAt: this.now(),
-      updatedAt: this.now(),
-    }, input.expectedLifecycleRevision);
+    const deprecated = this.replaceProfile(
+      current,
+      {
+        status: 'deprecated',
+        lifecycleRevision: current.lifecycleRevision + 1,
+        deprecatedBy: input.deprecatedBy,
+        deprecatedAt: this.now(),
+        updatedAt: this.now(),
+      },
+      input.expectedLifecycleRevision
+    );
     this.cache.clear();
     return clone(deprecated);
   }
@@ -350,6 +390,8 @@ export class PromptProfileRegistry {
       variables: Record<string, unknown>;
       principal: PromptProfilePrincipal;
       maxInlineBytes?: number;
+      policyRevision?: string;
+      dependencySnapshotHash?: string;
     }
   ): Promise<PromptProfileResolution> {
     const profile =
@@ -359,10 +401,15 @@ export class PromptProfileRegistry {
     if (!profile) {
       throw promptProfileError('PROMPT_PROFILE_NOT_FOUND', 'Prompt Profile not found', { ...ref });
     }
-    if (profile.status !== 'active' && !(ref.revision !== undefined && profile.status === 'deprecated')) {
+    if (
+      profile.status !== 'active' &&
+      !(ref.revision !== undefined && profile.status === 'deprecated')
+    ) {
       lifecycleError(profile, `Prompt Profile revision is ${profile.status}, not active`);
     }
     assertProfileAccess(profile, context.principal);
+    assertProfileGovernance(profile, context, this.now());
+    assertProfileVariables(profile, context.variables);
     const principalScopeHash = hashContent(stableStringify(context.principal));
     const cacheKey = hashContent(
       stableStringify({
@@ -461,7 +508,8 @@ export class PromptProfileRegistry {
     patch: Partial<PromptProfile>
   ): PromptProfile {
     const current = this.requireExact(ref);
-    if (current.status !== from) lifecycleError(current, `expected ${from}, found ${current.status}`);
+    if (current.status !== from)
+      lifecycleError(current, `expected ${from}, found ${current.status}`);
     const updated = this.replaceProfile(
       current,
       {
@@ -499,7 +547,8 @@ export class PromptProfileRegistry {
 
   private requireExact(ref: Required<PromptProfileRef>): PromptProfile {
     const profile = this.profiles.get(profileKey(ref.id, ref.version, ref.revision));
-    if (!profile) throw promptProfileError('PROMPT_PROFILE_NOT_FOUND', 'Prompt Profile not found', ref);
+    if (!profile)
+      throw promptProfileError('PROMPT_PROFILE_NOT_FOUND', 'Prompt Profile not found', ref);
     return profile;
   }
 
@@ -577,9 +626,23 @@ function renderLayer(
   declared: Set<string>,
   variables: Record<string, unknown>
 ): string {
-  const placeholders = Array.from(layer.content.matchAll(/\{\{\s*([^}]+?)\s*\}\}/gu)).map(
-    (match) => match[1].trim()
+  if (/\{%\s*include\b/iu.test(layer.content)) {
+    throw promptProfileError(
+      'PROMPT_PROFILE_INCLUDE_UNSUPPORTED',
+      'Prompt Profile includes are not allowed in governed inline layers',
+      { ...exactRef(profile), layerId: layer.id }
+    );
+  }
+  const placeholders = Array.from(layer.content.matchAll(/\{\{\s*([^}]+?)\s*\}\}/gu)).map((match) =>
+    match[1].trim()
   );
+  if (placeholders.some((name) => name.includes('|'))) {
+    throw promptProfileError(
+      'PROMPT_PROFILE_FILTER_INVALID',
+      'Prompt Profile filters are not allowed',
+      { ...exactRef(profile), layerId: layer.id }
+    );
+  }
   const undeclared = placeholders.filter((name) => !declared.has(name));
   if (undeclared.length > 0) {
     throw promptProfileError(
@@ -606,10 +669,7 @@ function roleForSource(source: PromptProfileSource): PromptRole {
 }
 
 function escapeUntrustedPromptData(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 function assertProfileAccess(profile: PromptProfile, principal: PromptProfilePrincipal): void {
@@ -626,18 +686,90 @@ function assertProfileAccess(profile: PromptProfile, principal: PromptProfilePri
       principalId: principal.principalId,
     });
   }
+  if (scope === 'user' && profile.userId !== principal.userId) {
+    scopeDenied(profile, principal, 'user');
+  }
+  if (scope === 'session' && profile.sessionId !== principal.sessionId) {
+    scopeDenied(profile, principal, 'session');
+  }
+  if (scope === 'run' && profile.runId !== principal.runId) {
+    scopeDenied(profile, principal, 'run');
+  }
   if (profile.agentIds && (!principal.agentId || !profile.agentIds.includes(principal.agentId))) {
     throw promptProfileError('PROMPT_PROFILE_SCOPE_DENIED', 'Prompt Profile agent scope denied', {
       ...exactRef(profile),
       principalId: principal.principalId,
     });
   }
-  if (profile.domainIds && (!principal.domainId || !profile.domainIds.includes(principal.domainId))) {
+  if (
+    profile.domainIds &&
+    (!principal.domainId || !profile.domainIds.includes(principal.domainId))
+  ) {
     throw promptProfileError('PROMPT_PROFILE_SCOPE_DENIED', 'Prompt Profile domain scope denied', {
       ...exactRef(profile),
       principalId: principal.principalId,
     });
   }
+}
+
+function assertProfileGovernance(
+  profile: PromptProfile,
+  context: { policyRevision?: string; dependencySnapshotHash?: string },
+  now: string
+): void {
+  if (profile.policyRevision !== undefined && profile.policyRevision !== context.policyRevision) {
+    throw promptProfileError(
+      'PROMPT_PROFILE_POLICY_REVISION_MISMATCH',
+      'Prompt Profile policy revision changed',
+      { ...exactRef(profile), expected: profile.policyRevision, actual: context.policyRevision }
+    );
+  }
+  if (
+    profile.dependencySnapshotHash !== undefined &&
+    profile.dependencySnapshotHash !== context.dependencySnapshotHash
+  ) {
+    throw promptProfileError(
+      'PROMPT_PROFILE_DEPENDENCY_SNAPSHOT_MISMATCH',
+      'Prompt Profile dependency snapshot changed',
+      {
+        ...exactRef(profile),
+        expected: profile.dependencySnapshotHash,
+        actual: context.dependencySnapshotHash,
+      }
+    );
+  }
+  if (
+    profile.approvalExpiresAt !== undefined &&
+    Date.parse(profile.approvalExpiresAt) <= Date.parse(now)
+  ) {
+    throw promptProfileError('PROMPT_PROFILE_APPROVAL_EXPIRED', 'Prompt Profile approval expired', {
+      ...exactRef(profile),
+      approvalExpiresAt: profile.approvalExpiresAt,
+    });
+  }
+}
+
+function assertProfileVariables(profile: PromptProfile, variables: Record<string, unknown>): void {
+  const declared = new Set(profile.variableNames ?? []);
+  const unknown = Object.keys(variables).filter((name) => !declared.has(name));
+  if (unknown.length > 0) {
+    throw promptProfileError(
+      'PROMPT_PROFILE_UNKNOWN_VARIABLE',
+      'Prompt Profile received unknown variables',
+      { ...exactRef(profile), variables: unknown.sort() }
+    );
+  }
+}
+
+function scopeDenied(
+  profile: PromptProfile,
+  principal: PromptProfilePrincipal,
+  scope: string
+): never {
+  throw promptProfileError('PROMPT_PROFILE_SCOPE_DENIED', `Prompt Profile ${scope} scope denied`, {
+    ...exactRef(profile),
+    principalId: principal.principalId,
+  });
 }
 
 function lifecycleError(profile: PromptProfile, reason: string): never {
@@ -684,8 +816,18 @@ function profileInputFromSnapshot(profile: PromptProfile): PromptProfileInput {
     ...(profile.scope === undefined ? {} : { scope: profile.scope }),
     ...(profile.tenantId === undefined ? {} : { tenantId: profile.tenantId }),
     ...(profile.ownerId === undefined ? {} : { ownerId: profile.ownerId }),
+    ...(profile.userId === undefined ? {} : { userId: profile.userId }),
+    ...(profile.sessionId === undefined ? {} : { sessionId: profile.sessionId }),
+    ...(profile.runId === undefined ? {} : { runId: profile.runId }),
     ...(profile.agentIds === undefined ? {} : { agentIds: profile.agentIds }),
     ...(profile.domainIds === undefined ? {} : { domainIds: profile.domainIds }),
+    ...(profile.policyRevision === undefined ? {} : { policyRevision: profile.policyRevision }),
+    ...(profile.dependencySnapshotHash === undefined
+      ? {}
+      : { dependencySnapshotHash: profile.dependencySnapshotHash }),
+    ...(profile.approvalExpiresAt === undefined
+      ? {}
+      : { approvalExpiresAt: profile.approvalExpiresAt }),
     ...(profile.maxInlineBytes === undefined ? {} : { maxInlineBytes: profile.maxInlineBytes }),
     ...(profile.metadata === undefined ? {} : { metadata: profile.metadata }),
   };

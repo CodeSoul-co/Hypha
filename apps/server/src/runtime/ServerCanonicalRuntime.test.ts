@@ -1,8 +1,13 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createFrameworkEvent, InMemoryEventStore } from '@hypha/core';
+import { createFrameworkEvent, InMemoryEventStore, type RuntimeCancelResult } from '@hypha/core';
+import { defaultReActFSMProcessSpec } from '@hypha/fsm';
+import type { InferenceProvider } from '@hypha/inference';
+import type { ToolRunner } from '@hypha/tools';
 import { ServerCanonicalRuntime } from './ServerCanonicalRuntime';
+import type { ServerRuntimeCompositionBindings } from './ServerRuntimeComposition';
+import type { ServerRuntimeWorkerBindings } from './ServerRuntimeWorkerLifecycle';
 
 describe('ServerCanonicalRuntime', () => {
   const services: ServerCanonicalRuntime[] = [];
@@ -98,6 +103,89 @@ describe('ServerCanonicalRuntime', () => {
     await expect(composition.events.list({ runId: 'run-1' })).resolves.toHaveLength(2);
   });
 
+  it('hands the audited canonical authorities to one cached execution composition', async () => {
+    const service = createService(new InMemoryEventStore());
+    const bindings = executionBindings();
+
+    expect(service.executionReadiness()).toMatchObject({
+      ready: false,
+      state: 'not_initialized',
+    });
+    expect(() => service.composeRuntime(bindings)).toThrow('Canonical Runtime is not initialized');
+
+    const canonical = await service.initialize();
+    expect(service.executionReadiness()).toMatchObject({
+      ready: false,
+      state: 'event_authority_ready',
+    });
+    const runtime = service.composeRuntime(bindings);
+
+    expect(service.executionReadiness()).toMatchObject({
+      ready: false,
+      state: 'execution_graph_ready',
+    });
+
+    expect(runtime.events).toBe(canonical.backbone.events);
+    expect(runtime.projections).toBe(canonical.backbone.projections);
+    expect(runtime.projectionStore).toBe(canonical.backbone.projectionStore);
+    expect(runtime.runLeases).toBe(canonical.backbone.runLeases);
+    expect(runtime.stateClaims).toBe(canonical.backbone.stateClaims);
+    expect(runtime.sessionQueue).toBe(canonical.backbone.sessionQueue);
+    expect(service.composeRuntime(executionBindings())).toBe(runtime);
+  });
+
+  it('owns one worker lifecycle and drains it before canonical shutdown', async () => {
+    const service = createService(new InMemoryEventStore());
+    await service.initialize();
+
+    expect(() => service.startWorkers(workerBindings())).toThrow(
+      'Canonical Runtime execution graph is not composed'
+    );
+
+    service.composeRuntime(executionBindings());
+    const [first, second] = await Promise.all([
+      service.startWorkers(workerBindings()),
+      service.startWorkers(workerBindings()),
+    ]);
+
+    expect(first).toBe(second);
+    expect(service.areWorkersRunning()).toBe(true);
+    expect(service.executionReadiness()).toEqual({
+      ready: true,
+      state: 'workers_running',
+      message: 'Canonical Runtime execution graph and durable workers are running',
+    });
+
+    const firstClose = service.close();
+    const secondClose = service.close();
+    expect(firstClose).toBe(secondClose);
+    await firstClose;
+
+    expect(first.timer.isRunning()).toBe(false);
+    expect(first.recovery.isRunning()).toBe(false);
+    expect(service.areWorkersRunning()).toBe(false);
+    expect(service.executionReadiness()).toMatchObject({ ready: false, state: 'closed' });
+    expect(() => service.composeRuntime(executionBindings())).toThrow(
+      'Canonical Runtime is closed'
+    );
+  });
+
+  it('keeps execution readiness closed when only maintenance workers are configured', async () => {
+    const service = createService(new InMemoryEventStore());
+    await service.initialize();
+    service.composeRuntime(executionBindings());
+
+    await service.startWorkers(maintenanceWorkerBindings());
+
+    expect(service.areWorkersRunning()).toBe(false);
+    expect(service.executionReadiness()).toEqual({
+      ready: false,
+      state: 'maintenance_workers_running',
+      message:
+        'Canonical Runtime maintenance workers are running, but the durable Session Command worker is not configured',
+    });
+  });
+
   function createService(
     legacyEvents: InMemoryEventStore,
     maxLegacyEvents = 100,
@@ -123,6 +211,88 @@ describe('ServerCanonicalRuntime', () => {
     return service;
   }
 });
+
+function executionBindings(): ServerRuntimeCompositionBindings {
+  return {
+    inference: {
+      id: 'inference.test',
+      infer: jest.fn(),
+    } as InferenceProvider,
+    toolRunner: {} as ToolRunner,
+    fsmSpec: defaultReActFSMProcessSpec,
+    executeState: async () => ({ result: { kind: 'continued' } }),
+    recoveryActivities: {
+      reconcile: async (request) => ({
+        activityId: request.invocation.activityId,
+        status: 'unknown',
+      }),
+      retry: async () => {
+        throw new Error('not configured');
+      },
+    },
+    recoveryRedispatches: {
+      redispatch: async () => {
+        throw new Error('not configured');
+      },
+    },
+    recoveryCancellations: {
+      cancel: async () => ({}) as RuntimeCancelResult,
+    },
+    recoveryRequeue: { requeue: async () => undefined },
+  };
+}
+
+function workerBindings(): ServerRuntimeWorkerBindings {
+  let running = true;
+  let continuationRunning = true;
+  const commands = {
+    processNext: jest.fn(async () => ({ disposition: 'idle' as const })),
+    supportedCommandTypes: jest.fn(() => ['continue_react' as const]),
+    start: jest.fn(),
+    isRunning: jest.fn(() => running),
+    close: jest.fn(async () => {
+      running = false;
+    }),
+  };
+  return {
+    timer: {
+      ownerId: 'runtime.timer.server',
+      leaseTtlMs: 30_000,
+      pageLimit: 100,
+      pollIntervalMs: 60_000,
+    },
+    recovery: {
+      ownerId: 'runtime.recovery.server',
+      leaseTtlMs: 30_000,
+      pageLimit: 100,
+      pollIntervalMs: 60_000,
+      autoRecoverReasons: ['PROJECTION_BEHIND'],
+    },
+    commands: { runtime: commands },
+    continuations: {
+      runtime: {
+        sweepOnce: jest.fn(async () => ({
+          checkedAt: '2026-07-26T00:00:00.000Z',
+          pages: 1,
+          scannedRuns: 0,
+          scheduled: 0,
+          reused: 0,
+          quarantined: 0,
+        })),
+        start: jest.fn(),
+        isRunning: jest.fn(() => continuationRunning),
+        close: jest.fn(async () => {
+          continuationRunning = false;
+        }),
+      },
+    },
+  };
+}
+
+function maintenanceWorkerBindings(): ServerRuntimeWorkerBindings {
+  const { commands: _commands, continuations: _continuations, ...bindings } = workerBindings();
+  return bindings;
+}
 
 function event(id: string, type: Parameters<typeof createFrameworkEvent>[0]['type']) {
   return createFrameworkEvent({

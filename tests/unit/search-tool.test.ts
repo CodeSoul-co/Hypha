@@ -3,6 +3,7 @@ import type { AddressInfo } from 'net';
 import SearchTool from '../../apps/server/src/core/tools/builtins/SearchTool';
 
 const originalEnv = {
+  NODE_ENV: process.env.NODE_ENV,
   WEB_SEARCH_PROVIDER: process.env.WEB_SEARCH_PROVIDER,
   WEB_SEARCH_ENDPOINT: process.env.WEB_SEARCH_ENDPOINT,
   WEB_SEARCH_DUCKDUCKGO_ENDPOINT: process.env.WEB_SEARCH_DUCKDUCKGO_ENDPOINT,
@@ -278,9 +279,42 @@ describe('SearchTool', () => {
       await close(wikipedia);
     }
   });
+
+  it('rejects the offline stub as a production default during lifecycle loading', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WEB_SEARCH_PROVIDER = 'stub';
+
+    await expect(new SearchTool().onLoad()).rejects.toThrow(
+      'WEB_SEARCH_PROVIDER=stub is test-only'
+    );
+  });
+
+  it('rejects request-level stub overrides in production', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WEB_SEARCH_PROVIDER = 'wikipedia';
+
+    const result = await new SearchTool().execute({ query: 'hypha', provider: 'stub' });
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        'WEB_SEARCH_PROVIDER=stub is test-only and cannot be used in production; configure a real HTTP provider',
+    });
+  });
+
+  it('rejects a production fallback list that contains the offline stub', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WEB_SEARCH_PROVIDER = 'auto';
+    process.env.WEB_SEARCH_PROVIDER_ORDER = 'duckduckgo,stub';
+
+    await expect(new SearchTool().onLoad()).rejects.toThrow(
+      'stub web search provider is test-only'
+    );
+  });
 });
 
 function restoreEnv(): void {
+  setOptionalEnv('NODE_ENV', originalEnv.NODE_ENV);
   setOptionalEnv('WEB_SEARCH_PROVIDER', originalEnv.WEB_SEARCH_PROVIDER);
   setOptionalEnv('WEB_SEARCH_ENDPOINT', originalEnv.WEB_SEARCH_ENDPOINT);
   setOptionalEnv('WEB_SEARCH_DUCKDUCKGO_ENDPOINT', originalEnv.WEB_SEARCH_DUCKDUCKGO_ENDPOINT);

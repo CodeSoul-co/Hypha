@@ -4,6 +4,23 @@ import path from 'node:path';
 import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@hypha/core';
 import { executionProviderError } from './execution-provider-error';
 
+const hostControlPlaneEnvironmentNames = new Set([
+  'CONTAINERD_ADDRESS',
+  'CONTAINERD_NAMESPACE',
+  'CONTAINER_HOST',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'DBUS_SYSTEM_BUS_ADDRESS',
+  'DOCKER_CERT_PATH',
+  'DOCKER_CONFIG',
+  'DOCKER_CONTEXT',
+  'DOCKER_HOST',
+  'DOCKER_TLS_VERIFY',
+  'KUBECONFIG',
+  'KUBERNETES_MASTER',
+  'PODMAN_HOST',
+  'SSH_AUTH_SOCK',
+]);
+
 export interface LocalProcessPolicyResolverOptions {
   workspaceRoot: string;
   executables: Record<string, string>;
@@ -13,10 +30,17 @@ export interface LocalProcessPolicyResolverOptions {
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   maxCombinedOutputBytes?: number;
+  maxArgumentCount?: number;
+  maxArgumentBytes?: number;
+  maxTotalArgumentBytes?: number;
+  maxEnvironmentVariables?: number;
+  maxEnvironmentValueBytes?: number;
+  maxTotalEnvironmentBytes?: number;
 }
 
 export interface ResolvedLocalProcessPolicy {
   executable: string;
+  args: readonly string[];
   cwd: string;
   environment: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -24,6 +48,17 @@ export interface ResolvedLocalProcessPolicy {
   maxStdoutBytes: number;
   maxStderrBytes: number;
   maxCombinedOutputBytes: number;
+}
+
+interface LocalProcessSurfaceIdentity {
+  realPath: string;
+  kind: 'executable' | 'directory';
+  dev: bigint;
+  ino: bigint;
+  nlink: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
 }
 
 /** Resolves untrusted command input into an explicit, host-local execution policy. */
@@ -36,6 +71,19 @@ export class LocalProcessPolicyResolver {
   private readonly maxStdoutBytes: number;
   private readonly maxStderrBytes: number;
   private readonly maxCombinedOutputBytes: number;
+  private readonly maxArgumentCount: number;
+  private readonly maxArgumentBytes: number;
+  private readonly maxTotalArgumentBytes: number;
+  private readonly maxEnvironmentVariables: number;
+  private readonly maxEnvironmentValueBytes: number;
+  private readonly maxTotalEnvironmentBytes: number;
+  private readonly resolvedIdentities = new WeakMap<
+    ResolvedLocalProcessPolicy,
+    {
+      executable: LocalProcessSurfaceIdentity;
+      cwd: LocalProcessSurfaceIdentity;
+    }
+  >();
 
   constructor(options: LocalProcessPolicyResolverOptions) {
     if (!options.workspaceRoot.trim()) throw new Error('workspaceRoot is required.');
@@ -79,6 +127,27 @@ export class LocalProcessPolicyResolver {
     this.maxCombinedOutputBytes = positiveInteger(
       options.maxCombinedOutputBytes ?? 8 * 1024 * 1024,
       'maxCombinedOutputBytes'
+    );
+    this.maxArgumentCount = positiveInteger(options.maxArgumentCount ?? 256, 'maxArgumentCount');
+    this.maxArgumentBytes = positiveInteger(
+      options.maxArgumentBytes ?? 8 * 1024,
+      'maxArgumentBytes'
+    );
+    this.maxTotalArgumentBytes = positiveInteger(
+      options.maxTotalArgumentBytes ?? 24 * 1024,
+      'maxTotalArgumentBytes'
+    );
+    this.maxEnvironmentVariables = positiveInteger(
+      options.maxEnvironmentVariables ?? 128,
+      'maxEnvironmentVariables'
+    );
+    this.maxEnvironmentValueBytes = positiveInteger(
+      options.maxEnvironmentValueBytes ?? 8 * 1024,
+      'maxEnvironmentValueBytes'
+    );
+    this.maxTotalEnvironmentBytes = positiveInteger(
+      options.maxTotalEnvironmentBytes ?? 24 * 1024,
+      'maxTotalEnvironmentBytes'
     );
   }
 
@@ -125,6 +194,7 @@ export class LocalProcessPolicyResolver {
         false
       );
     }
+    assertNoHostControlPlaneEnvironment(environment);
   }
 
   async resolve(
@@ -185,8 +255,9 @@ export class LocalProcessPolicyResolver {
       maxStdoutBytes + maxStderrBytes,
     ]);
 
-    return {
+    const resolved: ResolvedLocalProcessPolicy = {
       executable,
+      args: this.resolveArguments(request.args ?? []),
       cwd,
       environment: this.buildEnvironment(environment, request.env),
       timeoutMs,
@@ -195,15 +266,47 @@ export class LocalProcessPolicyResolver {
       maxStderrBytes,
       maxCombinedOutputBytes,
     };
+    const [executableIdentity, cwdIdentity] = await Promise.all([
+      captureSurfaceIdentity(executable, 'executable'),
+      captureSurfaceIdentity(cwd, 'directory'),
+    ]);
+    this.resolvedIdentities.set(resolved, {
+      executable: executableIdentity,
+      cwd: cwdIdentity,
+    });
+    return resolved;
+  }
+
+  async assertExecutionSurfaceUnchanged(policy: ResolvedLocalProcessPolicy): Promise<void> {
+    const expected = this.resolvedIdentities.get(policy);
+    if (!expected) {
+      throw surfaceChanged();
+    }
+
+    let current: {
+      executable: LocalProcessSurfaceIdentity;
+      cwd: LocalProcessSurfaceIdentity;
+    };
+    try {
+      const [executable, cwd] = await Promise.all([
+        captureSurfaceIdentity(policy.executable, 'executable'),
+        captureSurfaceIdentity(policy.cwd, 'directory'),
+      ]);
+      current = { executable, cwd };
+    } catch {
+      throw surfaceChanged();
+    }
+    if (
+      !sameSurfaceIdentity(expected.executable, current.executable) ||
+      !sameSurfaceIdentity(expected.cwd, current.cwd)
+    ) {
+      throw surfaceChanged();
+    }
   }
 
   async assertSurfaceAvailable(): Promise<void> {
     await fs.access(this.workspaceRoot, fsConstants.R_OK | fsConstants.W_OK);
-    await Promise.all(
-      Object.values(this.executables).map((executable) =>
-        fs.access(executable, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK)
-      )
-    );
+    await Promise.all(Object.values(this.executables).map(resolveHostExecutable));
   }
 
   private async resolveExecutable(
@@ -254,12 +357,7 @@ export class LocalProcessPolicyResolver {
         false
       );
     }
-    const realExecutable = await fs.realpath(configuredPath);
-    await fs.access(
-      realExecutable,
-      process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK
-    );
-    return realExecutable;
+    return resolveHostExecutable(configuredPath);
   }
 
   private async resolveWorkingDirectory(requested?: string): Promise<string> {
@@ -285,6 +383,7 @@ export class LocalProcessPolicyResolver {
     environment: ExecutionEnvironmentSpec,
     requested?: Record<string, string>
   ): NodeJS.ProcessEnv {
+    assertNoHostControlPlaneEnvironment(environment);
     const allowed = normalizedNameSet(environment.process.environmentAllowList ?? []);
     const denied = normalizedNameSet(environment.process.environmentDenyList ?? []);
     const output: NodeJS.ProcessEnv = {};
@@ -309,7 +408,86 @@ export class LocalProcessPolicyResolver {
       }
       output[name] = value;
     }
-    return output;
+    return this.validateResolvedEnvironment(output);
+  }
+
+  private resolveArguments(requested: readonly string[]): readonly string[] {
+    if (requested.length > this.maxArgumentCount) {
+      throw executionProviderError(
+        'EXECUTION_POLICY_DENIED',
+        'Local Process command exceeds the configured argument count limit.',
+        false
+      );
+    }
+
+    let totalBytes = 0;
+    for (const argument of requested) {
+      if (argument.includes('\u0000')) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process command arguments cannot contain NUL characters.',
+          false
+        );
+      }
+      const argumentBytes = Buffer.byteLength(argument, 'utf8');
+      if (argumentBytes > this.maxArgumentBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process command exceeds the configured per-argument byte limit.',
+          false
+        );
+      }
+      totalBytes += argumentBytes + 1;
+      if (totalBytes > this.maxTotalArgumentBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process command exceeds the configured total argument byte limit.',
+          false
+        );
+      }
+    }
+    // Preserve exact Unicode semantics while severing the caller-owned mutable array.
+    return Object.freeze([...requested]);
+  }
+
+  private validateResolvedEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const entries = Object.entries(environment);
+    if (entries.length > this.maxEnvironmentVariables) {
+      throw executionProviderError(
+        'EXECUTION_POLICY_DENIED',
+        'Local Process environment exceeds the configured variable count limit.',
+        false
+      );
+    }
+
+    let totalBytes = 0;
+    for (const [name, value] of entries) {
+      if (value === undefined) continue;
+      if (value.includes('\u0000')) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          `Environment variable ${name} cannot contain NUL characters.`,
+          false
+        );
+      }
+      const valueBytes = Buffer.byteLength(value, 'utf8');
+      if (valueBytes > this.maxEnvironmentValueBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          `Environment variable ${name} exceeds the configured value byte limit.`,
+          false
+        );
+      }
+      totalBytes += Buffer.byteLength(name, 'utf8') + valueBytes + 2;
+      if (totalBytes > this.maxTotalEnvironmentBytes) {
+        throw executionProviderError(
+          'EXECUTION_POLICY_DENIED',
+          'Local Process environment exceeds the configured total byte limit.',
+          false
+        );
+      }
+    }
+    return Object.freeze({ ...environment });
   }
 }
 
@@ -351,6 +529,20 @@ function normalizedNameSet(values: readonly string[]): Set<string> {
   return new Set(values.map(normalizeEnvironmentName));
 }
 
+function assertNoHostControlPlaneEnvironment(environment: ExecutionEnvironmentSpec): void {
+  const allowed = normalizedNameSet(environment.process.environmentAllowList ?? []);
+  for (const name of hostControlPlaneEnvironmentNames) {
+    if (!allowed.has(normalizeEnvironmentName(name))) continue;
+    // Local Process has no OS isolation. Ambient daemon, agent, bus, or cluster handles must
+    // never be delegated through its environment, including Windows named-pipe endpoints.
+    throw executionProviderError(
+      'EXECUTION_POLICY_DENIED',
+      `Local Process environment cannot expose host control-plane variable ${name}.`,
+      false
+    );
+  }
+}
+
 function minimumPositive(values: Array<number | undefined>): number {
   return Math.min(...values.filter((value): value is number => value !== undefined && value > 0));
 }
@@ -365,4 +557,79 @@ function positiveInteger(value: number, name: string): number {
     throw new Error(`${name} must be a positive integer.`);
   }
   return value;
+}
+
+async function captureSurfaceIdentity(
+  candidate: string,
+  kind: LocalProcessSurfaceIdentity['kind']
+): Promise<LocalProcessSurfaceIdentity> {
+  const realPath = await fs.realpath(candidate);
+  const stat = await fs.lstat(realPath, { bigint: true });
+  const validType = kind === 'executable' ? stat.isFile() : stat.isDirectory();
+  if (!validType) {
+    throw surfaceChanged();
+  }
+  return {
+    realPath,
+    kind,
+    dev: stat.dev,
+    ino: stat.ino,
+    nlink: stat.nlink,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+
+function sameSurfaceIdentity(
+  before: LocalProcessSurfaceIdentity,
+  after: LocalProcessSurfaceIdentity
+): boolean {
+  return (
+    before.kind === after.kind &&
+    samePath(before.realPath, after.realPath) &&
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.nlink === after.nlink &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  );
+}
+
+function surfaceChanged() {
+  return executionProviderError(
+    'EXECUTION_PATH_DENIED',
+    'Local Process executable or working directory changed after policy resolution.',
+    false
+  );
+}
+
+async function resolveHostExecutable(candidate: string): Promise<string> {
+  try {
+    const realExecutable = await fs.realpath(candidate);
+    const stat = await fs.lstat(realExecutable);
+    if (!stat.isFile()) throw new Error('Configured executable is not a regular file.');
+
+    if (process.platform === 'win32') {
+      const extension = path.extname(realExecutable).toLowerCase();
+      // Batch and script files require an interpreter or shell. Local Process only launches
+      // directly executable Windows images and never enables a shell implicitly.
+      if (extension !== '.exe' && extension !== '.com') {
+        throw new Error('Configured executable has no supported Windows executable extension.');
+      }
+      await fs.access(realExecutable, fsConstants.F_OK);
+    } else {
+      // POSIX direct execution requires an executable regular file. Interpreter scripts remain
+      // ordinary argv inputs to an independently allowlisted interpreter.
+      await fs.access(realExecutable, fsConstants.X_OK);
+    }
+    return realExecutable;
+  } catch {
+    throw executionProviderError(
+      'EXECUTION_PATH_DENIED',
+      'Configured Local Process executable is unavailable or not directly executable.',
+      false
+    );
+  }
 }

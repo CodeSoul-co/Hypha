@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { InMemoryEventStore, stableRecoveryHash, type RecoveryFailure } from '@hypha/core';
+import { reActContinuationScopeHash, type ReActStep } from '@hypha/kernel';
 import { ServerCanonicalRuntime } from '../runtime/ServerCanonicalRuntime';
 import { destroyEventRuntime, initializeEventRuntime } from './EventRuntime';
 
@@ -9,7 +10,7 @@ describe('Server EventRuntime canonical integration', () => {
   let canonicalRuntime: ServerCanonicalRuntime | undefined;
 
   afterEach(async () => {
-    destroyEventRuntime();
+    await destroyEventRuntime();
     await canonicalRuntime?.close();
     canonicalRuntime = undefined;
   });
@@ -33,7 +34,97 @@ describe('Server EventRuntime canonical integration', () => {
       events: composition.events,
       eventDbPath: path.join(root, 'runtime.sqlite'),
       humanWaits: composition.humanWaits,
+      cancellations: { cancel: (command) => canonicalRuntime!.cancel(command) },
     });
+    const adapters = runtime.canonicalExecutionAdapters();
+    canonicalRuntime.composeCancellations({
+      activities: adapters.cancellationActivities,
+      children: adapters.cancellationChildren,
+    });
+    expect(adapters.fsmSpec.id).toBeTruthy();
+    await expect(
+      adapters.inference.infer({
+        runId: 'run.invalid',
+        stepId: 'step.invalid',
+        modelAlias: 'model.invalid',
+        input: {},
+      })
+    ).rejects.toMatchObject({ code: 'INFERENCE_INVALID_INPUT' });
+    await expect(
+      adapters.toolRunner.run({
+        toolId: 'utility.text',
+        input: {},
+        context: { runId: 'run.invalid', stepId: 'step.invalid' },
+      })
+    ).rejects.toMatchObject({ code: 'TOOL_INVALID_INPUT' });
+
+    const reactRun = await runtime.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.react',
+      react: {
+        messages: [{ role: 'user', content: 'Return a direct answer.' }],
+        agentSpec: {
+          id: 'agent.integration',
+          version: '1.0.0',
+          name: 'Integration Agent',
+          modelAlias: 'model.integration',
+          systemInstructions: 'Return a direct answer without tools.',
+        },
+      },
+    });
+    const prepared = await runtime.prepareCanonicalReActExecution(
+      {
+        userId: 'user.integration',
+        sessionId: 'session.react',
+        react: {
+          messages: [{ role: 'user', content: 'Return a direct answer.' }],
+          agentSpec: {
+            id: 'agent.integration',
+            version: '1.0.0',
+            name: 'Integration Agent',
+            modelAlias: 'model.integration',
+            systemInstructions: 'Return a direct answer without tools.',
+          },
+        },
+      },
+      reactRun.runId
+    );
+    expect(prepared).not.toBeNull();
+    await runtime.recordCanonicalReActContextPrepared({
+      runId: reactRun.runId,
+      stepId: prepared!.context.stepId,
+      scopeHash: reActContinuationScopeHash(prepared!.context),
+      messageCount: prepared!.context.messages.length,
+      activeSkillIds: [],
+    });
+    const directSteps: ReActStep[] = [
+      { id: 'react:1:reason', phase: 'reason' },
+      { id: 'react:2:select_action', phase: 'select_action' },
+      { id: 'react:3:verify', phase: 'verify' },
+      { id: 'react:4:memory_sync', phase: 'memory_sync' },
+      { id: 'react:5:complete', phase: 'complete', output: 'done' },
+    ];
+    for (const step of directSteps) {
+      await runtime.recordCanonicalReActStep(reactRun.runId, step);
+    }
+    const directOutcome = {
+      runId: reactRun.runId,
+      status: 'completed' as const,
+      steps: directSteps,
+      output: 'done',
+    };
+    await runtime.recordCanonicalReActOutcome(reactRun.runId, directOutcome);
+    await runtime.recordCanonicalReActOutcome(reactRun.runId, directOutcome);
+    await expect(
+      composition.events.list({ runId: reactRun.runId, type: 'run.completed' })
+    ).resolves.toHaveLength(1);
+    await expect(
+      composition.events.list({ runId: reactRun.runId, type: 'fsm.state.entered' })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ payload: expect.objectContaining({ stateId: 'Completed' }) }),
+      ])
+    );
 
     const run = await runtime.startRun({
       userId: 'user.integration',
@@ -62,6 +153,74 @@ describe('Server EventRuntime canonical integration', () => {
     });
     await runtime.transition(run.runId, 'ContextBuilt', { approval: 'approved' });
     await runtime.record(run.runId, 'model.call.completed', { output: 'observed' }, 'model-1');
+
+    const governedReview = await runtime.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.governed-review',
+    });
+    const governedSubjectHash = `sha256:${'7'.repeat(64)}`;
+    await runtime.waitForHumanReview(governedReview.runId, {
+      waitId: 'wait.governed-review',
+      pendingActionRef: 'task.governed-review',
+      reason: 'A governed decision is required',
+      humanTasks: [
+        {
+          taskId: 'task.governed-review',
+          kind: 'policy',
+          subjectRef: 'react:governed-review@1',
+          subjectHash: governedSubjectHash,
+          requestedBy: 'agent.runtime',
+          allowedDecisionScopes: ['runtime.human-task.decide'],
+          requestedAt: '2026-07-26T00:00:02.000Z',
+        },
+      ],
+    });
+    await expect(
+      runtime.listOwnedRuntimeHumanTasks(governedReview.runId, 'foreign.user')
+    ).rejects.toMatchObject({ code: 'RUNTIME_RUN_ACCESS_DENIED' });
+    await expect(
+      runtime.decideOwnedRuntimeHumanTask({
+        runId: governedReview.runId,
+        ownerUserId: 'user.integration',
+        principalId: 'user.integration',
+        taskId: 'task.governed-review',
+        expectedRevision: 1,
+        expectedSubjectHash: `sha256:${'8'.repeat(64)}`,
+        decision: 'approved',
+        idempotencyKey: 'decision.governed-review.tampered',
+      })
+    ).rejects.toMatchObject({ code: 'HUMAN_TASK_SUBJECT_MISMATCH' });
+    await expect(
+      runtime.decideOwnedRuntimeHumanTask({
+        runId: governedReview.runId,
+        ownerUserId: 'user.integration',
+        principalId: 'user.integration',
+        taskId: 'task.governed-review',
+        expectedRevision: 1,
+        expectedSubjectHash: governedSubjectHash,
+        decision: 'approved',
+        reason: 'Approved after inspecting the bounded plan.',
+        idempotencyKey: 'decision.governed-review',
+      })
+    ).resolves.toMatchObject({
+      taskId: 'task.governed-review',
+      status: 'approved',
+      revision: 2,
+      decidedBy: 'user.integration',
+    });
+    await expect(
+      runtime.decideOwnedRuntimeHumanTask({
+        runId: governedReview.runId,
+        ownerUserId: 'user.integration',
+        principalId: 'user.integration',
+        taskId: 'task.governed-review',
+        expectedRevision: 1,
+        expectedSubjectHash: governedSubjectHash,
+        decision: 'approved',
+        reason: 'Approved after inspecting the bounded plan.',
+        idempotencyKey: 'decision.governed-review',
+      })
+    ).resolves.toMatchObject({ taskId: 'task.governed-review', status: 'approved', revision: 2 });
     const cacheFailure: RecoveryFailure = {
       id: 'cache-failure.integration',
       module: 'cache',
@@ -87,6 +246,31 @@ describe('Server EventRuntime canonical integration', () => {
         recordBypassedCacheFailure(failure: RecoveryFailure): Promise<void>;
       }
     ).recordBypassedCacheFailure(cacheFailure);
+
+    const cancellable = await runtime.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.integration',
+      workflowRef: { id: 'workflow.cancellable', version: '1.0.0' },
+      metadata: { surface: 'http.workflows.execute' },
+    });
+    await expect(
+      runtime.cancelOwnedWorkflowExecution({
+        executionId: cancellable.runId,
+        userId: 'user.integration',
+        idempotencyKey: 'cancel.integration',
+      })
+    ).resolves.toMatchObject({
+      commandId: 'cancel.integration',
+      disposition: 'applied',
+      projection: { runStatus: 'cancelled' },
+    });
+    await expect(
+      runtime.cancelOwnedWorkflowExecution({
+        executionId: cancellable.runId,
+        userId: 'foreign.user',
+        idempotencyKey: 'cancel.foreign',
+      })
+    ).resolves.toBeNull();
 
     await expect(
       composition.events.list({ runId: run.runId, type: 'run.started' })
@@ -158,12 +342,26 @@ describe('Server EventRuntime canonical integration', () => {
       }),
     ]);
 
-    destroyEventRuntime();
+    await destroyEventRuntime();
     const restarted = initializeEventRuntime({
       events: composition.events,
       eventDbPath: path.join(root, 'runtime.sqlite'),
       humanWaits: composition.humanWaits,
+      cancellations: { cancel: (command) => canonicalRuntime!.cancel(command) },
     });
+    await restarted.transition(run.runId, 'Reasoning', { resumedAfterRestart: true });
+    await expect(
+      composition.events.list({ runId: run.runId, type: 'fsm.state.entered' })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            stateId: 'Reasoning',
+            snapshot: expect.objectContaining({ currentState: 'Reasoning' }),
+          }),
+        }),
+      ])
+    );
     await restarted.startRun({
       userId: 'user.integration',
       sessionId: 'session.integration',
@@ -176,7 +374,7 @@ describe('Server EventRuntime canonical integration', () => {
       })
     ).resolves.toHaveLength(1);
 
-    destroyEventRuntime();
+    await destroyEventRuntime();
     await canonicalRuntime.close();
     canonicalRuntime = new ServerCanonicalRuntime({
       filename: path.join(root, 'runtime.sqlite'),

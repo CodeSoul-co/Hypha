@@ -29,6 +29,10 @@ export interface ArtifactPutRequest {
   ifAbsent?: boolean;
 }
 
+export interface ArtifactOperationOptions {
+  abortSignal?: AbortSignal;
+}
+
 export interface ArtifactGetRequest {
   ref: ArtifactStorageRef;
   range?: ArtifactByteRange;
@@ -77,8 +81,8 @@ export interface ArtifactDownloadAccess {
 export interface ArtifactStoreProvider {
   readonly id: string;
   capabilities(): Promise<ArtifactStoreCapabilities>;
-  put(request: ArtifactPutRequest): Promise<ArtifactStorageRef>;
-  get(request: ArtifactGetRequest): Promise<ArtifactContent>;
+  put(request: ArtifactPutRequest, options?: ArtifactOperationOptions): Promise<ArtifactStorageRef>;
+  get(request: ArtifactGetRequest, options?: ArtifactOperationOptions): Promise<ArtifactContent>;
   head(ref: ArtifactStorageRef): Promise<ArtifactObjectMetadata | null>;
   exists(ref: ArtifactStorageRef): Promise<boolean>;
   delete(ref: ArtifactStorageRef): Promise<void>;

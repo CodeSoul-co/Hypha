@@ -9,7 +9,9 @@ export type RuntimeActivityEventType =
   | 'runtime.activity.compensation.requested'
   | 'runtime.activity.compensation.completed'
   | 'runtime.activity.compensation.failed'
-  | 'activity.redispatch.requested';
+  | 'activity.redispatch.requested'
+  | 'activity.redispatch.accepted'
+  | 'activity.redispatch.outcome_unknown';
 
 export type FrameworkEventType =
   | 'session.created'
@@ -223,11 +225,13 @@ export type FrameworkEventType =
   | 'context.build.started'
   | 'context.build.completed'
   | 'context.compacted'
+  | 'react.continuation.quarantined'
   | 'human.review.requested'
   | 'human.review.approved'
   | 'human.review.rejected'
   | 'human.review.expired'
   | 'human.review.cancelled'
+  | 'human.review.superseded'
   | 'human.review.resume.started'
   | 'human.review.resume.revalidated'
   | 'human.review.resume.failed'

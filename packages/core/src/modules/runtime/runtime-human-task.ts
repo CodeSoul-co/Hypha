@@ -24,16 +24,51 @@ export function projectRuntimeHumanTasks(events: readonly FrameworkEvent[]): Run
     if (!current) continue;
     const status = statusFromEvent(event.type);
     if (!status) continue;
+    const recordedDecision = text(payload?.decision);
+    if (recordedDecision !== undefined && recordedDecision !== status) {
+      humanTaskError(
+        'RUNTIME_EVENT_STREAM_CORRUPT',
+        'Human task terminal Event type and decision do not match.',
+        {
+          taskId,
+          eventId: event.id,
+          eventType: event.type,
+          recordedDecision,
+        }
+      );
+    }
+    const recordedSubjectHash = text(payload?.expectedSubjectHash) ?? text(payload?.subjectHash);
+    if (recordedSubjectHash !== undefined && recordedSubjectHash !== current.subjectHash) {
+      humanTaskError(
+        'RUNTIME_EVENT_STREAM_CORRUPT',
+        'Human task terminal Event subject hash does not match the request.',
+        {
+          taskId,
+          eventId: event.id,
+          expectedSubjectHash: current.subjectHash,
+          recordedSubjectHash,
+        }
+      );
+    }
     const expectedRevision = positiveInteger(payload?.expectedRevision) ?? current.revision;
     if (expectedRevision !== current.revision) continue;
+    const decisionCommandId = text(payload?.decisionCommandId) ?? text(payload?.commandId);
+    const decisionIdempotencyKey =
+      text(payload?.decisionIdempotencyKey) ?? text(event.idempotencyKey);
     tasks.set(
       taskId,
       validateRuntimeHumanTask({
         ...current,
         status,
         revision: current.revision + 1,
+        decisionEventId: event.id,
+        ...(decisionCommandId === undefined ? {} : { decisionCommandId }),
+        ...(decisionIdempotencyKey === undefined ? {} : { decisionIdempotencyKey }),
         ...(text(payload?.decidedBy) === undefined ? {} : { decidedBy: text(payload?.decidedBy) }),
         decidedAt: text(payload?.decidedAt) ?? event.timestamp,
+        ...(text(payload?.supersededByTaskId) === undefined
+          ? {}
+          : { supersededByTaskId: text(payload?.supersededByTaskId) }),
         ...(text(payload?.reason) === undefined ? {} : { reason: text(payload?.reason) }),
       })
     );
@@ -45,7 +80,7 @@ export function assertRuntimeHumanTaskDecision<TTask extends RuntimeHumanTask>(
   task: TTask | undefined,
   command: Pick<
     RuntimeHumanTaskDecisionCommand,
-    'expectedRevision' | 'expectedSubjectHash' | 'principal' | 'decidedAt'
+    'expectedRevision' | 'expectedSubjectHash' | 'principal' | 'decidedAt' | 'decision'
   >
 ): TTask {
   if (!task) humanTaskError('HUMAN_TASK_NOT_FOUND', 'Human task was not found.');
@@ -69,8 +104,16 @@ export function assertRuntimeHumanTaskDecision<TTask extends RuntimeHumanTask>(
       actualSubjectHash: task.subjectHash,
     });
   }
-  if (task.expiresAt !== undefined && Date.parse(task.expiresAt) <= Date.parse(command.decidedAt)) {
+  const expiresAt = task.expiresAt === undefined ? undefined : Date.parse(task.expiresAt);
+  const decidedAt = Date.parse(command.decidedAt);
+  if (command.decision !== 'expired' && expiresAt !== undefined && expiresAt <= decidedAt) {
     humanTaskError('HUMAN_TASK_EXPIRED', 'Human task has expired.', {
+      taskId: task.taskId,
+      expiresAt: task.expiresAt,
+    });
+  }
+  if (command.decision === 'expired' && (expiresAt === undefined || decidedAt < expiresAt)) {
+    humanTaskError('HUMAN_TASK_NOT_EXPIRED', 'Human task cannot expire before its deadline.', {
       taskId: task.taskId,
       expiresAt: task.expiresAt,
     });
@@ -246,6 +289,7 @@ function statusFromEvent(type: FrameworkEvent['type']): RuntimeHumanTaskStatus |
   if (type === 'human.review.rejected') return 'rejected';
   if (type === 'human.review.expired') return 'expired';
   if (type === 'human.review.cancelled') return 'cancelled';
+  if (type === 'human.review.superseded') return 'superseded';
   return undefined;
 }
 

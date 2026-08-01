@@ -1,24 +1,34 @@
 import fs from 'fs/promises';
 import path from 'path';
 import YAML from 'yaml';
+import { createFrameworkEvent, type EventStore } from '@hypha/core';
+import { LocalHashEmbeddingProvider } from '@hypha/adapters-local';
 import {
   CanonicalMemoryRuntimeLoader,
-  InMemoryLocalVectorStoreAdapter,
   MemoryManagementProviderRegistry,
+  MemoryOperationalMetrics,
   MemoryProviderTelemetry,
   MemoryRuntimeFactory,
   MongoStructuredStoreProvider,
+  StructuredManagedVectorStoreAdapter,
   createHindsightLocalMemoryProviderFactory,
   createMem0OssMemoryProviderFactory,
   createMem0PlatformMemoryProviderFactory,
   createMemoryBankManagedProviderFactory,
   createNativeMemoryManagementProviderFactory,
   memoryError,
-  type EmbeddingProvider,
+  memoryEventIdempotencyKey,
+  sanitizeMemoryEventPayload,
+  sanitizeMemoryOperationalValue,
   type MemoryApplicationService,
   type MemoryLifecycleTaskStore,
+  type MemoryEventContext,
+  type MemoryEventPayloadBase,
+  type MemoryEventPublisher,
+  type MemoryEventType,
   type MemoryProviderCostEstimator,
   type MemoryProviderOperationalReport,
+  type MemoryOperationalMetricsSnapshot,
   type MemoryProviderOperation,
   type MemoryRuntime,
   type MemoryRuntimeCompositionReceipt,
@@ -38,6 +48,7 @@ export type ServerMemoryCompositionState =
   | 'idle'
   | 'starting'
   | 'ready'
+  | 'degraded'
   | 'draining'
   | 'stopped'
   | 'failed';
@@ -47,6 +58,15 @@ export interface ServerMemoryReadiness {
   ready: boolean;
   receipt?: MemoryRuntimeCompositionReceipt;
   providerStatus?: string;
+  requirement?: 'required' | 'optional';
+  external?: boolean;
+  evidence?: {
+    profileId: string;
+    providerId: string;
+    providerStatus: string;
+    requirement: 'required' | 'optional';
+    external: boolean;
+  };
   message?: string;
 }
 
@@ -55,9 +75,11 @@ export interface ServerMemoryOperationalSnapshot {
   profile: { id: string; version: string; revision?: string };
   provider: ProviderHealth & { id: string };
   telemetry?: MemoryProviderOperationalReport;
+  operationalMetrics?: MemoryOperationalMetricsSnapshot;
 }
 export interface ServerMemoryCompositionOptions {
   bootstrap: () => Promise<MemoryRuntime>;
+  operationalMetrics?: MemoryOperationalMetrics;
 }
 
 /** The only Server registration point for the canonical Memory application service. */
@@ -72,7 +94,7 @@ export class ServerMemoryComposition {
   constructor(private readonly options: ServerMemoryCompositionOptions) {}
 
   async start(): Promise<MemoryRuntimeCompositionReceipt> {
-    if (this.runtime && this.state === 'ready') return this.runtime.compositionReceipt;
+    if (this.runtime && isServingState(this.state)) return this.runtime.compositionReceipt;
     if (this.startPromise) return (await this.startPromise).compositionReceipt;
     if (this.state === 'draining' || this.state === 'stopped') {
       throw memoryError(
@@ -97,7 +119,7 @@ export class ServerMemoryComposition {
       return runtime.compositionReceipt;
     } catch (error) {
       this.state = 'failed';
-      this.failureMessage = error instanceof Error ? error.message : String(error);
+      this.failureMessage = sanitizeServerMemoryOperationalError(error);
       throw error;
     } finally {
       this.startPromise = null;
@@ -105,7 +127,7 @@ export class ServerMemoryComposition {
   }
 
   service(): MemoryApplicationService {
-    if (this.state !== 'ready' || !this.runtime) {
+    if (!isServingState(this.state) || !this.runtime) {
       throw memoryError(
         'MEMORY_PROVIDER_UNAVAILABLE',
         `Server Memory composition is ${this.state}.`
@@ -124,7 +146,7 @@ export class ServerMemoryComposition {
   }
 
   profileRef() {
-    if (this.state !== 'ready' || !this.runtime) {
+    if (!isServingState(this.state) || !this.runtime) {
       throw memoryError(
         'MEMORY_PROVIDER_UNAVAILABLE',
         `Server Memory composition is ${this.state}.`
@@ -138,7 +160,7 @@ export class ServerMemoryComposition {
   }
 
   lifecycleTaskStore(): MemoryLifecycleTaskStore {
-    if (this.state !== 'ready' || !this.runtime) {
+    if (!isServingState(this.state) || !this.runtime) {
       throw memoryError(
         'MEMORY_PROVIDER_UNAVAILABLE',
         `Server Memory composition is ${this.state}.`
@@ -155,7 +177,7 @@ export class ServerMemoryComposition {
   }
 
   async operationalSnapshot(): Promise<ServerMemoryOperationalSnapshot> {
-    if (this.state !== 'ready' || !this.runtime) {
+    if (!isServingState(this.state) || !this.runtime) {
       throw memoryError(
         'MEMORY_PROVIDER_UNAVAILABLE',
         `Server Memory composition is ${this.state}.`
@@ -171,11 +193,12 @@ export class ServerMemoryComposition {
       },
       provider: { id: this.runtime.provider.id, ...health },
       telemetry: this.runtime.telemetry?.snapshot(this.runtime.provider.id),
+      operationalMetrics: this.options.operationalMetrics?.snapshot(),
     };
   }
 
   async readiness(): Promise<ServerMemoryReadiness> {
-    if (this.state !== 'ready' || !this.runtime) {
+    if (!isServingState(this.state) || !this.runtime) {
       return {
         state: this.state,
         ready: false,
@@ -183,12 +206,38 @@ export class ServerMemoryComposition {
       };
     }
     const health = await this.runtime.service.providerHealth();
+    const availability = providerStartupAvailability(this.runtime);
+    const ready =
+      health.status === 'healthy' ||
+      (!availability.external && health.status === 'degraded') ||
+      (availability.external && availability.requirement === 'optional');
+    if (
+      availability.external &&
+      availability.requirement === 'optional' &&
+      health.status !== 'healthy'
+    ) {
+      this.state = 'degraded';
+    } else if (this.state === 'degraded') {
+      this.state = 'ready';
+    }
+    const message = health.message
+      ? String(sanitizeMemoryOperationalValue(health.message))
+      : undefined;
     return {
       state: this.state,
-      ready: health.status === 'healthy' || health.status === 'degraded',
+      ready,
       receipt: this.runtime.compositionReceipt,
       providerStatus: health.status,
-      message: health.message,
+      requirement: availability.requirement,
+      external: availability.external,
+      evidence: {
+        profileId: this.runtime.profile.id,
+        providerId: this.runtime.provider.id,
+        providerStatus: health.status,
+        requirement: availability.requirement,
+        external: availability.external,
+      },
+      message,
     };
   }
 
@@ -220,13 +269,17 @@ export class ServerMemoryComposition {
   }
 }
 
+const serverMemoryOperationalMetrics = new MemoryOperationalMetrics();
+
 let productionComposition: ServerMemoryComposition | null = null;
+let productionEventStore: EventStore | null = null;
 
 export function getServerMemoryComposition(): ServerMemoryComposition {
   if (!productionComposition) {
-    productionComposition = new ServerMemoryComposition({
-      bootstrap: createProductionMemoryRuntime,
-    });
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Server Memory composition has not been initialized with the canonical Event Store.'
+    );
   }
   return productionComposition;
 }
@@ -238,15 +291,38 @@ export function getMemoryApplicationService(
   return consumer ? composition.bindConsumer(consumer) : composition.service();
 }
 
-export async function initializeServerMemoryComposition(): Promise<MemoryRuntimeCompositionReceipt> {
-  return getServerMemoryComposition().start();
+export async function initializeServerMemoryComposition(
+  eventStore?: EventStore
+): Promise<MemoryRuntimeCompositionReceipt> {
+  if (!eventStore) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Canonical Event Store is required to initialize Server Memory.'
+    );
+  }
+  if (productionEventStore && productionEventStore !== eventStore) {
+    throw memoryError(
+      'MEMORY_PROVIDER_UNAVAILABLE',
+      'Server Memory cannot be rebound to a different canonical Event Store.'
+    );
+  }
+  if (!productionComposition) {
+    productionEventStore = eventStore;
+    productionComposition = new ServerMemoryComposition({
+      bootstrap: () => createProductionMemoryRuntime(eventStore),
+      operationalMetrics: serverMemoryOperationalMetrics,
+    });
+  }
+  return productionComposition.start();
 }
 
 export async function closeServerMemoryComposition(): Promise<void> {
-  await getServerMemoryComposition().stop();
+  await productionComposition?.stop();
+  productionComposition = null;
+  productionEventStore = null;
 }
 
-async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
+async function createProductionMemoryRuntime(eventStore: EventStore): Promise<MemoryRuntime> {
   const mongo = getMongoConnection();
   const database = mongo?.connection.db;
   if (!mongo || !database) {
@@ -283,7 +359,13 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
   await structuredStore.initialize([
     'memory_external_mappings',
     'memory_external_provider_operations',
+    'managed_memory_vectors',
   ]);
+  const vectorStore = new StructuredManagedVectorStoreAdapter(structuredStore, {
+    id: 'memory.vector.local',
+    table: 'managed_memory_vectors',
+  });
+  await vectorStore.initialize();
   const configPath = path.resolve(
     process.cwd(),
     process.env.HYPHA_MEMORY_CONFIG_PATH?.trim() || 'configs/memory-profiles.yaml'
@@ -295,31 +377,35 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
   const loaded = await loader.load(document);
   const selected = loaded.config.profiles[loaded.config.activeProfile];
   const redis = getRedisClient();
-  if (selected.management.type === 'native' && !redis) {
+  if (
+    selected.management.type === 'native' &&
+    selected.profile.workingStoreRef?.id === 'memory.store.working.redis' &&
+    !redis
+  ) {
     throw memoryError(
       'MEMORY_STORE_UNAVAILABLE',
       'The active Native Memory profile requires initialized Redis storage.'
     );
   }
-  const registry = new MemoryManagementProviderRegistry();
-  if (redis) {
-    registry.register(
+  const registry = new MemoryManagementProviderRegistry()
+    .register(
       createNativeMemoryManagementProviderFactory({
         structuredStore,
-        redisClient: redis as unknown as RedisLikeWorkingMemoryClient,
-        embeddingProvider: new LocalDeterministicEmbeddingProvider(),
-        vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+        structuredStoreId: 'memory.store.record.mongodb',
+        redisClient: redis as unknown as RedisLikeWorkingMemoryClient | undefined,
+        embeddingProvider: new LocalHashEmbeddingProvider(),
+        embeddingProviderId: 'memory.embedding.local',
+        vectorStores: [vectorStore],
         ownerId: `server:${process.pid}`,
         workingMemoryNamespace: 'hypha:memory:working',
+        onIndexEvent: (event) => serverMemoryOperationalMetrics.observeIndexEvent(event),
+        onLifecycleEvent: (event) => serverMemoryOperationalMetrics.observeLifecycleEvent(event),
       })
-    );
-  }
-  registry
+    )
     .register(createMem0OssMemoryProviderFactory())
     .register(createHindsightLocalMemoryProviderFactory())
     .register(createMem0PlatformMemoryProviderFactory())
     .register(createMemoryBankManagedProviderFactory());
-  let eventSequence = 0;
   const telemetry = createServerMemoryTelemetry();
   const activeProviderType = () =>
     loaded.config.profiles[loaded.config.activeProfile].management.type;
@@ -337,21 +423,22 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
           };
         },
       },
-      events: {
-        publish: async (type, _payload, context) =>
-          `server-memory:${context.runId}:${type}:${++eventSequence}`,
-      },
+      events: createServerMemoryEventPublisher(eventStore),
       harness: {
         beforeExecute: async () => undefined,
         afterExecute: async () => undefined,
       },
     },
     eventContext: (request) => ({
+      userId: request.scope.userId,
+      tenantId: request.scope.tenantId,
       runId: request.scope.runId ?? request.operationId,
       sessionId: request.scope.sessionId,
+      workspaceId: request.scope.workspaceId,
       agentId: request.scope.agentId,
     }),
     telemetry,
+    operationalMetrics: serverMemoryOperationalMetrics,
     providerCostEstimator: (operation, request) =>
       estimateServerMemoryOperation(operation, request, activeProviderType()),
   });
@@ -363,6 +450,54 @@ async function createProductionMemoryRuntime(): Promise<MemoryRuntime> {
     providerId: runtime.compositionReceipt.providerId,
   });
   return runtime;
+}
+
+export function createServerMemoryEventPublisher(
+  eventStore: EventStore,
+  now: () => string = () => new Date().toISOString()
+): MemoryEventPublisher {
+  return {
+    async publish(
+      type: MemoryEventType,
+      payload: MemoryEventPayloadBase,
+      context: MemoryEventContext
+    ): Promise<string> {
+      const sanitizedPayload = sanitizeMemoryEventPayload(payload);
+      const idempotencyKey = memoryEventIdempotencyKey(type, sanitizedPayload);
+      const eventId = `memory-event:${idempotencyKey.slice('sha256:'.length)}`;
+      const existing = await eventStore.list({
+        userId: context.userId,
+        runId: context.runId,
+        type,
+      });
+      if (existing.some((event) => event.id === eventId)) return eventId;
+
+      await eventStore.append(
+        createFrameworkEvent({
+          id: eventId,
+          type,
+          version: '1.0.0',
+          tenantId: context.tenantId,
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          sessionId: context.sessionId,
+          runId: context.runId,
+          stepId: context.stepId,
+          agentId: context.agentId,
+          operationId: sanitizedPayload.operationId,
+          idempotencyKey,
+          timestamp: now(),
+          payload: sanitizedPayload,
+          metadata: {
+            source: 'server-memory-composition',
+            profileId: sanitizedPayload.profileId,
+            providerId: sanitizedPayload.providerId,
+          },
+        })
+      );
+      return eventId;
+    },
+  };
 }
 
 export function createServerMemoryTelemetry(
@@ -473,17 +608,22 @@ export function resolveMongoTransactionMode(
     Boolean(hello.setName || configuredReplicaSet?.trim()) || hello.msg === 'isdbgrid';
   return transactionCapable ? 'required' : 'disabled';
 }
-class LocalDeterministicEmbeddingProvider implements EmbeddingProvider {
-  async embed(inputs: string[]): Promise<number[][]> {
-    return inputs.map((input) => deterministicVector(input));
-  }
+function isServingState(state: ServerMemoryCompositionState): boolean {
+  return state === 'ready' || state === 'degraded';
 }
 
-function deterministicVector(input: string): number[] {
-  const values = Array.from({ length: 32 }, () => 0);
-  for (let index = 0; index < input.length; index += 1) {
-    values[index % values.length] += input.charCodeAt(index) / 65535;
-  }
-  const norm = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  return norm === 0 ? values : values.map((value) => value / norm);
+function providerStartupAvailability(runtime: MemoryRuntime): {
+  requirement: 'required' | 'optional';
+  external: boolean;
+} {
+  const configured = runtime.providerSpec.metadata?.startupRequirement;
+  const requirement = configured === 'optional' ? 'optional' : 'required';
+  const external =
+    runtime.providerSpec.type !== undefined && runtime.providerSpec.type !== 'native';
+  return { requirement, external };
+}
+
+export function sanitizeServerMemoryOperationalError(error: unknown): string {
+  const value = error instanceof Error ? error.message : String(error);
+  return String(sanitizeMemoryOperationalValue(value));
 }

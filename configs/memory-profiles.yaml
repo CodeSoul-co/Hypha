@@ -20,9 +20,6 @@ profiles:
       vectorStoreRefs:
         - id: memory.vector.local
           version: '1.0.0'
-      artifactStoreRef:
-        id: memory.artifact.local
-        version: '1.0.0'
       embeddingProviderRef:
         id: memory.embedding.local
         version: '1.0.0'
@@ -68,7 +65,6 @@ profiles:
         workingStoreRef: memory.store.working.in-memory
         recordStoreRef: memory.store.record.sqlite
         vectorStoreRef: memory.vector.local
-        artifactStoreRef: memory.artifact.local
         embeddingProviderRef: memory.embedding.local
       capabilities: &native-capabilities
         add: true
@@ -111,9 +107,6 @@ profiles:
       vectorStoreRefs:
         - id: memory.vector.local
           version: '1.0.0'
-      artifactStoreRef:
-        id: memory.artifact.local
-        version: '1.0.0'
       embeddingProviderRef:
         id: memory.embedding.local
         version: '1.0.0'
@@ -137,7 +130,6 @@ profiles:
         workingStoreRef: memory.store.working.redis
         recordStoreRef: memory.store.record.mongodb
         vectorStoreRef: memory.vector.local
-        artifactStoreRef: memory.artifact.local
         embeddingProviderRef: memory.embedding.local
         outboxStoreRef: memory.store.outbox.mongodb
       capabilities: *native-capabilities
@@ -176,7 +168,9 @@ profiles:
       connectionRef: memory.connection.mem0-oss
       config:
         protocol: mem0-oss-rest
+        expectedProviderVersion: b357a5a1b03c299ec8229c268e63cfac0f7c6566
         mappingStoreRef: memory.mapping.durable
+        operationStoreRef: memory.operation.durable
       capabilities: &mem0-oss-capabilities
         add: true
         search: true
@@ -229,6 +223,8 @@ profiles:
         baseUrl: https://api.mem0.ai
         credentialRef: credential:mem0-platform
         protocol: mem0-platform-v3
+        providerVersion: mem0-platform-v3
+        expectedProviderVersion: mem0-platform-v3
         mappingStoreRef: memory.mapping.durable
         operationStoreRef: memory.operation.durable
       capabilities: &mem0-platform-capabilities

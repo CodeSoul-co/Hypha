@@ -153,6 +153,7 @@ describe('Context Artifact and cache integrity', () => {
       contextProfileRevision: profile.revision!,
       memoryProfileRevision: 'memory-profile:r1',
       scopeHash: reference.scopeHash,
+      mutationGeneration: '0',
       selectedMemoryVersionIds: [],
       sourceHashes: { memory: envelope.contextHash },
       artifactHashes: { [reference.id]: reference.contentHash },
@@ -188,12 +189,18 @@ describe('Context Artifact and cache integrity', () => {
       async delete() {
         record = null;
       },
+      async invalidateScope() {
+        const count = record ? 1 : 0;
+        record = null;
+        return count;
+      },
     };
     const cache = new VersionValidContextCache({ store, now });
     const snapshot: ContextCacheVersionSnapshot = {
       contextProfileRevision: 'context:r1',
       memoryProfileRevision: 'memory:r1',
       scopeHash: 'scope:cache',
+      mutationGeneration: '0',
       selectedMemoryVersionIds: [],
       sourceHashes: {},
     };

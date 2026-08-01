@@ -851,6 +851,10 @@ describe('@hypha/kernel ReAct contracts', () => {
 
     expect(result).toMatchObject({
       status: 'human_review_required',
+      checkpoint: {
+        nextPhase: 'reason',
+        stepSequence: result.steps.length,
+      },
       finalAction: {
         type: 'human_review',
         target: 'tool.search',

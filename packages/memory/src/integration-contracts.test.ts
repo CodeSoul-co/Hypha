@@ -31,6 +31,7 @@ const request: MemoryActivityRequest = {
   },
   profileRef: { id: 'memory.default', version: '1.0.0' },
   eventContext: {
+    userId: 'user:integration',
     runId: 'run:integration',
     sessionId: 'session:integration',
     workspaceId: 'workspace:integration',
@@ -124,12 +125,14 @@ describe('memory integration contracts', () => {
     const first = createMemoryCacheValidityInput({
       scope: request.scope,
       memoryProfileRevision: 'memory-profile:v3',
+      mutationGeneration: '7',
       selectedMemoryVersionIds: ['memory:b:v2', 'memory:a:v1'],
       policyRevision: 'policy:v2',
     });
     const second = createMemoryCacheValidityInput({
       scope: request.scope,
       memoryProfileRevision: 'memory-profile:v3',
+      mutationGeneration: '7',
       selectedMemoryVersionIds: ['memory:a:v1', 'memory:b:v2'],
       policyRevision: 'policy:v2',
     });

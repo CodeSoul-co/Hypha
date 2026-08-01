@@ -96,8 +96,10 @@ describe('@hypha/mcp performance acceptance', () => {
         measurements.schema_cache_10000_hits_ms = performance.now() - cacheStarted;
       }
     }
-    expect(measurements.refresh_10000_ms).toBeLessThan(20_000);
-    expect(measurements.query_10000_ms).toBeLessThan(5_000);
+    expect(measurements.discovery_1000_p95_ms).toBeLessThan(250);
+    expect(measurements.refresh_10000_ms).toBeLessThan(5_000);
+    expect(measurements.query_10000_ms).toBeLessThan(1_000);
+    expect(measurements.schema_cache_10000_hits_ms).toBeLessThan(2_000);
     console.info('tool-mcp-performance', JSON.stringify(measurements));
   }, 30_000);
 

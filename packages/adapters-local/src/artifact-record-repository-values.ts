@@ -1,11 +1,8 @@
 import type { StoredArtifactRecord } from '@hypha/core';
-import { specRefSchema, validateArtifactRecord } from '@hypha/core';
+import { validateStoredArtifactRecord as validateCoreStoredArtifactRecord } from '@hypha/core';
 
 export function validateStoredArtifactRecord(stored: StoredArtifactRecord): StoredArtifactRecord {
-  return {
-    record: validateArtifactRecord(stored.record),
-    profileRef: specRefSchema.parse(stored.profileRef),
-  };
+  return validateCoreStoredArtifactRecord(stored);
 }
 
 export function parseStoredArtifactRecord(

@@ -4,13 +4,23 @@ import {
   MemoryRuntimeFactory,
   MemoryProviderTelemetry,
   NativeMemoryManagementProvider,
+  InMemoryLocalVectorStoreAdapter,
   memoryManagementProviderSpecExample,
   memoryProfileSpecExample,
   validateMemoryRuntimeConfig,
   type MemoryAddRequest,
   type MemoryEventType,
   type MemoryRuntimeConfig,
+  type MemoryProfileSpec,
 } from './index';
+
+function nativeProvider(profile: MemoryProfileSpec): NativeMemoryManagementProvider {
+  return new NativeMemoryManagementProvider({
+    profile,
+    embeddingProvider: { embed: async (input) => input.map(() => [1, 0]) },
+    vectorStores: [new InMemoryLocalVectorStoreAdapter('memory.vector.local')],
+  });
+}
 
 function config(): MemoryRuntimeConfig {
   return {
@@ -46,7 +56,10 @@ function runtimeFactory(
       events: { publish: vi.fn(async (type: MemoryEventType) => `event:${type}`) },
       harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
     },
-    eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+    eventContext: (request) => ({
+      userId: request.scope.userId,
+      runId: request.scope.runId ?? request.operationId,
+    }),
     now,
     telemetry,
     providerCostEstimator: () => ({ costUnits: 0 }),
@@ -58,7 +71,7 @@ describe('MemoryRuntimeFactory', () => {
     const registry = new MemoryManagementProviderRegistry().register({
       id: 'native-embedded',
       supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
-      create: async ({ profile }) => new NativeMemoryManagementProvider({ profile }),
+      create: async ({ profile }) => nativeProvider(profile),
     });
     const runtime = await runtimeFactory(registry).create(config());
     const request: MemoryAddRequest = {
@@ -98,7 +111,7 @@ describe('MemoryRuntimeFactory', () => {
     const registry = new MemoryManagementProviderRegistry().register({
       id: 'observed-native',
       supports: () => true,
-      create: async ({ profile }) => new NativeMemoryManagementProvider({ profile }),
+      create: async ({ profile }) => nativeProvider(profile),
     });
     const telemetry = new MemoryProviderTelemetry({
       defaultPolicy: {
@@ -118,11 +131,41 @@ describe('MemoryRuntimeFactory', () => {
     });
   });
 
+  it('keeps an unhealthy optional external Profile available for degraded Server startup', async () => {
+    const provider = nativeProvider(memoryProfileSpecExample);
+    vi.spyOn(provider, 'health').mockResolvedValue({
+      status: 'unhealthy',
+      checkedAt: '2026-07-28T00:00:00.000Z',
+      message: 'optional external provider offline',
+    });
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'optional-external',
+      supports: () => true,
+      create: async () => provider,
+    });
+    const optional = config();
+    optional.profiles[memoryProfileSpecExample.id] = {
+      profile: memoryProfileSpecExample,
+      management: {
+        ...optional.profiles[memoryProfileSpecExample.id].management,
+        type: 'mem0',
+        deployment: 'remote',
+        connectionRef: 'memory.connection.optional-external',
+        metadata: { startupRequirement: 'optional' },
+      },
+    };
+
+    const runtime = await runtimeFactory(registry).create(optional);
+    await expect(runtime.service.providerHealth()).resolves.toMatchObject({
+      status: 'unhealthy',
+    });
+    await runtime.close();
+  });
   it('changes the real service provider when the active profile changes', async () => {
     const registry = new MemoryManagementProviderRegistry().register({
       id: 'switchable-native',
       supports: (spec) => spec.type === 'native' && spec.deployment === 'embedded',
-      create: async ({ profile }) => new NativeMemoryManagementProvider({ profile }),
+      create: async ({ profile }) => nativeProvider(profile),
     });
     const factory = runtimeFactory(registry);
     const firstConfig = config();
@@ -228,7 +271,7 @@ describe('MemoryRuntimeFactory', () => {
   });
 
   it('closes runtime resources once across repeated and concurrent close calls', async () => {
-    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const provider = nativeProvider(memoryProfileSpecExample);
     const providerClose = vi.spyOn(provider, 'close');
     const installationClose = vi.fn(async () => undefined);
     const registry = new MemoryManagementProviderRegistry().register({
@@ -247,7 +290,7 @@ describe('MemoryRuntimeFactory', () => {
 
   it('rolls back provider and installation resources when capability or health checks fail', async () => {
     for (const failure of ['capabilities', 'health'] as const) {
-      const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+      const provider = nativeProvider(memoryProfileSpecExample);
       if (failure === 'capabilities') {
         vi.spyOn(provider, 'capabilities').mockRejectedValue(new Error('capability failure'));
       } else {
@@ -271,7 +314,7 @@ describe('MemoryRuntimeFactory', () => {
   });
 
   it('rolls back after activity registration when late composition fails', async () => {
-    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const provider = nativeProvider(memoryProfileSpecExample);
     const providerClose = vi.spyOn(provider, 'close');
     const installationClose = vi.fn(async () => undefined);
     const registry = new MemoryManagementProviderRegistry().register({
@@ -290,7 +333,7 @@ describe('MemoryRuntimeFactory', () => {
   });
 
   it('continues reverse-order release when provider close fails', async () => {
-    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    const provider = nativeProvider(memoryProfileSpecExample);
     const providerClose = vi.spyOn(provider, 'close');
     const installationClose = vi.fn(async () => undefined);
     const registry = new MemoryManagementProviderRegistry().register({

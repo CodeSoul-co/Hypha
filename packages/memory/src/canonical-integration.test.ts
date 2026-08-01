@@ -129,6 +129,8 @@ describe('memory canonical contract integration', () => {
       scope,
       profileRef: input.profileRef,
       eventContext: {
+        userId: scope.userId,
+        tenantId: scope.tenantId,
         runId: scope.runId!,
         sessionId: scope.sessionId,
         workspaceId: scope.workspaceId,
@@ -214,6 +216,7 @@ describe('memory canonical contract integration', () => {
     const validity = createMemoryCacheValidityInput({
       scope,
       memoryProfileRevision: memoryProfileSpecExample.revision!,
+      mutationGeneration: '1',
       selectedMemoryVersionIds: results.map((result) => result.record.versionId),
       policyRevision: 'policy:v1',
     });
@@ -223,6 +226,7 @@ describe('memory canonical contract integration', () => {
       reason: 'created',
       memoryIds: [record.id],
       memoryVersionIds: [record.versionId],
+      mutationGeneration: '1',
       validityHash: memoryCacheValidityHash(validity),
     });
 

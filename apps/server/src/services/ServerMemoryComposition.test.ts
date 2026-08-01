@@ -1,10 +1,14 @@
 import type {
   MemoryApplicationService,
   MemoryRuntime,
+  ProviderHealth,
   MemoryProviderTelemetry,
   MemoryRuntimeCompositionReceipt,
 } from '@hypha/memory';
+import { InMemoryEventStore } from '@hypha/core';
+import { MemoryOperationalMetrics } from '@hypha/memory';
 import {
+  createServerMemoryEventPublisher,
   createServerMemoryTelemetry,
   estimateServerMemoryOperation,
   resolveMongoTransactionMode,
@@ -12,8 +16,12 @@ import {
 } from './ServerMemoryComposition';
 
 function runtime(
-  close = jest.fn(async () => undefined),
-  telemetry?: MemoryProviderTelemetry
+  close: MemoryRuntime['close'] = jest.fn(async () => undefined),
+  telemetry?: MemoryProviderTelemetry,
+  setup: {
+    health?: ProviderHealth;
+    providerSpec?: MemoryRuntime['providerSpec'];
+  } = {}
 ): MemoryRuntime {
   const receipt: MemoryRuntimeCompositionReceipt = {
     runtimeId: 'memory-runtime:test',
@@ -28,16 +36,21 @@ function runtime(
     createdAt: '2026-07-24T00:00:00.000Z',
   };
   const service = {
-    providerHealth: jest.fn(async () => ({
-      status: 'healthy',
-      checkedAt: '2026-07-24T00:00:00.000Z',
-    })),
+    providerHealth: jest.fn(
+      async () =>
+        setup.health ?? {
+          status: 'healthy',
+          checkedAt: '2026-07-24T00:00:00.000Z',
+        }
+    ),
   } as unknown as MemoryApplicationService;
   return {
     service,
     provider: { id: 'memory.provider.native-test' } as MemoryRuntime['provider'],
     profile: { id: 'native-test', version: '1.0.0' } as MemoryRuntime['profile'],
-    providerSpec: {} as MemoryRuntime['providerSpec'],
+    providerSpec:
+      setup.providerSpec ??
+      ({ type: 'native', deployment: 'embedded' } as MemoryRuntime['providerSpec']),
     profileHash: receipt.profileHash,
     capabilities: {} as MemoryRuntime['capabilities'],
     compositionReceipt: receipt,
@@ -47,6 +60,61 @@ function runtime(
 }
 
 describe('ServerMemoryComposition', () => {
+  it('persists sanitized and scoped Memory lifecycle events into the Event fact store', async () => {
+    const events = new InMemoryEventStore();
+    const publisher = createServerMemoryEventPublisher(events, () => '2026-08-01T00:00:00.000Z');
+    const context = {
+      tenantId: 'tenant:test',
+      userId: 'user:test',
+      workspaceId: 'workspace:test',
+      sessionId: 'session:test',
+      runId: 'run:test',
+      stepId: 'step:test',
+      agentId: 'agent:test',
+    };
+    const payload = {
+      operationId: 'operation:test',
+      profileId: 'memory.default',
+      providerId: 'memory.provider.native',
+      scopeHash: 'sha256:scope',
+      status: 'requested',
+      metadata: {
+        content: 'must-not-enter-events',
+        safe: 'retained',
+      },
+    };
+
+    const eventId = await publisher.publish('memory.activity.requested', payload, context);
+    await expect(publisher.publish('memory.activity.requested', payload, context)).resolves.toBe(
+      eventId
+    );
+
+    const persisted = await events.list({ userId: 'user:test', runId: 'run:test' });
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      id: eventId,
+      type: 'memory.activity.requested',
+      version: '1.0.0',
+      tenantId: 'tenant:test',
+      userId: 'user:test',
+      workspaceId: 'workspace:test',
+      sessionId: 'session:test',
+      runId: 'run:test',
+      stepId: 'step:test',
+      agentId: 'agent:test',
+      operationId: 'operation:test',
+      timestamp: '2026-08-01T00:00:00.000Z',
+      payload: {
+        operationId: 'operation:test',
+        profileId: 'memory.default',
+        providerId: 'memory.provider.native',
+        scopeHash: 'sha256:scope',
+        status: 'requested',
+        metadata: { safe: 'retained' },
+      },
+    });
+  });
+
   it('registers one canonical service and shares concurrent startup', async () => {
     const bootstrap = jest.fn(async () => runtime());
     const composition = new ServerMemoryComposition({ bootstrap });
@@ -87,8 +155,11 @@ describe('ServerMemoryComposition', () => {
       storedBytesDelta: 20,
     });
     reservation.complete('succeeded');
+    const operationalMetrics = new MemoryOperationalMetrics();
+    operationalMetrics.record('retry');
     const composition = new ServerMemoryComposition({
       bootstrap: async () => runtime(undefined, telemetry),
+      operationalMetrics,
     });
     await composition.start();
 
@@ -103,6 +174,7 @@ describe('ServerMemoryComposition', () => {
         quota: { maxOperations: 10, remainingOperations: 9 },
         slo: { status: 'met' },
       },
+      operationalMetrics: { counters: { retry: 1 } },
     });
   });
 
@@ -135,18 +207,123 @@ describe('ServerMemoryComposition', () => {
     });
   });
 
-  it('fails closed when bootstrap cannot create the runtime', async () => {
+  it('fails closed when bootstrap cannot create the runtime and redacts readiness evidence', async () => {
     const composition = new ServerMemoryComposition({
       bootstrap: async () => {
-        throw new Error('profile reference is unresolved');
+        throw new Error(
+          'profile reference is unresolved at C:\\Users\\operator\\memory.yaml using Bearer live-token'
+        );
       },
     });
 
     await expect(composition.start()).rejects.toThrow('profile reference is unresolved');
-    await expect(composition.readiness()).resolves.toMatchObject({
+    const readiness = await composition.readiness();
+    expect(readiness).toMatchObject({
       state: 'failed',
       ready: false,
-      message: 'profile reference is unresolved',
+    });
+    expect(readiness.message).toContain('[REDACTED_PATH]');
+    expect(readiness.message).toContain('[REDACTED_SECRET]');
+    expect(readiness.message).not.toContain('operator');
+    expect(readiness.message).not.toContain('live-token');
+  });
+
+  it('fails readiness for an unhealthy required external Profile', async () => {
+    const composition = new ServerMemoryComposition({
+      bootstrap: async () =>
+        runtime(undefined, undefined, {
+          health: {
+            status: 'degraded',
+            checkedAt: '2026-07-24T00:00:00.000Z',
+            message: 'remote provider unavailable',
+          },
+          providerSpec: {
+            type: 'mem0',
+            deployment: 'remote',
+            metadata: { startupRequirement: 'required' },
+          } as unknown as MemoryRuntime['providerSpec'],
+        }),
+    });
+    await composition.start();
+
+    await expect(composition.readiness()).resolves.toMatchObject({
+      state: 'ready',
+      ready: false,
+      providerStatus: 'degraded',
+      requirement: 'required',
+      external: true,
+      evidence: {
+        profileId: 'native-test',
+        providerId: 'memory.provider.native-test',
+        providerStatus: 'degraded',
+        requirement: 'required',
+        external: true,
+      },
+    });
+  });
+
+  it('continues in degraded state with explicit evidence for an optional external Profile', async () => {
+    const composition = new ServerMemoryComposition({
+      bootstrap: async () =>
+        runtime(undefined, undefined, {
+          health: {
+            status: 'unhealthy',
+            checkedAt: '2026-07-24T00:00:00.000Z',
+            message: 'optional provider is offline',
+          },
+          providerSpec: {
+            type: 'memorybank',
+            deployment: 'managed',
+            metadata: { startupRequirement: 'optional' },
+          } as unknown as MemoryRuntime['providerSpec'],
+        }),
+    });
+    await composition.start();
+
+    await expect(composition.readiness()).resolves.toMatchObject({
+      state: 'degraded',
+      ready: true,
+      providerStatus: 'unhealthy',
+      requirement: 'optional',
+      external: true,
+      evidence: {
+        providerStatus: 'unhealthy',
+        requirement: 'optional',
+      },
+    });
+    expect(composition.service()).toBeDefined();
+  });
+
+  it('waits for runtime worker drain before reporting shutdown complete', async () => {
+    let releaseDrain!: () => void;
+    const draining = new Promise<void>((resolve) => {
+      releaseDrain = resolve;
+    });
+    const close = jest.fn(async () => draining);
+    const composition = new ServerMemoryComposition({
+      bootstrap: async () => runtime(close),
+    });
+    await composition.start();
+
+    const stopping = composition.stop();
+    await Promise.resolve();
+    await expect(composition.readiness()).resolves.toMatchObject({
+      state: 'draining',
+      ready: false,
+    });
+    let stopped = false;
+    void stopping.then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    releaseDrain();
+    await stopping;
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(composition.readiness()).resolves.toMatchObject({
+      state: 'stopped',
+      ready: false,
     });
   });
 });

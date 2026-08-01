@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NormalizedExecutionError } from '../../contracts/execution';
+import { executionRecordExample } from '../execution-store';
 import { adviseExecutionRecovery, classifyExecutionFailure } from './recovery';
 
 function error(
@@ -86,6 +87,39 @@ describe('@hypha/core execution recovery classification', () => {
       sideEffectState: 'not_started',
       retryable: true,
       evidence: { receiptStatus: 'rejected' },
+    });
+  });
+
+  it('uses a durable terminal receipt to prevent Provider replay after persistence failure', () => {
+    const failure = classifyExecutionFailure(error('EXECUTION_INTERNAL_ERROR', true), {
+      id: 'execution_artifact_finalize_failed',
+      operation: 'persist',
+      occurredAt: '2026-07-16T00:00:03.000Z',
+      record: {
+        ...executionRecordExample,
+        terminalReceipt: {
+          id: 'receipt.execution.example',
+          providerId: executionRecordExample.providerId,
+          executionId: executionRecordExample.id,
+          providerExecutionRef: 'provider-execution.example',
+          status: 'completed',
+          issuedAt: '2026-07-16T00:00:02.000Z',
+          receiptHash: 'sha256:provider-terminal-receipt',
+        },
+      },
+    });
+
+    expect(failure).toMatchObject({
+      sideEffectState: 'committed',
+      retryable: false,
+      evidence: {
+        receiptStatus: 'completed',
+      },
+    });
+    expect(adviseExecutionRecovery(failure)).toMatchObject({
+      strategy: 'reconcile',
+      refreshRecordBeforeRetry: true,
+      requireReceiptReconciliation: true,
     });
   });
 

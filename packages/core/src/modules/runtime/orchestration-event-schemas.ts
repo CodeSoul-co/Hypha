@@ -35,6 +35,8 @@ export const RUNTIME_ORCHESTRATION_EVENT_TYPES = [
   'runtime.activity.compensation.completed',
   'runtime.activity.compensation.failed',
   'activity.redispatch.requested',
+  'activity.redispatch.accepted',
+  'activity.redispatch.outcome_unknown',
   'recovery.case.opened',
   'recovery.case.resolved',
   'recovery.case.escalated',
@@ -56,6 +58,7 @@ export const RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES = [
   'human.review.rejected',
   'human.review.expired',
   'human.review.cancelled',
+  'human.review.superseded',
   'human.review.resume.started',
   'human.review.resume.revalidated',
   'human.review.resume.failed',
@@ -100,6 +103,7 @@ export const RUNTIME_RUN_MANAGER_EVENT_TYPES = [
   'react.continuation.checkpointed',
   'react.continuation.suspended',
   'react.continuation.resumed',
+  'react.continuation.quarantined',
 ] as const satisfies readonly FrameworkEventType[];
 
 export type RuntimeRunManagerEventType = (typeof RUNTIME_RUN_MANAGER_EVENT_TYPES)[number];
@@ -246,6 +250,8 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'runtime.activity.compensation.completed': activityPayload(),
   'runtime.activity.compensation.failed': activityPayload(),
   'activity.redispatch.requested': activityRedispatchPayload(),
+  'activity.redispatch.accepted': activityRedispatchAcceptedPayload(),
+  'activity.redispatch.outcome_unknown': activityRedispatchOutcomeUnknownPayload(),
   'runtime.checkpoint.created': checkpointPayload(),
   'runtime.checkpoint.failed': checkpointPayload(),
   'recovery.case.opened': recoveryCasePayload(),
@@ -275,6 +281,7 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'human.review.rejected': humanReviewPayload(),
   'human.review.expired': humanReviewPayload(),
   'human.review.cancelled': humanReviewPayload(),
+  'human.review.superseded': humanReviewPayload(),
   'human.review.resume.started': humanReviewPayload(),
   'human.review.resume.revalidated': humanReviewPayload(),
   'human.review.resume.failed': humanReviewPayload(),
@@ -282,6 +289,15 @@ const payloadSchemas: Record<RuntimeCanonicalEventType, JsonSchema> = {
   'context.build.started': openPayload(),
   'context.build.completed': openPayload(),
   'context.compacted': openPayload(),
+  'react.continuation.quarantined': strictPayload(
+    ['evidenceEventId', 'reason', 'commandIds', 'quarantinedAt'],
+    {
+      evidenceEventId: stringSchema,
+      reason: stringSchema,
+      commandIds: { type: 'array', items: stringSchema },
+      quarantinedAt: timestampSchema,
+    }
+  ),
   'skill.selected': openPayload(),
   'skill.loaded': openPayload(),
   'skill.completed': openPayload(),
@@ -511,6 +527,64 @@ function activityRedispatchPayload(): JsonSchema {
   );
 }
 
+function activityRedispatchAcceptedPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'taskId',
+      'activityId',
+      'activityDescriptorRef',
+      'activityDescriptorHash',
+      'redispatchCommandId',
+      'activityCommandId',
+      'requestEventId',
+      'approvalEventId',
+      'commandReused',
+      'source',
+      'acceptedAt',
+    ],
+    {
+      taskId: stringSchema,
+      activityId: stringSchema,
+      activityDescriptorRef: stringSchema,
+      activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      redispatchCommandId: stringSchema,
+      activityCommandId: stringSchema,
+      requestEventId: stringSchema,
+      approvalEventId: stringSchema,
+      commandReused: { type: 'boolean' },
+      source: { type: 'string', enum: ['dispatch', 'reconcile'] },
+      acceptedAt: timestampSchema,
+    }
+  );
+}
+
+function activityRedispatchOutcomeUnknownPayload(): JsonSchema {
+  return strictPayload(
+    [
+      'taskId',
+      'activityId',
+      'activityDescriptorRef',
+      'activityDescriptorHash',
+      'redispatchCommandId',
+      'requestEventId',
+      'approvalEventId',
+      'reason',
+      'detectedAt',
+    ],
+    {
+      taskId: stringSchema,
+      activityId: stringSchema,
+      activityDescriptorRef: stringSchema,
+      activityDescriptorHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      redispatchCommandId: stringSchema,
+      requestEventId: stringSchema,
+      approvalEventId: stringSchema,
+      reason: stringSchema,
+      detectedAt: timestampSchema,
+    }
+  );
+}
+
 function checkpointPayload(): JsonSchema {
   return payload(['checkpointId'], {
     checkpointId: stringSchema,
@@ -562,6 +636,17 @@ function humanReviewPayload(): JsonSchema {
     revision: integerSchema,
     expectedRevision: integerSchema,
     expectedSubjectHash: stringSchema,
+    decision: {
+      type: 'string',
+      enum: ['approved', 'rejected', 'expired', 'cancelled', 'superseded'],
+    },
+    decisionCommandId: stringSchema,
+    decisionIdempotencyKey: stringSchema,
+    approvalRevision: integerSchema,
+    waitId: stringSchema,
+    pendingActionRef: stringSchema,
+    principal: metadataSchema,
+    scope: metadataSchema,
     resolutionOperationId: stringSchema,
     checkpointRef: stringSchema,
     policyRef: stringSchema,
@@ -571,6 +656,7 @@ function humanReviewPayload(): JsonSchema {
     requestedAt: timestampSchema,
     decidedBy: stringSchema,
     decidedAt: timestampSchema,
+    supersededByTaskId: stringSchema,
     expiresAt: timestampSchema,
     reason: stringSchema,
     metadata: metadataSchema,

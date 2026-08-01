@@ -54,6 +54,9 @@ export class DefaultExecutionOutputCollector implements ExecutionOutputCollector
             createdBy: context.principal.principalId,
             executionId: plan.executionId,
           },
+          // The durable Execution result will reference every collected output.
+          // Mark it before that commit so retention/GC fails closed during recovery.
+          retention: { referencedByCount: 1 },
           idempotencyKey: identity.createIdempotencyKey,
         })
       );
@@ -188,9 +191,16 @@ function assertCollectedRecordMatchesPlan(
     record.provenance.sourceType === 'command_generated' &&
     record.provenance.createdBy === context.principal.principalId &&
     record.provenance.executionId === executionId;
+  const protectsExecutionReference = (record.retention.referencedByCount ?? 0) > 0;
   const hasCollectableStatus = record.status === 'draft' || record.status === 'final';
 
-  if (!matchesPlan || !matchesScope || !matchesProvenance || !hasCollectableStatus) {
+  if (
+    !matchesPlan ||
+    !matchesScope ||
+    !matchesProvenance ||
+    !protectsExecutionReference ||
+    !hasCollectableStatus
+  ) {
     throw new FrameworkError({
       code: 'EXECUTION_INTERNAL_ERROR',
       message: 'Artifact Manager returned output that does not match the collection boundary',

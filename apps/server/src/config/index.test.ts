@@ -4,8 +4,8 @@ import {
   inferenceConfig,
   redisConfig,
   reloadConfig,
-  runtimeConfig,
   servingCacheConfig,
+  runtimeConfig,
   storageConfig,
   toolResultCacheConfig,
   workCacheConfig,
@@ -22,6 +22,11 @@ const trackedEnv = [
   'HYPHA_STORAGE_ARTIFACT_ROOT',
   'HYPHA_SYSTEM_LOG_PATH',
   'KAFKA_ENABLED',
+  'POSTGRES_ENABLED',
+  'QDRANT_ENABLED',
+  'CHROMA_ENABLED',
+  'PINECONE_ENABLED',
+  'S3_ARTIFACTS_ENABLED',
   'HYPHA_INFERENCE_DEFAULT_BACKEND',
   'HYPHA_INFERENCE_RUNTIME_PROVIDER',
   'HYPHA_LOCAL_INFERENCE_ENABLED',
@@ -92,13 +97,12 @@ describe('configuration storage taxonomy', () => {
     process.env.HYPHA_STORAGE_EVENT_DB = './data/events.test.sqlite';
     process.env.HYPHA_STORAGE_VECTOR_INDEX = './data/vectors.test.json';
     process.env.HYPHA_SYSTEM_LOG_PATH = './data/logs/test-system.log';
-    process.env.KAFKA_ENABLED = 'true';
 
     const config = reloadConfig();
 
     expect(config.storage.document.mongodb.host).toBe('mongo.local');
     expect(config.storage.messaging.redis.host).toBe('redis.local');
-    expect(config.storage.messaging.kafka.enabled).toBe(true);
+    expect(config.storage.messaging.kafka.enabled).toBe(false);
     expect(config.storage.relational.sqlite.eventDbPath).toBe('./data/events.test.sqlite');
     expect(config.storage.vector.local.path).toBe('./data/vectors.test.json');
     expect(config.logging.outputs?.[1]?.path).toBe('./data/logs/test-system.log');
@@ -136,6 +140,19 @@ describe('configuration storage taxonomy', () => {
     expect(profiles).toContain('storage.local-vector.semantic');
   });
 
+  it.each([
+    ['Kafka', 'KAFKA_ENABLED'],
+    ['Postgres', 'POSTGRES_ENABLED'],
+    ['Qdrant', 'QDRANT_ENABLED'],
+    ['Chroma', 'CHROMA_ENABLED'],
+    ['Pinecone', 'PINECONE_ENABLED'],
+    ['S3 Artifact Storage', 'S3_ARTIFACTS_ENABLED'],
+  ])('rejects %s as enabled until the Server has a concrete composition', (_name, envName) => {
+    process.env[envName] = 'true';
+
+    expect(() => reloadConfig()).toThrow('Invalid configuration');
+  });
+
   it('loads bounded canonical Runtime startup limits', () => {
     expect(runtimeConfig().canonical).toEqual({
       auditPageSize: 250,
@@ -144,6 +161,28 @@ describe('configuration storage taxonomy', () => {
       auditMaxBytes: 256 * 1024 * 1024,
       auditMaxDurationMs: 30_000,
       maxLegacyEvents: 100_000,
+      workers: {
+        workerId: 'server.runtime',
+        leaseTtlMs: 30_000,
+        pageLimit: 100,
+        timerPollIntervalMs: 1_000,
+        timerErrorBackoffMs: 5_000,
+        recoveryPollIntervalMs: 5_000,
+        recoveryErrorBackoffMs: 10_000,
+        commandArtifactRoot: './data/runtime/session-command-artifacts',
+        commandLeaseMs: 30_000,
+        commandPollIntervalMs: 100,
+        commandErrorBackoffMs: 1_000,
+        commandRenewalIntervalMs: 10_000,
+        commandMaxHandlerDurationMs: 300_000,
+        commandShutdownDrainMs: 30_000,
+        reactQuantumIterations: 4,
+        reactMaxIterations: 64,
+        reactMaxModelCalls: 64,
+        reactMaxToolCalls: 64,
+        reactMaxTotalTokens: 1_000_000,
+        autoRecoverReasons: ['PROJECTION_BEHIND'],
+      },
     });
   });
 
@@ -166,7 +205,8 @@ describe('configuration storage taxonomy', () => {
       requireExactHash: true,
     });
   });
-  it('keeps WorkCache enabled on the cache integration line and switches configured stores from env', () => {
+
+  it('keeps WorkCache enabled by default on cache-base and switches configured stores from env', () => {
     reloadConfig();
     expect(workCacheConfig()).toMatchObject({
       enabled: true,
@@ -277,6 +317,7 @@ describe('configuration storage taxonomy', () => {
       },
     });
   });
+
   it('loads separate filesystem read, write, and execute path policies', () => {
     process.env.HYPHA_FILESYSTEM_WORKING_DIRECTORY = './workspace';
     process.env.HYPHA_FILESYSTEM_READ_PATHS = './workspace,./shared';
@@ -298,6 +339,17 @@ describe('configuration storage taxonomy', () => {
         timeoutMs: 2500,
         maxOutputBytes: 8192,
       },
+    });
+  });
+
+  it('keeps the default Tool workspace outside the framework control-plane', () => {
+    reloadConfig();
+
+    expect(filesystemToolConfig()).toMatchObject({
+      workingDirectory: './data/workspace',
+      readPaths: ['./data/workspace'],
+      writePaths: ['./data/workspace'],
+      executePaths: ['./data/workspace/bin'],
     });
   });
 

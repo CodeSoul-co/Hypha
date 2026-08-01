@@ -1,9 +1,4 @@
-import {
-  createHash,
-  generateKeyPairSync,
-  sign,
-  type KeyObject,
-} from 'crypto';
+import { createHash, generateKeyPairSync, sign, type KeyObject } from 'crypto';
 import { describe, expect, it } from 'vitest';
 import {
   HttpsSkillRegistryClient,
@@ -37,7 +32,9 @@ function signature(value: unknown, key: KeyObject): string {
 function fixture() {
   const publisher = generateKeyPairSync('ed25519');
   const log = generateKeyPairSync('ed25519');
-  const content = new TextEncoder().encode('---\nid: cloud.search\nversion: 1.0.0\n---\nSearch safely.');
+  const content = new TextEncoder().encode(
+    '---\nid: cloud.search\nversion: 1.0.0\n---\nSearch safely.'
+  );
   const manifest: SkillSupplyChainManifest = {
     skillId: 'cloud.search',
     version: '1.0.0',
@@ -119,10 +116,7 @@ describe('HttpsSkillRegistryClient', () => {
       expect.objectContaining({ id: 'common.http', version: '2.1.0' }),
     ]);
     expect(entry.manifest.sbom).toMatchObject({ format: 'cyclonedx-json' });
-    expect(authorizations).toEqual([
-      'Bearer registry-token-2',
-      'Bearer registry-token-2',
-    ]);
+    expect(authorizations).toEqual(['Bearer registry-token-2', 'Bearer registry-token-2']);
     expect(client.verifyOfflineBundle(bundle)).toEqual(bundle);
   });
 
@@ -164,5 +158,92 @@ describe('HttpsSkillRegistryClient', () => {
     await expect(tamperClient.resolve('cloud.search', '1.0.0')).rejects.toMatchObject({
       code: 'SKILL_REGISTRY_PUBLISHER_SIGNATURE_INVALID',
     });
+  });
+
+  it('retries bounded failures, rotates credentials, honors ETag, and verifies paginated entries', async () => {
+    const data = fixture();
+    const sleeps: number[] = [];
+    const credentials: string[] = [];
+    let attempts = 0;
+    let credentialRevision = 0;
+    const client = new HttpsSkillRegistryClient({
+      endpoint: 'https://registry.example.com/',
+      tenantId: 'tenant-a',
+      publisherKeys: { 'publisher-a': data.publisherPublicKey },
+      transparencyLogKeys: { 'log-a': data.logPublicKey },
+      authorization: () => `Bearer registry-token-${++credentialRevision}`,
+      now: () => Date.parse('2026-07-24T01:00:00.000Z'),
+      maxAttempts: 3,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        credentials.push(request.headers.get('authorization') ?? '');
+        if (request.url.includes('/v1/skills?')) {
+          return Response.json({
+            entries: [data.entry],
+            nextCursor: 'cursor-2',
+            revision: 'registry-revision-7',
+          });
+        }
+        if (request.headers.get('if-none-match') === '"entry-7"') {
+          return new Response(null, { status: 304 });
+        }
+        attempts += 1;
+        if (attempts === 1) {
+          return Response.json(
+            { error: 'limited' },
+            { status: 429, headers: { 'retry-after': '1' } }
+          );
+        }
+        if (attempts === 2) return Response.json({ error: 'failed' }, { status: 503 });
+        return Response.json(data.entry, {
+          headers: {
+            etag: '"entry-7"',
+            'x-registry-revision': 'registry-revision-7',
+          },
+        });
+      },
+    });
+
+    await expect(client.resolve('cloud.search', '1.0.0')).resolves.toEqual(data.entry);
+    await expect(client.resolve('cloud.search', '1.0.0')).resolves.toEqual(data.entry);
+    await expect(client.list({ limit: 25 })).resolves.toMatchObject({
+      entries: [data.entry],
+      nextCursor: 'cursor-2',
+      revision: 'registry-revision-7',
+    });
+    expect(sleeps).toEqual([1_000, 500]);
+    expect(new Set(credentials).size).toBe(credentials.length);
+    expect(credentials).toHaveLength(5);
+  });
+
+  it('revalidates expiration when an ETag response reuses cached metadata', async () => {
+    const data = fixture();
+    let currentTime = Date.parse('2026-07-24T01:00:00.000Z');
+    let requests = 0;
+    const client = new HttpsSkillRegistryClient({
+      endpoint: 'https://registry.example.com/',
+      tenantId: 'tenant-a',
+      publisherKeys: { 'publisher-a': data.publisherPublicKey },
+      transparencyLogKeys: { 'log-a': data.logPublicKey },
+      now: () => currentTime,
+      fetch: async (_input, init) => {
+        requests += 1;
+        const headers = new Headers(init?.headers);
+        if (headers.get('if-none-match') === '"entry-7"') {
+          return new Response(null, { status: 304 });
+        }
+        return Response.json(data.entry, { headers: { etag: '"entry-7"' } });
+      },
+    });
+
+    await expect(client.resolve('cloud.search', '1.0.0')).resolves.toEqual(data.entry);
+    currentTime = Date.parse('2026-08-24T00:00:00.001Z');
+    await expect(client.resolve('cloud.search', '1.0.0')).rejects.toMatchObject({
+      code: 'SKILL_REGISTRY_PACKAGE_EXPIRED',
+    });
+    expect(requests).toBe(2);
   });
 });
