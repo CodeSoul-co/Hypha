@@ -12,6 +12,10 @@ import type {
 } from './integration-contracts';
 import type { MemoryEventContext } from './memory-events';
 import { memoryError } from './memory-utils';
+import {
+  createMemoryProviderReturnEvidence,
+  verifyMemoryProviderReturnEvidence,
+} from './provider-return-evidence';
 import type {
   ManagedMemoryDeleteRequest,
   ManagedMemoryDeleteResult,
@@ -42,6 +46,7 @@ type GovernedMemoryRequest =
 
 export interface GovernedMemoryManagerOptions {
   activities: MemoryActivityPort;
+  providerId: string;
   profileRef: MemoryContractSpecRef | ((request: GovernedMemoryRequest) => MemoryContractSpecRef);
   eventContext: MemoryEventContext | ((request: GovernedMemoryRequest) => MemoryEventContext);
   timeoutMs?: number;
@@ -87,6 +92,7 @@ export class GovernedMemoryManager {
     signal?: AbortSignal
   ): Promise<ManagedMemoryDeleteResult> {
     const result = await this.execute<ManagedMemoryDeleteResult>('delete', request, signal);
+
     if (result.pendingProviderIds?.length && this.options.reconciliationStore) {
       await enqueueProviderDeleteReconciliation(
         request,
@@ -107,13 +113,24 @@ export class GovernedMemoryManager {
     request: GovernedMemoryRequest,
     signal?: AbortSignal
   ): Promise<T> {
+    const profileRef = this.resolveProfileRef(request);
+    const evidenceInput = {
+      ...request,
+      operationId: request.operationId,
+      principal: request.principal,
+      scope: request.scope,
+      profileRef,
+      ...('idempotencyKey' in request && request.idempotencyKey !== undefined
+        ? { idempotencyKey: request.idempotencyKey }
+        : {}),
+    };
     const result = await this.options.activities.execute(
       {
         operationId: request.operationId,
         operation,
         principal: request.principal,
         scope: request.scope,
-        profileRef: this.resolveProfileRef(request),
+        profileRef,
         eventContext: this.resolveEventContext(request),
         payload: request,
         timeoutMs: this.options.timeoutMs,
@@ -121,6 +138,30 @@ export class GovernedMemoryManager {
       },
       signal
     );
+    if (result.status === 'completed' || result.status === 'partial') {
+      const evidence = verifyMemoryProviderReturnEvidence(result.evidence, {
+        operationId: request.operationId,
+        operation,
+        principal: request.principal,
+        scope: request.scope,
+        providerId: this.options.providerId,
+        providerRevision: profileRef.revision ?? profileRef.version,
+        input: evidenceInput,
+        output: result.output,
+      });
+      if (
+        evidence.terminal.status !== result.status ||
+        result.error !== undefined ||
+        evidence.terminal.error !== undefined
+      ) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Governed provider success terminal does not match its return evidence.',
+          false,
+          { providerReturnEvidenceInvalid: true }
+        );
+      }
+    }
     if (result.status === 'failed' || result.status === 'cancelled') {
       throw (
         result.error ??
@@ -162,31 +203,39 @@ export function registerMemoryManagementProviderHandlers(
 ): void {
   activities.register(
     'add',
-    providerHandler((request, signal) => provider.add(request as MemoryAddRequest, signal))
+    providerHandler(provider, 'add', (request, signal) =>
+      provider.add(request as MemoryAddRequest, signal)
+    )
   );
   activities.register(
     'search',
-    providerHandler((request, signal) =>
+    providerHandler(provider, 'search', (request, signal) =>
       provider.search(request as ManagedMemorySearchRequest, signal)
     )
   );
   activities.register(
     'get',
-    providerHandler((request, signal) => provider.get(request as MemoryGetRequest, signal))
+    providerHandler(provider, 'get', (request, signal) =>
+      provider.get(request as MemoryGetRequest, signal)
+    )
   );
   activities.register(
     'list',
-    providerHandler((request, signal) => provider.list(request as MemoryListRequest, signal))
+    providerHandler(provider, 'list', (request, signal) =>
+      provider.list(request as MemoryListRequest, signal)
+    )
   );
   activities.register(
     'update',
-    providerHandler((request, signal) =>
+    providerHandler(provider, 'update', (request, signal) =>
       provider.update(request as ManagedMemoryUpdateRequest, signal)
     )
   );
   activities.register(
     'delete',
     providerHandler(
+      provider,
+      'delete',
       (request, signal) => provider.delete(request as ManagedMemoryDeleteRequest, signal),
       (output) =>
         (output as ManagedMemoryDeleteResult).status === 'partial' ? 'partial' : 'completed'
@@ -203,7 +252,12 @@ export function registerMemoryManagementProviderHandlers(
       normalizeActivityRequest(activity) as MemoryHistoryRequest,
       signal
     );
-    return { status: 'completed', eventIds: [], output };
+    return {
+      status: 'completed',
+      eventIds: [],
+      output,
+      evidence: createProviderEvidence(provider, 'history', activity, output, 'completed'),
+    };
   });
 }
 
@@ -220,13 +274,45 @@ export function governedMemoryProviderHealth(
 }
 
 function providerHandler<T>(
+  provider: MemoryManagementProvider,
+  operation: MemoryActivityOperation,
   invoke: (request: GovernedMemoryRequest, signal?: AbortSignal) => Promise<T>,
   status: (output: T) => 'completed' | 'partial' = () => 'completed'
 ): MemoryActivityHandler {
   return async (activity, signal) => {
-    const output = await invoke(normalizeActivityRequest(activity), signal);
-    return { status: status(output), eventIds: [], output };
+    const request = normalizeActivityRequest(activity);
+    const output = await invoke(request, signal);
+    const terminal = status(output);
+    return {
+      status: terminal,
+      eventIds: [],
+      output,
+      evidence: createProviderEvidence(provider, operation, activity, output, terminal),
+    };
   };
+}
+
+function createProviderEvidence(
+  provider: MemoryManagementProvider,
+  operation: MemoryActivityOperation,
+  activity: MemoryActivityRequest,
+  output: unknown,
+  status: 'completed' | 'partial'
+) {
+  return createMemoryProviderReturnEvidence({
+    operationId: activity.operationId,
+    operation,
+    principal: activity.principal,
+    scope: activity.scope,
+    providerId: provider.id,
+    providerRevision:
+      typeof (activity.profileRef as { revision?: unknown }).revision === 'string'
+        ? (activity.profileRef as { revision: string }).revision
+        : activity.profileRef.version,
+    input: normalizeActivityRequest(activity),
+    output,
+    status,
+  });
 }
 
 function normalizeActivityRequest(activity: MemoryActivityRequest): GovernedMemoryRequest {

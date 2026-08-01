@@ -1,4 +1,4 @@
-import type { StructuredQuery, StructuredStoreProvider } from './index';
+﻿import type { StructuredQuery, StructuredStoreProvider } from './index';
 import { isNormalizedMemoryError, memoryError, sha256 } from './memory-utils';
 
 export interface MongoOperationOptionsLike {
@@ -80,7 +80,10 @@ export class MongoStructuredStoreProvider implements StructuredStoreProvider {
 
   async insert<T extends { id: string }>(table: string, record: T): Promise<void> {
     await this.execute('insert', () =>
-      this.collection(table).insertOne(structuredClone(record), this.operationOptions())
+      this.collection(table).insertOne(
+        stripUndefined(structuredClone(record)),
+        this.operationOptions()
+      )
     );
   }
 
@@ -88,7 +91,7 @@ export class MongoStructuredStoreProvider implements StructuredStoreProvider {
     const result = await this.execute('update', () =>
       this.collection(table).updateOne(
         { id },
-        { $set: structuredClone(patch) as Record<string, unknown> },
+        { $set: stripUndefined(structuredClone(patch)) as Record<string, unknown> },
         this.operationOptions()
       )
     );
@@ -105,8 +108,8 @@ export class MongoStructuredStoreProvider implements StructuredStoreProvider {
   ): Promise<boolean> {
     const result = await this.execute('compare_and_set', () =>
       this.collection(table).updateOne(
-        { id, ...(structuredClone(expected) as Record<string, unknown>) },
-        { $set: structuredClone(patch) as Record<string, unknown> },
+        { id, ...(stripUndefined(structuredClone(expected)) as Record<string, unknown>) },
+        { $set: stripUndefined(structuredClone(patch)) as Record<string, unknown> },
         this.operationOptions()
       )
     );
@@ -201,6 +204,9 @@ export class MongoStructuredStoreProvider implements StructuredStoreProvider {
     try {
       return await run();
     } catch (error) {
+      // Preserve labelled driver errors inside withTransaction so Mongo can
+      // perform transient transaction and unknown-commit retries.
+      if (this.session) throw error;
       throw normalizeMongoStructuredStoreError(error, operation);
     }
   }
@@ -213,6 +219,16 @@ export class MongoStructuredStoreProvider implements StructuredStoreProvider {
   }
 }
 
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => stripUndefined(item)) as T;
+  if (!value || typeof value !== 'object') return value;
+  if (Object.prototype.toString.call(value) !== '[object Object]') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => [key, stripUndefined(item)])
+  ) as T;
+}
 function stripMongoInternalId<T>(record: T): T {
   if (!record || typeof record !== 'object' || Array.isArray(record))
     return structuredClone(record);
