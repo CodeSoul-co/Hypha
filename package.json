@@ -61,7 +61,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
     "@google/generative-ai": "^0.2.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "bcryptjs": "^2.4.3",
@@ -119,6 +119,6 @@
     "vitest": "^3.2.7"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   }
 }

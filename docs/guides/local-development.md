@@ -1,6 +1,6 @@
 # Local Development
 
-hypha is a TypeScript workspace. Use Node.js 18 or newer.
+hypha is a TypeScript workspace. Use a supported Node.js 22 or newer LTS release.
 
 ## Setup
 
