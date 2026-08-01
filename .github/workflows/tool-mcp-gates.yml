@@ -1,10 +1,12 @@
-name: Tool and MCP gates
+name: Repository and platform gates
 
 on:
   pull_request:
-    branches: [dev, domain]
+    branches: [dev, domain, cache-base, dev-domain-merge, dev-merge, main]
   push:
-    branches: [tools, runtime, domain-tools]
+    branches:
+      [tools, runtime, domain-tools, dev, domain, cache-base, dev-domain-merge, dev-merge, main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,8 +25,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.22.3
           cache: npm
@@ -69,18 +71,26 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
+      - run: npm audit
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:unit
       - run: npm run test:packages
-      - run: npm run test:integration
+      - name: Integration tests with WorkCache enabled
+        run: npm run test:integration
         env:
           MONGODB_URI: mongodb://127.0.0.1:27017/hypha_test
+          REDIS_URL: redis://127.0.0.1:6379
+      - name: Integration tests with WorkCache disabled
+        run: npm run test:integration
+        env:
+          HYPHA_WORKCACHE: 'off'
+          MONGODB_URI: mongodb://127.0.0.1:27017/hypha_test_cache_off
           REDIS_URL: redis://127.0.0.1:6379
