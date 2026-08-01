@@ -479,7 +479,7 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
       throw new Error('unreachable');
     });
     const service = createService(workspace, fixture.manager, {
-      maxRestoreStagingDurationMs: 20,
+      maxRestoreStagingDurationMs: 1_000,
     });
 
     await expect(
@@ -487,7 +487,7 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     ).rejects.toMatchObject({
       normalizedError: {
         code: 'EXECUTION_RESOURCE_EXCEEDED',
-        details: { maxRestoreStagingDurationMs: 20 },
+        details: { maxRestoreStagingDurationMs: 1_000 },
       },
     });
 
@@ -529,7 +529,7 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
         },
       },
       fixture.manager,
-      { maxRestoreStagingDurationMs: 20 }
+      { maxRestoreStagingDurationMs: 1_000 }
     );
 
     await expect(
@@ -537,7 +537,7 @@ describe('LocalWorkspaceSnapshotArtifactService', () => {
     ).rejects.toMatchObject({
       normalizedError: {
         code: 'EXECUTION_RESOURCE_EXCEEDED',
-        details: { maxRestoreStagingDurationMs: 20 },
+        details: { maxRestoreStagingDurationMs: 1_000 },
       },
     });
 
