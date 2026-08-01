@@ -2,220 +2,438 @@
   <img src="docs/hypha_logo.png" alt="hypha logo" width="180" />
 </p>
 
+<h1 align="center">hypha</h1>
+
 <p align="center">
-  <strong>Harness-oriented agent system framework for production-grade LLM agent applications.</strong>
+  <strong>A production-oriented TypeScript framework for governed, durable, and extensible AI agents.</strong>
 </p>
 
 <p align="center">
   English | <a href="README.zh-CN.md">中文</a>
 </p>
 
-## Overview
+## What is hypha?
 
-hypha is a TypeScript framework for building LLM agent systems that can be run, traced, replayed, governed, evaluated, and extended through stable APIs.
+hypha is an open-source TypeScript workspace for building agent products that must do more than
+complete a single model call. It combines a ReAct reasoning loop with explicit finite-state-machine
+(FSM) execution, durable events, policy-controlled side effects, replay, recovery, evaluation, and
+provider-neutral extension contracts.
 
-The framework separates reusable agent-system contracts from presentation surfaces. The API server, CLI, and web clients are clients of the same framework model; they do not define the core runtime behavior.
+The framework keeps product-domain declarations separate from the runtime kernel. A product defines
+its tasks and workflow in a `DomainPack`; hypha compiles that declaration into an FSM process and a
+versioned dependency snapshot. The same runtime can then serve an API, CLI, worker, or another
+application surface without moving product rules into framework core.
 
-## Core Model
+## Product model
 
-hypha uses a ReAct + FSM execution model. ReAct describes the agent loop of observing, reasoning, acting, observing results, and verifying. FSM makes that loop explicit as states, guarded transitions, retries, trace events, and terminal outcomes.
+| Concept      | Responsibility                                                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DomainPack` | Declares tasks, workflows, output contracts, skills, tools, MCP, memory, context, policy, evaluation, regression, and deployment references. |
+| `Agent`      | Selects model aliases and receives the capability references compiled from a DomainPack.                                                     |
+| `Session`    | Holds user and product context. A Session references a DomainPack and optional Session profile.                                              |
+| `Run`        | Represents one durable execution under a Session.                                                                                            |
+| `Event`      | Records source-of-truth facts from which state, replay, audit, and regression views are projected.                                           |
+| `Artifact`   | Stores content-addressed inputs, outputs, checkpoints, and execution evidence.                                                               |
 
-The runtime model is event-first:
+The canonical execution path is:
 
-- `DomainPack` declares domain-level definitions such as task schemas, workflows, tools, MCP profiles, memory profiles, skill policy, permissions, evaluation rules, and output contracts.
-- `Session` is the runtime user or business context container. It can reference a DomainPack and initialize metadata from a SessionProfile.
-- `Run` is one concrete execution under a Session.
-- `Event` is the smallest source-of-truth fact record. Trace, replay, audit, regression, and state projection are derived from events.
-
-The package runtime includes `FSMRuntime`, `ReActAgentRunner`, `RunManager`, and `HarnessedReActFSMRunner` for executing a minimal governed agent path with trace events for every FSM state. Anomaly recovery is also FSM-native: bounded retry and circuit wait enter `Recovering`, committed effects enter `Compensating`, and uncertain effects enter `Quarantined`.
-
-## API Documentation
-
-Public API documentation is maintained as field-level references:
-
-- [Documentation Index](docs/README.md): entry point for architecture, package boundaries, guides, and API references.
-- [HTTP API](docs/api/http.md): REST endpoints, authentication, request bodies, response shapes, and runtime conventions.
-- [Framework API](docs/api/framework.md): TypeScript package contracts for DomainPack, Session, Run, Event, execution, inference, memory, tools, MCP, skills, and model providers.
-- [Execution Contracts](docs/architecture/execution.md): provider-neutral Workspace, Sandbox, Command, Store, Event, and cache-fingerprint boundaries.
-- [Architecture](docs/reference/architecture.md): package responsibilities, harness semantics, runtime model, and extension boundaries.
-- [Storage](docs/reference/storage.md): document, messaging, relational, vector, and artifact storage conventions for local, self-hosted, managed, and cloud deployments.
-- [Domain Packs](docs/guides/domain-packs.md): field contracts and examples for declaring workflows, tools, memory, skills, policy, and output contracts.
-
-When the server is running, the interactive route index is also available at `/api/v1/docs`.
-
-## Runtime Mode
-
-hypha defaults to a single-user runtime for local and self-hosted deployments. The configured owner account is seeded from `auth.singleUser`, and public registration is disabled unless multi-user mode is explicitly enabled.
-
-Internal APIs keep `userId` boundaries for sessions, memory, token usage, API keys, and session queues. This keeps default deployment simple while preserving the concurrency model required by multi-user clients.
-
-## Governed Runtime
-
-`@hypha/core` provides the event-first orchestration contracts and local reference implementations
-needed to run FSM work without hidden loops. The runtime includes versioned event schemas and
-upcasters, optimistic event-stream append, projections, scoped session commands, message
-inbox/outbox delivery, run leases and state claims with fencing, shared/exclusive resource claims,
-deterministic helpers, timers, pause/resume/signal controls, cancellation, checkpoints, recovery,
-replay, and query services. `@hypha/harness` adds a bounded FSM driver and execution context while
-keeping DomainPack workflows, provider adapters, and application state outside the runtime core.
-
-Every command and durable operation remains scoped by user, session, and run identity. Revision,
-lease, claim, event, and checkpoint evidence prevents stale workers or repeated loop iterations from
-being treated as progress. See the [Runtime Model](docs/reference/runtime-model.md) and
-[Framework API](docs/api/framework.md).
-
-The bundled Express server composes the canonical Runtime graph during startup. It owns durable
-session-command, ReAct continuation, timer, and recovery workers; restores their persisted state;
-and stops them in dependency order during shutdown. A start command is persisted before execution,
-each ReAct quantum is bounded, and the next quantum is rebuilt from Event, checkpoint, and Artifact
-evidence rather than process memory. `/ready` fails closed when the Runtime graph, a required worker,
-Memory, storage, or the configured LLM provider is unavailable.
-
-## Coordinated Recovery
-
-Hypha coordinates inference, tools, MCP, memory, execution, storage, message delivery, policy, and
-cache failures through the same FSM-governed recovery contract. Participants run in dependency
-order, completed upstream work is not repeated, and progress is proven by stable receipts,
-revisions, hashes, or provider state rather than by another loop iteration. Bounded retry,
-reconciliation, compatible fallback, degradation, compensation, human review, quarantine,
-cancellation, and failure are explicit strategies with trace events.
-
-Unknown write outcomes are reconciled before replay. Optional caches may be bypassed without
-changing the source result, and WorkCache can retain only user-scoped, revision-matched, revalidated
-recovery knowledge as an acceleration hint. The event log and FSM snapshot remain the sources of truth. See
-[FSM anomaly recovery](docs/architecture/fsm-recovery.md).
-
-## Inference Runtime
-
-Agent inference is exposed through `@hypha/inference`: prompt compilation, prefix segmentation, user-scoped and bounded Plasmod cache coordination, backend routing, and normalized responses. SGLang is the default physical backend, with vLLM, llama.cpp, and OpenAI API adapters available through the same backend registry.
-
-Configure the default backend and endpoints in `config.yaml` or `.env`, for example `HYPHA_INFERENCE_DEFAULT_BACKEND=sglang` and `SGLANG_BASE_URL=http://localhost:30000`.
-
-## Serving Cache
-
-Hypha Serving Cache is a lightweight middleware for LLM provider calls. It provides exact request-level caching, deterministic cache keys, pluggable stores, cache policies, prompt prefix metadata, and trace events without changing the agent runtime or Domain Pack interfaces.
-
-The exact cache key is derived from the resolved provider, model, system or prefix content, messages, tools/function schemas, generation params, and optional scope fields such as `userId`, `sessionId`, `projectId`, and `domainPackId`. Request ids, timestamps, and undefined values are excluded before hashing.
-
-Enable it with `HYPHA_SERVING_CACHE=memory`, `sqlite`, or `redis`; the default `off` mode keeps provider calls on the original path. The default policy requires `userId`, bounds entries and store latency, coalesces concurrent misses, and persists only a safe response projection. Streaming always bypasses. SQLite uses `HYPHA_SERVING_CACHE_SQLITE_PATH`; Redis uses the configured Redis deployment.
-
-Runtime traces may include `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`, `llm.cache.write`, and `llm.cache.bypass`. Streaming requests bypass the cache in this version. This layer does not implement semantic caching, cache trees, WorkCache scheduling, provider KV cache management, or CPU/GPU cache migration.
-
-For provider-side prefix cache, Hypha keeps request shape stable by canonicalizing tool schemas and tracking stable prefix hashes per provider/model/scope. Provider usage fields include `cacheHitTokens` and `cacheMissTokens` when the upstream API reports cached or missed prompt tokens. These metrics describe provider prefix-cache reuse; they are separate from Hypha's local exact response cache.
-
-## WorkCache
-
-`@hypha/workcache` is an event-derived typed runtime cache for reusable agent artifacts. It consumes existing Hypha events, maps them to `PlanTree`, `ComputationTree`, `ToolTree`, `ObservationTree`, `VerificationTree`, `MemoryTree`, `RecoveryTree`, or `PromptPrefixTree`, and stores `CacheBlock` records without changing DomainPack, Session, Run, or Event semantics.
-
-The bundled server configuration uses `HYPHA_WORKCACHE=memory`. Set `HYPHA_WORKCACHE=off` to disable it, `sqlite` for local persistence, or `redis` for a shared store with peer invalidation. Cache keys and blocks are user-scoped by default, unknown validity never hits, and stores plus WorkGraph history are bounded. `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` controls prompt prefix materialization budget.
-
-WorkCache is separate from Serving Cache. Serving Cache reuses exact LLM API responses; WorkCache organizes event-derived runtime artifacts. Tool blocks require read-only side effects, stable args, permission scope, and validity metadata. Verification blocks require strict source, test, and environment hashes. Recovery blocks are revision-matched, expiring strategy hints and never replace FSM, event, or receipt evidence.
-
-## Governed Tools and MCP
-
-Local, HTTP, Plugin, Mock, and MCP capabilities share `ToolAdapter`, `ToolRegistry`, and the
-single `GovernedToolRunner` execution path. Each call is a persistent Invocation with schema,
-permission, policy, approval, idempotency, retry, timeout, cancellation, artifact, event,
-observation, cache-validity, and recovery semantics. Dynamic MCP capabilities are separated into
-connection, catalog, trust, drift, schema-cache, and immutable Run snapshot records.
-
-Skills are loaded progressively through the Server `SkillManager`. Built-in, filesystem, package,
-and explicitly enabled remote registries share validation, content hashing, quarantine, review, and
-activation rules; a required remote Skill fails startup instead of silently becoming unavailable.
-
-See the [Tool/MCP architecture](docs/architecture/tool-mcp.md),
-[security guide](docs/guides/tool-mcp-security.md), and
-[adapter guide](docs/guides/tool-adapters.md).
-
-The server includes governed, side-effect-free `utility.json`, `utility.text`, and `utility.hash`
-tools for bounded JSON operations, literal text transformations, and SHA-256 fingerprints. See the
-[common utility guide](docs/guides/common-utility-tools.md) and
-[FSM recovery architecture](docs/architecture/fsm-recovery.md).
-
-## Governed Execution Contracts
-
-`@hypha/core` exposes provider-neutral contracts for managed Workspaces, sandbox environments,
-command execution, revisioned records and leases, lifecycle events, and deterministic cache
-fingerprints. The contracts keep filesystem, process, container, remote-provider, storage, artifact,
-policy, and secret implementations behind adapter and harness boundaries. Paths, identities,
-transitions, terminal evidence, sensitive event fields, idempotency, and stale-writer fencing are
-validated before adapters perform side effects.
-
-Runtime work crosses into Execution through a validated `ExecutionActivityRequest` that binds the
-Run, FSM state attempt, Workspace, fencing token, deadline, principal, and idempotency identity.
-`DefaultExecutionRiskEvaluator` derives provider-neutral risk evidence, while
-`GovernedExecutionPort` verifies Tool binding, permission scopes, Policy/Human Approval evidence,
-cancellation, deadlines, and authorization expiry immediately before dispatch. Unsuccessful
-activity terminals require normalized errors and durable Event references.
-
-`DefaultExecutionOutputPlanner` deterministically selects bounded, content-addressed Workspace
-mutations. `DefaultExecutionOutputCollector` then creates and optionally finalizes Artifacts only
-when returned records match the planned hash, size, path, principal, user, tenant, Workspace, Run,
-provenance, and Artifact version. These components expose framework ports; they do not imply a
-particular container, cloud object store, or remote execution provider.
-
-The Artifact lifecycle is content-addressed and append-only. `DefaultArtifactManager` and its
-eventing wrapper govern create, read, list, version navigation, lineage, retention, garbage
-collection, and download access through principal-scoped policy checks. In-memory, local-file, and
-SQLite-backed reference components are available. `@hypha/adapters-local` also provides explicit
-factories for local-process and Docker execution, remote-sandbox HTTP transport, SQLite and
-PostgreSQL execution stores, and local or S3-compatible execution Artifacts. Deployments register
-only the providers they intend to trust; capability negotiation and readiness fail closed when a
-required control or provider is unavailable. Environment-specific providers are release-qualified
-only by their required, zero-skipped acceptance suites.
-
-See the [Execution architecture](docs/architecture/execution.md) for the contract layers and
-extension rules.
-
-## Governed Memory and Context
-
-`@hypha/memory` provides versioned Memory profiles, principal/user/workspace scope enforcement,
-optimistic record revisions, scoped idempotency, structured history, atomic record-plus-index-outbox
-persistence, deterministic retrieval explanations, lifecycle workers, and bounded context assembly.
-The native provider keeps structured records as the source of truth while vector indexing runs as a
-leased, retry-bounded outbox job. Hard delete removes current and historical versions; external
-provider adapters must preserve scope metadata and reconcile uncertain writes before replay.
-
-Memory, Context, Domain, Cache, Replay, and Evaluation share versioned dependency and validity
-snapshots. Context builders apply policy, provenance, token budgets, deterministic compaction, and
-instruction/data boundaries before model injection. See the
-[Governed Memory architecture](docs/architecture/memory.md).
-
-The bundled server loads `configs/memory-profiles.yaml` and starts with `native-default`, backed by
-MongoDB for durable records, history, mappings, and recovery evidence plus Redis for native working
-state. The same composition can select self-hosted `mem0-oss`, managed `mem0-platform`, or
-`memorybank-managed` without placing credentials in the profile. Set
-`HYPHA_MEMORY_CONFIG_PATH` to an alternative validated profile file and provide only the environment
-references required by the selected provider. External providers still use MongoDB for Hypha-owned
-identity mappings and durable governance evidence. See
-[Memory provider profiles](docs/guides/memory-provider-profiles.md) and
-[External provider runtime](docs/guides/memory-external-provider-runtime.md).
-
-`MemoryBankLocalClient` is a protocol compatibility fixture, not a bundled MemoryBank service. The
-separate, disabled `memorybank-hindsight-local` profile and its registered factory form the supplied
-self-hosted MemoryBank-style deployment candidate; it is intentionally excluded from the canonical
-selectable profile file. Managed and self-hosted provider profiles become release-ready only after
-their environment-specific acceptance suite runs with zero skipped cases.
-
-## Development Commands
-
-```bash
-npm install
-npm run dev
-npm run build
-npm run typecheck
-npm test
-npm run lint
-npm run test:release
-npm run cli -- --help
+```text
+DomainPack
+  -> validated bindings and dependency snapshot
+  -> FSM process
+  -> bounded ReAct quantum
+  -> governed Tool / MCP / Memory / Execution activity
+  -> Event + receipt + Artifact evidence
+  -> projection, continuation, recovery, replay, and evaluation
 ```
 
-- `npm run dev` starts the Express API server with dotenv.
-- `npm run build` compiles framework packages, the API server, and the CLI.
-- `npm test` runs unit, package, and integration test suites.
-- `npm run test:release` additionally requires real Memory and Execution provider acceptance; it is
-  expected to fail when those deployment services or credentials are absent.
-- `npm run cli -- --help` shows the CLI client commands.
+No cache hit or provider response can authorize a side effect, advance the FSM, or replace Event and
+Artifact evidence. Tool, MCP, Memory, file, execution, and external writes pass through policy,
+trace, cancellation, deadline, idempotency, and harness boundaries.
+
+## Included capabilities
+
+| Area               | Included runtime capability                                                                                                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime            | ReAct + FSM, durable session commands, bounded continuation, timers, leases, fencing, cancellation, recovery workers, human review, replay, audit, and regression projections.                           |
+| Domain             | YAML/JSON/TypeScript Domain Packs, runtime validation, overlays, registry, deterministic compiler, dependency snapshots, and Agent patches.                                                              |
+| Memory             | Hypha Native Memory, local Native Lite, self-hosted Mem0 OSS, Mem0 Platform, and Vertex AI Memory Bank adapters behind one governed contract.                                                            |
+| Tools and MCP      | Local, HTTP, plugin, mock, and MCP adapters through one governed invocation path with capability snapshots and drift control.                                                                            |
+| Skills and prompts | Built-in, filesystem, package, and signed remote Skill registries; progressive loading; versioned prompt references and templates.                                                                       |
+| Execution          | Provider-neutral Workspace, Sandbox, Command, Artifact, Store, lease, recovery, and cache contracts with local-process, Docker, remote HTTP, SQLite, PostgreSQL, local-file, and S3-compatible adapters. |
+| Cache              | Exact LLM Serving Cache plus event-derived WorkCache with bounded, scoped, invalidatable projections.                                                                                                    |
+| Surfaces           | Express API server and an example CLI that consume the same framework runtime.                                                                                                                           |
+
+## Quick start
+
+### Requirements
+
+- Node.js 22 or newer
+- npm
+- MongoDB and Redis for the bundled API server
+- At least one configured model provider or a reachable local model endpoint
+
+### 1. Install the workspace
+
+```bash
+git clone https://github.com/CodeSoul-co/Hypha.git
+cd Hypha
+npm ci
+cp .env.example .env
+```
+
+For a disposable local MongoDB and Redis environment, you may use containers:
+
+```bash
+docker run -d --name hypha-mongodb -p 27017:27017 mongo:8
+docker run -d --name hypha-redis -p 6379:6379 redis:7-alpine
+```
+
+You can instead set `MONGODB_URI` and `REDIS_URL` to self-hosted or managed services.
+
+### 2. Configure identity and a model provider
+
+Edit `.env`. Keep credentials out of `config.yaml` and source control.
+
+```bash
+HYPHA_OWNER_EMAIL=owner@example.com
+HYPHA_OWNER_PASSWORD=replace-with-a-private-password
+JWT_SECRET=replace-with-at-least-32-random-characters
+
+HYPHA_LLM_DEFAULT_PROVIDER=openai
+HYPHA_LLM_DEFAULT_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your-provider-key
+```
+
+The default deployment mode is single-user. Registration remains disabled and the configured owner
+is created during startup. Internal data access still retains user, Session, Run, Workspace, and
+tenant boundaries.
+
+### 3. Start and verify the server
+
+```bash
+npm run dev
+```
+
+In another terminal:
+
+```bash
+curl -fsS http://127.0.0.1:3000/api/v1/health
+curl -fsS http://127.0.0.1:3000/api/v1/ready
+```
+
+`/health` is process liveness. `/ready` is the traffic gate: it returns a failure status until
+storage, the selected model provider, Memory, the canonical Runtime graph, and required workers are
+ready. The route index is available at `http://127.0.0.1:3000/api/v1/docs`.
+
+### 4. Use the CLI
+
+```bash
+npm run cli -- login --email owner@example.com
+npm run cli -- chat "Explain the active runtime" --stream
+npm run cli -- tools
+npm run cli -- skills
+npm run cli -- workflows
+```
+
+The CLI stores its endpoint configuration and JWT under `~/.hypha` by default. Set
+`HYPHA_BASE_URL` and `HYPHA_HOME` to use another server or an isolated client profile.
+
+## Develop an agent with a DomainPack
+
+Domain Packs are the supported product-integration boundary. Product-specific tasks, prompts,
+workflows, rules, and capability selections belong in a Domain Pack or product application—not in
+`@hypha/core`, `@hypha/kernel`, or the generic Runtime.
+
+### 1. Declare the domain
+
+Start from [`configs/domain-packs/minimal.domain.yaml`](configs/domain-packs/minimal.domain.yaml).
+A production Domain Pack normally defines:
+
+| Declaration                              | What it controls                                                                                      |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `taskSchemas`                            | Accepted task types, input schemas, output-contract references, and default workflows.                |
+| `outputContracts`                        | Machine-verifiable final output schemas.                                                              |
+| `sessionProfiles`                        | Default metadata and Memory, Context, Reasoning, Tool, MCP, Skill, and Policy profile references.     |
+| `workflows`                              | FSM states, transitions, guards, retry/timeout behavior, human review, and state-scoped capabilities. |
+| `tools`, `toolProfiles`                  | Stable Tool contracts and the profiles allowed to bind them to executable adapters.                   |
+| `mcpProfiles`                            | Server references, capability import rules, trust policy, and version pinning.                        |
+| `memoryProfiles`, `contextProfiles`      | Memory selection, retrieval/write policy, context sources, provenance, and token budgets.             |
+| `allowedSkills`, `skillPolicies`         | Which Skills an Agent may load and which tools or policies each Skill may use.                        |
+| `allowedPromptRefs`, `defaultPromptRefs` | Versioned prompt templates that application composition must resolve.                                 |
+| `policies`, `businessRules`              | Permission, approval, precondition, postcondition, and output constraints.                            |
+| `evaluationProfiles`, `regressionCases`  | Event-derived acceptance and regression definitions.                                                  |
+
+Keep provider URLs, bearer tokens, API keys, and deployment secrets out of the Domain Pack. It should
+select stable profile references; the trusted application composition resolves those references to
+live providers.
+
+### 2. Load, validate, and compile
+
+```ts
+import {
+  applyDomainAgentPatch,
+  compileDomainPackToHarnessedSystem,
+  DomainPackRegistry,
+  LocalDomainPackLoader,
+} from '@hypha/domain';
+
+const registry = new DomainPackRegistry();
+
+await new LocalDomainPackLoader({
+  directories: ['configs/domain-packs'],
+}).loadInto(registry);
+
+const domainPack = registry.get('domain.minimal', '0.0.0');
+if (!domainPack) throw new Error('DomainPack not found');
+
+const compiled = compileDomainPackToHarnessedSystem(domainPack, {
+  agentRef: { id: 'agent.default', version: '1.0.0' },
+  taskSchemaId: 'task.minimal',
+  workflowId: 'workflow.minimal',
+  sessionProfileId: 'session.local',
+  memoryProfileId: 'memory.local',
+});
+
+const agent = applyDomainAgentPatch(
+  {
+    id: 'agent.default',
+    version: '1.0.0',
+    name: 'Default Agent',
+    modelAlias: 'default-chat',
+  },
+  compiled.agentPatch
+);
+```
+
+The compiler validates internal references and produces all data needed by application composition:
+
+| Compiler output           | Integration use                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------------------- |
+| `fsmProcess`              | Register the exact `FSMProcessSpec` executed by the Runtime.                                        |
+| `harnessedSystem`         | Bind Agent, FSM, policy, trace, Memory, MCP, Context, Tool, Skill, evaluation, and output refs.     |
+| `agentPatch`              | Apply resolved prompt, Skill, Tool, Memory, Context, Reasoning, and Policy references to the Agent. |
+| `bindings`                | Register only the selected concrete capabilities and state-level allowlists.                        |
+| `sessionInitialization`   | Create Session metadata and default profile references.                                             |
+| `dependencySnapshot`      | Persist the complete versioned dependency closure used for replay and cache validity.               |
+| `processHash` and `audit` | Prove the compiler input and workflow identity associated with a Run.                               |
+
+### 3. Register the compiled system explicitly
+
+A Domain Pack file does not become executable merely because it exists on disk. During application
+startup, the trusted composition layer must:
+
+1. Load the pack into a `DomainPackRegistry` and compile the selected task/workflow/profile set.
+2. Resolve the Agent's model alias and versioned Prompt references.
+3. Register the selected Skills and enforce workflow-state `allowedSkills` and `requiredSkills`.
+4. Bind declared Tool contracts to local, HTTP, plugin, execution, or MCP adapters through the
+   governed Tool runner.
+5. Connect and approve exact MCP capability revisions required by the compiled bindings.
+6. Resolve the selected Memory profile through the Server Memory runtime configuration.
+7. Create the Session from `sessionInitialization`, then persist `processHash` and
+   `dependencySnapshot` with the Run's Event evidence.
+8. Execute `fsmProcess` through the canonical Runtime and derive status only from Events and
+   persisted checkpoints.
+
+This explicit activation step prevents an unreviewed YAML file, Skill, Tool, or remote MCP catalog
+change from silently gaining runtime authority.
+
+### 4. Narrow capability at the workflow state
+
+DomainPack capability declarations are upper bounds. Each workflow state should narrow them:
+
+```yaml
+states:
+  - id: Research
+    goal: Collect bounded evidence.
+    allowedTools: [common.search]
+    allowedSkills: [skill.context-enrichment]
+    requiredSkills: [skill.context-enrichment]
+    allowedMCPProfiles: [mcp.local]
+    permissionScopes: [search.query]
+    policyRefs: [policy.readonly]
+    timeoutPolicy:
+      timeoutMs: 30000
+      onTimeout: fail
+    retryPolicy:
+      maxAttempts: 2
+```
+
+Required Skills or capabilities that are missing, untrusted, policy-denied, expired, or different
+from the Run snapshot fail closed before inference or dispatch.
+
+### 5. Extend without copying the base pack
+
+Use `extendDomainPack()` to upsert or remove declarations by stable id, then assign a new version:
+
+```ts
+import { extendDomainPack } from '@hypha/domain';
+
+const customized = extendDomainPack(domainPack, {
+  version: '1.1.0',
+  defaultSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+  remove: { regressionCases: ['regression.obsolete'] },
+});
+```
+
+The extended result is validated again. Removing a referenced Tool, Policy, Prompt, Skill, Memory
+profile, or output contract therefore requires updating every dependent reference.
+
+### 6. Test the domain as a product contract
+
+For every supported DomainPack selection, test:
+
+- schema validation and unresolved-reference rejection;
+- deterministic `processHash` and dependency snapshots;
+- legal and illegal FSM transitions, retry, timeout, cancellation, and terminal states;
+- state-scoped Tool, MCP, Skill, Prompt, Memory, and Policy enforcement;
+- human-review approval, rejection, expiry, and resume revalidation;
+- Event-derived replay, audit, regression, and output-contract validation;
+- cache enabled and disabled without changing source-of-truth behavior.
+
+The maintained field reference and complete examples are in the
+[`Domain Packs` guide](docs/guides/domain-packs.md) and
+[`Framework API`](docs/api/framework.md).
+
+## Configure Memory
+
+The bundled Server reads [`configs/memory-profiles.yaml`](configs/memory-profiles.yaml). Choose the
+active profile in that file or point `HYPHA_MEMORY_CONFIG_PATH` to another validated profile set.
+
+| Profile              | Intended topology            | Required deployment configuration                                                           |
+| -------------------- | ---------------------------- | ------------------------------------------------------------------------------------------- |
+| `native-lite`        | Embedded, single process     | Local SQLite records, in-memory working state, local vector and embedding adapters.         |
+| `native-default`     | Durable Hypha-native runtime | MongoDB record/history/outbox evidence and Redis working state.                             |
+| `mem0-oss`           | Self-hosted Mem0             | `HYPHA_MEM0_OSS_URL`, optional API key, and Hypha-owned durable mapping/operation evidence. |
+| `mem0-platform`      | Managed Mem0                 | `HYPHA_MEM0_PLATFORM_TOKEN` and Hypha-owned durable mapping/operation evidence.             |
+| `memorybank-managed` | Vertex AI Memory Bank        | Project, location, reasoning engine, and short-lived Google authorization configuration.    |
+
+Profiles do not place credentials in DomainPack or Memory specs. Provider calls remain scoped,
+audited, idempotent, revision-aware, and reconciled before uncertain writes are replayed. See
+[`Memory provider profiles`](docs/guides/memory-provider-profiles.md) and
+[`External Memory runtime`](docs/guides/memory-external-provider-runtime.md).
+
+## Configure Tools, MCP, Skills, and prompts
+
+- Tool definitions and trusted adapter bindings live in `config.yaml`, `configs/tools.yaml`, and the
+  application composition layer.
+- Local MCP servers use a command and argument vector; remote servers use an endpoint plus a Secret
+  reference. Newly discovered capability revisions must satisfy trust and approval policy.
+- Skills can come from built-ins, `~/.hypha/skills`, package registries, or an explicitly enabled
+  signed remote registry. Required Skills fail startup or context construction when unavailable.
+- Prompt templates live under `apps/server/src/prompts`; Domain Packs reference versioned prompt ids
+  rather than embedding deployment-specific prompt loading logic in core.
+
+The Server includes governed `utility.json`, `utility.text`, `utility.hash`, filesystem, search, and
+real local stdio MCP paths. Use [`Tool adapters`](docs/guides/tool-adapters.md),
+[`Tool and MCP security`](docs/guides/tool-mcp-security.md), and the
+[`HTTP API`](docs/api/http.md) for configuration and invocation contracts.
+
+## Runtime, execution, and recovery
+
+The Express Server composes the canonical Event authority and durable execution graph during
+startup. Session-command, ReAct continuation, timer, recovery, and reconciliation workers perform
+an initial sweep before readiness. Shutdown drains workers while their providers remain available.
+
+Long-running work progresses in bounded quanta. The next quantum is reconstructed from Events,
+checkpoints, Artifacts, capability snapshots, and provider receipts. Recovery uses explicit bounded
+retry, reconciliation, fallback, degradation, compensation, human review, quarantine,
+cancellation, and failure states; repeatedly entering a loop is not considered progress.
+
+Execution providers are registered explicitly. Local process, Docker, remote sandbox HTTP,
+PostgreSQL execution records, and S3-compatible Artifacts are available as adapters, but a
+deployment should activate only the providers it trusts and can verify. See
+[`Execution architecture`](docs/architecture/execution.md) and
+[`Runtime model`](docs/reference/runtime-model.md).
+
+## Cache model
+
+- **Serving Cache** reuses exact, normalized model responses. Enable it with
+  `HYPHA_SERVING_CACHE=memory`, `sqlite`, or `redis`.
+- **WorkCache** stores bounded projections derived from Events. Use `HYPHA_WORKCACHE=off`, `memory`,
+  `sqlite`, or `redis`.
+- **Tool result cache** is opt-in for eligible `none`/`read` calls and requires stable external-state
+  evidence for reads.
+
+All caches are disposable views. A cache miss or failure can bypass the cache; a cache hit cannot
+authorize a side effect, skip policy, fabricate a receipt, or advance an FSM.
+
+## HTTP API
+
+The default API prefix is `/api/v1`. Protected routes use
+`Authorization: Bearer <jwt>`. Primary surfaces include:
+
+- `/chat` and `/chat/stream` for agent interaction;
+- `/runtime/runs/:runId` plus `/events`, `/replay`, `/audit`, and `/regression` projections;
+- `/tools`, `/tool-invocations`, `/tool-approvals`, and `/mcp` for governed capabilities;
+- `/memory` and `/memory-admin` for scoped Memory operations;
+- `/skills`, `/workflows`, `/models`, `/usage`, `/status`, and `/docs`.
+
+See [`docs/api/http.md`](docs/api/http.md) for request and response contracts.
+
+## Production deployment
+
+Before accepting traffic:
+
+1. Set `NODE_ENV=production`, replace owner and JWT secrets, and use a dedicated `.env` or Secret
+   manager.
+2. Configure durable MongoDB and Redis endpoints, TLS, authentication, backups, and retention.
+3. Configure at least one healthy model provider and stable model aliases.
+4. Restrict filesystem roots, disable process execution unless required, and isolate untrusted code
+   in a container or remote sandbox.
+5. Pin and approve MCP capabilities, Skill artifacts, DomainPack versions, prompts, and provider
+   revisions.
+6. Persist `data/` or replace local adapters with deployment-qualified providers.
+7. Route traffic only after `/api/v1/ready` returns success.
+8. Run release and real-provider acceptance suites in the target environment with zero skipped
+   required cases.
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+npm test
+npm run test:release
+```
+
+`npm run test:release` intentionally fails when required real Memory or Execution services and
+credentials are not available.
+
+Build once and start the compiled Server with the production environment:
+
+```bash
+npm run build
+NODE_ENV=production npm start
+```
+
+## Workspace packages
+
+| Package                                       | Responsibility                                                                                |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `@hypha/core`                                 | Public specs, schemas, Events, policy, runtime, Artifact, Workspace, and Execution contracts. |
+| `@hypha/fsm`                                  | FSM specs, snapshots, transitions, guards, and recovery semantics.                            |
+| `@hypha/kernel`                               | Governed ReAct and FSM coordination.                                                          |
+| `@hypha/harness`                              | Bounded execution, tracing, recovery, continuation, and side-effect hooks.                    |
+| `@hypha/domain`                               | DomainPack loading, validation, overlays, registry, and compilation.                          |
+| `@hypha/memory`                               | Memory profiles, provider adapters, context assembly, migration, and governance.              |
+| `@hypha/tools`, `@hypha/mcp`, `@hypha/skills` | Capability contracts, registries, execution, trust, and progressive loading.                  |
+| `@hypha/inference`, `@hypha/models`           | Model aliases, routing, inference backends, prompt compilation, and normalized responses.     |
+| `@hypha/storage`, `@hypha/adapters-local`     | Storage contracts and local/self-hosted provider adapters.                                    |
+| `@hypha/serving-cache`, `@hypha/workcache`    | Exact model-response cache and event-derived runtime cache.                                   |
+| `@hypha/testing`                              | Contract fixtures and test support.                                                           |
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Architecture](docs/reference/architecture.md)
+- [Framework API](docs/api/framework.md)
+- [HTTP API](docs/api/http.md)
+- [Domain Packs](docs/guides/domain-packs.md)
+- [Local development](docs/guides/local-development.md)
+- [Memory](docs/architecture/memory.md)
+- [Tools and MCP](docs/architecture/tool-mcp.md)
+- [Execution](docs/architecture/execution.md)
+- [FSM recovery](docs/architecture/fsm-recovery.md)
 
 ## License
 
