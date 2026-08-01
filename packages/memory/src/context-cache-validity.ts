@@ -1,9 +1,5 @@
 import type { ContextArtifactRef, ContextArtifactStore } from './context-artifacts';
 import type { ContextEnvelope } from './context-contracts';
-import type {
-  MemoryMutationGenerationStore,
-  MemoryProjectionInvalidationTarget,
-} from './memory-projection-invalidation';
 import { sha256 } from './memory-utils';
 
 export interface ContextCacheVersionSnapshot {
@@ -12,7 +8,6 @@ export interface ContextCacheVersionSnapshot {
   scopeHash: string;
   providerRevision?: string;
   policyRevision?: string;
-  mutationGeneration: string;
   selectedMemoryVersionIds: string[];
   sourceHashes: Record<string, string>;
   artifactHashes?: Record<string, string>;
@@ -32,7 +27,6 @@ export interface ContextEnvelopeCacheStore {
   get(key: string): Promise<VersionValidContextCacheRecord | null>;
   set(key: string, value: VersionValidContextCacheRecord): Promise<void>;
   delete(key: string): Promise<void>;
-  invalidateScope(scopeHash: string): Promise<number>;
 }
 
 export class InMemoryContextEnvelopeCacheStore implements ContextEnvelopeCacheStore {
@@ -47,45 +41,23 @@ export class InMemoryContextEnvelopeCacheStore implements ContextEnvelopeCacheSt
   async delete(key: string): Promise<void> {
     this.entries.delete(key);
   }
-  async invalidateScope(scopeHash: string): Promise<number> {
-    const keys = [...this.entries.entries()]
-      .filter(([, record]) => record.snapshot.scopeHash === scopeHash)
-      .map(([key]) => key);
-    for (const key of keys) this.entries.delete(key);
-    return keys.length;
-  }
 }
 
 export interface VersionValidContextCacheOptions {
   store: ContextEnvelopeCacheStore;
   now?: () => string;
   artifactStore?: ContextArtifactStore;
-  projectionId?: string;
-  generations?: MemoryMutationGenerationStore;
 }
 
-export class VersionValidContextCache implements MemoryProjectionInvalidationTarget {
-  readonly id: string;
+export class VersionValidContextCache {
   private readonly now: () => string;
   constructor(private readonly options: VersionValidContextCacheOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
-    this.id = options.projectionId ?? 'context';
-  }
-
-  invalidateScope(scopeHash: string): Promise<number> {
-    return this.options.store.invalidateScope(scopeHash);
   }
 
   async get(key: string, current: ContextCacheVersionSnapshot): Promise<ContextEnvelope | null> {
     const record = await this.options.store.get(key);
     if (!record) return null;
-    if (
-      this.options.generations &&
-      (await this.options.generations.current(current.scopeHash)) !== current.mutationGeneration
-    ) {
-      await this.options.store.delete(key);
-      return null;
-    }
     if (record.expiresAt && record.expiresAt <= this.now()) {
       await this.options.store.delete(key);
       return null;
@@ -114,9 +86,6 @@ export class VersionValidContextCache implements MemoryProjectionInvalidationTar
     snapshot: ContextCacheVersionSnapshot,
     expiresAt?: string
   ): Promise<void> {
-    if (this.options.generations) {
-      await assertCurrentGeneration(this.options.generations, snapshot);
-    }
     if (envelope.profileRevision !== snapshot.contextProfileRevision) {
       throw new Error('Context envelope profile revision is not version-valid for caching.');
     }
@@ -138,11 +107,6 @@ export class VersionValidContextCache implements MemoryProjectionInvalidationTar
       createdAt: this.now(),
       expiresAt,
     });
-    if (this.options.generations) {
-      await assertCurrentGeneration(this.options.generations, snapshot, async () =>
-        this.options.store.delete(key)
-      );
-    }
   }
 }
 
@@ -200,7 +164,6 @@ async function validateEnvelopeArtifacts(
 function segmentArtifactReferences(envelope: ContextEnvelope): ContextArtifactRef[] {
   return [
     ...envelope.systemSegments,
-
     ...envelope.instructionSegments,
     ...envelope.dataSegments,
   ].flatMap((segment) => segment.artifactRefs ?? []);
@@ -208,17 +171,4 @@ function segmentArtifactReferences(envelope: ContextEnvelope): ContextArtifactRe
 
 function sortRecord(record: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(record).sort(([a], [b]) => a.localeCompare(b)));
-}
-
-async function assertCurrentGeneration(
-  generations: MemoryMutationGenerationStore,
-  snapshot: ContextCacheVersionSnapshot,
-  onStale?: () => Promise<void>
-): Promise<void> {
-  const current = await generations.current(snapshot.scopeHash);
-  if (current === snapshot.mutationGeneration) return;
-  await onStale?.();
-  throw new Error(
-    'Context projection mutation generation changed before the cache write completed.'
-  );
 }
