@@ -96,20 +96,25 @@ export class WorkspaceControlPlaneGuard {
   }
 
   assertWorkspaceRoot(candidate: string): void {
-    const resolvedCandidate = path.resolve(candidate);
+    const candidateIdentities = this.resolvedAndCanonicalRoot(candidate);
     if (
-      this.isProtectedResolvedPath(resolvedCandidate) ||
-      this.protectedRoots.some((root) => this.isWithin(root, resolvedCandidate))
+      candidateIdentities.some(
+        (identity) =>
+          this.hasProtectedLexicalShape(identity) ||
+          this.protectedRoots.some(
+            (root) => this.isWithin(identity, root) || this.isWithin(root, identity)
+          )
+      )
     ) {
       throw new Error('Workspace root overlaps the framework control-plane');
     }
   }
 
   isProtectedResolvedPath(candidate: string): boolean {
-    const resolvedCandidate = path.resolve(candidate);
-    return (
-      this.hasProtectedLexicalShape(resolvedCandidate) ||
-      this.protectedRoots.some((root) => this.isWithin(resolvedCandidate, root))
+    return this.resolvedAndCanonicalRoot(candidate).some(
+      (identity) =>
+        this.hasProtectedLexicalShape(identity) ||
+        this.protectedRoots.some((root) => this.isWithin(identity, root))
     );
   }
 

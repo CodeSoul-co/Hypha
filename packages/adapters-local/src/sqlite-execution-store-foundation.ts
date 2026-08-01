@@ -83,9 +83,10 @@ export class SQLiteExecutionStoreFoundationError extends Error {
   constructor(
     readonly code: SQLiteExecutionStoreFoundationErrorCode,
     message: string,
-    readonly details?: Record<string, unknown>
+    readonly details?: Record<string, unknown>,
+    cause?: unknown
   ) {
-    super(message);
+    super(message, { cause });
     this.name = 'SQLiteExecutionStoreFoundationError';
   }
 }
@@ -140,6 +141,11 @@ export class SQLiteExecutionStoreFoundation {
       database.exec('PRAGMA foreign_keys = ON');
       backupBeforeMigration(database, this.filename, existingDatabaseHasContent);
       migrateSQLiteExecutionStore(database);
+      // This adapter owns a mutable ExecutionStore. Opening a database whose
+      // current schema needs no writes can otherwise appear healthy even when
+      // SQLite opened it read-only, leaving the first real command to fail much
+      // later. Prove write authority during startup without changing data.
+      assertSQLiteWritable(database);
       this.database = database;
       this.quarantineCorruptRecords();
       secureSQLiteRuntimeFiles(this.filename);
@@ -1183,14 +1189,22 @@ function rejectAliasedDatabaseFile(filename: string): void {
 }
 
 function secureSQLiteRuntimeFiles(filename: string): void {
+  const databaseOwnerWritable =
+    fs.existsSync(filename) && (fs.statSync(filename).mode & 0o200) === 0o200;
   for (const suffix of ['', '-wal', '-shm', '-journal']) {
     const runtimeFilename = `${filename}${suffix}`;
     rejectAliasedDatabaseFile(runtimeFilename);
     if (process.platform !== 'win32' && fs.existsSync(runtimeFilename)) {
       const currentMode = fs.statSync(runtimeFilename).mode & 0o777;
       // Remove group/other access without silently making an operator-owned
-      // read-only database writable again.
-      fs.chmodSync(runtimeFilename, currentMode & 0o600);
+      // read-only database writable again. SQLite owns its sidecars, so restore
+      // their owner read/write bit once the operator has made the main database
+      // writable; otherwise a stale read-only WAL can poison the next reopen.
+      const privateMode = currentMode & 0o600;
+      fs.chmodSync(
+        runtimeFilename,
+        suffix && databaseOwnerWritable ? privateMode | 0o600 : privateMode
+      );
     }
   }
 }
@@ -1246,13 +1260,29 @@ function sqliteStringLiteral(value: string): string {
 
 function configureMaxDatabasePages(database: SQLiteDatabase, requested: number): void {
   database.exec(`PRAGMA max_page_count = ${requested}`);
-  const configured = Number(
-    database.prepare('PRAGMA max_page_count').get()?.max_page_count
-  );
+  const configured = Number(database.prepare('PRAGMA max_page_count').get()?.max_page_count);
   if (configured !== requested) {
     throw new TypeError(
       'maxDatabasePages must not be below the current database size or above the SQLite limit.'
     );
+  }
+}
+
+function assertSQLiteWritable(database: SQLiteDatabase): void {
+  let transactionStarted = false;
+  try {
+    database.exec('BEGIN IMMEDIATE');
+    transactionStarted = true;
+    database.exec('ROLLBACK');
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        database.exec('ROLLBACK');
+      } catch {
+        // Preserve the original write-authority failure.
+      }
+    }
+    throw error;
   }
 }
 
@@ -1308,9 +1338,9 @@ function storeError(
   code: SQLiteExecutionStoreFoundationErrorCode,
   message: string,
   details?: Record<string, unknown>,
-  _cause?: unknown
+  cause?: unknown
 ): SQLiteExecutionStoreFoundationError {
-  return new SQLiteExecutionStoreFoundationError(code, message, details);
+  return new SQLiteExecutionStoreFoundationError(code, message, details, cause);
 }
 
 function sqlitePrimaryResultCode(error: unknown): number | undefined {
