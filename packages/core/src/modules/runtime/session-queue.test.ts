@@ -219,7 +219,21 @@ describe('InMemorySessionQueue', () => {
       now: '2026-07-18T06:00:02.000Z',
       leaseMs: 1_000,
     });
-    expect(recovered).toMatchObject({ id: 'command.recover', claimedBy: 'worker.recovery' });
+    expect(recovered).toMatchObject({
+      id: 'command.recover',
+      claimedBy: 'worker.recovery',
+      leaseEpoch: 2,
+      leaseRecoveries: [
+        {
+          version: '1.0.0',
+          previousWorkerId: 'worker.stale',
+          previousLeaseEpoch: 1,
+          leaseExpiredAt: '2026-07-18T06:00:01.000Z',
+          recoveredAt: '2026-07-18T06:00:02.000Z',
+          disposition: 'requeued',
+        },
+      ],
+    });
     expect(recovered?.attempts).toBe(2);
     await expect(
       queue.complete({
@@ -346,6 +360,15 @@ describe('InMemorySessionQueue', () => {
         attempts: 1,
         maxAttempts: 1,
         rejectionCode: 'claim_lease_expired_after_attempt_budget',
+        leaseRecoveries: [
+          {
+            previousWorkerId: 'worker.stale',
+            previousLeaseEpoch: 1,
+            leaseExpiredAt: '2026-07-18T06:00:01.000Z',
+            recoveredAt: '2026-07-18T06:00:02.000Z',
+            disposition: 'dead_lettered',
+          },
+        ],
       },
     ]);
   });
@@ -434,9 +457,90 @@ describe('InMemorySessionQueue', () => {
       queue.redriveDeadLetter({ ...request, reason: 'Different operator decision' })
     ).rejects.toMatchObject({ code: 'RUNTIME_IDEMPOTENCY_CONFLICT' });
     await expect(queue.list({ scope })).resolves.toMatchObject([
-      { id: 'command.dead', status: 'dead_letter', rejectionCode: 'provider_outage' },
+      {
+        id: 'command.dead',
+        status: 'dead_letter_resolved',
+        rejectionCode: 'provider_outage',
+        deadLetterResolution: {
+          disposition: 'redriven',
+          operatorId: 'operator.1',
+          reason: 'Provider outage resolved',
+          resolvedAt: '2026-07-18T06:01:00.000Z',
+          redriveCommandId: 'command.redrive',
+        },
+      },
       { id: 'command.redrive', status: 'queued' },
     ]);
+    await expect(
+      queue.redriveDeadLetter({
+        ...request,
+        id: 'command.redrive.again',
+        idempotencyKey: 'redrive.command.dead.2',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+  });
+
+  it('closes inspected dead-letter work idempotently and prevents later redrive', async () => {
+    const queue = new InMemorySessionQueue();
+    await queue.enqueue(command('command.dead.close'));
+    const claimed = await queue.claim({
+      workerId: 'worker.1',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await queue.fail({
+      commandId: claimed!.id,
+      workerId: 'worker.1',
+      ...claimIdentity(claimed!),
+      failedAt: '2026-07-18T06:00:00.500Z',
+      rejectionCode: 'invalid_payload',
+      deadLetter: true,
+    });
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      commandId: 'command.dead.close',
+      operatorId: 'operator.1',
+      reason: 'Payload inspected; no replay is safe',
+      closedAt: '2026-07-18T06:01:00.000Z',
+    };
+
+    await expect(queue.closeDeadLetter(request)).resolves.toMatchObject({
+      id: 'command.dead.close',
+      status: 'dead_letter_resolved',
+      rejectionCode: 'invalid_payload',
+      deadLetterResolution: {
+        version: '1.0.0',
+        disposition: 'closed',
+        operatorId: 'operator.1',
+        reason: 'Payload inspected; no replay is safe',
+        resolvedAt: '2026-07-18T06:01:00.000Z',
+      },
+    });
+    await expect(queue.closeDeadLetter(request)).resolves.toMatchObject({
+      status: 'dead_letter_resolved',
+    });
+    await expect(
+      queue.closeDeadLetter({ ...request, reason: 'Conflicting operator decision' })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(
+      queue.redriveDeadLetter({
+        version: '1.0.0',
+        scope,
+        sourceCommandId: 'command.dead.close',
+        id: 'command.closed.redrive',
+        idempotencyKey: 'redrive.closed',
+        operatorId: 'operator.2',
+        reason: 'Try to replay a closed item',
+        requestedAt: '2026-07-18T06:02:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(queue.health()).resolves.toMatchObject({
+      details: {
+        deadLetterCommands: 0,
+        resolvedDeadLetterCommands: 1,
+      },
+    });
   });
 
   it('rejects operator redrive for a command that is not a dead letter', async () => {
@@ -541,5 +645,160 @@ describe('InMemorySessionQueue', () => {
         completedAt: '2026-07-18T06:00:02.500Z',
       })
     ).resolves.toBeUndefined();
+  });
+
+  it('cancels only matching Run commands and fences an active stale owner', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.terminal', { targetRunId: 'run.cancelled' }));
+    const terminal = await queue.claim({
+      workerId: 'worker.terminal',
+      now: initialTime,
+      leaseMs: 1_000,
+    });
+    await queue.complete({
+      commandId: terminal!.id,
+      workerId: 'worker.terminal',
+      ...claimIdentity(terminal!),
+      completedAt: initialTime,
+    });
+    await queue.enqueue(command('command.claimed', { targetRunId: 'run.cancelled' }));
+    const claimed = await queue.claim({
+      workerId: 'worker.stale',
+      now: initialTime,
+      leaseMs: 10_000,
+    });
+    await queue.enqueue(command('command.queued', { targetRunId: 'run.cancelled' }));
+    await queue.enqueue(command('cancel.default', { targetRunId: 'run.cancelled' }));
+    await queue.enqueue(command('command.other-run', { targetRunId: 'run.other' }));
+    await queue.enqueue(
+      command('command.other-session', {
+        sessionId: 'session.other',
+        targetRunId: 'run.cancelled',
+      })
+    );
+    await queue.enqueue(
+      command('command.other-user', {
+        userId: 'user.other',
+        targetRunId: 'run.cancelled',
+      })
+    );
+
+    const request = {
+      version: '1.0.0' as const,
+      scope,
+      targetRunId: 'run.cancelled',
+      cancellationCommandId: 'cancel.default',
+      reason: 'Run cancelled by user',
+      cancelledAt: '2026-07-18T06:00:01.000Z',
+    };
+    await expect(queue.cancelPending(request)).resolves.toEqual({
+      targetRunId: 'run.cancelled',
+      cancelledCommandIds: ['command.claimed', 'command.queued'],
+      alreadyCancelledCommandIds: [],
+      alreadyTerminalCommandIds: ['command.terminal'],
+    });
+    await expect(
+      queue.complete({
+        commandId: claimed!.id,
+        workerId: 'worker.stale',
+        ...claimIdentity(claimed!),
+        completedAt: '2026-07-18T06:00:02.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
+    await expect(queue.cancelPending(request)).resolves.toEqual({
+      targetRunId: 'run.cancelled',
+      cancelledCommandIds: [],
+      alreadyCancelledCommandIds: ['command.claimed', 'command.queued'],
+      alreadyTerminalCommandIds: ['command.terminal'],
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { id: 'command.terminal', status: 'applied' },
+      {
+        id: 'command.claimed',
+        status: 'rejected',
+        rejectionCode: 'RUNTIME_RUN_CANCELLED',
+      },
+      {
+        id: 'command.queued',
+        status: 'rejected',
+        rejectionCode: 'RUNTIME_RUN_CANCELLED',
+      },
+      { id: 'cancel.default', status: 'queued' },
+      { id: 'command.other-run', status: 'queued' },
+    ]);
+  });
+
+  it('reports backlog age, lease recovery, redelivery, and dead letters in health', async () => {
+    let now = initialTime;
+    const queue = new InMemorySessionQueue({ now: () => now });
+    await queue.enqueue(command('command.health'));
+    const firstClaim = await queue.claim({
+      workerId: 'worker.health.first',
+      now,
+      leaseMs: 1_000,
+    });
+
+    now = '2026-07-18T06:00:02.000Z';
+    await expect(queue.health()).resolves.toMatchObject({
+      status: 'healthy',
+      checkedAt: now,
+      details: {
+        version: '1.0.0',
+        totalCommands: 1,
+        pendingCommands: 1,
+        queuedCommands: 1,
+        claimedCommands: 0,
+        deadLetterCommands: 0,
+        retryingCommands: 1,
+        redeliveredCommands: 0,
+        recoveredExpiredLeases: 1,
+        leaseRecoveryCount: 1,
+        oldestPendingAgeMs: 2_000,
+      },
+    });
+
+    const secondClaim = await queue.claim({
+      workerId: 'worker.health.second',
+      now,
+      leaseMs: 1_000,
+    });
+    expect(secondClaim?.leaseEpoch).toBe(2);
+    now = '2026-07-18T06:00:02.500Z';
+    await expect(queue.health()).resolves.toMatchObject({
+      details: {
+        pendingCommands: 1,
+        claimedCommands: 1,
+        redeliveredCommands: 1,
+        recoveredExpiredLeases: 0,
+        leaseRecoveryCount: 1,
+        oldestPendingAgeMs: 2_500,
+      },
+    });
+
+    await queue.fail({
+      commandId: secondClaim!.id,
+      workerId: 'worker.health.second',
+      ...claimIdentity(secondClaim!),
+      failedAt: now,
+      rejectionCode: 'poison_command',
+      deadLetter: true,
+    });
+    const terminalHealth = await queue.health();
+    expect(terminalHealth.details).toMatchObject({
+      totalCommands: 1,
+      pendingCommands: 0,
+      deadLetterCommands: 1,
+      redeliveredCommands: 1,
+      leaseRecoveryCount: 1,
+    });
+    expect(terminalHealth.details).not.toHaveProperty('oldestPendingAgeMs');
+    await expect(
+      queue.complete({
+        commandId: firstClaim!.id,
+        workerId: 'worker.health.first',
+        ...claimIdentity(firstClaim!),
+        completedAt: now,
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_SESSION_QUEUE_CONFLICT' });
   });
 });

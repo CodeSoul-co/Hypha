@@ -634,6 +634,25 @@ skills:
   dirs:
     - "~/.hypha/skills" # user-installed skills
   autoLoad: true
+  # Signed remote registries are opt-in. Configure only public-key file paths
+  # here; bearer credentials are resolved from authorizationEnv on every
+  # request so token rotation does not require a Server restart.
+  remoteRegistry:
+    enabled: "${HYPHA_SKILL_REGISTRY_ENABLED:false}"
+    required: "${HYPHA_SKILL_REGISTRY_REQUIRED:false}"
+    endpoint: "${HYPHA_SKILL_REGISTRY_ENDPOINT:}"
+    tenantId: "${HYPHA_SKILL_REGISTRY_TENANT_ID:}"
+    authorizationEnv: "HYPHA_SKILL_REGISTRY_AUTHORIZATION"
+    publisherKeyFiles: {}
+    transparencyLogKeyFiles: {}
+    artifactOrigins: []
+    refs: []
+    timeoutMs: 10000
+    maxAttempts: 3
+    maxMetadataBytes: 262144
+    maxBundleBytes: 2097152
+    maxSkills: 128
+    maxDependencyDepth: 8
 
 tools:
   # Profiles contain only declarative references. Executable plugin/execution
@@ -670,8 +689,8 @@ tools:
       timeoutMs: "${HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS:30000}"
       maxOutputBytes: "${HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES:1048576}"
   # The local stdio example is a real child-process MCP server and is the
-  # default product-development path. The classic in-process fixture remains
-  # optional for deterministic compatibility tests only.
+  # default product-development path. In-process fixtures are test-only and
+  # are intentionally absent from deployable configuration.
   mcpServers:
     - id: "local-example"
       name: "Hypha Local MCP Example"
@@ -684,11 +703,6 @@ tools:
       protocolVersionPolicy:
         allowedVersions: ["2025-11-25"]
         rejectUnknown: true
-    - id: "classic"
-      name: "Classic MCP Fixture"
-      mode: "fixture"
-      autoConnect: true
-      required: false
 
 workflows:
   configPath: "./configs/workflows"
@@ -706,6 +720,16 @@ runtime:
     auditMaxBytes: 268435456
     auditMaxDurationMs: 30000
     maxLegacyEvents: 100000
+    workers:
+      workerId: "${HYPHA_RUNTIME_WORKER_ID:server.runtime}"
+      leaseTtlMs: 30000
+      pageLimit: 100
+      timerPollIntervalMs: 1000
+      timerErrorBackoffMs: 5000
+      recoveryPollIntervalMs: 5000
+      recoveryErrorBackoffMs: 10000
+      autoRecoverReasons:
+        - "PROJECTION_BEHIND"
 
 logging:
   level: "debug"

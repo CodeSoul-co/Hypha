@@ -31,7 +31,7 @@ import {
   type RenewableCredentialProvider,
 } from './managed-credentials';
 import { normalizeExternalProviderBaseUrl } from './external-provider-url';
-import { memoryError } from './memory-utils';
+import { hashMemoryScope, memoryError, sha256 } from './memory-utils';
 
 export interface Mem0PlatformClientOptions {
   baseUrl?: string;
@@ -44,6 +44,9 @@ export interface Mem0PlatformClientOptions {
   operationStore?: ExternalProviderOperationStore;
   operationDeadlineMs?: number;
   maxOperationAttempts?: number;
+  providerVersion?: string;
+  expectedProviderVersion?: string;
+  expectedCapabilities?: Partial<MemoryManagementCapabilities>;
   now?: () => Date;
   allowInsecureForTests?: boolean;
 }
@@ -88,6 +91,36 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   private readonly now: () => Date;
 
   constructor(options: Mem0PlatformClientOptions) {
+    if (
+      options.expectedProviderVersion &&
+      options.providerVersion !== options.expectedProviderVersion
+    ) {
+      throw memoryError(
+        'MEMORY_PROVIDER_NOT_INSTALLED',
+        'Mem0 Platform version mismatch: expected ' +
+          options.expectedProviderVersion +
+          ', observed ' +
+          (options.providerVersion ?? '<missing>') +
+          '.'
+      );
+    }
+    for (const [capability, expected] of Object.entries(options.expectedCapabilities ?? {})) {
+      const observed = platformCapabilities[
+        capability as keyof MemoryManagementCapabilities
+      ] as boolean;
+      if (observed !== expected) {
+        throw memoryError(
+          'MEMORY_PROVIDER_NOT_INSTALLED',
+          'Mem0 Platform capability drift: ' +
+            capability +
+            ' expected ' +
+            String(expected) +
+            ', observed ' +
+            String(observed) +
+            '.'
+        );
+      }
+    }
     if (Boolean(options.apiToken) === Boolean(options.credentialProvider)) {
       throw memoryError(
         'MEMORY_PERMISSION_DENIED',
@@ -140,6 +173,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
   }
 
   async add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult> {
+    const operationMetadata = createOperationIdentity(this.providerId, request);
     try {
       const result = await this.delegate.add(request, signal);
       if (result.status !== 'queued' || !result.events?.[0]) {
@@ -162,6 +196,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
             userId: request.principal.userId,
           },
           deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
+          metadata: operationMetadata,
           now: this.now().toISOString(),
         })
       );
@@ -181,6 +216,7 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
               userId: request.principal.userId,
             },
             deadlineAt: new Date(this.now().getTime() + this.operationDeadlineMs).toISOString(),
+            metadata: operationMetadata,
             now: this.now().toISOString(),
           })
         );
@@ -273,6 +309,12 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
     }
     try {
       const event = await this.getEvent(operation.externalOperationId, signal);
+      if (event.id !== operation.externalOperationId) {
+        throw memoryError(
+          'MEMORY_PROVIDER_UNAVAILABLE',
+          'Mem0 Platform event identity does not match the durable operation journal.'
+        );
+      }
       const settledAt = this.now().toISOString();
       if (operation.cancellationRequestedAt || signal?.aborted) {
         await this.operationStore.set({ ...operation, state: 'cancelled', updatedAt: settledAt });
@@ -386,10 +428,33 @@ export class Mem0PlatformClient implements ExternalMemoryClient {
               : 'MEMORY_PROVIDER_UNAVAILABLE';
       throw memoryError(code, 'Mem0 Platform HTTP ' + response.status, retryable, {
         status: response.status,
+        retryAfterMs: readRetryAfterMs(response, this.now()),
       });
     }
     return response;
   }
+}
+
+function createOperationIdentity(providerId: string, request: MemoryAddRequest) {
+  const requestHash = sha256(request);
+  return {
+    requestHash,
+    operationHash: sha256({
+      providerId,
+      operationId: request.operationId,
+      scopeHash: hashMemoryScope(request.scope),
+      requestHash,
+    }),
+  };
+}
+
+function readRetryAfterMs(response: Mem0HttpResponse, now: Date): number | undefined {
+  const value = response.headers?.get('retry-after')?.trim();
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - now.getTime()) : undefined;
 }
 
 function toV3SearchBody(input: Record<string, unknown>): Record<string, unknown> {

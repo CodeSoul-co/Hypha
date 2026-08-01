@@ -46,7 +46,10 @@ function runtimeFactory(
       events: { publish: vi.fn(async (type: MemoryEventType) => `event:${type}`) },
       harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
     },
-    eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+    eventContext: (request) => ({
+      userId: request.scope.userId,
+      runId: request.scope.runId ?? request.operationId,
+    }),
     now,
     telemetry,
     providerCostEstimator: () => ({ costUnits: 0 }),
@@ -118,6 +121,36 @@ describe('MemoryRuntimeFactory', () => {
     });
   });
 
+  it('keeps an unhealthy optional external Profile available for degraded Server startup', async () => {
+    const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
+    vi.spyOn(provider, 'health').mockResolvedValue({
+      status: 'unhealthy',
+      checkedAt: '2026-07-28T00:00:00.000Z',
+      message: 'optional external provider offline',
+    });
+    const registry = new MemoryManagementProviderRegistry().register({
+      id: 'optional-external',
+      supports: () => true,
+      create: async () => provider,
+    });
+    const optional = config();
+    optional.profiles[memoryProfileSpecExample.id] = {
+      profile: memoryProfileSpecExample,
+      management: {
+        ...optional.profiles[memoryProfileSpecExample.id].management,
+        type: 'mem0',
+        deployment: 'remote',
+        connectionRef: 'memory.connection.optional-external',
+        metadata: { startupRequirement: 'optional' },
+      },
+    };
+
+    const runtime = await runtimeFactory(registry).create(optional);
+    await expect(runtime.service.providerHealth()).resolves.toMatchObject({
+      status: 'unhealthy',
+    });
+    await runtime.close();
+  });
   it('changes the real service provider when the active profile changes', async () => {
     const registry = new MemoryManagementProviderRegistry().register({
       id: 'switchable-native',

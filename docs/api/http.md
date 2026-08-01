@@ -192,19 +192,23 @@ fully qualified names such as `filesystem.read_file`:
 }
 ```
 
-The default `config.yaml` registers a local fixture gateway:
+The default `config.yaml` starts the real local stdio MCP example:
 
 ```yaml
 tools:
   mcpServers:
-    - id: 'classic'
-      name: 'Classic MCP Fixture'
-      mode: 'fixture'
+    - id: 'local-example'
+      name: 'Hypha Local MCP Example'
+      mode: 'local'
+      command: 'node'
+      args: ['./examples/mcp/local-stdio-server.cjs']
       autoConnect: true
+      required: true
 ```
 
 Deployment MCP servers use the same list with `mode: "local"` and
-`command`/`args`, or `mode: "remote"` and `endpoint` plus optional `authToken`.
+`command`/`args`, or `mode: "remote"` and `endpoint` plus optional
+`credentialRef`. Fixture mode is test-only and is rejected in production.
 `GET /tools/mcp/tools` reports normalized `ToolSpec` records, including
 `sourceRef.serverId` and `sourceRef.capabilityId`.
 
@@ -234,15 +238,27 @@ and projects as `waiting_human` from `run.waiting_human` events.
 Approval completion projects `ObservationRecorded`, `Verifying`, `MemorySync`, and
 `run.completed` events. Rejection projects the Run to `Failed` and records `run.failed`.
 
-### MCP Catalog Operations
+### MCP Catalog and Context Operations
 
-| Method | Path                          | Description                                     |
-| ------ | ----------------------------- | ----------------------------------------------- |
-| `GET`  | `/mcp/servers`                | List configured MCP connection records.         |
-| `POST` | `/mcp/servers/:id/connect`    | Connect a configured MCP server. Admin only.    |
-| `POST` | `/mcp/servers/:id/disconnect` | Disconnect a configured MCP server. Admin only. |
-| `GET`  | `/mcp/capabilities`           | List normalized capability catalog records.     |
-| `GET`  | `/mcp/drifts`                 | List detected capability drift records.         |
+| Method | Path                                                           | Description                                                           |
+| ------ | -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `GET`  | `/mcp/servers`                                                 | List configured MCP connection records.                               |
+| `POST` | `/mcp/servers/:id/connect`                                     | Connect a configured MCP server. Admin only.                          |
+| `POST` | `/mcp/servers/:id/disconnect`                                  | Disconnect a configured MCP server. Admin only.                       |
+| `GET`  | `/mcp/capabilities`                                            | List normalized Tool, Resource, and Prompt capability revisions.      |
+| `GET`  | `/mcp/drifts`                                                  | List detected capability drift records.                               |
+| `POST` | `/mcp/servers/:serverId/capabilities/:capabilityId/approve`    | Approve an exact capability hash. Admin only.                         |
+| `POST` | `/mcp/servers/:serverId/capabilities/:capabilityId/quarantine` | Quarantine an exact capability revision. Admin only.                  |
+| `GET`  | `/mcp/servers/:serverId/resources`                             | List approved Resources.                                              |
+| `POST` | `/mcp/servers/:serverId/resources/read`                        | Read an approved Resource through a scoped, event-backed Runtime Run. |
+| `GET`  | `/mcp/servers/:serverId/prompts`                               | List approved Prompts.                                                |
+| `POST` | `/mcp/servers/:serverId/prompts/:name/render`                  | Render an approved Prompt through a scoped, event-backed Runtime Run. |
+
+Approvals are revision-specific and require `capabilityHash`. A Tool whose server descriptor does
+not declare its side-effect level remains conservatively classified until an administrator supplies
+`sideEffectLevel`; this explicit classification cannot downgrade a server-declared level. Resource
+and Prompt results include `runId`, and their authorization, capability snapshot, call lifecycle,
+and terminal status are recorded under that canonical Run.
 
 ## Workflows
 

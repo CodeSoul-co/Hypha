@@ -40,8 +40,18 @@ router.post(
   '/install',
   adminOnly,
   asyncHandler(async (req: Request, res: Response) => {
-    const { source, path, url, content, filename, expectedSha256, signer, signature, manifest, activate } =
-      req.body || {};
+    const {
+      source,
+      path,
+      url,
+      content,
+      filename,
+      expectedSha256,
+      signer,
+      signature,
+      manifest,
+      activate,
+    } = req.body || {};
     if (!source || !['path', 'url', 'inline'].includes(source)) {
       throw new AppError(
         'VALIDATION_ERROR',

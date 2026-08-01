@@ -392,7 +392,15 @@ export class MCPConnectionManager implements MCPGateway {
       });
     }
     try {
-      return await this.reconnectWithBudget(serverId);
+      await lease?.assertCurrent();
+      const result = await this.reconnectWithBudget(serverId);
+      try {
+        await lease?.assertCurrent();
+      } catch (error) {
+        await this.disconnect(serverId, 'stale-reconnect-owner').catch(() => undefined);
+        throw error;
+      }
+      return result;
     } finally {
       await lease?.release();
     }
@@ -571,6 +579,16 @@ export class MCPConnectionManager implements MCPGateway {
           });
         },
       });
+      const outputBytes = encodeRemoteContent(output).bytes.byteLength;
+      const maxOutputBytes = managed.profile.contentPolicy?.maxToolResultBytes ?? 1024 * 1024;
+      if (outputBytes > maxOutputBytes) {
+        throw guardedRequestError(
+          'MCP_CONTENT_TOO_LARGE',
+          'MCP Tool result exceeded the configured byte limit.',
+          false,
+          { outputBytes, maxOutputBytes }
+        );
+      }
       this.assertRequestActive(controller.signal, request.context.deadlineAt, 'completion');
       await this.record('mcp.request.completed', {
         requestId,
@@ -1169,7 +1187,8 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
       negotiatedProtocolVersion: this.negotiatedProtocolVersion,
       serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
       serverCapabilities: this.client.getServerCapabilities() as
-        Record<string, unknown> | undefined,
+        | Record<string, unknown>
+        | undefined,
     };
   }
 

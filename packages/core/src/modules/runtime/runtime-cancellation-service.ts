@@ -21,6 +21,7 @@ import type { EventRuntime } from './event-runtime';
 import type { EventStreamScope } from './event-store';
 import { createRuntimeOrchestrationProjectionDefinition } from './orchestration-projection';
 import type { ProjectionEngine, ProjectionStore } from './projection';
+import type { SessionQueue } from './session-queue';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
 
@@ -29,6 +30,7 @@ export interface RuntimeCancellationServiceOptions {
   projections: ProjectionEngine;
   projectionStore: ProjectionStore<RuntimeOrchestrationProjection>;
   runLeases: RunLeaseStore;
+  commands: Pick<SessionQueue, 'cancelPending'>;
   activities: RuntimeActivityCancellationPort;
   children: RuntimeChildRunCancellationPort;
   now?: () => string;
@@ -73,6 +75,7 @@ export class RuntimeCancellationService {
       }
 
       const recorded = targetResultsFrom(operation);
+      await this.cancelSessionCommands(command, authorization, commandHash, recorded);
       await this.cancelActivities(command, authorization, projection, commandHash, recorded);
       await this.cancelChildren(command, authorization, commandHash, recorded);
 
@@ -182,6 +185,57 @@ export class RuntimeCancellationService {
         fencingToken: lease.fencingToken,
       },
     };
+  }
+
+  private async cancelSessionCommands(
+    command: RuntimeCancelCommand,
+    authorization: RunLeaseAuthorization,
+    commandHash: string,
+    recorded: RuntimeCancellationTargetResult[]
+  ): Promise<void> {
+    const completed = targetKeys(recorded);
+    await this.heartbeat(command, authorization);
+    let results: RuntimeCancellationTargetResult[];
+    try {
+      const cancelled = await this.options.commands.cancelPending({
+        version: '1.0.0',
+        scope: {
+          ...(command.scope.tenantId === undefined ? {} : { tenantId: command.scope.tenantId }),
+          userId: command.scope.userId,
+          sessionId: command.scope.sessionId,
+        },
+        targetRunId: command.scope.runId,
+        cancellationCommandId: command.commandId,
+        reason: command.reason,
+        cancelledAt: command.requestedAt,
+      });
+      results = [...cancelled.cancelledCommandIds, ...cancelled.alreadyCancelledCommandIds].map(
+        (targetId) => ({
+          targetType: 'session_command',
+          targetId,
+          status: 'cancelled',
+        })
+      );
+      results.push(
+        ...cancelled.alreadyTerminalCommandIds.map((targetId) => ({
+          targetType: 'session_command' as const,
+          targetId,
+          status: 'already_terminal' as const,
+        }))
+      );
+    } catch (error) {
+      results = [failedResult('session_command', `${command.scope.runId}:session-commands`, error)];
+    }
+    for (const result of results) {
+      if (completed.has(targetKey(result.targetType, result.targetId))) continue;
+      await this.persistTargetResult(
+        command,
+        authorization,
+        commandHash,
+        await this.project(command),
+        result
+      );
+    }
   }
 
   private async cancelActivities(

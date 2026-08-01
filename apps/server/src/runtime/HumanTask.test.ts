@@ -42,10 +42,19 @@ describe('Generic HumanTask Server projection', () => {
     ['human.review.rejected', 'rejected'],
     ['human.review.expired', 'expired'],
     ['human.review.cancelled', 'cancelled'],
+    ['human.review.superseded', 'superseded'],
   ] as const)('rebuilds %s across a restart', (type, status) => {
     const tasks = projectHumanTasks([
       event('human.review.requested', requested, 1),
-      event(type, { taskId: requested.taskId, expectedRevision: 1 }, 2),
+      event(
+        type,
+        {
+          taskId: requested.taskId,
+          expectedRevision: 1,
+          ...(type === 'human.review.superseded' ? { supersededByTaskId: 'review-2' } : {}),
+        },
+        2
+      ),
     ]);
     expect(tasks).toEqual([
       expect.objectContaining({

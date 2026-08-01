@@ -210,10 +210,7 @@ export async function readExistingGovernedFile(
 
 export async function assertDirectoryStable(directory: DirectoryIdentity): Promise<void> {
   const current = await directoryIdentity(directory.canonicalPath);
-  if (
-    current.canonicalPath !== directory.canonicalPath ||
-    !sameIdentity(directory, current)
-  ) {
+  if (current.canonicalPath !== directory.canonicalPath || !sameIdentity(directory, current)) {
     throw new AppError(
       'SKILL_DIRECTORY_IDENTITY_CHANGED',
       'Governed Skill directory identity changed during the operation.',
@@ -229,7 +226,10 @@ export function governedChildPath(directory: string, filename: string): string {
     filename === '..' ||
     filename.includes('/') ||
     filename.includes('\\') ||
-    filename.includes('\0')
+    filename.includes('\0') ||
+    /[\u2044\u2215\u29f8\uff0f\uff3c]/u.test(filename) ||
+    unsafeEncodedPath(filename) ||
+    unsafeWindowsDeviceName(filename)
   ) {
     throw pathEscape();
   }
@@ -238,6 +238,42 @@ export function governedChildPath(directory: string, filename: string): string {
     throw pathEscape();
   }
   return target;
+}
+
+function unsafeEncodedPath(filename: string): boolean {
+  let decoded = filename;
+  for (let depth = 0; depth < 3; depth += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) return false;
+      decoded = next;
+      if (
+        decoded === '.' ||
+        decoded === '..' ||
+        decoded.includes('/') ||
+        decoded.includes('\\') ||
+        decoded.includes('\0') ||
+        /[\u2044\u2215\u29f8\uff0f\uff3c]/u.test(decoded)
+      ) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return decoded !== filename;
+}
+
+function unsafeWindowsDeviceName(filename: string): boolean {
+  if (
+    /[:<>"|?*]/u.test(filename) ||
+    /[ .]$/u.test(filename) ||
+    Array.from(filename).some((character) => character.charCodeAt(0) < 32)
+  ) {
+    return true;
+  }
+  const basename = filename.split('.')[0]?.toUpperCase() ?? '';
+  return /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/u.test(basename);
 }
 
 export function isPathWithin(root: string, candidate: string): boolean {
@@ -285,10 +321,7 @@ async function openReadNoFollow(filePath: string) {
   return fs.open(filePath, fsConstants.O_RDONLY | noFollow);
 }
 
-async function readAndVerifyIdentity(
-  filePath: string,
-  expected: FileIdentity
-): Promise<string> {
+async function readAndVerifyIdentity(filePath: string, expected: FileIdentity): Promise<string> {
   const handle = await openReadNoFollow(filePath);
   try {
     const actual = identity(await handle.stat({ bigint: true }));
@@ -351,9 +384,7 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
 
 function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return (
-    sameIdentity(left, right) &&
-    left.size === right.size &&
-    left.birthtimeNs === right.birthtimeNs
+    sameIdentity(left, right) && left.size === right.size && left.birthtimeNs === right.birthtimeNs
   );
 }
 

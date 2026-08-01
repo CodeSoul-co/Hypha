@@ -27,6 +27,7 @@ import {
   mcpConnectionRecordDefinition,
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
+  normalizeMCPToolOutput,
   normalizeMCPToolSpec,
   normalizedMCPErrorSchema,
   RedisMCPCapabilityCatalogStore,
@@ -40,6 +41,81 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('unwraps structured Tool output without misclassifying domain objects', () => {
+    expect(
+      normalizeMCPToolOutput({
+        content: [{ type: 'text', text: '{"value":"hypha"}' }],
+        structuredContent: { value: 'hypha' },
+      })
+    ).toEqual({ value: 'hypha' });
+    const domainValue = { structuredContent: { value: 'domain-field' } };
+    expect(normalizeMCPToolOutput(domainValue)).toBe(domainValue);
+  });
+
+  it('persists an explicit side-effect approval and rejects unsafe downgrades', async () => {
+    const capabilities: MCPCapabilityDescriptor[] = [
+      {
+        id: 'side-effect-review',
+        version: '1.0.0',
+        serverId: 'review-server',
+        capabilityId: 'lookup',
+        type: 'tool',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        trustLevel: 'untrusted',
+        declarationSource: 'server',
+      },
+    ];
+    const catalog = new MCPCapabilityCatalog({
+      integration: {
+        id: 'side-effect-review',
+        version: '1.0.0',
+        servers: [{ id: 'review-server', mode: 'local' }],
+      },
+      gateway: new MockMCPGateway(capabilities),
+      trustPolicy: {
+        defaultTrustLevel: 'restricted',
+        requireApprovalForNewCapability: true,
+        requireApprovalForSchemaChange: true,
+      },
+      driftPolicy: {
+        onDescriptionChange: 'snapshot_next_run',
+        onSchemaChange: 'require_approval',
+        onRemoval: 'allow_existing_run',
+        onServerIdentityChange: 'quarantine',
+      },
+    });
+    const discovered = (await catalog.refresh('review-server')).capabilities[0];
+    await catalog.approveRevision({
+      serverId: 'review-server',
+      capabilityId: 'lookup',
+      capabilityHash: discovered.capabilityHash,
+      approvedBy: 'admin.review',
+      sideEffectLevel: 'read',
+    });
+    await expect(catalog.refresh('review-server')).resolves.toMatchObject({
+      capabilities: [
+        expect.objectContaining({
+          driftState: 'approved',
+          normalizedToolSpec: expect.objectContaining({ sideEffectLevel: 'read' }),
+          metadata: expect.objectContaining({ approvedSideEffectLevel: 'read' }),
+        }),
+      ],
+    });
+
+    capabilities[0].sideEffectLevel = 'write';
+    const changed = (await catalog.refresh('review-server')).capabilities[0];
+    await expect(
+      catalog.approveRevision({
+        serverId: 'review-server',
+        capabilityId: 'lookup',
+        capabilityHash: changed.capabilityHash,
+        approvedBy: 'admin.review',
+        sideEffectLevel: 'read',
+      })
+    ).rejects.toMatchObject({ code: 'MCP_SIDE_EFFECT_OVERRIDE_UNSAFE' });
+  });
+
   it('keeps NormalizedMCPError TypeScript, Zod, and JSON Schema in parity', () => {
     const jsonSchema = governedMCPIntegrationJsonSchemas.NormalizedMCPError;
     expect(jsonSchema.required).toEqual(['code', 'message', 'retryable']);
@@ -867,12 +943,61 @@ describe('@hypha/mcp normalization', () => {
     });
   });
 
+  it('rejects an oversized Tool frame before it can enter governed observations', async () => {
+    const manager = new MCPConnectionManager({
+      sessionFactory: {
+        create() {
+          return {
+            async connect() {
+              return { negotiatedProtocolVersion: '2025-11-25' };
+            },
+            async listCapabilities() {
+              return [];
+            },
+            async callTool() {
+              return { content: 'x'.repeat(2_048) };
+            },
+            async ping() {},
+            async close() {},
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'bounded-frame',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: { maxToolResultBytes: 512 },
+    });
+
+    await expect(
+      manager.call({
+        serverId: 'bounded-frame',
+        capabilityId: 'oversized',
+        input: {},
+        context: {
+          runId: 'run.frame',
+          stepId: 'step.frame',
+          invocationId: 'invocation.frame',
+        },
+      })
+    ).rejects.toMatchObject({
+      code: 'MCP_CONTENT_TOO_LARGE',
+      retryable: false,
+    });
+    await expect(manager.get('bounded-frame')).resolves.toMatchObject({
+      activeRequestCount: 0,
+    });
+  });
+
   it('rejects Resource and Prompt results cancelled or expired while awaiting the server', async () => {
     let now = '2026-07-23T00:00:00.000Z';
     let resolveResource:
-      ((value: { contents: Array<{ uri: string; text: string }> }) => void) | undefined;
+      | ((value: { contents: Array<{ uri: string; text: string }> }) => void)
+      | undefined;
     let resolvePrompt:
-      ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+      | ((value: { messages: Array<{ role: string; content: string }> }) => void)
+      | undefined;
     const factory: MCPConnectionSessionFactory = {
       create() {
         return {

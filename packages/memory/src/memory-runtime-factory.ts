@@ -23,6 +23,7 @@ import {
   type MemoryApplicationService,
 } from './memory-application-service';
 import type { MemoryEventContext } from './memory-events';
+
 import { memoryError, sha256 } from './memory-utils';
 import type { MemoryManagementProvider } from './operations';
 import {
@@ -283,6 +284,7 @@ export class MemoryRuntimeFactory {
           estimate: this.options.providerCostEstimator,
         })
       : installedProvider;
+
     try {
       const capabilities = negotiateMemoryManagementCapabilities(await provider.capabilities());
       const errors = [
@@ -298,7 +300,7 @@ export class MemoryRuntimeFactory {
         );
       }
       const health = await provider.health();
-      if (health.status === 'unhealthy') {
+      if (health.status === 'unhealthy' && !isOptionalExternalProvider(selected.management)) {
         throw memoryError(
           'MEMORY_PROVIDER_UNAVAILABLE',
           `Memory provider ${provider.id} is unhealthy during runtime composition.`,
@@ -325,6 +327,7 @@ export class MemoryRuntimeFactory {
       };
       const manager = new GovernedMemoryManager({
         activities,
+        providerId: provider.id,
         profileRef,
         eventContext: (request) => this.options.eventContext(request),
         timeoutMs: selected.management.timeoutPolicy?.timeoutMs,
@@ -409,6 +412,13 @@ async function closeMemoryRuntimeResources(
   }
 }
 
+function isOptionalExternalProvider(spec: MemoryManagementProviderSpec): boolean {
+  return (
+    spec.type !== 'native' &&
+    ['self_hosted', 'managed', 'remote'].includes(spec.deployment) &&
+    spec.metadata?.startupRequirement === 'optional'
+  );
+}
 function sameProviderRef(
   profile: MemoryProfileSpec,
   provider: MemoryManagementProviderSpec
