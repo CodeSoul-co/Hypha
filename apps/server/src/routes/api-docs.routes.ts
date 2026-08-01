@@ -537,7 +537,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "toolCount": 6 }]
+  "data": [{ "id": "local-example", "name": "Hypha Local MCP Example", "status": "connected", "toolCount": 0 }]
 }`,
   },
   {
@@ -547,7 +547,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": { "id": "classic", "name": "Classic MCP Fixture", "status": "connected", "healthy": true }
+  "data": { "id": "local-example", "name": "Hypha Local MCP Example", "status": "connected", "healthy": true }
 }`,
   },
   {
@@ -592,7 +592,7 @@ const toolEndpoints = [
     auth: 'JWT Bearer Token or X-API-Key',
     response: `{
   "success": true,
-  "data": [{ "serverId": "classic", "serverName": "Classic MCP Fixture", "tools": [{ "id": "baidu.web_search", "source": "mcp" }] }]
+  "data": [{ "serverId": "local-example", "serverName": "Hypha Local MCP Example", "tools": [] }]
 }`,
   },
 ];

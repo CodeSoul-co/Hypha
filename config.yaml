@@ -689,8 +689,8 @@ tools:
       timeoutMs: "${HYPHA_FILESYSTEM_EXECUTION_TIMEOUT_MS:30000}"
       maxOutputBytes: "${HYPHA_FILESYSTEM_MAX_OUTPUT_BYTES:1048576}"
   # The local stdio example is a real child-process MCP server and is the
-  # default product-development path. The classic in-process fixture remains
-  # optional for deterministic compatibility tests only.
+  # default product-development path. In-process fixtures are test-only and
+  # are intentionally absent from deployable configuration.
   mcpServers:
     - id: "local-example"
       name: "Hypha Local MCP Example"
@@ -703,11 +703,6 @@ tools:
       protocolVersionPolicy:
         allowedVersions: ["2025-11-25"]
         rejectUnknown: true
-    - id: "classic"
-      name: "Classic MCP Fixture"
-      mode: "fixture"
-      autoConnect: true
-      required: false
 
 workflows:
   configPath: "./configs/workflows"

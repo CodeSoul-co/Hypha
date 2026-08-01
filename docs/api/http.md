@@ -192,19 +192,23 @@ fully qualified names such as `filesystem.read_file`:
 }
 ```
 
-The default `config.yaml` registers a local fixture gateway:
+The default `config.yaml` starts the real local stdio MCP example:
 
 ```yaml
 tools:
   mcpServers:
-    - id: 'classic'
-      name: 'Classic MCP Fixture'
-      mode: 'fixture'
+    - id: 'local-example'
+      name: 'Hypha Local MCP Example'
+      mode: 'local'
+      command: 'node'
+      args: ['./examples/mcp/local-stdio-server.cjs']
       autoConnect: true
+      required: true
 ```
 
 Deployment MCP servers use the same list with `mode: "local"` and
-`command`/`args`, or `mode: "remote"` and `endpoint` plus optional `authToken`.
+`command`/`args`, or `mode: "remote"` and `endpoint` plus optional
+`credentialRef`. Fixture mode is test-only and is rejected in production.
 `GET /tools/mcp/tools` reports normalized `ToolSpec` records, including
 `sourceRef.serverId` and `sourceRef.capabilityId`.
 
