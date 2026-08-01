@@ -320,6 +320,9 @@ const artifactStorageConfigSchema = z.object({
     .default({}),
 });
 
+const developmentJwtSecret = 'change-me-local-access-secret';
+const developmentOwnerPassword = 'hypha_owner_2026';
+
 // Configuration schema
 const configSchema = z.object({
   app: z.object({
@@ -589,6 +592,35 @@ const configSchema = z.object({
     cacheEnabled: z.boolean().default(true),
     registryPath: z.string().default('./data/prompts/registry.json'),
   }),
+  runtime: z
+    .object({
+      canonical: z
+        .object({
+          auditPageSize: z.number().int().positive().max(1000).default(250),
+          auditPageMaxBytes: z.number().int().positive().default(4 * 1024 * 1024),
+          auditMaxEvents: z.number().int().positive().default(100_000),
+          auditMaxBytes: z.number().int().positive().default(256 * 1024 * 1024),
+          auditMaxDurationMs: z.number().int().positive().default(30_000),
+          maxLegacyEvents: z.number().int().positive().default(100_000),
+          workers: z
+            .object({
+              workerId: z.string().min(1).default('server.runtime'),
+              leaseTtlMs: z.number().int().positive().default(30_000),
+              pageLimit: z.number().int().positive().max(1000).default(100),
+              timerPollIntervalMs: z.number().int().positive().default(1_000),
+              timerErrorBackoffMs: z.number().int().positive().default(5_000),
+              recoveryPollIntervalMs: z.number().int().positive().default(5_000),
+              recoveryErrorBackoffMs: z.number().int().positive().default(10_000),
+              autoRecoverReasons: z
+                .array(z.enum(['PROJECTION_BEHIND']))
+                .min(1)
+                .default(['PROJECTION_BEHIND']),
+            })
+            .default({}),
+        })
+        .default({}),
+    })
+    .default({}),
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     format: z.enum(['json', 'text']).default('json'),
@@ -638,6 +670,41 @@ const configSchema = z.object({
     windowMs: z.number().default(60000),
     max: z.number().default(100),
   }),
+}).superRefine((config, context) => {
+  if (config.app.env !== 'production') {
+    return;
+  }
+
+  if (!config.auth.enabled) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'enabled'],
+      message: 'Authentication must be enabled in production',
+    });
+  }
+
+  if (
+    config.auth.jwt.secret === developmentJwtSecret ||
+    config.auth.jwt.secret.length < 32
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'jwt', 'secret'],
+      message: 'Production JWT secret must be changed and contain at least 32 characters',
+    });
+  }
+
+  if (
+    config.auth.mode === 'single-user' &&
+    (config.auth.singleUser.password === developmentOwnerPassword ||
+      config.auth.singleUser.password.length < 16)
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'singleUser', 'password'],
+      message: 'Production owner password must be changed and contain at least 16 characters',
+    });
+  }
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -786,6 +853,7 @@ export const servingCacheConfig = () => {
 };
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
+export const runtimeConfig = () => getConfig().runtime;
 export const toolResultCacheConfig = () => getConfig().tools.resultCache;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;

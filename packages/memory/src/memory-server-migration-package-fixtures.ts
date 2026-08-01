@@ -285,7 +285,10 @@ function createRuntimeFactory(
       events: { publish: async (type) => `event:${type}` },
       harness: { beforeExecute: async () => undefined, afterExecute: async () => undefined },
     },
-    eventContext: (request) => ({ runId: request.scope.runId ?? request.operationId }),
+    eventContext: (request) => ({
+      userId: request.scope.userId,
+      runId: request.scope.runId ?? request.operationId,
+    }),
     now,
   });
 }

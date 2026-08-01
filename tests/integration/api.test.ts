@@ -54,6 +54,54 @@ describe('GET /api/v1/health', () => {
   });
 });
 
+describe('GET /api/v1/ready', () => {
+  it('fails closed while the production Session Command worker is not configured', async () => {
+    const r = await request(app).get('/api/v1/ready');
+
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({
+      success: false,
+      data: {
+        status: 'not_ready',
+        runtime: {
+          ready: false,
+          state: 'maintenance_workers_running',
+        },
+        components: {
+          runtime: { ready: false },
+          storage: { ready: true, mongodb: true, redis: true },
+          memory: { ready: true },
+          llm: { ready: false, availableProviders: [] },
+          tools: { initialized: true, ready: true },
+          skills: { initialized: true, ready: true },
+        },
+      },
+    });
+  });
+});
+
+describe('GET /api/v1/status', () => {
+  it('reports observed product readiness without hard-coded provider health', async () => {
+    const r = await request(app).get('/api/v1/status');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      success: true,
+      data: {
+        service: 'hypha',
+        readiness: {
+          ready: false,
+          status: 'not_ready',
+          components: {
+            runtime: { ready: false },
+            llm: { ready: false, availableProviders: [] },
+          },
+        },
+        llm: { availableProviders: [] },
+      },
+    });
+  });
+});
+
 describe('runtime reasoning and agent prompt registries', () => {
   it('lists registered reasoning strategies with official source metadata', async () => {
     const r = await request(app)
@@ -813,6 +861,7 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
           'tool.policy.checked',
           'human.review.requested',
           'fsm.state.entered',
+          'runtime.wait.created',
           'run.waiting_human',
         ])
       );
@@ -879,8 +928,13 @@ describe('POST /api/v1/tools/execute (bugs 8/9 — search is a stub but reachabl
       const completedEvents = await request(app)
         .get(`/api/v1/runtime/runs/${r.body.runId}/events`)
         .set('Authorization', `Bearer ${devToken}`);
-      expect((completedEvents.body.data || []).map((event: any) => event.type)).toContain(
-        'run.completed'
+      expect((completedEvents.body.data || []).map((event: any) => event.type)).toEqual(
+        expect.arrayContaining([
+          'run.resume.requested',
+          'runtime.wait.resolved',
+          'run.resumed',
+          'run.completed',
+        ])
       );
     } finally {
       await getToolManager().unregister('approval-test-tool');

@@ -94,6 +94,8 @@ export class DefaultMemoryContextGateway implements MemoryContextGateway {
       scope: request.scope,
       profileRef: request.profileRef,
       eventContext: this.options.eventContext?.(request) ?? {
+        userId: request.scope.userId,
+        tenantId: request.scope.tenantId,
         runId: request.runId,
         workspaceId: request.scope.workspaceId,
         stepId: request.stepId,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
 import {
   MongoStructuredStoreProvider,
   type MongoCollectionLike,
@@ -80,6 +80,25 @@ describe('MongoStructuredStoreProvider', () => {
         { state: 'processing', attempts: 1 }
       )
     ).resolves.toBe(false);
+  });
+  it('omits undefined optionals before BSON serialization', async () => {
+    const collection = mongoCollection();
+    const provider = new MongoStructuredStoreProvider({
+      database: { collection: () => collection },
+      transactionMode: 'disabled',
+    });
+    await provider.insert('managed_memory_current', {
+      id: 'memory:optional',
+      optional: undefined,
+      nested: { kept: true, optional: undefined },
+      items: [{ optional: undefined }],
+    });
+
+    await expect(provider.get('managed_memory_current', 'memory:optional')).resolves.toEqual({
+      id: 'memory:optional',
+      nested: { kept: true },
+      items: [{}],
+    });
   });
   it('normalizes provider failures without leaking Mongo diagnostics', async () => {
     const failingCollection: MongoCollectionLike = {

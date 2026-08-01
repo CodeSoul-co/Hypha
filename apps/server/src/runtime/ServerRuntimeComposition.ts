@@ -2,8 +2,10 @@ import {
   DurableRuntimeTimerWorker,
   RuntimeRecoveryService,
   type EventStore,
+  type RuntimeActivityRedispatchRecoveryPort,
   type RuntimeActivityReconciliationPort,
   type RuntimeCancellationRecoveryPort,
+  type RuntimeOperationalTelemetry,
   type RuntimeRecoveryRequeuePort,
 } from '@hypha/core';
 import { FSMRuntime, type FSMProcessSpec } from '@hypha/fsm';
@@ -22,17 +24,22 @@ import type { RuntimeBackbone } from './RuntimeBackbone';
 import { RuntimeCompositionRoot, type RuntimeComposition } from './RuntimeCompositionRoot';
 import { CanonicalRunManagerEventStore } from './OrchestrationEventStore';
 
-export interface ServerRuntimeCompositionOptions {
-  backbone: RuntimeBackbone;
-  mergedEvents: EventStore;
+export interface ServerRuntimeCompositionBindings {
   inference: InferenceProvider;
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
   executeState: FencedBoundedFSMDriverOptions['executeState'];
   recoveryActivities: RuntimeActivityReconciliationPort;
+  recoveryRedispatches: RuntimeActivityRedispatchRecoveryPort;
   recoveryCancellations: RuntimeCancellationRecoveryPort;
   recoveryRequeue: RuntimeRecoveryRequeuePort;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
   nextId?: FencedBoundedFSMDriverOptions['nextId'];
+}
+
+export interface ServerRuntimeCompositionOptions extends ServerRuntimeCompositionBindings {
+  backbone: RuntimeBackbone;
+  mergedEvents: EventStore;
 }
 
 /**
@@ -63,6 +70,9 @@ export function createServerRuntimeComposition(
           runtime: new EventFirstRuntime(
             new CanonicalRunManagerEventStore(canonicalEvents, options.mergedEvents)
           ),
+          ...(options.operationalTelemetry === undefined
+            ? {}
+            : { operationalTelemetry: options.operationalTelemetry }),
         });
       },
       createTimerWorker: ({ events, projections, projectionStore, runLeases }) =>
@@ -71,6 +81,9 @@ export function createServerRuntimeComposition(
           projections,
           projectionStore,
           runLeases,
+          ...(options.operationalTelemetry === undefined
+            ? {}
+            : { operationalTelemetry: options.operationalTelemetry }),
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
         }),
       createRecoveryService: ({ events, projections, projectionStore, runLeases, stateClaims }) =>
@@ -81,6 +94,7 @@ export function createServerRuntimeComposition(
           runLeases,
           stateClaims,
           activities: options.recoveryActivities,
+          redispatches: options.recoveryRedispatches,
           cancellations: options.recoveryCancellations,
           requeue: options.recoveryRequeue,
           ...(options.nextId === undefined ? {} : { nextId: options.nextId }),

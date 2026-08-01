@@ -15,9 +15,12 @@ import {
   stableRecoveryHash,
   type FrameworkEvent,
   type FrameworkEventType,
+  type EventStore,
+  type TraceRecorder,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type RuntimeHumanWaitService,
   type SpecRef,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
@@ -499,11 +502,27 @@ function legacyToolToModelTool(
   };
 }
 
+export interface EventRuntimeInitialization {
+  events: EventStore & TraceRecorder;
+  eventDbPath?: string;
+  humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+}
+
+export interface EventRuntimeCanonicalExecutionAdapters {
+  inference: InferenceProvider;
+  toolRunner: ToolRunner;
+  fsmSpec: FSMProcessSpec;
+}
+
 class EventRuntimeService {
-  private readonly events: SQLiteEventStore;
+  private readonly events: EventStore & TraceRecorder;
+  private readonly humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  private readonly humanWaitOwnerId = `server-event-runtime:${process.pid}`;
+  private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
   private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
+  private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
   private readonly inferenceProviderId: string;
   private readonly reasoning: ReasoningOrchestrator;
@@ -520,14 +539,16 @@ class EventRuntimeService {
   >();
   private recoveryKnowledge?: RecoveryKnowledgePort;
 
-  constructor() {
+  constructor(options?: EventRuntimeInitialization) {
     const sqliteStorage = storageConfig().relational.sqlite;
-    const eventDbPath =
-      process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
-    this.events = new SQLiteEventStore({
-      filename: eventDbPath,
-      mode: sqliteStorage.sqliteMode,
-    });
+    const eventDbPath = options?.eventDbPath ?? serverRuntimeEventDatabasePath();
+    this.events =
+      options?.events ??
+      new SQLiteEventStore({
+        filename: eventDbPath,
+        mode: sqliteStorage.sqliteMode,
+      });
+    this.humanWaits = options?.humanWaits;
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
@@ -610,6 +631,100 @@ class EventRuntimeService {
     return this.reasoning.registry.unregister(id);
   }
 
+  /**
+   * Exposes the Server-owned model and governed Tool adapters to the canonical
+   * Runtime composition without leaking provider SDKs into Runtime packages.
+   */
+  canonicalExecutionAdapters(): Readonly<EventRuntimeCanonicalExecutionAdapters> {
+    return Object.freeze({
+      inference: {
+        id: 'server-canonical-inference',
+        infer: (request: InferenceRequest) => this.inferCanonical(request),
+      },
+      toolRunner: {
+        run: (request: Parameters<ToolRunner['run']>[0]) => this.runCanonicalTool(request),
+        cancelInvocation: (invocationId: string, reason?: string) =>
+          this.toolRunner.cancelInvocation(invocationId, reason),
+      },
+      fsmSpec: this.defaultFsm,
+    });
+  }
+
+  private async inferCanonical(request: InferenceRequest): Promise<InferenceResponse> {
+    const input = canonicalInferenceInput(request.input);
+    const resolved = this.resolveChatModel(request.modelAlias);
+    return this.reasoning.infer({
+      ...request,
+      modelAlias: resolved.model,
+      input: {
+        messages: input.messages,
+        options: {
+          model: resolved.model,
+          ...(input.instructions === undefined ? {} : { systemPrompt: input.instructions }),
+          ...(request.options?.temperature === undefined
+            ? {}
+            : { temperature: request.options.temperature }),
+          ...(request.options?.maxTokens === undefined
+            ? {}
+            : { maxTokens: request.options.maxTokens }),
+          ...(request.options?.topP === undefined ? {} : { topP: request.options.topP }),
+          ...(request.options?.topK === undefined ? {} : { topK: request.options.topK }),
+          ...(request.options?.stop === undefined ? {} : { stopSequences: request.options.stop }),
+          ...(request.tools === undefined
+            ? {}
+            : {
+                tools: request.tools.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description ?? tool.name,
+                  inputSchema: canonicalToolInputSchema(tool.inputSchema),
+                })),
+              }),
+        },
+      },
+      reasoning: { method: 'direct' },
+      metadata: {
+        ...request.metadata,
+        canonicalRuntime: true,
+        provider: resolved.provider,
+        context: input.context,
+      },
+    });
+  }
+
+  private async runCanonicalTool(
+    request: Parameters<ToolRunner['run']>[0]
+  ): Promise<ToolCallResult> {
+    const userId = request.context.userId?.trim();
+    const sessionId = request.context.sessionId?.trim();
+    if (!userId || !sessionId) {
+      throw new FrameworkError({
+        code: 'TOOL_INVALID_INPUT',
+        message: 'Canonical Tool execution requires userId and sessionId scope',
+      });
+    }
+    const toolId = this.registerManagedTool(request.toolId);
+    const contractSnapshotRef =
+      request.context.contractSnapshotRef ??
+      (await this.ensureRunToolSnapshot(request.context.runId));
+    return this.toolRunner.run({
+      ...request,
+      toolId,
+      context: {
+        ...request.context,
+        userId,
+        sessionId,
+        contractSnapshotRef,
+        principal: request.context.principal ?? {
+          id: userId,
+          principalId: userId,
+          type: 'user',
+          userId,
+          permissionScopes: [],
+        },
+      },
+    });
+  }
+
   async listAgentPrompts(): Promise<AgentPromptSpec[]> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
@@ -664,7 +779,7 @@ class EventRuntimeService {
       fsm,
       snapshot,
     });
-    await this.append(runId, 'run.started', { input: input.input }, timestamp);
+    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
     await this.append(runId, 'fsm.state.entered', { stateId: snapshot.currentState }, timestamp, {
       fsmState: snapshot.currentState,
     });
@@ -1423,17 +1538,18 @@ class EventRuntimeService {
     if (invocation) this.registerManagedTool(invocation.toolId);
     const result = await this.toolRunner.approveAndResume(invocationId, approvedBy);
     if (invocation && result.status === 'completed') {
-      await this.completeApprovedToolRun(invocation, result);
+      await this.completeApprovedToolRun(invocation, result, approvedBy);
     }
     return result;
   }
 
-  async rejectToolInvocation(invocationId: string): Promise<ToolCallResult> {
+  async rejectToolInvocation(invocationId: string, rejectedBy: string): Promise<ToolCallResult> {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     const result = await this.toolRunner.rejectInvocation(invocationId);
     const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
     const run = runId ? this.runs.get(runId) : undefined;
     if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
+      await this.resolveHumanReview(run, invocationId, rejectedBy, 'rejected');
       await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
     }
     return result;
@@ -1441,13 +1557,15 @@ class EventRuntimeService {
 
   private async completeApprovedToolRun(
     invocation: ToolInvocationRecord,
-    result: ToolCallResult
+    result: ToolCallResult,
+    approvedBy: string
   ): Promise<void> {
     const runId = invocation.scope?.runId ?? invocation.request.context.runId;
     const run = this.runs.get(runId);
     if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
 
     if (run.snapshot.currentState === 'HumanReview') {
+      await this.resolveHumanReview(run, invocation.id, approvedBy, 'approved');
       await this.transition(runId, 'ObservationRecorded', {
         tool: invocation.toolId,
         invocationId: invocation.id,
@@ -1488,15 +1606,7 @@ class EventRuntimeService {
         message: `Tool not found: ${toolId}`,
       });
     }
-    const spec: ToolSpec = {
-      ...resolved.spec,
-      ...override,
-      id: resolved.spec.id,
-      version: override?.version ?? resolved.spec.version,
-      description: override?.description ?? resolved.spec.description,
-      inputSchema: override?.inputSchema ?? resolved.spec.inputSchema,
-      sideEffectLevel: override?.sideEffectLevel ?? resolved.spec.sideEffectLevel,
-    };
+    const spec = mergeManagedToolSpec(resolved.spec, override);
     this.toolRegistry.registerAdapter(spec, resolved.adapter, { replace: true });
     return spec.id;
   }
@@ -1909,6 +2019,16 @@ class EventRuntimeService {
     const context = this.runs.get(runId)!;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
+    const candidateHash = stableRecoveryHash(failure.evidence);
+    const recoveryEvidence = {
+      caseId: failure.id,
+      rootFingerprint: fingerprint,
+      cycles: 1,
+      candidateId: failure.id,
+      candidateHash,
+      reason: `${failure.category}:${failure.code}`,
+      safeAction: 'apply_observation',
+    };
     const knowledge: RecoveryKnowledge = {
       key: {
         fingerprint,
@@ -1924,7 +2044,7 @@ class EventRuntimeService {
       },
       strategy: 'degrade',
       outcome: 'degraded',
-      evidenceHash: stableRecoveryHash(failure.evidence),
+      evidenceHash: candidateHash,
       learnedAt: failure.occurredAt,
       validation: {
         status: 'verified',
@@ -1936,8 +2056,8 @@ class EventRuntimeService {
       runId,
       'recovery.case.opened',
       {
-        caseId: failure.id,
-        rootFingerprint: fingerprint,
+        ...recoveryEvidence,
+        status: 'active',
         failure,
       },
       failure.occurredAt,
@@ -1947,9 +2067,9 @@ class EventRuntimeService {
       runId,
       'recovery.case.resolved',
       {
-        caseId: failure.id,
-        rootFingerprint: fingerprint,
-        status: 'degraded',
+        ...recoveryEvidence,
+        status: 'recovered',
+        disposition: 'recovered',
         strategy: 'degrade',
         knowledge,
       },
@@ -1978,7 +2098,10 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferCompletedState(context.fsm), { reason: 'completed' });
     }
-    await this.append(runId, 'run.completed', { output });
+    await this.append(runId, 'run.completed', {
+      terminalState: context.snapshot.currentState,
+      output,
+    });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
@@ -1987,11 +2110,83 @@ class EventRuntimeService {
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
       await this.transition(runId, inferFailedState(context.fsm), { reason: message });
     }
-    await this.append(runId, 'run.failed', { error: message });
+    await this.append(runId, 'run.failed', {
+      terminalState: context.snapshot.currentState,
+      error: message,
+    });
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    await this.append(runId, 'run.waiting_human', payload);
+    const context = this.requireRun(runId);
+    const waitId =
+      typeof payload.waitId === 'string' && payload.waitId.trim()
+        ? payload.waitId
+        : `human-review:${generateId()}`;
+    const pendingActionRef =
+      typeof payload.pendingActionRef === 'string' && payload.pendingActionRef.trim()
+        ? payload.pendingActionRef
+        : typeof payload.invocationId === 'string' && payload.invocationId.trim()
+          ? payload.invocationId
+          : waitId;
+    if (this.humanWaits) {
+      const result = await this.humanWaits.create({
+        commandId: `create:${waitId}`,
+        scope: {
+          userId: context.userId,
+          sessionId: context.sessionId,
+          runId,
+        },
+        ownerId: this.humanWaitOwnerId,
+        leaseTtlMs: this.humanWaitLeaseTtlMs,
+        waitId,
+        pendingActionRef,
+        reason:
+          typeof payload.reason === 'string' && payload.reason.trim()
+            ? payload.reason
+            : 'Human review required',
+        requestedAt: new Date().toISOString(),
+        idempotencyKey: `create:${waitId}`,
+      });
+      if (result.disposition === 'lease_unavailable') {
+        throw new FrameworkError({
+          code: 'RUNTIME_RESOURCE_CONFLICT',
+          message: `Run ${runId} Human Wait Lease is unavailable`,
+        });
+      }
+      return;
+    }
+    await this.append(runId, 'run.waiting_human', { ...payload, waitId });
+  }
+
+  private async resolveHumanReview(
+    context: RuntimeRunContext,
+    pendingActionRef: string,
+    principalId: string,
+    decision: 'approved' | 'rejected'
+  ): Promise<void> {
+    if (!this.humanWaits) return;
+    const resolvedAt = new Date().toISOString();
+    const result = await this.humanWaits.resolve({
+      commandId: `resolve:${pendingActionRef}:${decision}`,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+      },
+      ownerId: this.humanWaitOwnerId,
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      pendingActionRef,
+      principalId,
+      decision,
+      resolvedAt,
+      idempotencyKey: `resolve:${pendingActionRef}:${decision}`,
+    });
+    if (result.disposition === 'lease_unavailable') {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: `Run ${context.runId} Human Wait Lease is unavailable`,
+      });
+    }
   }
 
   createRuntimeSpecFromWorkflow(workflow: WorkflowDefinition): {
@@ -2584,6 +2779,58 @@ class EventRuntimeService {
   ): Promise<void> {
     const runtimeSessionId = this.runtimeSessionId(userId, clientSessionId);
     if (this.knownSessions.has(runtimeSessionId)) return;
+    const pending = this.sessionInitializations.get(runtimeSessionId);
+    if (pending) return pending;
+    const initialization = this.initializeSession(
+      runtimeSessionId,
+      userId,
+      clientSessionId,
+      domainPack,
+      metadata
+    );
+    this.sessionInitializations.set(runtimeSessionId, initialization);
+    try {
+      await initialization;
+      this.knownSessions.add(runtimeSessionId);
+    } finally {
+      this.sessionInitializations.delete(runtimeSessionId);
+    }
+  }
+
+  private async initializeSession(
+    runtimeSessionId: string,
+    userId: string,
+    clientSessionId: string,
+    domainPack: DomainPackSpec,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const persisted = await this.events.list({
+      userId,
+      sessionId: runtimeSessionId,
+      type: 'session.created',
+    });
+    if (persisted.length > 0) {
+      if (persisted.length !== 1) {
+        throw new FrameworkError({
+          code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+          message: `Session ${runtimeSessionId} has more than one creation fact`,
+        });
+      }
+      const payload = asRecord(persisted[0]!.payload);
+      const domainPackRef = asRecord(payload?.domainPackRef);
+      if (
+        stringValue(payload?.id) !== runtimeSessionId ||
+        stringValue(payload?.userId) !== userId ||
+        stringValue(domainPackRef?.id) !== domainPack.id ||
+        stringValue(domainPackRef?.version) !== domainPack.version
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_RUN_CONFLICT',
+          message: `Session ${runtimeSessionId} conflicts with its persisted owner or Domain Pack`,
+        });
+      }
+      return;
+    }
     await this.runtime.createSession({
       id: runtimeSessionId,
       userId,
@@ -2593,7 +2840,6 @@ class EventRuntimeService {
         ...metadata,
       },
     });
-    this.knownSessions.add(runtimeSessionId);
   }
 
   private async append(
@@ -2634,6 +2880,39 @@ class EventRuntimeService {
   private runtimeSessionId(userId: string, clientSessionId: string): string {
     return `user:${userId}:session:${clientSessionId}`;
   }
+}
+
+export function mergeManagedToolSpec(resolved: ToolSpec, override?: Partial<ToolSpec>): ToolSpec {
+  const sourceRef =
+    resolved.sourceRef || override?.sourceRef
+      ? {
+          ...override?.sourceRef,
+          ...resolved.sourceRef,
+        }
+      : undefined;
+  const governedMCP = resolved.source === 'mcp';
+  return {
+    ...resolved,
+    ...override,
+    id: resolved.id,
+    version: resolved.version,
+    revision: resolved.revision,
+    name: resolved.name,
+    inputSchema: resolved.inputSchema,
+    outputSchema: resolved.outputSchema,
+    input: resolved.input,
+    output: resolved.output,
+    source: resolved.source,
+    sourceRef,
+    sideEffectLevel:
+      governedMCP || override?.sideEffectLevel === undefined
+        ? resolved.sideEffectLevel
+        : override.sideEffectLevel,
+    permissionScope:
+      governedMCP || override?.permissionScope === undefined
+        ? resolved.permissionScope
+        : override.permissionScope,
+  };
 }
 
 function createDefaultDomainPack(): DomainPackSpec {
@@ -2803,6 +3082,69 @@ function normalizeToolInput(input: unknown): Record<string, unknown> {
     return input as Record<string, unknown>;
   }
   return input === undefined ? {} : { value: input };
+}
+
+function canonicalInferenceInput(input: unknown): {
+  instructions?: string;
+  messages: LLMMessage[];
+  context?: Record<string, unknown>;
+} {
+  const record = asRecord(input);
+  if (!record || !Array.isArray(record.messages)) {
+    throw new FrameworkError({
+      code: 'INFERENCE_INVALID_INPUT',
+      message: 'Canonical inference input requires a messages array',
+    });
+  }
+  const messages = record.messages.map((entry, index): LLMMessage => {
+    const message = asRecord(entry);
+    const content =
+      typeof message?.content === 'string' && message.content.trim() ? message.content : undefined;
+    const role = stringValue(message?.role);
+    if (!message || !content || !role) {
+      throw new FrameworkError({
+        code: 'INFERENCE_INVALID_INPUT',
+        message: `Canonical inference message ${index} is invalid`,
+      });
+    }
+    if (role === 'system' || role === 'user' || role === 'assistant') {
+      return {
+        role,
+        content,
+        ...(stringValue(message.name) === undefined ? {} : { name: stringValue(message.name) }),
+      };
+    }
+    if (role === 'tool') {
+      const name = stringValue(message.name) ?? 'tool';
+      return { role: 'user', content: `[${name} observation]\n${content}` };
+    }
+    if (role === 'developer' || role === 'context' || role === 'memory') {
+      return { role: 'system', content };
+    }
+    throw new FrameworkError({
+      code: 'INFERENCE_INVALID_INPUT',
+      message: `Canonical inference message ${index} has unsupported role`,
+    });
+  });
+  return {
+    messages,
+    ...(stringValue(record.instructions) === undefined
+      ? {}
+      : { instructions: stringValue(record.instructions) }),
+    ...(asRecord(record.context) === undefined ? {} : { context: asRecord(record.context) }),
+  };
+}
+
+function canonicalToolInputSchema(
+  schema: Record<string, unknown>
+): NonNullable<ChatOptions['tools']>[number]['inputSchema'] {
+  if (schema.type !== 'object') {
+    throw new FrameworkError({
+      code: 'INFERENCE_INVALID_INPUT',
+      message: 'Canonical inference Tool schemas must declare type=object',
+    });
+  }
+  return schema as NonNullable<ChatOptions['tools']>[number]['inputSchema'];
 }
 
 function normalizeWorkflowGuardCondition(condition: string): string {
@@ -3060,9 +3402,37 @@ function inferToolSideEffect(
 
 let service: EventRuntimeService | null = null;
 
+export function serverRuntimeEventDatabasePath(): string {
+  const sqliteStorage = storageConfig().relational.sqlite;
+  return process.env.HYPHA_RUNTIME_EVENT_DB ?? resolveRuntimePath(sqliteStorage.eventDbPath);
+}
+
+export function createServerCompatibilityEventStore(): SQLiteEventStore {
+  const sqliteStorage = storageConfig().relational.sqlite;
+  return new SQLiteEventStore({
+    filename: serverRuntimeEventDatabasePath(),
+    mode: sqliteStorage.sqliteMode,
+  });
+}
+
+export function initializeEventRuntime(options: EventRuntimeInitialization): EventRuntimeService {
+  if (service) {
+    throw new FrameworkError({
+      code: 'RUNTIME_RESOURCE_CONFLICT',
+      message: 'Server Event Runtime is already initialized',
+    });
+  }
+  service = new EventRuntimeService(options);
+  return service;
+}
+
 export function getEventRuntime(): EventRuntimeService {
   if (!service) {
     service = new EventRuntimeService();
   }
   return service;
+}
+
+export function destroyEventRuntime(): void {
+  service = null;
 }

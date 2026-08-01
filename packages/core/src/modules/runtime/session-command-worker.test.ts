@@ -249,6 +249,44 @@ describe('DurableSessionCommandWorker', () => {
     await expect(queue.list({ scope })).resolves.toMatchObject([{ status: 'claimed' }]);
   });
 
+  it('does not redeliver a command when completion commits but its acknowledgement is lost', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.lost-completion-ack'));
+    const complete = queue.complete.bind(queue);
+    const queueWithLostAck = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === 'complete') {
+          return async (request: Parameters<typeof complete>[0]) => {
+            await complete(request);
+            throw new Error('completion acknowledgement lost');
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const handler = vi.fn(async () => ({ disposition: 'applied' as const }));
+    const uncertainWorker = new DurableSessionCommandWorker({
+      queue: queueWithLostAck,
+      workerId: 'worker.lost-ack',
+      leaseMs: 1_000,
+      handlers: { user_input: handler },
+      now: () => initialTime,
+    });
+
+    await expect(uncertainWorker.processNext()).resolves.toMatchObject({
+      disposition: 'lease_lost',
+      rejectionCode: 'session_command_claim_lost',
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { id: 'command.lost-completion-ack', status: 'applied' },
+    ]);
+    await expect(worker(queue, { user_input: handler }).processNext()).resolves.toEqual({
+      disposition: 'idle',
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('aborts an overlong handler without committing its eventual result', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(initialTime));

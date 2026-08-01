@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { EventCreateInput } from '../../events';
 import type {
   FencedRunLease,
@@ -16,6 +17,15 @@ import {
   type RuntimeActivityDescriptorReference,
 } from './runtime-activity-descriptor-store';
 import { assertRuntimeHumanTaskResume, projectRuntimeHumanTasks } from './runtime-human-task';
+import type { RuntimeOperationalTelemetry } from './runtime-operational-telemetry';
+
+const REDISPATCH_BLOCKING_RUN_EVENT_TYPES = new Set([
+  'run.cancel.requested',
+  'run.cancelling',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+]);
 
 export interface RuntimeActivityRedispatchCommand extends RuntimeActivityDescriptorReference {
   commandId: string;
@@ -37,15 +47,43 @@ export interface RuntimeActivityRevisionValidator {
   }): Promise<void>;
 }
 
+export interface RuntimeActivityRedispatchAttempt {
+  scope: Readonly<RuntimeScope>;
+  task: Readonly<RuntimeHumanTask>;
+  descriptor: Readonly<RuntimeActivityDescriptor>;
+  redispatchCommandId: string;
+  redispatchIdempotencyKey: string;
+  approvalEventId: string;
+  requestEventId: string;
+  fencingToken: number;
+  signal: AbortSignal;
+}
+
+export type RuntimeActivityRedispatchReconciliation =
+  | {
+      status: 'accepted';
+      commandId: string;
+    }
+  | {
+      status: 'safe_to_dispatch';
+    }
+  | {
+      status: 'unknown';
+      reason: string;
+    };
+
 export interface RuntimeActivityRedispatchPort {
-  dispatch(input: {
-    scope: Readonly<RuntimeScope>;
-    task: Readonly<RuntimeHumanTask>;
-    descriptor: Readonly<RuntimeActivityDescriptor>;
-    requestEventId: string;
-    fencingToken: number;
-    signal: AbortSignal;
-  }): Promise<{ commandId: string; reused: boolean }>;
+  dispatch(
+    input: RuntimeActivityRedispatchAttempt
+  ): Promise<{ commandId: string; reused: boolean }>;
+  /**
+   * Resolves the crash window between an accepted external dispatch and its
+   * durable Runtime receipt. `safe_to_dispatch` is an authoritative absence
+   * result; uncertainty must be returned as `unknown`.
+   */
+  reconcile(
+    input: RuntimeActivityRedispatchAttempt
+  ): Promise<RuntimeActivityRedispatchReconciliation>;
 }
 
 export interface RuntimeActivityRedispatchServiceOptions {
@@ -54,6 +92,11 @@ export interface RuntimeActivityRedispatchServiceOptions {
   descriptors: RuntimeActivityDescriptorStore;
   revisions: RuntimeActivityRevisionValidator;
   dispatcher: RuntimeActivityRedispatchPort;
+  renewalIntervalMs?: number;
+  wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  onLeaseRenewalFailure?: (error: unknown, commandId: string) => void;
+  operationalTelemetry?: RuntimeOperationalTelemetry;
+  monotonicNow?: () => number;
   nextId?: (namespace: string) => string;
   now?: () => string;
 }
@@ -61,32 +104,52 @@ export interface RuntimeActivityRedispatchServiceOptions {
 export interface RuntimeActivityRedispatchResult {
   commandId: string;
   requestEventId: string;
+  receiptEventId: string;
   activityCommandId: string;
   eventReused: boolean;
+  receiptReused: boolean;
   commandReused: boolean;
+  reconciled: boolean;
 }
 
 /**
- * Revalidates approved HumanTask evidence, records redispatch intent, and only
- * then invokes an Owner-provided idempotent Activity dispatcher.
+ * Revalidates approved HumanTask evidence, records redispatch intent, invokes
+ * an Owner-provided idempotent Activity dispatcher, and persists acceptance.
+ * An intent without a receipt is reconciled before any retry is dispatched.
  */
 export class RuntimeActivityRedispatchService {
   private readonly nextId: (namespace: string) => string;
   private readonly now: () => string;
+  private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  private readonly monotonicNow: () => number;
 
   constructor(private readonly options: RuntimeActivityRedispatchServiceOptions) {
-    let sequence = 0;
-    this.nextId = options.nextId ?? ((namespace) => `${namespace}.${++sequence}`);
+    this.nextId = options.nextId ?? ((namespace) => `${namespace}.${randomUUID()}`);
     this.now = options.now ?? (() => new Date().toISOString());
+    this.wait = options.wait ?? abortableDelay;
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
+    if (
+      options.renewalIntervalMs !== undefined &&
+      (!Number.isInteger(options.renewalIntervalMs) || options.renewalIntervalMs <= 0)
+    ) {
+      invalid('renewalIntervalMs must be a positive integer');
+    }
   }
 
   async redispatch(
     command: RuntimeActivityRedispatchCommand
   ): Promise<RuntimeActivityRedispatchResult> {
     validateCommand(command);
-    const signal = command.signal ?? new AbortController().signal;
-    assertActive(signal);
-    const lease = await this.acquire(command);
+    const callerSignal = command.signal ?? new AbortController().signal;
+    assertActive(callerSignal);
+    const renewalIntervalMs =
+      this.options.renewalIntervalMs ?? Math.max(1, Math.floor(command.leaseTtlMs / 3));
+    if (renewalIntervalMs >= command.leaseTtlMs) {
+      invalid('renewalIntervalMs must be shorter than leaseTtlMs');
+    }
+    const startedAt = this.now();
+    validTimestamp(startedAt, 'Activity redispatch clock');
+    const lease = await this.acquire(command, startedAt);
     if (!lease) {
       throw new FrameworkError({
         code: 'RUNTIME_LEASE_UNAVAILABLE',
@@ -94,50 +157,229 @@ export class RuntimeActivityRedispatchService {
       });
     }
     const authorization = authorizationFor(lease);
+    const operationController = new AbortController();
+    const heartbeatController = new AbortController();
+    const forwardAbort = () =>
+      operationController.abort(callerSignal.reason ?? 'runtime_activity_redispatch_cancelled');
+    callerSignal.addEventListener('abort', forwardAbort, { once: true });
+    if (callerSignal.aborted) forwardAbort();
+    const heartbeat = this.maintainLease({
+      command,
+      authorization,
+      renewalIntervalMs,
+      stopSignal: heartbeatController.signal,
+      operationController,
+    });
+    const signal = operationController.signal;
     try {
-      const evidence = await this.loadEvidence(command);
+      const evidence = await this.loadEvidence(command, startedAt);
+      assertActive(signal);
       await this.options.revisions.validate(evidence);
       assertActive(signal);
       const prior = await this.findPrior(command);
+      assertActive(signal);
       const requestEventId = prior?.id ?? this.nextId('activity-redispatch-event');
       if (!prior) {
+        this.assertDispatchEvidence(evidence, startedAt, 'intent');
         const scope = streamScope(command.scope);
         const head = await this.options.events.getStreamHead(scope);
         if (!head) corrupt('Run Event stream does not exist');
         await this.options.events.append({
           scope,
-          events: [redispatchEvent(command, evidence.task, evidence.descriptor, requestEventId)],
+          events: [
+            redispatchEvent(
+              command,
+              evidence.task,
+              evidence.descriptor,
+              evidence.approvalEventId,
+              requestEventId
+            ),
+          ],
           expectedLastSequence: head.lastSequence,
           expectedRunRevision: head.runRevision,
           fencingToken: authorization.guard.fencingToken,
           idempotencyKey: `activity-redispatch:${command.idempotencyKey ?? command.commandId}`,
-          transactionGroupId: redispatchOperationId(command.commandId),
+          transactionGroupId: runtimeActivityRedispatchIdentity(command),
         });
+        assertActive(signal);
       }
       assertActive(signal);
-      const dispatched = await this.options.dispatcher.dispatch({
+      await this.options.runLeases.assertCurrent({
+        scope: authorization.scope,
+        guard: authorization.guard,
+        checkedAt: this.now(),
+      });
+      const redispatchIdentity = runtimeActivityRedispatchIdentity(command);
+      const attempt: RuntimeActivityRedispatchAttempt = {
         scope: command.scope,
         task: evidence.task,
         descriptor: evidence.descriptor,
+        redispatchCommandId: redispatchIdentity,
+        redispatchIdempotencyKey: redispatchIdentity,
+        approvalEventId: evidence.approvalEventId,
         requestEventId,
         fencingToken: authorization.guard.fencingToken,
         signal,
+      };
+      const receipt = await this.findReceipt(command, requestEventId, redispatchIdentity);
+      assertActive(signal);
+      if (receipt) {
+        return {
+          commandId: command.commandId,
+          requestEventId,
+          receiptEventId: receipt.id,
+          activityCommandId: receipt.activityCommandId,
+          eventReused: prior !== null,
+          receiptReused: true,
+          commandReused: true,
+          reconciled: receipt.source === 'reconcile',
+        };
+      }
+      let accepted: { commandId: string; reused: boolean };
+      let source: 'dispatch' | 'reconcile' = 'dispatch';
+      if (prior) {
+        const reconciliation = await awaitWithAbort(
+          this.options.dispatcher.reconcile(attempt),
+          signal
+        );
+        assertActive(signal);
+        validateReconciliation(reconciliation);
+        await this.assertLeaseCurrent(authorization);
+        if (reconciliation.status === 'unknown') {
+          await this.appendOutcomeUnknown(
+            command,
+            evidence,
+            requestEventId,
+            redispatchIdentity,
+            reconciliation.reason,
+            authorization
+          );
+          throw new FrameworkError({
+            code: 'RUNTIME_ACTIVITY_OUTCOME_UNKNOWN',
+            message:
+              'Activity redispatch outcome is unknown; automatic redispatch is blocked pending reconciliation',
+            context: {
+              taskId: command.taskId,
+              requestEventId,
+              redispatchCommandId: redispatchIdentity,
+              reason: reconciliation.reason,
+            },
+          });
+        }
+        if (reconciliation.status === 'accepted') {
+          accepted = { commandId: reconciliation.commandId, reused: true };
+          source = 'reconcile';
+        } else {
+          assertActive(signal);
+          await this.revalidateDispatchEvidence(command, evidence.approvalEventId, 'redispatch');
+          await this.assertLeaseCurrent(authorization);
+          accepted = await awaitWithAbort(this.options.dispatcher.dispatch(attempt), signal);
+          assertActive(signal);
+          validateDispatchResult(accepted);
+        }
+      } else {
+        await this.revalidateDispatchEvidence(command, evidence.approvalEventId, 'dispatch');
+        await this.assertLeaseCurrent(authorization);
+        accepted = await awaitWithAbort(this.options.dispatcher.dispatch(attempt), signal);
+        assertActive(signal);
+        validateDispatchResult(accepted);
+      }
+      if (source === 'dispatch') {
+        await this.revalidateDispatchEvidence(command, evidence.approvalEventId, 'receipt');
+      }
+      await this.options.runLeases.assertCurrent({
+        scope: authorization.scope,
+        guard: authorization.guard,
+        checkedAt: this.now(),
       });
+      const receiptEventId = redispatchEvidenceEventId(redispatchIdentity, 'accepted');
+      await this.appendAccepted(
+        command,
+        evidence,
+        requestEventId,
+        redispatchIdentity,
+        receiptEventId,
+        accepted,
+        source,
+        authorization
+      );
       return {
         commandId: command.commandId,
         requestEventId,
-        activityCommandId: dispatched.commandId,
+        receiptEventId,
+        activityCommandId: accepted.commandId,
         eventReused: prior !== null,
-        commandReused: dispatched.reused,
+        receiptReused: false,
+        commandReused: accepted.reused,
+        reconciled: source === 'reconcile',
       };
     } finally {
+      heartbeatController.abort();
+      await heartbeat;
+      callerSignal.removeEventListener('abort', forwardAbort);
       await this.release(authorization);
     }
   }
 
-  private async loadEvidence(command: RuntimeActivityRedispatchCommand): Promise<{
+  private async maintainLease(input: {
+    command: RuntimeActivityRedispatchCommand;
+    authorization: RunLeaseAuthorization;
+    renewalIntervalMs: number;
+    stopSignal: AbortSignal;
+    operationController: AbortController;
+  }): Promise<void> {
+    while (!input.stopSignal.aborted) {
+      await this.wait(input.renewalIntervalMs, input.stopSignal);
+      if (input.stopSignal.aborted) return;
+      try {
+        await this.renewLease({
+          scope: input.authorization.scope,
+          guard: input.authorization.guard,
+          ttlMs: input.command.leaseTtlMs,
+          heartbeatAt: this.now(),
+        });
+      } catch (error) {
+        try {
+          this.options.onLeaseRenewalFailure?.(error, input.command.commandId);
+        } catch {
+          // Observer failures cannot hide the lease loss.
+        }
+        input.operationController.abort(error);
+        return;
+      }
+    }
+  }
+
+  private async renewLease(
+    request: Parameters<RunLeaseStore['heartbeat']>[0]
+  ): Promise<Awaited<ReturnType<RunLeaseStore['heartbeat']>>> {
+    const startedAt = this.monotonicNow();
+    try {
+      const renewed = await this.options.runLeases.heartbeat(request);
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'run',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'succeeded',
+      });
+      return renewed;
+    } catch (error) {
+      await this.options.operationalTelemetry?.recordLeaseRenewal({
+        resource: 'run',
+        durationMs: Math.max(0, this.monotonicNow() - startedAt),
+        outcome: 'failed',
+      });
+      throw error;
+    }
+  }
+
+  private async loadEvidence(
+    command: RuntimeActivityRedispatchCommand,
+    checkedAt: string
+  ): Promise<{
     task: RuntimeHumanTask;
     descriptor: RuntimeActivityDescriptor;
+    approvalEventId: string;
+    blockingRunEvent?: { id: string; type: string };
   }> {
     const events = await this.options.events.read({ scope: streamScope(command.scope) });
     const task = projectRuntimeHumanTasks(events).find(
@@ -151,7 +393,7 @@ export class RuntimeActivityRedispatchService {
       subjectHash: command.expectedSubjectHash,
       revision: command.expectedTaskRevision,
       requestedBy: task.requestedBy,
-      resumedAt: command.requestedAt,
+      resumedAt: checkedAt,
       ...(task.checkpointRef === undefined ? {} : { checkpointRef: task.checkpointRef }),
       ...(task.policyRef === undefined ? {} : { policyRef: task.policyRef }),
       ...(task.providerRevision === undefined ? {} : { providerRevision: task.providerRevision }),
@@ -163,7 +405,54 @@ export class RuntimeActivityRedispatchService {
       activityDescriptorHash: command.activityDescriptorHash,
     });
     assertDescriptorIdentity(task, descriptor, command);
-    return { task, descriptor };
+    const approvalEventId = approvedEventId(events, command);
+    const blocker = events.find((event) => REDISPATCH_BLOCKING_RUN_EVENT_TYPES.has(event.type));
+    return {
+      task,
+      descriptor,
+      approvalEventId,
+      ...(blocker === undefined
+        ? {}
+        : { blockingRunEvent: { id: blocker.id, type: blocker.type } }),
+    };
+  }
+
+  private assertDispatchEvidence(
+    evidence: {
+      descriptor: RuntimeActivityDescriptor;
+      blockingRunEvent?: { id: string; type: string };
+    },
+    checkedAt: string,
+    phase: 'intent' | 'dispatch' | 'redispatch' | 'receipt'
+  ): void {
+    assertDescriptorDispatchWindow(evidence.descriptor, checkedAt);
+    if (!evidence.blockingRunEvent) return;
+    throw new FrameworkError({
+      code: 'RUNTIME_ACTIVITY_REDISPATCH_BLOCKED',
+      message: `Activity redispatch is blocked by ${evidence.blockingRunEvent.type}`,
+      context: {
+        phase,
+        eventId: evidence.blockingRunEvent.id,
+        eventType: evidence.blockingRunEvent.type,
+      },
+    });
+  }
+
+  private async revalidateDispatchEvidence(
+    command: RuntimeActivityRedispatchCommand,
+    expectedApprovalEventId: string,
+    phase: 'dispatch' | 'redispatch' | 'receipt'
+  ): Promise<void> {
+    const checkedAt = this.now();
+    validTimestamp(checkedAt, 'Activity redispatch revalidation clock');
+    const evidence = await this.loadEvidence(command, checkedAt);
+    if (evidence.approvalEventId !== expectedApprovalEventId) {
+      humanTaskError(
+        'HUMAN_TASK_RESUME_REVALIDATION_FAILED',
+        'Approved HumanTask decision changed before Activity redispatch'
+      );
+    }
+    this.assertDispatchEvidence(evidence, checkedAt, phase);
   }
 
   private async findPrior(command: RuntimeActivityRedispatchCommand) {
@@ -171,24 +460,207 @@ export class RuntimeActivityRedispatchService {
       scope: streamScope(command.scope),
       types: ['activity.redispatch.requested'],
     });
-    const prior = events.find(
-      (event) => event.operationId === redispatchOperationId(command.commandId)
-    );
+    const prior = events.find((event) => {
+      const payload = record(event.payload);
+      const metadata = record(event.metadata);
+      if (payload?.taskId !== command.taskId) return false;
+      if (metadata?.expectedTaskRevision !== undefined) {
+        return metadata.expectedTaskRevision === command.expectedTaskRevision;
+      }
+      return (
+        payload.activityDescriptorRef === command.activityDescriptorRef &&
+        payload.activityDescriptorHash === command.activityDescriptorHash
+      );
+    });
     if (!prior) return null;
     const payload = record(prior.payload);
-    if (
-      payload?.activityDescriptorHash !== command.activityDescriptorHash ||
-      payload?.taskId !== command.taskId
-    ) {
+    const metadata = record(prior.metadata);
+    const expectedCommandHash = redispatchCommandHash(command);
+    const redispatchIdentity = runtimeActivityRedispatchIdentity(command);
+    const identityVersion = metadata?.redispatchIdentityVersion;
+    const mismatches = [
+      payload?.activityDescriptorRef !== command.activityDescriptorRef && 'descriptor_ref',
+      payload?.activityDescriptorHash !== command.activityDescriptorHash && 'descriptor_hash',
+      payload?.taskId !== command.taskId && 'task_id',
+      prior.sessionId !== command.scope.sessionId && 'session_id',
+      prior.workspaceId !== command.scope.workspaceId && 'workspace_id',
+      metadata?.expectedTaskRevision !== undefined &&
+        metadata.expectedTaskRevision !== command.expectedTaskRevision &&
+        'task_revision',
+      metadata?.subjectHash !== undefined &&
+        metadata.subjectHash !== command.expectedSubjectHash &&
+        'subject_hash',
+      identityVersion === '1.0.0' &&
+        metadata?.redispatchCommandHash !== expectedCommandHash &&
+        'command_hash',
+      identityVersion === '1.0.0' && prior.operationId !== redispatchIdentity && 'operation_id',
+      identityVersion === '1.0.0' &&
+        prior.idempotencyKey !== redispatchIdentity &&
+        'idempotency_key',
+    ].filter((mismatch): mismatch is string => typeof mismatch === 'string');
+    if (mismatches.length > 0) {
       throw new FrameworkError({
         code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
-        message: 'Activity redispatch command was reused with different evidence',
+        message: `Activity redispatch command was reused with different evidence: ${mismatches.join(
+          ','
+        )}`,
+        context: { mismatches },
       });
     }
     return prior;
   }
 
-  private acquire(command: RuntimeActivityRedispatchCommand): Promise<FencedRunLease | null> {
+  private async findReceipt(
+    command: RuntimeActivityRedispatchCommand,
+    requestEventId: string,
+    redispatchIdentity: string
+  ): Promise<{
+    id: string;
+    activityCommandId: string;
+    source: 'dispatch' | 'reconcile';
+  } | null> {
+    const events = await this.options.events.read({
+      scope: streamScope(command.scope),
+      types: ['activity.redispatch.accepted'],
+    });
+    const receipt = events.find(
+      (event) =>
+        event.operationId === redispatchIdentity && record(event.payload)?.taskId === command.taskId
+    );
+    if (!receipt) return null;
+    const payload = record(receipt.payload);
+    const metadata = record(receipt.metadata);
+    const mismatches = [
+      payload?.requestEventId !== requestEventId && 'request_event_id',
+      payload?.activityDescriptorRef !== command.activityDescriptorRef && 'descriptor_ref',
+      payload?.activityDescriptorHash !== command.activityDescriptorHash && 'descriptor_hash',
+      payload?.redispatchCommandId !== redispatchIdentity && 'redispatch_command_id',
+      metadata?.expectedTaskRevision !== command.expectedTaskRevision && 'task_revision',
+      metadata?.subjectHash !== command.expectedSubjectHash && 'subject_hash',
+    ].filter((mismatch): mismatch is string => typeof mismatch === 'string');
+    if (mismatches.length > 0) {
+      throw new FrameworkError({
+        code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+        message: `Activity redispatch receipt conflicts with command evidence: ${mismatches.join(
+          ','
+        )}`,
+        context: { mismatches },
+      });
+    }
+    if (
+      typeof payload?.activityCommandId !== 'string' ||
+      !payload.activityCommandId ||
+      (payload.source !== 'dispatch' && payload.source !== 'reconcile')
+    ) {
+      corrupt('Activity redispatch receipt is incomplete');
+    }
+    return {
+      id: receipt.id,
+      activityCommandId: payload.activityCommandId,
+      source: payload.source,
+    };
+  }
+
+  private async appendAccepted(
+    command: RuntimeActivityRedispatchCommand,
+    evidence: {
+      task: RuntimeHumanTask;
+      descriptor: RuntimeActivityDescriptor;
+      approvalEventId: string;
+    },
+    requestEventId: string,
+    redispatchIdentity: string,
+    receiptEventId: string,
+    accepted: { commandId: string; reused: boolean },
+    source: 'dispatch' | 'reconcile',
+    authorization: RunLeaseAuthorization
+  ): Promise<void> {
+    const acceptedAt = this.now();
+    validTimestamp(acceptedAt, 'Activity redispatch acceptance clock');
+    await this.appendEvidenceEvent({
+      command,
+      event: redispatchAcceptedEvent({
+        command,
+        task: evidence.task,
+        descriptor: evidence.descriptor,
+        approvalEventId: evidence.approvalEventId,
+        requestEventId,
+        redispatchIdentity,
+        receiptEventId,
+        activityCommandId: accepted.commandId,
+        commandReused: accepted.reused,
+        source,
+        acceptedAt,
+      }),
+      idempotencyKey: `${redispatchIdentity}:accepted`,
+      authorization,
+    });
+  }
+
+  private async appendOutcomeUnknown(
+    command: RuntimeActivityRedispatchCommand,
+    evidence: {
+      task: RuntimeHumanTask;
+      descriptor: RuntimeActivityDescriptor;
+      approvalEventId: string;
+    },
+    requestEventId: string,
+    redispatchIdentity: string,
+    reason: string,
+    authorization: RunLeaseAuthorization
+  ): Promise<void> {
+    const detectedAt = this.now();
+    validTimestamp(detectedAt, 'Activity redispatch reconciliation clock');
+    await this.appendEvidenceEvent({
+      command,
+      event: redispatchOutcomeUnknownEvent({
+        command,
+        task: evidence.task,
+        descriptor: evidence.descriptor,
+        approvalEventId: evidence.approvalEventId,
+        requestEventId,
+        redispatchIdentity,
+        eventId: redispatchEvidenceEventId(redispatchIdentity, 'outcome-unknown'),
+        reason,
+        detectedAt,
+      }),
+      idempotencyKey: `${redispatchIdentity}:outcome-unknown`,
+      authorization,
+    });
+  }
+
+  private async appendEvidenceEvent(input: {
+    command: RuntimeActivityRedispatchCommand;
+    event: EventCreateInput;
+    idempotencyKey: string;
+    authorization: RunLeaseAuthorization;
+  }): Promise<void> {
+    const scope = streamScope(input.command.scope);
+    const head = await this.options.events.getStreamHead(scope);
+    if (!head) corrupt('Run Event stream does not exist');
+    await this.options.events.append({
+      scope,
+      events: [input.event],
+      expectedLastSequence: head.lastSequence,
+      expectedRunRevision: head.runRevision,
+      fencingToken: input.authorization.guard.fencingToken,
+      idempotencyKey: input.idempotencyKey,
+      transactionGroupId: runtimeActivityRedispatchIdentity(input.command),
+    });
+  }
+
+  private async assertLeaseCurrent(authorization: RunLeaseAuthorization): Promise<void> {
+    await this.options.runLeases.assertCurrent({
+      scope: authorization.scope,
+      guard: authorization.guard,
+      checkedAt: this.now(),
+    });
+  }
+
+  private acquire(
+    command: RuntimeActivityRedispatchCommand,
+    acquiredAt: string
+  ): Promise<FencedRunLease | null> {
     const leaseId = this.nextId('activity-redispatch-lease');
     return this.options.runLeases.acquire({
       ...(command.scope.tenantId === undefined ? {} : { tenantId: command.scope.tenantId }),
@@ -198,8 +670,8 @@ export class RuntimeActivityRedispatchService {
       requestedLeaseId: leaseId,
       ownerId: command.ownerId,
       ttlMs: command.leaseTtlMs,
-      acquiredAt: command.requestedAt,
-      idempotencyKey: `${redispatchOperationId(command.commandId)}:lease:${leaseId}`,
+      acquiredAt,
+      idempotencyKey: `${runtimeActivityRedispatchIdentity(command)}:lease:${leaseId}`,
     });
   }
 
@@ -220,6 +692,7 @@ function redispatchEvent(
   command: RuntimeActivityRedispatchCommand,
   task: RuntimeHumanTask,
   descriptor: RuntimeActivityDescriptor,
+  approvalEventId: string,
   eventId: string
 ): EventCreateInput {
   return {
@@ -233,8 +706,10 @@ function redispatchEvent(
     runId: command.scope.runId,
     fsmState: task.stateId,
     correlationId: command.scope.runId,
-    operationId: redispatchOperationId(command.commandId),
-    idempotencyKey: command.idempotencyKey ?? command.commandId,
+    causationId: approvalEventId,
+    parentEventId: approvalEventId,
+    operationId: runtimeActivityRedispatchIdentity(command),
+    idempotencyKey: runtimeActivityRedispatchIdentity(command),
     timestamp: command.requestedAt,
     payload: {
       commandId: command.commandId,
@@ -249,7 +724,119 @@ function redispatchEvent(
     metadata: {
       stateAttempt: task.stateAttempt,
       subjectHash: task.subjectHash,
+      expectedTaskRevision: command.expectedTaskRevision,
+      redispatchIdentityVersion: '1.0.0',
+      redispatchCommandHash: redispatchCommandHash(command),
     },
+  };
+}
+
+function redispatchAcceptedEvent(input: {
+  command: RuntimeActivityRedispatchCommand;
+  task: RuntimeHumanTask;
+  descriptor: RuntimeActivityDescriptor;
+  approvalEventId: string;
+  requestEventId: string;
+  redispatchIdentity: string;
+  receiptEventId: string;
+  activityCommandId: string;
+  commandReused: boolean;
+  source: 'dispatch' | 'reconcile';
+  acceptedAt: string;
+}): EventCreateInput {
+  return {
+    id: input.receiptEventId,
+    type: 'activity.redispatch.accepted',
+    version: '1.0.0',
+    ...(input.command.scope.tenantId === undefined
+      ? {}
+      : { tenantId: input.command.scope.tenantId }),
+    userId: input.command.scope.userId,
+    ...(input.command.scope.workspaceId === undefined
+      ? {}
+      : { workspaceId: input.command.scope.workspaceId }),
+    sessionId: input.command.scope.sessionId,
+    runId: input.command.scope.runId,
+    fsmState: input.task.stateId,
+    correlationId: input.command.scope.runId,
+    causationId: input.requestEventId,
+    parentEventId: input.requestEventId,
+    operationId: input.redispatchIdentity,
+    idempotencyKey: `${input.redispatchIdentity}:accepted`,
+    timestamp: input.acceptedAt,
+    payload: {
+      taskId: input.task.taskId,
+      activityId: input.descriptor.activityId,
+      activityDescriptorRef: input.command.activityDescriptorRef,
+      activityDescriptorHash: input.command.activityDescriptorHash,
+      redispatchCommandId: input.redispatchIdentity,
+      activityCommandId: input.activityCommandId,
+      requestEventId: input.requestEventId,
+      approvalEventId: input.approvalEventId,
+      commandReused: input.commandReused,
+      source: input.source,
+      acceptedAt: input.acceptedAt,
+    },
+    metadata: redispatchEvidenceMetadata(input.command, input.task),
+  };
+}
+
+function redispatchOutcomeUnknownEvent(input: {
+  command: RuntimeActivityRedispatchCommand;
+  task: RuntimeHumanTask;
+  descriptor: RuntimeActivityDescriptor;
+  approvalEventId: string;
+  requestEventId: string;
+  redispatchIdentity: string;
+  eventId: string;
+  reason: string;
+  detectedAt: string;
+}): EventCreateInput {
+  return {
+    id: input.eventId,
+    type: 'activity.redispatch.outcome_unknown',
+    version: '1.0.0',
+    ...(input.command.scope.tenantId === undefined
+      ? {}
+      : { tenantId: input.command.scope.tenantId }),
+    userId: input.command.scope.userId,
+    ...(input.command.scope.workspaceId === undefined
+      ? {}
+      : { workspaceId: input.command.scope.workspaceId }),
+    sessionId: input.command.scope.sessionId,
+    runId: input.command.scope.runId,
+    fsmState: input.task.stateId,
+    correlationId: input.command.scope.runId,
+    causationId: input.requestEventId,
+    parentEventId: input.requestEventId,
+    operationId: input.redispatchIdentity,
+    idempotencyKey: `${input.redispatchIdentity}:outcome-unknown`,
+    timestamp: input.detectedAt,
+    payload: {
+      taskId: input.task.taskId,
+      activityId: input.descriptor.activityId,
+      activityDescriptorRef: input.command.activityDescriptorRef,
+      activityDescriptorHash: input.command.activityDescriptorHash,
+      redispatchCommandId: input.redispatchIdentity,
+      requestEventId: input.requestEventId,
+      approvalEventId: input.approvalEventId,
+      reason: input.reason,
+      detectedAt: input.detectedAt,
+    },
+    metadata: redispatchEvidenceMetadata(input.command, input.task),
+  };
+}
+
+function redispatchEvidenceMetadata(
+  command: RuntimeActivityRedispatchCommand,
+  task: RuntimeHumanTask
+): Record<string, unknown> {
+  return {
+    stateAttempt: task.stateAttempt,
+    subjectHash: task.subjectHash,
+    expectedTaskRevision: command.expectedTaskRevision,
+    redispatchIdentityVersion: '1.0.0',
+    redispatchCommandHash: redispatchCommandHash(command),
   };
 }
 
@@ -269,12 +856,46 @@ function assertDescriptorIdentity(
       'Activity descriptor no longer matches approved HumanTask evidence'
     );
   }
+}
+
+function assertDescriptorDispatchWindow(
+  descriptor: RuntimeActivityDescriptor,
+  checkedAt: string
+): void {
   if (
     descriptor.deadlineAt !== undefined &&
-    Date.parse(descriptor.deadlineAt) <= Date.parse(command.requestedAt)
+    Date.parse(descriptor.deadlineAt) <= Date.parse(checkedAt)
   ) {
     humanTaskError('HUMAN_TASK_EXPIRED', 'Activity descriptor expired before redispatch');
   }
+}
+
+function approvedEventId(
+  events: readonly {
+    id: string;
+    type: string;
+    payload: unknown;
+  }[],
+  command: RuntimeActivityRedispatchCommand
+): string {
+  const approval = events.find((event) => {
+    if (event.type !== 'human.review.approved') return false;
+    const payload = record(event.payload);
+    return (
+      payload?.taskId === command.taskId &&
+      (payload.expectedRevision === undefined ||
+        payload.expectedRevision === command.expectedTaskRevision - 1) &&
+      (payload.expectedSubjectHash === undefined ||
+        payload.expectedSubjectHash === command.expectedSubjectHash)
+    );
+  });
+  if (!approval) {
+    humanTaskError(
+      'HUMAN_TASK_RESUME_REVALIDATION_FAILED',
+      'Approved HumanTask decision Event was not found'
+    );
+  }
+  return approval.id;
 }
 
 function descriptorKindForTask(
@@ -284,8 +905,35 @@ function descriptorKindForTask(
   return kind;
 }
 
-function redispatchOperationId(commandId: string): string {
-  return `activity-redispatch:${commandId}`;
+export function runtimeActivityRedispatchIdentity(
+  command: Pick<RuntimeActivityRedispatchCommand, 'scope' | 'taskId' | 'expectedTaskRevision'>
+): string {
+  const digest = hashCanonicalJson({
+    ...(command.scope.tenantId === undefined ? {} : { tenantId: command.scope.tenantId }),
+    userId: command.scope.userId,
+    runId: command.scope.runId,
+    taskId: command.taskId,
+    expectedTaskRevision: command.expectedTaskRevision,
+  }).slice('sha256:'.length);
+  return `activity-redispatch:${digest}`;
+}
+
+function redispatchEvidenceEventId(
+  redispatchIdentity: string,
+  kind: 'accepted' | 'outcome-unknown'
+): string {
+  return `${redispatchIdentity}:${kind}`;
+}
+
+function redispatchCommandHash(command: RuntimeActivityRedispatchCommand): string {
+  return hashCanonicalJson({
+    scope: command.scope,
+    taskId: command.taskId,
+    expectedTaskRevision: command.expectedTaskRevision,
+    expectedSubjectHash: command.expectedSubjectHash,
+    activityDescriptorRef: command.activityDescriptorRef,
+    activityDescriptorHash: command.activityDescriptorHash,
+  });
 }
 
 function streamScope(scope: RuntimeScope): EventStreamScope {
@@ -341,13 +989,79 @@ function validateCommand(command: RuntimeActivityRedispatchCommand): void {
   }
 }
 
+function validateDispatchResult(result: { commandId: string; reused: boolean }): void {
+  if (!result.commandId || typeof result.reused !== 'boolean') {
+    invalid('Activity redispatch result is invalid');
+  }
+}
+
+function validateReconciliation(result: RuntimeActivityRedispatchReconciliation): void {
+  if (result.status === 'accepted') {
+    if (!result.commandId) invalid('Accepted Activity reconciliation requires commandId');
+    return;
+  }
+  if (result.status === 'safe_to_dispatch') return;
+  if (result.status === 'unknown' && result.reason) return;
+  invalid('Activity redispatch reconciliation result is invalid');
+}
+
+function validTimestamp(value: string, label: string): void {
+  if (!Number.isFinite(Date.parse(value))) invalid(`${label} must be a valid date-time`);
+}
+
 function assertActive(signal: AbortSignal): void {
   if (signal.aborted) {
+    if (isFrameworkError(signal.reason)) throw signal.reason;
     throw new FrameworkError({
       code: 'RUNTIME_CANCELLED',
       message: 'Activity redispatch was cancelled',
     });
   }
+}
+
+function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    operation.catch(() => undefined);
+    return Promise.reject(abortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => {
+      signal.removeEventListener('abort', aborted);
+      reject(abortError(signal));
+    };
+    signal.addEventListener('abort', aborted, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', aborted);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', aborted);
+        reject(error);
+      }
+    );
+  });
+}
+
+function abortError(signal: AbortSignal): unknown {
+  if (isFrameworkError(signal.reason)) return signal.reason;
+  return new FrameworkError({
+    code: 'RUNTIME_CANCELLED',
+    message: 'Activity redispatch was cancelled',
+  });
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, delayMs);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

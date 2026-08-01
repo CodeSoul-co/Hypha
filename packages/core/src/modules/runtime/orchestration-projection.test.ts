@@ -28,6 +28,7 @@ const eventTypes: FrameworkEventType[] = [
   'run.failed',
   'run.cancelled',
   'human.review.requested',
+  'human.review.resolved',
   'fsm.transition.accepted',
   'fsm.state.entered',
   'fsm.state.exited',
@@ -256,7 +257,7 @@ describe('Runtime orchestration projection', () => {
     await expect(
       target.engine.update(definition, target.projectionStore, scope)
     ).resolves.toMatchObject({
-      projectionVersion: '1.4.0',
+      projectionVersion: '1.5.0',
       state: {
         runStatus: 'cancelling',
         cancellation: {
@@ -294,7 +295,7 @@ describe('Runtime orchestration projection', () => {
         scope
       )
     ).resolves.toMatchObject({
-      projectionVersion: '1.4.0',
+      projectionVersion: '1.5.0',
       state: {
         runStatus: 'waiting_signal',
         pendingWait: {
@@ -370,6 +371,52 @@ describe('Runtime orchestration projection', () => {
         },
       },
     });
+  });
+
+  it('resumes a legacy Human Wait when its review resolution matches the pending action', async () => {
+    const target = await fixture();
+    await append(target, [
+      event('run.created', 'run.created'),
+      event('run.started', 'run.started'),
+      event('state.human-review.1', 'fsm.state.entered', { stateId: 'HumanReview' }),
+      event('review.requested', 'human.review.requested', {
+        invocationId: 'tool-invocation:approval',
+      }),
+      event('legacy.human.waiting', 'run.waiting_human', {
+        waitId: 'human-review:approval',
+        reason: 'Review required',
+      }),
+      event('review.resolved', 'human.review.resolved', {
+        invocationId: 'tool-invocation:approval',
+        approvedBy: 'operator-1',
+      }),
+      event('transition.observation', 'fsm.transition.accepted', {
+        from: 'HumanReview',
+        to: 'ObservationRecorded',
+      }),
+      event('state.observation.1', 'fsm.state.entered', {
+        stateId: 'ObservationRecorded',
+      }),
+    ]);
+
+    const result = await target.engine.rebuild(
+      createRuntimeOrchestrationProjectionDefinition(scope.runId),
+      target.projectionStore,
+      scope
+    );
+    expect(result).toMatchObject({
+      projectionVersion: '1.5.0',
+      state: {
+        runStatus: 'running',
+        currentState: 'ObservationRecorded',
+        lastResume: {
+          kind: 'manual',
+          waitId: 'human-review:approval',
+          principalId: 'operator-1',
+        },
+      },
+    });
+    expect(result.state).not.toHaveProperty('pendingWait');
   });
 
   it('quarantines a legacy Human Wait without stable pending-action evidence', async () => {

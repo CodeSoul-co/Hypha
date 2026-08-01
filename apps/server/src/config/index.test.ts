@@ -4,6 +4,7 @@ import {
   inferenceConfig,
   redisConfig,
   reloadConfig,
+  runtimeConfig,
   storageConfig,
   toolResultCacheConfig,
 } from './index';
@@ -47,6 +48,9 @@ const trackedEnv = [
   'HYPHA_TOOL_RESULT_CACHE_REDIS_DEFAULT_TTL_MS',
   'HYPHA_TOOL_RESULT_CACHE_NAMESPACE',
   'FILESYSTEM_TOOL_ROOT',
+  'NODE_ENV',
+  'JWT_SECRET',
+  'HYPHA_OWNER_PASSWORD',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -119,6 +123,27 @@ describe('configuration storage taxonomy', () => {
     expect(profiles).toContain('storage.redis.messaging');
     expect(profiles).toContain('storage.sqlite.events');
     expect(profiles).toContain('storage.local-vector.semantic');
+  });
+
+  it('loads bounded canonical Runtime startup limits', () => {
+    expect(runtimeConfig().canonical).toEqual({
+      auditPageSize: 250,
+      auditPageMaxBytes: 4 * 1024 * 1024,
+      auditMaxEvents: 100_000,
+      auditMaxBytes: 256 * 1024 * 1024,
+      auditMaxDurationMs: 30_000,
+      maxLegacyEvents: 100_000,
+      workers: {
+        workerId: 'server.runtime',
+        leaseTtlMs: 30_000,
+        pageLimit: 100,
+        timerPollIntervalMs: 1_000,
+        timerErrorBackoffMs: 5_000,
+        recoveryPollIntervalMs: 5_000,
+        recoveryErrorBackoffMs: 10_000,
+        autoRecoverReasons: ['PROJECTION_BEHIND'],
+      },
+    });
   });
 
   it('loads inference backend configuration with SGLang as default', () => {
@@ -228,6 +253,28 @@ describe('configuration storage taxonomy', () => {
       workingDirectory: './legacy-workspace',
       readPaths: ['./legacy-workspace'],
       writePaths: ['./legacy-workspace'],
+    });
+  });
+
+  it('rejects development authentication credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+
+    expect(() => reloadConfig()).toThrow('Invalid configuration');
+  });
+
+  it('accepts explicit strong authentication credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'production-jwt-secret-with-32-plus-characters';
+    process.env.HYPHA_OWNER_PASSWORD = 'production-owner-password';
+
+    expect(reloadConfig()).toMatchObject({
+      app: { env: 'production' },
+      auth: {
+        enabled: true,
+        mode: 'single-user',
+        jwt: { secret: 'production-jwt-secret-with-32-plus-characters' },
+        singleUser: { password: 'production-owner-password' },
+      },
     });
   });
 });

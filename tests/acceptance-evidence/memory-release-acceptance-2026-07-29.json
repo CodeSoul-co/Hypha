@@ -1,0 +1,243 @@
+{
+  "schemaVersion": "1.0.0",
+  "evidenceType": "memory.release-acceptance",
+  "recordedAt": "2026-07-29T14:49:25.7196457+08:00",
+  "source": {
+    "kind": "curated-live-acceptance-output",
+    "branch": "memory",
+    "commitSha": "ed834d5178d310e3b15307681f2d11a3b432bd82",
+    "workingTreeCleanBeforeAcceptance": true,
+    "containsCredentials": false
+  },
+  "releaseScope": {
+    "vertexMemoryBank": "excluded-by-approved-decision",
+    "requiredProviders": [
+      "mem0-oss",
+      "mem0-platform-v3",
+      "hindsight-local",
+      "native-production-topology"
+    ]
+  },
+  "providers": [
+    {
+      "provider": "mem0-oss",
+      "status": "passed",
+      "requiredCaseSkipped": false,
+      "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
+      "testExecution": {
+        "mode": "required",
+        "forceExit": false,
+        "detectOpenHandles": true,
+        "testsPassed": 1,
+        "testsSkipped": 0,
+        "timeoutMs": 600000
+      },
+      "topology": {
+        "kind": "self-hosted-container",
+        "upstreamRevision": "d6d89c987bddf580870db14c69db974edfc5263c",
+        "imageDigest": "mem0-dev-mem0@sha256:b6b01d3d26082b23c84a532bd677b769580cd90e17ff1b8783b91edb742c721c",
+        "durableStore": "standalone MongoDB; no transaction or HA claim"
+      },
+      "result": {
+        "addStatus": "committed",
+        "searchCount": 2,
+        "listCount": 2,
+        "paginationPageCount": 2,
+        "updateStatus": "committed",
+        "historyCount": 0,
+        "deleteStatus": "completed",
+        "healthStatus": "healthy",
+        "scopeIsolationVerified": true,
+        "restartVerified": true,
+        "failureProbeCount": 2
+      },
+      "resilience": {
+        "failureInjection": ["invalid API key", "pre-aborted request"],
+        "cancellationVerified": true,
+        "restartVerifiedWithFreshClient": true,
+        "cleanupVerified": true
+      },
+      "evidence": {
+        "commitSha": "ed834d5178d310e3b15307681f2d11a3b432bd82",
+        "providerId": "memory.provider.mem0.rest",
+        "providerVersion": "d6d89c987bddf580870db14c69db974edfc5263c",
+        "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
+        "environmentHash": "sha256:70f32e545707a45911f05531eebf4e73f5689654f0a0bf902095b1142414785a",
+        "startedAt": "2026-07-29T06:26:43.690Z",
+        "finishedAt": "2026-07-29T06:27:18.250Z"
+      }
+    },
+    {
+      "provider": "mem0-platform-v3",
+      "status": "passed",
+      "requiredCaseSkipped": false,
+      "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
+      "testExecution": {
+        "mode": "required",
+        "forceExit": false,
+        "detectOpenHandles": true,
+        "testsPassed": 1,
+        "testsSkipped": 0,
+        "timeoutMs": 600000
+      },
+      "topology": {
+        "kind": "managed-cloud",
+        "endpoint": "https://api.mem0.ai",
+        "providerVersion": "mem0-platform-v3",
+        "durableStore": "standalone MongoDB; no transaction or HA claim"
+      },
+      "result": {
+        "addStatus": "queued",
+        "searchCount": 2,
+        "listCount": 2,
+        "paginationPageCount": 2,
+        "updateStatus": "committed",
+        "historyCount": 2,
+        "deleteStatus": "completed",
+        "healthStatus": "healthy",
+        "scopeIsolationVerified": true,
+        "restartVerified": true,
+        "failureProbeCount": 2
+      },
+      "resilience": {
+        "failureInjection": ["invalid bearer token", "pre-aborted request"],
+        "credentialRotationVerified": true,
+        "cancellationVerified": true,
+        "restartVerifiedWithFreshClient": true,
+        "cleanupVerified": true
+      },
+      "evidence": {
+        "commitSha": "ed834d5178d310e3b15307681f2d11a3b432bd82",
+        "providerId": "memory.provider.mem0.platform.v3",
+        "providerVersion": "mem0-platform-v3",
+        "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
+        "environmentHash": "sha256:70f32e545707a45911f05531eebf4e73f5689654f0a0bf902095b1142414785a",
+        "startedAt": "2026-07-29T06:09:50.257Z",
+        "finishedAt": "2026-07-29T06:10:27.016Z"
+      }
+    },
+    {
+      "provider": "hindsight-local",
+      "status": "passed",
+      "requiredCaseSkipped": false,
+      "testSuite": "tests/integration/memory-external-providers.integration.test.ts",
+      "testExecution": {
+        "mode": "required",
+        "forceExit": false,
+        "detectOpenHandles": true,
+        "testsPassed": 1,
+        "testsSkipped": 0,
+        "timeoutMs": 600000
+      },
+      "topology": {
+        "kind": "self-hosted-container",
+        "providerVersion": "0.8.5",
+        "imageDigest": "ghcr.io/vectorize-io/hindsight:0.8.5@sha256:0710076cd1539b4f89537d2e5b0ea1e4d179885bc12809a56cf748c538c8c4fb",
+        "llmMode": "mock",
+        "durableStore": "standalone MongoDB; no transaction or HA claim"
+      },
+      "result": {
+        "addStatus": "queued",
+        "searchCount": 10,
+        "listCount": 19,
+        "paginationPageCount": 19,
+        "updateStatus": "committed",
+        "historyCount": 2,
+        "deleteStatus": "completed",
+        "healthStatus": "healthy",
+        "scopeIsolationVerified": true,
+        "restartVerified": true,
+        "failureProbeCount": 3
+      },
+      "resilience": {
+        "failureInjection": [
+          "pre-aborted request",
+          "container network pause",
+          "bounded network-partition timeout"
+        ],
+        "cancellationVerified": true,
+        "timeoutVerified": true,
+        "restartVerifiedWithDockerRestart": true,
+        "cleanupVerified": true
+      },
+      "evidence": {
+        "commitSha": "ed834d5178d310e3b15307681f2d11a3b432bd82",
+        "providerId": "memory.provider.memorybank.hindsight-local",
+        "providerVersion": "0.8.5",
+        "profileHash": "sha256:60b31f4d656a2d90b68e0fc6df70ad9bcfae8ac3739189de9acd705ae2157944",
+        "environmentHash": "sha256:70f32e545707a45911f05531eebf4e73f5689654f0a0bf902095b1142414785a",
+        "startedAt": "2026-07-29T06:05:55.771Z",
+        "finishedAt": "2026-07-29T06:07:20.694Z"
+      }
+    },
+    {
+      "provider": "native-production-topology",
+      "status": "passed",
+      "requiredCaseSkipped": false,
+      "testSuite": "tests/integration/memory-native-production-topology.integration.test.ts",
+      "testExecution": {
+        "mode": "required",
+        "forceExit": false,
+        "detectOpenHandles": true,
+        "testsPassed": 6,
+        "testsSkipped": 0,
+        "durationSeconds": 36.632
+      },
+      "topology": {
+        "mongo": {
+          "imageDigest": "mongo@sha256:340c1c56fb10e95cf79ff547f8664b96bc6ead9909bc355238cbf865a9695a6f",
+          "replicaSet": "hypha-rs",
+          "memberCount": 3,
+          "transactionMode": "required",
+          "writeConcern": "majority"
+        },
+        "redis": {
+          "imageDigest": "redis@sha256:a8f08480e1f88f2647fed492d1178c06abb0d0c1fbf02c682a61e2f483fb3954",
+          "dataNodes": 3,
+          "sentinels": 3,
+          "quorum": 2,
+          "initialMasterPort": 27201,
+          "postAcceptanceMasterPort": 27203
+        }
+      },
+      "cases": [
+        "atomic record/history/outbox transaction with rollback and retry",
+        "Mongo primary stepdown and majority-data recovery",
+        "revision fencing, restart and scope-isolated outbox recovery",
+        "lease renewal, crashed-worker takeover and stale-token rejection",
+        "Redis disconnect, script error, eviction and Sentinel failover",
+        "failure-window reconciliation and hard-delete resource cleanup"
+      ],
+      "resilience": {
+        "failureInjection": [
+          "Mongo transient transaction error",
+          "Mongo unknown commit result",
+          "Mongo primary stepdown",
+          "Redis disconnect",
+          "Redis script error",
+          "Redis eviction",
+          "Redis Sentinel failover"
+        ],
+        "restartVerified": true,
+        "timeoutAndRetryVerified": true,
+        "fencingVerified": true,
+        "scopeIsolationVerified": true,
+        "cleanupAndResourceRecoveryVerified": true
+      },
+      "evidence": {
+        "commitSha": "ed834d5178d310e3b15307681f2d11a3b432bd82",
+        "finalMongoReplicaSet": "hypha-rs",
+        "finalMongoMemberCount": 3,
+        "finalMongoWritablePrimary": true,
+        "finalRedisMaster": "host.docker.internal:27203"
+      }
+    },
+    {
+      "provider": "vertex-memory-bank",
+      "status": "skipped-by-decision",
+      "requiredCaseSkipped": true,
+      "reason": "Vertex was explicitly excluded from this closure by the approved review decision.",
+      "releaseDecision": "Do not claim Vertex live validation or release readiness."
+    }
+  ]
+}
