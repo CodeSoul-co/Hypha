@@ -5,6 +5,7 @@ export interface MCPReconnectLease {
   ownerId: string;
   fencingToken: string;
   expiresAt: string;
+  assertCurrent(): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -49,7 +50,10 @@ export class RedisMCPReconnectCoordinator implements MCPReconnectCoordinator {
     ttlMs: number;
   }): Promise<MCPReconnectLease | null> {
     if (!input.serverId || !input.ownerId || !Number.isInteger(input.ttlMs) || input.ttlMs < 1) {
-      throw coordinationError('MCP_RECONNECT_LEASE_INVALID', 'MCP reconnect lease input is invalid.');
+      throw coordinationError(
+        'MCP_RECONNECT_LEASE_INVALID',
+        'MCP reconnect lease input is invalid.'
+      );
     }
     const key = `${this.namespace}:${input.serverId}`;
     const fencingToken = randomUUID();
@@ -62,6 +66,20 @@ export class RedisMCPReconnectCoordinator implements MCPReconnectCoordinator {
       ownerId: input.ownerId,
       fencingToken,
       expiresAt: new Date(this.now() + input.ttlMs).toISOString(),
+      assertCurrent: async () => {
+        const current = await this.client.eval(
+          "return redis.call('GET', KEYS[1]) == ARGV[1] and 1 or 0",
+          1,
+          key,
+          value
+        );
+        if (Number(current) !== 1) {
+          throw coordinationError(
+            'MCP_BULKHEAD_REJECTED',
+            'MCP reconnect lease was lost to a newer owner.'
+          );
+        }
+      },
       release: async () => {
         if (released) return;
         released = true;
