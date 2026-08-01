@@ -212,15 +212,16 @@ Deployment MCP servers use the same list with `mode: "local"` and
 `GET /tools/mcp/tools` reports normalized `ToolSpec` records, including
 `sourceRef.serverId` and `sourceRef.capabilityId`.
 
-The built-in `search` tool uses deterministic offline results by default. Set
-`WEB_SEARCH_PROVIDER=auto` to try `duckduckgo,wikipedia,stub` in order,
+The built-in `search` tool uses real HTTP providers in production. Set
+`WEB_SEARCH_PROVIDER=auto` to try `duckduckgo,wikipedia` in order,
 `WEB_SEARCH_PROVIDER=china` to prefer mainland China providers
-`baidu,so360,stub`, `WEB_SEARCH_PROVIDER=baidu` or `so360` for explicit
+`baidu,so360`, `WEB_SEARCH_PROVIDER=baidu` or `so360` for explicit
 mainland no-key suggest providers, `WEB_SEARCH_PROVIDER=wikipedia` for
 Wikipedia OpenSearch, or `WEB_SEARCH_PROVIDER=duckduckgo` for a DuckDuckGo
 Instant Answer-compatible endpoint while keeping the same `POST /tools/execute`
 contract. Request params may include `provider` and `fallbackProviders` for
-per-call overrides.
+per-call overrides. The deterministic `stub` is limited to tests and
+non-production development and is rejected by production lifecycle and calls.
 
 Tools that require human approval return HTTP `202` with `data.status` set to
 `human_review_required`. The run remains queryable through `/runtime/runs/:runId`
