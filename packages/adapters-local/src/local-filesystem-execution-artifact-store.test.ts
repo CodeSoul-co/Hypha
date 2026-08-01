@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import type { ArtifactPutRequest } from '@hypha/core';
 import { hashArtifactBytes, readArtifactStream } from './artifact-content-io';
 import {
   listLocalArtifactFiles,
+  isNodeError,
   localArtifactBlobPath,
   localArtifactManifestPath,
   prepareLocalArtifactStore,
@@ -15,6 +17,17 @@ import { LocalFilesystemExecutionArtifactStore } from './local-filesystem-execut
 const fixedNow = '2026-07-18T00:00:00.000Z';
 
 describe('LocalFilesystemExecutionArtifactStore', () => {
+  it('recognizes filesystem errors returned across a VM realm boundary', () => {
+    const foreignError = runInNewContext(
+      `Object.assign(new Error('missing'), { code: 'ENOENT' })`
+    ) as unknown;
+
+    expect(foreignError).not.toBeInstanceOf(Error);
+    expect(isNodeError(foreignError, 'ENOENT')).toBe(true);
+    expect(isNodeError({ code: 'EACCES' }, 'ENOENT')).toBe(false);
+    expect(isNodeError(null, 'ENOENT')).toBe(false);
+  });
+
   it('persists streamed content and recovers it after Store restart', async () => {
     const root = await createRoot();
     const store = createStore(root);
