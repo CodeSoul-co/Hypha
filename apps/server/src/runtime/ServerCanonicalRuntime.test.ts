@@ -1,8 +1,13 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createFrameworkEvent, InMemoryEventStore } from '@hypha/core';
+import { createFrameworkEvent, InMemoryEventStore, type RuntimeCancelResult } from '@hypha/core';
+import { defaultReActFSMProcessSpec } from '@hypha/fsm';
+import type { InferenceProvider } from '@hypha/inference';
+import type { ToolRunner } from '@hypha/tools';
 import { ServerCanonicalRuntime } from './ServerCanonicalRuntime';
+import type { ServerRuntimeCompositionBindings } from './ServerRuntimeComposition';
+import type { ServerRuntimeWorkerBindings } from './ServerRuntimeWorkerLifecycle';
 
 describe('ServerCanonicalRuntime', () => {
   const services: ServerCanonicalRuntime[] = [];
@@ -98,6 +103,54 @@ describe('ServerCanonicalRuntime', () => {
     await expect(composition.events.list({ runId: 'run-1' })).resolves.toHaveLength(2);
   });
 
+  it('hands the audited canonical authorities to one cached execution composition', async () => {
+    const service = createService(new InMemoryEventStore());
+    const bindings = executionBindings();
+
+    expect(() => service.composeRuntime(bindings)).toThrow('Canonical Runtime is not initialized');
+
+    const canonical = await service.initialize();
+    const runtime = service.composeRuntime(bindings);
+
+    expect(runtime.events).toBe(canonical.backbone.events);
+    expect(runtime.projections).toBe(canonical.backbone.projections);
+    expect(runtime.projectionStore).toBe(canonical.backbone.projectionStore);
+    expect(runtime.runLeases).toBe(canonical.backbone.runLeases);
+    expect(runtime.stateClaims).toBe(canonical.backbone.stateClaims);
+    expect(runtime.sessionQueue).toBe(canonical.backbone.sessionQueue);
+    expect(service.composeRuntime(executionBindings())).toBe(runtime);
+  });
+
+  it('owns one worker lifecycle and drains it before canonical shutdown', async () => {
+    const service = createService(new InMemoryEventStore());
+    await service.initialize();
+
+    expect(() => service.startWorkers(workerBindings())).toThrow(
+      'Canonical Runtime execution graph is not composed'
+    );
+
+    service.composeRuntime(executionBindings());
+    const [first, second] = await Promise.all([
+      service.startWorkers(workerBindings()),
+      service.startWorkers(workerBindings()),
+    ]);
+
+    expect(first).toBe(second);
+    expect(service.areWorkersRunning()).toBe(true);
+
+    const firstClose = service.close();
+    const secondClose = service.close();
+    expect(firstClose).toBe(secondClose);
+    await firstClose;
+
+    expect(first.timer.isRunning()).toBe(false);
+    expect(first.recovery.isRunning()).toBe(false);
+    expect(service.areWorkersRunning()).toBe(false);
+    expect(() => service.composeRuntime(executionBindings())).toThrow(
+      'Canonical Runtime is closed'
+    );
+  });
+
   function createService(
     legacyEvents: InMemoryEventStore,
     maxLegacyEvents = 100,
@@ -123,6 +176,54 @@ describe('ServerCanonicalRuntime', () => {
     return service;
   }
 });
+
+function executionBindings(): ServerRuntimeCompositionBindings {
+  return {
+    inference: {
+      id: 'inference.test',
+      infer: jest.fn(),
+    } as InferenceProvider,
+    toolRunner: {} as ToolRunner,
+    fsmSpec: defaultReActFSMProcessSpec,
+    executeState: async () => ({ result: { kind: 'continued' } }),
+    recoveryActivities: {
+      reconcile: async (request) => ({
+        activityId: request.invocation.activityId,
+        status: 'unknown',
+      }),
+      retry: async () => {
+        throw new Error('not configured');
+      },
+    },
+    recoveryRedispatches: {
+      redispatch: async () => {
+        throw new Error('not configured');
+      },
+    },
+    recoveryCancellations: {
+      cancel: async () => ({}) as RuntimeCancelResult,
+    },
+    recoveryRequeue: { requeue: async () => undefined },
+  };
+}
+
+function workerBindings(): ServerRuntimeWorkerBindings {
+  return {
+    timer: {
+      ownerId: 'runtime.timer.server',
+      leaseTtlMs: 30_000,
+      pageLimit: 100,
+      pollIntervalMs: 60_000,
+    },
+    recovery: {
+      ownerId: 'runtime.recovery.server',
+      leaseTtlMs: 30_000,
+      pageLimit: 100,
+      pollIntervalMs: 60_000,
+      autoRecoverReasons: ['PROJECTION_BEHIND'],
+    },
+  };
+}
 
 function event(id: string, type: Parameters<typeof createFrameworkEvent>[0]['type']) {
   return createFrameworkEvent({

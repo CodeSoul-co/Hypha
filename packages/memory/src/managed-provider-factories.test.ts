@@ -53,6 +53,28 @@ function context(
       id: `provider:${type}`,
       type,
       deployment: 'managed',
+      capabilities:
+        type === 'mem0'
+          ? {
+              add: true,
+              search: true,
+              get: true,
+              list: true,
+              update: true,
+              delete: true,
+              deleteByFilter: true,
+              history: true,
+              summarize: false,
+              consolidate: false,
+              decay: false,
+              reinforce: false,
+              conflictDetection: true,
+              hybridSearch: true,
+              graphRelations: false,
+              asyncWrite: true,
+              batchOperations: false,
+            }
+          : memoryManagementProviderSpecExample.capabilities,
       config,
     },
     references,

@@ -68,6 +68,7 @@ export interface MCPServerProfile {
     circuitBreaker?: { failureThreshold: number; resetAfterMs: number };
   };
   contentPolicy?: {
+    maxToolResultBytes?: number;
     maxResourceBytes?: number;
     maxPromptBytes?: number;
     maxPromptTokens?: number;
@@ -273,6 +274,7 @@ export const mcpServerProfileSchema = z.object({
     .optional(),
   contentPolicy: z
     .object({
+      maxToolResultBytes: z.number().int().positive().optional(),
       maxResourceBytes: z.number().int().positive().optional(),
       maxPromptBytes: z.number().int().positive().optional(),
       maxPromptTokens: z.number().int().positive().optional(),
