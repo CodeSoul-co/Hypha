@@ -102,6 +102,53 @@ describe('Execution Store and Lease contracts', () => {
     ).toThrow(/record id/u);
   });
 
+  it('binds durable terminal receipts to the Execution and Provider identities', () => {
+    const receipt = terminalReceipt();
+    expect(
+      validateExecutionRecord({
+        ...executionRecordExample,
+        terminalReceipt: receipt,
+      }).terminalReceipt
+    ).toEqual(receipt);
+
+    expect(() =>
+      validateExecutionRecord({
+        ...executionRecordExample,
+        terminalReceipt: { ...receipt, executionId: 'execution.other' },
+      })
+    ).toThrow(/record id/u);
+    expect(() =>
+      validateExecutionRecord({
+        ...executionRecordExample,
+        terminalReceipt: { ...receipt, providerId: 'provider.other' },
+      })
+    ).toThrow(/providerId/u);
+    expect(() =>
+      validateExecutionRecord({
+        ...executionRecordExample,
+        terminalReceipt: { ...receipt, status: 'accepted' },
+      })
+    ).toThrow(/completed or rejected/u);
+  });
+
+  it('requires a terminal result receipt to match its durable checkpoint', () => {
+    const receipt = terminalReceipt();
+    expect(() =>
+      validateExecutionRecord({
+        ...executionRecordExample,
+        status: 'completed',
+        lease: undefined,
+        terminalReceipt: receipt,
+        result: {
+          ...commandExecutionResultExample,
+          executionId: executionRecordExample.id,
+          sandboxId: 'sandbox.example',
+          externalReceipt: { ...receipt, receiptHash: 'sha256:different' },
+        },
+      })
+    ).toThrow(/durable terminalReceipt/u);
+  });
+
   it('requires a matching result for terminal records', () => {
     expect(() =>
       validateExecutionRecord({
@@ -143,6 +190,18 @@ describe('Execution Store and Lease contracts', () => {
     expect(() => validateExecutionRecord({ ...executionRecordExample, request })).toThrow(
       /idempotencyKey/u
     );
+  });
+
+  it('forbids a Provider terminal receipt on initial queued creation', () => {
+    expect(() =>
+      validateExecutionRecordCreateRequest({
+        ...executionRecordCreateRequestExample,
+        record: {
+          ...executionRecordCreateRequestExample.record,
+          terminalReceipt: terminalReceipt(),
+        },
+      })
+    ).toThrow(/receipt/u);
   });
 
   it('rejects record timestamps that move backwards', () => {
@@ -299,3 +358,15 @@ describe('Execution Store and Lease contracts', () => {
     }
   });
 });
+
+function terminalReceipt() {
+  return {
+    id: 'receipt.execution.example',
+    providerId: executionRecordExample.providerId,
+    executionId: executionRecordExample.id,
+    providerExecutionRef: 'provider-execution.example',
+    status: 'completed' as const,
+    issuedAt: '2026-07-16T00:00:02.000Z',
+    receiptHash: 'sha256:provider-terminal-receipt',
+  };
+}

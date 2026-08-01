@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type {
   ArtifactEventPublication,
   ArtifactEventPublisher,
+  ArtifactGetRequest,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
+  ArtifactPutRequest,
+  ArtifactStorageRef,
   ExecutionPrincipal,
 } from '@hypha/core';
 import {
@@ -77,6 +81,24 @@ describe('Artifact Event publication decorators', () => {
     expect(JSON.stringify(fixture.publisher.publications)).not.toMatch(
       /event-content|storageRef|relativePath/u
     );
+  });
+
+  it('preserves write and read cancellation context through the eventing decorator', async () => {
+    const fixture = createFixture();
+    const writeController = new AbortController();
+    const readController = new AbortController();
+
+    const created = await fixture.manager.create(
+      createRequest('operation.cancel-context', 'cancel-context'),
+      { abortSignal: writeController.signal }
+    );
+    await fixture.manager.read(
+      { principal, artifactId: created.id },
+      { abortSignal: readController.signal }
+    );
+
+    expect(fixture.store.operationOptions.at(-1)?.abortSignal).toBe(writeController.signal);
+    expect(fixture.store.readOperationOptions.at(-1)?.abortSignal).toBe(readController.signal);
   });
 
   it('publishes normalized create failure and delete-blocked evidence', async () => {
@@ -316,7 +338,7 @@ class CapturingArtifactEventPublisher implements ArtifactEventPublisher {
 }
 
 function createFixture() {
-  const store = new InMemoryExecutionArtifactStore({ id: 'artifact-store.event-test' });
+  const store = new CapturingArtifactOperationStore({ id: 'artifact-store.event-test' });
   const repository = new InMemoryArtifactRecordRepository();
   const publisher = new CapturingArtifactEventPublisher();
   const profile: ArtifactProfileSpec = {
@@ -391,6 +413,27 @@ function createFixture() {
     repository,
     store,
   };
+}
+
+class CapturingArtifactOperationStore extends InMemoryExecutionArtifactStore {
+  readonly operationOptions: Array<ArtifactOperationOptions | undefined> = [];
+  readonly readOperationOptions: Array<ArtifactOperationOptions | undefined> = [];
+
+  override async put(
+    request: ArtifactPutRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactStorageRef> {
+    this.operationOptions.push(options);
+    return super.put(request);
+  }
+
+  override async get(
+    request: ArtifactGetRequest,
+    options?: ArtifactOperationOptions
+  ): ReturnType<InMemoryExecutionArtifactStore['get']> {
+    this.readOperationOptions.push(options);
+    return super.get(request, options);
+  }
 }
 
 function createRequest(

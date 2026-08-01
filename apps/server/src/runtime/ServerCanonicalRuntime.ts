@@ -1,11 +1,16 @@
 import {
   FrameworkError,
   InMemoryEventSchemaRegistry,
+  RuntimeCancellationService,
   RuntimeHumanWaitService,
   hashCanonicalJson,
   registerRuntimeOrchestrationEventSchemas,
   runtimeEventSchemaDefinitions,
   type EventStore,
+  type RuntimeActivityCancellationPort,
+  type RuntimeCancelCommand,
+  type RuntimeCancelResult,
+  type RuntimeChildRunCancellationPort,
 } from '@hypha/core';
 import { DurableEventStoreBridge } from '@hypha/harness';
 import { randomUUID } from 'crypto';
@@ -54,6 +59,7 @@ export type ServerRuntimeExecutionState =
   | 'not_initialized'
   | 'event_authority_ready'
   | 'execution_graph_ready'
+  | 'maintenance_workers_running'
   | 'workers_running'
   | 'closed';
 
@@ -61,6 +67,11 @@ export interface ServerRuntimeExecutionReadiness {
   ready: boolean;
   state: ServerRuntimeExecutionState;
   message: string;
+}
+
+export interface ServerRuntimeCancellationBindings {
+  activities: RuntimeActivityCancellationPort;
+  children: RuntimeChildRunCancellationPort;
 }
 
 /**
@@ -76,6 +87,7 @@ export class ServerCanonicalRuntime {
   private migration?: CanonicalEventFamilyMigrationReport;
   private composition?: Readonly<ServerCanonicalRuntimeComposition>;
   private runtimeComposition?: Readonly<RuntimeComposition>;
+  private cancellations?: RuntimeCancellationService;
   private workerLifecycle?: ServerRuntimeWorkerLifecycle;
   private closePromise?: Promise<void>;
   private closed = false;
@@ -213,6 +225,36 @@ export class ServerCanonicalRuntime {
     return this.runtimeComposition;
   }
 
+  composeCancellations(bindings: ServerRuntimeCancellationBindings): RuntimeCancellationService {
+    this.assertOpen();
+    if (this.cancellations) return this.cancellations;
+    const canonical = this.get();
+    const backbone = canonical.backbone;
+    this.cancellations = new RuntimeCancellationService({
+      events: backbone.events,
+      projections: backbone.projections,
+      projectionStore: backbone.projectionStore,
+      runLeases: backbone.runLeases,
+      commands: backbone.sessionQueue,
+      activities: bindings.activities,
+      children: bindings.children,
+      nextId: (namespace) => `${namespace}:${this.runtimeInstanceId}:${++this.bridgeLeaseSequence}`,
+      ...(this.options.now === undefined ? {} : { now: this.options.now }),
+    });
+    return this.cancellations;
+  }
+
+  cancel(command: RuntimeCancelCommand): Promise<RuntimeCancelResult> {
+    this.assertOpen();
+    if (!this.cancellations) {
+      throw failure(
+        'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        'Canonical Runtime cancellation service is not composed'
+      );
+    }
+    return this.cancellations.cancel(command);
+  }
+
   /**
    * Starts the durable Runtime pollers only after the audited execution graph
    * has been composed. The returned workers are owned by this service.
@@ -262,11 +304,38 @@ export class ServerCanonicalRuntime {
         message: 'Canonical Runtime execution graph is not composed',
       });
     }
+    const workerStatus = this.workerLifecycle?.status();
+    const continuousExecutionReady =
+      workerStatus?.commands?.running === true &&
+      workerStatus.commands.supportedCommandTypes.includes('continue_react');
+    const continuationRepairReady = workerStatus?.continuations?.running === true;
+    if (
+      workerStatus?.timer.running === true &&
+      workerStatus.recovery.running === true &&
+      !continuousExecutionReady
+    ) {
+      return Object.freeze({
+        ready: false,
+        state: 'maintenance_workers_running',
+        message:
+          workerStatus.commands === undefined
+            ? 'Canonical Runtime maintenance workers are running, but the durable Session Command worker is not configured'
+            : 'Canonical Runtime Session Command worker is running, but continue_react is not composed',
+      });
+    }
+    if (continuousExecutionReady && !continuationRepairReady) {
+      return Object.freeze({
+        ready: false,
+        state: 'execution_graph_ready',
+        message:
+          'Canonical Runtime continuation command worker is running, but durable continuation reconciliation is not configured',
+      });
+    }
     if (!this.areWorkersRunning()) {
       return Object.freeze({
         ready: false,
         state: 'execution_graph_ready',
-        message: 'Canonical Runtime durable workers are not running',
+        message: 'Canonical Runtime durable execution workers are not running',
       });
     }
     return Object.freeze({
@@ -296,6 +365,7 @@ export class ServerCanonicalRuntime {
       failures.push(error);
     }
     this.workerLifecycle = undefined;
+    this.cancellations = undefined;
     this.runtimeComposition = undefined;
     this.composition = undefined;
     this.bridge = undefined;

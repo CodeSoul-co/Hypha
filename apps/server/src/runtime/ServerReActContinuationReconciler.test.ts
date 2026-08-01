@@ -152,6 +152,137 @@ describe('ServerReActContinuationReconciler', () => {
     expect(schedule).not.toHaveBeenCalled();
     expect(telemetryRecorder.sum(RUNTIME_OPERATIONAL_METRIC_NAMES.quarantineTotal)).toBe(1);
   });
+
+  it('does not resume a HumanTask before approval and advances it with reviewer feedback', async () => {
+    const events = await eventRuntime();
+    const value = checkpoint();
+    await appendHumanReview(events, value, false);
+    const checkpoints = new InMemoryReActContinuationCheckpointStore();
+    await checkpoints.put(value, 'checkpoint.human-review');
+    const schedule = jest.fn(async () => ({ taskId: 'command.human-review', reused: false }));
+    const reconciler = new ServerReActContinuationReconciler({
+      events,
+      queue: new InMemorySessionQueue({ now: () => now }),
+      checkpoints,
+      scheduler: { schedule },
+      payloadFactory: {
+        build: async ({ evidence, checkpoint: stored }) => payload(evidence, stored),
+      },
+      quarantine: { quarantine: jest.fn() },
+    });
+
+    await expect(reconciler.reconcile()).resolves.toMatchObject({ scheduled: 0 });
+    expect(schedule).not.toHaveBeenCalled();
+
+    await appendHumanApproval(events);
+    await expect(reconciler.reconcile()).resolves.toMatchObject({
+      scheduled: 1,
+      quarantined: 0,
+    });
+    const advanced = await checkpoints.get(value.runId, value.stepId, value.scopeHash);
+    expect(advanced).toMatchObject({
+      stepSequence: 6,
+      nextPhase: 'reason',
+      consecutiveNoProgress: 0,
+      updatedAt: now,
+    });
+    expect(advanced?.messages.at(-1)).toEqual({
+      role: 'user',
+      content: 'Human review approved. Reviewer feedback: use the safer read-only plan',
+    });
+  });
+
+  it('does not recreate a continuation after durable resume evidence', async () => {
+    const events = await eventRuntime();
+    const value = checkpoint();
+    await appendSuspension(events, value);
+    await events.append({
+      scope: { userId: 'user.reconcile', runId: value.runId },
+      events: [
+        {
+          id: 'event.resumed',
+          type: 'react.continuation.resumed',
+          version: '1.0.0',
+          userId: 'user.reconcile',
+          sessionId: 'session.reconcile',
+          runId: value.runId,
+          stepId: value.stepId,
+          timestamp: now,
+          payload: {
+            stepId: value.stepId,
+            scopeHash: value.scopeHash,
+            checkpointStepSequence: value.stepSequence,
+            checkpointHash: hashCanonicalJson(value),
+            resumedAt: now,
+          },
+        },
+      ],
+      expectedLastSequence: 1,
+      idempotencyKey: 'append.resume',
+    });
+    const checkpoints = new InMemoryReActContinuationCheckpointStore();
+    await checkpoints.put(value, 'checkpoint.resumed');
+    const schedule = jest.fn();
+    const reconciler = new ServerReActContinuationReconciler({
+      events,
+      queue: new InMemorySessionQueue({ now: () => now }),
+      checkpoints,
+      scheduler: { schedule },
+      payloadFactory: {
+        build: async ({ evidence, checkpoint: stored }) => payload(evidence, stored),
+      },
+      quarantine: { quarantine: jest.fn() },
+    });
+
+    await expect(reconciler.reconcile()).resolves.toMatchObject({ scheduled: 0 });
+    expect(schedule).not.toHaveBeenCalled();
+  });
+
+  it('bounds scans by all Session commands instead of only matching continuations', async () => {
+    const events = await eventRuntime();
+    const value = checkpoint();
+    await appendSuspension(events, value);
+    const checkpoints = new InMemoryReActContinuationCheckpointStore();
+    await checkpoints.put(value, 'checkpoint.scan-bound');
+    const list = jest.fn(async () =>
+      [1, 2].map(
+        (sequence) =>
+          ({
+            id: `irrelevant.${sequence}`,
+            commandType: 'signal',
+            idempotencyKey: `irrelevant.${sequence}`,
+            userId: 'user.reconcile',
+            sessionId: 'session.reconcile',
+            payloadRef: `payload.${sequence}`,
+            payloadHash: `sha256:${'4'.repeat(64)}`,
+            status: 'queued',
+            priority: 0,
+            maxAttempts: 1,
+            attempt: 0,
+            leaseEpoch: 0,
+            enqueueSequence: sequence,
+            createdAt: now,
+            availableAt: now,
+          }) as const
+      )
+    );
+    const reconciler = new ServerReActContinuationReconciler({
+      events,
+      queue: { list } as never,
+      checkpoints,
+      scheduler: { schedule: jest.fn() },
+      payloadFactory: {
+        build: async ({ evidence, checkpoint: stored }) => payload(evidence, stored),
+      },
+      quarantine: { quarantine: jest.fn() },
+      maxCommandsPerSession: 2,
+    });
+
+    await expect(reconciler.reconcile()).rejects.toMatchObject({
+      code: 'RUNTIME_RESOURCE_EXHAUSTED',
+    });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
 });
 
 async function eventRuntime(): Promise<EventRuntime> {
@@ -192,5 +323,78 @@ async function appendSuspension(
     ],
     expectedLastSequence: 0,
     idempotencyKey: 'append.suspension',
+  });
+}
+
+async function appendHumanReview(
+  events: EventRuntime,
+  value: ReActContinuationCheckpoint,
+  approved: boolean
+): Promise<void> {
+  await events.append({
+    scope: { userId: 'user.reconcile', runId: value.runId },
+    events: [
+      {
+        id: 'event.human.requested',
+        type: 'human.review.requested',
+        version: '1.0.0',
+        userId: 'user.reconcile',
+        sessionId: 'session.reconcile',
+        runId: value.runId,
+        timestamp: now,
+        payload: {
+          taskId: 'task.react-review',
+          metadata: {
+            resumeMode: 'react_feedback',
+            stepId: value.stepId,
+            scopeHash: value.scopeHash,
+            checkpointSequence: value.stepSequence,
+            checkpointHash: hashCanonicalJson(value),
+          },
+        },
+      },
+      ...(approved
+        ? [
+            {
+              id: 'event.human.approved',
+              type: 'human.review.approved' as const,
+              version: '1.0.0',
+              userId: 'user.reconcile',
+              sessionId: 'session.reconcile',
+              runId: value.runId,
+              timestamp: now,
+              payload: {
+                taskId: 'task.react-review',
+                reason: 'use the safer read-only plan',
+              },
+            },
+          ]
+        : []),
+    ],
+    expectedLastSequence: 0,
+    idempotencyKey: 'append.human-review',
+  });
+}
+
+async function appendHumanApproval(events: EventRuntime): Promise<void> {
+  await events.append({
+    scope: { userId: 'user.reconcile', runId: 'run.reconcile' },
+    events: [
+      {
+        id: 'event.human.approved',
+        type: 'human.review.approved',
+        version: '1.0.0',
+        userId: 'user.reconcile',
+        sessionId: 'session.reconcile',
+        runId: 'run.reconcile',
+        timestamp: now,
+        payload: {
+          taskId: 'task.react-review',
+          reason: 'use the safer read-only plan',
+        },
+      },
+    ],
+    expectedLastSequence: 1,
+    idempotencyKey: 'append.human-approval',
   });
 }

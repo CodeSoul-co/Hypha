@@ -335,6 +335,12 @@ export interface ReActRunnerOptions {
   onCheckpoint?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
   onResume?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
   syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
+  /**
+   * Keep the latest durable checkpoint until an outer transaction records the
+   * terminal/waiting outcome. Production quantum executors use this to avoid
+   * an unrecoverable gap between Runner completion and Event persistence.
+   */
+  retainCheckpointUntilOutcome?: boolean;
   resolveToolExecutionScope?: (
     context: ReActRunContext,
     action: ReActAction
@@ -1293,6 +1299,7 @@ export class ReActRunner {
       return current;
     };
     const clearCheckpoint = async (): Promise<void> => {
+      if (this.options.retainCheckpointUntilOutcome) return;
       if (!this.options.checkpointStore || persistedStepSequence === undefined) return;
       await this.options.checkpointStore.delete(
         context.runId,
@@ -1395,7 +1402,13 @@ export class ReActRunner {
         }
         action = structuredClone(resumed.pendingAction);
       } else {
-        if (!resumed) await pushStep('observe', { messageCount: context.messages.length });
+        if (!resumed) {
+          await pushStep('observe', { messageCount: context.messages.length });
+          // Establish a recovery anchor before the first external Model call.
+          // Production keeps this checkpoint until the terminal Event is
+          // durable; local/default runners still clear it on normal outcome.
+          await persistCheckpoint('reason');
+        }
         const inferred = await infer();
         if (inferred.disposition === 'suspended') return inferred.result;
         response = inferred.response;
@@ -1411,12 +1424,14 @@ export class ReActRunner {
         }
         if (action.type === 'human_review') {
           await pushStep('human_review', action);
+          const reviewCheckpoint = await persistCheckpoint('reason');
           await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
             steps,
             finalAction: action,
+            checkpoint: reviewCheckpoint,
           };
         }
 
@@ -1431,12 +1446,14 @@ export class ReActRunner {
           await pushStep('verify', observation, verifiedAction);
           if (verifiedAction.type === 'human_review') {
             await pushStep('human_review', verifiedAction);
+            const reviewCheckpoint = await persistCheckpoint('reason');
             await clearCheckpoint();
             return {
               runId: context.runId,
               status: 'human_review_required',
               steps,
               finalAction: verifiedAction,
+              checkpoint: reviewCheckpoint,
             };
           }
           if (verifiedAction.type !== 'finish' && verifiedAction.type !== 'model') {
@@ -1493,12 +1510,14 @@ export class ReActRunner {
             reason: 'Tool action requires human review.',
           };
           await pushStep('human_review', observation, humanReviewAction);
+          const reviewCheckpoint = await persistCheckpoint('reason');
           await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
             steps,
             finalAction: humanReviewAction,
+            checkpoint: reviewCheckpoint,
           };
         }
 
@@ -1508,12 +1527,14 @@ export class ReActRunner {
         await pushStep('memory_sync', { source: observation.source });
         if (action.type === 'human_review') {
           await pushStep('human_review', action);
+          const reviewCheckpoint = await persistCheckpoint('reason');
           await clearCheckpoint();
           return {
             runId: context.runId,
             status: 'human_review_required',
             steps,
             finalAction: action,
+            checkpoint: reviewCheckpoint,
           };
         }
         if (consecutiveNoProgress >= budget.maxConsecutiveNoProgress) {

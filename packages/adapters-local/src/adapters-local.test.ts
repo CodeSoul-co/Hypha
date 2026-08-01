@@ -4,6 +4,7 @@ import {
   InMemoryArtifactStore,
   InMemoryStructuredStore,
   InMemoryVectorIndexProvider,
+  LocalHashEmbeddingProvider,
   LocalVectorIndexProvider,
   MockEmbeddingProvider,
   SQLiteEventStore,
@@ -149,6 +150,19 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(artifacts.get(ref)).resolves.toEqual(Buffer.from('{"ok":true}'));
 
     await expect(new MockEmbeddingProvider().embed(['hypha'])).resolves.toHaveLength(1);
+  });
+
+  it('uses an honest lexical hash embedding for the zero-dependency local backbone', async () => {
+    const embeddings = new LocalHashEmbeddingProvider({ dimensions: 128 });
+    const [query, related, unrelated] = await embeddings.embed([
+      'durable runtime checkpoint recovery',
+      'runtime checkpoint recovery worker',
+      'watercolor landscape painting',
+    ]);
+
+    expect(query).toHaveLength(128);
+    expect(cosine(query, related)).toBeGreaterThan(cosine(query, unrelated));
+    expect(() => new LocalHashEmbeddingProvider({ dimensions: 8 })).toThrow('between 32 and 4096');
   });
 
   it('bridges the persistent local vector provider through the managed Memory contract', async () => {
@@ -508,6 +522,13 @@ describe('@hypha/adapters-local reference providers', () => {
 });
 
 async function awaitVector(value: string): Promise<number[]> {
-  const [vector] = await new MockEmbeddingProvider().embed([value]);
+  const [vector] = await new LocalHashEmbeddingProvider().embed([value]);
   return vector;
+}
+
+function cosine(left: number[], right: number[]): number {
+  const dot = left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
+  const leftNorm = Math.sqrt(left.reduce((sum, value) => sum + value * value, 0));
+  const rightNorm = Math.sqrt(right.reduce((sum, value) => sum + value * value, 0));
+  return dot / (leftNorm * rightNorm);
 }

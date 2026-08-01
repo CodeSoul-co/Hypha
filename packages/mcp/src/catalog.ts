@@ -4,6 +4,7 @@ import {
   FrameworkError,
   defineSpecSchema,
   type JsonSchema,
+  type SideEffectLevel,
   type TelemetryRecorder,
 } from '@hypha/core';
 import {
@@ -217,6 +218,7 @@ export interface MCPCapabilityApprovalRequest extends MCPCapabilityRef {
   approvedBy: string;
   expiresAt?: string;
   restrictions?: string[];
+  sideEffectLevel?: SideEffectLevel;
 }
 
 export interface MCPCapabilityCatalogStore {
@@ -244,7 +246,8 @@ export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogSt
   ): Promise<boolean> {
     if (options && 'expected' in options) {
       const current = this.records.get(record.id);
-      if (JSON.stringify(current ?? null) !== JSON.stringify(options.expected ?? null)) return false;
+      if (JSON.stringify(current ?? null) !== JSON.stringify(options.expected ?? null))
+        return false;
     }
     this.records.set(record.id, clone(record));
     return true;
@@ -613,12 +616,24 @@ export class MCPCapabilityCatalog {
         { serverId: record.serverId, capabilityId: record.remoteName }
       );
     }
+    assertSideEffectOverrideIsSafe(record, request.sideEffectLevel);
+    const normalizedToolSpec =
+      request.sideEffectLevel && record.normalizedToolSpec
+        ? { ...record.normalizedToolSpec, sideEffectLevel: request.sideEffectLevel }
+        : record.normalizedToolSpec;
     const saved = await this.store.save(
       {
         ...record,
         driftState: 'approved',
+        normalizedToolSpec,
         approvedAt,
         approvalExpiresAt: request.expiresAt,
+        metadata: {
+          ...(record.metadata ?? {}),
+          ...(request.sideEffectLevel === undefined
+            ? {}
+            : { approvedSideEffectLevel: request.sideEffectLevel }),
+        },
         trust: {
           ...record.trust,
           level: record.trust.level === 'untrusted' ? 'restricted' : record.trust.level,
@@ -642,6 +657,7 @@ export class MCPCapabilityCatalog {
       capabilityHash: record.capabilityHash,
       approvedBy: request.approvedBy,
       expiresAt: request.expiresAt,
+      sideEffectLevel: request.sideEffectLevel,
     });
   }
 
@@ -664,7 +680,7 @@ export class MCPCapabilityCatalog {
               context: { ...context, ...request.context },
             });
             await this.assertInvocationAuthorized(record, request.context);
-            return result;
+            return normalizeMCPToolOutput(result);
           },
           health: async () => ({ status: 'unknown', checkedAt: this.now() }),
         }),
@@ -724,7 +740,13 @@ export class MCPCapabilityCatalog {
   ): MCPCapabilityRecord {
     const now = this.now();
     const capabilityHash = descriptor.capabilityHash!;
-    const normalizedToolSpec = descriptor.type === 'tool' ? catalogToolSpec(descriptor) : undefined;
+    const discoveredToolSpec = descriptor.type === 'tool' ? catalogToolSpec(descriptor) : undefined;
+    const normalizedToolSpec =
+      prior?.driftState === 'approved' &&
+      prior.capabilityHash === capabilityHash &&
+      prior.normalizedToolSpec
+        ? prior.normalizedToolSpec
+        : discoveredToolSpec;
     const quarantined = shouldQuarantine(
       driftTypes,
       this.options.trustPolicy,
@@ -771,6 +793,10 @@ export class MCPCapabilityCatalog {
       approvalExpiresAt:
         driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
           ? prior.approvalExpiresAt
+          : undefined,
+      metadata:
+        driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
+          ? prior.metadata
           : undefined,
     };
   }
@@ -917,6 +943,38 @@ export class MCPCapabilityCatalog {
   }
 }
 
+function assertSideEffectOverrideIsSafe(
+  record: MCPCapabilityRecord,
+  approved: SideEffectLevel | undefined
+): void {
+  if (!approved) return;
+  if (record.kind !== 'tool' || !record.normalizedToolSpec) {
+    throw catalogError(
+      'MCP_SIDE_EFFECT_OVERRIDE_INVALID',
+      'Side-effect approval is only valid for MCP Tool capabilities.',
+      { serverId: record.serverId, capabilityId: record.remoteName }
+    );
+  }
+  const declared = (record.descriptor as { sideEffectLevel?: SideEffectLevel }).sideEffectLevel;
+  if (declared && sideEffectRank(approved) < sideEffectRank(declared)) {
+    throw catalogError(
+      'MCP_SIDE_EFFECT_OVERRIDE_UNSAFE',
+      'Approved side-effect level cannot be lower than the server-declared level.',
+      { serverId: record.serverId, capabilityId: record.remoteName, declared, approved }
+    );
+  }
+}
+
+function sideEffectRank(level: SideEffectLevel): number {
+  return {
+    none: 0,
+    read: 1,
+    write: 2,
+    external_effect: 3,
+    irreversible: 4,
+  }[level];
+}
+
 export class InMemoryToolContractSnapshotStore implements ToolContractSnapshotStore {
   private readonly snapshots = new Map<string, ToolContractSnapshot>();
 
@@ -986,6 +1044,23 @@ function catalogToolSpec(capability: MCPCapabilityDescriptor): ToolSpec {
     },
   };
   return spec;
+}
+
+/**
+ * MCP CallToolResult is a transport envelope. A declared Tool output schema
+ * applies to structuredContent, not to the protocol's content/isError fields.
+ */
+export function normalizeMCPToolOutput(result: unknown): unknown {
+  if (
+    result &&
+    typeof result === 'object' &&
+    Array.isArray((result as { content?: unknown }).content) &&
+    Object.prototype.hasOwnProperty.call(result, 'structuredContent') &&
+    (result as { structuredContent?: unknown }).structuredContent !== undefined
+  ) {
+    return (result as { structuredContent: unknown }).structuredContent;
+  }
+  return result;
 }
 
 function shouldQuarantine(

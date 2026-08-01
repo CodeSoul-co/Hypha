@@ -311,14 +311,34 @@ export function validateArtifactPutRequest(input: unknown): ArtifactPutRequest {
   return artifactPutRequestSchema.parse(input);
 }
 
+export function validateArtifactStoreCapabilities(input: unknown): ArtifactStoreCapabilities {
+  return artifactStoreCapabilitiesSchema.parse(input);
+}
+
 export function validateArtifactGetRequest(input: unknown): ArtifactGetRequest {
   return artifactGetRequestSchema.parse(input);
+}
+
+export function validateArtifactContent(input: unknown): ArtifactContent {
+  return artifactContentSchema.parse(input);
+}
+
+export function validateArtifactObjectMetadata(input: unknown): ArtifactObjectMetadata {
+  return artifactObjectMetadataSchema.parse(input);
+}
+
+export function validateArtifactStorageRef(input: unknown) {
+  return artifactStorageRefSchema.parse(input);
 }
 
 export function validateArtifactDownloadAccessRequest(
   input: unknown
 ): ArtifactDownloadAccessRequest {
   return artifactDownloadAccessRequestSchema.parse(input);
+}
+
+export function validateArtifactDownloadAccess(input: unknown): ArtifactDownloadAccess {
+  return artifactDownloadAccessSchema.parse(input);
 }
 
 export function isArtifactByteSource(value: unknown): value is ArtifactByteSource {

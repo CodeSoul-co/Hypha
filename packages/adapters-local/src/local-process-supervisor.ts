@@ -27,6 +27,13 @@ export interface LocalProcessRunRequest {
   maxCombinedOutputBytes: number;
   gracefulTerminationMs: number;
   signal: AbortSignal;
+  onOutput?: (event: LocalProcessOutputEvent) => void | Promise<void>;
+}
+
+export interface LocalProcessOutputEvent {
+  stream: 'stdout' | 'stderr';
+  chunk: Uint8Array;
+  truncated: boolean;
 }
 
 export interface LocalProcessRunResult {
@@ -53,6 +60,25 @@ export interface LocalProcessSupervisorOptions {
   monotonicNow?: () => number;
   taskkillPath?: string;
   kill?: (pid: number, signal: NodeJS.Signals | 0) => void;
+}
+
+interface PosixProcessGroupTerminationOperations {
+  signal(signal: 'SIGTERM' | 'SIGKILL'): void;
+  isAlive(): boolean;
+  waitForExit(maximumWaitMs: number): Promise<boolean>;
+  delay(milliseconds: number): Promise<void>;
+}
+
+export async function terminatePosixProcessGroup(
+  gracefulTerminationMs: number,
+  operations: PosixProcessGroupTerminationOperations
+): Promise<boolean> {
+  operations.signal('SIGTERM');
+  await operations.delay(gracefulTerminationMs);
+  if (!operations.isAlive()) return true;
+
+  operations.signal('SIGKILL');
+  return operations.waitForExit(Math.min(1_000, Math.max(250, gracefulTerminationMs)));
 }
 
 export class LocalProcessSupervisor {
@@ -85,6 +111,7 @@ export class LocalProcessSupervisor {
       let terminationError: Error | undefined;
       let timeout: NodeJS.Timeout | undefined;
       let idleTimeout: NodeJS.Timeout | undefined;
+      const pendingOutput = new Set<Promise<void>>();
       const output = new LocalProcessOutputCollector({
         maxStdoutBytes: request.maxStdoutBytes,
         maxStderrBytes: request.maxStderrBytes,
@@ -118,13 +145,39 @@ export class LocalProcessSupervisor {
         idleTimeout = setTimeout(() => requestTermination('idle_timed_out'), request.idleTimeoutMs);
       };
 
-      const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
+      const appendOutput = async (
+        stream: 'stdout' | 'stderr',
+        chunk: Buffer
+      ): Promise<void> => {
         const appended = output.append(stream, chunk);
         if (appended.limitExceeded) {
           outputLimitStream = appended.limitExceeded;
           requestTermination('output_limit');
         }
         resetIdleTimeout();
+        try {
+          await request.onOutput?.({
+            stream,
+            chunk: Uint8Array.from(chunk),
+            truncated: appended.limitExceeded !== undefined,
+          });
+        } catch (error) {
+          terminationError = asError(error);
+          requestTermination('termination_failed');
+        }
+      };
+
+      const observeOutput = (
+        source: NodeJS.ReadableStream,
+        stream: 'stdout' | 'stderr',
+        chunk: Buffer
+      ): void => {
+        source.pause();
+        const pending = appendOutput(stream, chunk).finally(() => {
+          pendingOutput.delete(pending);
+          if (!settled) source.resume();
+        });
+        pendingOutput.add(pending);
       };
 
       const clearTimers = (): void => {
@@ -156,6 +209,7 @@ export class LocalProcessSupervisor {
             request.gracefulTerminationMs
           );
         }
+        await Promise.all([...pendingOutput]);
         const capturedOutput = output.snapshot();
         const completedAt = this.now();
         resolve({
@@ -200,8 +254,8 @@ export class LocalProcessSupervisor {
       }
 
       request.signal.addEventListener('abort', onAbort, { once: true });
-      child.stdout.on('data', (chunk: Buffer) => appendOutput('stdout', chunk));
-      child.stderr.on('data', (chunk: Buffer) => appendOutput('stderr', chunk));
+      child.stdout.on('data', (chunk: Buffer) => observeOutput(child.stdout, 'stdout', chunk));
+      child.stderr.on('data', (chunk: Buffer) => observeOutput(child.stderr, 'stderr', chunk));
       child.once('error', (error) => void finish(null, null, asError(error)));
       child.once('close', (exitCode, signal) => void finish(exitCode, signal));
 
@@ -228,13 +282,12 @@ export class LocalProcessSupervisor {
   }
 
   private async terminatePosixScope(pid: number, gracefulTerminationMs: number): Promise<boolean> {
-    this.signalPosixScope(pid, 'SIGTERM');
-    await delay(gracefulTerminationMs);
-    if (this.isPosixScopeAlive(pid)) {
-      this.signalPosixScope(pid, 'SIGKILL');
-      return this.waitForPosixScopeExit(pid, Math.min(1_000, Math.max(250, gracefulTerminationMs)));
-    }
-    return true;
+    return terminatePosixProcessGroup(gracefulTerminationMs, {
+      signal: (signal) => this.signalPosixScope(pid, signal),
+      isAlive: () => this.isPosixScopeAlive(pid),
+      waitForExit: (maximumWaitMs) => this.waitForPosixScopeExit(pid, maximumWaitMs),
+      delay,
+    });
   }
 
   private async waitForPosixScopeExit(pid: number, maximumWaitMs: number): Promise<boolean> {

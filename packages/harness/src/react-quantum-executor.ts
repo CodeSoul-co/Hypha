@@ -387,7 +387,7 @@ export class ReActQuantumExecutor {
     } else if (input.command) {
       invalid('Initial quantum must not contain a Session command');
     }
-    this.assertActive(descriptor, input.signal);
+    this.assertLease(input.signal);
 
     const state = await this.options.runtime.replay(descriptor);
     this.identity.validateRuntimeState(descriptor, state);
@@ -416,13 +416,25 @@ export class ReActQuantumExecutor {
     this.identity.validateSnapshot(descriptor, snapshot);
 
     await this.options.revisionValidator?.validate(descriptor, state);
-    this.assertActive(descriptor, input.signal);
+    this.assertLease(input.signal);
+    if (this.deadlineElapsed(descriptor)) {
+      return this.recordPreExecutionTimeout(descriptor, state, input.signal);
+    }
+    if ((descriptor.pendingOperationReceipts?.length ?? 0) > 0 && !this.options.receiptReconciler) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Pending operation receipts require a configured reconciler',
+      });
+    }
     await this.options.receiptReconciler?.reconcile({
       descriptor,
       receiptRefs: descriptor.pendingOperationReceipts ?? [],
       signal: input.signal,
     });
-    this.assertActive(descriptor, input.signal);
+    this.assertLease(input.signal);
+    if (this.deadlineElapsed(descriptor)) {
+      return this.recordPreExecutionTimeout(descriptor, state, input.signal);
+    }
 
     const runner = await this.options.runnerFactory.create({
       descriptor,
@@ -430,7 +442,7 @@ export class ReActQuantumExecutor {
       snapshot,
       signal: input.signal,
     });
-    const react = await runner.run(snapshot.context, {
+    const runnerResult = await runner.run(snapshot.context, {
       ...(checkpoint === null ? {} : { checkpoint }),
       executionBudget: {
         maxIterations: descriptor.globalBudget.iterations,
@@ -442,7 +454,13 @@ export class ReActQuantumExecutor {
       },
       abortSignal: input.signal,
     });
-    this.assertActive(descriptor, input.signal);
+    // A worker that lost its lease may not publish. A worker that still owns
+    // the lease but crossed its deadline must persist a fail-closed timeout
+    // fact instead of leaving a live Run with an orphaned checkpoint.
+    this.assertLease(input.signal);
+    const react = this.deadlineElapsed(descriptor)
+      ? timedOutResult(runnerResult, descriptor.deadlineAt!)
+      : runnerResult;
     const disposition = dispositionFor(react);
     await this.options.outcomeRecorder.record({
       descriptor,
@@ -451,25 +469,66 @@ export class ReActQuantumExecutor {
       disposition,
       signal: input.signal,
     });
+    this.assertLease(input.signal);
+    if (react.status === 'completed' || react.status === 'failed' || react.status === 'cancelled') {
+      await this.options.checkpoints.delete(
+        descriptor.runId,
+        descriptor.stepId,
+        descriptor.scopeHash
+      );
+    }
     return { disposition, react };
   }
 
-  private assertActive(descriptor: ReActQuantumDescriptor, signal: AbortSignal): void {
+  private async recordPreExecutionTimeout(
+    descriptor: ReActQuantumDescriptor,
+    state: ReActQuantumRuntimeState,
+    signal: AbortSignal
+  ): Promise<ExecuteReActQuantumResult> {
+    const react = timedOutResult(
+      { runId: descriptor.runId, status: 'failed', steps: [] },
+      descriptor.deadlineAt!
+    );
+    await this.options.outcomeRecorder.record({
+      descriptor,
+      state,
+      react,
+      disposition: 'failed',
+      signal,
+    });
+    this.assertLease(signal);
+    await this.options.checkpoints.delete(
+      descriptor.runId,
+      descriptor.stepId,
+      descriptor.scopeHash
+    );
+    return { disposition: 'failed', react };
+  }
+
+  private assertLease(signal: AbortSignal): void {
     if (signal.aborted) {
       throw new FrameworkError({ code: 'RUNTIME_CANCELLED', message: 'ReAct quantum was aborted' });
     }
+  }
+
+  private deadlineElapsed(descriptor: ReActQuantumDescriptor): boolean {
+    if (descriptor.deadlineAt === undefined) return false;
     const now = this.now();
     if (!Number.isFinite(Date.parse(now))) invalid('Executor now must be a valid date-time');
-    if (
-      descriptor.deadlineAt !== undefined &&
-      Date.parse(now) >= Date.parse(descriptor.deadlineAt)
-    ) {
-      throw new FrameworkError({
-        code: 'RUNTIME_RUN_TIMEOUT',
-        message: 'ReAct continuation deadline has elapsed',
-      });
-    }
+    return Date.parse(now) >= Date.parse(descriptor.deadlineAt);
   }
+}
+
+function timedOutResult(result: ReActRunResult, deadlineAt: string): ReActRunResult {
+  return {
+    runId: result.runId,
+    status: 'failed',
+    steps: result.steps,
+    error: new FrameworkError({
+      code: 'RUNTIME_RUN_TIMEOUT',
+      message: `ReAct execution crossed its deadline ${deadlineAt}`,
+    }),
+  };
 }
 
 function validateContextSnapshot(input: unknown): ReActContextSnapshot {

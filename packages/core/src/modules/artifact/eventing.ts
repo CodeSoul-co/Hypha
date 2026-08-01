@@ -20,6 +20,7 @@ import type {
   ArtifactListRequest,
   ArtifactManager,
   ArtifactMutationRequest,
+  ArtifactOperationOptions,
   ArtifactProfileSpec,
   ArtifactPreviousRequest,
   ArtifactReadRequest,
@@ -95,19 +96,28 @@ export class EventingArtifactManager implements ArtifactManager {
     this.events = new ArtifactEventEmitter(options);
   }
 
-  async create(input: ArtifactCreateRequest): Promise<ArtifactRecord> {
+  async create(
+    input: ArtifactCreateRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactCreateRequest(input));
-    return this.createArtifact(request, () => this.manager.create(request));
+    return this.createArtifact(request, () => this.manager.create(request, options));
   }
 
-  async createFromWorkspace(input: ArtifactFromWorkspaceRequest): Promise<ArtifactRecord> {
+  async createFromWorkspace(
+    input: ArtifactFromWorkspaceRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactFromWorkspaceRequest(input));
-    return this.createArtifact(request, () => this.manager.createFromWorkspace(request));
+    return this.createArtifact(request, () => this.manager.createFromWorkspace(request, options));
   }
 
-  async createVersion(input: ArtifactVersionRequest): Promise<ArtifactRecord> {
+  async createVersion(
+    input: ArtifactVersionRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactRecord> {
     const request = validateArtifactManagerInput(() => validateArtifactVersionRequest(input));
-    const record = await this.manager.createVersion(request);
+    const record = await this.manager.createVersion(request, options);
     await this.events.publish(
       'artifact.version.created',
       recordPayload(request.operationId, record),
@@ -122,14 +132,17 @@ export class EventingArtifactManager implements ArtifactManager {
     return this.manager.get(request);
   }
 
-  async read(input: ArtifactReadRequest): Promise<ArtifactReadResult> {
+  async read(
+    input: ArtifactReadRequest,
+    options: ArtifactOperationOptions = {}
+  ): Promise<ArtifactReadResult> {
     const request = validateArtifactManagerInput(() => validateArtifactReadRequest(input));
     const operationId = this.events.operationId('read');
     await this.events.publish('artifact.read.requested', {
       operationId,
       artifactId: request.artifactId,
     });
-    const result = await this.manager.read(request);
+    const result = await this.manager.read(request, options);
     await this.events.publish(
       'artifact.read.completed',
       {

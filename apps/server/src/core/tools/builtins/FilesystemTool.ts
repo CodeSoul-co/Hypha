@@ -10,8 +10,8 @@ import type { ToolDefinition, ToolGovernanceSpec, ToolParams } from '../types';
 export type FilesystemToolConfig = WorkspaceRuntimeConfig;
 
 const defaultConfig: FilesystemToolConfig = {
-  workingDirectory: '.',
-  readPaths: ['.'],
+  workingDirectory: './data/workspace',
+  readPaths: ['./data/workspace'],
   writePaths: ['./data/workspace'],
   executePaths: ['./data/workspace/bin'],
   execution: {

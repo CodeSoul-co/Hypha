@@ -6,6 +6,8 @@ import {
   remoteArtifactDownloadRequestExample,
   remoteArtifactTransferReceiptExample,
   remoteArtifactUploadRequestExample,
+  remoteExecutionReconciliationRequestExample,
+  remoteExecutionReconciliationResultExample,
   remoteOutputStreamRequestExample,
   remoteSandboxProviderCapabilitiesExample,
   remoteSandboxProviderContractJsonSchemas,
@@ -14,6 +16,8 @@ import {
   validateRemoteArtifactDownloadRequest,
   validateRemoteArtifactTransferReceipt,
   validateRemoteArtifactUploadRequest,
+  validateRemoteExecutionReconciliationRequest,
+  validateRemoteExecutionReconciliationResult,
   validateRemoteOutputStreamRequest,
   validateRemoteSandboxProviderCapabilities,
 } from './index';
@@ -26,6 +30,8 @@ describe('Remote Sandbox Provider contract', () => {
       'RemoteArtifactDownloadRequest',
       'RemoteArtifactTransferReceipt',
       'RemoteArtifactUploadRequest',
+      'RemoteExecutionReconciliationRequest',
+      'RemoteExecutionReconciliationResult',
       'RemoteOutputStreamRequest',
       'RemoteSandboxProviderCapabilities',
     ]);
@@ -35,6 +41,12 @@ describe('Remote Sandbox Provider contract', () => {
     expect(validateRemoteOutputStreamRequest(remoteOutputStreamRequestExample)).toEqual(
       remoteOutputStreamRequestExample
     );
+    expect(
+      validateRemoteExecutionReconciliationRequest(remoteExecutionReconciliationRequestExample)
+    ).toEqual(remoteExecutionReconciliationRequestExample);
+    expect(
+      validateRemoteExecutionReconciliationResult(remoteExecutionReconciliationResultExample)
+    ).toEqual(remoteExecutionReconciliationResultExample);
     expect(validateRemoteArtifactUploadRequest(remoteArtifactUploadRequestExample)).toEqual(
       remoteArtifactUploadRequestExample
     );
@@ -71,6 +83,46 @@ describe('Remote Sandbox Provider contract', () => {
         maxBytes: 0,
       })
     ).toThrow();
+  });
+
+  it('requires a durable lookup key and identity-consistent reconciliation evidence', () => {
+    expect(() =>
+      validateRemoteExecutionReconciliationRequest({
+        ...remoteExecutionReconciliationRequestExample,
+        providerExecutionRef: undefined,
+        idempotencyKey: undefined,
+      })
+    ).toThrow(/providerExecutionRef or idempotencyKey/u);
+
+    expect(() =>
+      validateRemoteExecutionReconciliationResult({
+        ...remoteExecutionReconciliationResultExample,
+        providerExecutionRef: undefined,
+      })
+    ).toThrow(/providerExecutionRef/u);
+    expect(() =>
+      validateRemoteExecutionReconciliationResult({
+        ...remoteExecutionReconciliationResultExample,
+        result: {
+          ...remoteExecutionReconciliationResultExample.result,
+          executionId: 'execution.other',
+        },
+      })
+    ).toThrow(/reconciled executionId/u);
+    expect(() =>
+      validateRemoteExecutionReconciliationResult({
+        ...remoteExecutionReconciliationResultExample,
+        state: 'running',
+      })
+    ).toThrow(/reconciliation state/u);
+    expect(
+      validateRemoteExecutionReconciliationResult({
+        executionId: remoteExecutionReconciliationRequestExample.executionId,
+        sandboxId: remoteExecutionReconciliationRequestExample.sandboxId,
+        state: 'not_found',
+        observedAt: remoteExecutionReconciliationResultExample.observedAt,
+      })
+    ).toMatchObject({ state: 'not_found' });
   });
 
   it('validates decoded chunk size and contiguous transfer ordering', () => {

@@ -6,13 +6,13 @@ hypha uses a storage-profile model. Framework specs reference storage by stable 
 
 The local backbone is designed for a complete local harness:
 
-| Component          | Provider                   | Role                                                                                    |
-| ------------------ | -------------------------- | --------------------------------------------------------------------------------------- |
-| Events             | `SQLiteEventStore`         | Trace, replay, audit, regression, and runtime projection source.                        |
-| Structured records | `SQLiteStructuredStore`    | Source of truth for runs, memory records, policies, evaluations, and task state.        |
-| Semantic recall    | `LocalVectorIndexProvider` | Vector index with metadata filters.                                                     |
-| Artifacts          | `FileArtifactStore`        | Files, snapshots, large tool outputs, and exports.                                      |
-| Memory             | `HybridMemoryProvider`     | Simple composition of structured source of truth plus optional vector/artifact indexes. |
+| Component             | Provider                   | Role                                                                                                        |
+| --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Events                | `SQLiteEventStore`         | Trace, replay, audit, regression, and runtime projection source.                                            |
+| Structured records    | `SQLiteStructuredStore`    | Source of truth for runs, memory records, policies, evaluations, and task state.                            |
+| Lexical vector recall | `LocalVectorIndexProvider` | Vector index with metadata filters; the default local embedding uses deterministic lexical feature hashing. |
+| Artifacts             | `FileArtifactStore`        | Files, snapshots, large tool outputs, and exports.                                                          |
+| Memory                | `HybridMemoryProvider`     | Simple composition of structured source of truth plus optional vector/artifact indexes.                     |
 
 Create the full local stack:
 
@@ -40,6 +40,11 @@ await storage.eventStore.importJsonl('./data/runtime/events/run_1.events.jsonl')
 Use JSONL exports for replay fixtures, audits, regression snapshots, and local
 debugging. The event log remains the source of truth; exported files are
 portable snapshots.
+
+The zero-dependency default is `LocalHashEmbeddingProvider`. It preserves
+repeatable lexical similarity for local/offline use; it is not a neural
+semantic embedding model. Inject a concrete `EmbeddingProvider` through the
+`embeddings` option when semantic retrieval quality is required.
 
 ## Storage Provider Profile
 
@@ -76,6 +81,8 @@ const qdrant = createQdrantStorageProfile({ host: 'localhost', port: 6333 });
 const pinecone = createPineconeStorageProfile();
 ```
 
+Profile factories declare portable contracts; they do not instantiate provider clients. The stock Server currently composes MongoDB, Redis, local SQLite/JSON storage, the local vector index, and the filesystem artifact store. It fails configuration validation if Kafka, Postgres, Qdrant, Chroma, Pinecone, or S3 is marked enabled without a registered concrete Server composition.
+
 ## Storage Recovery Contract
 
 `classifyStorageFailure(error, context)` normalizes relational, document, event, object, vector,
@@ -99,12 +106,31 @@ Runtime configuration is grouped by function before provider:
 | Config Path          | Function                                  | Examples                                      |
 | -------------------- | ----------------------------------------- | --------------------------------------------- |
 | `storage.document`   | Document records                          | MongoDB local or Atlas.                       |
-| `storage.messaging`  | Cache, streams, queues, pub/sub           | Redis local/cloud, Kafka self-hosted/managed. |
-| `storage.relational` | Event logs and structured source of truth | SQLite local, Postgres production.            |
-| `storage.vector`     | Semantic indexes                          | Local JSON, Qdrant, Chroma, Pinecone.         |
-| `storage.artifacts`  | File/blob payloads                        | Local filesystem, S3-compatible stores.       |
+| `storage.messaging`  | Cache, streams, queues, pub/sub           | Redis adapter; Kafka profile contract.        |
+| `storage.relational` | Event logs and structured source of truth | SQLite adapter; Postgres profile contract.    |
+| `storage.vector`     | Semantic indexes                          | Local JSON adapter; remote profile contracts. |
+| `storage.artifacts`  | File/blob payloads                        | Filesystem adapter; S3 profile contract.      |
 
 Each store declares a deployment mode: `local`, `self_hosted`, `managed`, or `cloud`. Use `.env` for deployment-specific URLs, credentials, and local paths. Use `config.yaml` for typed structure and safe defaults.
+
+Execution provides a concrete `S3ExecutionArtifactStore` and an explicit
+`S3ExecutionArtifactStoreFactory`. The Factory can be added to
+`ArtifactStoreProviderRegistry`, but it is not registered or selected by default and is not yet
+wired into Server composition. Its capability contract reports versioning, range reads, signed
+access, server-side copy, multipart upload, and content addressing; encryption remains `false`.
+Deployment requires a bucket with object versioning enabled, explicit endpoint policy, and current
+real MinIO/S3 acceptance evidence.
+
+Execution also exports `PostgresExecutionStoreFactory` with the stable
+`execution-store.postgres` identity. The Factory validates an explicit Postgres connection string,
+TLS mode, pool limits, and operation timeouts; initializes the versioned schema under an advisory
+lock before returning the Store; and closes its pool when initialization fails. It can be added to
+`ExecutionStoreRegistry`, but it is not registered or selected by default and is not wired into
+Server composition. Current adapter evidence covers runtime-schema-validated records, restart
+persistence, idempotency, CAS, lease renewal and fencing, concurrent migration, lock timeout,
+database outage and crash recovery, unsupported schema, read-only migration failure, corrupt-record
+quarantine, health, and close. These adapter guarantees do not by themselves make a deployment
+release-ready.
 
 Local defaults are organized under `data/`: events in `data/runtime/events/`, structured records in `data/runtime/structured/`, vector indexes in `data/storage/vector/`, artifacts in `data/storage/artifacts/`, and system logs in `data/logs/system.log`.
 
@@ -151,13 +177,13 @@ REDIS_TLS=true
 
 `REDIS_URL` takes precedence over host/port config. `KV_URL` and `RENDER_REDIS_URL` are also recognized as compatibility fallbacks.
 
-Kafka config is available under `storage.messaging.kafka` for queue/pub-sub adapters. It is optional and not required for the current API startup path.
+Kafka configuration is available under `storage.messaging.kafka` as an extension contract. The stock Server does not compose a Kafka client and rejects `KAFKA_ENABLED=true`; a deployment must first provide an adapter, lifecycle hooks, readiness probe, and real acceptance tests.
 
 ## Relational and Vector Extension Points
 
-`StructuredStoreProvider` is the relational/source-of-truth interface. `SQLiteStructuredStore` is the local implementation. Future providers such as Postgres or MySQL should implement the same methods: `get`, `insert`, `update`, `query`, and `transaction`.
+`StructuredStoreProvider` is the relational/source-of-truth interface. `SQLiteStructuredStore` is the local implementation. Other providers such as Postgres or MySQL must implement the same methods: `get`, `insert`, `update`, `query`, and `transaction`, then be registered in Server composition before their configuration can be enabled.
 
-`VectorIndexProvider` is the vector retrieval interface. `LocalVectorIndexProvider` is the local implementation. Provider profiles already cover `pgvector`, Qdrant, Milvus, Chroma, Pinecone, and Weaviate; concrete adapters should implement `upsert`, `search`, and `delete`.
+`VectorIndexProvider` is the vector retrieval interface. `LocalVectorIndexProvider` is the local implementation. Provider profiles cover `pgvector`, Qdrant, Milvus, Chroma, Pinecone, and Weaviate; each concrete adapter must implement `upsert`, `search`, and `delete` and register lifecycle and readiness behavior before Server enablement.
 
 Vector stores are retrieval indexes, not the full source of truth. Persist factual memory records in structured storage, then index selected semantic or episodic values in a vector provider.
 

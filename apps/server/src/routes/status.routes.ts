@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
-import { checkStorageHealth } from '../services/database';
 import { getConfig } from '../config';
+import { getServerProductReadiness } from '../services/ServerProductReadiness';
 
 const router = Router();
 
@@ -20,10 +20,11 @@ function escapeHtml(str: string): string {
 router.get(
   '/page',
   asyncHandler(async (_req: Request, res: Response) => {
-    const dbHealth = await checkStorageHealth();
+    const readiness = await getServerProductReadiness();
+    const dbHealth = readiness.components.storage;
     const llmManager = getLLMManager();
     const config = getConfig();
-    const llmHealth = await llmManager.healthCheck();
+    const llmHealth = readiness.components.llm.providers;
     const models = await llmManager.listAllModels();
 
     let providersHtml = '';
@@ -55,6 +56,13 @@ router.get(
     const documentStoreClass = dbHealth.mongodb ? 'success' : 'warning';
     const messagingStoreStatus = dbHealth.redis ? 'Connected' : 'Disconnected';
     const messagingStoreClass = dbHealth.redis ? 'success' : 'warning';
+    const llmReady = readiness.components.llm.ready;
+    const runtimeReady = readiness.components.runtime.ready;
+    const overallLabel = readiness.ready
+      ? readiness.status === 'degraded'
+        ? 'Ready with optional degradation'
+        : 'Ready'
+      : 'Not ready for traffic';
 
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -97,7 +105,7 @@ router.get(
 <body>
   <div class="container">
     <h1>hypha</h1>
-    <p class="subtitle">Modular AI Agent Backend Service</p>
+    <p class="subtitle">Harness-oriented Agent Runtime</p>
     <div class="status-grid">
       <div class="card">
         <div class="card-header">
@@ -118,15 +126,24 @@ router.get(
           <div>Engine: <strong>Redis</strong></div>
           <div>Role: <strong>Cache, stream, queue-ready</strong></div>
           <div>Status: <span class="badge ${messagingStoreClass}">${messagingStoreStatus}</span></div>
-          <div>Max Pairs: <strong>50</strong></div>
         </div>
       </div>
       <div class="card">
         <div class="card-header">
-          <div class="status-dot healthy"></div>
+          <div class="status-dot ${llmReady ? 'healthy' : 'unavailable'}"></div>
           <span class="card-title">LLM Providers</span>
         </div>
         <div class="card-content">${providersHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="status-dot ${runtimeReady ? 'healthy' : 'unavailable'}"></div>
+          <span class="card-title">Canonical Runtime</span>
+        </div>
+        <div class="card-content">
+          <div>Status: <strong>${escapeHtml(readiness.components.runtime.state)}</strong></div>
+          <div>${escapeHtml(readiness.components.runtime.message ?? overallLabel)}</div>
+        </div>
       </div>
     </div>
     <div class="api-section">
@@ -149,8 +166,8 @@ router.get(
       ${modelsHtml}
     </div>
     <div class="footer">
-      <p>hypha v1.0.0 | All systems operational</p>
-      <p style="margin-top:8px">Base URL: <code style="background:rgba(0,217,255,0.1);padding:4px 8px;border-radius:4px">http://localhost:3000/api/v1</code></p>
+      <p>hypha ${escapeHtml(config.app.version)} | ${escapeHtml(overallLabel)}</p>
+      <p style="margin-top:8px">API prefix: <code style="background:rgba(0,217,255,0.1);padding:4px 8px;border-radius:4px">${escapeHtml(config.app.apiPrefix)}</code></p>
     </div>
   </div>
 </body>
@@ -164,16 +181,22 @@ router.get(
 router.get(
   '/',
   asyncHandler(async (_req: Request, res: Response) => {
-    const dbHealth = await checkStorageHealth();
+    const readiness = await getServerProductReadiness();
+    const dbHealth = readiness.components.storage;
     const llmManager = getLLMManager();
-    const llmHealth = await llmManager.healthCheck();
+    const llmHealth = readiness.components.llm.providers;
     const models = await llmManager.listAllModels();
 
     res.json({
       success: true,
       data: {
         service: 'hypha',
-        version: '1.0.0',
+        version: getConfig().app.version,
+        readiness: {
+          ready: readiness.ready,
+          status: readiness.status,
+          components: readiness.components,
+        },
         timestamp: new Date().toISOString(),
         storage: {
           document: {
@@ -192,7 +215,7 @@ router.get(
         },
         llm: {
           health: llmHealth,
-          availableProviders: Object.keys(llmHealth),
+          availableProviders: readiness.components.llm.availableProviders,
           modelCount: models.length,
         },
         endpoints: {

@@ -1,3 +1,4 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -5,6 +6,7 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionRecordCreateRequest,
+  ExecutionRecordQuery,
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
@@ -19,7 +21,7 @@ import {
   executionRecordCreateRequestExample,
   executionRecordExample,
 } from '@hypha/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SQLiteExecutionStoreFoundation,
   SQLiteExecutionStoreFoundationError,
@@ -61,6 +63,141 @@ describe('SQLiteExecutionStoreFoundation', () => {
     const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root });
     await expect(reopened.get(created.id)).resolves.toEqual(created);
     await reopened.close();
+  });
+
+  it('fails closed under a competing write lock and retries the same create safely', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root, busyTimeoutMs: 1 });
+    const filename = path.join(root, 'executions.sqlite');
+    const lockHolder = openTestDatabase(filename);
+    const request = queuedCreateRequest('execution.locked');
+
+    lockHolder.exec('BEGIN IMMEDIATE');
+    try {
+      await expect(store.create(request)).rejects.toMatchObject({
+        code: 'EXECUTION_STORE_UNAVAILABLE',
+        message: 'SQLite Execution store write failed.',
+      });
+      expect(
+        lockHolder
+          .prepare('SELECT execution_id FROM execution_records WHERE execution_id = ?')
+          .get(request.record.id)
+      ).toBeUndefined();
+    } finally {
+      lockHolder.exec('ROLLBACK');
+      lockHolder.close();
+    }
+
+    const created = await store.create(request);
+    await expect(store.create(request)).resolves.toEqual(created);
+    await expect(store.get(request.record.id)).resolves.toEqual(created);
+    await store.close();
+  });
+
+  it('rolls back a disk-full write and retries safely after capacity is restored', async () => {
+    const root = await temporaryRoot();
+    const initial = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const filename = initial.filename;
+    await initial.close();
+
+    const capacityProbe = openTestDatabase(filename);
+    const pageCount = Number(capacityProbe.prepare('PRAGMA page_count').get()?.page_count);
+    expect(pageCount).toBeGreaterThan(0);
+    capacityProbe.close();
+
+    const limited = new SQLiteExecutionStoreFoundation({
+      rootPath: root,
+      maxDatabasePages: pageCount,
+    });
+    const request = queuedCreateRequest('execution.disk-full');
+    request.record.request.metadata = { padding: 'x'.repeat(256 * 1024) };
+
+    await expect(limited.create(request)).rejects.toMatchObject({
+      code: 'EXECUTION_STORE_UNAVAILABLE',
+      message: 'SQLite Execution store write failed.',
+    });
+    await expect(limited.get(request.record.id)).resolves.toBeNull();
+    await limited.close();
+
+    const restored = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const created = await restored.create(request);
+    await expect(restored.create(request)).resolves.toEqual(created);
+    await expect(restored.get(request.record.id)).resolves.toEqual(created);
+    await restored.close();
+  });
+
+  it('fails closed on a read-only database and retries without a partial commit', async () => {
+    const root = await temporaryRoot();
+    const initial = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const filename = initial.filename;
+    const preservedRequest = queuedCreateRequest('execution.read-only.preserved');
+    const preserved = await initial.create(preservedRequest);
+    await initial.close();
+
+    const rejectedRequest = queuedCreateRequest('execution.read-only.rejected');
+    await fs.chmod(filename, 0o444);
+    let readOnlyStore: SQLiteExecutionStoreFoundation | undefined;
+    let openError: unknown;
+    try {
+      try {
+        readOnlyStore = new SQLiteExecutionStoreFoundation({ rootPath: root });
+      } catch (error) {
+        openError = error;
+      }
+
+      if (readOnlyStore) {
+        await expect(readOnlyStore.create(rejectedRequest)).rejects.toMatchObject({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'SQLite Execution store write failed.',
+        });
+        await expect(readOnlyStore.get(preserved.id)).resolves.toEqual(preserved);
+        await readOnlyStore.close();
+        readOnlyStore = undefined;
+      } else {
+        expect(openError).toMatchObject({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'Unable to open the SQLite Execution store.',
+        });
+      }
+    } finally {
+      await readOnlyStore?.close();
+      await fs.chmod(filename, 0o600);
+    }
+
+    const restored = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(restored.get(preserved.id)).resolves.toEqual(preserved);
+    await expect(restored.get(rejectedRequest.record.id)).resolves.toBeNull();
+    const created = await restored.create(rejectedRequest);
+    await expect(restored.create(rejectedRequest)).resolves.toEqual(created);
+    await restored.close();
+  });
+
+  it.each([
+    ['permission denial', 'EACCES', 'permission denied'],
+    ['filesystem I/O failure', 'EIO', 'input/output error'],
+  ])('normalizes store-root %s before opening SQLite', async (_caseName, code, message) => {
+    const root = await temporaryRoot();
+    const failure = Object.assign(new Error(message), { code });
+    const spy =
+      code === 'EACCES'
+        ? vi.spyOn(fsSync, 'mkdirSync').mockImplementationOnce(() => {
+            throw failure;
+          })
+        : vi.spyOn(fsSync, 'lstatSync').mockImplementationOnce(() => {
+            throw failure;
+          });
+
+    try {
+      expect(() => new SQLiteExecutionStoreFoundation({ rootPath: root })).toThrowError(
+        expect.objectContaining({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'Unable to prepare the SQLite Execution store.',
+        })
+      );
+      await expect(fs.readdir(root)).resolves.toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('lists only records matching owner, provider, status, and time filters', async () => {
@@ -165,6 +302,95 @@ describe('SQLiteExecutionStoreFoundation', () => {
       code: 'EXECUTION_STORE_INVALID_CURSOR',
     });
     await reopened.close();
+  });
+
+  it('preserves cursor identity across concurrent inserts, deletes, and status changes', async () => {
+    const root = await temporaryRoot();
+    const store = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    const records = new Map<string, ExecutionRecord>();
+    for (const [suffix, updatedAt] of [
+      ['a', '2026-07-16T00:00:00.100Z'],
+      ['b', '2026-07-16T00:00:00.200Z'],
+      ['c', '2026-07-16T00:00:00.300Z'],
+      ['d', '2026-07-16T00:00:00.400Z'],
+    ] as const) {
+      const created = await store.create(
+        queuedCreateRequest(`execution.concurrent-page.${suffix}`, {
+          userId: 'user.concurrent-page',
+          workspaceId: 'workspace.concurrent-page',
+          updatedAt,
+        })
+      );
+      records.set(suffix, created);
+    }
+
+    const query: ExecutionRecordQuery = {
+      userId: 'user.concurrent-page',
+      workspaceId: 'workspace.concurrent-page',
+      statuses: ['queued'],
+      limit: 2,
+    };
+    const first = await store.list(query);
+    expect(first.records.map((record) => record.id)).toEqual([
+      'execution.concurrent-page.d',
+      'execution.concurrent-page.c',
+    ]);
+    expect(first.cursor).toEqual(expect.any(String));
+
+    await store.create(
+      queuedCreateRequest('execution.concurrent-page.newer', {
+        userId: 'user.concurrent-page',
+        workspaceId: 'workspace.concurrent-page',
+        updatedAt: '2026-07-16T00:00:00.500Z',
+      })
+    );
+    const recordB = records.get('b');
+    expect(recordB).toBeDefined();
+    await store.compareAndSet(
+      compareAndSetRequest(0, 'starting', 'cas:concurrent-page-b', recordB)
+    );
+    const concurrentDatabase = openTestDatabase(store.filename);
+    try {
+      concurrentDatabase.exec('BEGIN IMMEDIATE');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_create_idempotency WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_mutation_idempotency WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_lease_history WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_record_quarantine WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase
+        .prepare('DELETE FROM execution_records WHERE execution_id = ?')
+        .run('execution.concurrent-page.a');
+      concurrentDatabase.exec('COMMIT');
+    } catch (error) {
+      concurrentDatabase.exec('ROLLBACK');
+      throw error;
+    } finally {
+      concurrentDatabase.close();
+    }
+
+    const second = await store.list({ ...query, cursor: first.cursor });
+    expect(second).toEqual({ records: [] });
+    expect(
+      [...first.records, ...second.records].map((record) => record.id)
+    ).toEqual([
+      'execution.concurrent-page.d',
+      'execution.concurrent-page.c',
+    ]);
+    await expect(
+      store.list({
+        ...query,
+        statuses: ['starting'],
+        cursor: first.cursor,
+      })
+    ).rejects.toMatchObject({ code: 'EXECUTION_STORE_INVALID_CURSOR' });
+    await store.close();
   });
 
   it('queries active leases by indexed expiry time', async () => {
@@ -915,6 +1141,87 @@ describe('SQLiteExecutionStoreFoundation', () => {
     backup.close();
   });
 
+  it('restores a verified migration backup and migrates it forward without data loss', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const backupFilename = `${filename}.backup-v1.sqlite`;
+    const created = structuredClone(executionRecordCreateRequestExample.record);
+    const database = openTestDatabase(filename);
+    createVersionOneDatabase(database);
+    insertLegacyRecord(database, created);
+    database.close();
+
+    const migrated = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(migrated.get(created.id)).resolves.toEqual(created);
+    await migrated.close();
+
+    const verifiedBackup = openTestDatabase(backupFilename);
+    expect(verifiedBackup.prepare('PRAGMA integrity_check').get()).toMatchObject({
+      integrity_check: 'ok',
+    });
+    expect(verifiedBackup.prepare('PRAGMA user_version').get()).toMatchObject({
+      user_version: 1,
+    });
+    verifiedBackup.close();
+
+    await fs.copyFile(backupFilename, filename);
+    const restored = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(restored.get(created.id)).resolves.toEqual(created);
+    await expect(restored.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: SQLiteExecutionStoreFoundation.schemaVersion },
+    });
+    await restored.close();
+  });
+
+  it('fails startup migration under a write lock and opens cleanly after release', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const created = structuredClone(executionRecordCreateRequestExample.record);
+    const lockHolder = openTestDatabase(filename);
+    createVersionOneDatabase(lockHolder);
+    insertLegacyRecord(lockHolder, created);
+    lockHolder.exec('PRAGMA journal_mode = WAL');
+    lockHolder.exec('BEGIN IMMEDIATE');
+
+    try {
+      expect(
+        () => new SQLiteExecutionStoreFoundation({ rootPath: root, busyTimeoutMs: 1 })
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'EXECUTION_STORE_UNAVAILABLE',
+          message: 'Unable to open the SQLite Execution store.',
+        })
+      );
+      expect(lockHolder.prepare('PRAGMA user_version').get()).toMatchObject({
+        user_version: 1,
+      });
+      expect(
+        lockHolder
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get('execution_mutation_idempotency')
+      ).toBeUndefined();
+    } finally {
+      lockHolder.exec('ROLLBACK');
+      lockHolder.close();
+    }
+
+    const reopened = new SQLiteExecutionStoreFoundation({ rootPath: root, busyTimeoutMs: 1 });
+    await expect(reopened.get(created.id)).resolves.toEqual(created);
+    await expect(reopened.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: 7 },
+    });
+    await reopened.close();
+
+    const backup = openTestDatabase(`${filename}.backup-v1.sqlite`);
+    expect(backup.prepare('PRAGMA integrity_check').get()).toMatchObject({
+      integrity_check: 'ok',
+    });
+    expect(backup.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+    backup.close();
+  });
+
   it('preserves the source and verified backup when migration rolls back', async () => {
     const root = await temporaryRoot();
     const filename = path.join(root, 'executions.sqlite');
@@ -1033,6 +1340,30 @@ describe('SQLiteExecutionStoreFoundation', () => {
     } catch (error) {
       expect(error).toMatchObject({ code: 'EXECUTION_STORE_UNSUPPORTED_SCHEMA' });
     }
+  });
+
+  it('fails closed on a corrupt database header without rewriting operator evidence', async () => {
+    const root = await temporaryRoot();
+    const filename = path.join(root, 'executions.sqlite');
+    const corruptHeader = Buffer.from('not-a-sqlite-database-header', 'utf8');
+    await fs.writeFile(filename, corruptHeader);
+
+    expect(() => new SQLiteExecutionStoreFoundation({ rootPath: root })).toThrowError(
+      expect.objectContaining({
+        code: 'EXECUTION_STORE_CORRUPT',
+        message: 'SQLite Execution store is corrupt.',
+        details: { sqliteResultCode: 26 },
+      })
+    );
+    await expect(fs.readFile(filename)).resolves.toEqual(corruptHeader);
+
+    await fs.rm(filename);
+    const repaired = new SQLiteExecutionStoreFoundation({ rootPath: root });
+    await expect(repaired.health()).resolves.toMatchObject({
+      status: 'healthy',
+      details: { schemaVersion: SQLiteExecutionStoreFoundation.schemaVersion },
+    });
+    await repaired.close();
   });
 
   it('rejects aliased store roots and hard-linked database files', async () => {

@@ -27,8 +27,18 @@
     "test:unit": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects unit --detectOpenHandles",
     "test:packages": "vitest run",
     "test:integration": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects integration --runInBand --detectOpenHandles",
+    "test:acceptance:memory-external": "HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_MODE=required node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects memory-external-acceptance --runInBand --detectOpenHandles",
+    "test:acceptance:memory-native": "HYPHA_TEST_NATIVE_PRODUCTION_TOPOLOGY=required node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects memory-native-acceptance --runInBand --detectOpenHandles",
+    "test:acceptance:execution:postgres": "HYPHA_EXECUTION_ACCEPTANCE_SUITE=postgres vitest run --config vitest.execution-acceptance.config.ts --reporter=dot",
+    "test:acceptance:execution:s3": "HYPHA_EXECUTION_ACCEPTANCE_SUITE=s3 vitest run --config vitest.execution-acceptance.config.ts --reporter=dot",
+    "test:acceptance:execution:docker": "HYPHA_EXECUTION_ACCEPTANCE_SUITE=docker vitest run --config vitest.execution-acceptance.config.ts --reporter=dot",
+    "test:acceptance:execution:docker-restart": "HYPHA_EXECUTION_ACCEPTANCE_SUITE=docker-restart vitest run --config vitest.execution-acceptance.config.ts --reporter=dot",
+    "test:acceptance:execution:remote": "HYPHA_EXECUTION_ACCEPTANCE_SUITE=remote vitest run --config vitest.execution-acceptance.config.ts --reporter=dot",
+    "test:acceptance:execution": "npm run test:acceptance:execution:postgres && npm run test:acceptance:execution:s3 && npm run test:acceptance:execution:docker && npm run test:acceptance:execution:docker-restart && npm run test:acceptance:execution:remote",
+    "test:acceptance": "npm run test:acceptance:memory-external && npm run test:acceptance:memory-native",
+    "test:release": "npm run lint && npm run typecheck && npm run build && npm run test && npm run test:acceptance",
     "test:watch": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
-    "test:coverage": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage --detectOpenHandles",
+    "test:coverage": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects unit integration --coverage --detectOpenHandles",
     "lint": "eslint \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\"",
     "lint:fix": "eslint \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\" --fix",
     "format": "prettier --write \"apps/**/*.ts\" \"packages/**/*.ts\" \"tests/**/*.ts\"",
@@ -51,7 +61,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
     "@google/generative-ai": "^0.2.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "bcryptjs": "^2.4.3",
@@ -109,6 +119,6 @@
     "vitest": "^3.2.7"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   }
 }

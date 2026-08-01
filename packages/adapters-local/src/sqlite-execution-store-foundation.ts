@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
@@ -59,6 +60,9 @@ interface SQLiteModule {
   DatabaseSync: new (filename: string) => SQLiteDatabase;
 }
 
+const SQLITE_CORRUPT_RESULT_CODE = 11;
+const SQLITE_NOT_A_DATABASE_RESULT_CODE = 26;
+
 export type SQLiteExecutionStoreFoundationErrorCode =
   | 'EXECUTION_STORE_UNAVAILABLE'
   | 'EXECUTION_STORE_CLOSED'
@@ -79,9 +83,10 @@ export class SQLiteExecutionStoreFoundationError extends Error {
   constructor(
     readonly code: SQLiteExecutionStoreFoundationErrorCode,
     message: string,
-    readonly details?: Record<string, unknown>
+    readonly details?: Record<string, unknown>,
+    cause?: unknown
   ) {
-    super(message);
+    super(message, { cause });
     this.name = 'SQLiteExecutionStoreFoundationError';
   }
 }
@@ -90,6 +95,11 @@ export interface SQLiteExecutionStoreFoundationOptions {
   rootPath: string;
   filename?: string;
   busyTimeoutMs?: number;
+  /**
+   * Optional hard database growth ceiling. SQLite returns SQLITE_FULL when a
+   * write would grow beyond this many pages.
+   */
+  maxDatabasePages?: number;
   now?: () => string;
 }
 
@@ -106,24 +116,36 @@ export class SQLiteExecutionStoreFoundation {
   private closed = false;
 
   constructor(options: SQLiteExecutionStoreFoundationOptions) {
-    const root = prepareStoreRoot(options.rootPath);
-    const basename = storeFilename(options.filename ?? 'executions.sqlite');
-    this.filename = path.join(root, basename);
-    secureSQLiteRuntimeFiles(this.filename);
-    const existingDatabaseHasContent =
-      fs.existsSync(this.filename) && fs.statSync(this.filename).size > 0;
+    const location = prepareStoreLocation(
+      options.rootPath,
+      options.filename ?? 'executions.sqlite'
+    );
+    this.filename = location.filename;
+    const existingDatabaseHasContent = location.existingDatabaseHasContent;
     this.now = options.now ?? (() => new Date().toISOString());
     const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, 'busyTimeoutMs');
+    const maxDatabasePages =
+      options.maxDatabasePages === undefined
+        ? undefined
+        : positiveInteger(options.maxDatabasePages, 'maxDatabasePages');
     let database: SQLiteDatabase | undefined;
     try {
       database = openSQLiteDatabase(this.filename);
       secureSQLiteRuntimeFiles(this.filename);
       database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
       database.exec('PRAGMA journal_mode = WAL');
+      if (maxDatabasePages !== undefined) {
+        configureMaxDatabasePages(database, maxDatabasePages);
+      }
       secureSQLiteRuntimeFiles(this.filename);
       database.exec('PRAGMA foreign_keys = ON');
       backupBeforeMigration(database, this.filename, existingDatabaseHasContent);
       migrateSQLiteExecutionStore(database);
+      // This adapter owns a mutable ExecutionStore. Opening a database whose
+      // current schema needs no writes can otherwise appear healthy even when
+      // SQLite opened it read-only, leaving the first real command to fail much
+      // later. Prove write authority during startup without changing data.
+      assertSQLiteWritable(database);
       this.database = database;
       this.quarantineCorruptRecords();
       secureSQLiteRuntimeFiles(this.filename);
@@ -139,6 +161,18 @@ export class SQLiteExecutionStoreFoundation {
           current: error.current,
           supported: error.supported,
         });
+      }
+      const sqliteResultCode = sqlitePrimaryResultCode(error);
+      if (
+        sqliteResultCode === SQLITE_CORRUPT_RESULT_CODE ||
+        sqliteResultCode === SQLITE_NOT_A_DATABASE_RESULT_CODE
+      ) {
+        throw storeError(
+          'EXECUTION_STORE_CORRUPT',
+          'SQLite Execution store is corrupt.',
+          { sqliteResultCode },
+          error
+        );
       }
       throw storeError(
         'EXECUTION_STORE_UNAVAILABLE',
@@ -330,6 +364,7 @@ export class SQLiteExecutionStoreFoundation {
       }
       assertLeaseContinuity(current, request);
       assertRecordIdentityContinuity(current, request.next);
+      assertTerminalReceiptContinuity(current, request.next);
 
       const fencingToken = lastFencingToken(row);
       const nextJson = this.replaceRecord(
@@ -1010,6 +1045,19 @@ function assertRecordIdentityContinuity(current: ExecutionRecord, next: Executio
   }
 }
 
+function assertTerminalReceiptContinuity(current: ExecutionRecord, next: ExecutionRecord): void {
+  if (
+    current.terminalReceipt &&
+    !isDeepStrictEqual(current.terminalReceipt, next.terminalReceipt)
+  ) {
+    throw storeError(
+      'EXECUTION_STORE_CONFLICT',
+      'Provider terminal receipt checkpoint is immutable.',
+      { executionId: current.id }
+    );
+  }
+}
+
 function uniqueIdempotencyRow(
   rows: Record<string, unknown>[]
 ): Record<string, unknown> | undefined {
@@ -1100,6 +1148,31 @@ function prepareStoreRoot(rootPath: string): string {
   return canonicalRoot;
 }
 
+function prepareStoreLocation(
+  rootPath: string,
+  filename: string
+): { filename: string; existingDatabaseHasContent: boolean } {
+  const basename = storeFilename(filename);
+  try {
+    const root = prepareStoreRoot(rootPath);
+    const resolvedFilename = path.join(root, basename);
+    secureSQLiteRuntimeFiles(resolvedFilename);
+    return {
+      filename: resolvedFilename,
+      existingDatabaseHasContent:
+        fs.existsSync(resolvedFilename) && fs.statSync(resolvedFilename).size > 0,
+    };
+  } catch (error) {
+    if (error instanceof TypeError) throw error;
+    throw storeError(
+      'EXECUTION_STORE_UNAVAILABLE',
+      'Unable to prepare the SQLite Execution store.',
+      undefined,
+      error
+    );
+  }
+}
+
 function storeFilename(value: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.sqlite$/u.test(value)) {
     throw new TypeError('SQLite Execution store filename must be a simple .sqlite basename.');
@@ -1116,11 +1189,22 @@ function rejectAliasedDatabaseFile(filename: string): void {
 }
 
 function secureSQLiteRuntimeFiles(filename: string): void {
+  const databaseOwnerWritable =
+    fs.existsSync(filename) && (fs.statSync(filename).mode & 0o200) === 0o200;
   for (const suffix of ['', '-wal', '-shm', '-journal']) {
     const runtimeFilename = `${filename}${suffix}`;
     rejectAliasedDatabaseFile(runtimeFilename);
     if (process.platform !== 'win32' && fs.existsSync(runtimeFilename)) {
-      fs.chmodSync(runtimeFilename, 0o600);
+      const currentMode = fs.statSync(runtimeFilename).mode & 0o777;
+      // Remove group/other access without silently making an operator-owned
+      // read-only database writable again. SQLite owns its sidecars, so restore
+      // their owner read/write bit once the operator has made the main database
+      // writable; otherwise a stale read-only WAL can poison the next reopen.
+      const privateMode = currentMode & 0o600;
+      fs.chmodSync(
+        runtimeFilename,
+        suffix && databaseOwnerWritable ? privateMode | 0o600 : privateMode
+      );
     }
   }
 }
@@ -1172,6 +1256,34 @@ function validateMigrationBackup(filename: string, expectedVersion: number): voi
 
 function sqliteStringLiteral(value: string): string {
   return `'${value.replace(/'/gu, "''")}'`;
+}
+
+function configureMaxDatabasePages(database: SQLiteDatabase, requested: number): void {
+  database.exec(`PRAGMA max_page_count = ${requested}`);
+  const configured = Number(database.prepare('PRAGMA max_page_count').get()?.max_page_count);
+  if (configured !== requested) {
+    throw new TypeError(
+      'maxDatabasePages must not be below the current database size or above the SQLite limit.'
+    );
+  }
+}
+
+function assertSQLiteWritable(database: SQLiteDatabase): void {
+  let transactionStarted = false;
+  try {
+    database.exec('BEGIN IMMEDIATE');
+    transactionStarted = true;
+    database.exec('ROLLBACK');
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        database.exec('ROLLBACK');
+      } catch {
+        // Preserve the original write-authority failure.
+      }
+    }
+    throw error;
+  }
 }
 
 function openSQLiteDatabase(filename: string): SQLiteDatabase {
@@ -1226,7 +1338,30 @@ function storeError(
   code: SQLiteExecutionStoreFoundationErrorCode,
   message: string,
   details?: Record<string, unknown>,
-  _cause?: unknown
+  cause?: unknown
 ): SQLiteExecutionStoreFoundationError {
-  return new SQLiteExecutionStoreFoundationError(code, message, details);
+  return new SQLiteExecutionStoreFoundationError(code, message, details, cause);
+}
+
+function sqlitePrimaryResultCode(error: unknown): number | undefined {
+  if (error instanceof AggregateError) {
+    for (const nestedError of error.errors) {
+      const nestedResultCode = sqlitePrimaryResultCode(nestedError);
+      if (nestedResultCode !== undefined) return nestedResultCode;
+    }
+  }
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return undefined;
+  }
+  if (error.code === 'SQLITE_CORRUPT') return SQLITE_CORRUPT_RESULT_CODE;
+  if (error.code === 'SQLITE_NOTADB') return SQLITE_NOT_A_DATABASE_RESULT_CODE;
+  if (
+    error.code !== 'ERR_SQLITE_ERROR' ||
+    !('errcode' in error) ||
+    typeof error.errcode !== 'number' ||
+    !Number.isInteger(error.errcode)
+  ) {
+    return undefined;
+  }
+  return error.errcode & 0xff;
 }

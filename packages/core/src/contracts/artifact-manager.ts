@@ -12,6 +12,7 @@ import type {
   ArtifactByteSource,
   ArtifactContent,
   ArtifactDownloadAccess,
+  ArtifactOperationOptions,
 } from './artifact-store';
 import type { ExecutionPrincipal, ProviderHealth } from './execution';
 import type { SpecRef } from '../specs';
@@ -63,6 +64,7 @@ export interface ArtifactFromWorkspaceRequest {
   expectedSizeBytes?: number;
   logicalArtifactId?: string;
   provenance: ArtifactProvenance;
+  retention?: ArtifactRetentionRecord;
   sensitive?: boolean;
   tags?: string[];
   idempotencyKey?: string;
@@ -187,11 +189,23 @@ export interface NormalizedArtifactError {
 }
 
 export interface ArtifactManager {
-  create(request: ArtifactCreateRequest): Promise<ArtifactRecord>;
-  createFromWorkspace(request: ArtifactFromWorkspaceRequest): Promise<ArtifactRecord>;
-  createVersion(request: ArtifactVersionRequest): Promise<ArtifactRecord>;
+  create(
+    request: ArtifactCreateRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactRecord>;
+  createFromWorkspace(
+    request: ArtifactFromWorkspaceRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactRecord>;
+  createVersion(
+    request: ArtifactVersionRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactRecord>;
   get(request: ArtifactGetRecordRequest): Promise<ArtifactRecord | null>;
-  read(request: ArtifactReadRequest): Promise<ArtifactReadResult>;
+  read(
+    request: ArtifactReadRequest,
+    options?: ArtifactOperationOptions
+  ): Promise<ArtifactReadResult>;
   createDownloadAccess(
     request: ArtifactCreateDownloadAccessRequest
   ): Promise<ArtifactDownloadAccess>;

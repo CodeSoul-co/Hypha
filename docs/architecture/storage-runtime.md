@@ -4,13 +4,13 @@ hypha separates storage by runtime function and deployment mode.
 
 ## Functional Groups
 
-| Group | Current Stores | Runtime Use |
-| --- | --- | --- |
-| `document` | MongoDB | User-owned records and permanent conversation memory. |
-| `messaging` | Redis, Kafka-ready config | Temporary memory streams, cache, queue, pub/sub, and future async workers. |
-| `relational` | SQLite, Postgres-ready config | Event logs, structured source-of-truth records, projections, and evaluation state. |
-| `vector` | Local JSON index, Qdrant/Chroma/Pinecone-ready config | Semantic retrieval indexes. |
-| `artifacts` | Filesystem, S3-ready config | Files, snapshots, large tool outputs, and exports. |
+| Group | Stock Server Adapters | Extension Contracts | Runtime Use |
+| --- | --- | --- | --- |
+| `document` | MongoDB | Additional document providers | User-owned records and permanent conversation memory. |
+| `messaging` | Redis | Kafka | Temporary memory streams, cache, queue, and pub/sub. |
+| `relational` | SQLite/JSON fallback | Postgres | Event logs, structured source-of-truth records, projections, and evaluation state. |
+| `vector` | Local JSON index | Qdrant, Chroma, Pinecone | Semantic retrieval indexes. |
+| `artifacts` | Filesystem | S3-compatible stores | Files, snapshots, large tool outputs, and exports. |
 
 Local records live under `data/` by function: `runtime/events`, `runtime/structured`, `storage/vector`, `storage/artifacts`, and `logs/system.log`.
 
@@ -24,6 +24,8 @@ Each store declares a `deployment` value:
 - `cloud`: cloud endpoint selected by URL or provider environment.
 
 The `.env` file supplies deployment-specific URLs and credentials. `config.yaml` supplies the typed topology and safe defaults.
+
+An extension contract is not a running integration. The stock Server rejects enabled Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3 configuration until a concrete adapter, lifecycle ownership, readiness probe, and acceptance evidence are registered. This prevents an unused URL or profile from appearing healthy.
 
 ## Source of Truth
 
