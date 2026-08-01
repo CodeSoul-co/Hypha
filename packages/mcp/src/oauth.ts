@@ -36,6 +36,8 @@ export interface MCPOAuth21ClientOptions {
   redirectUri: string;
   fetch?: typeof fetch;
   metadataUrl?: string;
+  /** Selects one server advertised by RFC 9728 metadata; defaults to the first. */
+  authorizationServer?: string;
   timeoutMs?: number;
   now?: () => number;
   randomBytes?: (size: number) => Uint8Array;
@@ -81,32 +83,43 @@ export class MCPOAuth21Client {
     authorizationServer: MCPAuthorizationServerMetadata;
   }> {
     const resourceUrl = new URL(this.options.resource);
-    const metadataUrl =
-      this.options.metadataUrl ??
-      new URL('/.well-known/oauth-protected-resource', resourceUrl.origin).toString();
-    assertSecureOAuthUrl(metadataUrl, this.options.allowInsecureLoopbackForAcceptance);
+    const metadataUrls = this.options.metadataUrl
+      ? [this.options.metadataUrl]
+      : protectedResourceMetadataUrls(resourceUrl);
+    for (const metadataUrl of metadataUrls) {
+      assertSecureOAuthUrl(metadataUrl, this.options.allowInsecureLoopbackForAcceptance);
+    }
     const protectedResource = parseProtectedResourceMetadata(
-      await this.fetchJson(metadataUrl, 'protected resource metadata')
+      await this.fetchJsonCandidates(metadataUrls, 'protected resource metadata')
     );
     if (canonicalUrl(protectedResource.resource) !== canonicalUrl(this.options.resource)) {
       throw oauthError('MCP_OAUTH_RESOURCE_MISMATCH', 'Protected resource metadata mismatch.');
     }
-    if (protectedResource.authorization_servers.length !== 1) {
+    if (protectedResource.authorization_servers.length === 0) {
       throw oauthError(
         'MCP_OAUTH_METADATA_INVALID',
-        'Exactly one authorization server is required.'
+        'At least one authorization server is required.'
       );
     }
 
-    const issuer = protectedResource.authorization_servers[0];
+    const issuer = this.options.authorizationServer ?? protectedResource.authorization_servers[0];
+    if (
+      !protectedResource.authorization_servers.some(
+        (candidate) => canonicalUrl(candidate) === canonicalUrl(issuer)
+      )
+    ) {
+      throw oauthError(
+        'MCP_OAUTH_AUTHORIZATION_SERVER_DENIED',
+        'Configured authorization server was not advertised by the protected resource.'
+      );
+    }
     assertSecureOAuthUrl(issuer, this.options.allowInsecureLoopbackForAcceptance);
     const issuerUrl = new URL(issuer);
-    const authorizationMetadataUrl = new URL(
-      '/.well-known/oauth-authorization-server',
-      issuerUrl.origin
-    ).toString();
     const authorizationServer = parseAuthorizationServerMetadata(
-      await this.fetchJson(authorizationMetadataUrl, 'authorization server metadata')
+      await this.fetchJsonCandidates(
+        authorizationServerMetadataUrls(issuerUrl),
+        'authorization server metadata'
+      )
     );
     if (canonicalUrl(authorizationServer.issuer) !== canonicalUrl(issuer)) {
       throw oauthError('MCP_OAUTH_ISSUER_MISMATCH', 'Authorization server issuer mismatch.');
@@ -233,11 +246,14 @@ export class MCPOAuth21Client {
     if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
       throw oauthError('MCP_OAUTH_TOKEN_INVALID', 'OAuth token expiry is invalid.');
     }
-    const resource =
+    const assertedResource =
       typeof response.resource === 'string'
         ? response.resource
         : audienceFromJwt(response.access_token);
-    if (!resource || canonicalUrl(resource) !== canonicalUrl(this.options.resource)) {
+    if (
+      assertedResource &&
+      canonicalUrl(assertedResource) !== canonicalUrl(this.options.resource)
+    ) {
       throw oauthError('MCP_OAUTH_AUDIENCE_MISMATCH', 'OAuth token audience mismatch.');
     }
     return {
@@ -246,8 +262,25 @@ export class MCPOAuth21Client {
       tokenType: 'Bearer',
       expiresAt: this.now() + expiresIn * 1000,
       scope: typeof response.scope === 'string' ? response.scope : undefined,
-      resource,
+      // OAuth token responses are not required to echo RFC 8707 `resource`, and
+      // opaque tokens cannot be decoded by a public client. The resource server
+      // remains responsible for validating token audience. Preserve the resource
+      // that was bound into both authorization and token requests.
+      resource: this.options.resource,
     };
+  }
+
+  private async fetchJsonCandidates(urls: string[], label: string): Promise<unknown> {
+    let lastError: unknown;
+    for (const url of [...new Set(urls)]) {
+      assertSecureOAuthUrl(url, this.options.allowInsecureLoopbackForAcceptance);
+      try {
+        return await this.fetchJson(url, label);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError ?? oauthError('MCP_OAUTH_METADATA_FAILED', `${label} discovery failed.`);
   }
 
   private async fetchJson(url: string, label: string): Promise<unknown> {
@@ -309,11 +342,27 @@ export function redactMCPOAuthSecrets<T>(value: T): T {
   ) as T;
 }
 
+/** Extracts RFC 9728 metadata discovery from an MCP Bearer challenge. */
+export function mcpProtectedResourceMetadataUrlFromChallenge(
+  wwwAuthenticate: string | null | undefined
+): string | undefined {
+  if (!wwwAuthenticate || !/\bBearer\b/iu.test(wwwAuthenticate)) return undefined;
+  const match = /\bresource_metadata\s*=\s*"([^"\\]*(?:\\.[^"\\]*)*)"/iu.exec(wwwAuthenticate);
+  if (!match) return undefined;
+  const value = match[1].replace(/\\([\\"])/gu, '$1');
+  try {
+    return new URL(value).toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function parseProtectedResourceMetadata(input: unknown): MCPProtectedResourceMetadata {
   const value = asRecord(input);
   if (
     typeof value.resource !== 'string' ||
     !Array.isArray(value.authorization_servers) ||
+    value.authorization_servers.length === 0 ||
     value.authorization_servers.some((entry) => typeof entry !== 'string')
   ) {
     throw oauthError('MCP_OAUTH_METADATA_INVALID', 'Protected resource metadata is invalid.');
@@ -323,6 +372,34 @@ function parseProtectedResourceMetadata(input: unknown): MCPProtectedResourceMet
     authorization_servers: value.authorization_servers as string[],
     bearer_methods_supported: stringArray(value.bearer_methods_supported),
   };
+}
+
+function protectedResourceMetadataUrls(resource: URL): string[] {
+  const path = resource.pathname.replace(/^\/+|\/+$/gu, '');
+  return [
+    ...(path
+      ? [new URL(`/.well-known/oauth-protected-resource/${path}`, resource.origin).toString()]
+      : []),
+    new URL('/.well-known/oauth-protected-resource', resource.origin).toString(),
+  ];
+}
+
+function authorizationServerMetadataUrls(issuer: URL): string[] {
+  const path = issuer.pathname.replace(/^\/+|\/+$/gu, '');
+  if (!path) {
+    return [
+      new URL('/.well-known/oauth-authorization-server', issuer.origin).toString(),
+      new URL('/.well-known/openid-configuration', issuer.origin).toString(),
+    ];
+  }
+  return [
+    new URL(`/.well-known/oauth-authorization-server/${path}`, issuer.origin).toString(),
+    new URL(`/.well-known/openid-configuration/${path}`, issuer.origin).toString(),
+    new URL(
+      `${issuer.pathname.replace(/\/+$/u, '')}/.well-known/openid-configuration`,
+      issuer.origin
+    ).toString(),
+  ];
 }
 
 function parseAuthorizationServerMetadata(input: unknown): MCPAuthorizationServerMetadata {

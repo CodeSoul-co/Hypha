@@ -218,4 +218,32 @@ describe('HttpsSkillRegistryClient', () => {
     expect(new Set(credentials).size).toBe(credentials.length);
     expect(credentials).toHaveLength(5);
   });
+
+  it('revalidates expiration when an ETag response reuses cached metadata', async () => {
+    const data = fixture();
+    let currentTime = Date.parse('2026-07-24T01:00:00.000Z');
+    let requests = 0;
+    const client = new HttpsSkillRegistryClient({
+      endpoint: 'https://registry.example.com/',
+      tenantId: 'tenant-a',
+      publisherKeys: { 'publisher-a': data.publisherPublicKey },
+      transparencyLogKeys: { 'log-a': data.logPublicKey },
+      now: () => currentTime,
+      fetch: async (_input, init) => {
+        requests += 1;
+        const headers = new Headers(init?.headers);
+        if (headers.get('if-none-match') === '"entry-7"') {
+          return new Response(null, { status: 304 });
+        }
+        return Response.json(data.entry, { headers: { etag: '"entry-7"' } });
+      },
+    });
+
+    await expect(client.resolve('cloud.search', '1.0.0')).resolves.toEqual(data.entry);
+    currentTime = Date.parse('2026-08-24T00:00:00.001Z');
+    await expect(client.resolve('cloud.search', '1.0.0')).rejects.toMatchObject({
+      code: 'SKILL_REGISTRY_PACKAGE_EXPIRED',
+    });
+    expect(requests).toBe(2);
+  });
 });

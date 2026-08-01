@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MCPOAuth21Client, redactMCPOAuthSecrets } from './oauth';
+import {
+  MCPOAuth21Client,
+  mcpProtectedResourceMetadataUrlFromChallenge,
+  redactMCPOAuthSecrets,
+} from './oauth';
 
 interface IssuedCode {
   challenge: string;
@@ -139,6 +143,98 @@ describe('remote MCP OAuth 2.1 real service acceptance', () => {
     expect(JSON.stringify(redacted)).not.toMatch(
       /access\.secret|session=secret|access-token|refresh-token|authorization-code|client-secret/u
     );
+  });
+
+  it('supports RFC 9728 multiple issuers and issuer-path OAuth/OIDC discovery', async () => {
+    const requests: string[] = [];
+    const target = 'https://mcp.example.test/public/mcp';
+    const selectedIssuer = 'https://identity.example.test/tenant-a';
+    const client = new MCPOAuth21Client({
+      resource: target,
+      clientId: 'mcp-client',
+      redirectUri: 'https://client.example.test/callback',
+      authorizationServer: selectedIssuer,
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        requests.push(url.toString());
+        if (url.pathname === '/.well-known/oauth-protected-resource/public/mcp') {
+          return Response.json({
+            resource: target,
+            authorization_servers: ['https://identity.example.test/tenant-b', selectedIssuer],
+          });
+        }
+        if (url.pathname === '/.well-known/oauth-authorization-server/tenant-a') {
+          return Response.json({ error: 'not_found' }, { status: 404 });
+        }
+        if (url.pathname === '/.well-known/openid-configuration/tenant-a') {
+          return Response.json({
+            issuer: selectedIssuer,
+            authorization_endpoint: `${selectedIssuer}/authorize`,
+            token_endpoint: `${selectedIssuer}/token`,
+            code_challenge_methods_supported: ['S256'],
+          });
+        }
+        return Response.json({ error: 'unexpected' }, { status: 404 });
+      },
+    });
+
+    await expect(client.discover()).resolves.toMatchObject({
+      authorizationServer: { issuer: selectedIssuer },
+    });
+    expect(requests).toEqual([
+      'https://mcp.example.test/.well-known/oauth-protected-resource/public/mcp',
+      'https://identity.example.test/.well-known/oauth-authorization-server/tenant-a',
+      'https://identity.example.test/.well-known/openid-configuration/tenant-a',
+    ]);
+  });
+
+  it('accepts opaque tokens without an echoed resource and parses RFC 9728 challenges', async () => {
+    const target = 'https://mcp.example.test/mcp';
+    const issuer = 'https://identity.example.test';
+    const client = new MCPOAuth21Client({
+      resource: target,
+      clientId: 'mcp-client',
+      redirectUri: 'https://client.example.test/callback',
+      metadataUrl: 'https://mcp.example.test/metadata',
+      now: () => now,
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/metadata') {
+          return Response.json({ resource: target, authorization_servers: [issuer] });
+        }
+        if (url.pathname === '/.well-known/oauth-authorization-server') {
+          return Response.json({
+            issuer,
+            authorization_endpoint: `${issuer}/authorize`,
+            token_endpoint: `${issuer}/token`,
+            code_challenge_methods_supported: ['S256'],
+          });
+        }
+        if (url.pathname === '/token' && init?.method === 'POST') {
+          return Response.json({
+            access_token: 'opaque-token',
+            token_type: 'Bearer',
+            expires_in: 300,
+          });
+        }
+        return Response.json({ error: 'unexpected' }, { status: 404 });
+      },
+    });
+
+    const request = await client.createAuthorizationRequest('state-opaque');
+    await expect(
+      client.exchangeAuthorizationCode({
+        code: 'opaque-code',
+        codeVerifier: request.codeVerifier,
+        state: request.state,
+        expectedState: request.state,
+      })
+    ).resolves.toMatchObject({ accessToken: 'opaque-token', resource: target });
+    expect(
+      mcpProtectedResourceMetadataUrlFromChallenge(
+        'Bearer resource_metadata="https://mcp.example.test/metadata", scope="tools:read"'
+      )
+    ).toBe('https://mcp.example.test/metadata');
   });
 });
 

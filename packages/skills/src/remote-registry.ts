@@ -164,6 +164,10 @@ export class HttpsSkillRegistryClient {
           'Skill registry returned not-modified without a cached package.'
         );
       }
+      // An ETag only proves that the registry payload did not change. Time-based
+      // and tenant/key policy can change while the payload remains identical, so
+      // cached metadata must pass the full trust check on every use.
+      this.verifyEntry(cached.entry);
       return clone(cached.entry);
     }
     if (response.status === 404) {
