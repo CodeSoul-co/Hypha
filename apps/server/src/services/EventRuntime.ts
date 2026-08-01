@@ -57,7 +57,6 @@ import {
   HyphaInferencePipeline,
   InferenceManager,
   InMemoryKvCacheProvider,
-  InMemoryPrefixCacheProvider,
   ReasoningOrchestrator,
   classifyInferenceFailure,
   type AgentPromptRef,
@@ -629,7 +628,6 @@ class EventRuntimeService {
     });
     this.runtime = new EventFirstRuntime(this.events);
     this.inference = new InferenceManager({
-      prefixCache: new InMemoryPrefixCacheProvider(),
       kvCache: new InMemoryKvCacheProvider(),
       onRecoveryFailure: (failure) => this.recordBypassedCacheFailure(failure),
     });
