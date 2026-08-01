@@ -33,8 +33,13 @@ describe('Server EventRuntime canonical integration', () => {
       events: composition.events,
       eventDbPath: path.join(root, 'runtime.sqlite'),
       humanWaits: composition.humanWaits,
+      cancellations: { cancel: (command) => canonicalRuntime!.cancel(command) },
     });
     const adapters = runtime.canonicalExecutionAdapters();
+    canonicalRuntime.composeCancellations({
+      activities: adapters.cancellationActivities,
+      children: adapters.cancellationChildren,
+    });
     expect(adapters.fsmSpec.id).toBeTruthy();
     await expect(
       adapters.inference.infer({
@@ -105,6 +110,31 @@ describe('Server EventRuntime canonical integration', () => {
       }
     ).recordBypassedCacheFailure(cacheFailure);
 
+    const cancellable = await runtime.startRun({
+      userId: 'user.integration',
+      sessionId: 'session.integration',
+      workflowRef: { id: 'workflow.cancellable', version: '1.0.0' },
+      metadata: { surface: 'http.workflows.execute' },
+    });
+    await expect(
+      runtime.cancelOwnedWorkflowExecution({
+        executionId: cancellable.runId,
+        userId: 'user.integration',
+        idempotencyKey: 'cancel.integration',
+      })
+    ).resolves.toMatchObject({
+      commandId: 'cancel.integration',
+      disposition: 'applied',
+      projection: { runStatus: 'cancelled' },
+    });
+    await expect(
+      runtime.cancelOwnedWorkflowExecution({
+        executionId: cancellable.runId,
+        userId: 'foreign.user',
+        idempotencyKey: 'cancel.foreign',
+      })
+    ).resolves.toBeNull();
+
     await expect(
       composition.events.list({ runId: run.runId, type: 'run.started' })
     ).resolves.toEqual([
@@ -172,7 +202,21 @@ describe('Server EventRuntime canonical integration', () => {
       events: composition.events,
       eventDbPath: path.join(root, 'runtime.sqlite'),
       humanWaits: composition.humanWaits,
+      cancellations: { cancel: (command) => canonicalRuntime!.cancel(command) },
     });
+    await restarted.transition(run.runId, 'Reasoning', { resumedAfterRestart: true });
+    await expect(
+      composition.events.list({ runId: run.runId, type: 'fsm.state.entered' })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            stateId: 'Reasoning',
+            snapshot: expect.objectContaining({ currentState: 'Reasoning' }),
+          }),
+        }),
+      ])
+    );
     await restarted.startRun({
       userId: 'user.integration',
       sessionId: 'session.integration',

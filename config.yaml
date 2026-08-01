@@ -736,6 +736,13 @@ runtime:
       timerErrorBackoffMs: 5000
       recoveryPollIntervalMs: 5000
       recoveryErrorBackoffMs: 10000
+      commandArtifactRoot: "${HYPHA_SESSION_COMMAND_ARTIFACT_ROOT:./data/runtime/session-command-artifacts}"
+      commandLeaseMs: 30000
+      commandPollIntervalMs: 100
+      commandErrorBackoffMs: 1000
+      commandRenewalIntervalMs: 10000
+      commandMaxHandlerDurationMs: 300000
+      commandShutdownDrainMs: 30000
       autoRecoverReasons:
         - "PROJECTION_BEHIND"
 

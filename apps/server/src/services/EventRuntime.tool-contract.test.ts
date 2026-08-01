@@ -1,5 +1,5 @@
-import type { ToolSpec } from '@hypha/tools';
-import { mergeManagedToolSpec } from './EventRuntime';
+import type { EffectiveAgentCapabilitySnapshot, ToolSpec } from '@hypha/tools';
+import { capabilityPolicyHash, mergeManagedToolSpec } from './EventRuntime';
 
 const inputSchema = {
   type: 'object' as const,
@@ -9,6 +9,36 @@ const inputSchema = {
 };
 
 describe('EventRuntime managed Tool contract identity', () => {
+  it('compares immutable capability policy independently of generated identity timestamps', () => {
+    const snapshot: EffectiveAgentCapabilitySnapshot = {
+      id: 'capability:first',
+      runId: 'run:capability',
+      agentId: 'agent:capability',
+      principalId: 'user:capability',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      skillRevisions: [],
+      allowedToolIds: ['utility.text'],
+      allowedMCPServerIds: [],
+      memoryAccess: 'read',
+      allowedExecutionProfiles: [],
+      maximumSideEffectLevel: 'read',
+      policyRefs: ['policy:default'],
+      requiresHumanReview: false,
+      snapshotHash: 'sha256:test-capability',
+    };
+
+    expect(
+      capabilityPolicyHash({
+        ...snapshot,
+        id: 'capability:regenerated',
+        createdAt: '2026-08-01T00:01:00.000Z',
+      })
+    ).toBe(capabilityPolicyHash(snapshot));
+    expect(capabilityPolicyHash({ ...snapshot, allowedToolIds: [] })).not.toBe(
+      capabilityPolicyHash(snapshot)
+    );
+  });
+
   it('preserves approved MCP identity, schemas, hash, and governance', () => {
     const resolved: ToolSpec = {
       id: 'mcp.local.hash_reference',

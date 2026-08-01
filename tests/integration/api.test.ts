@@ -60,7 +60,7 @@ describe('GET /api/v1/health', () => {
 });
 
 describe('GET /api/v1/ready', () => {
-  it('fails closed while the production Session Command worker is not configured', async () => {
+  it('fails closed while the production continuation handler is not composed', async () => {
     const r = await request(app).get('/api/v1/ready');
 
     expect(r.status).toBe(503);
@@ -82,6 +82,43 @@ describe('GET /api/v1/ready', () => {
         },
       },
     });
+  });
+});
+
+describe('durable Runtime Session Commands', () => {
+  it('does not admit a start_run command before continuation execution is composed', async () => {
+    const sessionId = `runtime-command-${Date.now()}`;
+    const idempotencyKey = `start-run-${Date.now()}`;
+    const body = { input: { task: 'durable-server-start' } };
+    const rejected = await request(app)
+      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+
+    expect(rejected.status).toBe(503);
+    expect(rejected.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        details: { state: 'maintenance_workers_running' },
+      },
+    });
+    const listed = await request(app)
+      .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual([]);
+  });
+
+  it('allows browser preflight to request the idempotency header', async () => {
+    const response = await request(app)
+      .options('/api/v1/runtime/sessions/browser/commands/start-run')
+      .set('Origin', 'https://client.example')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Idempotency-Key, Content-Type');
+    expect(response.status).toBe(204);
+    expect(response.headers['access-control-allow-headers']).toContain('Idempotency-Key');
   });
 });
 
@@ -735,6 +772,26 @@ describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
     // the regression is that we used to fail BEFORE reaching the first stage.
     const errMsg = r.body.data?.error || '';
     expect(errMsg).not.toMatch(/Cannot read propert/i);
+
+    const projected = await request(app)
+      .get(`/api/v1/workflows/executions/${r.body.data.executionId}`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(projected.status).toBe(200);
+    expect(projected.body.data).toMatchObject({
+      runId: r.body.data.runId,
+      executionId: r.body.data.executionId,
+      workflowName: 'conversation-flow',
+      status: expect.stringMatching(/completed|failed/),
+    });
+
+    const cancellation = await request(app)
+      .post(`/api/v1/workflows/executions/${r.body.data.executionId}/cancel`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(cancellation.status).toBe(409);
+    expect(cancellation.body).toMatchObject({
+      success: false,
+      error: { code: 'RUNTIME_RUN_CONFLICT' },
+    });
   });
 });
 
