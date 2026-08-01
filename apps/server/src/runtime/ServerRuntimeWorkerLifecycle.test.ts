@@ -22,7 +22,7 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     expect(lifecycle.status().lifecycle).toBe('failed');
     await lifecycle.close();
   });
-  it('starts one timer and recovery worker set for concurrent callers', async () => {
+  it('starts one maintenance worker set without claiming execution readiness', async () => {
     const sweep = jest
       .fn<Promise<RuntimeTimerSweepResult>, [RuntimeTimerSweepRequest]>()
       .mockResolvedValue(timerPage());
@@ -38,7 +38,7 @@ describe('ServerRuntimeWorkerLifecycle', () => {
     );
 
     expect(first).toBe(second);
-    expect(lifecycle.isRunning()).toBe(true);
+    expect(lifecycle.isRunning()).toBe(false);
     expect(first.status()).toMatchObject({
       lifecycle: 'running',
       timer: {
@@ -54,6 +54,7 @@ describe('ServerRuntimeWorkerLifecycle', () => {
         lastSuccessfulSweepAt: expect.any(String),
       },
     });
+    expect(first.status().commands).toBeUndefined();
     expect(sweep).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'runtime.timer.server', limit: 100 })
     );
