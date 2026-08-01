@@ -1358,9 +1358,7 @@ function stableHash(value: unknown): string {
 
 function toCanonicalDomainHashValue(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) =>
-      entry === undefined ? null : toCanonicalDomainHashValue(entry)
-    );
+    return value.map((entry) => (entry === undefined ? null : toCanonicalDomainHashValue(entry)));
   }
   if (value && typeof value === 'object') {
     return Object.fromEntries(
