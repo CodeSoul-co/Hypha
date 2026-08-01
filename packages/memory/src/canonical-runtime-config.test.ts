@@ -62,7 +62,7 @@ describe('canonical Memory runtime configuration', () => {
         events: { publish: async (type: MemoryEventType) => 'event:' + type },
         harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
       },
-      eventContext: (request) => ({ runId: request.operationId }),
+      eventContext: (request) => ({ userId: request.scope.userId, runId: request.operationId }),
     });
 
     const runtime = await loader.create(factory, document);
@@ -112,7 +112,7 @@ describe('canonical Memory runtime configuration', () => {
         events: { publish: async (type: MemoryEventType) => 'event:' + type },
         harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
       },
-      eventContext: (request) => ({ runId: request.operationId }),
+      eventContext: (request) => ({ userId: request.scope.userId, runId: request.operationId }),
     });
 
     const runtime = await loader.create(factory, document);
@@ -152,7 +152,7 @@ describe('canonical Memory runtime configuration', () => {
         events: { publish: async () => 'event' },
         harness: { beforeExecute: vi.fn(), afterExecute: vi.fn() },
       },
-      eventContext: (request) => ({ runId: request.operationId }),
+      eventContext: (request) => ({ userId: request.scope.userId, runId: request.operationId }),
     });
 
     await expect(loader.create(factory, document)).rejects.toThrow('missing reference');
