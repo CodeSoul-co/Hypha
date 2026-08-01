@@ -436,6 +436,7 @@ export interface DomainMemoryDependencySnapshot {
 
 export interface MemoryCacheValidityInput {
   memoryProfileRevision: string;
+  mutationGeneration: string;
   contextProfileRevision?: string;
   scopeHash: string;
   queryHash?: string;
@@ -452,6 +453,7 @@ export interface MemoryCacheInvalidation {
   reason: 'created' | 'updated' | 'invalidated' | 'deleted' | 'provider_revision';
   memoryIds: string[];
   memoryVersionIds?: string[];
+  mutationGeneration: string;
   validityHash: string;
 }
 

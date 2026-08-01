@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RuntimeCheckpointCreateCommand } from '../../contracts/runtime-checkpoint';
 import type { RuntimeOrchestrationProjection } from '../../contracts/runtime-projection';
 import type { RuntimeReplayRequest } from '../../contracts/runtime-replay';
@@ -268,5 +268,28 @@ describe('RuntimeReplayService and RuntimeQueryService', () => {
         scope: { ...scope, tenantId: 'tenant.other', userId: 'user.other' },
       })
     ).resolves.toBeNull();
+  });
+  it('ignores poisoned cache state and replays only Checkpoint and Event facts', async () => {
+    const target = await fixture();
+    const poisonedCache = {
+      get: vi.fn(async () => ({
+        finalSnapshot: { currentState: 'forged-by-cache' },
+        finalSnapshotChecksum: 'forged-checksum',
+      })),
+    };
+    const replay = new RuntimeReplayService({
+      checkpoints: target.checkpointService,
+      events: target.events,
+      now: target.now,
+      cache: poisonedCache,
+    } as ConstructorParameters<typeof RuntimeReplayService>[0] & { cache: typeof poisonedCache });
+
+    const baseline = await target.replay.replay(replayRequest());
+    const result = await replay.replay(replayRequest());
+
+    expect(result.finalSnapshot).toEqual(baseline.finalSnapshot);
+    expect(result.finalSnapshotChecksum).toBe(baseline.finalSnapshotChecksum);
+    expect(result.eventIds).toEqual(baseline.eventIds);
+    expect(poisonedCache.get).not.toHaveBeenCalled();
   });
 });
