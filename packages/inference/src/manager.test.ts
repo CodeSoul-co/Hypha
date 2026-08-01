@@ -513,7 +513,11 @@ describe('@hypha/inference', () => {
       manager.putPrefix({ id: 'oversized', version: '1', content: 'x'.repeat(65) })
     ).rejects.toMatchObject({ code: 'INFERENCE_CACHE_CAPACITY_EXCEEDED' });
 
-    const kvCache = new InMemoryKvCacheProvider({ maxEntries: 2 });
+    const kvCache = new InMemoryKvCacheProvider({
+      maxEntries: 2,
+      maxEntryBytes: 128,
+      maxTotalBytes: 128,
+    });
     const refs = [0, 1, 2].map((index) => ({
       id: `kv-${index}`,
       provider: 'fixture',
@@ -526,6 +530,29 @@ describe('@hypha/inference', () => {
     await kvCache.put(refs[2], { value: 2 });
     expect(kvCache.size()).toBe(2);
     await expect(kvCache.get(refs[1])).resolves.toBeNull();
+    expect(kvCache.stats().entries).toBe(2);
+    expect(kvCache.stats().totalBytes).toBeGreaterThan(0);
+    await expect(kvCache.put(refs[1], 'x'.repeat(256))).rejects.toMatchObject({
+      code: 'INFERENCE_CACHE_CAPACITY_EXCEEDED',
+    });
+  });
+
+  it('isolates cached KV values from caller mutation', async () => {
+    const kvCache = new InMemoryKvCacheProvider();
+    const ref = {
+      id: 'isolated',
+      provider: 'fixture',
+      modelAlias: 'default',
+      scope: 'run' as const,
+    };
+    const value = { nested: { count: 1 } };
+    await kvCache.put(ref, value);
+    value.nested.count = 2;
+
+    const first = (await kvCache.get(ref)) as typeof value;
+    expect(first).toEqual({ nested: { count: 1 } });
+    first.nested.count = 3;
+    await expect(kvCache.get(ref)).resolves.toEqual({ nested: { count: 1 } });
   });
 
   it('separates identical inference cache references by user scope', async () => {
