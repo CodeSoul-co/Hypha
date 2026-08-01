@@ -40,6 +40,7 @@ import {
 import { formatLocalHealthBaseUrl } from './utils/serverAddress';
 import { ServerCanonicalRuntime } from './runtime/ServerCanonicalRuntime';
 import { createServerProductionRuntime } from './runtime/ServerProductionRuntime';
+import { createServerProductionSessionCommands } from './runtime/ServerProductionSessionCommands';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 import {
   bindServerRuntimeReadiness,
@@ -195,9 +196,14 @@ class Application {
       throw new Error('Canonical Runtime Event authority is not initialized');
     }
     const adapters = getEventRuntime().canonicalExecutionAdapters();
+    const cancellations = runtime.composeCancellations({
+      activities: adapters.cancellationActivities,
+      children: adapters.cancellationChildren,
+    });
     const workers = runtimeConfig().canonical.workers;
     const production = createServerProductionRuntime({
       ...adapters,
+      cancellations,
       workerId: workers.workerId,
       leaseTtlMs: workers.leaseTtlMs,
       pageLimit: workers.pageLimit,
@@ -207,9 +213,26 @@ class Application {
       recoveryErrorBackoffMs: workers.recoveryErrorBackoffMs,
       autoRecoverReasons: workers.autoRecoverReasons,
     });
-    runtime.composeRuntime(production.execution);
-    const active = await runtime.startWorkers(production.workers);
-    logger.info('Canonical Runtime maintenance workers activated', {
+    const composition = runtime.composeRuntime(production.execution);
+    const commands = await createServerProductionSessionCommands({
+      queue: composition.sessionQueue,
+      artifactRoot: workers.commandArtifactRoot,
+      workerId: `${workers.workerId}:commands`,
+      leaseMs: workers.commandLeaseMs,
+      pollIntervalMs: workers.commandPollIntervalMs,
+      errorBackoffMs: workers.commandErrorBackoffMs,
+      renewalIntervalMs: workers.commandRenewalIntervalMs,
+      maxHandlerDurationMs: workers.commandMaxHandlerDurationMs,
+      shutdownDrainMs: workers.commandShutdownDrainMs,
+      startRun: (input, runId) => getEventRuntime().startRunWithId(input, runId),
+      onError: (error) => logger.error('Session Command worker polling failed', error),
+    });
+    getEventRuntime().bindSessionCommandIngress(commands);
+    const active = await runtime.startWorkers({
+      ...production.workers,
+      commands: { runtime: commands },
+    });
+    logger.info('Canonical Runtime durable workers activated', {
       workers: active.status(),
     });
     const readiness = runtime.executionReadiness();
@@ -239,6 +262,7 @@ class Application {
         events: composition.events,
         eventDbPath: serverRuntimeEventDatabasePath(),
         humanWaits: composition.humanWaits,
+        cancellations: { cancel: (command) => runtime.cancel(command) },
       });
       this.canonicalRuntime = runtime;
       bindServerRuntimeReadiness(() => runtime.executionReadiness());

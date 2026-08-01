@@ -16,11 +16,23 @@ import {
   type FrameworkEvent,
   type FrameworkEventType,
   type EventStore,
+  type ListSessionCommandsRequest,
   type TraceRecorder,
   type RecoveryFailure,
   type RecoveryKnowledge,
   type RecoveryKnowledgePort,
+  type RuntimeActivityCancellationPort,
+  type RuntimeActivityCancellationRequest,
+  type RuntimeCancelCommand,
+  type RuntimeCancelResult,
+  type RuntimeCancellationTargetResult,
+  type RuntimeCancellationRecoveryPort,
+  type RuntimeChildRunCancellationRequest,
+  type RuntimeChildRunListRequest,
+  type RuntimeChildRunCancellationPort,
   type RuntimeHumanWaitService,
+  type SessionCommandRecord,
+  type SessionQueueScope,
   type SpecRef,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
@@ -123,6 +135,11 @@ import {
   runtimeRunContextMetadata,
   type RuntimeRunContext,
 } from '../runtime/RuntimeRunContextProjection';
+import {
+  projectWorkflowExecution,
+  workflowExecutionIdFromEvent,
+  type WorkflowExecutionProjection,
+} from '../runtime/WorkflowExecutionProjection';
 
 export interface EventRunHandle {
   runId: string;
@@ -501,20 +518,33 @@ export interface EventRuntimeInitialization {
   events: EventStore & TraceRecorder;
   eventDbPath?: string;
   humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  cancellations?: RuntimeCancellationRecoveryPort;
+}
+
+export interface ServerStartRunCommandIngress {
+  enqueueStartRun(input: StartRunInput, idempotencyKey: string): Promise<SessionCommandRecord>;
+  listSessionCommands(
+    scope: SessionQueueScope,
+    options?: Omit<ListSessionCommandsRequest, 'scope'>
+  ): Promise<SessionCommandRecord[]>;
 }
 
 export interface EventRuntimeCanonicalExecutionAdapters {
   inference: InferenceProvider;
   toolRunner: ToolRunner;
   fsmSpec: FSMProcessSpec;
+  cancellationActivities: RuntimeActivityCancellationPort;
+  cancellationChildren: RuntimeChildRunCancellationPort;
 }
 
 class EventRuntimeService {
   private readonly events: EventStore & TraceRecorder;
   private readonly humanWaits?: Pick<RuntimeHumanWaitService, 'create' | 'resolve'>;
+  private readonly cancellations?: RuntimeCancellationRecoveryPort;
   private readonly humanWaitOwnerId = `server-event-runtime:${process.pid}`;
   private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
+  private sessionCommands?: ServerStartRunCommandIngress;
   private readonly knownSessions = new Set<string>();
   private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
@@ -543,6 +573,7 @@ class EventRuntimeService {
         mode: sqliteStorage.sqliteMode,
       });
     this.humanWaits = options?.humanWaits;
+    this.cancellations = options?.cancellations;
     const toolRuntimeStore = new FileToolRuntimeStore({
       filename: process.env.HYPHA_TOOL_RUNTIME_STORE ?? `${eventDbPath}.tool-runtime.json`,
     });
@@ -625,6 +656,39 @@ class EventRuntimeService {
     return this.reasoning.registry.unregister(id);
   }
 
+  bindSessionCommandIngress(ingress: ServerStartRunCommandIngress): void {
+    if (this.sessionCommands && this.sessionCommands !== ingress) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: 'Server Session Command ingress is already bound',
+      });
+    }
+    this.sessionCommands = ingress;
+  }
+
+  enqueueStartRun(input: StartRunInput, idempotencyKey: string): Promise<SessionCommandRecord> {
+    if (!this.sessionCommands) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Server Session Command ingress is not bound',
+      });
+    }
+    return this.sessionCommands.enqueueStartRun(input, idempotencyKey);
+  }
+
+  listSessionCommands(
+    scope: SessionQueueScope,
+    options: Omit<ListSessionCommandsRequest, 'scope'> = {}
+  ): Promise<SessionCommandRecord[]> {
+    if (!this.sessionCommands) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Server Session Command ingress is not bound',
+      });
+    }
+    return this.sessionCommands.listSessionCommands(scope, options);
+  }
+
   /**
    * Exposes the Server-owned model and governed Tool adapters to the canonical
    * Runtime composition without leaking provider SDKs into Runtime packages.
@@ -641,6 +705,15 @@ class EventRuntimeService {
           this.toolRunner.cancelInvocation(invocationId, reason),
       },
       fsmSpec: this.defaultFsm,
+      cancellationActivities: {
+        cancel: async (request: RuntimeActivityCancellationRequest) =>
+          this.cancelToolActivity(request.activityId, request.reason),
+      },
+      cancellationChildren: {
+        listChildren: async (request: RuntimeChildRunListRequest) =>
+          this.listChildRuns(request.scope.runId),
+        cancel: async (request: RuntimeChildRunCancellationRequest) => this.cancelChildRun(request),
+      },
     });
   }
 
@@ -719,6 +792,78 @@ class EventRuntimeService {
     });
   }
 
+  private async cancelToolActivity(
+    activityId: string,
+    reason: string
+  ): Promise<RuntimeCancellationTargetResult> {
+    const invocation = await this.toolRunner.getInvocation(activityId);
+    if (!invocation) {
+      return { targetType: 'activity', targetId: activityId, status: 'not_found' };
+    }
+    const result = await this.toolRunner.cancelInvocation(activityId, reason);
+    return {
+      targetType: 'activity',
+      targetId: activityId,
+      status: result.status === 'cancelled' ? 'cancelled' : 'already_terminal',
+    };
+  }
+
+  private async listChildRuns(parentRunId: string): Promise<Array<{ runId: string }>> {
+    const created = await this.events.list({ type: 'run.created' });
+    const children: Array<{ runId: string }> = [];
+    for (const event of created) {
+      const context = projectRuntimeRunContext([event], event.runId);
+      if (context?.parentRunId === parentRunId) children.push({ runId: event.runId });
+    }
+    return children;
+  }
+
+  private async cancelChildRun(
+    request: RuntimeChildRunCancellationRequest
+  ): Promise<RuntimeCancellationTargetResult> {
+    if (!this.cancellations) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Canonical Runtime cancellation service is not bound',
+      });
+    }
+    const child = await this.findRun(request.childRunId);
+    if (
+      !child ||
+      child.parentRunId !== request.parentScope.runId ||
+      child.userId !== request.parentScope.userId
+    ) {
+      return { targetType: 'child_run', targetId: request.childRunId, status: 'not_found' };
+    }
+    await this.cancellations.cancel({
+      commandId: request.idempotencyKey,
+      scope: {
+        ...(request.parentScope.tenantId === undefined
+          ? {}
+          : { tenantId: request.parentScope.tenantId }),
+        userId: child.userId,
+        sessionId: child.sessionId,
+        runId: child.runId,
+      },
+      principal: {
+        principalId: request.parentScope.userId,
+        type: 'user',
+        userId: request.parentScope.userId,
+        permissionScopes: ['runtime.run.cancel'],
+      },
+      ownerId: 'server.runtime.child-cancellation',
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      reason: request.reason,
+      policy: {
+        propagation: request.propagation,
+        cancelRunningActivities: true,
+      },
+      requestedAt: request.requestedAt,
+      idempotencyKey: request.idempotencyKey,
+    });
+    return { targetType: 'child_run', targetId: request.childRunId, status: 'cancelled' };
+  }
+
   async listAgentPrompts(): Promise<AgentPromptSpec[]> {
     const manager = getPromptManager();
     await manager.ensureInitialized();
@@ -741,12 +886,15 @@ class EventRuntimeService {
   }
 
   async startRun(input: StartRunInput): Promise<EventRunHandle> {
+    return this.startRunWithId(input, generateId());
+  }
+
+  async startRunWithId(input: StartRunInput, runId: string): Promise<EventRunHandle> {
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
     await this.ensureSession(input.userId, input.sessionId, domainPack, input.metadata);
 
-    const runId = generateId();
     const timestamp = new Date().toISOString();
     const workflowRef = input.workflowRef ?? {
       id: fsm.id,
@@ -763,28 +911,49 @@ class EventRuntimeService {
       snapshot,
     };
 
-    await this.runtime.createRun({
-      id: runId,
-      sessionId: runtimeSessionId,
-      userId: input.userId,
-      domainPackRef: { id: domainPack.id, version: domainPack.version },
-      workflowRef,
-      agentRef: input.agentId ? { id: input.agentId } : undefined,
-      input: input.input,
-      metadata: {
-        ...input.metadata,
-        ...runtimeRunContextMetadata(context),
-      },
-      timestamp,
-    });
-    await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
-    await this.append(
-      runId,
-      'fsm.state.entered',
-      { stateId: snapshot.currentState, snapshot },
-      timestamp,
-      { fsmState: snapshot.currentState }
-    );
+    const existingEvents = await this.events.list({ runId });
+    const existingContext = projectRuntimeRunContext(existingEvents, runId);
+    if (existingContext) {
+      if (
+        existingContext.userId !== input.userId ||
+        existingContext.sessionId !== runtimeSessionId ||
+        existingContext.clientSessionId !== input.sessionId
+      ) {
+        throw new FrameworkError({
+          code: 'RUNTIME_IDEMPOTENCY_CONFLICT',
+          message: `Run id is already bound to another Session scope: ${runId}`,
+        });
+      }
+    } else {
+      await this.runtime.createRun({
+        id: runId,
+        sessionId: runtimeSessionId,
+        userId: input.userId,
+        domainPackRef: { id: domainPack.id, version: domainPack.version },
+        workflowRef,
+        agentRef: input.agentId ? { id: input.agentId } : undefined,
+        input: input.input,
+        metadata: {
+          ...input.metadata,
+          ...runtimeRunContextMetadata(context),
+        },
+        timestamp,
+      });
+    }
+    if (!existingEvents.some((event) => event.type === 'run.started')) {
+      await this.append(runId, 'run.started', { runId, input: input.input }, timestamp, {
+        eventId: `${runId}:started`,
+      });
+    }
+    if (!existingEvents.some((event) => event.type === 'fsm.state.entered')) {
+      await this.append(
+        runId,
+        'fsm.state.entered',
+        { stateId: snapshot.currentState, snapshot },
+        timestamp,
+        { eventId: `${runId}:initial-state`, fsmState: snapshot.currentState }
+      );
+    }
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
@@ -1015,8 +1184,7 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
-    const availableToolIds =
-      spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
@@ -1645,8 +1813,7 @@ class EventRuntimeService {
       toolRevision: spec.revision,
       inputSchemaHash: spec.input.schemaHash,
       outputSchemaHash: spec.output?.schemaHash,
-      sourceCapabilityHash:
-        spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
+      sourceCapabilityHash: spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash,
       sideEffectLevel: spec.sideEffectLevel,
       adapterRef: spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`,
     }));
@@ -2164,6 +2331,83 @@ class EventRuntimeService {
     await this.append(runId, 'run.waiting_human', { ...payload, waitId });
   }
 
+  async projectWorkflowExecution(executionId: string): Promise<WorkflowExecutionProjection | null> {
+    const directEvents = await this.events.list({ runId: executionId });
+    const direct = projectWorkflowExecution(directEvents, executionId);
+    if (direct) return direct;
+
+    const lookupTypes: FrameworkEventType[] = [
+      'workflow.stage.started',
+      'workflow.stage.completed',
+      'workflow.stage.failed',
+      'run.completed',
+      'run.failed',
+      'run.cancelled',
+    ];
+    const candidates = (await Promise.all(lookupTypes.map((type) => this.events.list({ type }))))
+      .flat()
+      .find((event) => workflowExecutionIdFromEvent(event) === executionId);
+    if (!candidates) return null;
+    return projectWorkflowExecution(
+      await this.events.list({ runId: candidates.runId }),
+      executionId
+    );
+  }
+
+  async projectOwnedWorkflowExecution(
+    executionId: string,
+    userId: string
+  ): Promise<WorkflowExecutionProjection | null> {
+    const execution = await this.projectWorkflowExecution(executionId);
+    return execution?.userId === userId ? execution : null;
+  }
+
+  async cancelOwnedWorkflowExecution(input: {
+    executionId: string;
+    userId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  }): Promise<RuntimeCancelResult | null> {
+    const execution = await this.projectOwnedWorkflowExecution(input.executionId, input.userId);
+    if (!execution) return null;
+    if (!this.cancellations) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Canonical Runtime cancellation service is not bound',
+      });
+    }
+    const context = await this.requireRun(execution.runId);
+    const commandId = input.idempotencyKey?.trim() || `workflow-cancel:${execution.runId}`;
+    const priorRequest = (await this.events.list({ runId: execution.runId })).find(
+      (event) =>
+        event.type === 'run.cancel.requested' &&
+        stringValue(asRecord(event.payload)?.commandId) === commandId
+    );
+    const requestedAt =
+      stringValue(asRecord(priorRequest?.payload)?.requestedAt) ?? new Date().toISOString();
+    const command: RuntimeCancelCommand = {
+      commandId,
+      scope: {
+        userId: input.userId,
+        sessionId: context.sessionId,
+        runId: execution.runId,
+      },
+      principal: {
+        principalId: input.userId,
+        type: 'user',
+        userId: input.userId,
+        permissionScopes: ['runtime.run.cancel'],
+      },
+      ownerId: 'server.workflow-cancellation',
+      leaseTtlMs: 30_000,
+      reason: input.reason?.trim() || 'Workflow execution cancelled by its owner.',
+      policy: { propagation: 'all_descendants', cancelRunningActivities: true },
+      requestedAt,
+      idempotencyKey: input.idempotencyKey?.trim() || commandId,
+    };
+    return this.cancellations.cancel(command);
+  }
+
   private async resolveHumanReview(
     context: RuntimeRunContext,
     pendingActionRef: string,
@@ -2239,7 +2483,7 @@ class EventRuntimeService {
   }): Promise<WorkflowExecution> {
     const workflow = input.workflow;
     const execution: WorkflowExecution = {
-      id: generateId(),
+      id: input.runId,
       workflowName: workflow.name,
       workflowVersion: workflow.version,
       status: 'running',
@@ -2853,11 +3097,11 @@ class EventRuntimeService {
     type: FrameworkEventType,
     payload: unknown,
     timestamp?: string,
-    options: { stepId?: string; fsmState?: string } = {}
+    options: { eventId?: string; stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
     const context = await this.requireRun(runId);
     await this.runtime.appendRunEvent({
-      id: `${runId}:${type}:${generateId()}`,
+      id: options.eventId ?? `${runId}:${type}:${generateId()}`,
       type,
       runId,
       sessionId: context.sessionId,

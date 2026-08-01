@@ -656,6 +656,26 @@ describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
     // the regression is that we used to fail BEFORE reaching the first stage.
     const errMsg = r.body.data?.error || '';
     expect(errMsg).not.toMatch(/Cannot read propert/i);
+
+    const projected = await request(app)
+      .get(`/api/v1/workflows/executions/${r.body.data.executionId}`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(projected.status).toBe(200);
+    expect(projected.body.data).toMatchObject({
+      runId: r.body.data.runId,
+      executionId: r.body.data.executionId,
+      workflowName: 'conversation-flow',
+      status: expect.stringMatching(/completed|failed/),
+    });
+
+    const cancellation = await request(app)
+      .post(`/api/v1/workflows/executions/${r.body.data.executionId}/cancel`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(cancellation.status).toBe(409);
+    expect(cancellation.body).toMatchObject({
+      success: false,
+      error: { code: 'RUNTIME_RESOURCE_CONFLICT' },
+    });
   });
 });
 
