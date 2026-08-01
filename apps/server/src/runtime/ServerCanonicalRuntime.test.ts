@@ -107,10 +107,23 @@ describe('ServerCanonicalRuntime', () => {
     const service = createService(new InMemoryEventStore());
     const bindings = executionBindings();
 
+    expect(service.executionReadiness()).toMatchObject({
+      ready: false,
+      state: 'not_initialized',
+    });
     expect(() => service.composeRuntime(bindings)).toThrow('Canonical Runtime is not initialized');
 
     const canonical = await service.initialize();
+    expect(service.executionReadiness()).toMatchObject({
+      ready: false,
+      state: 'event_authority_ready',
+    });
     const runtime = service.composeRuntime(bindings);
+
+    expect(service.executionReadiness()).toMatchObject({
+      ready: false,
+      state: 'execution_graph_ready',
+    });
 
     expect(runtime.events).toBe(canonical.backbone.events);
     expect(runtime.projections).toBe(canonical.backbone.projections);
@@ -137,6 +150,11 @@ describe('ServerCanonicalRuntime', () => {
 
     expect(first).toBe(second);
     expect(service.areWorkersRunning()).toBe(true);
+    expect(service.executionReadiness()).toEqual({
+      ready: true,
+      state: 'workers_running',
+      message: 'Canonical Runtime execution graph and durable workers are running',
+    });
 
     const firstClose = service.close();
     const secondClose = service.close();
@@ -146,6 +164,7 @@ describe('ServerCanonicalRuntime', () => {
     expect(first.timer.isRunning()).toBe(false);
     expect(first.recovery.isRunning()).toBe(false);
     expect(service.areWorkersRunning()).toBe(false);
+    expect(service.executionReadiness()).toMatchObject({ ready: false, state: 'closed' });
     expect(() => service.composeRuntime(executionBindings())).toThrow(
       'Canonical Runtime is closed'
     );
