@@ -86,13 +86,8 @@ router.delete(
 router.get(
   '/runs/:runId',
   asyncHandler(async (req: Request, res: Response) => {
-    const run = await getEventRuntime().projectRun(req.params.runId);
-    if (!run) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        error: { code: 'RUN_NOT_FOUND', message: 'Run not found' },
-      });
-    }
+    const run = await requireRunAccess(req, res);
+    if (!run) return;
     res.json({ success: true, data: run });
   })
 );
@@ -100,6 +95,7 @@ router.get(
 router.get(
   '/runs/:runId/events',
   asyncHandler(async (req: Request, res: Response) => {
+    if (!(await requireRunAccess(req, res))) return;
     const events = await getEventRuntime().listEvents(req.params.runId);
     res.json({ success: true, data: events });
   })
@@ -108,6 +104,7 @@ router.get(
 router.get(
   '/runs/:runId/replay',
   asyncHandler(async (req: Request, res: Response) => {
+    if (!(await requireRunAccess(req, res))) return;
     const replay = await getEventRuntime().projectReplay(req.params.runId);
     res.json({ success: true, data: replay });
   })
@@ -116,6 +113,7 @@ router.get(
 router.get(
   '/runs/:runId/audit',
   asyncHandler(async (req: Request, res: Response) => {
+    if (!(await requireRunAccess(req, res))) return;
     const audit = await getEventRuntime().projectAudit(req.params.runId);
     res.json({ success: true, data: audit });
   })
@@ -124,9 +122,35 @@ router.get(
 router.get(
   '/runs/:runId/regression',
   asyncHandler(async (req: Request, res: Response) => {
+    if (!(await requireRunAccess(req, res))) return;
     const regression = await getEventRuntime().projectRegression(req.params.runId);
     res.json({ success: true, data: regression });
   })
 );
+
+async function requireRunAccess(req: Request, res: Response) {
+  const run = await getEventRuntime().projectRun(req.params.runId);
+  if (!run) {
+    res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'RUN_NOT_FOUND', message: 'Run not found' },
+    });
+    return undefined;
+  }
+
+  const requesterUserId = req.user?.userId ?? req.apiKey?.userId;
+  if (!req.user?.isAdmin && (!requesterUserId || requesterUserId !== run.userId)) {
+    res.status(HTTP_STATUS.FORBIDDEN).json({
+      success: false,
+      error: {
+        code: 'RUNTIME_RUN_ACCESS_DENIED',
+        message: 'Runtime Run belongs to another user',
+      },
+    });
+    return undefined;
+  }
+
+  return run;
+}
 
 export default router;
