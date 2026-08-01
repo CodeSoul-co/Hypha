@@ -96,18 +96,20 @@ supplied through `args`. Filesystem calls still pass through normal tool policy
 and event tracing. The path allowlist is not an OS process sandbox; use a
 container or dedicated worker when executing untrusted code.
 
-The built-in `search` tool is available without network access by default:
+The built-in `search` tool has a deterministic provider for explicit local tests:
 
 ```bash
 WEB_SEARCH_PROVIDER=stub
 ```
+
+Production rejects the `stub` provider during Tool lifecycle loading and rejects request-level or fallback attempts to select it. Use one or more real HTTP providers for deployable configurations.
 
 Use mainland China no-key HTTP providers when DuckDuckGo or Wikipedia are slow
 or blocked by the local network:
 
 ```bash
 WEB_SEARCH_PROVIDER=china
-WEB_SEARCH_CHINA_PROVIDER_ORDER=baidu,so360,stub
+WEB_SEARCH_CHINA_PROVIDER_ORDER=baidu,so360
 WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT=https://www.baidu.com/sugrec
 WEB_SEARCH_SO360_SUGGEST_ENDPOINT=https://sug.so.360.cn/suggest
 WEB_SEARCH_TIMEOUT_MS=10000
@@ -121,14 +123,13 @@ WEB_SEARCH_WIKIPEDIA_ENDPOINT=https://en.wikipedia.org/w/api.php
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-Use automatic fallback for local real-network testing. This tries DuckDuckGo
-first and falls back to Wikipedia or the offline stub if the local network
-blocks a provider:
+Use automatic fallback for real-network operation. This tries DuckDuckGo first
+and falls back to Wikipedia if the first provider is unavailable:
 
 ```bash
 WEB_SEARCH_PROVIDER=auto
-WEB_SEARCH_PROVIDER_ORDER=duckduckgo,wikipedia,stub
-WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
+WEB_SEARCH_PROVIDER_ORDER=duckduckgo,wikipedia
+WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia
 ```
 
 Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should make real HTTP search calls through DuckDuckGo:
@@ -136,7 +137,7 @@ Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should mak
 ```bash
 WEB_SEARCH_PROVIDER=duckduckgo
 WEB_SEARCH_DUCKDUCKGO_ENDPOINT=https://api.duckduckgo.com/
-WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
+WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
