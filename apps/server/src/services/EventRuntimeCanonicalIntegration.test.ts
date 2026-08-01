@@ -173,6 +173,19 @@ describe('Server EventRuntime canonical integration', () => {
       eventDbPath: path.join(root, 'runtime.sqlite'),
       humanWaits: composition.humanWaits,
     });
+    await restarted.transition(run.runId, 'Reasoning', { resumedAfterRestart: true });
+    await expect(
+      composition.events.list({ runId: run.runId, type: 'fsm.state.entered' })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            stateId: 'Reasoning',
+            snapshot: expect.objectContaining({ currentState: 'Reasoning' }),
+          }),
+        }),
+      ])
+    );
     await restarted.startRun({
       userId: 'user.integration',
       sessionId: 'session.integration',

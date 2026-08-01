@@ -118,16 +118,11 @@ import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { generateId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
-
-interface RuntimeRunContext {
-  runId: string;
-  userId: string;
-  sessionId: string;
-  clientSessionId: string;
-  domainPackId: string;
-  fsm: FSMProcessSpec;
-  snapshot: FSMSnapshot;
-}
+import {
+  projectRuntimeRunContext,
+  runtimeRunContextMetadata,
+  type RuntimeRunContext,
+} from '../runtime/RuntimeRunContextProjection';
 
 export interface EventRunHandle {
   runId: string;
@@ -520,7 +515,6 @@ class EventRuntimeService {
   private readonly humanWaitOwnerId = `server-event-runtime:${process.pid}`;
   private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
-  private readonly runs = new Map<string, RuntimeRunContext>();
   private readonly knownSessions = new Set<string>();
   private readonly sessionInitializations = new Map<string, Promise<void>>();
   private readonly inference: InferenceManager;
@@ -759,6 +753,15 @@ class EventRuntimeService {
       version: fsm.version,
     };
     const snapshot = createInitialSnapshot(fsm, runId, timestamp);
+    const context: RuntimeRunContext = {
+      runId,
+      userId: input.userId,
+      sessionId: runtimeSessionId,
+      clientSessionId: input.sessionId,
+      domainPackId: domainPack.id,
+      fsm,
+      snapshot,
+    };
 
     await this.runtime.createRun({
       id: runId,
@@ -768,21 +771,20 @@ class EventRuntimeService {
       workflowRef,
       agentRef: input.agentId ? { id: input.agentId } : undefined,
       input: input.input,
+      metadata: {
+        ...input.metadata,
+        ...runtimeRunContextMetadata(context),
+      },
       timestamp,
     });
-    this.runs.set(runId, {
-      runId,
-      userId: input.userId,
-      sessionId: runtimeSessionId,
-      clientSessionId: input.sessionId,
-      domainPackId: domainPack.id,
-      fsm,
-      snapshot,
-    });
     await this.append(runId, 'run.started', { runId, input: input.input }, timestamp);
-    await this.append(runId, 'fsm.state.entered', { stateId: snapshot.currentState }, timestamp, {
-      fsmState: snapshot.currentState,
-    });
+    await this.append(
+      runId,
+      'fsm.state.entered',
+      { stateId: snapshot.currentState, snapshot },
+      timestamp,
+      { fsmState: snapshot.currentState }
+    );
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
@@ -791,7 +793,7 @@ class EventRuntimeService {
     to: string,
     payload: Record<string, unknown> = {}
   ): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     if (context.snapshot.currentState === to) return;
     const from = context.snapshot.currentState;
     await this.append(runId, 'fsm.transition.requested', { from, to, ...payload }, undefined, {
@@ -813,14 +815,16 @@ class EventRuntimeService {
       await this.append(runId, 'fsm.state.exited', { stateId: from }, undefined, {
         fsmState: from,
       });
-      await this.append(runId, 'fsm.transition.accepted', { from, to, ...payload }, undefined, {
+      await this.append(
+        runId,
+        'fsm.transition.accepted',
+        { from, to, snapshot: next, ...payload },
+        undefined,
+        { fsmState: to }
+      );
+      await this.append(runId, 'fsm.state.entered', { stateId: to, snapshot: next }, undefined, {
         fsmState: to,
       });
-      await this.append(runId, 'fsm.state.entered', { stateId: to }, undefined, {
-        fsmState: to,
-      });
-      context.snapshot = next;
-      this.runs.set(runId, context);
     } catch (error) {
       if (error instanceof FrameworkError && error.code === 'FSM_HUMAN_REVIEW_REQUIRED') {
         await this.append(runId, 'human.review.requested', {
@@ -840,7 +844,7 @@ class EventRuntimeService {
 
   async inferChat(input: ChatInferenceInput): Promise<ChatResponse> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
-    const runContext = this.runs.get(input.runId);
+    const runContext = await this.requireRun(input.runId);
     await this.append(
       input.runId,
       'inference.requested',
@@ -865,10 +869,10 @@ class EventRuntimeService {
     const inferenceRequest: ReasoningRequest<LLMInferenceInput> = {
       runId: input.runId,
       stepId: input.stepId,
-      sessionId: runContext?.clientSessionId,
+      sessionId: runContext.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
-      cacheScope: { userId: runContext?.userId ?? 'single-user' },
+      cacheScope: { userId: runContext.userId },
       input: {
         messages: input.messages,
         options: {
@@ -890,11 +894,11 @@ class EventRuntimeService {
       },
       metadata: {
         ...input.metadata,
-        userId: runContext?.userId,
-        sessionId: runContext?.clientSessionId,
-        runtimeSessionId: runContext?.sessionId,
+        userId: runContext.userId,
+        sessionId: runContext.clientSessionId,
+        runtimeSessionId: runContext.sessionId,
         provider: resolved.provider,
-        domainPackId: runContext?.domainPackId,
+        domainPackId: runContext.domainPackId,
       },
     };
 
@@ -975,6 +979,7 @@ class EventRuntimeService {
     userId: string,
     sessionId: string
   ): Promise<ResolvedRuntimeAgentSpec> {
+    const runContext = await this.requireRun(input.runId);
     const spec = input.agentSpec ?? {};
     const id = spec.id ?? input.agentId ?? 'agent.default';
     const name = spec.name ?? input.agentId ?? 'Default Runtime Agent';
@@ -991,7 +996,7 @@ class EventRuntimeService {
           userId,
           sessionId,
           tenantId: stringValue(asRecord(input.metadata)?.tenantId),
-          domainId: this.runs.get(input.runId)?.domainPackId,
+          domainId: runContext.domainPackId,
           promptRefs,
         });
     const baseSystemInstructions =
@@ -1018,7 +1023,7 @@ class EventRuntimeService {
       agentId: id,
       principalId: userId,
       tenantId: stringValue(asRecord(input.metadata)?.tenantId),
-      domainId: this.runs.get(input.runId)?.domainPackId,
+      domainId: runContext.domainPackId,
       agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
       domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
       activeSkills,
@@ -1095,9 +1100,9 @@ class EventRuntimeService {
       sessionId?: string;
     }
   ): Promise<ChatResponse> {
-    const runContext = this.runs.get(input.runId);
-    const userId = input.userId ?? runContext?.userId ?? 'single-user';
-    const sessionId = input.sessionId ?? runContext?.clientSessionId ?? input.runId;
+    const runContext = await this.requireRun(input.runId);
+    const userId = input.userId ?? runContext.userId;
+    const sessionId = input.sessionId ?? runContext.clientSessionId;
     const agent = await this.resolveChatAgent(input, userId, sessionId);
     const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     let chatResponse: ChatResponse | undefined;
@@ -1234,12 +1239,8 @@ class EventRuntimeService {
 
   async *streamChat(input: ChatInferenceInput): AsyncGenerator<StreamChunk> {
     const resolved = this.resolveChatModel(input.modelAlias || input.options?.model);
-    const runContext = this.runs.get(input.runId);
-    const agent = await this.resolveChatAgent(
-      input,
-      runContext?.userId ?? 'single-user',
-      runContext?.clientSessionId ?? input.runId
-    );
+    const runContext = await this.requireRun(input.runId);
+    const agent = await this.resolveChatAgent(input, runContext.userId, runContext.clientSessionId);
     const chatOptions = withSystemPrompt(input.options, agent.systemInstructions);
     await this.append(
       input.runId,
@@ -1266,10 +1267,10 @@ class EventRuntimeService {
     const inferenceRequest: InferenceRequest<LLMInferenceInput> = {
       runId: input.runId,
       stepId: input.stepId,
-      sessionId: runContext?.clientSessionId,
+      sessionId: runContext.clientSessionId,
       modelAlias: resolved.model,
       cachePolicy: input.cachePolicy,
-      cacheScope: { userId: runContext?.userId ?? 'single-user' },
+      cacheScope: { userId: runContext.userId },
       input: {
         messages: input.messages,
         options: {
@@ -1293,11 +1294,11 @@ class EventRuntimeService {
             }
           : asRecord(input.agentSpec?.metadata)?.prompt,
         stream: true,
-        userId: runContext?.userId,
-        sessionId: runContext?.clientSessionId,
-        runtimeSessionId: runContext?.sessionId,
+        userId: runContext.userId,
+        sessionId: runContext.clientSessionId,
+        runtimeSessionId: runContext.sessionId,
         provider: resolved.provider,
-        domainPackId: runContext?.domainPackId,
+        domainPackId: runContext.domainPackId,
       },
     };
     const reasoning: ReasoningOptions = {
@@ -1547,7 +1548,7 @@ class EventRuntimeService {
     const invocation = await this.toolRunner.getInvocation(invocationId);
     const result = await this.toolRunner.rejectInvocation(invocationId);
     const runId = invocation?.scope?.runId ?? invocation?.request.context.runId;
-    const run = runId ? this.runs.get(runId) : undefined;
+    const run = runId ? await this.findRun(runId) : null;
     if (runId && run && !run.fsm.terminalStates.includes(run.snapshot.currentState)) {
       await this.resolveHumanReview(run, invocationId, rejectedBy, 'rejected');
       await this.failRun(runId, toolResultErrorMessage(result, 'Tool approval rejected.'));
@@ -1561,7 +1562,7 @@ class EventRuntimeService {
     approvedBy: string
   ): Promise<void> {
     const runId = invocation.scope?.runId ?? invocation.request.context.runId;
-    const run = this.runs.get(runId);
+    const run = await this.findRun(runId);
     if (!run || run.fsm.terminalStates.includes(run.snapshot.currentState)) return;
 
     if (run.snapshot.currentState === 'HumanReview') {
@@ -1918,14 +1919,12 @@ class EventRuntimeService {
     caseId: string;
     participant: RecoveryParticipant<TValue>;
   }): Promise<TValue> {
-    const context = this.requireRun(input.runId);
+    const context = await this.requireRun(input.runId);
     const recoveryFsm = new FSMRuntime(
       context.fsm,
       input.runId,
       {
         onTransition: async (transition) => {
-          context.snapshot = transition.snapshot;
-          this.runs.set(input.runId, context);
           await this.append(
             input.runId,
             'fsm.state.exited',
@@ -1940,6 +1939,7 @@ class EventRuntimeService {
               from: transition.from,
               to: transition.to,
               phase: 'recovery',
+              snapshot: transition.snapshot,
               ...transition.metadata,
             },
             transition.acceptedAt,
@@ -1947,12 +1947,15 @@ class EventRuntimeService {
           );
         },
         onStateEntered: async (entered) => {
-          context.snapshot = entered.snapshot;
-          this.runs.set(input.runId, context);
           await this.append(
             input.runId,
             'fsm.state.entered',
-            { stateId: entered.stateId, fromState: entered.fromState, phase: 'recovery' },
+            {
+              stateId: entered.stateId,
+              fromState: entered.fromState,
+              phase: 'recovery',
+              snapshot: entered.snapshot,
+            },
             entered.enteredAt,
             { stepId: input.stepId, fsmState: entered.stateId }
           );
@@ -1987,8 +1990,6 @@ class EventRuntimeService {
       },
       maxInlineDelayMs: 1_000,
     });
-    context.snapshot = recoveryFsm.getSnapshot();
-    this.runs.set(input.runId, context);
     if (result.status === 'succeeded' || result.status === 'degraded') {
       return result.outputs[input.participant.id] as TValue;
     }
@@ -2015,8 +2016,9 @@ class EventRuntimeService {
   private async recordBypassedCacheFailure(failure: RecoveryFailure): Promise<void> {
     if (failure.module !== 'cache') return;
     const runId = stringValue(failure.metadata?.runId);
-    if (!runId || !this.runs.has(runId)) return;
-    const context = this.runs.get(runId)!;
+    if (!runId) return;
+    const context = await this.findRun(runId);
+    if (!context) return;
     const stepId = stringValue(failure.metadata?.stepId);
     const fingerprint = recoveryFailureFingerprint(failure);
     const candidateHash = stableRecoveryHash(failure.evidence);
@@ -2079,7 +2081,7 @@ class EventRuntimeService {
   }
 
   private async recordServingCacheEvent(event: ServingCacheEvent): Promise<void> {
-    if (!event.runId || !this.runs.has(event.runId)) return;
+    if (!event.runId || !(await this.findRun(event.runId))) return;
     const { type, runId, stepId, ...payload } = event;
     await this.append(runId, type, payload, undefined, { stepId });
   }
@@ -2094,30 +2096,34 @@ class EventRuntimeService {
   }
 
   async completeRun(runId: string, output?: unknown): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
+    let terminalState = context.snapshot.currentState;
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
-      await this.transition(runId, inferCompletedState(context.fsm), { reason: 'completed' });
+      terminalState = inferCompletedState(context.fsm);
+      await this.transition(runId, terminalState, { reason: 'completed' });
     }
     await this.append(runId, 'run.completed', {
-      terminalState: context.snapshot.currentState,
+      terminalState,
       output,
     });
   }
 
   async failRun(runId: string, error: unknown): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     const message = error instanceof Error ? error.message : String(error);
+    let terminalState = context.snapshot.currentState;
     if (!context.fsm.terminalStates.includes(context.snapshot.currentState)) {
-      await this.transition(runId, inferFailedState(context.fsm), { reason: message });
+      terminalState = inferFailedState(context.fsm);
+      await this.transition(runId, terminalState, { reason: message });
     }
     await this.append(runId, 'run.failed', {
-      terminalState: context.snapshot.currentState,
+      terminalState,
       error: message,
     });
   }
 
   async waitForHumanReview(runId: string, payload: Record<string, unknown> = {}): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     const waitId =
       typeof payload.waitId === 'string' && payload.waitId.trim()
         ? payload.waitId
@@ -2849,7 +2855,7 @@ class EventRuntimeService {
     timestamp?: string,
     options: { stepId?: string; fsmState?: string } = {}
   ): Promise<void> {
-    const context = this.requireRun(runId);
+    const context = await this.requireRun(runId);
     await this.runtime.appendRunEvent({
       id: `${runId}:${type}:${generateId()}`,
       type,
@@ -2869,8 +2875,12 @@ class EventRuntimeService {
     });
   }
 
-  private requireRun(runId: string): RuntimeRunContext {
-    const context = this.runs.get(runId);
+  private async findRun(runId: string): Promise<RuntimeRunContext | null> {
+    return projectRuntimeRunContext(await this.events.list({ runId }), runId);
+  }
+
+  private async requireRun(runId: string): Promise<RuntimeRunContext> {
+    const context = await this.findRun(runId);
     if (!context) {
       throw new Error(`Runtime run not found: ${runId}`);
     }
