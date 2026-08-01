@@ -39,25 +39,7 @@ describe('EventRuntime WorkCache integration', () => {
   });
 
   it('derives ToolTree blocks from governed read-only tool completion events', async () => {
-    const [{ getEventRuntime }, { getToolManager }] = await Promise.all([
-      import('./EventRuntime'),
-      import('../core/tools/ToolManager'),
-    ]);
-    await getToolManager().register({
-      id: 'fixture.read',
-      name: 'fixture.read',
-      description: 'Deterministic read-only WorkCache fixture',
-      schema: {
-        name: 'fixture.read',
-        description: 'Deterministic read-only WorkCache fixture',
-        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
-      },
-      governance: { sideEffectLevel: 'read', permissionScope: ['fixture.read'] },
-      execute: async () => ({
-        success: true,
-        output: { value: 'ok', validity: { sourceHashes: { query: 'query-hash' } } },
-      }),
-    });
+    const { getEventRuntime } = await import('./EventRuntime');
     const runtime = getEventRuntime();
     const handle = await runtime.startRun({
       userId: 'workcache-user',
@@ -81,6 +63,10 @@ describe('EventRuntime WorkCache integration', () => {
         },
       },
       params: { query: 'hypha' },
+      handler: async () => ({
+        value: 'ok',
+        validity: { sourceHashes: { query: 'query-hash' } },
+      }),
     });
 
     expect(result.status).toBe('completed');
