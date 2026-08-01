@@ -10,7 +10,7 @@ describe('Server EventRuntime canonical integration', () => {
   let canonicalRuntime: ServerCanonicalRuntime | undefined;
 
   afterEach(async () => {
-    destroyEventRuntime();
+    await destroyEventRuntime();
     await canonicalRuntime?.close();
     canonicalRuntime = undefined;
   });
@@ -342,7 +342,7 @@ describe('Server EventRuntime canonical integration', () => {
       }),
     ]);
 
-    destroyEventRuntime();
+    await destroyEventRuntime();
     const restarted = initializeEventRuntime({
       events: composition.events,
       eventDbPath: path.join(root, 'runtime.sqlite'),
@@ -374,7 +374,7 @@ describe('Server EventRuntime canonical integration', () => {
       })
     ).resolves.toHaveLength(1);
 
-    destroyEventRuntime();
+    await destroyEventRuntime();
     await canonicalRuntime.close();
     canonicalRuntime = new ServerCanonicalRuntime({
       filename: path.join(root, 'runtime.sqlite'),
