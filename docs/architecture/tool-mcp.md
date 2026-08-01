@@ -34,6 +34,13 @@ pagination. MCP SDK types remain in the transport/session layer.
 A Run stores an immutable Tool contract snapshot. Catalog drift creates a new revision; it cannot
 silently replace the schema used by an active or replayed Run.
 
+MCP transport envelopes are not Tool domain outputs. When a Tool declares an output schema, the
+runner validates the protocol `structuredContent` value; text/binary `content`, `isError`, and other
+transport fields remain protocol evidence. Approved Resources and Prompts use a short-lived,
+user-scoped Run access record with the exact permission scope, deadline, capability hash, and server
+identity. Their HTTP surfaces create canonical Runs and persist MCP call and terminal events rather
+than invoking the SDK with an unverified caller-provided Run ID.
+
 ## Cross-Module Ports
 
 - Command and file Tools call `WorkspaceRuntimePort`; process execution lives in the local adapter.

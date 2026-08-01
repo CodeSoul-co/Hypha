@@ -75,15 +75,27 @@ export interface ServerRemoteSkillRegistryBinding {
   maxDependencyDepth?: number;
 }
 
+export interface ServerSkillRegistryReadiness {
+  initialized: boolean;
+  enabled: boolean;
+  required: boolean;
+  status: 'disabled' | 'ready' | 'degraded' | 'failed';
+  configuredRefs: number;
+  loadedSkills: number;
+  failures: Array<{ skillId: string; version: string; error: string }>;
+}
+
 /**
  * Server composition adapter for the package-level Skill pipeline.
  * It owns no second selector or execution loop.
  */
 export class SkillManager {
+  private initialized = false;
   private skills = new Map<string, RegisteredSkill>();
   private registry = new SkillRegistry();
   private readonly dirs: string[];
   private readonly remoteRegistry?: ServerRemoteSkillRegistryBinding;
+  private remoteRegistryReadiness: ServerSkillRegistryReadiness;
 
   constructor(opts?: { dirs?: string[]; remoteRegistry?: ServerRemoteSkillRegistryBinding }) {
     const skillConfig = getConfig().skills;
@@ -107,6 +119,7 @@ export class SkillManager {
       )
     );
     this.remoteRegistry = opts?.remoteRegistry ?? createRemoteRegistryBinding(skillConfig);
+    this.remoteRegistryReadiness = initialRemoteRegistryReadiness(this.remoteRegistry);
   }
 
   getDirs(): string[] {
@@ -117,9 +130,15 @@ export class SkillManager {
     return this.registry;
   }
 
+  readiness(): ServerSkillRegistryReadiness {
+    return structuredClone({ ...this.remoteRegistryReadiness, initialized: this.initialized });
+  }
+
   async initialize(): Promise<void> {
+    this.initialized = false;
     this.skills.clear();
     this.registry = new SkillRegistry();
+    this.remoteRegistryReadiness = initialRemoteRegistryReadiness(this.remoteRegistry);
     for (const directory of this.dirs) {
       for (const filePath of await listSkillFiles(directory)) {
         try {
@@ -147,11 +166,14 @@ export class SkillManager {
       dirs: this.dirs,
       remoteRegistryEnabled: this.remoteRegistry !== undefined,
     });
+    this.initialized = true;
   }
 
   async destroy(): Promise<void> {
+    this.initialized = false;
     this.skills.clear();
     this.registry = new SkillRegistry();
+    this.remoteRegistryReadiness = initialRemoteRegistryReadiness(undefined);
     logger.info('SkillManager destroyed');
   }
 
@@ -179,6 +201,7 @@ export class SkillManager {
   private async loadRemoteSkills(): Promise<void> {
     if (!this.remoteRegistry) return;
     const loaded = new Map<string, SkillSpec>();
+    const failures: ServerSkillRegistryReadiness['failures'] = [];
     for (const ref of this.remoteRegistry.refs) {
       try {
         const staged = new Map<string, SkillSpec>();
@@ -198,17 +221,37 @@ export class SkillManager {
           loaded.set(key, spec);
         }
       } catch (error) {
-        if (this.remoteRegistry.required || ref.required) throw error;
+        const failure = {
+          skillId: ref.id,
+          version: ref.version,
+          error: boundedErrorMessage(error),
+        };
+        failures.push(failure);
+        if (this.remoteRegistry.required || ref.required) {
+          this.remoteRegistryReadiness = {
+            ...this.remoteRegistryReadiness,
+            status: 'failed',
+            loadedSkills: 0,
+            failures,
+          };
+          throw error;
+        }
         logger.warn('Optional remote Skill failed closed during startup', {
           skillId: ref.id,
           version: ref.version,
-          error: error instanceof Error ? error.message : String(error),
+          error: failure.error,
         });
       }
     }
     for (const spec of loaded.values()) {
       this.registerPackageSkill(spec, `remote-registry:${spec.id}@${spec.version}`);
     }
+    this.remoteRegistryReadiness = {
+      ...this.remoteRegistryReadiness,
+      status: failures.length > 0 ? 'degraded' : 'ready',
+      loadedSkills: loaded.size,
+      failures,
+    };
   }
 
   private async loadRemoteSkillTree(
@@ -361,6 +404,36 @@ export class SkillManager {
     for (const skill of this.skills.values()) registry.register(skill.spec);
     this.registry = registry;
   }
+}
+
+function initialRemoteRegistryReadiness(
+  binding: ServerRemoteSkillRegistryBinding | undefined
+): ServerSkillRegistryReadiness {
+  if (!binding) {
+    return {
+      initialized: false,
+      enabled: false,
+      required: false,
+      status: 'disabled',
+      configuredRefs: 0,
+      loadedSkills: 0,
+      failures: [],
+    };
+  }
+  return {
+    initialized: false,
+    enabled: true,
+    required: binding.required === true || binding.refs.some((ref) => ref.required),
+    status: 'degraded',
+    configuredRefs: binding.refs.length,
+    loadedSkills: 0,
+    failures: [],
+  };
+}
+
+function boundedErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(0, 256);
 }
 
 function createRemoteRegistryBinding(

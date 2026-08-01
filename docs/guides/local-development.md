@@ -35,7 +35,7 @@ Local runtime records, indexes, artifacts, and detailed system logs are written 
 | --------------------------- | -------------------------------------------------------------------------------- |
 | `storage.document.mongodb`  | MongoDB permanent conversation memory and user-owned records.                    |
 | `storage.messaging.redis`   | Redis temporary memory, streams, cache, and queue-ready messaging.               |
-| `storage.messaging.kafka`   | Optional Kafka queue/pub-sub integration point.                                  |
+| `storage.messaging.kafka`   | Extension contract; not composed by the stock Server.                            |
 | `storage.relational.sqlite` | `data/runtime/events/` and `data/runtime/structured/` with SQLite/JSON fallback. |
 | `storage.vector.local`      | `data/storage/vector/` JSON-backed semantic index.                               |
 | `storage.artifacts.local`   | `data/storage/artifacts/` filesystem-backed artifact store.                      |
@@ -96,18 +96,20 @@ supplied through `args`. Filesystem calls still pass through normal tool policy
 and event tracing. The path allowlist is not an OS process sandbox; use a
 container or dedicated worker when executing untrusted code.
 
-The built-in `search` tool is available without network access by default:
+The built-in `search` tool has a deterministic provider for explicit local tests:
 
 ```bash
 WEB_SEARCH_PROVIDER=stub
 ```
+
+Production rejects the `stub` provider during Tool lifecycle loading and rejects request-level or fallback attempts to select it. Use one or more real HTTP providers for deployable configurations.
 
 Use mainland China no-key HTTP providers when DuckDuckGo or Wikipedia are slow
 or blocked by the local network:
 
 ```bash
 WEB_SEARCH_PROVIDER=china
-WEB_SEARCH_CHINA_PROVIDER_ORDER=baidu,so360,stub
+WEB_SEARCH_CHINA_PROVIDER_ORDER=baidu,so360
 WEB_SEARCH_BAIDU_SUGGEST_ENDPOINT=https://www.baidu.com/sugrec
 WEB_SEARCH_SO360_SUGGEST_ENDPOINT=https://sug.so.360.cn/suggest
 WEB_SEARCH_TIMEOUT_MS=10000
@@ -121,14 +123,13 @@ WEB_SEARCH_WIKIPEDIA_ENDPOINT=https://en.wikipedia.org/w/api.php
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-Use automatic fallback for local real-network testing. This tries DuckDuckGo
-first and falls back to Wikipedia or the offline stub if the local network
-blocks a provider:
+Use automatic fallback for real-network operation. This tries DuckDuckGo first
+and falls back to Wikipedia if the first provider is unavailable:
 
 ```bash
 WEB_SEARCH_PROVIDER=auto
-WEB_SEARCH_PROVIDER_ORDER=duckduckgo,wikipedia,stub
-WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
+WEB_SEARCH_PROVIDER_ORDER=duckduckgo,wikipedia
+WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia
 ```
 
 Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should make real HTTP search calls through DuckDuckGo:
@@ -136,27 +137,31 @@ Use a DuckDuckGo Instant Answer-compatible endpoint when a deployment should mak
 ```bash
 WEB_SEARCH_PROVIDER=duckduckgo
 WEB_SEARCH_DUCKDUCKGO_ENDPOINT=https://api.duckduckgo.com/
-WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia,stub
+WEB_SEARCH_FALLBACK_PROVIDERS=wikipedia
 WEB_SEARCH_TIMEOUT_MS=10000
 ```
 
-`config.yaml` enables the in-process classic MCP fixture by default:
+`config.yaml` enables the real local stdio MCP example by default:
 
 ```yaml
 tools:
   mcpServers:
-    - id: 'classic'
-      name: 'Classic MCP Fixture'
-      mode: 'fixture'
+    - id: 'local-example'
+      name: 'Hypha Local MCP Example'
+      mode: 'local'
+      command: 'node'
+      args: ['./examples/mcp/local-stdio-server.cjs']
       autoConnect: true
+      required: true
 ```
 
-The fixture exposes `filesystem.read_file`, `fetch.fetch`, `time.now`,
-`search.web_search`, `baidu.web_search`, and `so360.web_search` through the
-same governed `/tools/execute` path as remote or stdio MCP servers. Replace
-`mode: "fixture"` with `mode: "local"` plus `command`/`args`, or
-`mode: "remote"` plus `endpoint` and optional `authToken` for deployment MCP
-servers.
+The server discovers `hash_reference`, but the trust policy keeps a newly
+discovered capability unavailable until it is explicitly approved through the
+MCP capability API. After approval it uses the same governed `/tools/execute`
+path as remote MCP servers. Configure other local servers with `mode: "local"`
+plus `command`/`args`, or remote servers with `mode: "remote"` plus `endpoint`
+and a Secret reference. In-process fixture mode is reserved for tests and is
+rejected when `NODE_ENV=production`.
 
 Tool result caching is disabled by default. Use the bounded in-process Store for one process, or
 the configured Redis connection for multi-process/local/cloud deployments:
@@ -212,7 +217,7 @@ REDIS_DEPLOYMENT=cloud
 REDIS_TLS=true
 ```
 
-Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` but disabled by default. Enable them through `.env` only when a concrete adapter is available for the deployment.
+Kafka, Postgres, Qdrant, Chroma, Pinecone, and S3-compatible artifact stores are declared in `config.yaml` as extension contracts and disabled by default. The stock Server rejects attempts to enable them. A deployment that supplies one must register its concrete adapter, lifecycle cleanup, readiness probe, failure-injection tests, and real-environment acceptance in the same integration before removing that guard.
 
 Do not commit `.env`, `data/`, root `logs/`, build output, `AGENTS.md`, or `docs/dev_tmp_docs/`.
 

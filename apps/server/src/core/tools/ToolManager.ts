@@ -335,6 +335,7 @@ class FixtureMCPClient implements MCPClient {
 }
 
 export class ToolManager {
+  private initialized = false;
   private tools: Map<string, ToolRegistration> = new Map();
   private mcpClients: Map<string, MCPClient> = new Map();
   private readonly secretResolver = new EnvironmentSecretResolver();
@@ -415,6 +416,7 @@ export class ToolManager {
   ) {}
 
   async initialize(): Promise<void> {
+    this.initialized = false;
     registerBuiltinToolProfileBindings(this.profileBindings);
     const config = getConfig();
 
@@ -458,6 +460,7 @@ export class ToolManager {
       toolCount: this.tools.size,
       mcpServerCount: this.mcpClients.size,
     });
+    this.initialized = true;
   }
 
   private async loadToolsFromConfig(configPath: string): Promise<void> {
@@ -487,6 +490,7 @@ export class ToolManager {
   }
 
   async destroy(): Promise<void> {
+    this.initialized = false;
     // Disconnect all MCP clients
     for (const [id, client] of this.mcpClients) {
       await client.disconnect();
@@ -758,6 +762,15 @@ export class ToolManager {
   }
 
   async registerMCPServer(config: MCPServerConfig): Promise<void> {
+    if (process.env.NODE_ENV === 'production' && config.mode === 'fixture') {
+      throw Object.assign(
+        new Error(`MCP fixture mode is not available in production: ${config.id}`),
+        {
+          code: 'MCP_FIXTURE_FORBIDDEN_IN_PRODUCTION',
+          serverId: config.id,
+        }
+      );
+    }
     const required = config.required !== false;
     this.mcpServerModes.set(config.id, config.mode);
     const connectionProfileRef = config.connectionProfileRef ?? config.id;
@@ -859,9 +872,16 @@ export class ToolManager {
         : new ManagedMCPClient(config.id, config.name, this.connectionManager);
 
     this.mcpClients.set(config.id, client);
-    this.mcpServerStates.set(config.id, { status: 'ready', required });
+    const startsDuringInitialization = config.autoStart === true || config.autoConnect === true;
+    this.mcpServerStates.set(config.id, {
+      status: startsDuringInitialization ? 'degraded' : required ? 'failed' : 'degraded',
+      required,
+      error: startsDuringInitialization
+        ? 'MCP server initialization has not completed'
+        : 'MCP server is configured but not connected',
+    });
 
-    if (config.autoStart || config.autoConnect) {
+    if (startsDuringInitialization) {
       try {
         await client.connect();
         await this.mcpCatalogs.get(config.id)?.refresh(config.id, 'server-auto-connect');
@@ -1189,6 +1209,7 @@ export class ToolManager {
     approvedBy: string;
     restrictions?: string[];
     expiresAt?: string;
+    sideEffectLevel?: HyphaToolSpec['sideEffectLevel'];
   }): Promise<void> {
     const catalog = this.mcpCatalogs.get(request.serverId);
     if (!catalog) throw new Error(`MCP server not found: ${request.serverId}`);
@@ -1283,6 +1304,33 @@ export class ToolManager {
     }
   > {
     return Object.fromEntries(this.mcpServerStates);
+  }
+
+  operationalReadiness(): {
+    initialized: boolean;
+    ready: boolean;
+    status: 'not_initialized' | 'ready' | 'degraded' | 'failed';
+    profiles: ReturnType<ToolManager['profileReadiness']>;
+    mcpServers: ReturnType<ToolManager['mcpServerReadiness']>;
+  } {
+    const profiles = this.profileReadiness();
+    const mcpServers = this.mcpServerReadiness();
+    if (!this.initialized) {
+      return { initialized: false, ready: false, status: 'not_initialized', profiles, mcpServers };
+    }
+    const requiredFailure =
+      Object.values(profiles).some((state) => state.required && state.status !== 'ready') ||
+      Object.values(mcpServers).some((state) => state.required && state.status !== 'ready');
+    const degraded =
+      Object.values(profiles).some((state) => state.status !== 'ready') ||
+      Object.values(mcpServers).some((state) => state.status !== 'ready');
+    return {
+      initialized: true,
+      ready: !requiredFailure,
+      status: requiredFailure ? 'failed' : degraded ? 'degraded' : 'ready',
+      profiles,
+      mcpServers,
+    };
   }
 
   private superviseMCPReconnect(serverId: string): Promise<void> {
