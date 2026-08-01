@@ -55,7 +55,7 @@ describe('GET /api/v1/health', () => {
 });
 
 describe('GET /api/v1/ready', () => {
-  it('fails closed while the production Session Command worker is not configured', async () => {
+  it('fails closed while the production continuation handler is not composed', async () => {
     const r = await request(app).get('/api/v1/ready');
 
     expect(r.status).toBe(503);
@@ -77,6 +77,81 @@ describe('GET /api/v1/ready', () => {
         },
       },
     });
+  });
+});
+
+describe('durable Runtime Session Commands', () => {
+  it('persists, applies, reuses, and scopes a start_run command', async () => {
+    const sessionId = `runtime-command-${Date.now()}`;
+    const idempotencyKey = `start-run-${Date.now()}`;
+    const body = { input: { task: 'durable-server-start' } };
+    const accepted = await request(app)
+      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+
+    expect(accepted.status).toBe(202);
+    expect(accepted.body.data).toMatchObject({
+      commandType: 'start_run',
+      userId: devUserId,
+      sessionId,
+      targetRunId: expect.any(String),
+    });
+    expect(accepted.body.data).not.toHaveProperty('payloadRef');
+    expect(accepted.body.data).not.toHaveProperty('payloadHash');
+    expect(accepted.body.data).not.toHaveProperty('claimToken');
+    expect(accepted.body.data).not.toHaveProperty('leaseEpoch');
+
+    const reused = await request(app)
+      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+    expect(reused.status).toBe(202);
+    expect(reused.body.data).toMatchObject({ id: accepted.body.data.id, status: 'reused' });
+
+    let applied: Record<string, unknown> | undefined;
+    for (let attempt = 0; attempt < 80 && !applied; attempt += 1) {
+      const listed = await request(app)
+        .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(listed.status).toBe(200);
+      applied = (listed.body.data || []).find(
+        (command: Record<string, unknown>) =>
+          command.id === accepted.body.data.id && command.status === 'applied'
+      );
+      if (!applied) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(applied).toMatchObject({
+      resultRunId: accepted.body.data.targetRunId,
+      targetRunId: accepted.body.data.targetRunId,
+    });
+
+    const run = await request(app)
+      .get(`/api/v1/runtime/runs/${accepted.body.data.targetRunId}`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(run.status).toBe(200);
+    expect(run.body.data).toMatchObject({
+      runId: accepted.body.data.targetRunId,
+      userId: devUserId,
+    });
+
+    const foreignToken = generateToken({
+      id: `foreign-${Date.now()}`,
+      email: 'foreign@example.com',
+      isAdmin: false,
+    });
+    const foreignList = await request(app)
+      .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+      .set('Authorization', `Bearer ${foreignToken}`);
+    expect(foreignList.status).toBe(200);
+    expect(foreignList.body.data).toEqual([]);
+
+    const foreignRun = await request(app)
+      .get(`/api/v1/runtime/runs/${accepted.body.data.targetRunId}`)
+      .set('Authorization', `Bearer ${foreignToken}`);
+    expect(foreignRun.status).toBe(403);
   });
 });
 
@@ -674,7 +749,7 @@ describe('POST /api/v1/workflows/conversation-flow/execute (bug 10)', () => {
     expect(cancellation.status).toBe(409);
     expect(cancellation.body).toMatchObject({
       success: false,
-      error: { code: 'RUNTIME_RESOURCE_CONFLICT' },
+      error: { code: 'RUNTIME_RUN_CONFLICT' },
     });
   });
 });
