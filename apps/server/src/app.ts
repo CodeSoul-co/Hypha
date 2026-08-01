@@ -339,19 +339,31 @@ class Application {
       logger.error('  Memory      | Error:', safeError);
     }
 
-    // 4. Check canonical Runtime Event authority.
+    // 4. Check both the canonical Event authority and the executable Runtime.
+    // Event-store health alone must never be reported as continuous execution
+    // readiness when the graph or durable workers have not been started.
     try {
       const runtimeHealth = await this.canonicalRuntime?.get().backbone.eventStore.health();
-      const healthy = runtimeHealth?.status === 'healthy';
+      const execution = this.canonicalRuntime?.executionReadiness();
+      const eventStoreHealthy = runtimeHealth?.status === 'healthy';
+      const healthy = eventStoreHealthy && execution?.ready === true;
       checks.push({
         name: 'Runtime',
         status: healthy ? 'pass' : 'fail',
-        detail: runtimeHealth?.message ?? runtimeHealth?.status ?? 'not initialized',
+        detail: !eventStoreHealthy
+          ? (runtimeHealth?.message ?? runtimeHealth?.status ?? 'Event authority not initialized')
+          : (execution?.message ?? 'Runtime execution state is unavailable'),
       });
       if (healthy) {
-        logger.info('  ✅ Runtime     │ Canonical Event store ready');
+        logger.info('  ✅ Runtime     │ Canonical execution workers ready');
       } else {
-        logger.error('  ❌ Runtime     │ Canonical Event store unavailable');
+        logger.error(
+          `  ❌ Runtime     │ ${
+            !eventStoreHealthy
+              ? 'Canonical Event store unavailable'
+              : (execution?.message ?? 'Execution state unavailable')
+          }`
+        );
       }
     } catch (err) {
       checks.push({ name: 'Runtime', status: 'fail', detail: String(err) });
