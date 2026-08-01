@@ -6,13 +6,13 @@ hypha uses a storage-profile model. Framework specs reference storage by stable 
 
 The local backbone is designed for a complete local harness:
 
-| Component          | Provider                   | Role                                                                                    |
-| ------------------ | -------------------------- | --------------------------------------------------------------------------------------- |
-| Events             | `SQLiteEventStore`         | Trace, replay, audit, regression, and runtime projection source.                        |
-| Structured records | `SQLiteStructuredStore`    | Source of truth for runs, memory records, policies, evaluations, and task state.        |
-| Semantic recall    | `LocalVectorIndexProvider` | Vector index with metadata filters.                                                     |
-| Artifacts          | `FileArtifactStore`        | Files, snapshots, large tool outputs, and exports.                                      |
-| Memory             | `HybridMemoryProvider`     | Simple composition of structured source of truth plus optional vector/artifact indexes. |
+| Component             | Provider                   | Role                                                                                                        |
+| --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Events                | `SQLiteEventStore`         | Trace, replay, audit, regression, and runtime projection source.                                            |
+| Structured records    | `SQLiteStructuredStore`    | Source of truth for runs, memory records, policies, evaluations, and task state.                            |
+| Lexical vector recall | `LocalVectorIndexProvider` | Vector index with metadata filters; the default local embedding uses deterministic lexical feature hashing. |
+| Artifacts             | `FileArtifactStore`        | Files, snapshots, large tool outputs, and exports.                                                          |
+| Memory                | `HybridMemoryProvider`     | Simple composition of structured source of truth plus optional vector/artifact indexes.                     |
 
 Create the full local stack:
 
@@ -40,6 +40,11 @@ await storage.eventStore.importJsonl('./data/runtime/events/run_1.events.jsonl')
 Use JSONL exports for replay fixtures, audits, regression snapshots, and local
 debugging. The event log remains the source of truth; exported files are
 portable snapshots.
+
+The zero-dependency default is `LocalHashEmbeddingProvider`. It preserves
+repeatable lexical similarity for local/offline use; it is not a neural
+semantic embedding model. Inject a concrete `EmbeddingProvider` through the
+`embeddings` option when semantic retrieval quality is required.
 
 ## Storage Provider Profile
 
