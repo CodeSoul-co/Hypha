@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTransition,
   applyTransitionWithRuntimePolicy,
+  assertHarnessFSMProcessSpec,
   canRetryState,
+  createHarnessFSMProcessSpec,
   createInitialSnapshot,
   defaultReActFSMProcessSpec,
   evaluateGuardExpression,
@@ -11,7 +13,10 @@ import {
   fsmProcessSpecDefinition,
   fsmSpecJsonSchemas,
   getAllowedTransitions,
+  HARNESS_STATE_CAPABILITY_AREA,
+  harnessStateForReActPhase,
   parseFSMProcessSpec,
+  planHarnessCapabilityPath,
   REACT_FSM_STATE_PATH,
   validateFSMSnapshot,
   validateFSMProcessSpec,
@@ -231,6 +236,61 @@ describe('@hypha/fsm runtime contracts', () => {
       currentState: 'Completed',
       status: 'completed',
       statePath: [...REACT_FSM_STATE_PATH],
+    });
+  });
+
+  it('owns the Harness capability topology independently of Domain workflows', () => {
+    const canonical = createHarnessFSMProcessSpec();
+
+    expect(() => assertHarnessFSMProcessSpec(canonical)).not.toThrow();
+    expect(HARNESS_STATE_CAPABILITY_AREA.Reasoning).toBe('reasoning');
+    expect(HARNESS_STATE_CAPABILITY_AREA.Acting).toBe('activity');
+    expect(HARNESS_STATE_CAPABILITY_AREA.MemorySync).toBe('memory');
+    expect(harnessStateForReActPhase('policy_check')).toBe('PolicyChecked');
+    expect(harnessStateForReActPhase('unknown-domain-stage')).toBeUndefined();
+    expect(planHarnessCapabilityPath('Idle', 'PolicyChecked')).toEqual([
+      'RunInitialized',
+      'ContextBuilt',
+      'Reasoning',
+      'ActionSelected',
+      'PolicyChecked',
+    ]);
+    expect(planHarnessCapabilityPath('Verifying', 'PolicyChecked')).toEqual(['PolicyChecked']);
+    expect(() => planHarnessCapabilityPath('Verifying', 'Recovering')).toThrow(
+      /No normal Harness capability path/
+    );
+  });
+
+  it('rejects Domain or application changes to the Harness FSM topology', () => {
+    const withDomainState = createHarnessFSMProcessSpec();
+    withDomainState.states.push({ id: 'ApproveInvoice', kind: 'domain' });
+    withDomainState.transitions.push({ from: 'Reasoning', to: 'ApproveInvoice' });
+    expect(() => assertHarnessFSMProcessSpec(withDomainState)).toThrow(
+      /state set cannot be changed/
+    );
+
+    const withoutCapabilityTransition = createHarnessFSMProcessSpec();
+    withoutCapabilityTransition.transitions = withoutCapabilityTransition.transitions.filter(
+      ({ from, to }) => from !== 'Verifying' || to !== 'MemorySync'
+    );
+    expect(() => assertHarnessFSMProcessSpec(withoutCapabilityTransition)).toThrow(
+      /transition topology is framework-owned/
+    );
+
+    const renamed = createHarnessFSMProcessSpec();
+    renamed.id = 'domain.checkout.workflow';
+    expect(() => assertHarnessFSMProcessSpec(renamed)).toThrow(/identity is framework-owned/);
+  });
+
+  it('returns isolated Harness FSM copies for composition', () => {
+    const isolated = createHarnessFSMProcessSpec();
+    isolated.states[0].name = 'Application override';
+    isolated.transitions.splice(0, 1);
+
+    expect(defaultReActFSMProcessSpec.states[0].name).toBeUndefined();
+    expect(defaultReActFSMProcessSpec.transitions[0]).toMatchObject({
+      from: 'Idle',
+      to: 'RunInitialized',
     });
   });
 
