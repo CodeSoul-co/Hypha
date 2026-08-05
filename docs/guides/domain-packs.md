@@ -65,7 +65,7 @@ const compiled = compileDomainPackToHarnessedSystem(validPack, {
   agentRef: { id: 'agent.default', version: '0.0.0' },
 });
 
-compiled.fsmProcess; // FSMProcessSpec
+compiled.fsmProcess; // framework-owned Harness FSMProcessSpec
 compiled.processHash; // deterministic compiler + FSM + dependency fingerprint
 compiled.dependencySnapshot; // complete versioned runtime dependency closure
 compiled.harnessedSystem; // HarnessedAgentSystemSpec
@@ -224,7 +224,7 @@ returns:
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `domainPack`            | Validated `DomainPackSpec`.                                                                                                                                                                     |
 | `bindings`              | Resolved task, profiles, policies, tools, skills, and workflow state restrictions.                                                                                                              |
-| `fsmProcess`            | Compiled `FSMProcessSpec` from the selected workflow.                                                                                                                                           |
+| `fsmProcess`            | Framework-owned Harness `FSMProcessSpec`; the selected Domain workflow cannot change its state or transition topology.                                                                          |
 | `workflowRef`           | Versioned reference to the selected workflow.                                                                                                                                                   |
 | `compilerVersion`       | Domain compiler contract version included in the process fingerprint.                                                                                                                           |
 | `processHash`           | Deterministic hash of compiler version, workflow, FSM process, and dependency snapshot.                                                                                                         |
@@ -237,6 +237,14 @@ The selected default MCP/reasoning profiles remain available on `agentPatch`
 metadata. The compiled `harnessedSystem.mcpRefs` and `reasoningRefs` include
 both selected defaults and workflow state-scoped refs, so downstream runtime
 assemblers can load every profile used by the workflow.
+
+Workflow states describe Domain pipeline stages and bind Tool, Skill, Memory,
+MCP, Context, Reasoning, Policy, Evaluation, and approval requirements. They
+are recorded as Domain execution evidence. Runtime movement still uses the
+canonical Harness capability states (`ContextBuilt`, `Reasoning`,
+`PolicyChecked`, `Acting`, `ObservationRecorded`, `Verifying`, `MemorySync`,
+recovery/review, and terminal states). A Domain Pack cannot replace that state
+set, inject a business state into `FSMSnapshot`, or alter Harness transitions.
 
 All DomainPack-internal references are checked during validation: task output
 contracts, workflow state transitions, session profile refs, state

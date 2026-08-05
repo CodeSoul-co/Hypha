@@ -66,25 +66,25 @@ and derived-cache invalidation requirements. Ambiguous mutations are never marke
 
 `DomainPackSpec` declares domain-level capabilities and contracts.
 
-| Field                            | Type                   | Description                                                   |
-| -------------------------------- | ---------------------- | ------------------------------------------------------------- |
-| `id`, `version`, `name`          | string                 | Stable identity and display name.                             |
-| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.                     |
-| `workflows`                      | `WorkflowSpec[]`       | Domain workflows that can compile to FSM specs.               |
-| `defaultWorkflow`                | string                 | Workflow id used when none is specified.                      |
-| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.                   |
-| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                                  |
-| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                                |
-| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.                          |
-| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.                           |
-| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.                           |
-| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.                          |
-| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.                       |
-| `businessRules`                  | `BusinessRuleSpec[]`   | Abstract domain rules bound to output/policy/evaluation refs. |
-| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.                |
-| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                                         |
-| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                                             |
-| `metadata`                       | object                 | Domain-specific metadata.                                     |
+| Field                            | Type                   | Description                                                                               |
+| -------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------- |
+| `id`, `version`, `name`          | string                 | Stable identity and display name.                                                         |
+| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.                                                 |
+| `workflows`                      | `WorkflowSpec[]`       | Domain pipelines and capability/policy bindings; they do not define Harness FSM topology. |
+| `defaultWorkflow`                | string                 | Workflow id used when none is specified.                                                  |
+| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.                                               |
+| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                                                              |
+| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                                                            |
+| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.                                                      |
+| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.                                                       |
+| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.                                                       |
+| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.                                                      |
+| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.                                                   |
+| `businessRules`                  | `BusinessRuleSpec[]`   | Abstract domain rules bound to output/policy/evaluation refs.                             |
+| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.                                            |
+| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                                                                     |
+| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                                                                         |
+| `metadata`                       | object                 | Domain-specific metadata.                                                                 |
 
 `SessionProfileSpec` may define `metadataSchema`, `defaultMetadata`, and default references for memory, context, tool, MCP, skill, and policy profiles.
 
@@ -92,15 +92,15 @@ and derived-cache invalidation requirements. Ambiguous mutations are never marke
 
 Domain pack loading and compilation APIs:
 
-| API                                      | Description                                                                                     |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `LocalDomainPackLoader`                  | Loads `.domain.json`, `.domain.yaml`, and `.domain.yml` files from configured directories.      |
-| `DomainPackRegistry`                     | Registers validated packs by `id` and `version`, with latest-by-id lookup.                      |
-| `extendDomainPack(base, overlay)`        | Upserts or removes predefined customizations by `id` while preserving the base pack.            |
-| `compileWorkflowToFSM(domainPack, opts)` | Compiles one `WorkflowSpec` to `FSMProcessSpec`.                                                |
-| `WorkflowCompiler`                       | Class wrapper for workflow-to-FSM compilation when an injectable compiler object is preferred.  |
-| `compileDomainPackToHarnessedSystem()`   | Resolves task/profile/tool/skill/policy bindings and returns FSM, system spec, and agent patch. |
-| `applyDomainAgentPatch(agent, patch)`    | Applies DomainPack-derived skill/tool/memory/context/policy refs to an AgentSpec-shaped object. |
+| API                                      | Description                                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LocalDomainPackLoader`                  | Loads `.domain.json`, `.domain.yaml`, and `.domain.yml` files from configured directories.                                                        |
+| `DomainPackRegistry`                     | Registers validated packs by `id` and `version`, with latest-by-id lookup.                                                                        |
+| `extendDomainPack(base, overlay)`        | Upserts or removes predefined customizations by `id` while preserving the base pack.                                                              |
+| `compileWorkflowToFSM(domainPack, opts)` | Compatibility API that validates the selected workflow and returns the framework-owned Harness `FSMProcessSpec`; custom process ids are rejected. |
+| `WorkflowCompiler`                       | Deprecated class wrapper around the compatibility API; use the Domain compiler for new integrations.                                              |
+| `compileDomainPackToHarnessedSystem()`   | Resolves task/profile/tool/skill/policy bindings and returns the canonical Harness FSM, system spec, and agent patch.                             |
+| `applyDomainAgentPatch(agent, patch)`    | Applies DomainPack-derived skill/tool/memory/context/policy refs to an AgentSpec-shaped object.                                                   |
 
 `compileDomainPackToHarnessedSystem(domainPack, options)` returns `bindings`,
 `fsmProcess`, `harnessedSystem`, `agentPatch`, and `sessionInitialization`.
@@ -252,7 +252,9 @@ contain at least one item.
 | `states`         | `WorkflowStateSpec[]`      | State goals, contracts, policies, tools, skills, and timeouts. |
 | `transitions`    | `WorkflowTransitionSpec[]` | Allowed state transitions and guards.                          |
 
-`compileWorkflowToFSM(domainPack, options)` converts a DomainPack workflow into `FSMProcessSpec`. `FSMProcessSpec` uses `initialState`, `states`, `transitions`, `terminalStates`, and an optional `recoveryPolicy`; `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, `updatedAt`, and optional persisted `recovery` counters/circuits.
+`WorkflowSpec` is a Domain pipeline declaration. Its state ids, transitions, guards, Tool/Skill/Profile bindings, and output rules remain Domain evidence and scheduling inputs; they never become Harness FSM state ids or transitions. `compileWorkflowToFSM(domainPack, options)` is retained for compatibility, validates that the workflow exists, and returns the framework-owned ReAct Harness `FSMProcessSpec`. Passing a non-canonical `fsmProcessId` fails closed.
+
+The Harness FSM tracks system capability phases such as context construction, reasoning, action selection, policy checking, governed activity execution (Tool, MCP, Execution, file, Memory write, or external write), observation, verification, memory synchronization, recovery, human review, and terminal lifecycle. Domain stages may select and bind capabilities within those phases, but cannot add, remove, rename, or reconnect them. `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, `updatedAt`, and optional persisted recovery counters/circuits.
 
 `WorkflowStateSpec.allowedSkills` narrows which agent-bound skills may activate
 in that state. `requiredSkills` declares skills that must be attached to the
