@@ -111,9 +111,11 @@ through `SQLiteEventStore.exportJsonl(filePath, filter?)` and
 fixtures, audits, regression snapshots, and moving local traces between
 environments without exposing app-specific session state.
 
-## FSM and Guards
+## Domain Pipeline, Harness FSM, and Guards
 
-`WorkflowSpec` compiles to `FSMProcessSpec`. FSM states define process meaning; transitions define allowed movement. Guards are deterministic expressions evaluated against `input`, `variables`, and `metadata`.
+`WorkflowSpec` declares a Domain pipeline and its capability bindings. Its stage ids and transitions are preserved as Domain execution evidence; they do not become FSM states. The Runtime uses the framework-owned Harness `FSMProcessSpec` for lifecycle, context, reasoning, policy, governed activity, observation, verification, memory synchronization, recovery, review, and terminal movement. The compatibility `compileWorkflowToFSM()` API validates workflow selection and returns that canonical process; a custom process identity is rejected.
+
+Domain pipeline guards are deterministic expressions evaluated against `input`, `variables`, and `metadata`. They choose Domain stages without adding or reconnecting Harness FSM states.
 
 Supported guard forms include:
 

@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { assertHarnessFSMProcessSpec, HARNESS_FSM_STATE_IDS } from '@hypha/fsm';
 import {
   applyDomainAgentPatch,
   businessRuleSpecDefinition,
@@ -56,7 +57,7 @@ describe('@hypha/domain workflow compiler', () => {
     });
   });
 
-  it('compiles a DomainPack WorkflowSpec into an FSMProcessSpec', () => {
+  it('binds a DomainPack WorkflowSpec without redefining the Harness FSM', () => {
     const domainPack: DomainPackSpec = {
       id: 'minimal',
       version: '0.0.0',
@@ -99,38 +100,49 @@ describe('@hypha/domain workflow compiler', () => {
 
     const fsm = compileWorkflowToFSM(domainPack);
 
-    expect(fsm.id).toBe('minimal.intake-reason-finalize.fsm');
-    expect(fsm.states.map((state) => state.id)).toEqual(
-      expect.arrayContaining([
-        'Intake',
-        'ReasonAct',
-        'Finalize',
-        'Recovering',
-        'Compensating',
-        'Quarantined',
-        'HumanReview',
-        'Failed',
-        'Cancelled',
-      ])
+    expect(() => assertHarnessFSMProcessSpec(fsm)).not.toThrow();
+    expect(fsm.id).toBe('fsm.react.runtime.default');
+    expect(fsm.states.map((state) => state.id)).toEqual([...HARNESS_FSM_STATE_IDS]);
+    expect(fsm.states.map((state) => state.id)).not.toEqual(
+      expect.arrayContaining(['Intake', 'ReasonAct', 'Finalize'])
     );
-    expect(fsm.states[1]).toMatchObject({
-      timeoutPolicy: { timeoutMs: 1000, onTimeout: 'retry' },
-      retryPolicy: { maxAttempts: 2 },
-    });
-    expect(fsm.transitions[1]).toMatchObject({ from: 'ReasonAct', to: 'Finalize' });
-    expect(fsm.transitions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ from: 'ReasonAct', to: 'Recovering' }),
-        expect.objectContaining({ from: 'Recovering', to: 'ReasonAct' }),
-        expect.objectContaining({ from: 'Recovering', to: 'HumanReview' }),
-        expect.objectContaining({ from: 'Quarantined', to: 'Failed' }),
-      ])
+    expect(fsm.transitions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ from: 'ReasonAct' })])
     );
     expect(fsm.recoveryPolicy).toBeDefined();
-    expect(fsm.terminalStates).toEqual(expect.arrayContaining(['Finalize', 'Failed', 'Cancelled']));
-    expect(new WorkflowCompiler().compile(domainPack).id).toBe(
-      'minimal.intake-reason-finalize.fsm'
-    );
+    expect(fsm.terminalStates).toEqual(['Completed', 'Failed', 'Cancelled']);
+    expect(new WorkflowCompiler().compile(domainPack).id).toBe('fsm.react.runtime.default');
+    expect(() =>
+      compileWorkflowToFSM(domainPack, { fsmProcessId: 'minimal.intake-reason-finalize.fsm' })
+    ).toThrow(/cannot override the framework-owned Harness FSM identity/);
+  });
+
+  it('keeps different Domain pipelines distinct while sharing one Harness FSM topology', () => {
+    const first = domainPackSpecDefinition.example;
+    const alternateWorkflow = {
+      ...first.workflows[0],
+      id: 'workflow.alternate',
+      name: 'Alternate Domain Pipeline',
+    };
+    const domainPack = validateDomainPackSpec({
+      ...first,
+      workflows: [...first.workflows, alternateWorkflow],
+    });
+
+    const primary = compileDomainPackToHarnessedSystem(domainPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      workflowId: first.workflows[0].id,
+    });
+    const alternate = compileDomainPackToHarnessedSystem(domainPack, {
+      agentRef: { id: 'agent.default', version: '0.0.0' },
+      workflowId: alternateWorkflow.id,
+    });
+
+    expect(primary.fsmProcess).toEqual(alternate.fsmProcess);
+    expect(primary.workflowRef).not.toEqual(alternate.workflowRef);
+    expect(primary.processHash).not.toBe(alternate.processHash);
+    expect(primary.audit.compilationHash).not.toBe(alternate.audit.compilationHash);
+    expect(primary.harnessedSystem.fsmProcessRef).toEqual(alternate.harnessedSystem.fsmProcessRef);
   });
 
   it('initializes runtime session metadata from DomainPack SessionProfile without embedding Session', () => {
@@ -448,8 +460,8 @@ describe('@hypha/domain workflow compiler', () => {
     });
 
     expect(compiled.fsmProcess).toMatchObject({
-      id: 'domain.default.workflow.default.fsm',
-      initialState: 'Intake',
+      id: 'fsm.react.runtime.default',
+      initialState: 'Idle',
       terminalStates: ['Completed', 'Failed', 'Cancelled'],
     });
     expect(compiled).toMatchObject({
@@ -470,7 +482,7 @@ describe('@hypha/domain workflow compiler', () => {
     expect(compiled.harnessedSystem).toMatchObject({
       id: 'domain.default.workflow.default.system',
       agentRef: { id: 'agent.default', version: '0.0.0' },
-      fsmProcessRef: { id: 'domain.default.workflow.default.fsm', version: '0.0.0' },
+      fsmProcessRef: { id: 'fsm.react.runtime.default', version: '0.0.0' },
       memoryRefs: [{ id: 'memory.default', version: '0.0.0' }],
       toolRefs: [{ id: 'tool.search', version: '0.0.0' }],
       skillRefs: [{ id: 'skill.context-enrichment', version: '0.0.0' }],

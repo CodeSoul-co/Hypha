@@ -24,6 +24,7 @@ import {
   deploymentSpecSchema,
   evaluationSpecSchema,
   exportSpecJsonSchemas,
+  FrameworkError,
   hashCanonicalJson,
   contextSpecSchema,
   humanReviewPolicySpecSchema,
@@ -39,11 +40,9 @@ import {
   versionedSpecSchema,
 } from '@hypha/core';
 import {
-  defaultFSMRecoveryPolicy,
+  assertHarnessFSMProcessSpec,
+  createHarnessFSMProcessSpec,
   type FSMProcessSpec,
-  type FSMStateKind,
-  type FSMStateSpec,
-  type FSMTransitionSpec,
 } from '@hypha/fsm';
 import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@hypha/mcp';
 import { memorySpecSchema, type MemorySpec } from '@hypha/memory';
@@ -431,6 +430,7 @@ export interface WorkflowTransitionSpec {
 
 export interface WorkflowCompileOptions {
   workflowId?: string;
+  /** @deprecated Harness FSM identity is framework-owned and cannot be overridden. */
   fsmProcessId?: string;
   agentRef?: SpecRef;
 }
@@ -466,133 +466,17 @@ export function compileWorkflowToFSM(
   domainPack: DomainPackSpec,
   options: WorkflowCompileOptions = {}
 ): FSMProcessSpec {
-  const workflow = selectWorkflow(domainPack, options.workflowId);
-  const workflowStates: FSMStateSpec[] = workflow.states.map((state) => ({
-    id: state.id,
-    name: state.name,
-    description: state.description ?? state.goal,
-    kind: workflow.terminalStates.includes(state.id) ? inferTerminalKind(state.id) : 'domain',
-    timeoutPolicy:
-      state.timeoutPolicy ??
-      (state.timeoutMs ? { timeoutMs: state.timeoutMs, onTimeout: 'fail' } : undefined),
-    retryPolicy: state.retryPolicy,
-    humanReviewPolicy: state.humanReviewPolicy,
-    policyRefs: state.policyRefs,
-    traceEvents: [`workflow.state.${state.id}`],
-  }));
-  const workflowTransitions: FSMTransitionSpec[] = workflow.transitions.map((transition) => ({
-    from: transition.from,
-    to: transition.to,
-    guard: transition.guard,
-    description: transition.description,
-    traceEvent: `workflow.transition.${transition.from}.${transition.to}`,
-  }));
-
-  const recoveryEnvelope = compileRecoveryEnvelope(
-    workflowStates,
-    workflowTransitions,
-    workflow.terminalStates
-  );
-
-  return {
-    id: options.fsmProcessId ?? `${domainPack.id}.${workflow.id}.fsm`,
-    version: workflow.version,
-    name: `${domainPack.name} ${workflow.name ?? workflow.id} FSM`,
-    description: workflow.description,
-    initialState: workflow.initialState,
-    recoveryPolicy: defaultFSMRecoveryPolicy,
-    states: recoveryEnvelope.states,
-    transitions: recoveryEnvelope.transitions,
-    terminalStates: recoveryEnvelope.terminalStates,
-    tags: ['compiled-from-domain-pack', domainPack.id],
-  };
-}
-
-const DOMAIN_RECOVERY_STATES: ReadonlyArray<{
-  id: string;
-  kind: FSMStateKind;
-}> = [
-  { id: 'Recovering', kind: 'recovering' },
-  { id: 'Compensating', kind: 'compensating' },
-  { id: 'Quarantined', kind: 'quarantined' },
-  { id: 'HumanReview', kind: 'human_review' },
-  { id: 'Failed', kind: 'failed' },
-  { id: 'Cancelled', kind: 'cancelled' },
-];
-
-function compileRecoveryEnvelope(
-  workflowStates: FSMStateSpec[],
-  workflowTransitions: FSMTransitionSpec[],
-  workflowTerminalStates: string[]
-): {
-  states: FSMStateSpec[];
-  transitions: FSMTransitionSpec[];
-  terminalStates: string[];
-} {
-  const recoveryKinds = new Map(DOMAIN_RECOVERY_STATES.map((state) => [state.id, state.kind]));
-  const existingIds = new Set(workflowStates.map((state) => state.id));
-  const states = workflowStates.map((state) => {
-    const recoveryKind = recoveryKinds.get(state.id);
-    return recoveryKind ? { ...state, kind: recoveryKind } : state;
-  });
-  for (const state of DOMAIN_RECOVERY_STATES) {
-    if (existingIds.has(state.id)) continue;
-    states.push({
-      id: state.id,
-      kind: state.kind,
-      description: `Framework recovery state: ${state.id}`,
-      traceEvents: ['fsm.state.entered'],
+  selectWorkflow(domainPack, options.workflowId);
+  const fsm = createHarnessFSMProcessSpec();
+  if (options.fsmProcessId && options.fsmProcessId !== fsm.id) {
+    throw new FrameworkError({
+      code: 'FSM_INVALID_PROCESS',
+      message: 'Domain compilation cannot override the framework-owned Harness FSM identity.',
+      context: { requestedProcessId: options.fsmProcessId, harnessProcessId: fsm.id },
     });
   }
-
-  const terminalStates = mergeStrings(workflowTerminalStates, ['Failed', 'Cancelled']);
-  const recoverableStates = workflowStates
-    .map((state) => state.id)
-    .filter((stateId) => !terminalStates.includes(stateId) && !recoveryKinds.has(stateId));
-  const transitions = [...workflowTransitions];
-  const transitionKeys = new Set(
-    transitions.map((transition) => `${transition.from}->${transition.to}`)
-  );
-  const addTransition = (from: string, to: string): void => {
-    const key = `${from}->${to}`;
-    if (from === to || transitionKeys.has(key)) return;
-    transitionKeys.add(key);
-    transitions.push({
-      from,
-      to,
-      description: `Framework recovery transition: ${from} -> ${to}`,
-      traceEvent: 'fsm.transition.accepted',
-    });
-  };
-
-  for (const stateId of recoverableStates) {
-    addTransition(stateId, 'Recovering');
-    addTransition(stateId, 'Compensating');
-    addTransition(stateId, 'Quarantined');
-    addTransition(stateId, 'Cancelled');
-    addTransition('Recovering', stateId);
-    addTransition('HumanReview', stateId);
-  }
-  for (const [from, to] of [
-    ['Recovering', 'Compensating'],
-    ['Recovering', 'HumanReview'],
-    ['Recovering', 'Quarantined'],
-    ['Recovering', 'Failed'],
-    ['Recovering', 'Cancelled'],
-    ['Compensating', 'Recovering'],
-    ['Compensating', 'HumanReview'],
-    ['Compensating', 'Quarantined'],
-    ['Compensating', 'Failed'],
-    ['Quarantined', 'HumanReview'],
-    ['Quarantined', 'Failed'],
-    ['Quarantined', 'Cancelled'],
-    ['HumanReview', 'Failed'],
-    ['HumanReview', 'Cancelled'],
-  ]) {
-    addTransition(from, to);
-  }
-
-  return { states, transitions, terminalStates };
+  assertHarnessFSMProcessSpec(fsm);
+  return fsm;
 }
 
 export class DomainPackRegistry {
@@ -673,6 +557,7 @@ export class DomainCompiler {
 }
 
 export class WorkflowCompiler {
+  /** @deprecated Use DomainCompiler; WorkflowSpec no longer defines Harness FSM topology. */
   compile(domainPack: DomainPackSpec, options: WorkflowCompileOptions = {}): FSMProcessSpec {
     return compileWorkflowToFSM(domainPack, options);
   }
@@ -894,7 +779,6 @@ export function compileDomainPackToHarnessedSystem(
   );
   const fsmProcess = compileWorkflowToFSM(domainPack, {
     workflowId: workflow.id,
-    fsmProcessId: `${domainPack.id}.${workflow.id}.fsm`,
     agentRef: options.agentRef,
   });
   const workflowRef = toSpecRef(workflow);
@@ -1391,13 +1275,6 @@ function selectSessionProfile(
     throw new Error(`SessionProfile not found in domain pack: ${profileId}`);
   }
   return profile;
-}
-
-function inferTerminalKind(stateId: string): FSMStateSpec['kind'] {
-  const lower = stateId.toLowerCase();
-  if (lower.includes('fail')) return 'failed';
-  if (lower.includes('cancel')) return 'cancelled';
-  return 'completed';
 }
 
 export const riskProfileSpecSchema = z.object({

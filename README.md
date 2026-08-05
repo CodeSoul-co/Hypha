@@ -20,9 +20,10 @@ complete a single model call. It combines a ReAct reasoning loop with explicit f
 provider-neutral extension contracts.
 
 The framework keeps product-domain declarations separate from the runtime kernel. A product defines
-its tasks and workflow in a `DomainPack`; hypha compiles that declaration into an FSM process and a
-versioned dependency snapshot. The same runtime can then serve an API, CLI, worker, or another
-application surface without moving product rules into framework core.
+its tasks, pipeline, and capability bindings in a `DomainPack`; hypha validates those declarations,
+builds a versioned dependency snapshot, and associates them with the framework-owned Harness FSM.
+Domain state ids and transitions never redefine that FSM. The same runtime can then serve an API,
+CLI, worker, or another application surface without moving product rules into framework core.
 
 ## Product model
 
@@ -40,8 +41,8 @@ The canonical execution path is:
 ```text
 DomainPack
   -> validated bindings and dependency snapshot
-  -> FSM process
-  -> bounded ReAct quantum
+  -> framework-owned Harness FSM
+  -> bounded ReAct quantum and Domain pipeline evidence
   -> governed Tool / MCP / Memory / Execution activity
   -> Event + receipt + Artifact evidence
   -> projection, continuation, recovery, replay, and evaluation
@@ -150,19 +151,19 @@ workflows, rules, and capability selections belong in a Domain Pack or product a
 Start from [`configs/domain-packs/minimal.domain.yaml`](configs/domain-packs/minimal.domain.yaml).
 A production Domain Pack normally defines:
 
-| Declaration                              | What it controls                                                                                      |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `taskSchemas`                            | Accepted task types, input schemas, output-contract references, and default workflows.                |
-| `outputContracts`                        | Machine-verifiable final output schemas.                                                              |
-| `sessionProfiles`                        | Default metadata and Memory, Context, Reasoning, Tool, MCP, Skill, and Policy profile references.     |
-| `workflows`                              | FSM states, transitions, guards, retry/timeout behavior, human review, and state-scoped capabilities. |
-| `tools`, `toolProfiles`                  | Stable Tool contracts and the profiles allowed to bind them to executable adapters.                   |
-| `mcpProfiles`                            | Server references, capability import rules, trust policy, and version pinning.                        |
-| `memoryProfiles`, `contextProfiles`      | Memory selection, retrieval/write policy, context sources, provenance, and token budgets.             |
-| `allowedSkills`, `skillPolicies`         | Which Skills an Agent may load and which tools or policies each Skill may use.                        |
-| `allowedPromptRefs`, `defaultPromptRefs` | Versioned prompt templates that application composition must resolve.                                 |
-| `policies`, `businessRules`              | Permission, approval, precondition, postcondition, and output constraints.                            |
-| `evaluationProfiles`, `regressionCases`  | Event-derived acceptance and regression definitions.                                                  |
+| Declaration                              | What it controls                                                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `taskSchemas`                            | Accepted task types, input schemas, output-contract references, and default workflows.                                       |
+| `outputContracts`                        | Machine-verifiable final output schemas.                                                                                     |
+| `sessionProfiles`                        | Default metadata and Memory, Context, Reasoning, Tool, MCP, Skill, and Policy profile references.                            |
+| `workflows`                              | Domain pipeline stages, guards, retry/timeout intent, human review, and state-scoped capabilities; not Harness FSM topology. |
+| `tools`, `toolProfiles`                  | Stable Tool contracts and the profiles allowed to bind them to executable adapters.                                          |
+| `mcpProfiles`                            | Server references, capability import rules, trust policy, and version pinning.                                               |
+| `memoryProfiles`, `contextProfiles`      | Memory selection, retrieval/write policy, context sources, provenance, and token budgets.                                    |
+| `allowedSkills`, `skillPolicies`         | Which Skills an Agent may load and which tools or policies each Skill may use.                                               |
+| `allowedPromptRefs`, `defaultPromptRefs` | Versioned prompt templates that application composition must resolve.                                                        |
+| `policies`, `businessRules`              | Permission, approval, precondition, postcondition, and output constraints.                                                   |
+| `evaluationProfiles`, `regressionCases`  | Event-derived acceptance and regression definitions.                                                                         |
 
 Keep provider URLs, bearer tokens, API keys, and deployment secrets out of the Domain Pack. It should
 select stable profile references; the trusted application composition resolves those references to
@@ -210,7 +211,7 @@ The compiler validates internal references and produces all data needed by appli
 
 | Compiler output           | Integration use                                                                                     |
 | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| `fsmProcess`              | Register the exact `FSMProcessSpec` executed by the Runtime.                                        |
+| `fsmProcess`              | Register the canonical, framework-owned Harness `FSMProcessSpec`.                                   |
 | `harnessedSystem`         | Bind Agent, FSM, policy, trace, Memory, MCP, Context, Tool, Skill, evaluation, and output refs.     |
 | `agentPatch`              | Apply resolved prompt, Skill, Tool, Memory, Context, Reasoning, and Policy references to the Agent. |
 | `bindings`                | Register only the selected concrete capabilities and state-level allowlists.                        |
@@ -232,8 +233,8 @@ startup, the trusted composition layer must:
 6. Resolve the selected Memory profile through the Server Memory runtime configuration.
 7. Create the Session from `sessionInitialization`, then persist `processHash` and
    `dependencySnapshot` with the Run's Event evidence.
-8. Execute `fsmProcess` through the canonical Runtime and derive status only from Events and
-   persisted checkpoints.
+8. Execute the canonical `fsmProcess`, record Domain stage ids as Event evidence, and derive status
+   only from Events and persisted checkpoints.
 
 This explicit activation step prevents an unreviewed YAML file, Skill, Tool, or remote MCP catalog
 change from silently gaining runtime authority.

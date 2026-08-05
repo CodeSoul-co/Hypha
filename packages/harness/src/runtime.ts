@@ -9,8 +9,10 @@ import {
   type SpecRef,
 } from '@hypha/core';
 import {
-  defaultReActFSMProcessSpec,
+  assertHarnessFSMProcessSpec,
+  createHarnessFSMProcessSpec,
   FSMRuntime,
+  harnessStateForReActPhase,
   validateFSMSnapshot,
   type FSMProcessSpec,
   type FSMSnapshot,
@@ -851,7 +853,8 @@ export class HarnessedReActFSMRunner {
 
   constructor(private readonly options: HarnessedReActFSMRunnerOptions) {
     this.runManager = options.runManager ?? new RunManager();
-    this.fsmSpec = options.fsmSpec ?? defaultReActFSMProcessSpec;
+    this.fsmSpec = options.fsmSpec ?? createHarnessFSMProcessSpec();
+    assertHarnessFSMProcessSpec(this.fsmSpec);
     let baseContextBuilder = options.contextBuilder ?? new DefaultContextBuilder();
     if (options.skillRegistry) {
       baseContextBuilder = new SkillContextBuilder({
@@ -1197,32 +1200,7 @@ function isFSMSnapshotCandidate(value: unknown): value is FSMSnapshot {
 }
 
 function stateForReActStep(step: ReActStep): string | null {
-  switch (step.phase) {
-    case 'reason':
-      return 'Reasoning';
-    case 'select_action':
-      return 'ActionSelected';
-    case 'policy_check':
-      return 'PolicyChecked';
-    case 'act':
-      return 'Acting';
-    case 'observe_result':
-      return 'ObservationRecorded';
-    case 'verify':
-      return 'Verifying';
-    case 'complete':
-      return 'Completed';
-    case 'fail':
-      return 'Failed';
-    case 'human_review':
-      return 'HumanReview';
-    case 'memory_sync':
-      return 'MemorySync';
-    case 'suspend':
-    case 'cancel':
-    case 'observe':
-      return null;
-  }
+  return harnessStateForReActPhase(step.phase) ?? null;
 }
 
 function reactCheckpointReceipt(checkpoint: ReActContinuationCheckpoint): Record<string, unknown> {
