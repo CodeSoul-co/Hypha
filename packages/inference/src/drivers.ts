@@ -34,6 +34,16 @@ export interface LocalInferenceProcessSupervisor {
   start(spec: LocalInferenceProcessSpec): Promise<LocalInferenceProcessHandle>;
 }
 
+export interface LocalInferenceHealthProbeRequest {
+  url: string;
+  headers: Record<string, string>;
+  timeoutMs: number;
+}
+
+export type LocalInferenceHealthProbe = (
+  request: LocalInferenceHealthProbeRequest
+) => Promise<boolean>;
+
 export interface LocalInferenceDriverConfig {
   id?: string;
   kind: LocalInferenceEngineKind;
@@ -133,7 +143,8 @@ export class HttpLocalInferenceDriver implements LocalInferenceDriver {
 
   constructor(
     private readonly config: LocalInferenceDriverConfig,
-    supervisor: LocalInferenceProcessSupervisor = new NodeLocalInferenceProcessSupervisor()
+    supervisor: LocalInferenceProcessSupervisor = new NodeLocalInferenceProcessSupervisor(),
+    private readonly healthProbe: LocalInferenceHealthProbe = fetchLocalInferenceHealth
   ) {
     this.kind = config.kind;
     this.id = config.id ?? `local-${config.kind}`;
@@ -150,6 +161,11 @@ export class HttpLocalInferenceDriver implements LocalInferenceDriver {
     this.activeModel = model;
     try {
       if (this.mode === 'managed' && !this.processHandle) {
+        if (await this.health()) {
+          throw new Error(
+            `Managed local inference endpoint is already occupied by a healthy service: ${this.baseUrl}`
+          );
+        }
         const spec = processSpec(this.config, model);
         this.processHandle = await this.supervisor.start(spec);
         void this.processHandle.exited.then(({ code, signal }) => {
@@ -206,15 +222,11 @@ export class HttpLocalInferenceDriver implements LocalInferenceDriver {
 
   async health(): Promise<boolean> {
     const path = this.kind === 'ollama' ? '/api/tags' : '/health';
-    try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        headers: authorizationHeaders(this.config),
-        signal: AbortSignal.timeout(Math.min(this.config.requestTimeoutMs ?? 60000, 5000)),
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
+    return this.healthProbe({
+      url: `${this.baseUrl}${path}`,
+      headers: authorizationHeaders(this.config),
+      timeoutMs: Math.min(this.config.requestTimeoutMs ?? 60000, 5000),
+    });
   }
 
   status(): LocalInferenceDriverStatus {
@@ -260,6 +272,20 @@ export class HttpLocalInferenceDriver implements LocalInferenceDriver {
     throw new Error(
       `Local inference engine did not become healthy within ${timeoutMs}ms: ${this.id}`
     );
+  }
+}
+
+async function fetchLocalInferenceHealth(
+  request: LocalInferenceHealthProbeRequest
+): Promise<boolean> {
+  try {
+    const response = await fetch(request.url, {
+      headers: request.headers,
+      signal: AbortSignal.timeout(request.timeoutMs),
+    });
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 

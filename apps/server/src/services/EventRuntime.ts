@@ -41,17 +41,18 @@ import {
   type SpecRef,
 } from '@hypha/core';
 import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
-import {
-  compileWorkflowToFSM,
-  validateDomainPackSpec,
-  type DomainPackSpec,
-  type WorkflowSpec,
-} from '@hypha/domain';
+import { validateDomainPackSpec, type DomainPackSpec, type WorkflowSpec } from '@hypha/domain';
 import {
   applyTransitionWithRuntimePolicy,
+  assertHarnessFSMProcessSpec,
+  createHarnessFSMProcessSpec,
   createInitialSnapshot,
   evaluateGuardExpression,
   FSMRuntime,
+  harnessStateForReActPhase,
+  isHarnessFSMStateId,
+  planHarnessCapabilityPath,
+  type HarnessFSMStateId,
   type FSMProcessSpec,
   type FSMSnapshot,
 } from '@hypha/fsm';
@@ -631,7 +632,7 @@ class EventRuntimeService {
   private readonly workCache: WorkCacheManager;
   private readonly runEventClock = new Map<string, number>();
   private readonly defaultDomainPack = createDefaultDomainPack();
-  private readonly defaultFsm = compileWorkflowToFSM(this.defaultDomainPack);
+  private readonly defaultFsm = createHarnessFSMProcessSpec();
   private readonly toolRegistry = new ToolRegistry();
   private readonly toolTelemetry = new InMemoryTelemetryRecorder();
   private readonly toolRunner: GovernedToolRunner;
@@ -1059,9 +1060,9 @@ class EventRuntimeService {
   async startRunWithId(input: StartRunInput, runId: string): Promise<EventRunHandle> {
     const domainPack = input.domainPack ?? this.defaultDomainPack;
     const fsm = input.fsm ?? this.defaultFsm;
+    assertHarnessFSMProcessSpec(fsm);
     if (input.react) {
       validateStartReActRunInput(input.react);
-      assertCanonicalReActFSM(fsm);
     }
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
     await this.ensureSession(input.userId, input.sessionId, domainPack, input.metadata);
@@ -1132,6 +1133,10 @@ class EventRuntimeService {
         { eventId: `${runId}:initial-state`, fsmState: snapshot.currentState }
       );
     }
+    const initializedRun = await this.requireRun(runId);
+    if (initializedRun.snapshot.currentState === 'Idle') {
+      await this.transition(runId, 'RunInitialized', { reason: 'run-started' });
+    }
     return { runId, sessionId: input.sessionId, runtimeSessionId };
   }
 
@@ -1142,7 +1147,7 @@ class EventRuntimeService {
     if (!input.react) return null;
     const react = validateStartReActRunInput(input.react);
     const run = await this.requireRun(runId);
-    assertCanonicalReActFSM(run.fsm);
+    assertHarnessFSMProcessSpec(run.fsm);
     const stepId = react.stepId ?? 'react';
     const agent = await this.resolveChatAgent(
       {
@@ -1496,7 +1501,7 @@ class EventRuntimeService {
       undefined,
       { eventId: `${runId}:${step.id}:completed`, stepId: step.id }
     );
-    const target = canonicalStateForReActPhase(step.phase);
+    const target = harnessStateForReActPhase(step.phase);
     if (!target) return;
     const context = await this.requireRun(runId);
     if (context.fsm.terminalStates.includes(target)) {
@@ -3462,7 +3467,7 @@ class EventRuntimeService {
       allowedSkills: skillIds.map((id) => ({ id })),
       tools: toolIds.map((id): ToolSpec => createWorkflowToolSpec(id, workflow.version)),
     });
-    return { domainPack, fsm: compileWorkflowToFSM(domainPack) };
+    return { domainPack, fsm: createHarnessFSMProcessSpec() };
   }
 
   async executeWorkflow(input: {
@@ -3504,6 +3509,7 @@ class EventRuntimeService {
         }
 
         execution.currentStage = stage.id;
+        await this.enterWorkflowStageCapability(input.runId, stage);
         const startedAt = Date.now();
         await this.record(
           input.runId,
@@ -3527,6 +3533,10 @@ class EventRuntimeService {
             metadata: safeSerialize(result.metadata),
           };
           execution.stageResults.set(stage.id, stageResult);
+
+          if (result.success) {
+            await this.completeWorkflowStageCapability(input.runId, stage);
+          }
 
           await this.record(
             input.runId,
@@ -3552,10 +3562,6 @@ class EventRuntimeService {
           } else {
             const target =
               nextStageId === 'Completed' || nextStageId === 'Failed' ? nextStageId : nextStageId;
-            await this.transition(input.runId, target, {
-              executionId: execution.id,
-              fromStage: stage.id,
-            });
             currentStageId = workflow.stages.some((candidate) => candidate.id === target)
               ? target
               : undefined;
@@ -3625,6 +3631,70 @@ class EventRuntimeService {
         return { success: true, output: null, nextStage: 'end' };
       default:
         return { success: false, error: `Unknown stage type: ${resolvedStage.type}` };
+    }
+  }
+
+  private async enterWorkflowStageCapability(runId: string, stage: WorkflowStage): Promise<void> {
+    const current = (await this.requireRun(runId)).snapshot.currentState;
+    if (current === 'Idle' || current === 'RunInitialized') {
+      await this.moveHarnessCapability(runId, 'ContextBuilt', {
+        phase: 'workflow_context',
+        domainStageId: stage.id,
+        domainStageType: stage.type,
+      });
+    }
+    const target: HarnessFSMStateId =
+      stage.type === 'tool-call' && (stage.tools?.length ?? 0) > 0
+        ? 'PolicyChecked'
+        : stage.type === 'end'
+          ? 'Verifying'
+          : 'Reasoning';
+    await this.moveHarnessCapability(runId, target, {
+      phase: 'workflow_stage_entered',
+      domainStageId: stage.id,
+      domainStageType: stage.type,
+    });
+  }
+
+  private async completeWorkflowStageCapability(
+    runId: string,
+    stage: WorkflowStage
+  ): Promise<void> {
+    if (stage.type === 'end') return;
+    const targets: HarnessFSMStateId[] =
+      stage.type === 'tool-call' && (stage.tools?.length ?? 0) > 0
+        ? ['Acting', 'ObservationRecorded', 'Verifying']
+        : ['ActionSelected', 'Verifying'];
+    for (const target of targets) {
+      await this.moveHarnessCapability(runId, target, {
+        phase: 'workflow_stage_completed',
+        domainStageId: stage.id,
+        domainStageType: stage.type,
+      });
+    }
+  }
+
+  private async moveHarnessCapability(
+    runId: string,
+    target: HarnessFSMStateId,
+    evidence: Record<string, unknown>
+  ): Promise<void> {
+    const context = await this.requireRun(runId);
+    const current = context.snapshot.currentState;
+    if (!isHarnessFSMStateId(current)) {
+      throw new FrameworkError({
+        code: 'RUNTIME_EVENT_STREAM_CORRUPT',
+        message: `Run contains a non-Harness FSM State: ${current}`,
+      });
+    }
+    if (context.fsm.terminalStates.includes(current)) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_CONFLICT',
+        message: `Terminal Run cannot enter Harness capability State ${target}`,
+      });
+    }
+    for (const state of planHarnessCapabilityPath(current, target)) {
+      await this.transition(runId, state, evidence);
     }
   }
 
@@ -4451,22 +4521,6 @@ function inferFailedState(fsm: FSMProcessSpec): string {
   );
 }
 
-const canonicalReActStates = [
-  'RunInitialized',
-  'ContextBuilt',
-  'Reasoning',
-  'ActionSelected',
-  'PolicyChecked',
-  'Acting',
-  'ObservationRecorded',
-  'Verifying',
-  'MemorySync',
-  'HumanReview',
-  'Completed',
-  'Failed',
-  'Cancelled',
-] as const;
-
 function validateStartReActRunInput(input: StartReActRunInput): StartReActRunInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new FrameworkError({
@@ -4541,89 +4595,6 @@ function validateStartReActRunInput(input: StartReActRunInput): StartReActRunInp
     ...structuredClone(input),
     ...(agentSpec?.success ? { agentSpec: agentSpec.data } : {}),
   };
-}
-
-function assertCanonicalReActFSM(fsm: FSMProcessSpec): void {
-  const declared = new Set(fsm.states.map((state) => state.id));
-  const missing = canonicalReActStates.filter((state) => !declared.has(state));
-  if (missing.length > 0) {
-    throw new FrameworkError({
-      code: 'FSM_INVALID_PROCESS',
-      message: `Canonical ReAct execution requires FSM States: ${missing.join(', ')}`,
-    });
-  }
-  const requiredTransitions = [
-    ['RunInitialized', 'ContextBuilt'],
-    ['ContextBuilt', 'Reasoning'],
-    ['Reasoning', 'ActionSelected'],
-    ['ActionSelected', 'PolicyChecked'],
-    ['ActionSelected', 'Verifying'],
-    ['PolicyChecked', 'Acting'],
-    ['Acting', 'ObservationRecorded'],
-    ['ObservationRecorded', 'Verifying'],
-    ['Verifying', 'MemorySync'],
-    ['Verifying', 'PolicyChecked'],
-    ['MemorySync', 'Reasoning'],
-    ['MemorySync', 'PolicyChecked'],
-    ['MemorySync', 'Completed'],
-  ] as const;
-  const transitions = new Set(
-    fsm.transitions.map((transition) => `${transition.from}->${transition.to}`)
-  );
-  const missingTransitions = requiredTransitions.filter(
-    ([from, to]) => !transitions.has(`${from}->${to}`)
-  );
-  if (missingTransitions.length > 0) {
-    throw new FrameworkError({
-      code: 'FSM_INVALID_PROCESS',
-      message: `Canonical ReAct FSM is missing transitions: ${missingTransitions
-        .map(([from, to]) => `${from}->${to}`)
-        .join(', ')}`,
-    });
-  }
-  const nonTerminalStates = canonicalReActStates.filter(
-    (state) => !['Completed', 'Failed', 'Cancelled'].includes(state)
-  );
-  const missingSafetyTransitions = nonTerminalStates.flatMap((from) => {
-    const targets =
-      from === 'HumanReview' ? ['Failed', 'Cancelled'] : ['HumanReview', 'Failed', 'Cancelled'];
-    return targets.filter((to) => !transitions.has(`${from}->${to}`)).map((to) => `${from}->${to}`);
-  });
-  if (missingSafetyTransitions.length > 0) {
-    throw new FrameworkError({
-      code: 'FSM_INVALID_PROCESS',
-      message: `Canonical ReAct FSM is missing safety transitions: ${missingSafetyTransitions.join(', ')}`,
-    });
-  }
-}
-
-function canonicalStateForReActPhase(phase: ReActStep['phase']): string | undefined {
-  switch (phase) {
-    case 'reason':
-      return 'Reasoning';
-    case 'select_action':
-      return 'ActionSelected';
-    case 'policy_check':
-      return 'PolicyChecked';
-    case 'act':
-      return 'Acting';
-    case 'observe_result':
-      return 'ObservationRecorded';
-    case 'verify':
-      return 'Verifying';
-    case 'memory_sync':
-      return 'MemorySync';
-    case 'complete':
-      return 'Completed';
-    case 'fail':
-      return 'Failed';
-    case 'human_review':
-      return 'HumanReview';
-    case 'cancel':
-      return 'Cancelled';
-    default:
-      return undefined;
-  }
 }
 
 function decodePersistedSpecRef(value: unknown, label: string): SpecRef {

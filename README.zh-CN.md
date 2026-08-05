@@ -18,9 +18,10 @@ hypha 是一个用于开发 Agent 产品的 TypeScript 源码工作区。它不�
 而是将 ReAct 推理循环、显式有限状态机（FSM）、持久事件、受策略控制的副作用、回放、恢复、评估
 和 provider-neutral 扩展契约组合为统一框架。
 
-框架严格分离产品领域声明与运行时内核。产品通过 `DomainPack` 定义任务和工作流；hypha 将其编译为
-FSM Process 与版本化依赖快照。API、CLI、Worker 或其他应用界面可以复用同一套 Runtime，而无需把
-产品规则写入 Framework Core。
+框架严格分离产品领域声明与运行时内核。产品通过 `DomainPack` 定义任务、Pipeline 与 Capability
+Binding；hypha 校验这些声明、生成版本化依赖快照，并将其绑定到 Framework-owned Harness FSM。
+Domain State ID 与 Transition 不能重新定义该 FSM。API、CLI、Worker 或其他应用界面可以复用同一套
+Runtime，而无需把产品规则写入 Framework Core。
 
 ## 产品模型
 
@@ -38,8 +39,8 @@ Canonical 执行路径如下：
 ```text
 DomainPack
   -> 校验后的 Binding 与依赖快照
-  -> FSM Process
-  -> 有界 ReAct Quantum
+  -> Framework-owned Harness FSM
+  -> 有界 ReAct Quantum 与 Domain Pipeline 证据
   -> 受治理的 Tool / MCP / Memory / Execution Activity
   -> Event + Receipt + Artifact 证据
   -> Projection、Continuation、Recovery、Replay 与 Evaluation
@@ -146,19 +147,19 @@ DomainPack 是框架支持的产品集成边界。产品特定的 Task、Prompt�
 可以从 [`configs/domain-packs/minimal.domain.yaml`](configs/domain-packs/minimal.domain.yaml)
 开始。生产级 DomainPack 通常包含：
 
-| 声明                                     | 控制内容                                                                                |
-| ---------------------------------------- | --------------------------------------------------------------------------------------- |
-| `taskSchemas`                            | 可接受的任务类型、输入 Schema、输出契约引用与默认 Workflow。                            |
-| `outputContracts`                        | 可由程序验证的最终输出 Schema。                                                         |
-| `sessionProfiles`                        | 默认 Metadata，以及 Memory、Context、Reasoning、Tool、MCP、Skill、Policy Profile 引用。 |
-| `workflows`                              | FSM State、Transition、Guard、Retry/Timeout、人工复核与 State-scoped Capability。       |
-| `tools`, `toolProfiles`                  | 稳定 Tool Contract，以及允许绑定到可执行 Adapter 的 Profile。                           |
-| `mcpProfiles`                            | Server 引用、Capability Import Rule、Trust Policy 与版本固定策略。                      |
-| `memoryProfiles`, `contextProfiles`      | Memory 选择、读写策略、Context Source、Provenance 与 Token Budget。                     |
-| `allowedSkills`, `skillPolicies`         | Agent 可加载的 Skill，以及每个 Skill 可使用的 Tool 与 Policy。                          |
-| `allowedPromptRefs`, `defaultPromptRefs` | 必须由应用组合层解析的版本化 Prompt Template。                                          |
-| `policies`, `businessRules`              | Permission、Approval、Precondition、Postcondition 与输出约束。                          |
-| `evaluationProfiles`, `regressionCases`  | Event-derived 验收与回归定义。                                                          |
+| 声明                                     | 控制内容                                                                                                        |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `taskSchemas`                            | 可接受的任务类型、输入 Schema、输出契约引用与默认 Workflow。                                                    |
+| `outputContracts`                        | 可由程序验证的最终输出 Schema。                                                                                 |
+| `sessionProfiles`                        | 默认 Metadata，以及 Memory、Context、Reasoning、Tool、MCP、Skill、Policy Profile 引用。                         |
+| `workflows`                              | Domain Pipeline Stage、Guard、Retry/Timeout 意图、人工复核与 State-scoped Capability；不定义 Harness FSM 拓扑。 |
+| `tools`, `toolProfiles`                  | 稳定 Tool Contract，以及允许绑定到可执行 Adapter 的 Profile。                                                   |
+| `mcpProfiles`                            | Server 引用、Capability Import Rule、Trust Policy 与版本固定策略。                                              |
+| `memoryProfiles`, `contextProfiles`      | Memory 选择、读写策略、Context Source、Provenance 与 Token Budget。                                             |
+| `allowedSkills`, `skillPolicies`         | Agent 可加载的 Skill，以及每个 Skill 可使用的 Tool 与 Policy。                                                  |
+| `allowedPromptRefs`, `defaultPromptRefs` | 必须由应用组合层解析的版本化 Prompt Template。                                                                  |
+| `policies`, `businessRules`              | Permission、Approval、Precondition、Postcondition 与输出约束。                                                  |
+| `evaluationProfiles`, `regressionCases`  | Event-derived 验收与回归定义。                                                                                  |
 
 Provider URL、Bearer Token、API Key 与部署 Secret 不应写入 DomainPack。DomainPack 只选择稳定的
 Profile 引用，由可信应用组合层将其解析为真实 Provider。
@@ -205,7 +206,7 @@ const agent = applyDomainAgentPatch(
 
 | 编译结果                 | 集成方式                                                                                       |
 | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `fsmProcess`             | 注册 Runtime 实际执行的精确 `FSMProcessSpec`。                                                 |
+| `fsmProcess`             | 注册由 Framework 所有的 Canonical Harness `FSMProcessSpec`。                                   |
 | `harnessedSystem`        | 绑定 Agent、FSM、Policy、Trace、Memory、MCP、Context、Tool、Skill、Evaluation 与 Output 引用。 |
 | `agentPatch`             | 将已解析的 Prompt、Skill、Tool、Memory、Context、Reasoning 与 Policy 引用应用到 Agent。        |
 | `bindings`               | 只注册已选择的具体 Capability 与 State-level Allowlist。                                       |
@@ -226,7 +227,8 @@ DomainPack 文件不会因为存在于磁盘上就自动获得执行权限。应
 6. 通过 Server Memory Runtime 配置解析所选 Memory Profile。
 7. 使用 `sessionInitialization` 创建 Session，并将 `processHash` 与 `dependencySnapshot` 和 Run
    的 Event Evidence 一起持久化。
-8. 通过 Canonical Runtime 执行 `fsmProcess`，仅从 Event 与持久 Checkpoint 派生状态。
+8. 通过 Canonical Runtime 执行 `fsmProcess`，将 Domain Stage ID 记录为 Event Evidence，并且仅从
+   Event 与持久 Checkpoint 派生状态。
 
 显式激活可以防止未经审核的 YAML、Skill、Tool 或 Remote MCP Catalog 变化静默获得运行权限。
 
