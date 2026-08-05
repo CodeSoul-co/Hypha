@@ -26,6 +26,7 @@ import type {
 import { reActContinuationScopeHash } from '@hypha/kernel';
 import type { ToolRunner } from '@hypha/tools';
 import type { ArtifactStoreProvider } from '@hypha/core';
+import { harnessStateForReActPhase } from '@hypha/fsm';
 import type {
   CanonicalReActRunFacts,
   PreparedCanonicalReActExecution,
@@ -478,20 +479,7 @@ interface PreparedEvidence {
 }
 
 function fsmStateFor(step: Readonly<ReActStep>): string | undefined {
-  const states: Partial<Record<ReActStep['phase'], string>> = {
-    reason: 'Reasoning',
-    select_action: 'ActionSelected',
-    policy_check: 'PolicyChecked',
-    act: 'Acting',
-    observe_result: 'ObservationRecorded',
-    verify: 'Verifying',
-    memory_sync: 'MemorySync',
-    complete: 'Completed',
-    fail: 'Failed',
-    human_review: 'HumanReview',
-    cancel: 'Cancelled',
-  };
-  return states[step.phase];
+  return harnessStateForReActPhase(step.phase);
 }
 
 function timestamp(value: string, label: string): string {
