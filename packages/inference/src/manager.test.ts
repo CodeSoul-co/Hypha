@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RecoveryFailure } from '@hypha/core';
+import { canonicalizeJson, type RecoveryFailure } from '@hypha/core';
 import {
   createDefaultInferenceBackendRegistry,
   LlamaCppInferenceBackend,
@@ -200,6 +200,30 @@ describe('@hypha/inference', () => {
       stable: true,
     });
     expect(resolved.blocks[0]?.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('omits absent optional prompt evidence from canonical runtime values', () => {
+    const registry = new AgentPromptRegistry();
+    registry.register({
+      id: 'agent.canonical',
+      version: '1.0.0',
+      name: 'Canonical prompt',
+      role: 'system',
+      template: 'Canonical instructions.',
+    });
+
+    const resolved = registry.resolve([{ id: 'agent.canonical', required: true }], {
+      variables: {},
+      principal: { principalId: 'user-1', agentId: 'agent.canonical' },
+    });
+    const block = resolved.blocks[0];
+
+    expect(block).toBeDefined();
+    expect(block).not.toHaveProperty('ownerId');
+    expect(block).not.toHaveProperty('tenantId');
+    expect(block).not.toHaveProperty('provenance');
+    expect(block).not.toHaveProperty('metadata');
+    expect(() => canonicalizeJson(resolved)).not.toThrow();
   });
 
   it('rejects undeclared agent prompt variables instead of silently erasing them', () => {
