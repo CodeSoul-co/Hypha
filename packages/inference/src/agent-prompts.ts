@@ -243,10 +243,10 @@ export class AgentPromptRegistry {
         templateContentHash: spec.contentHash!,
         scope: spec.scope ?? 'global',
         trustLevel: spec.trustLevel ?? 'reviewed',
-        ownerId: spec.ownerId,
-        tenantId: spec.tenantId,
-        provenance: spec.provenance,
-        metadata: spec.metadata,
+        ...(spec.ownerId === undefined ? {} : { ownerId: spec.ownerId }),
+        ...(spec.tenantId === undefined ? {} : { tenantId: spec.tenantId }),
+        ...(spec.provenance === undefined ? {} : { provenance: spec.provenance }),
+        ...(spec.metadata === undefined ? {} : { metadata: spec.metadata }),
       });
     }
     return {
@@ -353,7 +353,7 @@ function promptAccessError(spec: AgentPromptSpec, reason: string): Error {
       promptVersion: spec.version,
       promptRevision: spec.revision,
       contentHash: spec.contentHash,
-    },
+    }
   });
 }
 
