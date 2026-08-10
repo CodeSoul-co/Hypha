@@ -90,6 +90,8 @@ describe('Server EventRuntime canonical integration', () => {
       reactRun.runId
     );
     expect(prepared).not.toBeNull();
+    expect(prepared!.context.agent).not.toHaveProperty('promptResolution');
+    expect(prepared!.context.agent).not.toHaveProperty('toolRefs');
     await runtime.recordCanonicalReActContextPrepared({
       runId: reactRun.runId,
       stepId: prepared!.context.stepId,
