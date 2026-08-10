@@ -907,6 +907,8 @@ class EventRuntimeService {
     const contractSnapshotRef =
       request.context.contractSnapshotRef ??
       (await this.ensureRunToolSnapshot(request.context.runId));
+    const contractSnapshot = await this.toolSnapshotStore.get(contractSnapshotRef);
+    const effectiveCapabilities = contractSnapshot?.effectiveCapabilities;
     return this.toolRunner.run({
       ...request,
       toolId,
@@ -915,6 +917,9 @@ class EventRuntimeService {
         userId,
         sessionId,
         contractSnapshotRef,
+        ...(effectiveCapabilities === undefined
+          ? {}
+          : { capabilitySnapshotRef: contractSnapshotRef }),
         principal: request.context.principal ?? {
           id: userId,
           principalId: userId,
@@ -1931,14 +1936,28 @@ class EventRuntimeService {
       : [];
     const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
     const capabilityMetadata = asRecord(spec.metadata);
+    const allowedMCPServerIds = Array.from(
+      new Set(
+        availableToolIds
+          .map((toolRef) => {
+            const descriptor = getToolManager().describeTool(toolRef);
+            return descriptor?.serverId ?? descriptor?.capabilityId?.split('.')[0];
+          })
+          .filter((serverId): serverId is string => Boolean(serverId)),
+      ),
+    );
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
       agentId: id,
       principalId: userId,
       tenantId: stringValue(asRecord(input.metadata)?.tenantId),
       domainId: runContext.domainPackId,
-      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy'),
-      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy'),
+      agent: capabilityConstraint(capabilityMetadata, availableToolIds, 'agent.policy', {
+        allowedMCPServerIds,
+      }),
+      domain: capabilityConstraint(workflowState, availableToolIds, 'domain.policy', {
+        allowedMCPServerIds,
+      }),
       activeSkills,
     });
     this.runCapabilitySnapshots.set(input.runId, effectiveCapabilities);
@@ -4892,7 +4911,8 @@ function stringList(input: unknown): string[] | undefined {
 function capabilityConstraint(
   source: Record<string, unknown> | undefined,
   fallbackToolIds: string[],
-  defaultPolicyRef: string
+  defaultPolicyRef: string,
+  extras: { allowedMCPServerIds?: string[] } = {},
 ): EffectiveAgentCapabilitySnapshotInput['agent'] {
   const memory = stringValue(source?.memoryAccess);
   const sideEffect = stringValue(source?.maximumSideEffectLevel);
@@ -4911,7 +4931,10 @@ function capabilityConstraint(
   return {
     allowedToolIds:
       stringList(source?.allowedToolIds) ?? stringList(source?.allowedTools) ?? fallbackToolIds,
-    allowedMCPServerIds: stringList(source?.allowedMCPServerIds),
+    allowedMCPServerIds:
+      stringList(source?.allowedMCPServerIds)?.length
+        ? (stringList(source?.allowedMCPServerIds) as string[])
+        : extras.allowedMCPServerIds ?? [],
     memoryAccess,
     allowedExecutionProfiles: stringList(source?.allowedExecutionProfiles) ?? [],
     maximumSideEffectLevel,
