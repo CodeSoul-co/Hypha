@@ -72,6 +72,7 @@ import {
   type InferenceProvider,
   type InferenceRequest,
   type InferenceResponse,
+  type InferenceToolDescriptor,
   type LocalInferenceDriver,
   type KvCacheRef,
   type KvCacheScope,
@@ -110,6 +111,7 @@ import {
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
   type EffectiveAgentCapabilitySnapshot,
+  type ResolvedToolSpec,
   type ToolCallResult,
   type ToolRunner,
   type ToolSpec,
@@ -826,13 +828,15 @@ class EventRuntimeService {
 
   private createCanonicalReActAgentRuntime(): ReActAgentRuntime {
     return {
-      async reason(context) {
+      reason: async (context) => {
+        const tools = await this.resolveCanonicalInferenceTools(context);
         return {
           runId: context.runId,
           stepId: context.stepId,
           sessionId: context.memoryScope?.sessionId,
           agentId: context.agent.id,
           modelAlias: context.agent.modelAlias,
+          ...(tools.length === 0 ? {} : { tools }),
           input: {
             instructions: context.agent.systemInstructions,
             messages: context.messages,
@@ -883,6 +887,66 @@ class EventRuntimeService {
         };
       },
     };
+  }
+
+  private async resolveCanonicalInferenceTools(
+    context: ReActRunContext
+  ): Promise<InferenceToolDescriptor[]> {
+    const requestedToolIds = context.agent.toolRefs ?? [];
+    if (requestedToolIds.length === 0) return [];
+
+    const snapshotRef = await this.ensureRunToolSnapshot(context.runId);
+    const snapshot = await this.toolSnapshotStore.get(snapshotRef);
+    if (!snapshot || snapshot.runId !== context.runId) {
+      throw new FrameworkError({
+        code: 'TOOL_CONTRACT_SNAPSHOT_UNAVAILABLE',
+        message: `Canonical ReAct Tool snapshot is unavailable: ${snapshotRef}`,
+      });
+    }
+    const effective = snapshot.effectiveCapabilities;
+    if (!effective || effective.runId !== context.runId || effective.agentId !== context.agent.id) {
+      throw new FrameworkError({
+        code: 'TOOL_CAPABILITY_SNAPSHOT_MISMATCH',
+        message: 'Canonical ReAct reasoning requires the exact Run capability snapshot.',
+      });
+    }
+
+    return requestedToolIds.map((toolId) => {
+      const item = snapshot.toolContracts.find((candidate) => candidate.toolId === toolId);
+      if (!item || !effective.allowedToolIds.includes(toolId)) {
+        throw new FrameworkError({
+          code: 'TOOL_CAPABILITY_SCOPE_DENIED',
+          message: `Tool ${toolId} is not allowed by the immutable Run capability snapshot.`,
+        });
+      }
+      const pinned = this.toolRegistry.resolve({
+        id: item.toolId,
+        version: item.toolVersion,
+        revision: item.toolRevision,
+      });
+      if (!pinned || !toolSnapshotItemMatchesSpec(item, pinned.spec)) {
+        throw new FrameworkError({
+          code: 'TOOL_CONTRACT_SNAPSHOT_MISMATCH',
+          message: `Tool ${toolId} no longer matches its immutable Run contract snapshot.`,
+        });
+      }
+      const serverId = pinned.spec.sourceRef?.serverId ?? pinned.spec.sourceRef?.mcpServerId;
+      if (
+        pinned.spec.source === 'mcp' &&
+        (!serverId || !effective.allowedMCPServerIds.includes(serverId))
+      ) {
+        throw new FrameworkError({
+          code: 'TOOL_CAPABILITY_SCOPE_DENIED',
+          message: `MCP server for ${toolId} is not allowed by the immutable Run capability snapshot.`,
+        });
+      }
+      return {
+        id: pinned.spec.id,
+        name: pinned.spec.name,
+        description: pinned.spec.description,
+        inputSchema: pinned.spec.input.jsonSchema,
+      };
+    });
   }
 
   private async inferCanonical(request: InferenceRequest): Promise<InferenceResponse> {
@@ -941,6 +1005,13 @@ class EventRuntimeService {
     const contractSnapshotRef =
       request.context.contractSnapshotRef ??
       (await this.ensureRunToolSnapshot(request.context.runId));
+    const contractSnapshot = await this.toolSnapshotStore.get(contractSnapshotRef);
+    if (!contractSnapshot || contractSnapshot.runId !== request.context.runId) {
+      throw new FrameworkError({
+        code: 'TOOL_CONTRACT_SNAPSHOT_UNAVAILABLE',
+        message: `Canonical Tool snapshot is unavailable: ${contractSnapshotRef}`,
+      });
+    }
     return this.toolRunner.run({
       ...request,
       toolId,
@@ -949,6 +1020,9 @@ class EventRuntimeService {
         userId,
         sessionId,
         contractSnapshotRef,
+        ...(contractSnapshot.effectiveCapabilities === undefined
+          ? {}
+          : { capabilitySnapshotRef: contractSnapshotRef }),
         principal: request.context.principal ?? {
           id: userId,
           principalId: userId,
@@ -1963,7 +2037,8 @@ class EventRuntimeService {
           metadata: spec.metadata,
         })
       : [];
-    const availableToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const requestedToolIds = spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) ?? [];
+    const availableToolIds = requestedToolIds.map((toolId) => this.registerManagedTool(toolId));
     const capabilityMetadata = asRecord(spec.metadata);
     const effectiveCapabilities = createEffectiveAgentCapabilitySnapshot({
       runId: input.runId,
@@ -2003,9 +2078,9 @@ class EventRuntimeService {
         input.options?.model ??
         this.resolveChatModel().model,
       systemInstructions,
-      promptResolution,
+      ...(promptResolution === undefined ? {} : { promptResolution }),
       activeSkills,
-      toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
+      ...(availableToolIds.length === 0 ? {} : { toolRefs: availableToolIds }),
     };
   }
 
@@ -5078,6 +5153,23 @@ function capabilityConstraint(
     maximumSideEffectLevel,
     policyRefs: stringList(source?.policyRefs) ?? [defaultPolicyRef],
   };
+}
+
+function toolSnapshotItemMatchesSpec(
+  item: ToolContractSnapshot['toolContracts'][number],
+  spec: ResolvedToolSpec
+): boolean {
+  return (
+    item.toolId === spec.id &&
+    item.toolVersion === spec.version &&
+    item.toolRevision === spec.revision &&
+    item.inputSchemaHash === spec.input.schemaHash &&
+    item.outputSchemaHash === spec.output?.schemaHash &&
+    item.sourceCapabilityHash ===
+      (spec.sourceRef?.capabilityHash ?? spec.sourceRef?.mcpCapabilityHash) &&
+    item.sideEffectLevel === spec.sideEffectLevel &&
+    item.adapterRef === (spec.sourceRef?.adapterId ?? `${spec.source}:${spec.id}`)
+  );
 }
 
 export function capabilityPolicyHash(
