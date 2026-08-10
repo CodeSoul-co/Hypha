@@ -72,6 +72,7 @@ import {
   type InferenceProvider,
   type InferenceRequest,
   type InferenceResponse,
+  type InferenceToolDescriptor,
   type LocalInferenceDriver,
   type KvCacheRef,
   type KvCacheScope,
@@ -778,12 +779,26 @@ class EventRuntimeService {
   private createCanonicalReActAgentRuntime(): ReActAgentRuntime {
     return {
       async reason(context) {
+        const toolRefs = context.agent.toolRefs ?? [];
+        const tools: InferenceToolDescriptor[] = toolRefs
+          .map((toolRef) => {
+            const descriptor = getToolManager().describeTool(toolRef);
+            if (!descriptor) return null;
+            return {
+              id: descriptor.id ?? toolRef,
+              name: descriptor.name ?? toolRef,
+              description: descriptor.description ?? toolRef,
+              inputSchema: descriptor.inputSchema as Record<string, unknown>,
+            } as InferenceToolDescriptor;
+          })
+          .filter((tool): tool is InferenceToolDescriptor => tool !== null);
         return {
           runId: context.runId,
           stepId: context.stepId,
           sessionId: context.memoryScope?.sessionId,
           agentId: context.agent.id,
           modelAlias: context.agent.modelAlias,
+          ...(tools.length === 0 ? {} : { tools }),
           input: {
             instructions: context.agent.systemInstructions,
             messages: context.messages,
