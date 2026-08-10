@@ -1954,9 +1954,11 @@ class EventRuntimeService {
         input.options?.model ??
         this.resolveChatModel().model,
       systemInstructions,
-      promptResolution,
+      ...(promptResolution === undefined ? {} : { promptResolution }),
       activeSkills,
-      toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name),
+      ...(spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name)
+        ? { toolRefs: spec.toolRefs ?? input.options?.tools?.map((tool) => tool.name) }
+        : {}),
     };
   }
 
