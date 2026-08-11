@@ -2,8 +2,6 @@
   <img src="docs/hypha_logo.png" alt="hypha logo" width="180" />
 </p>
 
-<h1 align="center">hypha</h1>
-
 <p align="center">
   <strong>面向受治理、持久且可复用领域 Agent 的 Agent Core + Production Harness。</strong>
 </p>

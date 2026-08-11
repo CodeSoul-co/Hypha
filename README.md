@@ -2,8 +2,6 @@
   <img src="docs/hypha_logo.png" alt="hypha logo" width="180" />
 </p>
 
-<h1 align="center">hypha</h1>
-
 <p align="center">
   <strong>Agent Core + Production Harness for governed, durable, and reusable domain agents.</strong>
 </p>
