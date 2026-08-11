@@ -524,3 +524,20 @@ NODE_ENV=production npm start
 
 商业产品可以依据 Apache-2.0 使用本软件，但修改后的 Fork 与第三方产品必须使用自己的主品牌。
 完整品牌素材条款参见 [BRAND_POLICY.md](BRAND_POLICY.md)。
+
+## Star 增长趋势
+
+<p align="center">
+  <a href="https://github.com/CodeSoul-co/Hypha/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/readme/star-history-dark.svg" />
+      <img src="docs/readme/star-history-light.svg"
+           alt="Hypha GitHub Stars 从 2026 年 7 月 1 日至 8 月 11 日的增长曲线"
+           width="900" />
+    </picture>
+  </a>
+</p>
+
+<p align="center">
+  <sub>根据 GitHub Stargazer 时间戳生成 · 更新于 2026 年 8 月 11 日</sub>
+</p>

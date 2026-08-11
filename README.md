@@ -550,3 +550,20 @@ permission from the applicable rights holder.
 Commercial products may use the software under Apache-2.0, but modified forks and third-party
 products must use their own primary branding. See [BRAND_POLICY.md](BRAND_POLICY.md) for the complete
 brand-asset terms.
+
+## Star History
+
+<p align="center">
+  <a href="https://github.com/CodeSoul-co/Hypha/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/readme/star-history-dark.svg" />
+      <img src="docs/readme/star-history-light.svg"
+           alt="Hypha GitHub Stars growth curve from July 1 through August 11, 2026"
+           width="900" />
+    </picture>
+  </a>
+</p>
+
+<p align="center">
+  <sub>Generated from GitHub stargazer timestamps · Updated August 11, 2026</sub>
+</p>
