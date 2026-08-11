@@ -528,16 +528,17 @@ NODE_ENV=production npm start
 ## Star 增长趋势
 
 <p align="center">
-  <a href="https://github.com/CodeSoul-co/Hypha/stargazers">
+  <a href="https://www.star-history.com/?repos=CodeSoul-co%2FHypha&type=date&legend=top-left">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/readme/star-history-dark.svg" />
-      <img src="docs/readme/star-history-light.svg"
-           alt="Hypha GitHub Stars 从 2026 年 7 月 1 日至 8 月 11 日的增长曲线"
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&theme=dark&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0" />
+      <img src="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0"
+           alt="Hypha GitHub Star History 增长曲线"
            width="900" />
     </picture>
   </a>
 </p>
 
 <p align="center">
-  <sub>根据 GitHub Stargazer 时间戳生成 · 更新于 2026 年 8 月 11 日</sub>
+  <sub>由 Star History 提供实时图表</sub>
 </p>

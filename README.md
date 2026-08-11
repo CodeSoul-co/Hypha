@@ -554,16 +554,17 @@ brand-asset terms.
 ## Star History
 
 <p align="center">
-  <a href="https://github.com/CodeSoul-co/Hypha/stargazers">
+  <a href="https://www.star-history.com/?repos=CodeSoul-co%2FHypha&type=date&legend=top-left">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/readme/star-history-dark.svg" />
-      <img src="docs/readme/star-history-light.svg"
-           alt="Hypha GitHub Stars growth curve from July 1 through August 11, 2026"
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&theme=dark&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0" />
+      <img src="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0"
+           alt="Hypha GitHub Star History chart"
            width="900" />
     </picture>
   </a>
 </p>
 
 <p align="center">
-  <sub>Generated from GitHub stargazer timestamps · Updated August 11, 2026</sub>
+  <sub>Live chart powered by Star History</sub>
 </p>
