@@ -5,7 +5,11 @@
 <h1 align="center">hypha</h1>
 
 <p align="center">
-  <strong>面向生产环境、具备治理能力、持久执行能力和可扩展性的 TypeScript AI Agent 框架。</strong>
+  <strong>面向受治理、持久且可复用领域 Agent 的 Agent Core + Production Harness。</strong>
+</p>
+
+<p align="center">
+  <sub>DomainPack · Event-first Runtime · Governed Capabilities · Recovery · Cache & Reuse</sub>
 </p>
 
 <p align="center">
@@ -14,14 +18,93 @@
 
 ## hypha 是什么？
 
-hypha 是一个用于开发 Agent 产品的 TypeScript 源码工作区。它不把 Agent 简化为一次模型调用，
-而是将 ReAct 推理循环、显式有限状态机（FSM）、持久事件、受策略控制的副作用、回放、恢复、评估
-和 provider-neutral 扩展契约组合为统一框架。
+hypha 是一个开源 TypeScript 框架，由相互协作的 **Agent Core** 与 **Production Harness** 两层构成。
+Agent Core 负责推理/ReAct、规划、Tool 选择、Memory 访问，以及模型与 Context 编排；Production
+Harness 则通过 FSM 控制、Policy/Approval、Checkpoint、恢复、回放与审计，把这些决策转化为有边界、
+以 Event 为依据的执行。
 
-框架严格分离产品领域声明与运行时内核。产品通过 `DomainPack` 定义任务、Pipeline 与 Capability
-Binding；hypha 校验这些声明、生成版本化依赖快照，并将其绑定到 Framework-owned Harness FSM。
-Domain State ID 与 Transition 不能重新定义该 FSM。API、CLI、Worker 或其他应用界面可以复用同一套
-Runtime，而无需把产品规则写入 Framework Core。
+产品特定行为通过 `DomainPack` 声明，而不是硬编码进 Runtime。DomainPack 将任务、Workflow、
+Capability、Prompt、Memory、Policy、Evaluation 与输出契约编译到共享 Core + Harness 中。横跨各层的
+**Cache & Reuse Plane** 会复用推理、Tool、Memory、Execution 与 Inference 中已经验证的工作，同时
+始终保持为可丢弃的投影视图：Cache 可以加速执行，但不能成为授权依据，也不能取代 Event、Artifact、
+Receipt 或 Checkpoint 证据。
+
+## 架构概览
+
+<p align="center">
+  <img src="docs/readme/hypha-framework.png"
+       alt="Hypha 架构：DomainPack、Agent Core、Production Harness、Cache & Reuse Plane 与领域 Agent 示例"
+       width="1050" />
+</p>
+
+<p align="center">
+  <em>同一套 Agent Core + Production Harness 可以加载不同 DomainPack；Cache & Reuse Plane 则横跨
+  推理、Tool、Memory、Execution 与 Inference。</em>
+</p>
+
+| 层 | 主要职责 |
+| --- | --- |
+| **Agent Core** | 推理/ReAct、规划、Tool 选择、Memory 访问，以及模型与 Context 编排。 |
+| **Production Harness** | FSM 执行、Event/Checkpoint 控制、Policy/Approval、Continuation、恢复、审计与回放。 |
+| **DomainPack** | 声明产品特定的任务、Workflow、Capability、Memory、Skill、Prompt、Policy、Evaluation 与输出契约，并将其编译到共享 Runtime。 |
+| **Cache & Reuse Plane** | 复用已验证的模型工作、推理结构、Tool/Execution 结果、Memory/Context 投影和 Prefix/KV 状态，但不成为事实来源或授权依据。 |
+
+这种分层让同一套 Runtime 能够支持差异很大的 Agent 产品。Coding Agent、Finance Agent、Legal Agent
+或 Research Agent 可以共享 Core + Harness，只需替换 DomainPack、Capability Binding、Policy、
+Evaluation Contract 与领域状态。
+
+## Cache 管理与类型化 Cache Tree
+
+Cache 在 hypha 中是一等控制面，而非单一的响应缓存功能。Exact LLM Response、推理子图、Tool Result、
+Memory Projection 与 KV Prefix 的有效性和失效条件各不相同，因此系统将其拆分为多个复用层。
+
+| Cache 层 | 可复用单元 | 典型有效性边界 |
+| --- | --- | --- |
+| **Serving Cache** | Exact、Normalized 的模型响应 | 模型/Provider 身份、Normalized Request、Scope、TTL 与响应有效性。 |
+| **Thinking Cache** | 推理节点、路径或可复用子图 | 模型/Provider、推理策略/版本、Prompt Block、Tool Schema、Inference Parameter 与 Scope。 |
+| **WorkCache** | 从 Event 派生的类型化 Agent 工作 | Source Event Provenance、依赖/Revision Closure、Scope、Validity State 与未来需求。 |
+| **Tool / Execution Cache** | 符合条件的只读 Tool Result 或确定性 Execution Result | Capability Revision、Policy、外部状态证据、Workspace/Environment Snapshot、Idempotency 与 Scope。 |
+| **Memory / Context Cache** | Memory Search 与已组装的 Context Projection | Memory Scope、Mutation Generation、Source Revision、Provenance 与 Context Policy。 |
+| **Prefix / KV Cache** | Prompt Prefix Block、Provider Prefix 或后端 KV Segment | 模型/Backend、Agent/Session/Domain Scope、Prompt Dependency 与 Prefix/KV Revision。 |
+
+<p align="center">
+  <img src="docs/readme/cache-tree-management.png"
+       alt="分层 Cache Tree：Artifact Type Root、Hash Prefix Parent、Full-key Leaf、插入、查找与局部失效"
+       width="760" />
+</p>
+
+Cache Tree 使用类型化 Root 划分可复用 Artifact，以紧凑 Parent Node 按 Hash Prefix 路由查找，并在
+Leaf 保存完整 Logical Key。插入新 Leaf 不需要重建无关分支，过期 Leaf 也能局部失效。因此物理 Tree
+只是查找结构，Event 与 Artifact 证据仍然是事实来源。
+
+WorkCache 将这种查找模式扩展为面向 Agent 执行的**语义 Cache Tree**：
+
+| 语义 Tree | 复用内容 |
+| --- | --- |
+| `PlanTree` | Plan、Plan Branch 与可复用的 Planning Artifact。 |
+| `ComputationTree` | 推理/计算节点与派生工作，同时也是 Thinking Cache 的天然承载层。 |
+| `ToolTree` | 符合条件的 Tool Call Result 及其 Provenance/Validity Metadata。 |
+| `ObservationTree` | 与 Source Evidence 和 Scope 绑定的可复用 Observation。 |
+| `VerificationTree` | Verification、Checking 与 Output Validation 工作。 |
+| `MemoryTree` | 有效性跟随 Memory Mutation Generation 与 Scope 的 Memory-derived Projection。 |
+| `RecoveryTree` | 按 Failure Context 与相关 Runtime Revision 索引的 Recovery Knowledge；Hit 仅用于建议，必须重新验证。 |
+| `PromptPrefixTree` | Provider/Backend Prefix Reuse 使用的稳定 Prompt Block 与 Prefix Materialization。 |
+
+核心不变量是**复用不产生授权**。Cache Hit 可以避免重复计算，但不能授权 Tool、跳过 Policy 或
+Approval、伪造 Receipt、推进 FSM，或取代 Event 与 Artifact 证据。因此，Cache Lookup、Validation、
+Invalidation 与 Bypass 都属于 Runtime 控制，而不是隐藏的实现细节。
+
+## 跨 Benchmark 的 Cache 诊断
+
+<p align="center">
+  <img src="docs/readme/cache-benchmark-diagnostics.png"
+       alt="通过 Ablation 得出的 Cache 组件贡献：Finance、TabMWP、tau-squared、总体成功率、API 成本节省与延迟节省"
+       width="1050" />
+</p>
+
+<p align="center">
+  <em>通过 Ablation 得出的组件贡献，覆盖任务成功率、API 成本节省与延迟节省。</em>
+</p>
 
 ## 产品模型
 
@@ -60,7 +143,7 @@ Deadline、Idempotency 与 Harness 边界。
 | Tool 与 MCP     | Local、HTTP、Plugin、Mock、MCP Adapter 共用一条受治理 Invocation 路径，并支持 Capability Snapshot 与 Drift Control。                                                                         |
 | Skill 与 Prompt | Built-in、Filesystem、Package、签名 Remote Skill Registry、渐进加载、版本化 Prompt 引用与模板。                                                                                              |
 | Execution       | Provider-neutral Workspace、Sandbox、Command、Artifact、Store、Lease、Recovery 与 Cache 契约，以及 Local Process、Docker、Remote HTTP、SQLite、PostgreSQL、本地文件、S3-compatible Adapter。 |
-| Cache           | Exact LLM Serving Cache，以及有边界、有作用域、可失效的 Event-derived WorkCache。                                                                                                            |
+| Cache           | Serving Cache、Event-derived WorkCache、Thinking Cache、类型化语义 Cache Tree、Capability Result Cache、Memory/Context Projection、Prefix/KV Reuse，以及有 Scope 的 Validity 与 Invalidation。 |
 | 应用界面        | 使用同一 Framework Runtime 的 Express API Server 与示例 CLI。                                                                                                                                |
 
 ## 快速开始
@@ -338,14 +421,21 @@ PostgreSQL Execution Record 与 S3-compatible Artifact Adapter；部署只应激
 
 ## Cache 模型
 
+详细架构参见[Cache 管理与类型化 Cache Tree](#cache-管理与类型化-cache-tree)。运行层面：
+
 - **Serving Cache**：复用 Exact、Normalized 的模型响应。通过 `HYPHA_SERVING_CACHE=memory`、
   `sqlite` 或 `redis` 开启。
-- **WorkCache**：保存从 Event 派生的有界投影。可设置 `HYPHA_WORKCACHE=off`、`memory`、`sqlite`
-  或 `redis`。
+- **WorkCache**：保存有边界、从 Event 派生的 Projection 与语义 Cache Tree。可设置
+  `HYPHA_WORKCACHE=off`、`memory`、`sqlite` 或 `redis`。
+- **Thinking Cache**：当当前模型、推理方式、Prompt、Tool Schema 与 Scope Identity 仍然有效时，
+  通过面向计算的 WorkCache Projection 复用推理节点、路径与子图。
 - **Tool Result Cache**：仅对符合要求的 `none`/`read` 调用启用；读取还必须携带稳定的外部状态证据。
+- **Execution、Memory/Context、Prompt Prefix 与 Prefix/KV Cache**：继续接受各自的 Capability、
+  Dependency、Revision、Provenance 与 Scope 校验；部署只能启用其能够验证的 Provider。
 
-所有 Cache 都是可丢弃的 View。Cache Miss 或故障可以 Bypass；Cache Hit 不能授权副作用、跳过
-Policy、伪造 Receipt 或推进 FSM。
+所有 Cache 都是可丢弃的 View。Cache Miss 或 Cache Provider 故障可以 Bypass；Cache Hit 不能授权
+副作用、跳过 Policy 或 Approval、伪造 Receipt、推进 FSM，或取代 Event 与 Artifact 证据。启用或
+关闭 Cache 的执行必须保持相同的事实来源语义。
 
 ## HTTP API
 
@@ -419,7 +509,20 @@ NODE_ENV=production npm start
 - [Tool 与 MCP](docs/architecture/tool-mcp.md)
 - [Execution](docs/architecture/execution.md)
 - [FSM Recovery](docs/architecture/fsm-recovery.md)
+- [品牌与 Logo 政策](BRAND_POLICY.md)
 
-## License
+## License 与品牌政策
 
-MIT
+本仓库的**源代码**使用 [Apache License 2.0](LICENSE) 授权。在遵守该许可证条款的前提下，允许商业
+使用、修改、分发与私有使用。
+
+**Hypha 名称、Logo、Wordmark、Icon 及其他指定品牌素材不属于 Apache-2.0 的授权范围**。仅可在如实
+引用 Hypha 项目或注明出处时原样复制官方 Hypha Logo。可以按比例缩放或进行无损格式转换，但必须
+保持其视觉外观不变。
+
+未经适用权利人事先书面许可，不得对 Hypha Logo 重新着色、裁剪、拉伸、旋转、重绘、制作动画、
+添加效果、与其他标记组合或创建衍生版本；也不得以暗示官方发行、背书、认证、赞助或隶属关系的
+方式使用 Hypha 品牌。
+
+商业产品可以依据 Apache-2.0 使用本软件，但修改后的 Fork 与第三方产品必须使用自己的主品牌。
+完整品牌素材条款参见 [BRAND_POLICY.md](BRAND_POLICY.md)。

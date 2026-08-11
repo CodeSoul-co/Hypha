@@ -5,7 +5,11 @@
 <h1 align="center">hypha</h1>
 
 <p align="center">
-  <strong>A production-oriented TypeScript framework for governed, durable, and extensible AI agents.</strong>
+  <strong>Agent Core + Production Harness for governed, durable, and reusable domain agents.</strong>
+</p>
+
+<p align="center">
+  <sub>DomainPack · Event-first Runtime · Governed Capabilities · Recovery · Cache & Reuse</sub>
 </p>
 
 <p align="center">
@@ -14,16 +18,97 @@
 
 ## What is hypha?
 
-hypha is an open-source TypeScript workspace for building agent products that must do more than
-complete a single model call. It combines a ReAct reasoning loop with explicit finite-state-machine
-(FSM) execution, durable events, policy-controlled side effects, replay, recovery, evaluation, and
-provider-neutral extension contracts.
+hypha is an open-source TypeScript framework built around two cooperating layers: an **Agent Core**
+and a **Production Harness**. The Agent Core handles reasoning/ReAct, planning, tool selection, Memory
+access, and model/context orchestration; the Production Harness turns those decisions into bounded,
+event-backed execution with FSM control, policy/approval, checkpoints, recovery, replay, and audit.
 
-The framework keeps product-domain declarations separate from the runtime kernel. A product defines
-its tasks, pipeline, and capability bindings in a `DomainPack`; hypha validates those declarations,
-builds a versioned dependency snapshot, and associates them with the framework-owned Harness FSM.
-Domain state ids and transitions never redefine that FSM. The same runtime can then serve an API,
-CLI, worker, or another application surface without moving product rules into framework core.
+Product-specific behavior is declared through a `DomainPack`, not hard-coded into the runtime. A
+DomainPack compiles tasks, workflows, capabilities, prompts, Memory, policy, evaluation, and output
+contracts into the shared Core + Harness. A cross-cutting **Cache & Reuse Plane** then reuses
+validated work across reasoning, tools, Memory, execution, and inference while remaining a disposable
+projection: cache state can accelerate execution, but it can never become authority or replace Event,
+Artifact, receipt, or checkpoint evidence.
+
+## Architecture at a glance
+
+<p align="center">
+  <img src="docs/readme/hypha-framework.png"
+       alt="Hypha architecture: DomainPack, Agent Core, Production Harness, Cache and Reuse Plane, and example domain agents"
+       width="1050" />
+</p>
+
+<p align="center">
+  <em>One Agent Core + Production Harness can be instantiated with different DomainPacks, while the
+  Cache & Reuse Plane spans reasoning, tools, Memory, execution, and inference.</em>
+</p>
+
+| Layer | Primary responsibility |
+| --- | --- |
+| **Agent Core** | Reasoning/ReAct, planning, tool selection, Memory access, model and context orchestration. |
+| **Production Harness** | FSM execution, Event/checkpoint control, policy/approval, continuation, recovery, audit, and replay. |
+| **DomainPack** | Declares the product-specific task, workflow, capability, Memory, Skill, Prompt, Policy, evaluation, and output contracts compiled into the shared runtime. |
+| **Cache & Reuse Plane** | Reuses validated model work, reasoning structures, tool/execution results, Memory/context projections, and prefix/KV state without becoming a source of truth or authority. |
+
+This separation is what lets the same runtime support very different agent products. A coding agent,
+finance agent, legal agent, or research agent can share the same Core + Harness while changing the
+DomainPack, capability bindings, policies, evaluation contracts, and domain-specific state.
+
+## Cache management and typed cache trees
+
+Cache is a first-class control plane in hypha, not a single response-cache feature. The system
+distinguishes several reuse layers because an exact LLM response, a reasoning subgraph, a tool result,
+a Memory projection, and a KV prefix have different validity and invalidation requirements.
+
+| Cache layer | Reusable unit | Typical validity boundary |
+| --- | --- | --- |
+| **Serving Cache** | Exact normalized model response | Model/provider identity, normalized request, scope, TTL, and response validity. |
+| **Thinking Cache** | Reasoning node, path, or reusable subgraph | Model/provider, reasoning strategy/version, prompt blocks, tool schema, inference parameters, and scope. |
+| **WorkCache** | Event-derived typed agent work | Source-event provenance, dependency/revision closure, scope, validity state, and future demand. |
+| **Tool / Execution Cache** | Eligible read-only tool results or deterministic execution results | Capability revision, Policy, external-state evidence, workspace/environment snapshot, idempotency, and scope. |
+| **Memory / Context Cache** | Memory search and assembled context projections | Memory scope, mutation generation, source revision, provenance, and context policy. |
+| **Prefix / KV Cache** | Prompt-prefix blocks, provider prefixes, or backend KV segments | Model/backend, Agent/Session/Domain scope, prompt dependencies, and prefix/KV revision. |
+
+<p align="center">
+  <img src="docs/readme/cache-tree-management.png"
+       alt="Hierarchical cache tree with artifact-type root, hash-prefix parents, full-key leaves, insertion, lookup, and local invalidation"
+       width="760" />
+</p>
+
+A cache tree uses a typed root to partition reusable artifacts, compact parent nodes to route lookups
+by hash prefix, and full logical keys at the leaves. New leaves can be inserted without rebuilding
+unrelated branches, while stale leaves can be invalidated locally; the physical tree is therefore a
+lookup structure, while Event and Artifact evidence remain the source of truth.
+
+WorkCache extends that lookup pattern into **semantic cache trees** for agent execution:
+
+| Semantic tree | What it reuses |
+| --- | --- |
+| `PlanTree` | Plans, plan branches, and reusable planning artifacts. |
+| `ComputationTree` | Reasoning/computation nodes and derived work; also the natural backing plane for Thinking Cache. |
+| `ToolTree` | Eligible tool-call results and their provenance/validity metadata. |
+| `ObservationTree` | Reusable observations tied to source evidence and scope. |
+| `VerificationTree` | Verification, checking, and output-validation work. |
+| `MemoryTree` | Memory-derived projections whose validity follows Memory mutation generations and scope. |
+| `RecoveryTree` | Recovery knowledge keyed by failure context and relevant runtime revisions; hits are advisory and must be revalidated. |
+| `PromptPrefixTree` | Stable prompt blocks and prefix materialization used by provider/backend prefix reuse. |
+
+The central invariant is **reuse without authority**. A hit may avoid recomputation, but it cannot
+authorize a Tool, skip Policy or Approval, fabricate a receipt, advance the FSM, or replace Event and
+Artifact evidence. Cache lookup, validation, invalidation, and bypass are therefore part of runtime
+control rather than hidden implementation details.
+
+## Cache diagnostics across benchmarks
+
+<p align="center">
+  <img src="docs/readme/cache-benchmark-diagnostics.png"
+       alt="Ablation-derived cache component contributions across Finance, TabMWP, tau-squared, aggregate success, API-cost saving, and latency saving"
+       width="1050" />
+</p>
+
+<p align="center">
+  <em>Ablation-derived component contributions across task success, API-cost saving, and latency saving.</em>
+</p>
 
 ## Product model
 
@@ -62,7 +147,7 @@ trace, cancellation, deadline, idempotency, and harness boundaries.
 | Tools and MCP      | Local, HTTP, plugin, mock, and MCP adapters through one governed invocation path with capability snapshots and drift control.                                                                            |
 | Skills and prompts | Built-in, filesystem, package, and signed remote Skill registries; progressive loading; versioned prompt references and templates.                                                                       |
 | Execution          | Provider-neutral Workspace, Sandbox, Command, Artifact, Store, lease, recovery, and cache contracts with local-process, Docker, remote HTTP, SQLite, PostgreSQL, local-file, and S3-compatible adapters. |
-| Cache              | Exact LLM Serving Cache plus event-derived WorkCache with bounded, scoped, invalidatable projections.                                                                                                    |
+| Cache              | Serving Cache, event-derived WorkCache, Thinking Cache, typed semantic cache trees, capability-result caches, Memory/context projections, Prefix/KV reuse, scoped validity, and invalidation.             |
 | Surfaces           | Express API server and an example CLI that consume the same framework runtime.                                                                                                                           |
 
 ## Quick start
@@ -349,15 +434,26 @@ deployment should activate only the providers it trusts and can verify. See
 
 ## Cache model
 
+The detailed architecture is summarized in [Cache management and typed cache trees](#cache-management-and-typed-cache-trees).
+Operationally:
+
 - **Serving Cache** reuses exact, normalized model responses. Enable it with
   `HYPHA_SERVING_CACHE=memory`, `sqlite`, or `redis`.
-- **WorkCache** stores bounded projections derived from Events. Use `HYPHA_WORKCACHE=off`, `memory`,
-  `sqlite`, or `redis`.
+- **WorkCache** stores bounded, event-derived projections and semantic cache trees. Use
+  `HYPHA_WORKCACHE=off`, `memory`, `sqlite`, or `redis`.
+- **Thinking Cache** reuses reasoning nodes, paths, and subgraphs through computation-oriented
+  WorkCache projections when the current model, reasoning, prompt, tool-schema, and scope identity
+  remain valid.
 - **Tool result cache** is opt-in for eligible `none`/`read` calls and requires stable external-state
   evidence for reads.
+- **Execution, Memory/context, Prompt-prefix, and Prefix/KV caches** remain subject to their own
+  capability, dependency, revision, provenance, and scope checks; deployments may enable only the
+  providers they can validate.
 
-All caches are disposable views. A cache miss or failure can bypass the cache; a cache hit cannot
-authorize a side effect, skip policy, fabricate a receipt, or advance an FSM.
+All caches are disposable views. A cache miss or cache-provider failure can bypass reuse; a cache hit
+cannot authorize a side effect, skip Policy or Approval, fabricate a receipt, advance the FSM, or
+replace Event and Artifact evidence. Cache-enabled and cache-disabled execution must preserve the same
+source-of-truth semantics.
 
 ## HTTP API
 
@@ -435,7 +531,24 @@ NODE_ENV=production npm start
 - [Tools and MCP](docs/architecture/tool-mcp.md)
 - [Execution](docs/architecture/execution.md)
 - [FSM recovery](docs/architecture/fsm-recovery.md)
+- [Brand and logo policy](BRAND_POLICY.md)
 
-## License
+## License and brand policy
 
-MIT
+The **source code** in this repository is licensed under the
+[Apache License 2.0](LICENSE). Commercial use, modification, distribution, and private use are
+permitted subject to the terms of that license.
+
+The **Hypha name, logo, wordmark, icons, and other designated brand assets are not licensed under
+Apache-2.0**. The official Hypha logo may be reproduced only in its unmodified form for truthful
+reference or attribution to the Hypha project. Proportional resizing and lossless format conversion
+are allowed when the visual appearance is preserved.
+
+Do not recolor, crop, stretch, rotate, redraw, animate, add effects to, combine with another mark, or
+create derivative versions of the Hypha logo. Do not use Hypha branding in a way that implies an
+official distribution, endorsement, certification, sponsorship, or affiliation without prior written
+permission from the applicable rights holder.
+
+Commercial products may use the software under Apache-2.0, but modified forks and third-party
+products must use their own primary branding. See [BRAND_POLICY.md](BRAND_POLICY.md) for the complete
+brand-asset terms.
