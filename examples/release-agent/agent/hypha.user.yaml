@@ -1,0 +1,15 @@
+# This file belongs to the Agent project and is loaded over Hypha's tracked config.yaml.
+app:
+  name: release-research-agent
+workflows:
+  autoReload: false
+prompts:
+  registryPath: ../data/prompt-registry.json
+tools:
+  filesystem:
+    workingDirectory: ../data/workspace
+    readPaths: [../data/workspace]
+    writePaths: [../data/workspace]
+    executePaths: [../data/workspace/bin]
+    execution:
+      enabled: false

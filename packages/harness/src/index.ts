@@ -18,6 +18,7 @@ export * from './bounded-fsm-driver';
 export * from './durable-event-store-bridge';
 export * from './long-horizon-react-supervisor';
 export * from './react-quantum-executor';
+export * from './manual-fsm-transition';
 
 export interface RunRecord<TInput = unknown, TOutput = unknown> {
   id: string;

@@ -3,6 +3,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { getLLMManager } from '../core/llm/LLMFactory';
 import { checkStorageHealth } from '../services/database';
 import { getConfig } from '../config';
+import { getOpenApiDocument } from './openapi';
 
 const router = Router();
 
@@ -1278,6 +1279,10 @@ router.get(
 );
 
 // JSON API documentation endpoint
+router.get('/openapi.json', (_req: Request, res: Response) => {
+  res.json(getOpenApiDocument());
+});
+
 router.get(
   '/json',
   asyncHandler(async (_req: Request, res: Response) => {

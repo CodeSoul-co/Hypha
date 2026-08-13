@@ -40,8 +40,20 @@ import {
   type SessionQueueScope,
   type SpecRef,
 } from '@hypha/core';
-import { EventFirstRuntime, runRecoverySupervisor, type RecoveryParticipant } from '@hypha/harness';
-import { validateDomainPackSpec, type DomainPackSpec, type WorkflowSpec } from '@hypha/domain';
+import {
+  EventFirstRuntime,
+  runRecoverySupervisor,
+  type GovernedFSMTransitionService,
+  type ManualFSMRunView,
+  type ManualFSMTransitionResult,
+  type RecoveryParticipant,
+} from '@hypha/harness';
+import {
+  compileWorkflowToFSM,
+  validateDomainPackSpec,
+  type DomainPackSpec,
+  type WorkflowSpec,
+} from '@hypha/domain';
 import {
   applyTransitionWithRuntimePolicy,
   assertHarnessFSMProcessSpec,
@@ -51,7 +63,9 @@ import {
   FSMRuntime,
   harnessStateForReActPhase,
   isHarnessFSMStateId,
+  isHarnessFSMProcessSpec,
   planHarnessCapabilityPath,
+  validateFSMProcessSpec,
   type HarnessFSMStateId,
   type FSMProcessSpec,
   type FSMSnapshot,
@@ -624,6 +638,7 @@ class EventRuntimeService {
   private readonly humanWaitLeaseTtlMs = 30_000;
   private readonly runtime: EventFirstRuntime;
   private sessionCommands?: ServerStartRunCommandIngress;
+  private fsmControl?: Pick<GovernedFSMTransitionService, 'inspect' | 'transition'>;
   private readonly knownSessions = new Set<string>();
   private readonly maxKnownSessions = 10_000;
   private readonly sessionInitializations = new Map<string, Promise<void>>();
@@ -772,6 +787,16 @@ class EventRuntimeService {
       });
     }
     this.sessionCommands = ingress;
+  }
+
+  bindFSMControl(control: Pick<GovernedFSMTransitionService, 'inspect' | 'transition'>): void {
+    if (this.fsmControl && this.fsmControl !== control) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RESOURCE_CONFLICT',
+        message: 'Server FSM control service is already bound',
+      });
+    }
+    this.fsmControl = control;
   }
 
   enqueueStartRun(input: StartRunInput, idempotencyKey: string): Promise<SessionCommandRecord> {
@@ -1133,10 +1158,16 @@ class EventRuntimeService {
 
   async startRunWithId(input: StartRunInput, runId: string): Promise<EventRunHandle> {
     const domainPack = input.domainPack ?? this.defaultDomainPack;
-    const fsm = input.fsm ?? this.defaultFsm;
-    assertHarnessFSMProcessSpec(fsm);
+    const fsm =
+      input.fsm ??
+      (input.domainPack && !input.react && domainPack.workflows.length > 0
+        ? compileWorkflowToFSM(domainPack, { workflowId: input.workflowRef?.id })
+        : this.defaultFsm);
     if (input.react) {
+      assertHarnessFSMProcessSpec(fsm);
       validateStartReActRunInput(input.react);
+    } else {
+      validateFSMProcessSpec(fsm);
     }
     const runtimeSessionId = this.runtimeSessionId(input.userId, input.sessionId);
     await this.ensureSession(input.userId, input.sessionId, domainPack, input.metadata);
@@ -1208,7 +1239,10 @@ class EventRuntimeService {
       );
     }
     const initializedRun = await this.requireRun(runId);
-    if (initializedRun.snapshot.currentState === 'Idle') {
+    if (
+      isHarnessFSMProcessSpec(initializedRun.fsm) &&
+      initializedRun.snapshot.currentState === 'Idle'
+    ) {
       await this.transition(runId, 'RunInitialized', { reason: 'run-started' });
     }
     return { runId, sessionId: input.sessionId, runtimeSessionId };
@@ -3370,6 +3404,82 @@ class EventRuntimeService {
     return resolved;
   }
 
+  async inspectOwnedFSM(runId: string, ownerUserId: string): Promise<ManualFSMRunView> {
+    const control = this.requireFSMControl();
+    const context = await this.requireRun(runId);
+    if (context.userId !== ownerUserId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_ACCESS_DENIED',
+        message: 'Runtime Run belongs to another user',
+      });
+    }
+    return control.inspect(
+      {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+      },
+      context.fsm
+    );
+  }
+
+  async transitionOwnedFSM(input: {
+    runId: string;
+    ownerUserId: string;
+    principalId: string;
+    processId: string;
+    processVersion: string;
+    expectedState: string;
+    expectedRunRevision: number;
+    targetState: string;
+    reason: string;
+    guardContext?: {
+      input?: unknown;
+      variables?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    };
+    idempotencyKey: string;
+  }): Promise<ManualFSMTransitionResult> {
+    const control = this.requireFSMControl();
+    const context = await this.requireRun(input.runId);
+    if (context.userId !== input.ownerUserId || input.principalId !== context.userId) {
+      throw new FrameworkError({
+        code: 'RUNTIME_RUN_ACCESS_DENIED',
+        message: 'Only the Run owner can request a manual FSM transition',
+      });
+    }
+    const digest = hashCanonicalJson({
+      runId: input.runId,
+      principalId: input.principalId,
+      idempotencyKey: input.idempotencyKey,
+    }).slice('sha256:'.length);
+    return control.transition(context.fsm, {
+      commandId: `manual-fsm-transition:${digest}`,
+      scope: {
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+      },
+      principal: {
+        principalId: input.principalId,
+        type: 'user',
+        userId: input.principalId,
+        permissionScopes: ['runtime.fsm.transition'],
+      },
+      ownerId: this.humanWaitOwnerId,
+      leaseTtlMs: this.humanWaitLeaseTtlMs,
+      processId: input.processId,
+      processVersion: input.processVersion,
+      expectedState: input.expectedState,
+      expectedRunRevision: input.expectedRunRevision,
+      targetState: input.targetState,
+      reason: input.reason,
+      requestedAt: new Date().toISOString(),
+      ...(input.guardContext === undefined ? {} : { guardContext: input.guardContext }),
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+
   async recordCanonicalReActContinuationQuarantine(input: {
     runId: string;
     stepId: string;
@@ -4154,6 +4264,16 @@ class EventRuntimeService {
 
   listEvents(runId: string): Promise<FrameworkEvent[]> {
     return this.runtime.listEvents(runId);
+  }
+
+  private requireFSMControl(): Pick<GovernedFSMTransitionService, 'inspect' | 'transition'> {
+    if (!this.fsmControl) {
+      throw new FrameworkError({
+        code: 'RUNTIME_STATE_EXECUTION_UNAVAILABLE',
+        message: 'Canonical FSM control service is not bound',
+      });
+    }
+    return this.fsmControl;
   }
 
   private async ensureSession(

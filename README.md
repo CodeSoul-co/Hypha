@@ -166,6 +166,9 @@ npm ci
 cp .env.example .env
 ```
 
+Keep product configuration out of tracked templates. Set `HYPHA_CONFIG_PATH` to a user-owned YAML
+overlay; see [Upgrading](UPGRADING.md) for the conflict-free update layout.
+
 For a disposable local MongoDB and Redis environment, you may use containers:
 
 ```bash
@@ -228,6 +231,10 @@ The CLI stores its endpoint configuration and JWT under `~/.hypha` by default. S
 Domain Packs are the supported product-integration boundary. Product-specific tasks, prompts,
 workflows, rules, and capability selections belong in a Domain Pack or product application—not in
 `@hypha/core`, `@hypha/kernel`, or the generic Runtime.
+
+For an application that consumes a versioned npm release, including separate Prompt, Skill, Tool,
+policy, contract test, and HTTP Run submission, see the
+[`release-agent` example](examples/release-agent/README.md).
 
 ### 1. Declare the domain
 
@@ -321,6 +328,20 @@ startup, the trusted composition layer must:
 
 This explicit activation step prevents an unreviewed YAML file, Skill, Tool, or remote MCP catalog
 change from silently gaining runtime authority.
+
+### Custom FSM topology and owner control
+
+Workflow-only Runs may execute a validated application-owned `FSMProcessSpec`, including custom
+State ids, transitions, guards, retry/timeout declarations, and terminal states. ReAct Runs retain
+the framework-owned Harness FSM so a product graph cannot bypass reasoning, policy, activity,
+observation, verification, memory, or recovery phases.
+
+Use `analyzeFSMTopology()` from `@hypha/fsm` to inspect reachability, dead ends, and cycles. The
+Server exposes `GET /runtime/runs/:runId/fsm` and the governed
+`POST /runtime/runs/:runId/fsm/transitions` owner endpoint. Manual transitions require exact process
+identity, expected State and Run revision, an idempotency key, a reason, and any guard variables;
+the Runtime also enforces permission, Policy, Lease, fencing, terminal, Event, and replay rules.
+See [Custom FSM Topologies](docs/guides/custom-fsm.md).
 
 ### 4. Narrow capability at the workflow state
 
@@ -466,6 +487,9 @@ The default API prefix is `/api/v1`. Protected routes use
 
 See [`docs/api/http.md`](docs/api/http.md) for request and response contracts.
 
+Machine-readable OpenAPI 3.1 is served from `/api/v1/openapi.json` and
+`/api/v1/docs/openapi.json`. It is generated from the mounted Express route registry.
+
 ## Production deployment
 
 Before accepting traffic:
@@ -503,10 +527,16 @@ NODE_ENV=production npm start
 
 ## Workspace packages
 
+Framework libraries whose manifests set `private: false` are version-aligned public npm release
+artifacts. The root workspace, bundled Server, CLI, and any package marked private remain
+source/deployment surfaces. A manifest version is not proof that a package has already been
+published; registry publication is a maintainer release step. See
+[Releases and npm Packages](docs/guides/releases.md) and [Upgrading](UPGRADING.md).
+
 | Package                                       | Responsibility                                                                                |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `@hypha/core`                                 | Public specs, schemas, Events, policy, runtime, Artifact, Workspace, and Execution contracts. |
-| `@hypha/fsm`                                  | FSM specs, snapshots, transitions, guards, and recovery semantics.                            |
+| `@hypha/fsm`                                  | FSM specs, custom topology analysis, snapshots, transitions, guards, and recovery semantics.  |
 | `@hypha/kernel`                               | Governed ReAct and FSM coordination.                                                          |
 | `@hypha/harness`                              | Bounded execution, tracing, recovery, continuation, and side-effect hooks.                    |
 | `@hypha/domain`                               | DomainPack loading, validation, overlays, registry, and compilation.                          |

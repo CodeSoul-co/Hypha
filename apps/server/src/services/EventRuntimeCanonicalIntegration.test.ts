@@ -2,6 +2,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { InMemoryEventStore, stableRecoveryHash, type RecoveryFailure } from '@hypha/core';
+import { GovernedFSMTransitionService } from '@hypha/harness';
+import type { FSMProcessSpec } from '@hypha/fsm';
 import { reActContinuationScopeHash, type ReActStep } from '@hypha/kernel';
 import { ServerCanonicalRuntime } from '../runtime/ServerCanonicalRuntime';
 import { destroyEventRuntime, initializeEventRuntime } from './EventRuntime';
@@ -13,6 +15,93 @@ describe('Server EventRuntime canonical integration', () => {
     await destroyEventRuntime();
     await canonicalRuntime?.close();
     canonicalRuntime = undefined;
+  });
+
+  it('starts a custom topology at its declared initial State and supports governed owner transitions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-custom-fsm-integration-'));
+    canonicalRuntime = new ServerCanonicalRuntime({
+      filename: path.join(root, 'runtime.sqlite'),
+      legacyEvents: new InMemoryEventStore(),
+      auditLimits: {
+        pageSize: 25,
+        pageMaxBytes: 1024 * 1024,
+        maxEvents: 100,
+        maxBytes: 4 * 1024 * 1024,
+        maxDurationMs: 5_000,
+      },
+    });
+    const canonical = await canonicalRuntime.initialize();
+    const runtime = initializeEventRuntime({
+      events: canonical.events,
+      eventDbPath: path.join(root, 'runtime.sqlite'),
+      humanWaits: canonical.humanWaits,
+    });
+    runtime.bindFSMControl(
+      new GovernedFSMTransitionService({
+        events: canonical.backbone.events,
+        projections: canonical.backbone.projections,
+        projectionStore: canonical.backbone.projectionStore,
+        runLeases: canonical.backbone.runLeases,
+      })
+    );
+    const fsm: FSMProcessSpec = {
+      id: 'domain.release.fsm',
+      version: '1.0.0',
+      initialState: 'Draft',
+      states: [
+        { id: 'Draft', kind: 'domain' },
+        { id: 'Review', kind: 'domain' },
+        { id: 'Released', kind: 'completed' },
+      ],
+      transitions: [
+        { from: 'Draft', to: 'Review' },
+        { from: 'Review', to: 'Released' },
+      ],
+      terminalStates: ['Released'],
+    };
+    const started = await runtime.startRun({
+      userId: 'user.custom-fsm',
+      sessionId: 'session.custom-fsm',
+      fsm,
+    });
+
+    const initial = await runtime.inspectOwnedFSM(started.runId, 'user.custom-fsm');
+    expect(initial).toMatchObject({
+      processId: fsm.id,
+      currentState: 'Draft',
+      statePath: ['Draft'],
+      allowedTransitions: [{ to: 'Review' }],
+    });
+    const transitioned = await runtime.transitionOwnedFSM({
+      runId: started.runId,
+      ownerUserId: 'user.custom-fsm',
+      principalId: 'user.custom-fsm',
+      processId: fsm.id,
+      processVersion: fsm.version,
+      expectedState: 'Draft',
+      expectedRunRevision: initial.runRevision,
+      targetState: 'Review',
+      reason: 'Move the release candidate into review.',
+      idempotencyKey: 'custom-fsm-review',
+    });
+    expect(transitioned).toMatchObject({
+      disposition: 'applied',
+      view: { currentState: 'Review', statePath: ['Draft', 'Review'] },
+    });
+    await expect(
+      runtime.transitionOwnedFSM({
+        runId: started.runId,
+        ownerUserId: 'another-user',
+        principalId: 'another-user',
+        processId: fsm.id,
+        processVersion: fsm.version,
+        expectedState: 'Review',
+        expectedRunRevision: transitioned.runRevision,
+        targetState: 'Released',
+        reason: 'Attempt an unauthorized release.',
+        idempotencyKey: 'unauthorized-release',
+      })
+    ).rejects.toMatchObject({ code: 'RUNTIME_RUN_ACCESS_DENIED' });
   });
 
   it('writes canonical Runtime facts to the audited store and keeps module observations legacy', async () => {
