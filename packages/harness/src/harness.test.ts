@@ -948,16 +948,14 @@ describe('@hypha/harness contracts', () => {
     });
 
     expect(result.react).toMatchObject({
-      status: 'completed',
-      output: {
-        toolId: 'tool.danger',
-        status: 'denied',
-        error: expect.objectContaining({
-          code: 'TOOL_POLICY_DENIED',
-          message: expect.stringContaining('requires an explicit policy override'),
-        }),
-      },
+      status: 'failed',
+      error: expect.objectContaining({
+        message: expect.stringContaining('requires an explicit policy override'),
+      }),
+      finalAction: { type: 'model' },
     });
+    expect(result.run.status).toBe('failed');
+    expect(result.fsmSnapshot.currentState).toBe('Failed');
     expect(result.events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['skill.completed', 'react.step.completed'])
     );
@@ -1025,14 +1023,14 @@ describe('@hypha/harness contracts', () => {
 
     expect(handlerCalls).toBe(0);
     expect(result.react).toMatchObject({
-      status: 'completed',
-      output: {
-        toolId: 'tool.scoped',
-        invocationId: 'run_scoped_tool:react:tool:tool.scoped:1',
-        status: 'denied',
-        error: { code: 'TOOL_NOT_ALLOWED_IN_SCOPE' },
-      },
+      status: 'failed',
+      error: expect.objectContaining({
+        message: expect.stringContaining('not allowed in the current execution scope'),
+      }),
+      finalAction: { type: 'model' },
     });
+    expect(result.run.status).toBe('failed');
+    expect(result.fsmSnapshot.currentState).toBe('Failed');
     expect(await toolTrace.list()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
