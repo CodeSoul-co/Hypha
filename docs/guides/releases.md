@@ -14,13 +14,24 @@ framework package does not publish or operate a Server.
 - Node.js 22 or newer is required.
 - `npm run release:check:npm` builds package output, verifies declared source dependencies, checks
   package metadata, and validates the files that `npm pack` would include.
+- `npm run test:acceptance` runs only reproducible local infrastructure acceptance: Native Memory,
+  Docker, Postgres, and S3/MinIO.
+- Externally provisioned Memory providers and Remote Sandbox remain runtime-validated interfaces,
+  but their live acceptance is opt-in through `npm run test:acceptance:online` and user-supplied
+  environment variables from `.env.example`.
+- Docker daemon-restart recovery remains an explicitly coordinated operational check through
+  `npm run test:acceptance:manual`; it is not allowed to restart a maintainer workstation as a side
+  effect of the base release command.
 - A release is not public until the maintainer has published packages and created the matching Git
   tag and release notes. A version in `package.json` alone is not proof of registry availability.
 
 ## Maintainer publication
 
 Run publication only from the fully validated release commit after `dev-merge` has passed every
-release gate. First authenticate the authorized npm organization account and verify the scope:
+base release gate. Online-provider maintainers may additionally run `npm run test:acceptance:online`,
+and infrastructure operators may run `npm run test:acceptance:manual` when those environments are
+available. Both commands fail closed when their required parameters are absent. First authenticate
+the authorized npm organization account and verify the scope:
 
 ```bash
 npm whoami
