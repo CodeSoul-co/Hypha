@@ -40,6 +40,9 @@ temp/
 # Local runtime data, storage records, and data-scoped logs
 data/
 
+# Product-owned configuration overlays kept inside a source checkout
+.hypha/
+
 # Redis dump
 dump.rdb
 

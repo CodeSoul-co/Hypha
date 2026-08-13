@@ -132,6 +132,75 @@ describe('durable Runtime Session Commands', () => {
     expect(response.status).toBe(204);
     expect(response.headers['access-control-allow-headers']).toContain('Idempotency-Key');
   });
+
+  it('starts and manually advances a custom FSM through governed HTTP control', async () => {
+    const sessionId = `custom-fsm-${Date.now()}`;
+    const process = {
+      id: 'integration.release-approval',
+      version: '1.0.0',
+      initialState: 'Draft',
+      states: [
+        { id: 'Draft', kind: 'domain' },
+        { id: 'Review', kind: 'domain' },
+        { id: 'Released', kind: 'completed' },
+      ],
+      transitions: [
+        { from: 'Draft', to: 'Review' },
+        { from: 'Review', to: 'Released' },
+      ],
+      terminalStates: ['Released'],
+    };
+    const accepted = await request(app)
+      .post(`/api/v1/runtime/sessions/${sessionId}/commands/start-run`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', `start-custom-fsm-${Date.now()}`)
+      .send({ fsm: process, input: { candidate: '1.0.0' } });
+
+    expect(accepted.status).toBe(202);
+    let appliedCommand: { status?: string; resultRunId?: string } | undefined;
+    for (let attempt = 0; attempt < 120 && !appliedCommand?.resultRunId; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const listed = await request(app)
+        .get(`/api/v1/runtime/sessions/${sessionId}/commands`)
+        .set('Authorization', `Bearer ${devToken}`);
+      expect(listed.status).toBe(200);
+      appliedCommand = listed.body.data?.find(
+        (command: { id: string; status: string }) =>
+          command.id === accepted.body.data.id && command.status === 'applied'
+      );
+    }
+    expect(appliedCommand).toMatchObject({ status: 'applied', resultRunId: expect.any(String) });
+    const runId = appliedCommand!.resultRunId!;
+
+    const before = await request(app)
+      .get(`/api/v1/runtime/runs/${runId}/fsm`)
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(before.status).toBe(200);
+    expect(before.body.data).toMatchObject({
+      processId: process.id,
+      processVersion: process.version,
+      currentState: 'Draft',
+      allowedTransitions: [{ to: 'Review' }],
+    });
+
+    const transitioned = await request(app)
+      .post(`/api/v1/runtime/runs/${runId}/fsm/transitions`)
+      .set('Authorization', `Bearer ${devToken}`)
+      .set('Idempotency-Key', `advance-custom-fsm-${Date.now()}`)
+      .send({
+        processId: process.id,
+        processVersion: process.version,
+        expectedState: 'Draft',
+        expectedRunRevision: before.body.data.runRevision,
+        targetState: 'Review',
+        reason: 'Integration owner requested review.',
+      });
+    expect(transitioned.status).toBe(200);
+    expect(transitioned.body.data).toMatchObject({
+      disposition: 'applied',
+      view: { currentState: 'Review', statePath: ['Draft', 'Review'] },
+    });
+  });
 });
 
 describe('GET /api/v1/status', () => {

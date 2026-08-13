@@ -81,6 +81,9 @@ npm ci
 cp .env.example .env
 ```
 
+产品配置不要直接写入 Git 跟踪的模板。通过 `HYPHA_CONFIG_PATH` 指向用户所有的 YAML Overlay；
+无冲突更新目录结构参见[升级指南](UPGRADING.md)。
+
 如果只需要临时本地环境，可以使用容器启动 MongoDB 与 Redis：
 
 ```bash
@@ -141,6 +144,9 @@ CLI 默认将 Endpoint 配置与 JWT 保存到 `~/.hypha`。可通过 `HYPHA_BAS
 
 DomainPack 是框架支持的产品集成边界。产品特定的 Task、Prompt、Workflow、Rule 与 Capability
 选择应放在 DomainPack 或产品应用中，而不是写入 `@hypha/core`、`@hypha/kernel` 或通用 Runtime。
+
+如果应用通过版本化 npm release 使用 Hypha，并需要独立的 Prompt、Skill、Tool、Policy、契约测试与
+HTTP Run 提交示例，请参见 [`release-agent` 示例](examples/release-agent/README.md)。
 
 ### 1. 声明 Domain
 
@@ -231,6 +237,20 @@ DomainPack 文件不会因为存在于磁盘上就自动获得执行权限。应
    Event 与持久 Checkpoint 派生状态。
 
 显式激活可以防止未经审核的 YAML、Skill、Tool 或 Remote MCP Catalog 变化静默获得运行权限。
+
+### 自定义 FSM 拓扑与所有者控制
+
+不包含 ReAct 的 Workflow Run 可以执行经过校验的应用自有 `FSMProcessSpec`，包括自定义 State
+ID、Transition、Guard、Retry/Timeout 声明与 Terminal State。ReAct Run 继续使用框架固定的
+Harness FSM，避免产品拓扑绕过 Reasoning、Policy、Activity、Observation、Verification、Memory
+或 Recovery 阶段。
+
+可以使用 `@hypha/fsm` 的 `analyzeFSMTopology()` 检查可达、不可达、非终态死路与循环 State。
+Server 提供 `GET /runtime/runs/:runId/fsm` 和受治理的所有者接口
+`POST /runtime/runs/:runId/fsm/transitions`。人工 Transition 必须携带精确 Process 身份、期望
+State、Run Revision、幂等键、原因和可选 Guard Variables；Runtime 还会执行权限、Policy、
+Lease、Fencing、Terminal、Event 与 Replay 校验。完整用法参见
+[`自定义 FSM 拓扑`](docs/guides/custom-fsm.md)。
 
 ### 4. 在 Workflow State 收窄 Capability
 
@@ -360,6 +380,9 @@ Policy、伪造 Receipt 或推进 FSM。
 
 请求与响应契约参见 [`docs/api/http.md`](docs/api/http.md)。
 
+由已挂载 Express Router 自动生成的 OpenAPI 3.1 位于 `/api/v1/openapi.json` 与
+`/api/v1/docs/openapi.json`。
+
 ## 生产部署
 
 接入生产流量之前：
@@ -393,10 +416,16 @@ NODE_ENV=production npm start
 
 ## Workspace Package
 
+Manifest 中设置了 `private: false` 的 Framework Library 是版本对齐、可公开发布的 `@hypha/*` npm
+release artifact；根 Workspace、内置 Server、CLI 及所有标记为 private 的 Package 仍是源码/部署
+Surface。`package.json` 中出现版本号不表示该版本已经上传 npm Registry，实际发布仍由 Maintainer
+在 Release Gate 全部通过后执行。参见 [Release 与 npm Package](docs/guides/releases.md)及
+[升级指南](UPGRADING.md)。
+
 | Package                                       | 职责                                                                                   |
 | --------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `@hypha/core`                                 | 公共 Spec、Schema、Event、Policy、Runtime、Artifact、Workspace 与 Execution Contract。 |
-| `@hypha/fsm`                                  | FSM Spec、Snapshot、Transition、Guard 与 Recovery Semantics。                          |
+| `@hypha/fsm`                                  | FSM Spec、自定义拓扑分析、Snapshot、Transition、Guard 与 Recovery Semantics。          |
 | `@hypha/kernel`                               | 受治理的 ReAct 与 FSM Coordination。                                                   |
 | `@hypha/harness`                              | 有界执行、Tracing、Recovery、Continuation 与 Side-effect Hook。                        |
 | `@hypha/domain`                               | DomainPack Loading、Validation、Overlay、Registry 与 Compilation。                     |

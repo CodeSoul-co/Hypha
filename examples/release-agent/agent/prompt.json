@@ -1,0 +1,10 @@
+{
+  "id": "prompt.release-research",
+  "version": "1.0.0",
+  "name": "Release research prompt",
+  "role": "system",
+  "template": "Answer the research question using bounded evidence. Never invent a source. Return JSON with answer and sources.",
+  "variables": [],
+  "stable": true,
+  "cacheable": true
+}
