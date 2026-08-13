@@ -1,0 +1,126 @@
+id: domain.release-research
+version: 1.0.0
+name: Release Research Agent
+description: A read-only research Agent built outside the Hypha framework repository.
+taskSchemas:
+  - id: task.research
+    version: 1.0.0
+    taskType: research_question
+    inputSchema:
+      type: object
+      required: [question]
+      properties:
+        question: { type: string }
+      additionalProperties: false
+    outputContractRef: output.research
+    defaultWorkflowRef: workflow.research
+    defaultSkillRefs:
+      - { id: skill.release-research, version: 1.0.0 }
+outputContracts:
+  - id: output.research
+    version: 1.0.0
+    schema:
+      type: object
+      required: [answer, sources]
+      properties:
+        answer: { type: string }
+        sources:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+workflows:
+  - id: workflow.research
+    version: 1.0.0
+    initialState: Research
+    terminalStates: [Completed, Failed]
+    states:
+      - id: Research
+        goal: Collect bounded evidence and synthesize an answer.
+        allowedTools: [search]
+        allowedSkills: [skill.release-research]
+        requiredSkills: [skill.release-research]
+        reasoningProfileRef: reasoning.release
+        policyRefs: [policy.readonly]
+        evaluationRefs: [eval.research-output]
+        timeoutPolicy: { timeoutMs: 30000, onTimeout: fail }
+        retryPolicy: { maxAttempts: 2 }
+      - id: Completed
+        goal: Return an answer and source list matching the output contract.
+      - id: Failed
+        goal: Record a terminal failure without fabricating sources.
+    transitions:
+      - { from: Research, to: Completed }
+      - { from: Research, to: Failed }
+defaultWorkflow: workflow.research
+allowedSkills:
+  - { id: skill.release-research, version: 1.0.0 }
+defaultSkills:
+  - { id: skill.release-research, version: 1.0.0 }
+skillPolicies:
+  - id: skill-policy.release-research
+    version: 1.0.0
+    skillRef: { id: skill.release-research, version: 1.0.0 }
+    policyRefs: [policy.readonly]
+    allowedTools: [search]
+    trustLevel: reviewed
+tools:
+  - id: search
+    version: 1.0.0
+    description: Search public references through the Server's governed search adapter.
+    inputSchema:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string }
+      additionalProperties: false
+    sideEffectLevel: read
+    source: local
+memoryProfiles:
+  - id: memory.release
+    version: 1.0.0
+    providers:
+      - id: structured
+        type: structured
+        providerRef: storage.sqlite.local
+    memoryTypes: [working, episodic]
+    structuredStoreRef: storage.sqlite.local
+    provenancePolicy: required
+    retrievalPolicy:
+      defaultTopK: 5
+      requireScope: true
+    writePolicyConfig:
+      allowLongTerm: false
+      requireProvenance: true
+reasoningProfiles:
+  - id: reasoning.release
+    version: 1.0.0
+    thinkingMode: structured
+    agenticMode: fsm_react
+    maxSteps: 8
+    persist: summary_only
+defaultReasoningProfile: reasoning.release
+policies:
+  - id: policy.readonly
+    version: 1.0.0
+    defaultEffect: deny
+    rules:
+      - id: allow-read
+        version: 1.0.0
+        effect: allow
+        sideEffectLevels: [none, read]
+evaluationProfiles:
+  - id: eval.research-output
+    version: 1.0.0
+    type: output_contract
+    deterministic: true
+regressionCases:
+  - id: regression.release-research
+    version: 1.0.0
+    fixtureRefs:
+      - { id: fixture.release-research, version: 1.0.0 }
+    requiredChecks: [event_types, state_path, output_contract]
+deploymentProfile:
+  id: deployment.release
+  version: 1.0.0
+  mode: local
+  runtimeMode: single-user

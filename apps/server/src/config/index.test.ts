@@ -10,6 +10,9 @@ import {
   toolResultCacheConfig,
   workCacheConfig,
 } from './index';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const trackedEnv = [
   'MONGODB_URI',
@@ -67,6 +70,12 @@ const trackedEnv = [
   'NODE_ENV',
   'JWT_SECRET',
   'HYPHA_OWNER_PASSWORD',
+  'HYPHA_CONFIG_PATH',
+  'HYPHA_AGENT_CONFIG_PATH',
+  'HYPHA_TOOL_CONFIG_PATH',
+  'HYPHA_WORKFLOW_PATH',
+  'HYPHA_PROMPT_TEMPLATES_PATH',
+  'HYPHA_PROMPT_REGISTRY_PATH',
 ] as const;
 
 describe('configuration storage taxonomy', () => {
@@ -108,6 +117,47 @@ describe('configuration storage taxonomy', () => {
     expect(config.logging.outputs?.[1]?.path).toBe('./data/logs/test-system.log');
     expect(dbConfig().host).toBe('mongo.local');
     expect(redisConfig().host).toBe('redis.local');
+  });
+
+  it('loads an ignored user overlay and external resource paths without editing tracked config', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-user-config-'));
+    const userConfigPath = path.join(tempDir, 'hypha.yaml');
+    fs.writeFileSync(
+      userConfigPath,
+      [
+        'app:',
+        '  name: user-agent',
+        'workflows:',
+        '  configPath: ./workflow-definitions',
+        '  autoReload: false',
+        '',
+      ].join('\n')
+    );
+    process.env.HYPHA_CONFIG_PATH = userConfigPath;
+    process.env.HYPHA_AGENT_CONFIG_PATH = path.join(tempDir, 'agents.yaml');
+    process.env.HYPHA_TOOL_CONFIG_PATH = path.join(tempDir, 'tools.yaml');
+    process.env.HYPHA_PROMPT_TEMPLATES_PATH = path.join(tempDir, 'prompts');
+    process.env.HYPHA_PROMPT_REGISTRY_PATH = path.join(tempDir, 'prompt-registry.json');
+
+    const config = reloadConfig();
+
+    expect(config.app.name).toBe('user-agent');
+    expect(config.workflows).toEqual({
+      configPath: path.join(tempDir, 'workflow-definitions'),
+      autoReload: false,
+    });
+    expect(config.agents.configPath).toBe(path.join(tempDir, 'agents.yaml'));
+    expect(config.tools.configPath).toBe(path.join(tempDir, 'tools.yaml'));
+    expect(config.prompts.templatesPath).toBe(path.join(tempDir, 'prompts'));
+    expect(config.prompts.registryPath).toBe(path.join(tempDir, 'prompt-registry.json'));
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('fails closed when an explicitly configured user overlay is missing', () => {
+    process.env.HYPHA_CONFIG_PATH = path.join(os.tmpdir(), 'hypha-overlay-does-not-exist.yaml');
+
+    expect(() => reloadConfig()).toThrow('HYPHA_CONFIG_PATH does not exist');
   });
 
   it('normalizes empty connection URLs while preserving local startup defaults', () => {

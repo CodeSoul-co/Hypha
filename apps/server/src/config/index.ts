@@ -963,6 +963,22 @@ function loadYamlConfig(configPath: string): any {
   }
 }
 
+function loadUserYamlConfig(configPath: string): Record<string, unknown> {
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`HYPHA_CONFIG_PATH does not exist: ${configPath}`);
+  }
+  try {
+    const parsed = yaml.load(fs.readFileSync(configPath, 'utf-8')) ?? {};
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('the document root must be a YAML mapping');
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    logger.error(`Failed to load user configuration from ${configPath}:`, error);
+    throw new Error(`Invalid HYPHA_CONFIG_PATH: ${configPath}`);
+  }
+}
+
 // Merge configs
 function mergeConfigs(...configs: any[]): any {
   return configs.reduce((acc, config) => {
@@ -980,11 +996,26 @@ function mergeConfigs(...configs: any[]): any {
 
 // Load and validate configuration
 function loadConfig(): Config {
-  const configPath = path.resolve(process.cwd(), 'config.yaml');
-  const yamlConfig = loadYamlConfig(configPath);
+  const defaultConfigPath = path.resolve(process.cwd(), 'config.yaml');
+  const configuredPath = process.env.HYPHA_CONFIG_PATH?.trim();
+  const userConfigPath = configuredPath ? path.resolve(process.cwd(), configuredPath) : undefined;
+  const userConfig = userConfigPath
+    ? resolveUserConfigPaths(loadUserYamlConfig(userConfigPath), path.dirname(userConfigPath))
+    : {};
+  const yamlConfig = mergeConfigs(
+    loadYamlConfig(defaultConfigPath),
+    userConfigPath && userConfigPath !== defaultConfigPath ? userConfig : {}
+  );
 
   const mergedConfig = mergeConfigs(yamlConfig, {
     app: { env: process.env.NODE_ENV || 'development' },
+    agents: optionalPathOverride('HYPHA_AGENT_CONFIG_PATH', 'configPath'),
+    tools: optionalPathOverride('HYPHA_TOOL_CONFIG_PATH', 'configPath'),
+    workflows: optionalPathOverride('HYPHA_WORKFLOW_PATH', 'configPath'),
+    prompts: {
+      ...optionalPathOverride('HYPHA_PROMPT_TEMPLATES_PATH', 'templatesPath'),
+      ...optionalPathOverride('HYPHA_PROMPT_REGISTRY_PATH', 'registryPath'),
+    },
   });
 
   const resolvedConfig = resolveEnvVariables(mergedConfig);
@@ -995,6 +1026,31 @@ function loadConfig(): Config {
     logger.error('Configuration validation failed:', error);
     throw new Error('Invalid configuration');
   }
+}
+
+function resolveUserConfigPaths(config: any, baseDirectory: string): any {
+  const resolveField = (owner: any, field: string): void => {
+    if (typeof owner?.[field] === 'string' && owner[field].trim()) {
+      owner[field] = path.resolve(baseDirectory, owner[field]);
+    }
+  };
+  resolveField(config.agents, 'configPath');
+  resolveField(config.tools, 'configPath');
+  resolveField(config.workflows, 'configPath');
+  resolveField(config.prompts, 'templatesPath');
+  resolveField(config.prompts, 'registryPath');
+  resolveField(config.skills, 'configPath');
+  if (Array.isArray(config.skills?.dirs)) {
+    config.skills.dirs = config.skills.dirs.map((entry: unknown) =>
+      typeof entry === 'string' ? path.resolve(baseDirectory, entry) : entry
+    );
+  }
+  return config;
+}
+
+function optionalPathOverride(envName: string, field: string): Record<string, string> {
+  const value = process.env[envName]?.trim();
+  return value ? { [field]: value } : {};
 }
 
 // Singleton config instance

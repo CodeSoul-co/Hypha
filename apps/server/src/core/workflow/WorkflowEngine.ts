@@ -10,6 +10,7 @@ import {
 import { normalizeWorkflowExecutionContext } from './context';
 import { getEventRuntime } from '../../services/EventRuntime';
 import { logger } from '../../utils/logger';
+import { getConfig } from '../../config';
 
 export class WorkflowEngine implements IWorkflowEngine {
   private workflows: Map<string, WorkflowDefinition> = new Map();
@@ -18,8 +19,9 @@ export class WorkflowEngine implements IWorkflowEngine {
   private reloadInterval: NodeJS.Timeout | null = null;
 
   constructor(workflowDir?: string, autoReload?: boolean) {
-    this.workflowDir = workflowDir || path.resolve(process.cwd(), 'configs/workflows');
-    this.autoReload = autoReload ?? true;
+    const config = getConfig().workflows;
+    this.workflowDir = path.resolve(process.cwd(), workflowDir || config.configPath);
+    this.autoReload = autoReload ?? config.autoReload;
   }
 
   async initialize(): Promise<void> {

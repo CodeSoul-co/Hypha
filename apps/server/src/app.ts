@@ -45,6 +45,7 @@ import { ServerProductionReActExecution } from './runtime/ServerProductionReActE
 import { ServerReActContinuationReconciler } from './runtime/ServerReActContinuationReconciler';
 import { ServerReActContinuationReconciliationScheduler } from './runtime/ServerReActContinuationReconciliationScheduler';
 import { LocalFilesystemExecutionArtifactStore } from '@hypha/adapters-local';
+import { GovernedFSMTransitionService } from '@hypha/harness';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 import {
   bindServerRuntimeReadiness,
@@ -219,6 +220,14 @@ class Application {
       autoRecoverReasons: workers.autoRecoverReasons,
     });
     const composition = runtime.composeRuntime(production.execution);
+    getEventRuntime().bindFSMControl(
+      new GovernedFSMTransitionService({
+        events: composition.events,
+        projections: composition.projections,
+        projectionStore: composition.projectionStore,
+        runLeases: composition.runLeases,
+      })
+    );
     const commandArtifacts = new LocalFilesystemExecutionArtifactStore({
       id: 'artifact-store.local-filesystem.session-commands',
       rootPath: workers.commandArtifactRoot,
