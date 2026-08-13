@@ -20,7 +20,7 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@hypha/core": "1.0.0",
     "@hypha/fsm": "1.0.0",
