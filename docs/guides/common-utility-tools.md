@@ -69,7 +69,7 @@ protocol outside agent context.
 
 ## Registration and Governance
 
-The contracts and pure executors are exported from `@codesoul-co/tools`:
+The contracts and pure executors are exported from `@codesoul-co/hypha-tools`:
 
 ```ts
 import {
@@ -77,7 +77,7 @@ import {
   executeHashUtility,
   executeJsonUtility,
   executeTextUtility,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 ```
 
 The server registers them through `ToolManager` and exposes them through the same governed Tool

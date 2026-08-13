@@ -8,7 +8,7 @@ import {
   type RecoveryKnowledge,
   type RecoveryKnowledgeKey,
   type RecoveryKnowledgePort,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { hashStableJson } from './key';
 import type { CacheBlock, RecoveryKnowledgeBlockValue, WorkCacheStore } from './types';
 

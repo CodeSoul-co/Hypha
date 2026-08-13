@@ -1,4 +1,4 @@
-import type { CommandOutputChunk, ExecutionPrincipal } from '@codesoul-co/core';
+import type { CommandOutputChunk, ExecutionPrincipal } from '@codesoul-co/hypha-core';
 import { describe, expect, it } from 'vitest';
 import { LocalProcessOutputStreamRegistry } from './local-process-output-stream-registry';
 

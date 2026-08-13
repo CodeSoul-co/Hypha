@@ -4,7 +4,7 @@ import {
   type FSMAnomaly,
   type FSMAnomalySource,
   type FSMRecoveryDecision,
-} from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-fsm';
 
 export interface FSMRecoveryAttemptContext {
   attempt: number;

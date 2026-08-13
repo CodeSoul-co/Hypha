@@ -1,10 +1,10 @@
-import { FrameworkError, type NormalizedRuntimeError, type RuntimeJsonValue } from '@codesoul-co/core';
+import { FrameworkError, type NormalizedRuntimeError, type RuntimeJsonValue } from '@codesoul-co/hypha-core';
 import {
   applyTransitionWithRuntimePolicy,
   type FSMGuardContext,
   type FSMSnapshot,
-} from '@codesoul-co/fsm';
-import type { BoundedStateExecutionDecision, BoundedStateExecutorInput } from '@codesoul-co/harness';
+} from '@codesoul-co/hypha-fsm';
+import type { BoundedStateExecutionDecision, BoundedStateExecutorInput } from '@codesoul-co/hypha-harness';
 
 export interface RuntimeTransitionCommand {
   id: string;

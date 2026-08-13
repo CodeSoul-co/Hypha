@@ -1,12 +1,12 @@
 # Changelog
 
-Hypha follows Semantic Versioning for public `@codesoul-co/*` packages and the versioned HTTP API.
+Hypha follows Semantic Versioning for public `@codesoul-co/hypha-*` packages and the versioned HTTP API.
 
 ## Unreleased
 
 ### Added
 
-- Publish-ready `@codesoul-co/*` package manifests with explicit runtime dependencies, exports, Node.js
+- Publish-ready `@codesoul-co/hypha-*` package manifests with explicit runtime dependencies, exports, Node.js
   compatibility, and npm tarball validation.
 - External user configuration overlays through `HYPHA_CONFIG_PATH`, plus independent Agent, Tool,
   Workflow, Prompt template, and Prompt registry paths.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ArtifactPutRequest } from '@codesoul-co/core';
+import type { ArtifactPutRequest } from '@codesoul-co/hypha-core';
 import { hashArtifactBytes, readArtifactStream } from './artifact-content-io';
 import {
   ArtifactStoreAdapterError,

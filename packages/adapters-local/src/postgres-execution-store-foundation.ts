@@ -14,7 +14,7 @@ import type {
   ExecutionRecordQuery,
   ExecutionStore,
   ProviderHealth,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   validateExecutionIdempotencyQuery,
   validateExecutionIdempotencyResolution,
@@ -25,7 +25,7 @@ import {
   validateExecutionRecordCompareAndSetRequest,
   validateExecutionRecordCreateRequest,
   validateExecutionRecordQuery,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   PostgresExecutionStoreConnectionError,
   type PostgresExecutionStorePoolClient,

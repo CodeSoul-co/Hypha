@@ -2,11 +2,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { InMemoryEventStore } from '@codesoul-co/core';
-import { GovernedToolRunner, ToolRegistry } from '@codesoul-co/tools';
+import { InMemoryEventStore } from '@codesoul-co/hypha-core';
+import { GovernedToolRunner, ToolRegistry } from '@codesoul-co/hypha-tools';
 import { FileToolRuntimeStore } from './index';
 
-describe('@codesoul-co/adapters-local FileToolRuntimeStore', () => {
+describe('@codesoul-co/hypha-adapters-local FileToolRuntimeStore', () => {
   it('persists approval and resumes the original invocation after a runtime restart', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-tool-runtime-'));
     const filename = path.join(root, 'tool-runtime.json');

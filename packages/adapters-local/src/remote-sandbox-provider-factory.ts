@@ -1,4 +1,4 @@
-import type { SandboxProvider, SandboxProviderFactory } from '@codesoul-co/core';
+import type { SandboxProvider, SandboxProviderFactory } from '@codesoul-co/hypha-core';
 import {
   RemoteSandboxHttpTransport,
   type RemoteSandboxHttpTransportOptions,

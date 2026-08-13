@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
-import { LocalWorkspaceRuntime } from '@codesoul-co/adapters-local';
+import { LocalWorkspaceRuntime } from '@codesoul-co/hypha-adapters-local';
 import FilesystemTool, { type FilesystemToolConfig } from './FilesystemTool';
 
 describe('FilesystemTool', () => {

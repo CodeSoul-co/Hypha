@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { runLeaseGuard, type RunLeaseAcquireRequest, type RunLeaseScope } from '@codesoul-co/core';
+import { runLeaseGuard, type RunLeaseAcquireRequest, type RunLeaseScope } from '@codesoul-co/hypha-core';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

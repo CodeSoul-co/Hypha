@@ -3,7 +3,7 @@ import type {
   WorkspaceRuntimeConfig,
   WorkspaceRuntimePort,
   WorkspaceRuntimeRequest,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 import { BaseTool } from '../types';
 import type { ToolDefinition, ToolGovernanceSpec, ToolParams } from '../types';
 

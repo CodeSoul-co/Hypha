@@ -3,7 +3,7 @@ import {
   runtimeHumanTaskResolutionEventId,
   type FrameworkEvent,
   type RuntimeHumanTask,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface HumanTask extends RuntimeHumanTask {
   taskKind: string;

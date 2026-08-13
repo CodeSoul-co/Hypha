@@ -5,8 +5,8 @@ import {
   validateContinueReActCommandPayload,
   type ContinueReActCommandPayloadV1,
   type SessionCommandHandlerResult,
-} from '@codesoul-co/core';
-import { InMemoryExecutionArtifactStore } from '@codesoul-co/adapters-local';
+} from '@codesoul-co/hypha-core';
+import { InMemoryExecutionArtifactStore } from '@codesoul-co/hypha-adapters-local';
 import {
   createServerReActContinuationCommandIngress,
   ServerSessionCommandRuntime,

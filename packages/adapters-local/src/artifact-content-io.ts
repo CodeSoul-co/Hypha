@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ArtifactByteSource } from '@codesoul-co/core';
+import type { ArtifactByteSource } from '@codesoul-co/hypha-core';
 
 export interface CollectedArtifactContent {
   bytes: Uint8Array;

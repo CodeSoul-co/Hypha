@@ -8,7 +8,7 @@ import {
   artifactProfileSpecExample,
   artifactRecordExample,
   type StoredArtifactRecord,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { SQLiteArtifactRecordRepository } from './sqlite-artifact-record-repository';
 
 const temporaryRoots: string[] = [];

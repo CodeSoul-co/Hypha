@@ -12,7 +12,7 @@ import {
   type PersistedFrameworkEvent,
   type RunLeaseStore,
   type TraceRecorder,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface DurableEventStoreBridgeCoordination {
   runLeases: RunLeaseStore;

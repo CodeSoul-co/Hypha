@@ -10,7 +10,7 @@ import {
   type MemoryLifecycleWorkerType,
   type MemoryServerMigrationRehearsalCheckpoint,
   type MemoryServerMigrationRehearsalCheckpointStore,
-} from '@codesoul-co/memory';
+} from '@codesoul-co/hypha-memory';
 import { getMongoConnection } from './database';
 import {
   getServerMemoryComposition,

@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import type { SandboxProvider, SandboxProviderFactory } from '@codesoul-co/core';
+import type { SandboxProvider, SandboxProviderFactory } from '@codesoul-co/hypha-core';
 import {
   LocalProcessExecutionProvider,
   type LocalProcessExecutionProviderOptions,

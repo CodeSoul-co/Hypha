@@ -2,7 +2,7 @@ import {
   validateExecutionCacheRecord,
   type ExecutionCacheRecord,
   type ExecutionCacheStore,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface RedisLikeExecutionCacheClient {
   get(key: string): Promise<string | null>;

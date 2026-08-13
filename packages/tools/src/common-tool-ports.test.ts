@@ -8,7 +8,7 @@ import {
   type ToolCallContext,
 } from './index';
 
-describe('@codesoul-co/tools port-backed common tools', () => {
+describe('@codesoul-co/hypha-tools port-backed common tools', () => {
   it('publishes strict governed contracts for external and stateful families', () => {
     expect(commonPortToolSpecs.map((spec) => validateToolSpec(spec).id)).toEqual([
       'common.files',

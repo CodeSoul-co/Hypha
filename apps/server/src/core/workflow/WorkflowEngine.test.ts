@@ -1,5 +1,5 @@
-import { validateDomainPackSpec } from '@codesoul-co/domain';
-import { assertHarnessFSMProcessSpec } from '@codesoul-co/fsm';
+import { validateDomainPackSpec } from '@codesoul-co/hypha-domain';
+import { assertHarnessFSMProcessSpec } from '@codesoul-co/hypha-fsm';
 import { getEventRuntime } from '../../services/EventRuntime';
 import { normalizeWorkflowExecutionContext } from './context';
 import { WorkflowEngine } from './WorkflowEngine';

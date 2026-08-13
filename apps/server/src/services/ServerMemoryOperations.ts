@@ -5,7 +5,7 @@ import type {
   MemoryApplicationService,
   MemoryContractSpecRef,
   MemoryPrincipal,
-} from '@codesoul-co/memory';
+} from '@codesoul-co/hypha-memory';
 import type { TempMessage } from '../core/llm/types';
 import type {
   ListConversationsOptions,

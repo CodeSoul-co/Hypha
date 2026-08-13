@@ -1,4 +1,4 @@
-import { executionRecordCreateRequestExample } from '@codesoul-co/core';
+import { executionRecordCreateRequestExample } from '@codesoul-co/hypha-core';
 import { describe, expect, it } from 'vitest';
 import {
   nextPostgresExecutionListCursor,

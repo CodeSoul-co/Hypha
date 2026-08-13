@@ -74,7 +74,7 @@ export async function runCanonicalConsumerMigrationAcceptance(
   const serviceInstanceId = observation.compositionReceipt?.serviceInstanceId;
   if (
     !observation.compositionReceipt ||
-    observation.compositionReceipt.serviceContract !== '@codesoul-co/memory.MemoryApplicationService' ||
+    observation.compositionReceipt.serviceContract !== '@codesoul-co/hypha-memory.MemoryApplicationService' ||
     !serviceInstanceId
   ) {
     findings.push(

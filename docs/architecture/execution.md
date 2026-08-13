@@ -1,6 +1,6 @@
 # Governed Execution Contracts
 
-Hypha models command execution as a provider-neutral, event-first capability. `@codesoul-co/core`
+Hypha models command execution as a provider-neutral, event-first capability. `@codesoul-co/hypha-core`
 publishes the contracts, validators, JSON Schemas, examples, lifecycle rules, and provider ports.
 Concrete process, container, remote-sandbox, persistence, artifact, policy, and secret integrations
 belong in adapters and must pass through the harness governance and trace path.
@@ -101,7 +101,7 @@ separate integration responsibilities.
 
 ## Deterministic Mock Provider
 
-`@codesoul-co/testing` exports `MockExecutionProvider` for provider contract tests, replay fixtures, and
+`@codesoul-co/hypha-testing` exports `MockExecutionProvider` for provider contract tests, replay fixtures, and
 failure injection. It implements the governed `SandboxProvider` requests in memory and supports a
 queue of deterministic execution behaviors. A behavior can configure delay, terminal status,
 stdout and stderr, truncation references, file mutations, generated Artifact references, resource

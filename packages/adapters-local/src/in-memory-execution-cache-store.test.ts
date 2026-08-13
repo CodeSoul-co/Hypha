@@ -5,7 +5,7 @@ import {
   executionCacheEntryProjectionExample,
   executionCacheValidityInputExample,
   executionCommandFingerprintInputExample,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   InMemoryExecutionCacheStore,
   NodeExecutionFingerprintHasher,

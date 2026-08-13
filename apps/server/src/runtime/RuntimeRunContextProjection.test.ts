@@ -1,5 +1,5 @@
-import { createFrameworkEvent } from '@codesoul-co/core';
-import type { FSMProcessSpec, FSMSnapshot } from '@codesoul-co/fsm';
+import { createFrameworkEvent } from '@codesoul-co/hypha-core';
+import type { FSMProcessSpec, FSMSnapshot } from '@codesoul-co/hypha-fsm';
 import {
   projectRuntimeRunContext,
   projectRuntimeRunContexts,

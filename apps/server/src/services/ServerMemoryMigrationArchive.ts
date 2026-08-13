@@ -2,7 +2,7 @@ import type { Collection } from 'mongodb';
 import type {
   MemoryServerMigrationRehearsalCheckpoint,
   MemoryServerMigrationRehearsalCheckpointStore,
-} from '@codesoul-co/memory';
+} from '@codesoul-co/hypha-memory';
 
 interface CheckpointDocument {
   _id: string;

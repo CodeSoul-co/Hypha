@@ -5,7 +5,7 @@ import type {
   ArtifactWorkspaceContent,
   ArtifactWorkspaceContentReader,
   ArtifactWorkspaceContentRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { ExecutionProviderError, executionProviderError } from './execution-provider-error';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 import {

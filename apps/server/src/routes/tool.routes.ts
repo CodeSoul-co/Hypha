@@ -4,7 +4,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { getToolManager } from '../core/tools/ToolManager';
 import { HTTP_STATUS } from '../constants';
 import { getEventRuntime } from '../services/EventRuntime';
-import { commonToolCatalogSpecs, governedToolFamilySpecs } from '@codesoul-co/tools';
+import { commonToolCatalogSpecs, governedToolFamilySpecs } from '@codesoul-co/hypha-tools';
 
 const router = Router();
 

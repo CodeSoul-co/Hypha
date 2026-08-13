@@ -2,7 +2,7 @@ import type {
   ManagedMemoryRecord,
   MemoryApplicationService,
   MemoryContractSpecRef,
-} from '@codesoul-co/memory';
+} from '@codesoul-co/hypha-memory';
 import { ServerMemoryOperations } from './ServerMemoryOperations';
 
 const profileRef: MemoryContractSpecRef = {

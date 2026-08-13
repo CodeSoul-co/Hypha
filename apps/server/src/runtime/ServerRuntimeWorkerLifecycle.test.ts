@@ -3,7 +3,7 @@ import type {
   RuntimeRecoveryScanResult,
   RuntimeTimerSweepRequest,
   RuntimeTimerSweepResult,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import type { ServerRuntimeRecoverySchedulerOptions } from './ServerRuntimeRecoveryScheduler';
 import type { ServerRuntimeTimerSchedulerOptions } from './ServerRuntimeTimerScheduler';
 import { ServerRuntimeWorkerLifecycle } from './ServerRuntimeWorkerLifecycle';

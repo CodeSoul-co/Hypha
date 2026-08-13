@@ -13,13 +13,13 @@ import {
   type SpecMetadata,
   type TraceRecorder,
   type VersionedSpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   MCPToolAdapter,
   type ToolCallContext,
   type ToolRegistry,
   type ToolSpec,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 import {
   InMemoryMCPCapabilityBaselineStore,
   capabilityKey,
@@ -136,7 +136,7 @@ export interface MCPGateway {
   callTool?(request: MCPToolCallRequest): Promise<unknown>;
   readResource?(request: MCPResourceReadRequest): Promise<MCPResourceResult>;
   getPrompt?(request: MCPPromptRequest): Promise<MCPPromptResult>;
-  health(serverId?: string): Promise<Record<string, import('@codesoul-co/tools').ProviderHealth>>;
+  health(serverId?: string): Promise<Record<string, import('@codesoul-co/hypha-tools').ProviderHealth>>;
 }
 
 export class MockMCPGateway implements MCPGateway {
@@ -211,7 +211,7 @@ export class MockMCPGateway implements MCPGateway {
     return structuredClone(result);
   }
 
-  async health(serverId?: string): Promise<Record<string, import('@codesoul-co/tools').ProviderHealth>> {
+  async health(serverId?: string): Promise<Record<string, import('@codesoul-co/hypha-tools').ProviderHealth>> {
     const serverIds = serverId
       ? [serverId]
       : Array.from(new Set(this.capabilities.map((capability) => capability.serverId)));

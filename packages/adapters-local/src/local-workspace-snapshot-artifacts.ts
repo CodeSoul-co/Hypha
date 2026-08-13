@@ -9,12 +9,12 @@ import type {
   WorkspaceSnapshotEntry,
   WorkspaceSnapshotManifest,
   WorkspaceSnapshotRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   validateWorkspaceRestoreRequest,
   validateWorkspaceSnapshotManifest,
   validateWorkspaceSnapshotRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { executionProviderError } from './execution-provider-error';
 import { sameWorkspaceRootIdentity } from './local-workspace-file-identity';
 import { type LocalWorkspaceEntry, type LocalWorkspaceSnapshot } from './local-workspace-mutations';

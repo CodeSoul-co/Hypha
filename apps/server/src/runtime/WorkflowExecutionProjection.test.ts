@@ -1,4 +1,4 @@
-import { createFrameworkEvent, type FrameworkEventType } from '@codesoul-co/core';
+import { createFrameworkEvent, type FrameworkEventType } from '@codesoul-co/hypha-core';
 import {
   projectWorkflowExecution,
   workflowExecutionIdFromEvent,

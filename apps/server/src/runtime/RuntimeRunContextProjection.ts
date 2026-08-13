@@ -1,10 +1,10 @@
-import { FrameworkError, type FrameworkEvent } from '@codesoul-co/core';
+import { FrameworkError, type FrameworkEvent } from '@codesoul-co/hypha-core';
 import {
   validateFSMProcessSpec,
   validateFSMSnapshot,
   type FSMProcessSpec,
   type FSMSnapshot,
-} from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-fsm';
 
 export const RUNTIME_RUN_CONTEXT_METADATA_KEY = 'runtimeRunContext';
 

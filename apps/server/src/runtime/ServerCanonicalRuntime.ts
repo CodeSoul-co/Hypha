@@ -11,8 +11,8 @@ import {
   type RuntimeCancelCommand,
   type RuntimeCancelResult,
   type RuntimeChildRunCancellationPort,
-} from '@codesoul-co/core';
-import { DurableEventStoreBridge } from '@codesoul-co/harness';
+} from '@codesoul-co/hypha-core';
+import { DurableEventStoreBridge } from '@codesoul-co/hypha-harness';
 import { randomUUID } from 'crypto';
 import {
   BoundedCanonicalRuntimeAudit,

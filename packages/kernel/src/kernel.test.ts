@@ -1,16 +1,16 @@
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
-import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@codesoul-co/adapters-local';
-import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@codesoul-co/inference';
-import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@codesoul-co/memory';
-import { SkillRegistry } from '@codesoul-co/skills';
+import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@codesoul-co/hypha-adapters-local';
+import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@codesoul-co/hypha-inference';
+import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@codesoul-co/hypha-memory';
+import { SkillRegistry } from '@codesoul-co/hypha-skills';
 import {
   MockToolRunner,
   type ToolCallRequest,
   type ToolCallResult,
   type ToolRunner,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 import {
   BasicReActAgentRuntime,
   createEpisodicMemorySync,
@@ -38,7 +38,7 @@ import {
   type ReActAgentSpec,
 } from './index';
 
-describe('@codesoul-co/kernel ReAct contracts', () => {
+describe('@codesoul-co/hypha-kernel ReAct contracts', () => {
   it('binds Runtime ToolActivity requests to the governed ToolRunner port', async () => {
     const runner = new MockToolRunner();
     runner.registerResult('tool.activity', {

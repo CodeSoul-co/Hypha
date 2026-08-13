@@ -1,4 +1,4 @@
-import type { RecoveryFailure } from '@codesoul-co/core';
+import type { RecoveryFailure } from '@codesoul-co/hypha-core';
 import { adviseMemoryRecovery } from './recovery';
 import { sha256 } from './memory-utils';
 

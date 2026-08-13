@@ -5,7 +5,7 @@ import {
   retryPolicySpecSchema,
   type JsonSchema,
   type RetryPolicySpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export type MCPTransportSpec =
   | {

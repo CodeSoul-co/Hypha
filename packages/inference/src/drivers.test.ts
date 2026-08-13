@@ -7,7 +7,7 @@ import {
   type LocalInferenceProcessSupervisor,
 } from './drivers';
 
-describe('@codesoul-co/inference local engine drivers', () => {
+describe('@codesoul-co/hypha-inference local engine drivers', () => {
   it('creates provider-neutral backends for Ollama, SGLang, and vLLM', () => {
     const drivers = [
       new HttpLocalInferenceDriver({ kind: 'ollama', model: 'qwen3:8b' }),

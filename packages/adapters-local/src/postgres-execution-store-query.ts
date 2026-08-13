@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ExecutionRecord, ExecutionRecordQuery } from '@codesoul-co/core';
+import type { ExecutionRecord, ExecutionRecordQuery } from '@codesoul-co/hypha-core';
 
 export const POSTGRES_EXECUTION_RECORD_COLUMNS = `
   records.execution_id,

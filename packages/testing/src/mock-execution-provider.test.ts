@@ -6,7 +6,7 @@ import {
   sandboxCreateRequestExample,
   validateCommandExecutionResult,
   validateSandboxRecord,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { MockExecutionProvider, MockExecutionProviderError } from './mock-execution-provider';
 
 const fixedNow = () => '2026-07-17T00:00:00.000Z';

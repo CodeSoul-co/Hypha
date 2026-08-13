@@ -4,13 +4,13 @@ import type {
   ExecutionCacheArtifactVerifier,
   ExecutionCacheScope,
   ExecutionPrincipal,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   artifactReadResultSchema,
   executionCacheArtifactReferenceSchema,
   validateExecutionCacheScope,
   validateExecutionPrincipal,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface ArtifactManagerExecutionCacheVerifierOptions {
   manager: Pick<ArtifactManager, 'read'>;

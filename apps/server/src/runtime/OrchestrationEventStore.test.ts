@@ -7,8 +7,8 @@ import {
   InMemoryEventStore,
   registerRuntimeOrchestrationEventSchemas,
   type FrameworkEvent,
-} from '@codesoul-co/core';
-import { DurableEventStoreBridge } from '@codesoul-co/harness';
+} from '@codesoul-co/hypha-core';
+import { DurableEventStoreBridge } from '@codesoul-co/hypha-harness';
 import {
   auditCanonicalRuntimeStreams,
   CanonicalRunManagerEventStore,

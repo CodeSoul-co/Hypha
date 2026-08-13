@@ -1,5 +1,5 @@
 {
-  "name": "@codesoul-co/core",
+  "name": "@codesoul-co/hypha-core",
   "version": "1.0.0",
   "private": false,
   "main": "dist/index.js",

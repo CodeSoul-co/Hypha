@@ -58,10 +58,10 @@ Local runtime records, indexes, artifacts, and detailed system logs are written 
 | `storage.artifacts.local`   | `data/storage/artifacts/` filesystem-backed artifact store.                      |
 | `logging.outputs`           | `data/logs/system.log` detailed system runtime log.                              |
 
-`createLocalStorageBackbone()` from `@codesoul-co/adapters-local` creates the local storage stack in one call:
+`createLocalStorageBackbone()` from `@codesoul-co/hypha-adapters-local` creates the local storage stack in one call:
 
 ```ts
-import { createLocalStorageBackbone } from '@codesoul-co/adapters-local';
+import { createLocalStorageBackbone } from '@codesoul-co/hypha-adapters-local';
 
 const storage = createLocalStorageBackbone({
   rootPath: './data/storage',
@@ -236,7 +236,7 @@ REDIS_TLS=true
 
 Kafka, Qdrant, Chroma, and Pinecone are declared in `config.yaml` as extension contracts and are
 disabled by default. Postgres Execution Store and S3-compatible Artifact Store factories are
-available from `@codesoul-co/adapters-local`, but the stock Server does not select them automatically.
+available from `@codesoul-co/hypha-adapters-local`, but the stock Server does not select them automatically.
 A deployment that enables either provider must compose its factory, lifecycle cleanup, readiness
 probe, credentials, and real-environment acceptance together; unsupported enabled selections fail
 closed during Server configuration loading.

@@ -1,6 +1,6 @@
-import { hashCanonicalJson } from '@codesoul-co/core';
-import { InMemoryExecutionArtifactStore } from '@codesoul-co/adapters-local';
-import { ArtifactReActContextSnapshotStore, type ReActContextSnapshot } from '@codesoul-co/harness';
+import { hashCanonicalJson } from '@codesoul-co/hypha-core';
+import { InMemoryExecutionArtifactStore } from '@codesoul-co/hypha-adapters-local';
+import { ArtifactReActContextSnapshotStore, type ReActContextSnapshot } from '@codesoul-co/hypha-harness';
 
 const scopeHash = `sha256:${'a'.repeat(64)}`;
 

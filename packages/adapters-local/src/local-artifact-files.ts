@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ArtifactByteRange, ArtifactByteSource } from '@codesoul-co/core';
+import type { ArtifactByteRange, ArtifactByteSource } from '@codesoul-co/hypha-core';
 import { ArtifactContentLimitError } from './artifact-content-io';
 
 export interface LocalArtifactStorePaths {

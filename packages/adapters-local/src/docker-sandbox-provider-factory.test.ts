@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SandboxProviderRegistry } from '@codesoul-co/core';
+import { SandboxProviderRegistry } from '@codesoul-co/hypha-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   DockerCliRequest,

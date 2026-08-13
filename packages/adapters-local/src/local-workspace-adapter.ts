@@ -1,7 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { FileMutation } from '@codesoul-co/core';
+import type { FileMutation } from '@codesoul-co/hypha-core';
 import { executionProviderError } from './execution-provider-error';
 import {
   LocalWorkspaceSnapshotCancelledError,

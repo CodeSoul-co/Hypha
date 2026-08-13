@@ -1,4 +1,4 @@
-import type { NormalizedExecutionError } from '@codesoul-co/core';
+import type { NormalizedExecutionError } from '@codesoul-co/hypha-core';
 
 export class ExecutionProviderError extends Error {
   constructor(readonly normalizedError: NormalizedExecutionError) {

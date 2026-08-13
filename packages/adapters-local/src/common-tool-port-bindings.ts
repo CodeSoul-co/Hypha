@@ -5,8 +5,8 @@ import {
   type ExecutionPort,
   type ExecutionPrincipal,
   type SpecRef,
-} from '@codesoul-co/core';
-import type { ToolCallContext, WorkspaceRuntimePort } from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-core';
+import type { ToolCallContext, WorkspaceRuntimePort } from '@codesoul-co/hypha-tools';
 
 /** Structural mirror of the tools-owned CommonToolPort boundary. */
 export interface CommonToolProviderRequest {

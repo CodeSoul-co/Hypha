@@ -8,13 +8,13 @@ import {
   type RuntimeOperationalTelemetry,
   type SessionCommandRecord,
   type SessionQueue,
-} from '@codesoul-co/core';
-import { reActContinuationIdempotencyKey, type ReActContinuationScheduler } from '@codesoul-co/harness';
+} from '@codesoul-co/hypha-core';
+import { reActContinuationIdempotencyKey, type ReActContinuationScheduler } from '@codesoul-co/hypha-harness';
 import {
   validateReActContinuationCheckpoint,
   type ReActContinuationCheckpoint,
   type ReActContinuationCheckpointStore,
-} from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-kernel';
 
 export interface ReActContinuationSuspensionEvidence {
   eventId: string;

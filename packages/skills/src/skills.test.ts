@@ -15,7 +15,7 @@ import {
   validateSkillSpec,
 } from './index';
 
-describe('@codesoul-co/skills resolver', () => {
+describe('@codesoul-co/hypha-skills resolver', () => {
   it('builds an immutable least-privilege Agent capability intersection', () => {
     const activeSkill = {
       id: 'skill-a',

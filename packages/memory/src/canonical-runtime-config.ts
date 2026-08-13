@@ -1,4 +1,4 @@
-import type { JsonSchema } from '@codesoul-co/core';
+import type { JsonSchema } from '@codesoul-co/hypha-core';
 import { z, type ZodType } from 'zod';
 import {
   memoryContractJsonSchemas,

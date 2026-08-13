@@ -1,6 +1,6 @@
-import { defaultReActFSMProcessSpec } from '@codesoul-co/fsm';
-import type { InferenceProvider } from '@codesoul-co/inference';
-import type { ToolRunner } from '@codesoul-co/tools';
+import { defaultReActFSMProcessSpec } from '@codesoul-co/hypha-fsm';
+import type { InferenceProvider } from '@codesoul-co/hypha-inference';
+import type { ToolRunner } from '@codesoul-co/hypha-tools';
 import { createServerProductionRuntime } from './ServerProductionRuntime';
 
 describe('ServerProductionRuntime', () => {

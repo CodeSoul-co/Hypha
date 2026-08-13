@@ -4,7 +4,7 @@ import {
   type RecoveryFailure,
   type RecoverySideEffectState,
   type RecoveryStrategy,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import type { StorageEngine, StorageRole } from './index';
 
 export type StorageRecoveryOperation =

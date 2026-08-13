@@ -27,7 +27,7 @@ import {
   type TelemetryRecorder,
   type TraceRecorder,
   type VersionedSpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   createToolSchemaSpec,
   createToolCacheValidityKey,

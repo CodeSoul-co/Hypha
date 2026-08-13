@@ -1,5 +1,5 @@
 import { z, type ZodType } from 'zod';
-import { defineSpecSchema, type JsonSchema } from '@codesoul-co/core';
+import { defineSpecSchema, type JsonSchema } from '@codesoul-co/hypha-core';
 import { memoryContractSpecRefJsonSchema, memoryContractSpecRefSchema } from './profile-contract';
 import { managedMemoryScopeSchema, memoryPrincipalSchema } from './record-contract';
 import type {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ArtifactSessionCommandPayloadStore } from '@codesoul-co/core';
+import { ArtifactSessionCommandPayloadStore } from '@codesoul-co/hypha-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

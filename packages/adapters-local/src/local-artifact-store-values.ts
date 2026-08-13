@@ -1,4 +1,4 @@
-import type { ArtifactGetRequest, ArtifactObjectMetadata } from '@codesoul-co/core';
+import type { ArtifactGetRequest, ArtifactObjectMetadata } from '@codesoul-co/hypha-core';
 import { ArtifactStoreAdapterError, artifactStoreError } from './artifact-store-adapter-error';
 import {
   isNodeError,

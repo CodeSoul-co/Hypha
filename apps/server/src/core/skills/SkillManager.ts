@@ -16,7 +16,7 @@ import {
   type SkillRef,
   type SkillResolutionContext,
   type SkillSpec,
-} from '@codesoul-co/skills';
+} from '@codesoul-co/hypha-skills';
 import type { SkillConfig, SkillContext, SkillResult, SkillTrigger } from './types';
 import { listSkillFiles, type ParsedSkillFile } from './parser';
 import { logger } from '../../utils/logger';

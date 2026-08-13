@@ -14,7 +14,7 @@ import {
   type RetryPolicySpec,
   type SideEffectLevel,
   type TimeoutPolicySpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export type ToolSource = 'local' | 'mcp' | 'http' | 'plugin' | 'hosted' | 'execution' | 'custom';
 

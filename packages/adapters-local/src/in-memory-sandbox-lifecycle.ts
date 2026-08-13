@@ -16,7 +16,7 @@ import {
   type SandboxStatus,
   type SandboxStatusRequest,
   type SandboxTerminateRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { executionProviderError } from './execution-provider-error';
 import { cloneExecutionValue, hashExecutionValue } from './execution-provider-values';
 

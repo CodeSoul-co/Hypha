@@ -1,5 +1,5 @@
 import { z, type ZodType } from 'zod';
-import { defineSpecSchema, exportSpecJsonSchemas, type JsonSchema } from '@codesoul-co/core';
+import { defineSpecSchema, exportSpecJsonSchemas, type JsonSchema } from '@codesoul-co/hypha-core';
 import type {
   MemoryExtractionProfileSpec,
   MemoryExtractionSourceRef,

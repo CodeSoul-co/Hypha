@@ -16,7 +16,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
 import { EnvironmentSecretResolver } from '../../services/SecretResolver';
-import { InMemoryTelemetryRecorder } from '@codesoul-co/core';
+import { InMemoryTelemetryRecorder } from '@codesoul-co/hypha-core';
 import { filesystemToolConfig, getConfig, storageConfig } from '../../config';
 import {
   ArtifactStoreToolPort,
@@ -24,7 +24,7 @@ import {
   FileArtifactStore,
   FileToolContractSnapshotStore,
   LocalWorkspaceRuntime,
-} from '@codesoul-co/adapters-local';
+} from '@codesoul-co/hypha-adapters-local';
 import {
   classicMCPCapabilityDescriptors,
   createClassicMCPMockGateway,
@@ -41,7 +41,7 @@ import {
   type MCPGateway,
   type RedisLikeMCPLeaseClient,
   type RedisLikeMCPStoreClient,
-} from '@codesoul-co/mcp';
+} from '@codesoul-co/hypha-mcp';
 import {
   LocalFunctionToolAdapter,
   MCPToolAdapter,
@@ -56,7 +56,7 @@ import {
   type ToolAdapterProfile,
   type ToolSpec as HyphaToolSpec,
   type ToolContractSnapshotStore,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 import { getRedisClient } from '../../services/database';
 import {
   getToolProfileBindingRegistry,

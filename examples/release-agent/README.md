@@ -32,7 +32,7 @@ npm run compile-agent
 npm test
 ```
 
-All `@codesoul-co/*` dependencies should remain on one release line. During Hypha repository development,
+All `@codesoul-co/hypha-*` dependencies should remain on one release line. During Hypha repository development,
 the root command `npm run typecheck:release-example` checks the same source against workspace packages.
 The `1.0.0` manifests in this checkout are a release candidate until the npm registry contains the
 matching version; package metadata alone is not evidence that publication happened.

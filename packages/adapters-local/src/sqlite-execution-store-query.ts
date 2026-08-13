@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ExecutionRecord, ExecutionRecordQuery } from '@codesoul-co/core';
+import type { ExecutionRecord, ExecutionRecordQuery } from '@codesoul-co/hypha-core';
 
 export const SQLITE_EXECUTION_RECORD_COLUMNS =
   'execution_id, revision, status, tenant_id, user_id, workspace_id, run_id, ' +

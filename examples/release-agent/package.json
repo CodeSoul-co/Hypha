@@ -11,8 +11,8 @@
     "run:fsm": "npm run build && node dist/run-fsm.js"
   },
   "dependencies": {
-    "@codesoul-co/domain": "1.0.0",
-    "@codesoul-co/kernel": "1.0.0"
+    "@codesoul-co/hypha-domain": "1.0.0",
+    "@codesoul-co/hypha-kernel": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

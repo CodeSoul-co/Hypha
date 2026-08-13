@@ -6,8 +6,8 @@ import {
   type OutputContractSpec,
   type SpecRef,
   type TraceRecorder,
-} from '@codesoul-co/core';
-import type { FSMSnapshot } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-core';
+import type { FSMSnapshot } from '@codesoul-co/hypha-fsm';
 
 export * from './runtime';
 export * from './message-bus';

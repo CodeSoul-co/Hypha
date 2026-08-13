@@ -14,7 +14,7 @@ import {
   type RecoveryFailure,
   type SpecMetadata,
   type VersionedSpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { classifyMemoryFailure, type MemoryRecoveryOperation } from './recovery';
 import type { ManagedMemoryRecord, MemoryManagementCapabilities } from './contracts';
 import type {
