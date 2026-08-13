@@ -23,7 +23,8 @@
   "license": "MIT",
   "dependencies": {
     "@hypha/models": "1.0.0",
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "^11.10.0",
+    "zod": "^3.22.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

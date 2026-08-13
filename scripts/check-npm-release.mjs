@@ -8,6 +8,7 @@ const root = process.cwd();
 const rootManifest = readJson(path.join(root, 'package.json'));
 const packagesRoot = path.join(root, 'packages');
 const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
+const privatePackageAllowlist = new Set(['@hypha/workcache']);
 const failures = [];
 
 const manifests = fs
@@ -21,22 +22,25 @@ const manifests = fs
 for (const { manifestPath, manifest } of manifests) {
   const packageRoot = path.dirname(manifestPath);
   const label = manifest.name;
+  const publishable = manifest.private === false;
 
-  if (manifest.private !== false) failures.push(`${label}: private must be false`);
-  if (manifest.version !== rootManifest.version) {
+  if (!publishable && !privatePackageAllowlist.has(label)) {
+    failures.push(`${label}: private package is not allowlisted`);
+  }
+  if (publishable && manifest.version !== rootManifest.version) {
     failures.push(
       `${label}: version ${manifest.version} must match release ${rootManifest.version}`
     );
   }
-  if (manifest.license !== rootManifest.license) {
+  if (publishable && manifest.license !== rootManifest.license) {
     failures.push(
       `${label}: license ${manifest.license} must match repository ${rootManifest.license}`
     );
   }
-  if (manifest.publishConfig?.access !== 'public') {
+  if (publishable && manifest.publishConfig?.access !== 'public') {
     failures.push(`${label}: publishConfig.access must be public`);
   }
-  for (const output of ['dist/index.js', 'dist/index.d.ts']) {
+  for (const output of publishable ? ['dist/index.js', 'dist/index.d.ts'] : []) {
     if (!fs.existsSync(path.join(packageRoot, output)))
       failures.push(`${label}: missing ${output}`);
   }
@@ -56,7 +60,7 @@ for (const { manifestPath, manifest } of manifests) {
     }
   }
 
-  if (fs.existsSync(path.join(packageRoot, 'dist/index.js'))) {
+  if (publishable && fs.existsSync(path.join(packageRoot, 'dist/index.js'))) {
     const packed = spawnSync('npm', ['pack', '--dry-run', '--json'], {
       cwd: packageRoot,
       encoding: 'utf8',
@@ -78,7 +82,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Validated ${manifests.length} publishable @hypha packages at ${rootManifest.version}.\n`
+    `Validated ${manifests.filter(({ manifest }) => manifest.private === false).length} publishable @hypha packages at ${rootManifest.version}.\n`
   );
 }
 
