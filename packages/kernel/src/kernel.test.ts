@@ -266,6 +266,123 @@ describe('@hypha/kernel ReAct contracts', () => {
     expect(result.output).toEqual({ result: 'hypha' });
   });
 
+  it('does not complete a Run when a failed Tool observation requires another Model turn', async () => {
+    const runner = new ReActRunner(new BasicReActAgentRuntime(), {
+      inference: {
+        id: 'failed-tool-provider',
+        async infer(): Promise<InferenceResponse> {
+          return {
+            id: 'failed-tool-response',
+            output: { action: 'tool', toolId: 'tool.invalid', input: { query: 42 } },
+          };
+        },
+      },
+      toolRunner: {
+        async run(request) {
+          return {
+            toolId: request.toolId,
+            invocationId: request.context.invocationId,
+            status: 'failed',
+            error: {
+              code: 'TOOL_INPUT_INVALID',
+              message: 'query must be a string',
+              retryable: false,
+              phase: 'input_validation',
+            },
+          };
+        },
+      },
+    });
+
+    const result = await runner.run({
+      runId: 'run_failed_tool_terminal',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user', content: 'search' }],
+    });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: { message: expect.stringContaining('query must be a string') },
+      finalAction: { type: 'model' },
+    });
+    expect(result.steps.map((step) => step.phase)).toContain('fail');
+    expect(result.steps.map((step) => step.phase)).not.toContain('complete');
+  });
+
+  it('feeds failed Tool evidence back to the Model and executes a repaired action', async () => {
+    const inferenceInputs: unknown[] = [];
+    let toolCalls = 0;
+    const runner = new ReActRunner(new BasicReActAgentRuntime(), {
+      inference: {
+        id: 'tool-repair-provider',
+        async infer(request): Promise<InferenceResponse> {
+          inferenceInputs.push(request.input);
+          return inferenceInputs.length === 1
+            ? {
+                id: 'invalid-tool-response',
+                output: { action: 'tool', toolId: 'tool.search', input: { query: 42 } },
+              }
+            : {
+                id: 'repaired-tool-response',
+                output: { action: 'tool', toolId: 'tool.search', input: { query: 'hypha' } },
+              };
+        },
+      },
+      toolRunner: {
+        async run(request) {
+          toolCalls += 1;
+          return toolCalls === 1
+            ? {
+                toolId: request.toolId,
+                invocationId: request.context.invocationId,
+                status: 'failed',
+                error: {
+                  code: 'TOOL_INPUT_INVALID',
+                  message: 'query must be a string',
+                  retryable: false,
+                  phase: 'input_validation',
+                },
+              }
+            : {
+                toolId: request.toolId,
+                invocationId: request.context.invocationId,
+                status: 'completed',
+                output: { result: 'hypha' },
+              };
+        },
+      },
+      continueAfterTool: true,
+      executionBudget: {
+        maxIterations: 2,
+        maxModelCalls: 2,
+        maxToolCalls: 2,
+        maxConsecutiveNoProgress: 2,
+        quantumIterations: 2,
+      },
+    });
+    const context = {
+      runId: 'run_repaired_tool',
+      stepId: 'react',
+      agent: reactAgentSpecDefinition.example,
+      messages: [{ role: 'user' as const, content: 'search' }],
+    };
+
+    const result = await runner.run(context);
+
+    expect(result).toMatchObject({ status: 'completed', output: { result: 'hypha' } });
+    expect(inferenceInputs).toHaveLength(2);
+    expect(toolCalls).toBe(2);
+    expect(context.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'tool',
+          content: expect.stringContaining('TOOL_INPUT_INVALID'),
+        }),
+      ])
+    );
+  });
+
   it('feeds tool observations back into a new model turn when multi-turn ReAct is enabled', async () => {
     const inferenceInputs: unknown[] = [];
     const provider: InferenceProvider = {
