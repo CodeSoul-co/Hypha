@@ -7,7 +7,7 @@ import {
   type EventSchemaRegistry,
   type EventStreamScope,
   type FrameworkEventType,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

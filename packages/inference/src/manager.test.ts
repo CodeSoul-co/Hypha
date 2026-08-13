@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeJson, type RecoveryFailure } from '@codesoul-co/core';
+import { canonicalizeJson, type RecoveryFailure } from '@codesoul-co/hypha-core';
 import {
   createDefaultInferenceBackendRegistry,
   LlamaCppInferenceBackend,
@@ -87,7 +87,7 @@ function backendRequest(): InferenceBackendRequest {
   };
 }
 
-describe('@codesoul-co/inference', () => {
+describe('@codesoul-co/hypha-inference', () => {
   it('registers built-in reasoning strategies with pinned official sources', () => {
     const orchestrator = new ReasoningOrchestrator({
       id: 'source-test',

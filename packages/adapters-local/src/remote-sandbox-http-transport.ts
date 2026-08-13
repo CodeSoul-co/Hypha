@@ -11,7 +11,7 @@ import type {
   SandboxStartRequest,
   SandboxStatusRequest,
   SandboxTerminateRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   RemoteSandboxTransportError,
   type RemoteSandboxTransport,

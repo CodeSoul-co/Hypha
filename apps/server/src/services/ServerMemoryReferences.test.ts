@@ -1,4 +1,4 @@
-import type { RenewableCredentialProvider, StructuredStoreProvider } from '@codesoul-co/memory';
+import type { RenewableCredentialProvider, StructuredStoreProvider } from '@codesoul-co/hypha-memory';
 import {
   createGoogleMetadataCredentialProvider,
   createRotatingEnvironmentCredentialProvider,

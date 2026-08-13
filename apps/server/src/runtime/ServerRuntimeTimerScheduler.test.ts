@@ -1,4 +1,4 @@
-import type { RuntimeTimerSweepRequest, RuntimeTimerSweepResult } from '@codesoul-co/core';
+import type { RuntimeTimerSweepRequest, RuntimeTimerSweepResult } from '@codesoul-co/hypha-core';
 import { ServerRuntimeTimerScheduler } from './ServerRuntimeTimerScheduler';
 
 function page(input: Partial<RuntimeTimerSweepResult> = {}): RuntimeTimerSweepResult {

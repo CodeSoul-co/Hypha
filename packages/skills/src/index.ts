@@ -12,12 +12,12 @@ import {
   type SideEffectLevel,
   type SpecMetadata,
   type VersionedSpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   effectiveAgentCapabilitySnapshotSchema,
   hashToolContract,
   type EffectiveAgentCapabilitySnapshot,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 
 export * from './remote-registry';
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryEventStore } from '@codesoul-co/core';
-import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@codesoul-co/adapters-local';
+import { InMemoryEventStore } from '@codesoul-co/hypha-core';
+import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@codesoul-co/hypha-adapters-local';
 import {
   adviseMemoryRecovery,
   classifyMemoryFailure,
@@ -14,7 +14,7 @@ import {
   type MemoryRecord,
 } from './index';
 
-describe('@codesoul-co/memory manager contract', () => {
+describe('@codesoul-co/hypha-memory manager contract', () => {
   it('requires provenance-bearing writes through MemoryProvider', async () => {
     const records: MemoryRecord[] = [];
     const provider: MemoryProvider = {

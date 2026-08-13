@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FrameworkError } from '@codesoul-co/core';
+import { FrameworkError } from '@codesoul-co/hypha-core';
 import type {
   MCPToolInvocationPort,
   ToolAdapter,

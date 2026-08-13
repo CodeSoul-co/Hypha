@@ -3,7 +3,7 @@ import {
   type CommandExecutionResult,
   type FileMutation,
   type NormalizedExecutionError,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import type { DockerCliResult } from './docker-cli-transport';
 import {
   DockerEngineClientError,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FrameworkEvent } from '@codesoul-co/core';
+import type { FrameworkEvent } from '@codesoul-co/hypha-core';
 import { WorkGraphIndex } from './graph';
 import { InMemoryWorkCacheInvalidationBus } from './invalidation-bus';
 import { WorkCacheManager } from './manager';
@@ -8,7 +8,7 @@ import { MemoryWorkCacheStore } from './stores/memory-store';
 import { HotIndexedWorkCacheStore } from './stores/hot-index-store';
 import { RedisWorkCacheStore, type RedisWorkCacheClient } from './stores/redis-store';
 
-describe('@codesoul-co/workcache hardening', () => {
+describe('@codesoul-co/hypha-workcache hardening', () => {
   it('partitions cache identity and blocks by user scope', async () => {
     const store = new MemoryWorkCacheStore();
     const manager = managerWith(store);

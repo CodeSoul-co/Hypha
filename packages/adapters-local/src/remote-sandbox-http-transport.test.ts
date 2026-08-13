@@ -10,7 +10,7 @@ import {
   remoteOutputStreamRequestExample,
   sandboxCreateRequestExample,
   sandboxRecordExample,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { describe, expect, it, vi } from 'vitest';
 import { RemoteSandboxProviderAdapter } from './remote-sandbox-provider-adapter';
 import {

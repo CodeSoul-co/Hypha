@@ -3,7 +3,7 @@ import type {
   ArtifactRecord,
   CommandExecutionRequest,
   SpecRef,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export type LocalProcessArtifactStream = 'stdout' | 'stderr';
 

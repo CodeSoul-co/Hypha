@@ -4,7 +4,7 @@ import {
   type ExecutionEnvironmentSpec,
   type SandboxCreateRequest,
   type SandboxRecord,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { afterAll, describe, expect, it } from 'vitest';
 import { RemoteSandboxHttpTransport } from './remote-sandbox-http-transport';
 import { RemoteSandboxProviderAdapter } from './remote-sandbox-provider-adapter';

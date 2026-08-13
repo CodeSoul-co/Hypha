@@ -1,4 +1,4 @@
-import type { ArtifactCreateRequest, ArtifactRecord, CommandExecutionRequest } from '@codesoul-co/core';
+import type { ArtifactCreateRequest, ArtifactRecord, CommandExecutionRequest } from '@codesoul-co/hypha-core';
 import { describe, expect, it, vi } from 'vitest';
 import { hashArtifactBytes } from './artifact-content-io';
 import { ArtifactManagerLocalProcessOutputPort } from './local-process-output-artifacts';

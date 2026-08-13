@@ -8,7 +8,7 @@ import {
   type ExecutionActivityResult,
   type ExecutionDispatchRequest,
   type NormalizedExecutionError,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   ExecutionToolAdapter,
   ExecutionToolTerminalError,

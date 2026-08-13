@@ -9,7 +9,7 @@ import {
   type ExecutionCacheArtifactReference,
   type ExecutionCacheScope,
   type ExecutionPrincipal,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { describe, expect, it, vi } from 'vitest';
 import { ArtifactManagerExecutionCacheVerifier } from './artifact-manager-execution-cache-verifier';
 import {

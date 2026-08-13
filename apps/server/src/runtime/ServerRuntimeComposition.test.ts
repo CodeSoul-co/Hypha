@@ -14,17 +14,17 @@ import {
   RuntimeRecoveryService,
   registerRuntimeOrchestrationEventSchemas,
   type RuntimeCancelResult,
-} from '@codesoul-co/core';
-import { defaultReActFSMProcessSpec, FSMRuntime } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-core';
+import { defaultReActFSMProcessSpec, FSMRuntime } from '@codesoul-co/hypha-fsm';
 import {
   DurableEventStoreBridge,
   FencedBoundedFSMDriver,
   HarnessedReActFSMRunner,
   RunManager,
-} from '@codesoul-co/harness';
-import type { InferenceProvider } from '@codesoul-co/inference';
-import { ReActRunner, type ReActAgentRuntime } from '@codesoul-co/kernel';
-import type { ToolRunner } from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-harness';
+import type { InferenceProvider } from '@codesoul-co/hypha-inference';
+import { ReActRunner, type ReActAgentRuntime } from '@codesoul-co/hypha-kernel';
+import type { ToolRunner } from '@codesoul-co/hypha-tools';
 import type { RuntimeBackbone } from './RuntimeBackbone';
 import { OrchestrationEventStore } from './OrchestrationEventStore';
 import { createServerRuntimeComposition } from './ServerRuntimeComposition';

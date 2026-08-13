@@ -1,4 +1,4 @@
-import type { SandboxProvider, SandboxProviderFactory } from '@codesoul-co/core';
+import type { SandboxProvider, SandboxProviderFactory } from '@codesoul-co/hypha-core';
 import { DockerCliTransport, type DockerCommandTransport } from './docker-cli-transport';
 import { DockerEngineCliClient } from './docker-engine-client';
 import { DockerExecIo } from './docker-exec-io';

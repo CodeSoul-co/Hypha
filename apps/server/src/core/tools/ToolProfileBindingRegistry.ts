@@ -6,7 +6,7 @@ import {
   type ToolAdapter,
   type ToolAdapterFactoryInput,
   type ToolHandler,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 
 export type ExecutionToolAdapterFactory = (input: ToolAdapterFactoryInput) => Promise<ToolAdapter>;
 

@@ -1,4 +1,4 @@
-import type { FrameworkEvent, FrameworkEventType, RecoveryKnowledge } from '@codesoul-co/core';
+import type { FrameworkEvent, FrameworkEventType, RecoveryKnowledge } from '@codesoul-co/hypha-core';
 
 export type WorkNodeType =
   | 'plan'

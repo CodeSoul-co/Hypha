@@ -3,7 +3,7 @@ import {
   type DurableRuntimeTimerWorker,
   type RuntimeTimerSweepResult,
   type RuntimeTimerSweepRunResult,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface ServerRuntimeTimerSweepResult {
   firedAt: string;

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import type { ArtifactPutRequest } from '@codesoul-co/core';
+import type { ArtifactPutRequest } from '@codesoul-co/hypha-core';
 import { hashArtifactBytes, readArtifactStream } from './artifact-content-io';
 import {
   listLocalArtifactFiles,

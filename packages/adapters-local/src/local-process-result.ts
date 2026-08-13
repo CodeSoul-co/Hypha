@@ -3,7 +3,7 @@ import type {
   CommandExecutionResult,
   FileMutation,
   NormalizedExecutionError,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   hashExecutionText,
   hashExecutionValue,

@@ -7,7 +7,7 @@ import {
   ArtifactStoreProviderRegistry,
   type ArtifactStorageRef,
   type ArtifactStoreProvider,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { readArtifactStream } from './artifact-content-io';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import {

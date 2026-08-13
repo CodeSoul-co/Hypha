@@ -4,13 +4,13 @@ import {
   type ContinueReActCommandPayloadV1,
   type ReActQuantumDescriptor,
   type SessionCommandRecord,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   InMemoryReActContinuationCheckpointStore,
   type ReActContinuationCheckpoint,
   type ReActRunContext,
   type ReActRunResult,
-} from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-kernel';
 import {
   ReActQuantumExecutor,
   createContinuationReActQuantumDescriptor,

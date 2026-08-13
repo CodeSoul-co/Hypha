@@ -1,4 +1,4 @@
-import type { EventFilter, EventStore, FrameworkEvent, TraceRecorder } from '@codesoul-co/core';
+import type { EventFilter, EventStore, FrameworkEvent, TraceRecorder } from '@codesoul-co/hypha-core';
 import type {
   ArtifactMeta,
   ArtifactRef,
@@ -10,7 +10,7 @@ import type {
   VectorQuery,
   VectorRecord,
   VectorSearchResult,
-} from '@codesoul-co/memory';
+} from '@codesoul-co/hypha-memory';
 import type {
   ToolApprovalGrant,
   ToolApprovalRequest,
@@ -26,18 +26,18 @@ import type {
   ToolObservationPort,
   ToolContractSnapshot,
   ToolContractSnapshotStore,
-} from '@codesoul-co/tools';
-import type { MCPCapabilityCatalogStore, MCPCapabilityRecord } from '@codesoul-co/mcp';
+} from '@codesoul-co/hypha-tools';
+import type { MCPCapabilityCatalogStore, MCPCapabilityRecord } from '@codesoul-co/hypha-mcp';
 import {
   createFileArtifactStorageProfile,
   createLocalVectorStorageProfile,
   createSQLiteStorageProfile,
   type StorageProviderProfile,
-} from '@codesoul-co/storage';
+} from '@codesoul-co/hypha-storage';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { HybridMemoryProvider } from '@codesoul-co/memory';
+import { HybridMemoryProvider } from '@codesoul-co/hypha-memory';
 import { loadSqlite, type SqliteDatabaseSync, type SqliteModule } from './sqlite-driver';
 
 export * from './workspace-runtime';

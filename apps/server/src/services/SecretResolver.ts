@@ -3,7 +3,7 @@ import type {
   SecretProvider,
   SecretResolutionContext,
   SecretResolver,
-} from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-tools';
 
 class ValueCredentialLease implements CredentialLease {
   readonly renewable = false;

@@ -156,7 +156,7 @@ Deadline、Idempotency 与 Harness 边界。
 ### 1. 安装工作区
 
 ```bash
-git clone https://github.com/CodeSoul-co/Hypha.git
+git clone https://github.com/CodeSoul-co/hypha-Hypha.git
 cd Hypha
 npm ci
 cp .env.example .env
@@ -224,7 +224,7 @@ CLI 默认将 Endpoint 配置与 JWT 保存到 `~/.hypha`。可通过 `HYPHA_BAS
 ## 使用 DomainPack 开发 Agent
 
 DomainPack 是框架支持的产品集成边界。产品特定的 Task、Prompt、Workflow、Rule 与 Capability
-选择应放在 DomainPack 或产品应用中，而不是写入 `@codesoul-co/core`、`@codesoul-co/kernel` 或通用 Runtime。
+选择应放在 DomainPack 或产品应用中，而不是写入 `@codesoul-co/hypha-core`、`@codesoul-co/hypha-kernel` 或通用 Runtime。
 
 如果应用通过版本化 npm release 使用 Hypha，并需要独立的 Prompt、Skill、Tool、Policy、契约测试与
 HTTP Run 提交示例，请参见 [`release-agent` 示例](examples/release-agent/README.md)。
@@ -259,7 +259,7 @@ import {
   compileDomainPackToHarnessedSystem,
   DomainPackRegistry,
   LocalDomainPackLoader,
-} from '@codesoul-co/domain';
+} from '@codesoul-co/hypha-domain';
 
 const registry = new DomainPackRegistry();
 
@@ -326,7 +326,7 @@ ID、Transition、Guard、Retry/Timeout 声明与 Terminal State。ReAct Run 继
 Harness FSM，避免产品拓扑绕过 Reasoning、Policy、Activity、Observation、Verification、Memory
 或 Recovery 阶段。
 
-可以使用 `@codesoul-co/fsm` 的 `analyzeFSMTopology()` 检查可达、不可达、非终态死路与循环 State。
+可以使用 `@codesoul-co/hypha-fsm` 的 `analyzeFSMTopology()` 检查可达、不可达、非终态死路与循环 State。
 Server 提供 `GET /runtime/runs/:runId/fsm` 和受治理的所有者接口
 `POST /runtime/runs/:runId/fsm/transitions`。人工 Transition 必须携带精确 Process 身份、期望
 State、Run Revision、幂等键、原因和可选 Guard Variables；Runtime 还会执行权限、Policy、
@@ -362,7 +362,7 @@ states:
 通过 `extendDomainPack()` 按稳定 ID Upsert 或删除声明，并分配新版本，无需复制整个基础包：
 
 ```ts
-import { extendDomainPack } from '@codesoul-co/domain';
+import { extendDomainPack } from '@codesoul-co/hypha-domain';
 
 const customized = extendDomainPack(domainPack, {
   version: '1.1.0',
@@ -504,7 +504,7 @@ NODE_ENV=production npm start
 
 ## Workspace Package
 
-Manifest 中设置了 `private: false` 的 Framework Library 是版本对齐、可公开发布的 `@codesoul-co/*` npm
+Manifest 中设置了 `private: false` 的 Framework Library 是版本对齐、可公开发布的 `@codesoul-co/hypha-*` npm
 release artifact；根 Workspace、内置 Server、CLI 及所有标记为 private 的 Package 仍是源码/部署
 Surface。`package.json` 中出现版本号不表示该版本已经上传 npm Registry，实际发布仍由 Maintainer
 在 Release Gate 全部通过后执行。参见 [Release 与 npm Package](docs/guides/releases.md)及
@@ -512,17 +512,17 @@ Surface。`package.json` 中出现版本号不表示该版本已经上传 npm Re
 
 | Package                                       | 职责                                                                                   |
 | --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `@codesoul-co/core`                                 | 公共 Spec、Schema、Event、Policy、Runtime、Artifact、Workspace 与 Execution Contract。 |
-| `@codesoul-co/fsm`                                  | FSM Spec、自定义拓扑分析、Snapshot、Transition、Guard 与 Recovery Semantics。          |
-| `@codesoul-co/kernel`                               | 受治理的 ReAct 与 FSM Coordination。                                                   |
-| `@codesoul-co/harness`                              | 有界执行、Tracing、Recovery、Continuation 与 Side-effect Hook。                        |
-| `@codesoul-co/domain`                               | DomainPack Loading、Validation、Overlay、Registry 与 Compilation。                     |
-| `@codesoul-co/memory`                               | Memory Profile、Provider Adapter、Context Assembly、Migration 与 Governance。          |
-| `@codesoul-co/tools`、`@codesoul-co/mcp`、`@codesoul-co/skills` | Capability Contract、Registry、Execution、Trust 与 Progressive Loading。               |
-| `@codesoul-co/inference`、`@codesoul-co/models`           | Model Alias、Routing、Inference Backend、Prompt Compilation 与 Normalized Response。   |
-| `@codesoul-co/storage`、`@codesoul-co/adapters-local`     | Storage Contract 与本地/自托管 Provider Adapter。                                      |
-| `@codesoul-co/serving-cache`、`@codesoul-co/workcache`    | Exact Model Response Cache 与 Event-derived Runtime Cache。                            |
-| `@codesoul-co/testing`                              | Contract Fixture 与测试支持。                                                          |
+| `@codesoul-co/hypha-core`                                 | 公共 Spec、Schema、Event、Policy、Runtime、Artifact、Workspace 与 Execution Contract。 |
+| `@codesoul-co/hypha-fsm`                                  | FSM Spec、自定义拓扑分析、Snapshot、Transition、Guard 与 Recovery Semantics。          |
+| `@codesoul-co/hypha-kernel`                               | 受治理的 ReAct 与 FSM Coordination。                                                   |
+| `@codesoul-co/hypha-harness`                              | 有界执行、Tracing、Recovery、Continuation 与 Side-effect Hook。                        |
+| `@codesoul-co/hypha-domain`                               | DomainPack Loading、Validation、Overlay、Registry 与 Compilation。                     |
+| `@codesoul-co/hypha-memory`                               | Memory Profile、Provider Adapter、Context Assembly、Migration 与 Governance。          |
+| `@codesoul-co/hypha-tools`、`@codesoul-co/hypha-mcp`、`@codesoul-co/hypha-skills` | Capability Contract、Registry、Execution、Trust 与 Progressive Loading。               |
+| `@codesoul-co/hypha-inference`、`@codesoul-co/hypha-models`           | Model Alias、Routing、Inference Backend、Prompt Compilation 与 Normalized Response。   |
+| `@codesoul-co/hypha-storage`、`@codesoul-co/hypha-adapters-local`     | Storage Contract 与本地/自托管 Provider Adapter。                                      |
+| `@codesoul-co/hypha-serving-cache`、`@codesoul-co/hypha-workcache`    | Exact Model Response Cache 与 Event-derived Runtime Cache。                            |
+| `@codesoul-co/hypha-testing`                              | Contract Fixture 与测试支持。                                                          |
 
 ## 文档
 

@@ -14,7 +14,7 @@ import {
   remoteSandboxProviderCapabilitiesExample,
   sandboxCreateRequestExample,
   sandboxRecordExample,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   RemoteSandboxProviderAdapter,

@@ -4,7 +4,7 @@ import type {
   ModelResponse,
   ModelStreamEvent,
   ModelUsage,
-} from '@codesoul-co/models';
+} from '@codesoul-co/hypha-models';
 import { CacheEntryTooLargeError, ServingCacheManager } from '../cache-manager';
 import { buildPromptPrefixMetadata, hashStableJson } from '../key';
 import { cacheModeAllowsRead, cacheModeAllowsWrite, normalizeCachePolicy } from '../policies';

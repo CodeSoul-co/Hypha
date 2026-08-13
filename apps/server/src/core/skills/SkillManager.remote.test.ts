@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import type { SignedSkillRegistryEntry } from '@codesoul-co/skills';
+import type { SignedSkillRegistryEntry } from '@codesoul-co/hypha-skills';
 import { SkillManager, type ServerRemoteSkillRegistryClient } from './SkillManager';
 
 describe('SkillManager signed remote registry composition', () => {

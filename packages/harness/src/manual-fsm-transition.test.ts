@@ -10,8 +10,8 @@ import {
   type EventCreateInput,
   type RuntimeOrchestrationProjection,
   type RuntimeScope,
-} from '@codesoul-co/core';
-import type { FSMProcessSpec } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-core';
+import type { FSMProcessSpec } from '@codesoul-co/hypha-fsm';
 import {
   GovernedFSMTransitionService,
   type ManualFSMTransitionCommand,

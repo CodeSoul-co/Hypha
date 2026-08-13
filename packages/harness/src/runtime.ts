@@ -7,7 +7,7 @@ import {
   type FrameworkEvent,
   type RuntimeOperationalTelemetry,
   type SpecRef,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   assertHarnessFSMProcessSpec,
   createHarnessFSMProcessSpec,
@@ -18,8 +18,8 @@ import {
   type FSMSnapshot,
   type FSMStateEnteredRecord,
   type StateTransition,
-} from '@codesoul-co/fsm';
-import type { InferenceProvider } from '@codesoul-co/inference';
+} from '@codesoul-co/hypha-fsm';
+import type { InferenceProvider } from '@codesoul-co/hypha-inference';
 import {
   BasicReActAgentRuntime,
   DefaultContextBuilder,
@@ -42,14 +42,14 @@ import {
   type SkillContextBuilderOptions,
   type ThinkingPlanner,
   type Verifier,
-} from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-kernel';
 import {
   type SkillPolicy,
   type SkillRegistry,
   SkillContextLoader,
   SkillSelector,
-} from '@codesoul-co/skills';
-import type { ToolExecutionScope, ToolRunner } from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-skills';
+import type { ToolExecutionScope, ToolRunner } from '@codesoul-co/hypha-tools';
 import { randomUUID } from 'node:crypto';
 
 export interface RuntimeSession {

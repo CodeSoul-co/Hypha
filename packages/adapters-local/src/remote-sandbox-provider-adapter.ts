@@ -37,7 +37,7 @@ import {
   type SandboxStartRequest,
   type SandboxStatusRequest,
   type SandboxTerminateRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { z, type ZodType } from 'zod';
 import { executionProviderError } from './execution-provider-error';
 

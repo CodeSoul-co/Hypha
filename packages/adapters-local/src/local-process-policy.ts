@@ -1,7 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@codesoul-co/core';
+import type { CommandExecutionRequest, ExecutionEnvironmentSpec } from '@codesoul-co/hypha-core';
 import { executionProviderError } from './execution-provider-error';
 
 const hostControlPlaneEnvironmentNames = new Set([

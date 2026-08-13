@@ -5,7 +5,7 @@ import {
   specRefSchema,
   versionedSpecSchema,
   type JsonSchema,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { managedMemoryTypeSchema, memorySourceSchema } from './record-contract';
 import type {
   EmbeddingProviderSpec,

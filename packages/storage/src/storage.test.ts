@@ -17,7 +17,7 @@ import {
   validateStorageTopologySpec,
 } from './index';
 
-describe('@codesoul-co/storage contracts', () => {
+describe('@codesoul-co/hypha-storage contracts', () => {
   it('exports schema definitions and examples for storage profiles', () => {
     expect(
       validateStorageProviderProfile(storageTopologySpecDefinition.example.providers[0]).id

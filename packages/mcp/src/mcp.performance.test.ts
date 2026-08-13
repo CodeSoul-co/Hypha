@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
-import { InMemoryEventStore } from '@codesoul-co/core';
-import { GovernedToolRunner, LocalFunctionToolAdapter, ToolRegistry } from '@codesoul-co/tools';
+import { InMemoryEventStore } from '@codesoul-co/hypha-core';
+import { GovernedToolRunner, LocalFunctionToolAdapter, ToolRegistry } from '@codesoul-co/hypha-tools';
 import {
   MCPCapabilityCatalog,
   MCPSchemaCache,
@@ -48,7 +48,7 @@ function catalog(count: number, schemaCache?: MCPSchemaCache): MCPCapabilityCata
   });
 }
 
-describe('@codesoul-co/mcp performance acceptance', () => {
+describe('@codesoul-co/hypha-mcp performance acceptance', () => {
   it('refreshes and queries 1k and 10k capability catalogs without order-of-magnitude regression', async () => {
     const measurements: Record<string, number> = {};
     const discoveryGateway = new MockMCPGateway(descriptors(1_000));

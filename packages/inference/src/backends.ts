@@ -1,4 +1,4 @@
-import { FrameworkError } from '@codesoul-co/core';
+import { FrameworkError } from '@codesoul-co/hypha-core';
 import type {
   InferenceBackend,
   InferenceBackendCapabilities,

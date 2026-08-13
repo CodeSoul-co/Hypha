@@ -9,15 +9,15 @@ import type {
   RuntimeOrchestrationProjection,
   SessionQueue,
   StateExecutionClaimStore,
-} from '@codesoul-co/core';
-import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@codesoul-co/harness';
-import type { FSMProcessSpec, FSMRuntime, FSMRuntimeOptions, FSMSnapshot } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-core';
+import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@codesoul-co/hypha-harness';
+import type { FSMProcessSpec, FSMRuntime, FSMRuntimeOptions, FSMSnapshot } from '@codesoul-co/hypha-fsm';
 import type {
   ReActAgentRuntime,
   ReActContinuationCheckpointStore,
   ReActRunner,
   ReActRunnerOptions,
-} from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-kernel';
 
 export interface ScopedReActRunnerFactory {
   create(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner;

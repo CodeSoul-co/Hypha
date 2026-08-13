@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type { MemoryLifecycleWorkerType } from '@codesoul-co/memory';
+import type { MemoryLifecycleWorkerType } from '@codesoul-co/hypha-memory';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getServerMemoryAdministration } from '../services/ServerMemoryAdministration';

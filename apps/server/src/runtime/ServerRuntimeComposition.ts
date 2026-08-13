@@ -7,8 +7,8 @@ import {
   type RuntimeCancellationRecoveryPort,
   type RuntimeOperationalTelemetry,
   type RuntimeRecoveryRequeuePort,
-} from '@codesoul-co/core';
-import { FSMRuntime, type FSMProcessSpec } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-core';
+import { FSMRuntime, type FSMProcessSpec } from '@codesoul-co/hypha-fsm';
 import {
   DurableEventStoreBridge,
   EventFirstRuntime,
@@ -16,10 +16,10 @@ import {
   HarnessedReActFSMRunner,
   RunManager,
   type FencedBoundedFSMDriverOptions,
-} from '@codesoul-co/harness';
-import type { InferenceProvider } from '@codesoul-co/inference';
-import { ReActRunner } from '@codesoul-co/kernel';
-import type { ToolRunner } from '@codesoul-co/tools';
+} from '@codesoul-co/hypha-harness';
+import type { InferenceProvider } from '@codesoul-co/hypha-inference';
+import { ReActRunner } from '@codesoul-co/hypha-kernel';
+import type { ToolRunner } from '@codesoul-co/hypha-tools';
 import type { RuntimeBackbone } from './RuntimeBackbone';
 import { RuntimeCompositionRoot, type RuntimeComposition } from './RuntimeCompositionRoot';
 import { CanonicalRunManagerEventStore } from './OrchestrationEventStore';

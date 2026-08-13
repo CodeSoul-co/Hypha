@@ -11,7 +11,7 @@ function error(
   return { code, message: code, retryable, details };
 }
 
-describe('@codesoul-co/core execution recovery classification', () => {
+describe('@codesoul-co/hypha-core execution recovery classification', () => {
   it('requires provider reconciliation for unknown execution results', () => {
     const failure = classifyExecutionFailure(error('EXECUTION_RESULT_UNKNOWN', true), {
       id: 'execution_unknown',

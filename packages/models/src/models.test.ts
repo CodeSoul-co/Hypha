@@ -17,7 +17,7 @@ import {
   type ModelTransport,
 } from './index';
 
-describe('@codesoul-co/models provider contracts', () => {
+describe('@codesoul-co/hypha-models provider contracts', () => {
   it('routes normalized ModelRequest through provider abstraction', async () => {
     const registry = new ModelRegistry();
     const provider = new MockModelProvider();

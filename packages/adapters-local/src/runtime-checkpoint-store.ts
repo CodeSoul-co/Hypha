@@ -9,7 +9,7 @@ import {
   type RuntimeCheckpointRecord,
   type RuntimeCheckpointStore,
   type RuntimeScope,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import fs from 'fs';
 import path from 'path';
 import { loadSqlite, type SqliteDatabaseSync } from './sqlite-driver';

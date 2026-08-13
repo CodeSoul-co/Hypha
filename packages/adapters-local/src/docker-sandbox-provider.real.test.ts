@@ -7,7 +7,7 @@ import {
   type CommandExecutionRequest,
   type ExecutionEnvironmentSpec,
   type SandboxCreateRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';
 import { DockerEngineCliClient } from './docker-engine-client';

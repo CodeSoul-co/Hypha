@@ -14,7 +14,7 @@ import {
   type AgentPromptRef,
   type ReasoningMethod,
   type ReasoningOptions,
-} from '@codesoul-co/inference';
+} from '@codesoul-co/hypha-inference';
 
 const router = Router();
 

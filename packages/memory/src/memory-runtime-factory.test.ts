@@ -96,7 +96,7 @@ describe('MemoryRuntimeFactory', () => {
     await expect(runtime.service.add(request)).resolves.toMatchObject({ status: 'committed' });
     expect(runtime.profileHash).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(runtime.compositionReceipt).toMatchObject({
-      serviceContract: '@codesoul-co/memory.MemoryApplicationService',
+      serviceContract: '@codesoul-co/hypha-memory.MemoryApplicationService',
       activeProfileId: memoryProfileSpecExample.id,
       providerId: memoryManagementProviderSpecExample.id,
       providerSpecId: memoryManagementProviderSpecExample.id,

@@ -1,5 +1,5 @@
 {
-  "name": "@codesoul-co/adapters-local",
+  "name": "@codesoul-co/hypha-adapters-local",
   "version": "1.0.0",
   "private": false,
   "main": "dist/index.js",
@@ -26,12 +26,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codesoul-co/core": "1.0.0",
-    "@codesoul-co/kernel": "1.0.0",
-    "@codesoul-co/mcp": "1.0.0",
-    "@codesoul-co/memory": "1.0.0",
-    "@codesoul-co/storage": "1.0.0",
-    "@codesoul-co/tools": "1.0.0",
+    "@codesoul-co/hypha-core": "1.0.0",
+    "@codesoul-co/hypha-kernel": "1.0.0",
+    "@codesoul-co/hypha-mcp": "1.0.0",
+    "@codesoul-co/hypha-memory": "1.0.0",
+    "@codesoul-co/hypha-storage": "1.0.0",
+    "@codesoul-co/hypha-tools": "1.0.0",
     "better-sqlite3": "^11.10.0",
     "minio": "8.0.7",
     "pg": "8.22.0",

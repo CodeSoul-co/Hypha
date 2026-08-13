@@ -11,13 +11,13 @@ import type {
   ArtifactStoreCapabilities,
   ArtifactStoreProvider,
   ProviderHealth,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   artifactCopyRequestSchema,
   artifactStorageRefSchema,
   validateArtifactGetRequest,
   validateArtifactPutRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { ArtifactContentLimitError } from './artifact-content-io';
 import {
   ArtifactStoreAdapterError,

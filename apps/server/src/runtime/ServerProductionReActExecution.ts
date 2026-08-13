@@ -7,14 +7,14 @@ import {
   type InitialReActQuantumDescriptor,
   type ReActGlobalBudget,
   type ReActQuantumDescriptor,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   ArtifactReActContextSnapshotStore,
   ReActQuantumExecutor,
   type ReActContextSnapshot,
   type ReActQuantumRuntimeState,
-} from '@codesoul-co/harness';
-import type { InferenceProvider } from '@codesoul-co/inference';
+} from '@codesoul-co/hypha-harness';
+import type { InferenceProvider } from '@codesoul-co/hypha-inference';
 import type {
   ReActAgentRuntime,
   ReActContinuationCheckpoint,
@@ -22,11 +22,11 @@ import type {
   ReActObservation,
   ReActRunResult,
   ReActStep,
-} from '@codesoul-co/kernel';
-import { reActContinuationScopeHash } from '@codesoul-co/kernel';
-import type { ToolRunner } from '@codesoul-co/tools';
-import type { ArtifactStoreProvider } from '@codesoul-co/core';
-import { harnessStateForReActPhase } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-kernel';
+import { reActContinuationScopeHash } from '@codesoul-co/hypha-kernel';
+import type { ToolRunner } from '@codesoul-co/hypha-tools';
+import type { ArtifactStoreProvider } from '@codesoul-co/hypha-core';
+import { harnessStateForReActPhase } from '@codesoul-co/hypha-fsm';
 import type {
   CanonicalReActRunFacts,
   PreparedCanonicalReActExecution,

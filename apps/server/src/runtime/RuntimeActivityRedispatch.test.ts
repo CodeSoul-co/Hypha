@@ -1,4 +1,4 @@
-import { InMemoryExecutionArtifactStore } from '@codesoul-co/adapters-local';
+import { InMemoryExecutionArtifactStore } from '@codesoul-co/hypha-adapters-local';
 import {
   ArtifactRuntimeActivityDescriptorStore,
   DurableEventRuntime,
@@ -16,7 +16,7 @@ import {
   type RuntimeActivityKind,
   type RuntimeActivityRedispatchPort,
   type RuntimeHumanTaskKind,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 const now = '2026-07-24T07:00:00.000Z';
 

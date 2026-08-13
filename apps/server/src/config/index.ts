@@ -3,8 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
-import { storageProviderProfileSchema } from '@codesoul-co/storage';
-import { toolAdapterProfileSchema } from '@codesoul-co/tools';
+import { storageProviderProfileSchema } from '@codesoul-co/hypha-storage';
+import { toolAdapterProfileSchema } from '@codesoul-co/hypha-tools';
 import { logger } from '../utils/logger';
 
 // Load environment variables

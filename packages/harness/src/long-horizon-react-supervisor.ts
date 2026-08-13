@@ -4,14 +4,14 @@ import {
   validateContinueReActCommandPayload,
   type ContinueReActCommandPayloadV1,
   type SessionCommandRecord,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import type {
   ReActContinuationCheckpoint,
   ReActRunContext,
   ReActRunControl,
   ReActRunResult,
   ReActRunner,
-} from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-kernel';
 
 export interface ReActContinuationScheduleRequest {
   version: '1.0.0';

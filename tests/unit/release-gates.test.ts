@@ -10,8 +10,9 @@ const releaseChecker = fs.readFileSync(
 
 describe('release gate composition', () => {
   it('publishes the release under the CodeSoul npm organization', () => {
-    expect(coreManifest.name).toBe('@codesoul-co/core');
-    expect(releaseChecker).toContain("startsWith('@codesoul-co/')");
+    expect(coreManifest.name).toBe('@codesoul-co/hypha-core');
+    expect(releaseChecker).toContain("startsWith('@codesoul-co/hypha-')");
+    expect(releaseChecker).toContain('publishable @codesoul-co/hypha-* packages');
     expect(releaseChecker).not.toContain('@hypha');
   });
 

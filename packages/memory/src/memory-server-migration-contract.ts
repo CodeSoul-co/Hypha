@@ -26,7 +26,7 @@ export interface MemoryServerMigrationSharedFixture {
 export interface MemoryServerMigrationAcceptance {
   contractRef: MemoryContractSpecRef;
   issues: readonly ['P0-1', 'P0-2', 'P0-3'];
-  canonicalService: '@codesoul-co/memory.MemoryApplicationService';
+  canonicalService: '@codesoul-co/hypha-memory.MemoryApplicationService';
   requiredConsumers: readonly ['chat', 'memory-routes', 'tool', 'workflow', 'harness'];
   prohibitedRuntimeDependencies: readonly ['TemporaryMemory', 'PermanentMemory'];
   canonicalConsumption: {
@@ -133,7 +133,7 @@ export const memoryServerMigrationAcceptance: MemoryServerMigrationAcceptance = 
     revision: 'p0-3-stage-4',
   },
   issues: ['P0-1', 'P0-2', 'P0-3'],
-  canonicalService: '@codesoul-co/memory.MemoryApplicationService',
+  canonicalService: '@codesoul-co/hypha-memory.MemoryApplicationService',
   requiredConsumers: ['chat', 'memory-routes', 'tool', 'workflow', 'harness'],
   prohibitedRuntimeDependencies: ['TemporaryMemory', 'PermanentMemory'],
   canonicalConsumption: {

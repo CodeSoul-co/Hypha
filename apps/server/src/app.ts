@@ -44,8 +44,8 @@ import { createServerProductionSessionCommands } from './runtime/ServerProductio
 import { ServerProductionReActExecution } from './runtime/ServerProductionReActExecution';
 import { ServerReActContinuationReconciler } from './runtime/ServerReActContinuationReconciler';
 import { ServerReActContinuationReconciliationScheduler } from './runtime/ServerReActContinuationReconciliationScheduler';
-import { LocalFilesystemExecutionArtifactStore } from '@codesoul-co/adapters-local';
-import { GovernedFSMTransitionService } from '@codesoul-co/harness';
+import { LocalFilesystemExecutionArtifactStore } from '@codesoul-co/hypha-adapters-local';
+import { GovernedFSMTransitionService } from '@codesoul-co/hypha-harness';
 import { ServerShutdownCoordinator } from './runtime/ServerShutdownCoordinator';
 import {
   bindServerRuntimeReadiness,

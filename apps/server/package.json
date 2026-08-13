@@ -1,5 +1,5 @@
 {
-  "name": "@codesoul-co/server",
+  "name": "@codesoul-co/hypha-server",
   "version": "0.0.0",
   "private": true,
   "main": "../../dist/apps/server/app.js",

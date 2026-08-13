@@ -17,7 +17,7 @@ import {
   type RunLeaseReleaseRequest,
   type RunLeaseScope,
   type RunLeaseStore,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import fs from 'fs';
 import path from 'path';
 import { loadSqlite, type SqliteDatabaseSync } from './sqlite-driver';

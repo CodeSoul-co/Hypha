@@ -1,5 +1,5 @@
 {
-  "name": "@codesoul-co/fsm",
+  "name": "@codesoul-co/hypha-fsm",
   "version": "1.0.0",
   "private": false,
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@codesoul-co/core": "1.0.0",
+    "@codesoul-co/hypha-core": "1.0.0",
     "zod": "^3.22.0"
   },
   "scripts": {

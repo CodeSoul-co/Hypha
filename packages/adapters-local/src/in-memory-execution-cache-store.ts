@@ -4,7 +4,7 @@ import {
   type ExecutionCacheRecord,
   type ExecutionCacheStore,
   type ExecutionFingerprintHasher,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface InMemoryExecutionCacheStoreOptions {
   maxEntries?: number;

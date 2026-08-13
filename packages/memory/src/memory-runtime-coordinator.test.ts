@@ -243,7 +243,7 @@ function runtime(
     compositionReceipt: {
       runtimeId: `runtime:${revision}`,
       serviceInstanceId: `service:${revision}`,
-      serviceContract: '@codesoul-co/memory.MemoryApplicationService',
+      serviceContract: '@codesoul-co/hypha-memory.MemoryApplicationService',
       activeProfileId: selected.profile.id,
       providerId: provider.id,
       providerSpecId: selected.management.id,

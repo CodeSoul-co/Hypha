@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryEventStore } from '@codesoul-co/core';
+import { InMemoryEventStore } from '@codesoul-co/hypha-core';
 import {
   GovernedToolRunner,
   ToolRegistry,

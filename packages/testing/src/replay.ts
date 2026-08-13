@@ -8,7 +8,7 @@ import {
   type ReplaySpec,
   type SpecRef,
   type TraceRecorder,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface ReplayFixture {
   id: string;

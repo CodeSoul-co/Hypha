@@ -7,7 +7,7 @@ import type {
   SpecMetadata,
   TimeoutPolicySpec,
   VersionedSpec,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   defineSpecSchema,
   exportSpecJsonSchemas,
@@ -17,7 +17,7 @@ import {
   specMetadataSchema,
   timeoutPolicySpecSchema,
   versionedSpecSchema,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   FSM_ANOMALY_CATEGORIES,
   defaultFSMRecoveryPolicy,

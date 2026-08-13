@@ -3,7 +3,7 @@ import type { BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import type { FileMutation } from '@codesoul-co/core';
+import type { FileMutation } from '@codesoul-co/hypha-core';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 import {
   directoryIdentity,

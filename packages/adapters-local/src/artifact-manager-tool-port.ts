@@ -1,5 +1,5 @@
-import type { ArtifactManager, ArtifactRecord, ExecutionPrincipal, SpecRef } from '@codesoul-co/core';
-import type { ToolArtifactPort } from '@codesoul-co/tools';
+import type { ArtifactManager, ArtifactRecord, ExecutionPrincipal, SpecRef } from '@codesoul-co/hypha-core';
+import type { ToolArtifactPort } from '@codesoul-co/hypha-tools';
 import { hashArtifactBytes } from './artifact-content-io';
 
 export interface ToolArtifactManagerContext {

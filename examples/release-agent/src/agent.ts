@@ -3,8 +3,8 @@ import {
   applyDomainAgentPatch,
   compileDomainPackToHarnessedSystem,
   loadDomainPackFile,
-} from '@codesoul-co/domain';
-import type { ReActAgentSpec } from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-domain';
+import type { ReActAgentSpec } from '@codesoul-co/hypha-kernel';
 
 export async function buildReleaseAgent(projectRoot = process.cwd()) {
   const domainPack = await loadDomainPackFile(path.join(projectRoot, 'agent', 'domain-pack.yaml'));

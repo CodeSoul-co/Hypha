@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import type { ModelProvider, ModelRequest, ModelResponse } from '@codesoul-co/models';
+import type { ModelProvider, ModelRequest, ModelResponse } from '@codesoul-co/hypha-models';
 import { ServingCacheManager } from './cache-manager';
 import { buildPromptPrefixMetadata, createLLMCacheKey } from './key';
 import { CachedLLMProvider } from './middleware/llm-cache-middleware';
@@ -56,7 +56,7 @@ class PrefixUsageProvider extends CountingProvider {
   }
 }
 
-describe('@codesoul-co/serving-cache', () => {
+describe('@codesoul-co/hypha-serving-cache', () => {
   it('builds deterministic exact request keys', () => {
     const left = createLLMCacheKey({
       provider: 'deepseek',

@@ -1,4 +1,4 @@
-import type { SandboxCreateRequest } from '@codesoul-co/core';
+import type { SandboxCreateRequest } from '@codesoul-co/hypha-core';
 import {
   InMemorySandboxLifecycle,
   type InMemorySandboxLifecycleOptions,

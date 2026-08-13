@@ -1,4 +1,4 @@
-import type { EffectiveAgentCapabilitySnapshot, ToolSpec } from '@codesoul-co/tools';
+import type { EffectiveAgentCapabilitySnapshot, ToolSpec } from '@codesoul-co/hypha-tools';
 import { capabilityPolicyHash, mergeManagedToolSpec } from './EventRuntime';
 
 const inputSchema = {

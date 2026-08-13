@@ -1,4 +1,4 @@
-import type { JsonSchema } from '@codesoul-co/core';
+import type { JsonSchema } from '@codesoul-co/hypha-core';
 import { LocalFunctionToolAdapter, type ToolAdapter, type ToolCallContext, type ToolSpec } from './index';
 
 export interface GovernedToolFamilyPort {

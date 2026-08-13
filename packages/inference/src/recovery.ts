@@ -3,7 +3,7 @@ import {
   type RecoveryCategory,
   type RecoveryFailure,
   type RecoveryStrategy,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import type { InferenceRequest } from './types';
 
 export type InferenceRecoveryOperation =

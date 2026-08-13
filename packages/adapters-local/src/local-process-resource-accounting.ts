@@ -1,4 +1,4 @@
-import type { ExecutionResourceUsage } from '@codesoul-co/core';
+import type { ExecutionResourceUsage } from '@codesoul-co/hypha-core';
 import type { LocalProcessRunResult } from './local-process-supervisor';
 
 export interface LocalProcessResourceEvidence {

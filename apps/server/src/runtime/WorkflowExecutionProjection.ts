@@ -1,4 +1,4 @@
-import type { FrameworkEvent } from '@codesoul-co/core';
+import type { FrameworkEvent } from '@codesoul-co/hypha-core';
 import type { StageResult, WorkflowExecution } from '../core/workflow/types';
 
 export interface WorkflowExecutionProjection {

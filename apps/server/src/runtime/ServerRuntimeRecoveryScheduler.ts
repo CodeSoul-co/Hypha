@@ -4,7 +4,7 @@ import {
   type RuntimeRecoveryResult,
   type RuntimeRecoveryScanResult,
   type RuntimeRecoveryService,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export interface ServerRuntimeRecoverySweepResult {
   checkedAt: string;

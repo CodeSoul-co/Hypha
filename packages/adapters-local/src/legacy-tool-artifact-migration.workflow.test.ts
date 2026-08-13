@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ArtifactProfileSpec, ExecutionPrincipal } from '@codesoul-co/core';
-import { DefaultArtifactManager } from '@codesoul-co/core';
+import type { ArtifactProfileSpec, ExecutionPrincipal } from '@codesoul-co/hypha-core';
+import { DefaultArtifactManager } from '@codesoul-co/hypha-core';
 import { describe, expect, it } from 'vitest';
 import { ArtifactStoreToolPort, FileArtifactStore } from './index';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';

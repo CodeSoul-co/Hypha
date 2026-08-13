@@ -81,7 +81,7 @@ function addRequest(
   };
 }
 
-describe('@codesoul-co/memory foundational runtime', () => {
+describe('@codesoul-co/hypha-memory foundational runtime', () => {
   it('provides idempotent native writes, scope isolation, CAS history and index outbox', async () => {
     const provider = new NativeMemoryManagementProvider({
       profile: memoryProfileSpecExample,

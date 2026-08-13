@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ArtifactManager } from '@codesoul-co/core';
+import type { ArtifactManager } from '@codesoul-co/hypha-core';
 import { hashArtifactBytes } from './artifact-content-io';
 import type { ToolArtifactManagerContext } from './artifact-manager-tool-port';
 

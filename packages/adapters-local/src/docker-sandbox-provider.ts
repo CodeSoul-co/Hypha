@@ -15,7 +15,7 @@ import {
   type SandboxStartRequest,
   type SandboxStatusRequest,
   type SandboxTerminateRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { ZodError } from 'zod';
 import {
   DockerExecutionCoordinator,

@@ -5,7 +5,7 @@ import {
   type RecoveryCategory,
   type RecoveryModule,
   type RecoverySideEffectState,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 
 export const FSM_ANOMALY_SOURCES = RECOVERY_MODULES;
 

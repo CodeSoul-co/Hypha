@@ -9,8 +9,8 @@ import type {
   WorkspaceRestoreRequest,
   WorkspaceSnapshotEntry,
   WorkspaceSnapshotManifest,
-} from '@codesoul-co/core';
-import { validateWorkspaceSnapshotManifest } from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
+import { validateWorkspaceSnapshotManifest } from '@codesoul-co/hypha-core';
 import { collectArtifactContent } from './artifact-content-io';
 import { executionProviderError } from './execution-provider-error';
 import type { LocalWorkspaceSnapshot } from './local-workspace-mutations';

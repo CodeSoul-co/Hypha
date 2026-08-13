@@ -1,5 +1,5 @@
-import type { StoredArtifactRecord } from '@codesoul-co/core';
-import { validateStoredArtifactRecord as validateCoreStoredArtifactRecord } from '@codesoul-co/core';
+import type { StoredArtifactRecord } from '@codesoul-co/hypha-core';
+import { validateStoredArtifactRecord as validateCoreStoredArtifactRecord } from '@codesoul-co/hypha-core';
 
 export function validateStoredArtifactRecord(stored: StoredArtifactRecord): StoredArtifactRecord {
   return validateCoreStoredArtifactRecord(stored);

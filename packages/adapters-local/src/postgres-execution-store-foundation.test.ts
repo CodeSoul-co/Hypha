@@ -8,7 +8,7 @@ import type {
   ExecutionRecordCreateRequest,
   ExecutionStore,
   ProviderHealth,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
@@ -18,7 +18,7 @@ import {
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
   executionRecordExample,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { describe, expect, it } from 'vitest';
 import type { PostgresExecutionStorePoolClient } from './postgres-execution-store-connection';
 import {

@@ -4,8 +4,8 @@ import type {
   ArtifactProfileSpec,
   ArtifactRecord,
   ExecutionPrincipal,
-} from '@codesoul-co/core';
-import { DefaultArtifactManager } from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
+import { DefaultArtifactManager } from '@codesoul-co/hypha-core';
 import { hashArtifactBytes } from './artifact-content-io';
 import { ArtifactManagerToolPort } from './artifact-manager-tool-port';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';

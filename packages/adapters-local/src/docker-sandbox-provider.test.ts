@@ -7,7 +7,7 @@ import type {
   ExecutionEnvironmentSpec,
   SandboxCreateRequest,
   SandboxRecord,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DockerExecutionCoordinatorError,

@@ -15,7 +15,7 @@ import type {
   ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
   ProviderHealth,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   validateExecutionRecord,
   validateExecutionRecordCompareAndSetRequest,
@@ -26,7 +26,7 @@ import {
   validateExecutionLeaseAcquireRequest,
   validateExecutionLeaseReleaseRequest,
   validateExecutionLeaseRenewRequest,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   nextSQLiteExecutionListCursor,
   planSQLiteExecutionList,

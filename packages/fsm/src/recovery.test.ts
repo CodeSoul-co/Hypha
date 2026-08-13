@@ -31,7 +31,7 @@ function policy(overrides: Partial<FSMRecoveryPolicySpec> = {}): FSMRecoveryPoli
   };
 }
 
-describe('@codesoul-co/fsm recovery contracts', () => {
+describe('@codesoul-co/hypha-fsm recovery contracts', () => {
   it('classifies common provider, policy, capacity, and cancellation failures', () => {
     expect(
       classifyFSMAnomaly({ status: 429, message: 'slow down' }, { id: 'a1', source: 'inference' })

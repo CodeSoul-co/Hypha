@@ -26,7 +26,7 @@ const failure: RecoveryFailure = {
   },
 };
 
-describe('@codesoul-co/core recovery contracts', () => {
+describe('@codesoul-co/hypha-core recovery contracts', () => {
   it('keeps a failure fingerprint stable across attempts and messages', () => {
     expect(
       recoveryFailureFingerprint({

@@ -1,4 +1,4 @@
-import { defineSpecSchema, exportSpecJsonSchemas, type JsonSchema } from '@codesoul-co/core';
+import { defineSpecSchema, exportSpecJsonSchemas, type JsonSchema } from '@codesoul-co/hypha-core';
 import type {
   DomainMemoryDependencySnapshot,
   MemoryCacheInvalidation,

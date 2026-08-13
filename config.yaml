@@ -199,7 +199,7 @@ storage:
 
 inference:
   # model-provider preserves the existing cloud/provider path. Set backend to
-  # route through @codesoul-co/inference and the configured local/API backend.
+  # route through @codesoul-co/hypha-inference and the configured local/API backend.
   runtimeProvider: "${HYPHA_INFERENCE_RUNTIME_PROVIDER:model-provider}"
   defaultBackend: "${HYPHA_INFERENCE_DEFAULT_BACKEND:sglang}"
   local:

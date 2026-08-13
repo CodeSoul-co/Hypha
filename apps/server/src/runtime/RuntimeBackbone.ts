@@ -7,13 +7,13 @@ import {
   SQLiteRuntimeCheckpointStore,
   SQLiteSessionQueue,
   SQLiteStateExecutionClaimStore,
-} from '@codesoul-co/adapters-local';
+} from '@codesoul-co/hypha-adapters-local';
 import {
   DurableEventRuntime,
   ProjectionEngine,
   type EventSchemaRegistry,
   type RuntimeOrchestrationProjection,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import fs from 'fs';
 import path from 'path';
 import type { RuntimeCompositionDependencies } from './RuntimeCompositionRoot';

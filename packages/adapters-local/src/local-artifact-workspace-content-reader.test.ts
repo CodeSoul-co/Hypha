@@ -5,7 +5,7 @@ import {
   DefaultArtifactManager,
   type ArtifactProfileSpec,
   type ExecutionPrincipal,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { hashArtifactBytes, readArtifactStream } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';

@@ -1,4 +1,4 @@
-import type { CommandExecutionResult, FileMutation } from '@codesoul-co/core';
+import type { CommandExecutionResult, FileMutation } from '@codesoul-co/hypha-core';
 import type { DockerCliResult } from './docker-cli-transport';
 import {
   DockerEngineClientError,

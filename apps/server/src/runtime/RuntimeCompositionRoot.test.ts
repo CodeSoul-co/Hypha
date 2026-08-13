@@ -9,9 +9,9 @@ import type {
   RuntimeRecoveryService,
   SessionQueue,
   StateExecutionClaimStore,
-} from '@codesoul-co/core';
-import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@codesoul-co/harness';
-import type { ReActContinuationCheckpointStore, ReActRunner } from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-core';
+import type { FencedBoundedFSMDriver, HarnessedReActFSMRunner, RunManager } from '@codesoul-co/hypha-harness';
+import type { ReActContinuationCheckpointStore, ReActRunner } from '@codesoul-co/hypha-kernel';
 import {
   RuntimeCompositionRoot,
   type RecoveryFSMFactory,

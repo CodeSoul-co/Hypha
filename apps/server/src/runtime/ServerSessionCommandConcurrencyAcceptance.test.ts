@@ -1,8 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { ArtifactSessionCommandPayloadStore, type SessionCommandWorkerResult } from '@codesoul-co/core';
-import { InMemoryExecutionArtifactStore, SQLiteSessionQueue } from '@codesoul-co/adapters-local';
+import { ArtifactSessionCommandPayloadStore, type SessionCommandWorkerResult } from '@codesoul-co/hypha-core';
+import { InMemoryExecutionArtifactStore, SQLiteSessionQueue } from '@codesoul-co/hypha-adapters-local';
 import {
   ServerSessionCommandRuntime,
   type ServerSessionCommandInput,

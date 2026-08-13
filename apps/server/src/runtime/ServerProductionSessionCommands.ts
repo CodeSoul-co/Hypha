@@ -1,4 +1,4 @@
-import { LocalFilesystemExecutionArtifactStore } from '@codesoul-co/adapters-local';
+import { LocalFilesystemExecutionArtifactStore } from '@codesoul-co/hypha-adapters-local';
 import {
   ArtifactSessionCommandPayloadStore,
   FrameworkError,
@@ -13,15 +13,15 @@ import {
   type SessionQueue,
   type SessionQueueScope,
   type SpecRef,
-} from '@codesoul-co/core';
+} from '@codesoul-co/hypha-core';
 import {
   LongHorizonReActSupervisor,
   ServerIngressReActContinuationScheduler,
   type ReActContinuationScheduler,
-} from '@codesoul-co/harness';
-import { reactAgentSpecSchema, type ReActContinuationCheckpoint } from '@codesoul-co/kernel';
-import { validateDomainPackSpec, type DomainPackSpec } from '@codesoul-co/domain';
-import { fsmProcessSpecSchema, validateFSMProcessSpec, type FSMProcessSpec } from '@codesoul-co/fsm';
+} from '@codesoul-co/hypha-harness';
+import { reactAgentSpecSchema, type ReActContinuationCheckpoint } from '@codesoul-co/hypha-kernel';
+import { validateDomainPackSpec, type DomainPackSpec } from '@codesoul-co/hypha-domain';
+import { fsmProcessSpecSchema, validateFSMProcessSpec, type FSMProcessSpec } from '@codesoul-co/hypha-fsm';
 import type { ServerStartRunCommandIngress, StartRunInput } from '../services/EventRuntime';
 import {
   ServerSessionCommandRuntime,

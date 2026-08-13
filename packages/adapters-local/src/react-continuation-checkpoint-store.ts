@@ -1,10 +1,10 @@
-import { FrameworkError, hashCanonicalJson } from '@codesoul-co/core';
+import { FrameworkError, hashCanonicalJson } from '@codesoul-co/hypha-core';
 import {
   validateReActContinuationCheckpoint,
   type ReActContinuationCheckpoint,
   type ReActContinuationCheckpointPutResult,
   type ReActContinuationCheckpointStore,
-} from '@codesoul-co/kernel';
+} from '@codesoul-co/hypha-kernel';
 import fs from 'fs';
 import path from 'path';
 import { loadSqlite, type SqliteDatabaseSync } from './sqlite-driver';
