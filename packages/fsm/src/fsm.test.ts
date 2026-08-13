@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  analyzeFSMTopology,
   applyTransition,
   applyTransitionWithRuntimePolicy,
   assertHarnessFSMProcessSpec,
@@ -15,6 +16,7 @@ import {
   getAllowedTransitions,
   HARNESS_STATE_CAPABILITY_AREA,
   harnessStateForReActPhase,
+  isHarnessFSMProcessSpec,
   parseFSMProcessSpec,
   planHarnessCapabilityPath,
   REACT_FSM_STATE_PATH,
@@ -55,6 +57,28 @@ describe('@hypha/fsm runtime contracts', () => {
     expect(() => applyTransition(processSpec, initial, 'Completed')).toThrow(
       /Transition not allowed/
     );
+  });
+
+  it('analyzes custom topology without forcing Harness-owned node names', () => {
+    const custom: FSMProcessSpec = {
+      ...processSpec,
+      states: [
+        ...processSpec.states,
+        { id: 'Detached', kind: 'domain' },
+        { id: 'Loop', kind: 'domain' },
+      ],
+      transitions: [...processSpec.transitions, { from: 'Loop', to: 'Loop' }],
+    };
+
+    expect(analyzeFSMTopology(custom)).toEqual({
+      initialState: 'Idle',
+      reachableStates: ['Idle', 'Reasoning', 'Completed'],
+      unreachableStates: ['Detached', 'Loop'],
+      deadEndStates: ['Detached'],
+      cycleStates: ['Loop'],
+    });
+    expect(isHarnessFSMProcessSpec(custom)).toBe(false);
+    expect(isHarnessFSMProcessSpec(defaultReActFSMProcessSpec)).toBe(true);
   });
 
   it('rejects duplicate topology and inconsistent persisted snapshots', () => {
