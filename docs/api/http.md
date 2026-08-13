@@ -1,8 +1,14 @@
 # HTTP API
 
-The HTTP API is mounted under `/api/v1`. Protected endpoints currently require
-`Authorization: Bearer <jwt>`. API key records can be managed through the authentication routes,
-but `X-API-Key` request authentication is not enabled by the default Express middleware.
+The HTTP API is mounted under `/api/v1`. Protected endpoints use
+`Authorization: Bearer <jwt>`. Chat, Memory, and Usage routes also accept the configured
+`X-API-Key`; Runtime administration and durable execution routes require a Bearer token.
+
+The OpenAPI 3.1 route inventory is generated from the mounted Express routers and is available at
+`GET /openapi.json` and `GET /docs/openapi.json`. The HTML `/docs` page and `/docs/json` response are
+retained as legacy human-readable indexes. This document remains the field-level behavioral
+contract; release CI checks the machine-readable inventory so newly mounted routes cannot silently
+disappear from API discovery.
 
 Responses use a common envelope:
 
@@ -305,9 +311,14 @@ Workflow execution creates a runtime run, records workflow stage events, and ret
 
 ```json
 {
+  "source": "inline",
   "content": "---\nname: Example\nversion: 0.0.0\ndescription: Example skill\npriority: 10\n---\nSkill instructions."
 }
 ```
+
+`source` is required and must be `inline`, `path`, or `url`; provide the matching `content`, `path`,
+or `url` field. Optional integrity, signature, manifest, filename, and activation fields are accepted
+for controlled installation.
 
 ## Runtime Projections
 
@@ -317,6 +328,7 @@ Runtime views are derived from events recorded during a run.
 | ------ | --------------------------------- | -------------------------------------------------------------------------- |
 | `GET`  | `/runtime/runs/:runId`            | Project run state from events.                                             |
 | `GET`  | `/runtime/runs/:runId/events`     | List source events for a run.                                              |
+| `GET`  | `/runtime/runs/:runId/fsm`        | Inspect process identity, revision, current State, and allowed transitions. |
 | `GET`  | `/runtime/runs/:runId/replay`     | Return replay state path and event-derived call details.                   |
 | `GET`  | `/runtime/runs/:runId/audit`      | Return audit counters and policy evidence.                                 |
 | `GET`  | `/runtime/runs/:runId/regression` | Return event-type, state-path, tool, memory, and output regression inputs. |
@@ -326,6 +338,64 @@ Replay responses include `runId`, `events`, `statePath`, `toolCallEventIds`, `po
 Audit responses include `eventCount`, `policyDecisionCount`, `memoryWriteCount`, `toolCallCount`, and `missingRunIds`.
 
 Regression responses include `eventTypes`, `statePath`, `toolCalls`, `memoryWriteCount`, and optional `finalOutput`.
+
+### Durable Session Commands
+
+`POST /runtime/sessions/:sessionId/commands/start-run` is the durable Agent execution entry point.
+It requires a unique `Idempotency-Key` header and returns HTTP `202` with the persisted command.
+
+```json
+{
+  "input": { "question": "What is Hypha?" },
+  "agentId": "agent.release-research",
+  "workflowRef": { "id": "workflow.research", "version": "1.0.0" },
+  "domainPack": {},
+  "react": {
+    "modelAlias": "default-chat",
+    "agentSpec": {},
+    "messages": [{ "role": "user", "content": "What is Hypha?" }],
+    "budget": { "iterations": 8, "modelCalls": 8, "toolCalls": 4 }
+  },
+  "metadata": { "source": "release-consumer" }
+}
+```
+
+The top-level request is strict. `react.messages` requires at least one bounded system, user, or
+assistant message. Optional budgets and `deadlineAt` are validated before the command is queued.
+Poll `GET /runtime/sessions/:sessionId/commands`; optional `status`, `fromSequence`, and `limit`
+filters support restart-safe consumers.
+
+Custom FSM Runs submit a complete validated `fsm` without `react`, or submit a DomainPack workflow
+that the Server compiles. ReAct Runs always retain the framework-owned Harness FSM. See
+[`Custom FSM Topologies`](../guides/custom-fsm.md).
+
+### Governed FSM Control
+
+| Method | Path                                           | Description                                                        |
+| ------ | ---------------------------------------------- | ------------------------------------------------------------------ |
+| `GET`  | `/runtime/runs/:runId/fsm`                    | Return the Event-derived FSM view and current Run revision.        |
+| `POST` | `/runtime/runs/:runId/fsm/transitions`        | Apply one declared edge with owner, revision, guard, and Lease evidence. |
+
+Manual transitions require `Idempotency-Key` plus `processId`, `processVersion`, `expectedState`,
+`expectedRunRevision`, `targetState`, and `reason`. Optional `guardContext` supplies deterministic
+input, variables, and metadata for a declared guard. The endpoint cannot add a node, invent an edge,
+bypass Policy/HumanTask approval, or leave a terminal Run.
+
+### Agent Prompts and Human Tasks
+
+| Method   | Path                                                | Description                                                              |
+| -------- | --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `GET`    | `/runtime/agent-prompts`                            | List registered versioned Agent Prompts.                                 |
+| `POST`   | `/runtime/agent-prompts`                            | Register a validated Prompt. Admin only.                                 |
+| `PUT`    | `/runtime/agent-prompts/:id/:version`               | Replace a Prompt using numeric `If-Match` revision evidence. Admin only. |
+| `DELETE` | `/runtime/agent-prompts/:id`                        | Remove an optional exact version. Admin only.                            |
+| `GET`    | `/runtime/reasoning/strategies`                     | List available reasoning strategies.                                     |
+| `GET`    | `/runtime/runs/:runId/human-tasks`                  | List HumanTasks owned by the Run user.                                   |
+| `POST`   | `/runtime/runs/:runId/human-tasks/:taskId/decision` | Approve or reject the exact task subject and revision.                   |
+
+HumanTask decisions require `Idempotency-Key` and a body containing `decision`, positive
+`expectedRevision`, exact `expectedSubjectHash`, and optional `reason`. The Runtime revalidates the
+subject after approval rather than treating an old approval as open-ended authority.
 
 ## Concurrency
 
