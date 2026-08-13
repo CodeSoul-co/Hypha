@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import Ajv from 'ajv';
-import type { JsonSchema } from '@hypha/core';
+import type { JsonSchema } from '@codesoul-co/core';
 import type { ToolSpec } from './index';
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;

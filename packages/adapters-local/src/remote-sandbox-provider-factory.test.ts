@@ -1,4 +1,4 @@
-import { SandboxProviderRegistry } from '@hypha/core';
+import { SandboxProviderRegistry } from '@codesoul-co/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   REMOTE_SANDBOX_PROVIDER_ID,

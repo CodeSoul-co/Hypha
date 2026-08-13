@@ -23,7 +23,7 @@ import {
   validateWorkingMemoryStoreSpec,
 } from './index';
 
-describe('@hypha/memory production contracts', () => {
+describe('@codesoul-co/memory production contracts', () => {
   it('validates a versioned MemoryProfileSpec with explicit scope and policies', () => {
     expect(validateMemoryProfileSpec(memoryProfileSpecExample)).toEqual(memoryProfileSpecExample);
     expect(memoryProfileSpecDefinition.example.revision).toBe('memory-default-v1');

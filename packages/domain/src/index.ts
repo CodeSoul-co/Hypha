@@ -18,7 +18,7 @@ import type {
   SpecRef,
   TimeoutPolicySpec,
   VersionedSpec,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   defineSpecSchema,
   deploymentSpecSchema,
@@ -38,22 +38,22 @@ import {
   specRefSchema,
   timeoutPolicySpecSchema,
   versionedSpecSchema,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   assertHarnessFSMProcessSpec,
   createHarnessFSMProcessSpec,
   type FSMProcessSpec,
-} from '@hypha/fsm';
-import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@hypha/mcp';
-import { memorySpecSchema, type MemorySpec } from '@hypha/memory';
-import type { SkillRef } from '@hypha/skills';
+} from '@codesoul-co/fsm';
+import { mcpIntegrationSpecSchema, type MCPIntegrationSpec } from '@codesoul-co/mcp';
+import { memorySpecSchema, type MemorySpec } from '@codesoul-co/memory';
+import type { SkillRef } from '@codesoul-co/skills';
 import {
   toolProfileSpecSchema,
   toolSpecSchema,
   type ToolExecutionScope,
   type ToolProfileSpec,
   type ToolSpec,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 
 export * from './research-evidence-example';
 

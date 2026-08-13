@@ -1,4 +1,4 @@
-import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
+import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@codesoul-co/inference';
 import { ThinkingCache, type ThinkingCacheTraceSink } from './thinking-cache';
 import type { WorkCacheManager } from './manager';
 

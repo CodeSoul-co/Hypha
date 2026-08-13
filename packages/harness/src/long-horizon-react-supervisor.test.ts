@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hashCanonicalJson, type ContinueReActCommandPayloadV1 } from '@hypha/core';
-import type { ReActContinuationCheckpoint, ReActRunContext, ReActRunResult } from '@hypha/kernel';
+import { hashCanonicalJson, type ContinueReActCommandPayloadV1 } from '@codesoul-co/core';
+import type { ReActContinuationCheckpoint, ReActRunContext, ReActRunResult } from '@codesoul-co/kernel';
 import {
   LongHorizonReActSupervisor,
   ServerIngressReActContinuationScheduler,

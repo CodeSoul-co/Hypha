@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { assertHarnessFSMProcessSpec, HARNESS_FSM_STATE_IDS } from '@hypha/fsm';
+import { assertHarnessFSMProcessSpec, HARNESS_FSM_STATE_IDS } from '@codesoul-co/fsm';
 import {
   applyDomainAgentPatch,
   businessRuleSpecDefinition,
@@ -27,7 +27,7 @@ import {
 } from './index';
 import { researchEvidenceDomainPackExample } from './research-evidence-example';
 
-describe('@hypha/domain workflow compiler', () => {
+describe('@codesoul-co/domain workflow compiler', () => {
   it('ships a read-bounded research Domain Pack with reviewed publication', () => {
     const validated = validateDomainPackSpec(researchEvidenceDomainPackExample);
     const compiled = compileDomainPackToHarnessedSystem(validated, {

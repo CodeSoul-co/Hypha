@@ -8,7 +8,7 @@ import {
   type MemoryRuntimeReferenceResolver,
   type RenewableCredentialProvider,
   type StructuredStoreProvider,
-} from '@hypha/memory';
+} from '@codesoul-co/memory';
 
 export interface ServerMemoryReferenceResolverOptions {
   structuredStore: StructuredStoreProvider;

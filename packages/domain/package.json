@@ -1,5 +1,5 @@
 {
-  "name": "@hypha/domain",
+  "name": "@codesoul-co/domain",
   "version": "1.0.0",
   "private": false,
   "main": "dist/index.js",
@@ -22,12 +22,12 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@hypha/core": "1.0.0",
-    "@hypha/fsm": "1.0.0",
-    "@hypha/mcp": "1.0.0",
-    "@hypha/memory": "1.0.0",
-    "@hypha/skills": "1.0.0",
-    "@hypha/tools": "1.0.0",
+    "@codesoul-co/core": "1.0.0",
+    "@codesoul-co/fsm": "1.0.0",
+    "@codesoul-co/mcp": "1.0.0",
+    "@codesoul-co/memory": "1.0.0",
+    "@codesoul-co/skills": "1.0.0",
+    "@codesoul-co/tools": "1.0.0",
     "yaml": "^2.3.0",
     "zod": "^3.22.0"
   },

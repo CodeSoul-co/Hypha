@@ -1,4 +1,4 @@
-import { ExecutionStoreRegistry } from '@hypha/core';
+import { ExecutionStoreRegistry } from '@codesoul-co/core';
 import { describe, expect, it } from 'vitest';
 import type {
   PostgresExecutionStorePool,

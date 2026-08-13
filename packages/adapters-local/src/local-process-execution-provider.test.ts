@@ -7,8 +7,8 @@ import type {
   CommandExecutionRequest,
   ExecutionEnvironmentSpec,
   SandboxCreateRequest,
-} from '@hypha/core';
-import { DefaultArtifactManager } from '@hypha/core';
+} from '@codesoul-co/core';
+import { DefaultArtifactManager } from '@codesoul-co/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readArtifactStream } from './artifact-content-io';
 import { hashExecutionValue } from './execution-provider-values';

@@ -13,7 +13,7 @@ import {
   type TraceRecorder,
   type TelemetryMetricKind,
   type TelemetryRecorder,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import type {
   MCPIntegrationSpec,
   MCPGateway,
@@ -25,7 +25,7 @@ import type {
   MCPToolCallRequest,
   NormalizedMCPCapability,
 } from './index';
-import type { ProviderHealth, ToolCallContext } from '@hypha/tools';
+import type { ProviderHealth, ToolCallContext } from '@codesoul-co/tools';
 import {
   normalizedMCPErrorSchema,
   type MCPServerProfile,

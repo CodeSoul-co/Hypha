@@ -1,5 +1,5 @@
-import { InMemorySessionQueue } from '@hypha/core';
-import { InMemoryExecutionArtifactStore } from '@hypha/adapters-local';
+import { InMemorySessionQueue } from '@codesoul-co/core';
+import { InMemoryExecutionArtifactStore } from '@codesoul-co/adapters-local';
 import { createServerProductionSessionCommands } from './ServerProductionSessionCommands';
 
 describe('ServerProductionSessionCommands', () => {

@@ -1,4 +1,4 @@
-import type { NormalizedArtifactError } from '@hypha/core';
+import type { NormalizedArtifactError } from '@codesoul-co/core';
 import { ZodError } from 'zod';
 
 export class ArtifactStoreAdapterError extends Error {

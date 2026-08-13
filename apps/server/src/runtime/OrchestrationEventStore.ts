@@ -11,7 +11,7 @@ import {
   type FrameworkEvent,
   type PersistedFrameworkEvent,
   type TraceRecorder,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 
 const canonicalRuntimeEventTypes = new Set<string>(RUNTIME_CANONICAL_EVENT_TYPES);
 const authoritativeOrchestrationEventTypes = new Set<string>(RUNTIME_ORCHESTRATION_EVENT_TYPES);

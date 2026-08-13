@@ -14,8 +14,8 @@ import {
   type PromptProfilePrincipal,
   type PromptProfileRef,
   type PromptProfileResolution,
-} from '@hypha/inference';
-import { FileArtifactStore } from '@hypha/adapters-local';
+} from '@codesoul-co/inference';
+import { FileArtifactStore } from '@codesoul-co/adapters-local';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 

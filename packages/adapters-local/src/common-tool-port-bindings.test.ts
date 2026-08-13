@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ArtifactManager, ExecutionDispatchRequest, ExecutionPort } from '@hypha/core';
-import type { ToolCallContext, WorkspaceRuntimePort } from '@hypha/tools';
+import type { ArtifactManager, ExecutionDispatchRequest, ExecutionPort } from '@codesoul-co/core';
+import type { ToolCallContext, WorkspaceRuntimePort } from '@codesoul-co/tools';
 import {
   ArtifactManagerCommonToolPort,
   GovernedCommandCommonToolPort,

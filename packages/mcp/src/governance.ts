@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { SideEffectLevel } from '@hypha/core';
+import type { SideEffectLevel } from '@codesoul-co/core';
 import type { MCPCapabilityDescriptor } from './index';
 
 export type MCPDriftStatus = 'added' | 'unchanged' | 'changed' | 'removed';

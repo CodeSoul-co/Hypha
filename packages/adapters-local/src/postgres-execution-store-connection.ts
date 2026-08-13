@@ -1,4 +1,4 @@
-import type { ProviderHealth } from '@hypha/core';
+import type { ProviderHealth } from '@codesoul-co/core';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import {
   migratePostgresExecutionStore,

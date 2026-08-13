@@ -9,8 +9,8 @@ import {
   type RuntimeEventCommitRequest,
   type RuntimeResourceCoordinator,
   type RuntimeRun,
-} from '@hypha/core';
-import { createInitialSnapshot, type FSMProcessSpec } from '@hypha/fsm';
+} from '@codesoul-co/core';
+import { createInitialSnapshot, type FSMProcessSpec } from '@codesoul-co/fsm';
 import { createRuntimeExecutionContext } from './execution-context';
 
 const process: FSMProcessSpec = {

@@ -22,7 +22,7 @@ import {
   type ProviderHealth,
   type ScanCanonicalEventsRequest,
   type ScanCanonicalEventsResult,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import fs from 'fs';
 import path from 'path';
 import { loadSqlite, type SqliteDatabaseSync } from './sqlite-driver';

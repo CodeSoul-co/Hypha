@@ -1,5 +1,5 @@
-import type { BoundedStateExecutorInput } from '@hypha/harness';
-import { createInitialSnapshot, type FSMProcessSpec } from '@hypha/fsm';
+import type { BoundedStateExecutorInput } from '@codesoul-co/harness';
+import { createInitialSnapshot, type FSMProcessSpec } from '@codesoul-co/fsm';
 import {
   RuntimeTransitionDispatcher,
   type RuntimeTransitionCommand,

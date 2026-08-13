@@ -2,8 +2,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
-import { createLLMCacheKey } from '@hypha/serving-cache';
+import type { FrameworkEvent, FrameworkEventType } from '@codesoul-co/core';
+import { createLLMCacheKey } from '@codesoul-co/serving-cache';
 import { createWorkCacheKey } from './key';
 import { WorkGraphIndex } from './graph';
 import { WorkCacheManager } from './manager';
@@ -13,7 +13,7 @@ import { MemoryWorkCacheStore } from './stores/memory-store';
 import { SQLiteWorkCacheStore } from './stores/sqlite-store';
 import type { CacheBlock, CacheTreeType, WorkCacheAuditEvent } from './types';
 
-describe('@hypha/workcache registry', () => {
+describe('@codesoul-co/workcache registry', () => {
   it('maps current FrameworkEventType values to exactly one primary tree', () => {
     const registry = new RuntimeTypeRegistry();
     const sourceTypes = registry.listSourceEventTypes();
@@ -64,7 +64,7 @@ describe('@hypha/workcache registry', () => {
   });
 });
 
-describe('@hypha/workcache stores and manager', () => {
+describe('@codesoul-co/workcache stores and manager', () => {
   it('writes, hits, expires, and rewrites memory blocks', async () => {
     let now = 1000;
     const store = new MemoryWorkCacheStore();
@@ -141,7 +141,7 @@ describe('@hypha/workcache stores and manager', () => {
   });
 });
 
-describe('@hypha/workcache graph-derived demand', () => {
+describe('@codesoul-co/workcache graph-derived demand', () => {
   it('builds typed WorkGraph nodes, dependency edges, and demand signals from source events', async () => {
     const graph = new WorkGraphIndex({ now: () => 1000 });
     const manager = new WorkCacheManager({
@@ -483,7 +483,7 @@ describe('@hypha/workcache graph-derived demand', () => {
   );
 });
 
-describe('@hypha/workcache tree safety rules', () => {
+describe('@codesoul-co/workcache tree safety rules', () => {
   it('caches only read-only tool results with stable args, scope, and validity metadata', async () => {
     const manager = managerWithMemory();
     const reusable = await manager.ingest(reusableToolEvent());

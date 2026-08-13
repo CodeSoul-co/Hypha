@@ -3,12 +3,12 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { getEventRuntime, type StartRunInput } from '../services/EventRuntime';
 import { HTTP_STATUS } from '../constants';
-import { agentPromptSpecSchema } from '@hypha/inference';
+import { agentPromptSpecSchema } from '@codesoul-co/inference';
 import {
   sessionCommandStatusSchema,
   type SessionCommandRecord,
   type SessionCommandStatus,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { z } from 'zod';
 import { getServerRuntimeReadiness } from '../services/ServerRuntimeReadiness';
 

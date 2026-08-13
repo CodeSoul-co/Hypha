@@ -6,7 +6,7 @@ import {
   FileToolObservationStore,
   FileToolRuntimeStore,
   SQLiteEventStore,
-} from '@hypha/adapters-local';
+} from '@codesoul-co/adapters-local';
 import {
   createFrameworkEvent,
   hashCanonicalJson,
@@ -39,7 +39,7 @@ import {
   type SessionCommandRecord,
   type SessionQueueScope,
   type SpecRef,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   EventFirstRuntime,
   runRecoverySupervisor,
@@ -47,13 +47,13 @@ import {
   type ManualFSMRunView,
   type ManualFSMTransitionResult,
   type RecoveryParticipant,
-} from '@hypha/harness';
+} from '@codesoul-co/harness';
 import {
   compileWorkflowToFSM,
   validateDomainPackSpec,
   type DomainPackSpec,
   type WorkflowSpec,
-} from '@hypha/domain';
+} from '@codesoul-co/domain';
 import {
   applyTransitionWithRuntimePolicy,
   assertHarnessFSMProcessSpec,
@@ -69,7 +69,7 @@ import {
   type HarnessFSMStateId,
   type FSMProcessSpec,
   type FSMSnapshot,
-} from '@hypha/fsm';
+} from '@codesoul-co/fsm';
 import {
   createDefaultInferenceBackendRegistry,
   hashContent,
@@ -96,9 +96,9 @@ import {
   type ReasoningOptions,
   type ReasoningStrategy,
   type ReasoningStrategyDescriptor,
-} from '@hypha/inference';
-import { classifyMemoryFailure } from '@hypha/memory';
-import { RedisToolContractSnapshotStore } from '@hypha/mcp';
+} from '@codesoul-co/inference';
+import { classifyMemoryFailure } from '@codesoul-co/memory';
+import { RedisToolContractSnapshotStore } from '@codesoul-co/mcp';
 import {
   ReActRunner,
   reactAgentSpecSchema,
@@ -109,13 +109,13 @@ import {
   type ReActObservation,
   type ReActRunResult,
   type ReActStep,
-} from '@hypha/kernel';
+} from '@codesoul-co/kernel';
 import {
   createEffectiveAgentCapabilitySnapshot,
   type EffectiveAgentCapabilitySnapshotInput,
   type LoadedSkillContext,
-} from '@hypha/skills';
-import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@hypha/models';
+} from '@codesoul-co/skills';
+import type { ModelCacheControl, ModelProvider, ModelToolDescriptor } from '@codesoul-co/models';
 import {
   GovernedToolRunner,
   hashToolContract,
@@ -130,7 +130,7 @@ import {
   type ToolRunner,
   type ToolSpec,
   type ToolInvocationRecord,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 import type {
   StageResult,
   WorkflowDefinition,
@@ -153,7 +153,7 @@ import {
   servingCacheResponseMetadata,
   type ServingCacheEvent,
   type ServingCacheTraceSink,
-} from '@hypha/serving-cache';
+} from '@codesoul-co/serving-cache';
 import {
   MemoryWorkCacheStore,
   NoopWorkCacheStore,
@@ -168,7 +168,7 @@ import {
   type RedisWorkCacheClient,
   type RedisWorkCachePubSubClient,
   type WorkCacheStore,
-} from '@hypha/workcache';
+} from '@codesoul-co/workcache';
 import { inferenceConfig, storageConfig, toolResultCacheConfig, workCacheConfig } from '../config';
 import { getRedisClient } from './database';
 import type { ChatOptions, ChatResponse, LLMMessage, StreamChunk } from '../core/llm/types';

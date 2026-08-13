@@ -2,13 +2,13 @@ import {
   hashCanonicalJson,
   type ContinueReActCommandPayloadV1,
   type SessionCommandRecord,
-} from '@hypha/core';
-import { LongHorizonReActSupervisor, type ReActContinuationScheduleRequest } from '@hypha/harness';
+} from '@codesoul-co/core';
+import { LongHorizonReActSupervisor, type ReActContinuationScheduleRequest } from '@codesoul-co/harness';
 import {
   InMemoryReActContinuationCheckpointStore,
   type ReActContinuationCheckpoint,
   type ReActRunResult,
-} from '@hypha/kernel';
+} from '@codesoul-co/kernel';
 import {
   createServerReActContinuationDefinition,
   createServerReActContinuationRuntime,

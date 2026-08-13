@@ -1,8 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import YAML from 'yaml';
-import { createFrameworkEvent, type EventStore } from '@hypha/core';
-import { LocalHashEmbeddingProvider } from '@hypha/adapters-local';
+import { createFrameworkEvent, type EventStore } from '@codesoul-co/core';
+import { LocalHashEmbeddingProvider } from '@codesoul-co/adapters-local';
 import {
   CanonicalMemoryRuntimeLoader,
   MemoryManagementProviderRegistry,
@@ -38,7 +38,7 @@ import {
   type MongoDatabaseLike,
   type ProviderHealth,
   type RedisLikeWorkingMemoryClient,
-} from '@hypha/memory';
+} from '@codesoul-co/memory';
 import { getMongoConnection, getRedisClient } from './database';
 import { dbConfig } from '../config';
 import { logger } from '../utils/logger';

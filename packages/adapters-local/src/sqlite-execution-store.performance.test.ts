@@ -6,7 +6,7 @@ import {
   executionRecordCreateRequestExample,
   type ExecutionRecord,
   type ExecutionRecordQuery,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
 import { planSQLiteExecutionList } from './sqlite-execution-store-query';

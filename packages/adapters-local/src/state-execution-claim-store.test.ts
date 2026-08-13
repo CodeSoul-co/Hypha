@@ -5,7 +5,7 @@ import {
   type RunLeaseScope,
   type StateExecutionClaimAcquireRequest,
   type StateExecutionClaimScope,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

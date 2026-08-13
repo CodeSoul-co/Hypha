@@ -1,6 +1,6 @@
 # Governed Memory Architecture
 
-`@hypha/memory` provides provider-neutral contracts for durable, scoped memory and bounded model
+`@codesoul-co/memory` provides provider-neutral contracts for durable, scoped memory and bounded model
 context. Memory remains persisted state; context is a per-call view assembled from authorized
 sources. Domain Packs select versioned profiles, while Runtime and Harness own policy, events,
 recovery, replay, and cache invalidation around every operation.
@@ -105,7 +105,7 @@ import {
   NativeMemoryManagementProvider,
   memoryProfileSpecExample,
   registerMemoryManagementProviderHandlers,
-} from '@hypha/memory';
+} from '@codesoul-co/memory';
 
 const provider = new NativeMemoryManagementProvider({ profile: memoryProfileSpecExample });
 const activities = new DefaultMemoryActivityPort({ policy, events, harness });

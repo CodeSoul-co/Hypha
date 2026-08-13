@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { JsonSchema } from '@hypha/core';
+import type { JsonSchema } from '@codesoul-co/core';
 import {
   contextProfileSpecExample,
   contextProfileSpecJsonSchema,

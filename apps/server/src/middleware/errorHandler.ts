@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
 import { HTTP_STATUS, ERROR_CODES } from '../constants';
-import { FrameworkError } from '@hypha/core';
+import { FrameworkError } from '@codesoul-co/core';
 
 // Custom error class
 export class AppError extends Error {

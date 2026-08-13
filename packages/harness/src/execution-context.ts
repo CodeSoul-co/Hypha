@@ -23,14 +23,14 @@ import {
   type RuntimeTransitionHelper,
   type RuntimeWaitHelper,
   type RunLeaseAuthorization,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   validateFSMProcessSpec,
   validateFSMSnapshot,
   type FSMProcessSpec,
   type FSMSnapshot,
   type FSMStateSpec,
-} from '@hypha/fsm';
+} from '@codesoul-co/fsm';
 
 export interface RuntimeExecutionContext {
   readonly scope: Readonly<RuntimeScope>;

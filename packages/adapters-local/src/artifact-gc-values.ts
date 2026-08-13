@@ -3,8 +3,8 @@ import type {
   ArtifactGarbageCollectionScanRequest,
   ArtifactStorageRef,
   StoredArtifactRecord,
-} from '@hypha/core';
-import { ArtifactRecordRepositoryError } from '@hypha/core';
+} from '@codesoul-co/core';
+import { ArtifactRecordRepositoryError } from '@codesoul-co/core';
 
 export interface ArtifactGarbageCollectionRecordState {
   storageKey: string;

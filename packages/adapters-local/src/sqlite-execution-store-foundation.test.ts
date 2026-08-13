@@ -10,7 +10,7 @@ import type {
   ExecutionLeaseAcquireRequest,
   ExecutionLeaseReleaseRequest,
   ExecutionLeaseRenewRequest,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   commandExecutionResultExample,
   executionLeaseAcquireRequestExample,
@@ -20,7 +20,7 @@ import {
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
   executionRecordExample,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SQLiteExecutionStoreFoundation,

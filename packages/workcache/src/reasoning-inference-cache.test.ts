@@ -4,7 +4,7 @@ import {
   type InferenceProvider,
   type InferenceRequest,
   type InferenceResponse,
-} from '@hypha/inference';
+} from '@codesoul-co/inference';
 import { WorkCacheManager } from './manager';
 import { WorkCachedInferenceProvider } from './reasoning-inference-cache';
 import { MemoryWorkCacheStore } from './stores/memory-store';

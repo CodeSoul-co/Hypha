@@ -18,15 +18,15 @@ moving `main` branch as a production release.
 
 ## npm application upgrade
 
-Keep all `@hypha/*` packages on one release version. Upgrade them together rather than mixing
+Keep all `@codesoul-co/*` packages on one release version. Upgrade them together rather than mixing
 framework revisions:
 
 ```bash
 npm install --save-exact \
-  @hypha/core@1.0.0 \
-  @hypha/domain@1.0.0 \
-  @hypha/kernel@1.0.0 \
-  @hypha/harness@1.0.0
+  @codesoul-co/core@1.0.0 \
+  @codesoul-co/domain@1.0.0 \
+  @codesoul-co/kernel@1.0.0 \
+  @codesoul-co/harness@1.0.0
 npm run typecheck
 npm test
 npm run build

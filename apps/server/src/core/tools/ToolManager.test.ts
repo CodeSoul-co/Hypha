@@ -3,8 +3,8 @@ import {
   type ToolAdapter,
   type ToolCallContext,
   type ToolRegistry,
-} from '@hypha/tools';
-import { normalizeMCPToolSpec } from '@hypha/mcp';
+} from '@codesoul-co/tools';
+import { normalizeMCPToolSpec } from '@codesoul-co/mcp';
 import { ToolManager } from './ToolManager';
 import type { MCPClient, ToolDefinition } from './types';
 import type { ITool } from './types';

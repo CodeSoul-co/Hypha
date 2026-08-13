@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
-import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@hypha/core';
+import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@codesoul-co/core';
 import {
   GovernedToolRunner,
   ToolRegistry,
   hashToolContract,
   toolContractSnapshotExample,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -40,7 +40,7 @@ import {
   type MCPServerProfile,
 } from './index';
 
-describe('@hypha/mcp normalization', () => {
+describe('@codesoul-co/mcp normalization', () => {
   it('unwraps structured Tool output without misclassifying domain objects', () => {
     expect(
       normalizeMCPToolOutput({

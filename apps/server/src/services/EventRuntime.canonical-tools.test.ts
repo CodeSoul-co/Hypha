@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { InMemoryEventStore } from '@hypha/core';
+import { InMemoryEventStore } from '@codesoul-co/core';
 import { destroyToolManager, getToolManager } from '../core/tools/ToolManager';
 import type { ITool } from '../core/tools/types';
 import { destroyEventRuntime, initializeEventRuntime } from './EventRuntime';

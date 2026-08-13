@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 const forbiddenImports = [
   {
     label: 'another Hypha owner package',
-    pattern: /from\s+['"]@hypha\/(?:tools|memory|fsm|inference|testing|harness)(?:\/[^'"]*)?['"]/u,
+    pattern:
+      /from\s+['"]@codesoul-co\/(?:tools|memory|fsm|inference|testing|harness)(?:\/[^'"]*)?['"]/u,
   },
   {
     label: 'Server implementation',

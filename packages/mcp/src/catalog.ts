@@ -6,7 +6,7 @@ import {
   type JsonSchema,
   type SideEffectLevel,
   type TelemetryRecorder,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   MCPToolAdapter,
   ToolRegistry,
@@ -17,7 +17,7 @@ import {
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
   type ToolSpec,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 import type { MCPCapabilityDescriptor, MCPGateway, MCPIntegrationSpec } from './index';
 import { attestCapability, capabilityKey, governedSideEffectLevel } from './governance';
 import type {

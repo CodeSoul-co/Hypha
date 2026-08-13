@@ -1,10 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { InMemoryEventStore, stableRecoveryHash, type RecoveryFailure } from '@hypha/core';
-import { GovernedFSMTransitionService } from '@hypha/harness';
-import type { FSMProcessSpec } from '@hypha/fsm';
-import { reActContinuationScopeHash, type ReActStep } from '@hypha/kernel';
+import { InMemoryEventStore, stableRecoveryHash, type RecoveryFailure } from '@codesoul-co/core';
+import { GovernedFSMTransitionService } from '@codesoul-co/harness';
+import type { FSMProcessSpec } from '@codesoul-co/fsm';
+import { reActContinuationScopeHash, type ReActStep } from '@codesoul-co/kernel';
 import { ServerCanonicalRuntime } from '../runtime/ServerCanonicalRuntime';
 import { destroyEventRuntime, initializeEventRuntime } from './EventRuntime';
 

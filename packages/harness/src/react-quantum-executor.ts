@@ -10,14 +10,14 @@ import {
   type ReActQuantumDescriptor,
   type SessionCommandRecord,
   type SpecRef,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import type {
   ReActContinuationCheckpoint,
   ReActContinuationCheckpointStore,
   ReActRunContext,
   ReActRunResult,
   ReActRunner,
-} from '@hypha/kernel';
+} from '@codesoul-co/kernel';
 
 export const REACT_CONTEXT_SNAPSHOT_VERSION = '1.0.0' as const;
 

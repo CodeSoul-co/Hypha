@@ -9,7 +9,7 @@ import type {
   ExecutionRecord,
   ExecutionRecordCompareAndSetRequest,
   ExecutionStore,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   DurableExecutionWorker,
   commandExecutionResultExample,
@@ -18,7 +18,7 @@ import {
   executionLeaseRenewRequestExample,
   executionRecordCreateRequestExample,
   validateExecutionRecord,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
 
@@ -778,7 +778,7 @@ try {
 }
 const originalResolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (request, parent, isMain, options) {
-  if (request === '@hypha/core') {
+  if (request === '@codesoul-co/core') {
     return path.join(process.env.HYPHA_REPO_ROOT, 'packages/core/src/index.ts');
   }
   return originalResolveFilename.call(this, request, parent, isMain, options);
@@ -789,7 +789,7 @@ const { SQLiteExecutionStore } = require(
     'packages/adapters-local/src/sqlite-execution-store.ts'
   )
 );
-const { DurableExecutionWorker } = require('@hypha/core');
+const { DurableExecutionWorker } = require('@codesoul-co/core');
 process.on('message', async ({ rootPath, operation, request }) => {
   const store = new SQLiteExecutionStore({ rootPath });
   try {

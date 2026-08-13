@@ -1,4 +1,4 @@
-import type { FrameworkEvent, FrameworkEventType } from '@hypha/core';
+import type { FrameworkEvent, FrameworkEventType } from '@codesoul-co/core';
 
 export * from './evaluation';
 export * from './mock-execution-provider';

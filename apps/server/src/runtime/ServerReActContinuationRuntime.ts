@@ -4,18 +4,18 @@ import {
   validateContinueReActCommandPayload,
   type ContinueReActCommandPayloadV1,
   type SessionCommandHandlerResult,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   LongHorizonReActSupervisor,
   createContinuationReActQuantumDescriptor,
   type ReActContinuationScheduler,
   type ReActQuantumExecutor,
-} from '@hypha/harness';
+} from '@codesoul-co/harness';
 import type {
   ReActContinuationCheckpoint,
   ReActContinuationCheckpointStore,
   ReActRunner,
-} from '@hypha/kernel';
+} from '@codesoul-co/kernel';
 import type { ServerSessionCommandDefinition } from './ServerSessionCommandRuntime';
 
 export interface ServerReActContinuationDefinitionOptions {

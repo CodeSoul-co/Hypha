@@ -1,10 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createFrameworkEvent, InMemoryEventStore, type RuntimeCancelResult } from '@hypha/core';
-import { defaultReActFSMProcessSpec } from '@hypha/fsm';
-import type { InferenceProvider } from '@hypha/inference';
-import type { ToolRunner } from '@hypha/tools';
+import { createFrameworkEvent, InMemoryEventStore, type RuntimeCancelResult } from '@codesoul-co/core';
+import { defaultReActFSMProcessSpec } from '@codesoul-co/fsm';
+import type { InferenceProvider } from '@codesoul-co/inference';
+import type { ToolRunner } from '@codesoul-co/tools';
 import { ServerCanonicalRuntime } from './ServerCanonicalRuntime';
 import type { ServerRuntimeCompositionBindings } from './ServerRuntimeComposition';
 import type { ServerRuntimeWorkerBindings } from './ServerRuntimeWorkerLifecycle';

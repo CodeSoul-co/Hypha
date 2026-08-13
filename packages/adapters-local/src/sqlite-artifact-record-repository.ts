@@ -9,8 +9,8 @@ import type {
   ArtifactRecordRepository,
   ProviderHealth,
   StoredArtifactRecord,
-} from '@hypha/core';
-import { ArtifactRecordRepositoryConflictError, ArtifactRecordRepositoryError } from '@hypha/core';
+} from '@codesoul-co/core';
+import { ArtifactRecordRepositoryConflictError, ArtifactRecordRepositoryError } from '@codesoul-co/core';
 import {
   compareStoredArtifactRecords,
   parseStoredArtifactRecord,

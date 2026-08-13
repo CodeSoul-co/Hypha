@@ -9,7 +9,7 @@ import {
 } from './common-tools';
 import { validateToolSpec } from './index';
 
-describe('@hypha/tools common utility tools', () => {
+describe('@codesoul-co/tools common utility tools', () => {
   it('publishes strict, side-effect-free governed tool specs', () => {
     expect(commonUtilityToolSpecs.map((spec) => validateToolSpec(spec).id)).toEqual([
       'utility.json',

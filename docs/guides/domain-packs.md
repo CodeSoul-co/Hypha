@@ -5,7 +5,7 @@
 ## Minimal Shape
 
 ```ts
-import type { DomainPackSpec } from '@hypha/domain';
+import type { DomainPackSpec } from '@codesoul-co/domain';
 
 export const domainPack: DomainPackSpec = {
   id: 'domain.default',
@@ -58,7 +58,7 @@ import {
   applyDomainAgentPatch,
   compileDomainPackToHarnessedSystem,
   validateDomainPackSpec,
-} from '@hypha/domain';
+} from '@codesoul-co/domain';
 
 const validPack = validateDomainPackSpec(domainPack);
 const compiled = compileDomainPackToHarnessedSystem(validPack, {
@@ -106,7 +106,7 @@ for a bounded research workflow:
 import {
   compileDomainPackToHarnessedSystem,
   researchEvidenceDomainPackExample,
-} from '@hypha/domain';
+} from '@codesoul-co/domain';
 
 const compiled = compileDomainPackToHarnessedSystem(researchEvidenceDomainPackExample, {
   agentRef: { id: 'agent.research', version: '1.0.0' },
@@ -153,7 +153,7 @@ Workflow transitions should use deterministic guards. Avoid provider-specific pr
 Use the local loader for predefined or user-edited packs:
 
 ```ts
-import { DomainPackRegistry, LocalDomainPackLoader, extendDomainPack } from '@hypha/domain';
+import { DomainPackRegistry, LocalDomainPackLoader, extendDomainPack } from '@codesoul-co/domain';
 
 const registry = new DomainPackRegistry();
 await new LocalDomainPackLoader({

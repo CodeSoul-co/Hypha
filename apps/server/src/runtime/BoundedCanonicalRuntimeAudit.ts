@@ -8,7 +8,7 @@ import {
   type RuntimeIntegrityStore,
   type RuntimeIntegrityWatermark,
   type RuntimeOperationalTelemetry,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   auditCanonicalRuntimeStreams,
   type CanonicalRuntimeStreamIntegrityReport,

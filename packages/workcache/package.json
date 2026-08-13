@@ -1,12 +1,12 @@
 {
-  "name": "@hypha/workcache",
+  "name": "@codesoul-co/workcache",
   "version": "0.0.0",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@hypha/core": "1.0.0",
-    "@hypha/inference": "1.0.0",
+    "@codesoul-co/core": "1.0.0",
+    "@codesoul-co/inference": "1.0.0",
     "better-sqlite3": "^11.10.0",
     "zod": "^3.22.0"
   },

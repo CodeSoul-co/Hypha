@@ -1,4 +1,4 @@
-import { createFrameworkEvent, type FrameworkEventType } from '@hypha/core';
+import { createFrameworkEvent, type FrameworkEventType } from '@codesoul-co/core';
 import { humanTaskResolutionEventId, projectHumanTasks } from './HumanTask';
 
 function event(type: FrameworkEventType, payload: Record<string, unknown>, index: number) {

@@ -1,5 +1,5 @@
 import { z, type ZodType } from 'zod';
-import type { ContextSpec, JsonSchema, SpecMetadata, SpecRef, VersionedSpec } from '@hypha/core';
+import type { ContextSpec, JsonSchema, SpecMetadata, SpecRef, VersionedSpec } from '@codesoul-co/core';
 import {
   defineSpecSchema,
   exportSpecJsonSchemas,
@@ -8,14 +8,14 @@ import {
   specMetadataSchema,
   specRefSchema,
   versionedSpecSchema,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   agentPromptRefSchema,
   type AgentPromptRef,
   type InferenceProvider,
   type InferenceRequest,
   type InferenceResponse,
-} from '@hypha/inference';
+} from '@codesoul-co/inference';
 import type {
   EmbeddingProvider,
   MemoryManager,
@@ -24,8 +24,8 @@ import type {
   MemorySearchQuery,
   MemorySearchResult,
   MemoryType,
-} from '@hypha/memory';
-import type { ModelMessage } from '@hypha/models';
+} from '@codesoul-co/memory';
+import type { ModelMessage } from '@codesoul-co/models';
 import {
   DefaultSkillPolicy,
   SkillContextLoader,
@@ -35,13 +35,13 @@ import {
   type SkillPolicy,
   type SkillRef,
   type SkillRegistry,
-} from '@hypha/skills';
+} from '@codesoul-co/skills';
 import type {
   NormalizedToolError,
   ToolExecutionScope,
   ToolPrincipal,
   ToolRunner,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 
 export interface ToolActivityRequest {
   operationId: string;

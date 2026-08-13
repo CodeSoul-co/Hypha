@@ -1,4 +1,4 @@
-import { ArtifactStoreProviderRegistry } from '@hypha/core';
+import { ArtifactStoreProviderRegistry } from '@codesoul-co/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { S3ArtifactTransport } from './s3-artifact-store-transport';
 import { S3_EXECUTION_ARTIFACT_STORE_ID } from './s3-execution-artifact-store';

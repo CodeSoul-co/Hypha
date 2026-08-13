@@ -1,4 +1,4 @@
-import type { ProviderHealth } from '@hypha/core';
+import type { ProviderHealth } from '@codesoul-co/core';
 import type { RuntimeBackbone } from './RuntimeBackbone';
 
 export interface RuntimeBackboneResource {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ArtifactProfileSpec, ExecutionPrincipal } from '@hypha/core';
-import { DefaultArtifactGarbageCollector, DefaultArtifactManager } from '@hypha/core';
+import type { ArtifactProfileSpec, ExecutionPrincipal } from '@codesoul-co/core';
+import { DefaultArtifactGarbageCollector, DefaultArtifactManager } from '@codesoul-co/core';
 import { hashArtifactBytes } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';

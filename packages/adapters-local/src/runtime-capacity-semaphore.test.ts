@@ -2,7 +2,7 @@ import type {
   RuntimeCapacityAcquireRequest,
   RuntimeCapacityLease,
   RuntimeCapacityPolicy,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

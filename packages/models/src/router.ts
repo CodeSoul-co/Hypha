@@ -1,4 +1,4 @@
-import { FrameworkError, isFrameworkError } from '@hypha/core';
+import { FrameworkError, isFrameworkError } from '@codesoul-co/core';
 import type {
   ModelAliasSpec,
   ModelCapabilities,

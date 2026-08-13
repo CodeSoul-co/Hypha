@@ -7,7 +7,7 @@ import {
   type CanonicalEventScanPort,
   type PersistedFrameworkEvent,
   type RuntimeIntegrityStore,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   BoundedCanonicalRuntimeAudit,
   RuntimeIntegrityRepairService,

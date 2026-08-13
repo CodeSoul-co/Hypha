@@ -10,11 +10,11 @@ import {
   registerRuntimeOrchestrationEventSchemas,
   type ContinueReActCommandPayloadV1,
   type EventRuntime,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   InMemoryReActContinuationCheckpointStore,
   type ReActContinuationCheckpoint,
-} from '@hypha/kernel';
+} from '@codesoul-co/kernel';
 import {
   ServerReActContinuationReconciler,
   type ReActContinuationSuspensionEvidence,

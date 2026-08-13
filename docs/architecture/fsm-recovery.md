@@ -137,10 +137,10 @@ recorded as a recovery case.
 ## Runtime API
 
 ```ts
-import { FSMRuntime, defaultReActFSMProcessSpec } from '@hypha/fsm';
-import { classifyMemoryFailure } from '@hypha/memory';
-import { runRecoverySupervisor } from '@hypha/harness';
-import { stableRecoveryHash } from '@hypha/core';
+import { FSMRuntime, defaultReActFSMProcessSpec } from '@codesoul-co/fsm';
+import { classifyMemoryFailure } from '@codesoul-co/memory';
+import { runRecoverySupervisor } from '@codesoul-co/harness';
+import { stableRecoveryHash } from '@codesoul-co/core';
 
 const fsm = new FSMRuntime(defaultReActFSMProcessSpec, runId, {
   onRecoveryDecision: recordRecoveryDecision,

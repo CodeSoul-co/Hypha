@@ -4,8 +4,8 @@ import {
   InMemoryEventStore,
   registerRuntimeOrchestrationEventSchemas,
   type RecoveryFailure,
-} from '@hypha/core';
-import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
+} from '@codesoul-co/core';
+import { defaultReActFSMProcessSpec, FSMRuntime } from '@codesoul-co/fsm';
 import { runRecoverySupervisor } from './recovery-supervisor';
 
 function failure(
@@ -56,7 +56,7 @@ async function runtime(runId: string): Promise<FSMRuntime> {
   return fsm;
 }
 
-describe('@hypha/harness coordinated recovery supervisor', () => {
+describe('@codesoul-co/harness coordinated recovery supervisor', () => {
   it('stops repeating an unchanged memory failure, degrades once, and continues execution', async () => {
     const fsm = await runtime('run_coordinated');
     const trace = new InMemoryEventStore();

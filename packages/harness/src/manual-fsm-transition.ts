@@ -15,7 +15,7 @@ import {
   type RuntimeOrchestrationProjection,
   type RuntimePrincipal,
   type RuntimeScope,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   applyTransitionWithRuntimePolicy,
   getAllowedTransitions,
@@ -23,7 +23,7 @@ import {
   type FSMGuardContext,
   type FSMProcessSpec,
   type FSMSnapshot,
-} from '@hypha/fsm';
+} from '@codesoul-co/fsm';
 
 export const MANUAL_FSM_TRANSITION_PERMISSION = 'runtime.fsm.transition';
 

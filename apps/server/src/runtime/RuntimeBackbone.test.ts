@@ -5,11 +5,11 @@ import {
   stateExecutionClaimGuard,
   type JsonSchema,
   type RunLeaseAuthorization,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { ReActContinuationCheckpoint } from '@hypha/kernel';
+import type { ReActContinuationCheckpoint } from '@codesoul-co/kernel';
 import { createRuntimeBackbone, type RuntimeBackbone } from './RuntimeBackbone';
 
 const timestamp = '2026-07-21T06:00:00.000Z';

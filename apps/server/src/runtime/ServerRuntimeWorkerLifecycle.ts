@@ -6,7 +6,7 @@ import {
   type SessionCommandWorkerResult,
   type SessionCommandType,
   type SessionQueueScope,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   ServerRuntimeRecoveryScheduler,
   type ServerRuntimeRecoverySchedulerOptions,

@@ -7,8 +7,8 @@ import type {
   ArtifactRecordRepository,
   ProviderHealth,
   StoredArtifactRecord,
-} from '@hypha/core';
-import { ArtifactRecordRepositoryConflictError } from '@hypha/core';
+} from '@codesoul-co/core';
+import { ArtifactRecordRepositoryConflictError } from '@codesoul-co/core';
 import {
   artifactIdempotencyMapKey,
   cloneStoredArtifactRecord,

@@ -14,22 +14,22 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 | Package                 | Public Surface                                                                                                                                                                                        |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                                                                        |
-| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                                                                          |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                                                                      |
-| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers.                                                    |
-| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                                                                         |
-| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                                                                     |
-| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                                                                     |
-| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                                                                          |
-| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                                                                       |
-| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.                                                      |
-| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                                                                   |
-| `@hypha/memory`         | Versioned Memory profiles, managed operations, scoped records/history, atomic persistence and index outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. |
-| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                                                                    |
-| `@hypha/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.                                                              |
-| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                                                                               |
-| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                                                                           |
+| `@codesoul-co/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                                                                        |
+| `@codesoul-co/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                                                                          |
+| `@codesoul-co/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                                                                      |
+| `@codesoul-co/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers.                                                    |
+| `@codesoul-co/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                                                                         |
+| `@codesoul-co/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                                                                     |
+| `@codesoul-co/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                                                                     |
+| `@codesoul-co/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                                                                          |
+| `@codesoul-co/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                                                                       |
+| `@codesoul-co/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.                                                      |
+| `@codesoul-co/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                                                                   |
+| `@codesoul-co/memory`         | Versioned Memory profiles, managed operations, scoped records/history, atomic persistence and index outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. |
+| `@codesoul-co/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                                                                    |
+| `@codesoul-co/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.                                                              |
+| `@codesoul-co/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                                                                               |
+| `@codesoul-co/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                                                                           |
 
 Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
 
@@ -164,7 +164,7 @@ handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
 `message.dead_lettered`. Constructor options bound delivery attempts and retry delay/multiplier;
 `fail({ retry: true })` requeues only inside that budget.
 
-Durable runtime orchestration contracts are exported from `@hypha/core`:
+Durable runtime orchestration contracts are exported from `@codesoul-co/core`:
 
 | API                                                     | Contract                                                                                                                            |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -183,12 +183,12 @@ Durable runtime orchestration contracts are exported from `@hypha/core`:
 clock, id, event, and resource helpers. `DefaultRuntimeActivityHelper` dispatches tool, memory,
 model, execution, or custom work through a port and commits the corresponding lifecycle observation;
 it does not execute provider-specific side effects in core. `BoundedFSMDriver` and
-`RuntimeExecutionContext` are exported by `@hypha/harness` for budgeted FSM advancement using those
+`RuntimeExecutionContext` are exported by `@codesoul-co/harness` for budgeted FSM advancement using those
 ports.
 
 ## Execution Activity, Governance, and Output
 
-The Runtime-to-Execution boundary is exported from `@hypha/core` as provider-neutral contracts and
+The Runtime-to-Execution boundary is exported from `@codesoul-co/core` as provider-neutral contracts and
 strict Zod/JSON Schema validators:
 
 | API                               | Contract                                                                                                                                                                         |
@@ -211,7 +211,7 @@ Artifact references always bypass or invalidate the Cache.
 
 ## Evaluation, Replay, and Regression
 
-`@hypha/testing` provides deterministic runtime verification APIs. These APIs derive results from events and supplied contracts; they do not call models, tools, or MCP servers during evaluation.
+`@codesoul-co/testing` provides deterministic runtime verification APIs. These APIs derive results from events and supplied contracts; they do not call models, tools, or MCP servers during evaluation.
 
 | API                          | Description                                                                                                                                                          |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -325,7 +325,7 @@ terminals even when the source workflow declares only domain states.
 | `plannerRef`   | string                                  | Optional planner implementation reference.       |
 | `reasonerRef`  | string                                  | Optional reasoner implementation reference.      |
 
-`HarnessedReActFSMRunner` from `@hypha/harness` composes `RunManager`, `FSMRuntime`, and `ReActRunner`. It records a trace event for every FSM state and projects run/replay state from events.
+`HarnessedReActFSMRunner` from `@codesoul-co/harness` composes `RunManager`, `FSMRuntime`, and `ReActRunner`. It records a trace event for every FSM state and projects run/replay state from events.
 
 ## Model Providers
 
@@ -362,7 +362,7 @@ OpenAI-compatible providers use `OpenAICompatibleProviderConfig` with `id`, `typ
 
 ## Serving Cache
 
-`@hypha/serving-cache` provides exact request-level caching for
+`@codesoul-co/serving-cache` provides exact request-level caching for
 `ModelProvider.generate()` calls. It does not change the agent runtime,
 DomainPack schema, or tool/MCP execution contracts.
 
@@ -404,7 +404,7 @@ cache in the first version.
 
 ## WorkCache
 
-`@hypha/workcache` exposes an event-derived typed runtime cache. It consumes
+`@codesoul-co/workcache` exposes an event-derived typed runtime cache. It consumes
 existing `FrameworkEvent` records and writes `CacheBlock<T>` entries into
 primary trees without changing Session, Run, Event, DomainPack, or Serving
 Cache contracts.
@@ -549,7 +549,7 @@ permissions, policy, timeout, retry, audit, approval, and source metadata.
 `GovernedToolContractSpec` is the structured canonical contract: `input`, `output`, `semantics`,
 `execution`, `governance`, `observability`, `cache`, optional `streaming`, and immutable `revision`.
 Registration normalizes both shapes before execution. TypeScript types, Zod validators, JSON Schema,
-and example definitions are exported from `@hypha/tools`.
+and example definitions are exported from `@codesoul-co/tools`.
 
 `ToolRegistry` binds an immutable normalized contract to a `ToolAdapter`. Built-in adapters cover
 local functions, plugins, mocks, HTTP providers, and MCP capabilities. `validateToolInput()` handles
@@ -574,7 +574,7 @@ side effects bypass result reuse.
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
 The server also registers `utility.json`, `utility.text`, and `utility.hash`. Their pure executors and
-contracts are exported from `@hypha/tools`. They provide bounded JSON parse/stable stringify/Pointer
+contracts are exported from `@codesoul-co/tools`. They provide bounded JSON parse/stable stringify/Pointer
 lookup, literal text inspection/transformation, and SHA-256 over text or canonical JSON. They reject
 prototype-pollution keys, excessive JSON depth/nodes, oversized text/results, and arbitrary search
 regex. See [Common Utility Tools](../guides/common-utility-tools.md).
@@ -669,7 +669,7 @@ same policy and trace path. See [Governed Memory](../architecture/memory.md).
 
 ## Local Adapters
 
-`@hypha/adapters-local` provides development and self-hosted adapters:
+`@codesoul-co/adapters-local` provides development and self-hosted adapters:
 
 | Adapter                          | Storage                 | Purpose                                                                                                                                                                                      |
 | -------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

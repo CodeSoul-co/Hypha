@@ -1,14 +1,14 @@
-import { InMemorySessionQueue, type ReActQuantumDescriptor } from '@hypha/core';
-import { InMemoryExecutionArtifactStore } from '@hypha/adapters-local';
-import type { InferenceProvider } from '@hypha/inference';
+import { InMemorySessionQueue, type ReActQuantumDescriptor } from '@codesoul-co/core';
+import { InMemoryExecutionArtifactStore } from '@codesoul-co/adapters-local';
+import type { InferenceProvider } from '@codesoul-co/inference';
 import {
   InMemoryReActContinuationCheckpointStore,
   ReActRunner,
   reActContinuationScopeHash,
   type ReActAgentRuntime,
   type ReActRunResult,
-} from '@hypha/kernel';
-import type { ToolRunner } from '@hypha/tools';
+} from '@codesoul-co/kernel';
+import type { ToolRunner } from '@codesoul-co/tools';
 import type {
   CanonicalReActRunFacts,
   PreparedCanonicalReActExecution,

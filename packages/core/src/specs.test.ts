@@ -27,7 +27,7 @@ import {
   validateTraceSpec,
 } from './index';
 
-describe('@hypha/core contracts', () => {
+describe('@codesoul-co/core contracts', () => {
   it('formats stable hypha ids', () => {
     expect(formatFrameworkId({ prefix: 'run', value: 'abc' })).toBe('run_abc');
   });

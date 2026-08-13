@@ -15,8 +15,8 @@ import {
   type FrameworkEventType,
   type RuntimeOrchestrationProjection,
   type RuntimeScope,
-} from '@hypha/core';
-import type { FSMProcessSpec } from '@hypha/fsm';
+} from '@codesoul-co/core';
+import type { FSMProcessSpec } from '@codesoul-co/fsm';
 import {
   FencedBoundedFSMDriver,
   type BoundedFSMDriverRunInput,

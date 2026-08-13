@@ -4,7 +4,7 @@ import {
   validateExecutionEnvironmentSpec,
   type CommandExecutionRequest,
   type ExecutionEnvironmentSpec,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import type { DockerContainerCreateInput } from './docker-engine-boundary';
 import { validateCreateInput, validateLiteralArgv } from './docker-engine-boundary';
 import { validateExecInput, type DockerContainerExecInput } from './docker-exec-io';

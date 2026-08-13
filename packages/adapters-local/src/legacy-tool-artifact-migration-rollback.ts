@@ -1,4 +1,4 @@
-import type { ArtifactManager, ArtifactRecord } from '@hypha/core';
+import type { ArtifactManager, ArtifactRecord } from '@codesoul-co/core';
 import type {
   LegacyToolArtifactMigrationExecutionItem,
   LegacyToolArtifactMigrationExecutionResult,

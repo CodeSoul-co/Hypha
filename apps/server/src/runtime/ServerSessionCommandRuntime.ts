@@ -16,11 +16,11 @@ import {
   type SessionQueue,
   type SessionQueueScope,
   type RuntimeOperationalTelemetry,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import type {
   EnqueueReActContinuationCommandRequest,
   ReActContinuationCommandIngress,
-} from '@hypha/harness';
+} from '@codesoul-co/harness';
 
 export type ServerSessionCommandPayloads = Record<SessionCommandType, unknown>;
 

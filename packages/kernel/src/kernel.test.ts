@@ -1,16 +1,16 @@
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
-import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@hypha/adapters-local';
-import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
-import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@hypha/memory';
-import { SkillRegistry } from '@hypha/skills';
+import { InMemoryStructuredStore, InMemoryVectorIndexProvider } from '@codesoul-co/adapters-local';
+import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@codesoul-co/inference';
+import { HybridMemoryProvider, MemoryManager, type EmbeddingProvider } from '@codesoul-co/memory';
+import { SkillRegistry } from '@codesoul-co/skills';
 import {
   MockToolRunner,
   type ToolCallRequest,
   type ToolCallResult,
   type ToolRunner,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 import {
   BasicReActAgentRuntime,
   createEpisodicMemorySync,
@@ -38,7 +38,7 @@ import {
   type ReActAgentSpec,
 } from './index';
 
-describe('@hypha/kernel ReAct contracts', () => {
+describe('@codesoul-co/kernel ReAct contracts', () => {
   it('binds Runtime ToolActivity requests to the governed ToolRunner port', async () => {
     const runner = new MockToolRunner();
     runner.registerResult('tool.activity', {

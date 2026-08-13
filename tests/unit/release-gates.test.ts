@@ -1,6 +1,20 @@
 import packageManifest from '../../package.json';
+import coreManifest from '../../packages/core/package.json';
+import fs from 'fs';
+import path from 'path';
+
+const releaseChecker = fs.readFileSync(
+  path.resolve(__dirname, '../../scripts/check-npm-release.mjs'),
+  'utf8'
+);
 
 describe('release gate composition', () => {
+  it('publishes the release under the CodeSoul npm organization', () => {
+    expect(coreManifest.name).toBe('@codesoul-co/core');
+    expect(releaseChecker).toContain("startsWith('@codesoul-co/')");
+    expect(releaseChecker).not.toContain('@hypha');
+  });
+
   it('requires reproducible local acceptance without third-party credentials', () => {
     expect(packageManifest.scripts['test:acceptance']).toBe('npm run test:acceptance:local');
     expect(packageManifest.scripts['test:acceptance:local']).toBe(

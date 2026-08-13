@@ -1,4 +1,4 @@
-import type { JsonSchema } from '@hypha/core';
+import type { JsonSchema } from '@codesoul-co/core';
 import { z, type ZodType } from 'zod';
 import type { MemoryServerMigrationPackageSpec } from './memory-server-migration-package';
 import { memoryContractSpecRefJsonSchema, memoryContractSpecRefSchema } from './profile-contract';

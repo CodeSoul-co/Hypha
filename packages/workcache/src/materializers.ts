@@ -2,7 +2,7 @@ import {
   parseScopedRecoveryKnowledge,
   type FrameworkEvent,
   type RecoveryKnowledge,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { createWorkBlockId, createWorkCacheKey, hashStableJson, stableJson } from './key';
 import type {
   CacheBlock,

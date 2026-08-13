@@ -1,4 +1,4 @@
-import type { FrameworkEventType } from '@hypha/core';
+import type { FrameworkEventType } from '@codesoul-co/core';
 import { createWorkCacheKey, hashStableJson } from './key';
 import { WorkCacheManager } from './manager';
 import type { WorkCacheAuditEvent } from './types';

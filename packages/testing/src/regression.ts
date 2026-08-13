@@ -4,7 +4,7 @@ import {
   type OutputContractSpec,
   type RegressionSpec,
   type TraceRecorder,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   OutputContractValidator,
   type EvaluationCheckResult,

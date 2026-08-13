@@ -4,17 +4,17 @@ import {
   InMemoryTelemetryRecorder,
   RUNTIME_OPERATIONAL_METRIC_NAMES,
   RuntimeOperationalTelemetry,
-} from '@hypha/core';
-import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@hypha/inference';
+} from '@codesoul-co/core';
+import type { InferenceProvider, InferenceRequest, InferenceResponse } from '@codesoul-co/inference';
 import {
   InMemoryReActContinuationCheckpointStore,
   reActContinuationScopeHash,
   type ContextBuilder,
   type ReActAgentRuntime,
-} from '@hypha/kernel';
-import { SkillRegistry } from '@hypha/skills';
-import { GovernedToolRunner, MockToolRunner, ToolRegistry } from '@hypha/tools';
-import { REACT_FSM_STATE_PATH } from '@hypha/fsm';
+} from '@codesoul-co/kernel';
+import { SkillRegistry } from '@codesoul-co/skills';
+import { GovernedToolRunner, MockToolRunner, ToolRegistry } from '@codesoul-co/tools';
+import { REACT_FSM_STATE_PATH } from '@codesoul-co/fsm';
 import {
   EventFirstRuntime,
   HarnessedReActFSMRunner,
@@ -25,7 +25,7 @@ import {
   UserScopedSessionQueue,
 } from './index';
 
-describe('@hypha/harness contracts', () => {
+describe('@codesoul-co/harness contracts', () => {
   it('keeps session views derived from events', async () => {
     const trace = new InMemoryTraceRecorder();
     await trace.record(

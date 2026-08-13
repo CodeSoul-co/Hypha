@@ -1,6 +1,6 @@
 # WorkCache
 
-`@hypha/workcache` is a typed runtime cache that consumes Hypha events and
+`@codesoul-co/workcache` is a typed runtime cache that consumes Hypha events and
 materializes reusable `CacheBlock` records. It is not the source of truth:
 DomainPack, Session, Run, and Event semantics stay unchanged, and replay,
 audit, regression, and projections still derive from events.

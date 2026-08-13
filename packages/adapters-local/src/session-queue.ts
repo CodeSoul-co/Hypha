@@ -32,7 +32,7 @@ import {
   type SessionQueueHealthSnapshot,
   type SessionQueueScope,
   type StuckSessionCommand,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import fs from 'fs';
 import path from 'path';
 import { loadSqlite, type SqliteDatabaseSync } from './sqlite-driver';
