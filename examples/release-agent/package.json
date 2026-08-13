@@ -1,0 +1,24 @@
+{
+  "name": "hypha-release-agent-example",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Consumer project demonstrating a versioned Hypha npm release",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "compile-agent": "npm run build && node dist/compile-agent.js",
+    "test": "npm run build && node dist/contract.test.js",
+    "run": "npm run build && node dist/run-agent.js",
+    "run:fsm": "npm run build && node dist/run-fsm.js"
+  },
+  "dependencies": {
+    "@hypha/domain": "1.0.0",
+    "@hypha/kernel": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -228,6 +228,14 @@ export interface FSMProcessSpec extends VersionedSpec, SpecMetadata {
   recoveryPolicy?: FSMRecoveryPolicySpec;
 }
 
+export interface FSMTopologyAnalysis {
+  initialState: string;
+  reachableStates: string[];
+  unreachableStates: string[];
+  deadEndStates: string[];
+  cycleStates: string[];
+}
+
 export interface FSMSnapshot {
   processId: string;
   runId: string;
@@ -385,6 +393,65 @@ export function validateFSMProcessSpec(spec: FSMProcessSpec): void {
 
 export function getAllowedTransitions(spec: FSMProcessSpec, stateId: string): FSMTransitionSpec[] {
   return spec.transitions.filter((transition) => transition.from === stateId);
+}
+
+/**
+ * Describes graph properties without imposing product-specific topology rules.
+ * Callers can decide whether unreachable states, non-terminal dead ends, or
+ * cycles are valid for their Domain workflow.
+ */
+export function analyzeFSMTopology(spec: FSMProcessSpec): FSMTopologyAnalysis {
+  validateFSMProcessSpec(spec);
+  const outgoing = new Map<string, string[]>();
+  for (const state of spec.states) outgoing.set(state.id, []);
+  for (const transition of spec.transitions) outgoing.get(transition.from)!.push(transition.to);
+
+  const reachable = new Set<string>();
+  const queue = [spec.initialState];
+  while (queue.length > 0) {
+    const stateId = queue.shift()!;
+    if (reachable.has(stateId)) continue;
+    reachable.add(stateId);
+    queue.push(...(outgoing.get(stateId) ?? []));
+  }
+
+  const cycleStates = new Set<string>();
+  for (const state of spec.states) {
+    if (canReachState(state.id, state.id, outgoing)) cycleStates.add(state.id);
+  }
+  const terminalStates = new Set(spec.terminalStates);
+  return {
+    initialState: spec.initialState,
+    reachableStates: spec.states
+      .map((state) => state.id)
+      .filter((stateId) => reachable.has(stateId)),
+    unreachableStates: spec.states
+      .map((state) => state.id)
+      .filter((stateId) => !reachable.has(stateId)),
+    deadEndStates: spec.states
+      .map((state) => state.id)
+      .filter(
+        (stateId) => !terminalStates.has(stateId) && (outgoing.get(stateId)?.length ?? 0) === 0
+      ),
+    cycleStates: spec.states.map((state) => state.id).filter((stateId) => cycleStates.has(stateId)),
+  };
+}
+
+function canReachState(
+  start: string,
+  target: string,
+  outgoing: ReadonlyMap<string, readonly string[]>
+): boolean {
+  const visited = new Set<string>([start]);
+  const queue = [...(outgoing.get(start) ?? [])];
+  while (queue.length > 0) {
+    const stateId = queue.shift()!;
+    if (stateId === target) return true;
+    if (visited.has(stateId)) continue;
+    visited.add(stateId);
+    queue.push(...(outgoing.get(stateId) ?? []));
+  }
+  return false;
 }
 
 export function createInitialSnapshot(
@@ -575,6 +642,16 @@ export function assertHarnessFSMProcessSpec(spec: FSMProcessSpec): void {
     'transition topology',
     spec
   );
+}
+
+/** Returns false for either an invalid process or a valid non-Harness topology. */
+export function isHarnessFSMProcessSpec(spec: FSMProcessSpec): boolean {
+  try {
+    assertHarnessFSMProcessSpec(spec);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function transitionIdentity(transition: FSMTransitionSpec): string {

@@ -13,6 +13,23 @@ The API server reads dotenv configuration. MongoDB and Redis are required for th
 
 `config.yaml` is the tracked typed configuration template. `.env` is ignored and should contain deployment-specific URLs, secrets, local paths, and CLI overrides.
 
+Do not put product settings into the tracked template. Create a small user overlay outside the
+checkout, or under the ignored `.hypha/` directory, and point the Server at it:
+
+```bash
+mkdir -p .hypha
+HYPHA_CONFIG_PATH=.hypha/config.yaml npm run dev
+```
+
+For example, `.hypha/config.yaml` may contain only `app.name` and the product-specific settings it
+overrides. Relative resource paths inside that file resolve from `.hypha/`.
+
+The overlay is merged over the release's `config.yaml`, so newly introduced framework defaults stay
+available after an update. Relative resource paths inside the overlay resolve from the overlay's own
+directory. `HYPHA_AGENT_CONFIG_PATH`, `HYPHA_TOOL_CONFIG_PATH`,
+`HYPHA_WORKFLOW_PATH`, `HYPHA_PROMPT_TEMPLATES_PATH`, and `HYPHA_PROMPT_REGISTRY_PATH` may point
+individual product resources at another repository or persistent volume.
+
 Local runtime records, indexes, artifacts, and detailed system logs are written under `data/`. See [Local Data Layout](../reference/local-data-layout.md) for the default tree.
 
 ## Common Commands

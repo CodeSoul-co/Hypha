@@ -7,6 +7,7 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.
 - [Runtime Model](reference/runtime-model.md): DomainPack, Session, Run, Event, durable orchestration, FSM, replay, audit, regression, and concurrency conventions.
 - [FSM Anomaly Recovery](architecture/fsm-recovery.md): cross-module supervision, evidence-based convergence, bounded recovery states, cache knowledge, and module failure matrix.
+- [Custom FSM Topologies](guides/custom-fsm.md): application-defined graphs, topology analysis, custom Runs, and governed owner transitions.
 - [Storage Reference](reference/storage.md): document, messaging, relational, vector, and artifact storage conventions plus memory extension points.
 - [Local Data Layout](reference/local-data-layout.md): ignored `data/` tree for local runtime records, indexes, artifacts, and logs.
 - [Framework API](api/framework.md): TypeScript package contracts and field-level spec references.
@@ -25,6 +26,10 @@ This directory contains public documentation for using hypha APIs, specs, runtim
 
 ## Guides
 
+- [Releases and npm Packages](guides/releases.md): version alignment, package verification,
+  publication boundaries, and the standalone consumer example.
+- [Upgrading Hypha](../UPGRADING.md): npm and source-release update, configuration migration,
+  staging, backup, and rollback procedure.
 - [Domain Packs](guides/domain-packs.md): how to declare workflows, task schemas, tools, MCP profiles, memory profiles, policies, evaluations, regressions, and output contracts.
 - [Local Development](guides/local-development.md): setup, environment, commands, storage adapters, and verification checks.
 - [Tool/MCP Security](guides/tool-mcp-security.md): trust boundaries, secrets, side effects, approval, and recovery.

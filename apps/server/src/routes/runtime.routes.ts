@@ -83,6 +83,25 @@ const humanTaskDecisionSchema = z
   })
   .strict();
 
+const manualFSMTransitionSchema = z
+  .object({
+    processId: z.string().trim().min(1).max(512),
+    processVersion: z.string().trim().min(1).max(128),
+    expectedState: z.string().trim().min(1).max(512),
+    expectedRunRevision: z.number().int().nonnegative(),
+    targetState: z.string().trim().min(1).max(512),
+    reason: z.string().trim().min(1).max(16_384),
+    guardContext: z
+      .object({
+        input: z.unknown().optional(),
+        variables: z.record(z.unknown()).optional(),
+        metadata: z.record(z.unknown()).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 router.post(
   '/sessions/:sessionId/commands/start-run',
   asyncHandler(async (req: Request, res: Response) => {
@@ -251,6 +270,53 @@ router.get(
 );
 
 router.get(
+  '/runs/:runId/fsm',
+  asyncHandler(async (req: Request, res: Response) => {
+    const run = await requireRunAccess(req, res);
+    if (!run) return;
+    const requesterUserId = authenticatedUserId(req);
+    if (!requesterUserId) return unauthorized(res);
+    if (requesterUserId !== run.userId) return ownerOnly(res);
+    const view = await getEventRuntime().inspectOwnedFSM(req.params.runId, requesterUserId);
+    res.json({ success: true, data: view });
+  })
+);
+
+router.post(
+  '/runs/:runId/fsm/transitions',
+  asyncHandler(async (req: Request, res: Response) => {
+    const run = await requireRunAccess(req, res);
+    if (!run) return;
+    const principalId = authenticatedUserId(req);
+    if (!principalId) return unauthorized(res);
+    if (principalId !== run.userId) return ownerOnly(res);
+    const idempotencyKey = req.get('Idempotency-Key')?.trim();
+    if (!idempotencyKey || idempotencyKey.length > 256) {
+      return invalidSessionCommand(
+        res,
+        'A 1 to 256 character Idempotency-Key is required for a manual FSM transition'
+      );
+    }
+    const parsed = manualFSMTransitionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return invalidSessionCommand(
+        res,
+        'Manual FSM transition body is invalid',
+        parsed.error.flatten()
+      );
+    }
+    const result = await getEventRuntime().transitionOwnedFSM({
+      runId: req.params.runId,
+      ownerUserId: run.userId,
+      principalId,
+      ...parsed.data,
+      idempotencyKey,
+    });
+    res.json({ success: true, data: result });
+  })
+);
+
+router.get(
   '/runs/:runId/human-tasks',
   asyncHandler(async (req: Request, res: Response) => {
     const run = await requireRunAccess(req, res);
@@ -361,6 +427,16 @@ function unauthorized(res: Response): Response {
   return res.status(HTTP_STATUS.UNAUTHORIZED).json({
     success: false,
     error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+  });
+}
+
+function ownerOnly(res: Response): Response {
+  return res.status(HTTP_STATUS.FORBIDDEN).json({
+    success: false,
+    error: {
+      code: 'RUNTIME_RUN_ACCESS_DENIED',
+      message: 'Only the Run owner can control its FSM',
+    },
   });
 }
 

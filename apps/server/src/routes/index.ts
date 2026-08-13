@@ -16,6 +16,13 @@ import { approvalRouter, invocationRouter } from './tool-runtime.routes';
 import mcpRoutes from './mcp.routes';
 import { asyncHandler } from '../middleware/errorHandler';
 import { getServerProductReadiness } from '../services/ServerProductReadiness';
+import {
+  createOpenApiDocument,
+  getOpenApiDocument,
+  setOpenApiDocument,
+  type OpenApiMount,
+} from './openapi';
+import { getConfig } from '../config';
 
 const router = Router();
 
@@ -51,22 +58,42 @@ router.get(
   })
 );
 
-// Mount routes
-router.use('/auth', authRoutes);
-router.use('/chat', chatRoutes);
-router.use('/memory/admin', memoryAdminRoutes);
-router.use('/memory', memoryRoutes);
-router.use('/skills', skillRoutes);
-router.use('/tools', toolRoutes);
-router.use('/tool-invocations', invocationRouter);
-router.use('/tool-approvals', approvalRouter);
-router.use('/mcp', mcpRoutes);
-router.use('/workflows', workflowRoutes);
-router.use('/models', modelRoutes);
-router.use('/status', statusRoutes);
-router.use('/usage', usageRoutes);
-router.use('/docs', apiDocsRoutes);
-router.use('/runtime', runtimeRoutes);
-router.use('/dev', devRoutes);
+// This mount table is shared with OpenAPI generation so adding a mounted route
+// automatically updates the machine-readable route inventory.
+const mounts: OpenApiMount[] = [
+  { prefix: '/auth', tag: 'Authentication', router: authRoutes },
+  { prefix: '/chat', tag: 'Chat', router: chatRoutes },
+  { prefix: '/memory/admin', tag: 'Memory Administration', router: memoryAdminRoutes },
+  { prefix: '/memory', tag: 'Memory', router: memoryRoutes },
+  { prefix: '/skills', tag: 'Skills', router: skillRoutes },
+  { prefix: '/tools', tag: 'Tools', router: toolRoutes },
+  { prefix: '/tool-invocations', tag: 'Tool Runtime', router: invocationRouter },
+  { prefix: '/tool-approvals', tag: 'Tool Runtime', router: approvalRouter },
+  { prefix: '/mcp', tag: 'MCP', router: mcpRoutes },
+  { prefix: '/workflows', tag: 'Workflows', router: workflowRoutes },
+  { prefix: '/models', tag: 'Models', router: modelRoutes },
+  { prefix: '/status', tag: 'Status', router: statusRoutes },
+  { prefix: '/usage', tag: 'Usage', router: usageRoutes },
+  { prefix: '/docs', tag: 'Documentation', router: apiDocsRoutes },
+  { prefix: '/runtime', tag: 'Runtime', router: runtimeRoutes },
+  { prefix: '/dev', tag: 'Development', router: devRoutes },
+];
+
+for (const mount of mounts) router.use(mount.prefix, mount.router);
+
+setOpenApiDocument(
+  createOpenApiDocument({
+    version: getConfig().app.version,
+    basePath: getConfig().app.apiPrefix,
+    mounts,
+    rootRoutes: [
+      { method: 'GET', path: '/health', tag: 'Status' },
+      { method: 'GET', path: '/ready', tag: 'Status' },
+      { method: 'GET', path: '/openapi.json', tag: 'Documentation' },
+    ],
+  })
+);
+
+router.get('/openapi.json', (_req, res) => res.json(getOpenApiDocument()));
 
 export default router;
