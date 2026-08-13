@@ -4,6 +4,7 @@ import {
   InMemoryArtifactStore,
   InMemoryStructuredStore,
   InMemoryVectorIndexProvider,
+  LocalHashEmbeddingProvider,
   LocalVectorIndexProvider,
   MockEmbeddingProvider,
   SQLiteEventStore,
@@ -46,6 +47,26 @@ describe('@hypha/adapters-local reference providers', () => {
     });
     await expect(catalog.list('server')).resolves.toMatchObject([
       { capabilityHash: 'hash-1', stableToolId: 'mcp.server.search' },
+    ]);
+    const [storedCapability] = await catalog.list('server');
+    const updatedCapability = {
+      ...storedCapability!,
+      descriptorHash: 'descriptor-2',
+      lastSeenAt: '2026-07-16T00:01:00.000Z',
+    };
+    await expect(
+      catalog.save(updatedCapability, {
+        expected: { ...storedCapability!, descriptorHash: 'stale-descriptor' },
+      })
+    ).resolves.toBe(false);
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { descriptorHash: 'descriptor-1' },
+    ]);
+    await expect(catalog.save(updatedCapability, { expected: storedCapability })).resolves.toBe(
+      true
+    );
+    await expect(catalog.list('server')).resolves.toMatchObject([
+      { descriptorHash: 'descriptor-2' },
     ]);
 
     const snapshots = new FileToolContractSnapshotStore(path.join(root, 'snapshots'));
@@ -129,6 +150,19 @@ describe('@hypha/adapters-local reference providers', () => {
     await expect(artifacts.get(ref)).resolves.toEqual(Buffer.from('{"ok":true}'));
 
     await expect(new MockEmbeddingProvider().embed(['hypha'])).resolves.toHaveLength(1);
+  });
+
+  it('uses an honest lexical hash embedding for the zero-dependency local backbone', async () => {
+    const embeddings = new LocalHashEmbeddingProvider({ dimensions: 128 });
+    const [query, related, unrelated] = await embeddings.embed([
+      'durable runtime checkpoint recovery',
+      'runtime checkpoint recovery worker',
+      'watercolor landscape painting',
+    ]);
+
+    expect(query).toHaveLength(128);
+    expect(cosine(query, related)).toBeGreaterThan(cosine(query, unrelated));
+    expect(() => new LocalHashEmbeddingProvider({ dimensions: 8 })).toThrow('between 32 and 4096');
   });
 
   it('bridges the persistent local vector provider through the managed Memory contract', async () => {
@@ -285,6 +319,40 @@ describe('@hypha/adapters-local reference providers', () => {
       { id: 'run_1:created', type: 'run.created', sessionId: 'session_1' },
     ]);
   });
+
+  it.each(['sqlite', 'json'] as const)(
+    'preserves causal insertion order for equal-timestamp Events in %s mode',
+    async (mode) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `hypha-event-order-${mode}-`));
+      const events = new SQLiteEventStore({
+        filename: path.join(root, 'events.sqlite'),
+        mode,
+      });
+      const timestamp = '2026-07-26T00:00:00.000Z';
+      for (const [id, type] of [
+        ['z-run-created', 'run.created'],
+        ['a-run-started', 'run.started'],
+        ['m-state-entered', 'fsm.state.entered'],
+      ] as const) {
+        await events.append(
+          createFrameworkEvent({
+            id,
+            type,
+            runId: 'run-order',
+            userId: 'user-order',
+            timestamp,
+            payload: { id },
+          })
+        );
+      }
+
+      await expect(events.list({ runId: 'run-order' })).resolves.toEqual([
+        expect.objectContaining({ id: 'z-run-created' }),
+        expect.objectContaining({ id: 'a-run-started' }),
+        expect.objectContaining({ id: 'm-state-entered' }),
+      ]);
+    }
+  );
 
   it('exports and imports framework event traces as JSONL', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-event-jsonl-'));
@@ -454,6 +522,13 @@ describe('@hypha/adapters-local reference providers', () => {
 });
 
 async function awaitVector(value: string): Promise<number[]> {
-  const [vector] = await new MockEmbeddingProvider().embed([value]);
+  const [vector] = await new LocalHashEmbeddingProvider().embed([value]);
   return vector;
+}
+
+function cosine(left: number[], right: number[]): number {
+  const dot = left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
+  const leftNorm = Math.sqrt(left.reduce((sum, value) => sum + value * value, 0));
+  const rightNorm = Math.sqrt(right.reduce((sum, value) => sum + value * value, 0));
+  return dot / (leftNorm * rightNorm);
 }

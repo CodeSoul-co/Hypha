@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
+import { LocalProcessOutputCollector } from './local-process-output-collector';
 
 const execFileAsync = promisify(execFile);
 
@@ -10,7 +11,8 @@ export type LocalProcessOutcome =
   | 'cancelled'
   | 'timed_out'
   | 'idle_timed_out'
-  | 'output_limit';
+  | 'output_limit'
+  | 'termination_failed';
 
 export interface LocalProcessRunRequest {
   executable: string;
@@ -25,6 +27,13 @@ export interface LocalProcessRunRequest {
   maxCombinedOutputBytes: number;
   gracefulTerminationMs: number;
   signal: AbortSignal;
+  onOutput?: (event: LocalProcessOutputEvent) => void | Promise<void>;
+}
+
+export interface LocalProcessOutputEvent {
+  stream: 'stdout' | 'stderr';
+  chunk: Uint8Array;
+  truncated: boolean;
 }
 
 export interface LocalProcessRunResult {
@@ -43,12 +52,33 @@ export interface LocalProcessRunResult {
   terminationMechanism: 'posix_process_group' | 'windows_taskkill';
   processTreeTerminationVerified: boolean;
   startError?: Error;
+  terminationError?: Error;
 }
 
 export interface LocalProcessSupervisorOptions {
   now?: () => string;
   monotonicNow?: () => number;
   taskkillPath?: string;
+  kill?: (pid: number, signal: NodeJS.Signals | 0) => void;
+}
+
+interface PosixProcessGroupTerminationOperations {
+  signal(signal: 'SIGTERM' | 'SIGKILL'): void;
+  isAlive(): boolean;
+  waitForExit(maximumWaitMs: number): Promise<boolean>;
+  delay(milliseconds: number): Promise<void>;
+}
+
+export async function terminatePosixProcessGroup(
+  gracefulTerminationMs: number,
+  operations: PosixProcessGroupTerminationOperations
+): Promise<boolean> {
+  operations.signal('SIGTERM');
+  await operations.delay(gracefulTerminationMs);
+  if (!operations.isAlive()) return true;
+
+  operations.signal('SIGKILL');
+  return operations.waitForExit(Math.min(1_000, Math.max(250, gracefulTerminationMs)));
 }
 
 export class LocalProcessSupervisor {
@@ -59,11 +89,13 @@ export class LocalProcessSupervisor {
   private readonly now: () => string;
   private readonly monotonicNow: () => number;
   private readonly taskkillPath: string;
+  private readonly kill: (pid: number, signal: NodeJS.Signals | 0) => void;
 
   constructor(options: LocalProcessSupervisorOptions = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.taskkillPath = options.taskkillPath ?? 'taskkill.exe';
+    this.kill = options.kill ?? ((pid, signal) => process.kill(pid, signal));
   }
 
   run(request: LocalProcessRunRequest): Promise<LocalProcessRunResult> {
@@ -76,14 +108,15 @@ export class LocalProcessSupervisor {
       let terminationOutcome: Exclude<LocalProcessOutcome, 'exited' | 'start_failed'> | undefined;
       let outputLimitStream: LocalProcessRunResult['outputLimitStream'];
       let terminationPromise: Promise<boolean> | undefined;
+      let terminationError: Error | undefined;
       let timeout: NodeJS.Timeout | undefined;
       let idleTimeout: NodeJS.Timeout | undefined;
-      let observedStdoutBytes = 0;
-      let observedStderrBytes = 0;
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      let capturedStdoutBytes = 0;
-      let capturedStderrBytes = 0;
+      const pendingOutput = new Set<Promise<void>>();
+      const output = new LocalProcessOutputCollector({
+        maxStdoutBytes: request.maxStdoutBytes,
+        maxStderrBytes: request.maxStderrBytes,
+        maxCombinedOutputBytes: request.maxCombinedOutputBytes,
+      });
 
       const requestTermination = (
         outcome: Exclude<LocalProcessOutcome, 'exited' | 'start_failed'>
@@ -91,7 +124,18 @@ export class LocalProcessSupervisor {
         if (terminationOutcome) return;
         terminationOutcome = outcome;
         if (child.pid) {
-          terminationPromise = this.terminateScope(child.pid, request.gracefulTerminationMs);
+          terminationPromise = this.terminateScope(child.pid, request.gracefulTerminationMs).catch(
+            (error) => {
+              terminationError = asError(error);
+              return false;
+            }
+          );
+          void terminationPromise.then((verified) => {
+            if (!verified && process.platform !== 'win32' && !settled) {
+              terminationError ??= new Error('POSIX process group could not be terminated.');
+              void finish(null, null);
+            }
+          });
         }
       };
 
@@ -101,37 +145,39 @@ export class LocalProcessSupervisor {
         idleTimeout = setTimeout(() => requestTermination('idle_timed_out'), request.idleTimeoutMs);
       };
 
-      const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-        if (stream === 'stdout') observedStdoutBytes += chunk.byteLength;
-        else observedStderrBytes += chunk.byteLength;
-        const observedCombined = observedStdoutBytes + observedStderrBytes;
-        const currentBytes = stream === 'stdout' ? capturedStdoutBytes : capturedStderrBytes;
-        const streamLimit = stream === 'stdout' ? request.maxStdoutBytes : request.maxStderrBytes;
-        const capturedCombined = capturedStdoutBytes + capturedStderrBytes;
-        const remaining = Math.max(
-          0,
-          Math.min(streamLimit - currentBytes, request.maxCombinedOutputBytes - capturedCombined)
-        );
-        if (remaining > 0) {
-          const captured = chunk.subarray(0, remaining);
-          if (stream === 'stdout') {
-            stdout.push(captured);
-            capturedStdoutBytes += captured.byteLength;
-          } else {
-            stderr.push(captured);
-            capturedStderrBytes += captured.byteLength;
-          }
-        }
-        if (observedCombined > request.maxCombinedOutputBytes) {
-          outputLimitStream = 'combined';
-          requestTermination('output_limit');
-        } else if (
-          (stream === 'stdout' ? observedStdoutBytes : observedStderrBytes) > streamLimit
-        ) {
-          outputLimitStream = stream;
+      const appendOutput = async (
+        stream: 'stdout' | 'stderr',
+        chunk: Buffer
+      ): Promise<void> => {
+        const appended = output.append(stream, chunk);
+        if (appended.limitExceeded) {
+          outputLimitStream = appended.limitExceeded;
           requestTermination('output_limit');
         }
         resetIdleTimeout();
+        try {
+          await request.onOutput?.({
+            stream,
+            chunk: Uint8Array.from(chunk),
+            truncated: appended.limitExceeded !== undefined,
+          });
+        } catch (error) {
+          terminationError = asError(error);
+          requestTermination('termination_failed');
+        }
+      };
+
+      const observeOutput = (
+        source: NodeJS.ReadableStream,
+        stream: 'stdout' | 'stderr',
+        chunk: Buffer
+      ): void => {
+        source.pause();
+        const pending = appendOutput(stream, chunk).finally(() => {
+          pendingOutput.delete(pending);
+          if (!settled) source.resume();
+        });
+        pendingOutput.add(pending);
       };
 
       const clearTimers = (): void => {
@@ -163,16 +209,22 @@ export class LocalProcessSupervisor {
             request.gracefulTerminationMs
           );
         }
+        await Promise.all([...pendingOutput]);
+        const capturedOutput = output.snapshot();
         const completedAt = this.now();
         resolve({
-          outcome: startError ? 'start_failed' : (terminationOutcome ?? 'exited'),
+          outcome: startError
+            ? 'start_failed'
+            : terminationError
+              ? 'termination_failed'
+              : (terminationOutcome ?? 'exited'),
           exitCode,
           ...(signal ? { signal } : {}),
-          stdout: Buffer.concat(stdout).toString('utf8'),
-          stderr: Buffer.concat(stderr).toString('utf8'),
+          stdout: capturedOutput.stdout,
+          stderr: capturedOutput.stderr,
           ...(outputLimitStream ? { outputLimitStream } : {}),
-          observedStdoutBytes,
-          observedStderrBytes,
+          observedStdoutBytes: capturedOutput.observedStdoutBytes,
+          observedStderrBytes: capturedOutput.observedStderrBytes,
           startedAt,
           completedAt,
           latencyMs: Math.max(0, this.monotonicNow() - startedTick),
@@ -180,6 +232,7 @@ export class LocalProcessSupervisor {
           terminationMechanism: this.terminationMechanism,
           processTreeTerminationVerified: terminationVerified,
           ...(startError ? { startError } : {}),
+          ...(terminationError ? { terminationError } : {}),
         });
       };
 
@@ -201,8 +254,8 @@ export class LocalProcessSupervisor {
       }
 
       request.signal.addEventListener('abort', onAbort, { once: true });
-      child.stdout.on('data', (chunk: Buffer) => appendOutput('stdout', chunk));
-      child.stderr.on('data', (chunk: Buffer) => appendOutput('stderr', chunk));
+      child.stdout.on('data', (chunk: Buffer) => observeOutput(child.stdout, 'stdout', chunk));
+      child.stderr.on('data', (chunk: Buffer) => observeOutput(child.stderr, 'stderr', chunk));
       child.once('error', (error) => void finish(null, null, asError(error)));
       child.once('close', (exitCode, signal) => void finish(exitCode, signal));
 
@@ -229,11 +282,20 @@ export class LocalProcessSupervisor {
   }
 
   private async terminatePosixScope(pid: number, gracefulTerminationMs: number): Promise<boolean> {
-    signalPosixScope(pid, 'SIGTERM');
-    await delay(gracefulTerminationMs);
-    if (this.isPosixScopeAlive(pid)) {
-      signalPosixScope(pid, 'SIGKILL');
-      await delay(Math.min(100, Math.max(10, gracefulTerminationMs)));
+    return terminatePosixProcessGroup(gracefulTerminationMs, {
+      signal: (signal) => this.signalPosixScope(pid, signal),
+      isAlive: () => this.isPosixScopeAlive(pid),
+      waitForExit: (maximumWaitMs) => this.waitForPosixScopeExit(pid, maximumWaitMs),
+      delay,
+    });
+  }
+
+  private async waitForPosixScopeExit(pid: number, maximumWaitMs: number): Promise<boolean> {
+    const pollIntervalMs = 25;
+    const maximumAttempts = Math.max(1, Math.ceil(maximumWaitMs / pollIntervalMs));
+    for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+      if (!this.isPosixScopeAlive(pid)) return true;
+      await delay(pollIntervalMs);
     }
     return !this.isPosixScopeAlive(pid);
   }
@@ -241,10 +303,31 @@ export class LocalProcessSupervisor {
   private isPosixScopeAlive(pid: number): boolean {
     if (process.platform === 'win32') return false;
     try {
-      process.kill(-pid, 0);
+      this.kill(-pid, 0);
       return true;
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  }
+
+  private signalPosixScope(pid: number, signal: NodeJS.Signals): void {
+    try {
+      this.kill(-pid, signal);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return;
+      if (code !== 'EPERM') throw error;
+    }
+
+    // macOS can transiently deny a process-group signal while the direct
+    // child is still owned by this process. Fall back to the child so timeout
+    // and cancellation always make progress, then verify the whole group
+    // disappeared before claiming process-tree termination.
+    try {
+      this.kill(pid, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
     }
   }
 
@@ -252,7 +335,7 @@ export class LocalProcessSupervisor {
     await delay(gracefulTerminationMs);
     await this.runTaskkill(pid, true);
     try {
-      process.kill(pid, 'SIGKILL');
+      this.kill(pid, 'SIGKILL');
     } catch {
       // taskkill may already have removed the direct child.
     }
@@ -290,14 +373,6 @@ function validateRunRequest(request: LocalProcessRunRequest): void {
     (!Number.isInteger(request.idleTimeoutMs) || request.idleTimeoutMs <= 0)
   ) {
     throw new Error('idleTimeoutMs must be a positive integer when provided.');
-  }
-}
-
-function signalPosixScope(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
 }
 

@@ -1,23 +1,35 @@
 import type { CacheMode, CachePolicy } from './types';
+import { validateCachePolicy } from './schemas';
 
 export const defaultCachePolicy: CachePolicy = {
   enabled: false,
   mode: 'readwrite',
   ttlMs: 1000 * 60 * 60 * 24,
-  cacheErrors: false,
-  cacheStreaming: false,
   respectNoCache: true,
+  failureMode: 'bypass',
+  scopeRequirement: 'user',
+  operationTimeoutMs: 250,
+  singleflight: true,
+  maxEntryBytes: 1024 * 1024,
+  circuitBreaker: {
+    failureThreshold: 3,
+    resetTimeoutMs: 30000,
+  },
 };
 
 export function normalizeCachePolicy(policy: Partial<CachePolicy> = {}): CachePolicy {
   const normalized: CachePolicy = {
     ...defaultCachePolicy,
     ...policy,
+    circuitBreaker: {
+      ...defaultCachePolicy.circuitBreaker!,
+      ...(policy.circuitBreaker ?? {}),
+    },
   };
   if (normalized.mode === 'off') {
-    return { ...normalized, enabled: false };
+    return validateCachePolicy({ ...normalized, enabled: false });
   }
-  return normalized;
+  return validateCachePolicy(normalized);
 }
 
 export function cacheModeAllowsRead(mode: CacheMode): boolean {

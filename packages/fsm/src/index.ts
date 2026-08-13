@@ -55,6 +55,151 @@ export type FSMStateKind =
   | 'cancelled'
   | 'domain';
 
+/**
+ * Stable Harness states owned by the framework runtime. Domain Packs may bind
+ * capabilities and policy to these phases, but must not add, remove, rename,
+ * or reconnect them.
+ */
+export const HARNESS_FSM_STATE_IDS = [
+  'Idle',
+  'RunInitialized',
+  'ContextBuilt',
+  'Reasoning',
+  'ActionSelected',
+  'PolicyChecked',
+  'Acting',
+  'ObservationRecorded',
+  'Verifying',
+  'MemorySync',
+  'Recovering',
+  'Compensating',
+  'Quarantined',
+  'HumanReview',
+  'Completed',
+  'Failed',
+  'Cancelled',
+] as const;
+
+export type HarnessFSMStateId = (typeof HARNESS_FSM_STATE_IDS)[number];
+
+export type HarnessCapabilityArea =
+  | 'lifecycle'
+  | 'context'
+  | 'reasoning'
+  | 'policy'
+  | 'activity'
+  | 'observation'
+  | 'verification'
+  | 'memory'
+  | 'recovery'
+  | 'human_review'
+  | 'terminal';
+
+/**
+ * `activity` is the governed side-effect phase shared by Tool, MCP,
+ * Execution, file, Memory-write, and external-write adapters. The concrete
+ * activity type remains Event evidence; it never becomes a Domain-defined
+ * FSM state.
+ */
+export const HARNESS_STATE_CAPABILITY_AREA: Readonly<
+  Record<HarnessFSMStateId, HarnessCapabilityArea>
+> = Object.freeze({
+  Idle: 'lifecycle',
+  RunInitialized: 'lifecycle',
+  ContextBuilt: 'context',
+  Reasoning: 'reasoning',
+  ActionSelected: 'reasoning',
+  PolicyChecked: 'policy',
+  Acting: 'activity',
+  ObservationRecorded: 'observation',
+  Verifying: 'verification',
+  MemorySync: 'memory',
+  Recovering: 'recovery',
+  Compensating: 'recovery',
+  Quarantined: 'recovery',
+  HumanReview: 'human_review',
+  Completed: 'terminal',
+  Failed: 'terminal',
+  Cancelled: 'terminal',
+});
+
+export const REACT_PHASE_TO_HARNESS_STATE = Object.freeze({
+  reason: 'Reasoning',
+  select_action: 'ActionSelected',
+  policy_check: 'PolicyChecked',
+  act: 'Acting',
+  observe_result: 'ObservationRecorded',
+  verify: 'Verifying',
+  memory_sync: 'MemorySync',
+  complete: 'Completed',
+  fail: 'Failed',
+  human_review: 'HumanReview',
+  cancel: 'Cancelled',
+} satisfies Readonly<Record<string, HarnessFSMStateId>>);
+
+export function harnessStateForReActPhase(phase: string): HarnessFSMStateId | undefined {
+  return REACT_PHASE_TO_HARNESS_STATE[phase as keyof typeof REACT_PHASE_TO_HARNESS_STATE];
+}
+
+const HARNESS_PIPELINE_STATE_IDS: ReadonlySet<HarnessFSMStateId> = new Set([
+  'Idle',
+  'RunInitialized',
+  'ContextBuilt',
+  'Reasoning',
+  'ActionSelected',
+  'PolicyChecked',
+  'Acting',
+  'ObservationRecorded',
+  'Verifying',
+  'MemorySync',
+  'Completed',
+]);
+
+/**
+ * Plans only normal capability movement. Recovery, compensation, quarantine,
+ * human review, failure, and cancellation are selected by their dedicated
+ * supervisors and can never be traversed as a shortcut for Domain work.
+ */
+export function planHarnessCapabilityPath(
+  from: HarnessFSMStateId,
+  to: HarnessFSMStateId
+): HarnessFSMStateId[] {
+  if (from === to) return [];
+  if (!HARNESS_PIPELINE_STATE_IDS.has(from) || !HARNESS_PIPELINE_STATE_IDS.has(to)) {
+    invalidHarnessPath(from, to);
+  }
+  const queue: Array<{ state: HarnessFSMStateId; path: HarnessFSMStateId[] }> = [
+    { state: from, path: [] },
+  ];
+  const visited = new Set<HarnessFSMStateId>([from]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const transition of defaultReActFSMProcessSpec.transitions) {
+      if (transition.from !== current.state || transition.guard) continue;
+      if (!isHarnessFSMStateId(transition.to)) continue;
+      if (!HARNESS_PIPELINE_STATE_IDS.has(transition.to)) continue;
+      const path = [...current.path, transition.to];
+      if (transition.to === to) return path;
+      if (visited.has(transition.to)) continue;
+      visited.add(transition.to);
+      queue.push({ state: transition.to, path });
+    }
+  }
+  invalidHarnessPath(from, to);
+}
+
+export function isHarnessFSMStateId(value: string): value is HarnessFSMStateId {
+  return (HARNESS_FSM_STATE_IDS as readonly string[]).includes(value);
+}
+
+function invalidHarnessPath(from: HarnessFSMStateId, to: HarnessFSMStateId): never {
+  throw new FrameworkError({
+    code: 'FSM_TRANSITION_NOT_ALLOWED',
+    message: `No normal Harness capability path exists: ${from} -> ${to}`,
+    context: { from, to },
+  });
+}
+
 export interface FSMStateSpec extends SpecMetadata {
   id: string;
   kind?: FSMStateKind;
@@ -325,6 +470,7 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { from: 'Acting', to: 'ObservationRecorded', traceEvent: 'fsm.transition.accepted' },
     { from: 'ObservationRecorded', to: 'Verifying', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
+    { from: 'Verifying', to: 'PolicyChecked', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'MemorySync', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
     { from: 'MemorySync', to: 'ContextBuilt', traceEvent: 'fsm.transition.accepted' },
@@ -338,6 +484,7 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
     { from: 'ObservationRecorded', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
     { from: 'Verifying', to: 'HumanReview', traceEvent: 'fsm.transition.accepted' },
     { from: 'HumanReview', to: 'Acting', traceEvent: 'fsm.transition.accepted' },
+    { from: 'HumanReview', to: 'ObservationRecorded', traceEvent: 'fsm.transition.accepted' },
     { from: 'HumanReview', to: 'Reasoning', traceEvent: 'fsm.transition.accepted' },
     { from: 'HumanReview', to: 'Completed', traceEvent: 'fsm.transition.accepted' },
     { from: 'HumanReview', to: 'Failed', traceEvent: 'fsm.transition.accepted' },
@@ -387,6 +534,76 @@ export const defaultReActFSMProcessSpec: FSMProcessSpec = {
   ],
   terminalStates: ['Completed', 'Failed', 'Cancelled'],
 };
+
+/** Returns an isolated copy so composition code cannot mutate the shared contract. */
+export function createHarnessFSMProcessSpec(): FSMProcessSpec {
+  return structuredClone(defaultReActFSMProcessSpec);
+}
+
+/**
+ * Fails closed when an application or Domain Pack attempts to replace the
+ * Harness capability topology with a product workflow.
+ */
+export function assertHarnessFSMProcessSpec(spec: FSMProcessSpec): void {
+  validateFSMProcessSpec(spec);
+  const canonical = defaultReActFSMProcessSpec;
+  if (spec.id !== canonical.id || spec.version !== canonical.version) {
+    invalidHarnessTopology('Harness FSM identity is framework-owned.', spec);
+  }
+  if (spec.initialState !== canonical.initialState) {
+    invalidHarnessTopology('Harness FSM initial state is framework-owned.', spec);
+  }
+
+  const canonicalStates = new Map(canonical.states.map((state) => [state.id, state.kind]));
+  const actualStates = new Map(spec.states.map((state) => [state.id, state.kind]));
+  if (canonicalStates.size !== actualStates.size) {
+    invalidHarnessTopology('Harness FSM state set cannot be changed by composition.', spec);
+  }
+  for (const [stateId, kind] of canonicalStates) {
+    if (actualStates.get(stateId) !== kind) {
+      invalidHarnessTopology(
+        `Harness FSM State ${stateId} is missing or has a different kind.`,
+        spec
+      );
+    }
+  }
+
+  assertExactStringSet(spec.terminalStates, canonical.terminalStates, 'terminal state set', spec);
+  assertExactStringSet(
+    spec.transitions.map(transitionIdentity),
+    canonical.transitions.map(transitionIdentity),
+    'transition topology',
+    spec
+  );
+}
+
+function transitionIdentity(transition: FSMTransitionSpec): string {
+  return `${transition.from}\u0000${transition.to}\u0000${transition.guard ?? ''}`;
+}
+
+function assertExactStringSet(
+  actual: readonly string[],
+  expected: readonly string[],
+  label: string,
+  spec: FSMProcessSpec
+): void {
+  const actualSet = new Set(actual);
+  const expectedSet = new Set(expected);
+  if (
+    actualSet.size !== expectedSet.size ||
+    [...expectedSet].some((value) => !actualSet.has(value))
+  ) {
+    invalidHarnessTopology(`Harness FSM ${label} is framework-owned.`, spec);
+  }
+}
+
+function invalidHarnessTopology(message: string, spec: FSMProcessSpec): never {
+  throw new FrameworkError({
+    code: 'FSM_INVALID_PROCESS',
+    message,
+    context: { processId: spec.id, processVersion: spec.version },
+  });
+}
 
 export class FSMRuntime {
   private snapshot: FSMSnapshot;

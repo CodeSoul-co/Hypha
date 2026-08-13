@@ -4,6 +4,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import { storageProviderProfileSchema } from '@hypha/storage';
+import { toolAdapterProfileSchema } from '@hypha/tools';
 import { logger } from '../utils/logger';
 
 // Load environment variables
@@ -167,22 +168,50 @@ const inferenceConfigSchema = z
   })
   .default({});
 
-const servingCacheStoreSchema = z.enum(['off', 'noop', 'memory', 'sqlite']);
+const servingCacheStoreSchema = z.enum(['off', 'noop', 'memory', 'sqlite', 'redis']);
 const servingCacheModeSchema = z.enum(['off', 'read', 'write', 'readwrite']);
-const workCacheStoreSchema = z.enum(['off', 'memory', 'sqlite']);
+const workCacheStoreSchema = z.enum(['off', 'memory', 'sqlite', 'redis']);
 
 const servingCacheConfigSchema = z
   .object({
-    enabled: booleanishSchema.default(false),
     store: servingCacheStoreSchema.default('off'),
     mode: servingCacheModeSchema.default('readwrite'),
     ttlMs: z.coerce.number().default(1000 * 60 * 60 * 24),
-    cacheErrors: booleanishSchema.default(false),
-    cacheStreaming: booleanishSchema.default(false),
     respectNoCache: booleanishSchema.default(true),
+    failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+    scopeRequirement: z.enum(['none', 'user', 'session']).default('user'),
+    operationTimeoutMs: z.coerce.number().int().positive().default(250),
+    singleflight: booleanishSchema.default(true),
+    maxEntryBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1024 * 1024),
+    circuitBreaker: z
+      .object({
+        failureThreshold: z.coerce.number().int().positive().default(3),
+        resetTimeoutMs: z.coerce.number().int().positive().default(30000),
+      })
+      .default({}),
+    memory: z
+      .object({
+        maxEntries: z.coerce.number().int().positive().default(5000),
+        maxBytes: z.coerce
+          .number()
+          .int()
+          .positive()
+          .default(64 * 1024 * 1024),
+      })
+      .default({}),
     sqlite: z
       .object({
         path: z.string().default('./data/runtime/cache/hypha-serving-cache.sqlite'),
+        maxEntries: z.coerce.number().int().positive().default(50000),
+      })
+      .default({}),
+    redis: z
+      .object({
+        prefix: z.string().min(1).default('serving-cache:v1:'),
       })
       .default({}),
   })
@@ -198,14 +227,37 @@ const workCacheTreeConfigSchema = z
 
 const workCacheConfigSchema = z
   .object({
-    enabled: booleanishSchema.default(false),
     store: workCacheStoreSchema.default('off'),
+    failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+    scopeRequirement: z.enum(['none', 'user', 'session']).default('user'),
+    operationTimeoutMs: z.coerce.number().int().positive().default(500),
+    maxBlockBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(2 * 1024 * 1024),
     promptBudgetTokens: z.coerce.number().default(4096),
     unknownEventPolicy: z.enum(['ignore', 'reject']).default('ignore'),
     allowExtensionEvents: booleanishSchema.default(false),
     sqlite: z
       .object({
         path: z.string().default('./data/runtime/cache/hypha-workcache.sqlite'),
+      })
+      .default({}),
+    memory: z
+      .object({
+        maxEntries: z.coerce.number().int().positive().default(8000),
+        maxBytes: z.coerce
+          .number()
+          .int()
+          .positive()
+          .default(128 * 1024 * 1024),
+      })
+      .default({}),
+    redis: z
+      .object({
+        prefix: z.string().min(1).default('workcache:v1:'),
+        invalidationChannel: z.string().min(1).default('workcache:v1:invalidate'),
       })
       .default({}),
     trees: z
@@ -238,6 +290,11 @@ const workCacheConfigSchema = z
         MemoryTree: workCacheTreeConfigSchema.default({
           enabled: true,
           ttlMs: 1000 * 60 * 60 * 24,
+          maxEntries: 1000,
+        }),
+        RecoveryTree: workCacheTreeConfigSchema.default({
+          enabled: true,
+          ttlMs: 1000 * 60 * 60 * 6,
           maxEntries: 1000,
         }),
         PromptPrefixTree: workCacheTreeConfigSchema.default({
@@ -382,6 +439,9 @@ const artifactStorageConfigSchema = z.object({
     .default({}),
 });
 
+const developmentJwtSecret = 'change-me-local-access-secret';
+const developmentOwnerPassword = 'hypha_owner_2026';
+
 // Configuration schema
 const configSchema = z.object({
   app: z.object({
@@ -504,13 +564,55 @@ const configSchema = z.object({
     // .md skill files in addition to the bundled builtins directory.
     // Order matters: later dirs override earlier ids.
     dirs: z.array(z.string()).optional(),
+    remoteRegistry: z
+      .object({
+        enabled: booleanishSchema.default(false),
+        required: booleanishSchema.default(false),
+        endpoint: optionalStringSchema,
+        tenantId: optionalStringSchema,
+        authorizationEnv: z
+          .string()
+          .regex(/^[A-Z][A-Z0-9_]*$/)
+          .optional(),
+        publisherKeyFiles: z.record(z.string().min(1)).default({}),
+        transparencyLogKeyFiles: z.record(z.string().min(1)).default({}),
+        artifactOrigins: z.array(z.string().url()).default([]),
+        refs: z
+          .array(
+            z.object({
+              id: z.string().min(1),
+              version: z.string().min(1),
+              required: booleanishSchema.default(true),
+            })
+          )
+          .default([]),
+        timeoutMs: z.coerce.number().int().positive().default(10000),
+        maxAttempts: z.coerce.number().int().positive().max(10).default(3),
+        maxMetadataBytes: z.coerce.number().int().positive().default(262144),
+        maxBundleBytes: z.coerce.number().int().positive().default(2097152),
+        maxSkills: z.coerce.number().int().positive().max(1000).default(128),
+        maxDependencyDepth: z.coerce.number().int().nonnegative().max(32).default(8),
+      })
+      .default({}),
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),
+    profiles: z.array(toolAdapterProfileSchema).default([]),
+    resultCache: z
+      .object({
+        store: z.enum(['off', 'memory', 'redis']).default('off'),
+        failureMode: z.enum(['bypass', 'strict']).default('bypass'),
+        operationTimeoutMs: z.coerce.number().int().positive().default(250),
+        maxEntries: z.coerce.number().int().positive().default(1000),
+        maxEntryBytes: z.coerce.number().int().positive().default(1048576),
+        redisDefaultTtlMs: z.coerce.number().int().positive().default(86400000),
+        namespace: z.string().min(1).default('tool-result-cache:v1'),
+      })
+      .default({}),
     filesystem: z
       .object({
-        workingDirectory: z.string().default('.'),
-        readPaths: pathListSchema.default(['.']),
+        workingDirectory: z.string().default('./data/workspace'),
+        readPaths: pathListSchema.default(['./data/workspace']),
         writePaths: pathListSchema.default(['./data/workspace']),
         executePaths: pathListSchema.default(['./data/workspace/bin']),
         execution: z
@@ -524,17 +626,80 @@ const configSchema = z.object({
       .default({}),
     mcpServers: z
       .array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          mode: z.enum(['local', 'remote', 'fixture']),
-          command: z.string().optional(),
-          args: z.array(z.string()).optional(),
-          endpoint: z.string().optional(),
-          authToken: z.string().optional(),
-          autoStart: z.boolean().optional(),
-          autoConnect: z.boolean().optional(),
-        })
+        z
+          .object({
+            id: z.string(),
+            name: z.string(),
+            mode: z.enum(['local', 'remote', 'fixture']),
+            connectionProfileRef: z.string().min(1).optional(),
+            command: z.string().optional(),
+            args: z.array(z.string()).optional(),
+            endpoint: z.string().url().optional(),
+            sessionMode: z.enum(['protocol_default', 'stateless']).optional(),
+            credentialRef: z
+              .string()
+              .regex(/^[a-z][a-z0-9+.-]*:[^\s]+$/)
+              .optional(),
+            autoStart: z.boolean().optional(),
+            autoConnect: z.boolean().optional(),
+            required: z.boolean().default(true),
+            reconnectPolicy: z
+              .object({
+                maxAttempts: z.number().int().positive().default(3),
+                backoffMs: z.number().int().nonnegative().default(250),
+                maxBackoffMs: z.number().int().nonnegative().optional(),
+                jitterRatio: z.number().min(0).max(1).optional(),
+                maxElapsedMs: z.number().int().positive().optional(),
+              })
+              .optional(),
+            protocolVersionPolicy: z
+              .object({
+                allowedVersions: z.array(z.string().min(1)).min(1),
+                rejectUnknown: z.boolean().default(true),
+              })
+              .optional(),
+            egressPolicy: z
+              .object({
+                allowedHosts: z.array(z.string().min(1)).optional(),
+                denyPrivateNetworks: z.boolean().default(true),
+                requireTls: z.boolean().default(true),
+                maxRedirects: z.number().int().min(0).max(10).default(0),
+                allowCrossOriginRedirects: z.boolean().default(false),
+              })
+              .optional(),
+            contentPolicy: z
+              .object({
+                maxResourceBytes: z.number().int().positive().default(1048576),
+                maxPromptBytes: z.number().int().positive().default(262144),
+                maxPromptTokens: z.number().int().positive().default(32768),
+                oversizeAction: z.enum(['reject', 'artifact']).default('reject'),
+              })
+              .optional(),
+          })
+          .superRefine((server, context) => {
+            if (server.mode === 'remote') {
+              if (!server.endpoint) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: 'Remote MCP requires endpoint.',
+                  path: ['endpoint'],
+                });
+              } else if (!server.endpoint.startsWith('https://')) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: 'Remote MCP endpoint must use HTTPS.',
+                  path: ['endpoint'],
+                });
+              }
+            }
+            if (server.mode === 'local' && !server.command) {
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Local MCP requires command.',
+                path: ['command'],
+              });
+            }
+          })
       )
       .optional(),
   }),
@@ -545,7 +710,61 @@ const configSchema = z.object({
   prompts: z.object({
     templatesPath: z.string().default('./apps/server/src/prompts'),
     cacheEnabled: z.boolean().default(true),
+    registryPath: z.string().default('./data/prompts/registry.json'),
   }),
+  runtime: z
+    .object({
+      canonical: z
+        .object({
+          auditPageSize: z.number().int().positive().max(1000).default(250),
+          auditPageMaxBytes: z.number().int().positive().default(4 * 1024 * 1024),
+          auditMaxEvents: z.number().int().positive().default(100_000),
+          auditMaxBytes: z.number().int().positive().default(256 * 1024 * 1024),
+          auditMaxDurationMs: z.number().int().positive().default(30_000),
+          maxLegacyEvents: z.number().int().positive().default(100_000),
+          workers: z
+            .object({
+              workerId: z.string().min(1).default('server.runtime'),
+              leaseTtlMs: z.number().int().positive().default(30_000),
+              pageLimit: z.number().int().positive().max(1000).default(100),
+              timerPollIntervalMs: z.number().int().positive().default(1_000),
+              timerErrorBackoffMs: z.number().int().positive().default(5_000),
+              recoveryPollIntervalMs: z.number().int().positive().default(5_000),
+              recoveryErrorBackoffMs: z.number().int().positive().default(10_000),
+              commandArtifactRoot: z
+                .string()
+                .min(1)
+                .default('./data/runtime/session-command-artifacts'),
+              commandLeaseMs: z.number().int().positive().default(30_000),
+              commandPollIntervalMs: z.number().int().positive().default(100),
+              commandErrorBackoffMs: z.number().int().positive().default(1_000),
+              commandRenewalIntervalMs: z.number().int().positive().default(10_000),
+              commandMaxHandlerDurationMs: z.number().int().positive().default(300_000),
+              commandShutdownDrainMs: z.number().int().nonnegative().default(30_000),
+              reactQuantumIterations: z.number().int().positive().default(4),
+              reactMaxIterations: z.number().int().positive().default(64),
+              reactMaxModelCalls: z.number().int().positive().default(64),
+              reactMaxToolCalls: z.number().int().positive().default(64),
+              reactMaxTotalTokens: z.number().int().positive().default(1_000_000),
+              autoRecoverReasons: z
+                .array(z.enum(['PROJECTION_BEHIND']))
+                .min(1)
+                .default(['PROJECTION_BEHIND']),
+            })
+            .superRefine((workers, context) => {
+              if (workers.commandRenewalIntervalMs >= workers.commandLeaseMs) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  path: ['commandRenewalIntervalMs'],
+                  message: 'commandRenewalIntervalMs must be shorter than commandLeaseMs',
+                });
+              }
+            })
+            .default({}),
+        })
+        .default({}),
+    })
+    .default({}),
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     format: z.enum(['json', 'text']).default('json'),
@@ -595,6 +814,82 @@ const configSchema = z.object({
     windowMs: z.number().default(60000),
     max: z.number().default(100),
   }),
+}).superRefine((config, context) => {
+  const uncomposedStorageProviders = [
+    {
+      enabled: config.storage.messaging.kafka.enabled,
+      path: ['storage', 'messaging', 'kafka', 'enabled'],
+      name: 'Kafka',
+    },
+    {
+      enabled: config.storage.relational.postgres.enabled,
+      path: ['storage', 'relational', 'postgres', 'enabled'],
+      name: 'Postgres',
+    },
+    {
+      enabled: config.storage.vector.qdrant.enabled,
+      path: ['storage', 'vector', 'qdrant', 'enabled'],
+      name: 'Qdrant',
+    },
+    {
+      enabled: config.storage.vector.chroma.enabled,
+      path: ['storage', 'vector', 'chroma', 'enabled'],
+      name: 'Chroma',
+    },
+    {
+      enabled: config.storage.vector.pinecone.enabled,
+      path: ['storage', 'vector', 'pinecone', 'enabled'],
+      name: 'Pinecone',
+    },
+    {
+      enabled: config.storage.artifacts.s3.enabled,
+      path: ['storage', 'artifacts', 's3', 'enabled'],
+      name: 'S3 Artifact Storage',
+    },
+  ] as const;
+  for (const provider of uncomposedStorageProviders) {
+    if (!provider.enabled) continue;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...provider.path],
+      message: `${provider.name} is declared but is not composed into the Server runtime; enabled must remain false until a concrete adapter, lifecycle, and readiness probe are registered`,
+    });
+  }
+
+  if (config.app.env !== 'production') {
+    return;
+  }
+
+  if (!config.auth.enabled) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'enabled'],
+      message: 'Authentication must be enabled in production',
+    });
+  }
+
+  if (
+    config.auth.jwt.secret === developmentJwtSecret ||
+    config.auth.jwt.secret.length < 32
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'jwt', 'secret'],
+      message: 'Production JWT secret must be changed and contain at least 32 characters',
+    });
+  }
+
+  if (
+    config.auth.mode === 'single-user' &&
+    (config.auth.singleUser.password === developmentOwnerPassword ||
+      config.auth.singleUser.password.length < 16)
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auth', 'singleUser', 'password'],
+      message: 'Production owner password must be changed and contain at least 16 characters',
+    });
+  }
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -760,6 +1055,8 @@ export const workCacheConfig = () => {
 };
 export const llmConfig = () => getConfig().llm;
 export const memoryConfig = () => getConfig().memory;
+export const runtimeConfig = () => getConfig().runtime;
+export const toolResultCacheConfig = () => getConfig().tools.resultCache;
 export const authConfig = () => getConfig().auth;
 export const rateLimitConfig = () => getConfig().rateLimit;
 export const filesystemToolConfig = () => {
@@ -800,7 +1097,12 @@ export default getConfig;
 function normalizeServingCacheStore(value: unknown): Config['servingCache']['store'] {
   if (typeof value !== 'string') return 'off';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'memory' || normalized === 'sqlite' || normalized === 'noop') {
+  if (
+    normalized === 'memory' ||
+    normalized === 'sqlite' ||
+    normalized === 'redis' ||
+    normalized === 'noop'
+  ) {
     return normalized;
   }
   return 'off';
@@ -809,6 +1111,8 @@ function normalizeServingCacheStore(value: unknown): Config['servingCache']['sto
 function normalizeWorkCacheStore(value: unknown): Config['workCache']['store'] {
   if (typeof value !== 'string') return 'off';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'memory' || normalized === 'sqlite') return normalized;
+  if (normalized === 'memory' || normalized === 'sqlite' || normalized === 'redis') {
+    return normalized;
+  }
   return 'off';
 }

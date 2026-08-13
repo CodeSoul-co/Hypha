@@ -1,6 +1,6 @@
 import { z, type ZodType } from 'zod';
 import { defineSpecSchema, type JsonSchema } from '@hypha/core';
-import { memoryContractSpecRefSchema } from './profile-contract';
+import { memoryContractSpecRefJsonSchema, memoryContractSpecRefSchema } from './profile-contract';
 import { managedMemoryScopeSchema, memoryPrincipalSchema } from './record-contract';
 import type {
   ContextBuildRequest,
@@ -23,77 +23,105 @@ const contextSourceTypeSchema = z.enum([
   'custom',
 ]);
 
-export const contextSourceSpecSchema: ZodType<ContextSourceSpec> = z.object({
-  id: z.string().min(1),
-  type: contextSourceTypeSchema,
-  ref: memoryContractSpecRefSchema.optional(),
-  required: z.boolean().optional(),
-  priority: z.number(),
-  maxItems: z.number().int().positive().optional(),
-  maxTokens: z.number().int().positive().optional(),
-  filters: metadataSchema.optional(),
-});
+export const contextArtifactRefSchema = z
+  .object({
+    id: z.string().min(1),
+    path: z.string().min(1),
+    contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+    sizeBytes: z.number().int().min(0),
+    contentType: z.literal('text/plain; charset=utf-8'),
+    scopeHash: z.string().min(1),
+    profileRevision: z.string().min(1),
+    sourceItemId: z.string().min(1),
+    createdAt: z.string().min(1),
+    expiresAt: z.string().min(1).optional(),
+  })
+  .strict();
 
-export const contextProfileSpecSchema: ZodType<ContextProfileSpec> = z.object({
-  id: z.string().min(1),
-  version: z.string().min(1),
-  revision: z.string().min(1).optional(),
-  name: z.string().optional(),
-  description: z.string().optional(),
-  sources: z.array(contextSourceSpecSchema).min(1),
-  maxItems: z.number().int().positive().optional(),
-  maxCharacters: z.number().int().positive().optional(),
-  maxTokens: z.number().int().positive(),
-  reservedOutputTokens: z.number().int().min(0).optional(),
-  reservedSystemTokens: z.number().int().min(0).optional(),
-  deduplication: z.enum(['none', 'id', 'hash', 'semantic']),
-  semanticDedupThreshold: z.number().min(0).max(1).optional(),
-  ranking: z.object({
-    method: z.enum(['priority', 'score_fusion', 'reranker', 'custom']),
-    recencyWeight: z.number().min(0).optional(),
-    relevanceWeight: z.number().min(0).optional(),
-    importanceWeight: z.number().min(0).optional(),
-    confidenceWeight: z.number().min(0).optional(),
-    provenanceWeight: z.number().min(0).optional(),
-    sourceWeights: z.record(z.number()).optional(),
-    rerankerProviderRef: memoryContractSpecRefSchema.optional(),
-  }),
-  truncation: z.object({
-    method: z.enum(['drop_lowest', 'truncate_items', 'summarize', 'hybrid']),
-    preserveRequiredSources: z.boolean(),
-    preserveLatestMessages: z.number().int().min(0).optional(),
-    minItemTokens: z.number().int().positive().optional(),
-    truncationMarker: z.string().optional(),
-  }),
-  conflictPolicy: z.enum(['include_marked', 'prefer_latest', 'prefer_verified']).optional(),
-  includeProvenance: z.boolean(),
-  includeScores: z.boolean().optional(),
-  instructionBoundary: z.enum(['strict', 'tagged', 'quoted']),
-  untrustedContentPolicy: z.enum(['escape', 'tag', 'reject']),
-  compactionPolicy: z
-    .object({
-      enabled: z.boolean(),
-      triggerRatio: z.number().min(0).max(1),
-      summaryProviderRef: memoryContractSpecRefSchema.optional(),
-      preserveLastMessages: z.number().int().min(0).optional(),
-      persistSummaryAsMemory: z.boolean().optional(),
-      summaryMemoryType: z
-        .enum([
-          'working',
-          'episodic',
-          'semantic',
-          'procedural',
-          'preference',
-          'artifact',
-          'governance',
-          'reflection',
-          'custom',
-        ])
-        .optional(),
-    })
-    .optional(),
-  metadata: metadataSchema.optional(),
-});
+export const contextSourceSpecSchema: ZodType<ContextSourceSpec> = z
+  .object({
+    id: z.string().min(1),
+    type: contextSourceTypeSchema,
+    ref: memoryContractSpecRefSchema.optional(),
+    required: z.boolean().optional(),
+    priority: z.number(),
+    maxItems: z.number().int().positive().optional(),
+    maxTokens: z.number().int().positive().optional(),
+    overflowPolicy: z
+      .enum(['drop', 'truncate', 'summarize', 'spill_to_artifact', 'fail'])
+      .optional(),
+    filters: metadataSchema.optional(),
+  })
+  .strict();
+
+export const contextProfileSpecSchema: ZodType<ContextProfileSpec> = z
+  .object({
+    id: z.string().min(1),
+    version: z.string().min(1),
+    revision: z.string().min(1).optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    sources: z.array(contextSourceSpecSchema).min(1),
+    maxItems: z.number().int().positive().optional(),
+    maxCharacters: z.number().int().positive().optional(),
+    maxSerializedBytes: z.number().int().positive().optional(),
+    maxTokens: z.number().int().positive(),
+    reservedOutputTokens: z.number().int().min(0).optional(),
+    reservedSystemTokens: z.number().int().min(0).optional(),
+    deduplication: z.enum(['none', 'id', 'hash', 'semantic']),
+    semanticDedupThreshold: z.number().min(0).max(1).optional(),
+    ranking: z
+      .object({
+        method: z.enum(['priority', 'score_fusion', 'reranker', 'custom']),
+        recencyWeight: z.number().min(0).optional(),
+        relevanceWeight: z.number().min(0).optional(),
+        importanceWeight: z.number().min(0).optional(),
+        confidenceWeight: z.number().min(0).optional(),
+        provenanceWeight: z.number().min(0).optional(),
+        sourceWeights: z.record(z.number()).optional(),
+        rerankerProviderRef: memoryContractSpecRefSchema.optional(),
+      })
+      .strict(),
+    truncation: z
+      .object({
+        method: z.enum(['drop_lowest', 'truncate_items', 'summarize', 'hybrid']),
+        preserveRequiredSources: z.boolean(),
+        preserveLatestMessages: z.number().int().min(0).optional(),
+        minItemTokens: z.number().int().positive().optional(),
+        truncationMarker: z.string().optional(),
+      })
+      .strict(),
+    conflictPolicy: z.enum(['include_marked', 'prefer_latest', 'prefer_verified']).optional(),
+    includeProvenance: z.boolean(),
+    includeScores: z.boolean().optional(),
+    instructionBoundary: z.enum(['strict', 'tagged', 'quoted']),
+    untrustedContentPolicy: z.enum(['escape', 'tag', 'reject']),
+    compactionPolicy: z
+      .object({
+        enabled: z.boolean(),
+        triggerRatio: z.number().min(0).max(1),
+        summaryProviderRef: memoryContractSpecRefSchema.optional(),
+        preserveLastMessages: z.number().int().min(0).optional(),
+        persistSummaryAsMemory: z.boolean().optional(),
+        summaryMemoryType: z
+          .enum([
+            'working',
+            'episodic',
+            'semantic',
+            'procedural',
+            'preference',
+            'artifact',
+            'governance',
+            'reflection',
+            'custom',
+          ])
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    metadata: metadataSchema.optional(),
+  })
+  .strict();
 
 export const contextItemSchema = z
   .object({
@@ -110,6 +138,7 @@ export const contextItemSchema = z
     provenance: metadataSchema.optional(),
     conflictGroupId: z.string().optional(),
     metadata: metadataSchema.optional(),
+    artifactRef: contextArtifactRefSchema.optional(),
   })
   .refine((item) => Object.prototype.hasOwnProperty.call(item, 'content'), {
     message: 'Context item content is required.',
@@ -156,6 +185,97 @@ export const contextProfileSpecExample: ContextProfileSpec = {
   untrustedContentPolicy: 'tag',
 };
 
+const contextSourceSpecJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['id', 'type', 'priority'],
+  properties: {
+    id: { type: 'string', minLength: 1 },
+    type: {
+      type: 'string',
+      enum: [
+        'system',
+        'workflow_state',
+        'messages',
+        'working_memory',
+        'long_term_memory',
+        'tool_observation',
+        'artifact',
+        'human_review',
+        'custom',
+      ],
+    },
+    ref: memoryContractSpecRefJsonSchema,
+    required: { type: 'boolean' },
+    priority: { type: 'number' },
+    maxItems: { type: 'integer', minimum: 1 },
+    maxTokens: { type: 'integer', minimum: 1 },
+    overflowPolicy: {
+      enum: ['drop', 'truncate', 'summarize', 'spill_to_artifact', 'fail'],
+    },
+    filters: { type: 'object', additionalProperties: true },
+  },
+  additionalProperties: false,
+};
+
+const contextRankingJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['method'],
+  properties: {
+    method: { type: 'string', enum: ['priority', 'score_fusion', 'reranker', 'custom'] },
+    recencyWeight: { type: 'number', minimum: 0 },
+    relevanceWeight: { type: 'number', minimum: 0 },
+    importanceWeight: { type: 'number', minimum: 0 },
+    confidenceWeight: { type: 'number', minimum: 0 },
+    provenanceWeight: { type: 'number', minimum: 0 },
+    sourceWeights: { type: 'object', additionalProperties: { type: 'number' } },
+    rerankerProviderRef: memoryContractSpecRefJsonSchema,
+  },
+  additionalProperties: false,
+};
+
+const contextTruncationJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['method', 'preserveRequiredSources'],
+  properties: {
+    method: {
+      type: 'string',
+      enum: ['drop_lowest', 'truncate_items', 'summarize', 'hybrid'],
+    },
+    preserveRequiredSources: { type: 'boolean' },
+    preserveLatestMessages: { type: 'integer', minimum: 0 },
+    minItemTokens: { type: 'integer', minimum: 1 },
+    truncationMarker: { type: 'string' },
+  },
+  additionalProperties: false,
+};
+
+const contextCompactionPolicyJsonSchema: JsonSchema = {
+  type: 'object',
+  required: ['enabled', 'triggerRatio'],
+  properties: {
+    enabled: { type: 'boolean' },
+    triggerRatio: { type: 'number', minimum: 0, maximum: 1 },
+    summaryProviderRef: memoryContractSpecRefJsonSchema,
+    preserveLastMessages: { type: 'integer', minimum: 0 },
+    persistSummaryAsMemory: { type: 'boolean' },
+    summaryMemoryType: {
+      type: 'string',
+      enum: [
+        'working',
+        'episodic',
+        'semantic',
+        'procedural',
+        'preference',
+        'artifact',
+        'governance',
+        'reflection',
+        'custom',
+      ],
+    },
+  },
+  additionalProperties: false,
+};
+
 export const contextProfileSpecJsonSchema: JsonSchema = {
   type: 'object',
   required: [
@@ -171,27 +291,28 @@ export const contextProfileSpecJsonSchema: JsonSchema = {
     'untrustedContentPolicy',
   ],
   properties: {
-    id: { type: 'string' },
-    version: { type: 'string' },
+    id: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
     revision: { type: 'string' },
     name: { type: 'string' },
     description: { type: 'string' },
-    sources: { type: 'array', items: { type: 'object' } },
-    maxItems: { type: 'number' },
-    maxCharacters: { type: 'number' },
-    maxTokens: { type: 'number' },
-    reservedOutputTokens: { type: 'number' },
-    reservedSystemTokens: { type: 'number' },
+    sources: { type: 'array', items: contextSourceSpecJsonSchema, minItems: 1 },
+    maxItems: { type: 'integer', minimum: 1 },
+    maxCharacters: { type: 'integer', minimum: 1 },
+    maxSerializedBytes: { type: 'integer', minimum: 1 },
+    maxTokens: { type: 'integer', minimum: 1 },
+    reservedOutputTokens: { type: 'integer', minimum: 0 },
+    reservedSystemTokens: { type: 'integer', minimum: 0 },
     deduplication: { enum: ['none', 'id', 'hash', 'semantic'] },
-    semanticDedupThreshold: { type: 'number' },
-    ranking: { type: 'object' },
-    truncation: { type: 'object' },
+    semanticDedupThreshold: { type: 'number', minimum: 0, maximum: 1 },
+    ranking: contextRankingJsonSchema,
+    truncation: contextTruncationJsonSchema,
     conflictPolicy: { type: 'string' },
     includeProvenance: { type: 'boolean' },
     includeScores: { type: 'boolean' },
     instructionBoundary: { enum: ['strict', 'tagged', 'quoted'] },
     untrustedContentPolicy: { enum: ['escape', 'tag', 'reject'] },
-    compactionPolicy: { type: 'object' },
+    compactionPolicy: contextCompactionPolicyJsonSchema,
     metadata: { type: 'object' },
   },
   additionalProperties: false,
@@ -238,6 +359,7 @@ export const promptSegmentSchema = z.object({
   trustLevel: z.enum(['trusted_instruction', 'trusted_data', 'untrusted_data']),
   sourceRefs: z.array(z.string()),
   required: z.boolean().optional(),
+  artifactRefs: z.array(contextArtifactRefSchema).optional(),
 });
 
 export const contextProvenanceLabelSchema = z.object({
@@ -256,7 +378,7 @@ export const contextTruncationRecordSchema = z.object({
   itemId: z.string().min(1),
   originalTokens: z.number().int().min(0),
   retainedTokens: z.number().int().min(0),
-  method: z.enum(['drop', 'truncate', 'summarize']),
+  method: z.enum(['drop', 'truncate', 'summarize', 'spill_to_artifact']),
   reason: z.string().min(1),
 });
 
@@ -284,6 +406,7 @@ export const contextEnvelopeSchema: ZodType<ContextEnvelope> = z
     conflicts: z.array(contextConflictSchema),
     totalTokens: z.number().int().min(0),
     createdAt: z.string().min(1),
+    artifactRefs: z.array(contextArtifactRefSchema).optional(),
   })
   .superRefine((envelope, context) => {
     if (envelope.systemSegments.some((segment) => segment.role !== 'system')) {

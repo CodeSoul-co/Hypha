@@ -10,11 +10,15 @@ import type {
   WorkGraphIndexLike,
   WorkGraphNode,
   WorkGraphUpdate,
+  WorkCacheScope,
   WorkNodeStatus,
 } from './types';
 
 export interface WorkGraphIndexOptions {
   maxActiveNodes?: number;
+  maxGraphs?: number;
+  maxNodesPerGraph?: number;
+  maxDemandSignals?: number;
   now?: () => number;
 }
 
@@ -22,16 +26,23 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
   private readonly graphs = new Map<string, WorkGraph>();
   private readonly demandSignals: DemandSignal[] = [];
   private readonly maxActiveNodes: number;
+  private readonly maxGraphs: number;
+  private readonly maxNodesPerGraph: number;
+  private readonly maxDemandSignals: number;
   private readonly now: () => number;
 
   constructor(options: WorkGraphIndexOptions = {}) {
     this.maxActiveNodes = options.maxActiveNodes ?? 64;
+    this.maxGraphs = Math.max(1, options.maxGraphs ?? 1000);
+    this.maxNodesPerGraph = Math.max(1, options.maxNodesPerGraph ?? 2000);
+    this.maxDemandSignals = Math.max(1, options.maxDemandSignals ?? 10000);
     this.now = options.now ?? Date.now;
   }
 
   ingest(event: NormalizedWorkEvent, blocks: CacheBlock[]): WorkGraphUpdate {
     const source = event.sourceEvent;
-    const graph = this.ensureGraph(source.runId, source.sessionId);
+    const scope = scopeFromEvent(event);
+    const graph = this.ensureGraph(source.runId, source.sessionId, scope);
     const payload = recordFromUnknown(event.payload);
     const nodeId = createWorkNodeId(source.runId, source.id, source.type);
     const node: WorkGraphNode = {
@@ -53,8 +64,9 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       recomputeCost: nonNegativeNumber(payload.recomputeCost),
       validationCost: nonNegativeNumber(payload.validationCost),
       stepsToExecution:
-        nonNegativeNumber(payload.stepsToExecution ?? payload.stepsToUse ?? payload.stepsToCacheUse) ??
-        0,
+        nonNegativeNumber(
+          payload.stepsToExecution ?? payload.stepsToUse ?? payload.stepsToCacheUse
+        ) ?? 0,
       futureDemand: nonNegativeNumber(payload.futureDemand),
       branchProbability: probabilityValue(payload.branchProbability) ?? 1,
       criticality: nonNegativeNumber(payload.criticality) ?? 1,
@@ -76,21 +88,26 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
     }
     graph.activeNodeIds = [...graph.activeNodeIds, nodeId].slice(-this.maxActiveNodes);
     graph.frontierNodeIds = [nodeId];
+    this.pruneGraph(graph);
 
     const demandSignals = blocks.map((block) => this.createDemandSignal(node, block, graph));
     this.demandSignals.push(...demandSignals);
+    this.pruneDemandSignals();
     return { graph, node, edges, demandSignals };
   }
 
-  getGraph(runId: string): WorkGraph | null {
-    return this.graphs.get(runId) ?? null;
+  getGraph(runId: string, scope?: WorkCacheScope): WorkGraph | null {
+    if (scope) return this.graphs.get(graphMapKey(runId, scope)) ?? null;
+    const matches = Array.from(this.graphs.values()).filter((graph) => graph.runId === runId);
+    return matches.length === 1 ? matches[0] : null;
   }
 
   listDemandSignals(runId?: string): DemandSignal[] {
     if (!runId) return [...this.demandSignals];
     return this.demandSignals.filter((signal) => {
-      const graph = this.graphs.get(runId);
-      return Boolean(graph?.nodes.has(signal.sourceNodeId));
+      return Array.from(this.graphs.values()).some(
+        (graph) => graph.runId === runId && graph.nodes.has(signal.sourceNodeId)
+      );
     });
   }
 
@@ -99,20 +116,67 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
     this.demandSignals.length = 0;
   }
 
-  private ensureGraph(runId: string, sessionId?: string): WorkGraph {
-    const existing = this.graphs.get(runId);
-    if (existing) return existing;
+  private ensureGraph(
+    runId: string,
+    sessionId: string | undefined,
+    scope: WorkCacheScope
+  ): WorkGraph {
+    const mapKey = graphMapKey(runId, scope);
+    const existing = this.graphs.get(mapKey);
+    if (existing) {
+      this.graphs.delete(mapKey);
+      this.graphs.set(mapKey, existing);
+      return existing;
+    }
     const graph: WorkGraph = {
-      graphId: `workgraph:${hashStableJson({ runId })}`,
+      graphId: `workgraph:${hashStableJson({ runId, scope })}`,
       runId,
       sessionId,
+      scope,
       nodes: new Map(),
       edges: new Map(),
       activeNodeIds: [],
       frontierNodeIds: [],
     };
-    this.graphs.set(runId, graph);
+    this.graphs.set(mapKey, graph);
+    while (this.graphs.size > this.maxGraphs) {
+      const oldestKey = this.graphs.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      const removed = this.graphs.get(oldestKey);
+      this.graphs.delete(oldestKey);
+      if (removed) {
+        const nodeIds = new Set(removed.nodes.keys());
+        removeInPlace(this.demandSignals, (signal) => nodeIds.has(signal.sourceNodeId));
+      }
+    }
     return graph;
+  }
+
+  private pruneGraph(graph: WorkGraph): void {
+    while (graph.nodes.size > this.maxNodesPerGraph) {
+      const oldestNodeId = graph.nodes.keys().next().value as string | undefined;
+      if (!oldestNodeId) break;
+      graph.nodes.delete(oldestNodeId);
+      for (const [edgeId, edgeValue] of graph.edges) {
+        if (edgeValue.from === oldestNodeId || edgeValue.to === oldestNodeId) {
+          graph.edges.delete(edgeId);
+        }
+      }
+      graph.activeNodeIds = graph.activeNodeIds.filter((id) => id !== oldestNodeId);
+      graph.frontierNodeIds = graph.frontierNodeIds.filter((id) => id !== oldestNodeId);
+      removeInPlace(this.demandSignals, (signal) => signal.sourceNodeId === oldestNodeId);
+    }
+  }
+
+  private pruneDemandSignals(): void {
+    const now = this.now();
+    removeInPlace(
+      this.demandSignals,
+      (signal) => signal.expiresAt !== undefined && signal.expiresAt <= now
+    );
+    if (this.demandSignals.length > this.maxDemandSignals) {
+      this.demandSignals.splice(0, this.demandSignals.length - this.maxDemandSignals);
+    }
   }
 
   private createEdges(
@@ -133,9 +197,11 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       edges.push(edge('cache', cacheDep, node.id));
     }
     for (const dependency of node.environmentDeps ?? []) {
-      edges.push(edge('environment', `${dependency.depType}:${dependency.key}`, node.id, {
-        dependency,
-      }));
+      edges.push(
+        edge('environment', `${dependency.depType}:${dependency.key}`, node.id, {
+          dependency,
+        })
+      );
     }
     for (const messageEdge of messageAgentEdges(node, payload)) {
       edges.push(messageEdge);
@@ -159,7 +225,8 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
       nonNegativeNumber(block.utility.recomputeCost) ??
       costToRecomputeScore(node.estimatedCost);
     const stalenessRisk = nonNegativeNumber(block.utility.staleRisk) ?? staleRiskFrom(block);
-    const validationCost = node.validationCost ?? nonNegativeNumber(block.utility.validationCost) ?? 0;
+    const validationCost =
+      node.validationCost ?? nonNegativeNumber(block.utility.validationCost) ?? 0;
     const branchProbability = node.branchProbability ?? 1;
     const criticality = node.criticality ?? 1;
     const stepsToUse = node.stepsToExecution ?? 0;
@@ -205,6 +272,31 @@ export class WorkGraphIndex implements WorkGraphIndexLike {
 
 export function createWorkNodeId(runId: string, sourceEventId: string, eventType: string): string {
   return `worknode:${hashStableJson({ runId, sourceEventId, eventType })}`;
+}
+
+function scopeFromEvent(event: NormalizedWorkEvent): WorkCacheScope {
+  const source = event.sourceEvent;
+  const metadata = recordFromUnknown(source.metadata);
+  return {
+    tenantId: stringValue(source.tenantId),
+    userId: stringValue(source.userId),
+    workspaceId: stringValue(source.workspaceId),
+    sessionId: stringValue(source.sessionId),
+    agentId: stringValue(source.agentId),
+    domainPackId: stringValue(metadata.domainPackId),
+  };
+}
+
+function graphMapKey(runId: string, scope: WorkCacheScope): string {
+  return hashStableJson({ runId, scope });
+}
+
+function removeInPlace<T>(values: T[], predicate: (value: T) => boolean): void {
+  let writeIndex = 0;
+  for (const value of values) {
+    if (!predicate(value)) values[writeIndex++] = value;
+  }
+  values.length = writeIndex;
 }
 
 function edge(
@@ -309,10 +401,7 @@ function dependencyRefsFrom(payload: Record<string, unknown>): DependencyRef[] {
   return dedupeDependencies(refs);
 }
 
-function messageAgentEdges(
-  node: WorkGraphNode,
-  payload: Record<string, unknown>
-): WorkGraphEdge[] {
+function messageAgentEdges(node: WorkGraphNode, payload: Record<string, unknown>): WorkGraphEdge[] {
   const message = recordFromUnknown(payload.message);
   const from = addressKey(recordFromUnknown(message.from));
   const to = addressKey(recordFromUnknown(message.to));

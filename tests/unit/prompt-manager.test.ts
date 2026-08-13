@@ -84,6 +84,28 @@ describe('PromptManager', () => {
     expect(manager.render('cached-defaults', {}, 'system')).toBe('Hello Assistant from .');
   });
 
+  it('invalidates cached template content when a registration is replaced', () => {
+    const manager = new PromptManager(undefined, true);
+    manager.register({
+      id: 'replaceable',
+      name: 'Replaceable',
+      category: 'system',
+      content: 'version one',
+      variables: [],
+    });
+    expect(manager.render('replaceable', {}, 'system')).toBe('version one');
+
+    manager.register({
+      id: 'replaceable',
+      name: 'Replaceable',
+      category: 'system',
+      content: 'version two',
+      variables: [],
+    });
+
+    expect(manager.render('replaceable', {}, 'system')).toBe('version two');
+  });
+
   it('reports unresolved prompt variables during validated renders', () => {
     const manager = new PromptManager(undefined, false);
     manager.register({
@@ -123,7 +145,10 @@ describe('PromptManager', () => {
 
     const resolved = manager.resolveAgentPrompts(
       [{ id: 'agent-managed', version: '2.1.0', required: true }],
-      { agent_name: 'Hypha', user_id: 'user-1' }
+      {
+        variables: { agent_name: 'Hypha', user_id: 'user-1' },
+        principal: { principalId: 'user-1' },
+      }
     );
     expect(resolved.instructions).toBe('You are Hypha for user-1.');
     expect(resolved.blocks[0]).toMatchObject({
@@ -132,5 +157,35 @@ describe('PromptManager', () => {
       stable: true,
       cacheable: true,
     });
+  });
+
+  it('persists governed agent prompts with revision and content hash across restart', async () => {
+    const registryPath = path.join(tmp, 'data', 'prompts', 'registry.json');
+    const first = new PromptManager(undefined, false, registryPath);
+    await first.initialize();
+    const stored = await first.registerAgentPrompt({
+      id: 'dynamic-agent',
+      version: '1.0.0',
+      name: 'Dynamic Agent',
+      role: 'system',
+      template: 'Act as {{role}}.',
+      variables: [{ name: 'role', type: 'string', required: true }],
+      ownerId: 'admin-1',
+      tenantId: 'tenant-1',
+      scope: 'tenant',
+      trustLevel: 'reviewed',
+      provenance: { source: 'admin-api' },
+    });
+    expect(stored).toMatchObject({
+      revision: 1,
+      contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    await first.destroy();
+
+    const second = new PromptManager(undefined, false, registryPath);
+    await second.initialize();
+    expect(second.listAgentPrompts()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'dynamic-agent', revision: 1 })])
+    );
   });
 });

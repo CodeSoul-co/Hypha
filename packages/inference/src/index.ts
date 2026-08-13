@@ -7,6 +7,7 @@ export * from './reasoning-registry';
 export * from './reasoning-sources';
 export * from './agent-prompts';
 export * from './prompt';
+export * from './prompt-profile';
 export * from './prefix';
 export * from './plasmod';
 export * from './backends';

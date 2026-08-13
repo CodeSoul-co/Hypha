@@ -57,7 +57,7 @@ type WikipediaOpenSearchResponse = [string, string[], string[], string[]];
 /**
  * Provider-neutral web-search tool.
  *
- * Default mode is a deterministic offline stub for local tests. Set
+ * Non-production mode defaults to a deterministic offline stub for local tests. Set
  * WEB_SEARCH_PROVIDER=auto to try HTTP providers with fallback,
  * WEB_SEARCH_PROVIDER=china to prefer mainland China HTTP providers,
  * WEB_SEARCH_PROVIDER=duckduckgo to call the DuckDuckGo Instant Answer API,
@@ -104,6 +104,19 @@ export default class SearchTool extends BaseTool {
     },
   };
 
+  async onLoad(): Promise<void> {
+    if (!this.isProduction()) return;
+
+    const provider = this.provider();
+    if (provider === 'auto') {
+      this.autoProviderOrder();
+    } else if (provider === 'china') {
+      this.chinaProviderOrder();
+    } else {
+      this.fallbackProviders(provider);
+    }
+  }
+
   protected async run(params: ToolParams): Promise<any> {
     const {
       query,
@@ -136,7 +149,8 @@ export default class SearchTool extends BaseTool {
   }
 
   private provider(override?: string): WebSearchProvider {
-    const raw = (override || process.env.WEB_SEARCH_PROVIDER || 'stub').toLowerCase();
+    const defaultProvider = this.isProduction() ? 'auto' : 'stub';
+    const raw = (override || process.env.WEB_SEARCH_PROVIDER || defaultProvider).toLowerCase();
     if (
       raw === 'auto' ||
       raw === 'china' ||
@@ -146,6 +160,11 @@ export default class SearchTool extends BaseTool {
       raw === 'baidu' ||
       raw === 'so360'
     ) {
+      if (this.isProduction() && raw === 'stub') {
+        throw new Error(
+          'WEB_SEARCH_PROVIDER=stub is test-only and cannot be used in production; configure a real HTTP provider'
+        );
+      }
       return raw;
     }
     throw new Error(`Unsupported web search provider: ${raw}`);
@@ -159,15 +178,11 @@ export default class SearchTool extends BaseTool {
   }
 
   private autoProviderOrder(): ConcreteWebSearchProvider[] {
-    return this.parseProviderList(
-      process.env.WEB_SEARCH_PROVIDER_ORDER || 'duckduckgo,wikipedia,stub'
-    );
+    return this.parseProviderList(process.env.WEB_SEARCH_PROVIDER_ORDER || 'duckduckgo,wikipedia');
   }
 
   private chinaProviderOrder(): ConcreteWebSearchProvider[] {
-    return this.parseProviderList(
-      process.env.WEB_SEARCH_CHINA_PROVIDER_ORDER || 'baidu,so360,stub'
-    );
+    return this.parseProviderList(process.env.WEB_SEARCH_CHINA_PROVIDER_ORDER || 'baidu,so360');
   }
 
   private fallbackProviders(
@@ -188,8 +203,8 @@ export default class SearchTool extends BaseTool {
       );
     }
     if (provider === 'duckduckgo') return ['wikipedia'];
-    if (provider === 'baidu') return ['so360', 'stub'];
-    if (provider === 'so360') return ['baidu', 'stub'];
+    if (provider === 'baidu') return ['so360'];
+    if (provider === 'so360') return ['baidu'];
     return [];
   }
 
@@ -207,11 +222,20 @@ export default class SearchTool extends BaseTool {
       ) {
         throw new Error(`Unsupported web search provider in list: ${value}`);
       }
+      if (this.isProduction() && value === 'stub') {
+        throw new Error(
+          'The stub web search provider is test-only and cannot appear in a production provider order or fallback list'
+        );
+      }
       if (!providers.includes(value)) {
         providers.push(value);
       }
     }
     return providers;
+  }
+
+  private isProduction(): boolean {
+    return process.env.NODE_ENV === 'production';
   }
 
   private async searchWithFallback(

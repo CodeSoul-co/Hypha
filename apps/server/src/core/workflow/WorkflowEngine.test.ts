@@ -1,5 +1,5 @@
 import { validateDomainPackSpec } from '@hypha/domain';
-import { validateFSMProcessSpec } from '@hypha/fsm';
+import { assertHarnessFSMProcessSpec } from '@hypha/fsm';
 import { getEventRuntime } from '../../services/EventRuntime';
 import { normalizeWorkflowExecutionContext } from './context';
 import { WorkflowEngine } from './WorkflowEngine';
@@ -109,10 +109,13 @@ describe('WorkflowEngine conditional execution', () => {
       outputContractRef: 'output.runtime-contract',
       defaultWorkflowRef: 'runtime-contract',
     });
-    expect(runtimeSpec.fsm.initialState).toBe('prepare');
+    expect(runtimeSpec.fsm.initialState).toBe('Idle');
+    expect(() => assertHarnessFSMProcessSpec(runtimeSpec.fsm)).not.toThrow();
+    expect(runtimeSpec.fsm.states.map(({ id }) => id)).not.toContain('prepare');
+    expect(runtimeSpec.fsm.states.map(({ id }) => id)).not.toContain('search');
   });
 
-  it('deduplicates equivalent branch and default FSM transitions', () => {
+  it('keeps Domain branch topology outside the framework-owned Harness FSM', () => {
     const workflow: WorkflowDefinition = {
       name: 'runtime-duplicate-transition',
       version: '1.0.0',
@@ -132,12 +135,13 @@ describe('WorkflowEngine conditional execution', () => {
 
     const { fsm } = getEventRuntime().createRuntimeSpecFromWorkflow(workflow);
 
-    expect(() => validateFSMProcessSpec(fsm)).not.toThrow();
-    expect(
-      fsm.transitions.filter(
-        (transition) => transition.from === 'gate' && transition.to === 'Completed'
-      )
-    ).toHaveLength(1);
+    expect(() => assertHarnessFSMProcessSpec(fsm)).not.toThrow();
+    expect(fsm.states.map(({ id }) => id)).not.toEqual(
+      expect.arrayContaining(['gate', 'execute', 'end'])
+    );
+    expect(fsm.transitions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ from: 'gate' })])
+    );
   });
 });
 

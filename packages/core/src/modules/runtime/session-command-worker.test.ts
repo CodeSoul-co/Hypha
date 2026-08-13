@@ -1,0 +1,351 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type {
+  EnqueueSessionCommandRequest,
+  SessionQueueScope,
+} from '../../contracts/session-queue';
+import { InMemoryTelemetryRecorder } from '../../telemetry';
+import {
+  RUNTIME_OPERATIONAL_METRIC_NAMES,
+  RuntimeOperationalTelemetry,
+} from './runtime-operational-telemetry';
+import { InMemorySessionQueue } from './session-queue';
+import { DurableSessionCommandWorker } from './session-command-worker';
+
+const initialTime = '2026-07-22T08:00:00.000Z';
+const payloadHash = 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+const scope: SessionQueueScope = { userId: 'user.worker', sessionId: 'session.worker' };
+
+function command(
+  id: string,
+  overrides: Partial<EnqueueSessionCommandRequest> = {}
+): EnqueueSessionCommandRequest {
+  return {
+    id,
+    commandType: 'user_input',
+    idempotencyKey: `idempotency.${id}`,
+    userId: scope.userId,
+    sessionId: scope.sessionId,
+    payloadHash,
+    createdAt: initialTime,
+    ...overrides,
+  };
+}
+
+describe('DurableSessionCommandWorker', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('completes an applied command with its Run and Event results', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    const handler = vi.fn(async () => ({
+      disposition: 'applied' as const,
+      resultRunId: 'run.1',
+      resultEventIds: ['event.1', 'event.2'],
+    }));
+    await queue.enqueue(command('command.applied'));
+
+    await expect(worker(queue, { user_input: handler }).processNext()).resolves.toMatchObject({
+      disposition: 'applied',
+      commandId: 'command.applied',
+      attempts: 1,
+    });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        claimToken: expect.stringMatching(/^sha256:/u),
+        leaseEpoch: 1,
+        command: expect.objectContaining({ attempts: 1 }),
+        signal: expect.any(AbortSignal),
+      })
+    );
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      {
+        status: 'applied',
+        resultRunId: 'run.1',
+        resultEventIds: ['event.1', 'event.2'],
+      },
+    ]);
+  });
+
+  it('releases an explicitly retryable command until its delay elapses', async () => {
+    let now = initialTime;
+    const queue = new InMemorySessionQueue({ now: () => now });
+    await queue.enqueue(command('command.retry'));
+    const active = worker(
+      queue,
+      {
+        user_input: async () => ({
+          disposition: 'retry',
+          availableAt: '2026-07-22T08:00:02.000Z',
+        }),
+      },
+      () => now
+    );
+
+    await expect(active.processNext()).resolves.toMatchObject({ disposition: 'retry_scheduled' });
+    now = '2026-07-22T08:00:01.000Z';
+    await expect(active.processNext()).resolves.toEqual({ disposition: 'idle' });
+    now = '2026-07-22T08:00:02.000Z';
+    await expect(active.processNext()).resolves.toMatchObject({ attempts: 2 });
+  });
+
+  it('dead-letters a retry outcome after the command consumes its final attempt', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.exhausted', { maxAttempts: 1 }));
+    const active = worker(queue, {
+      user_input: async () => ({ disposition: 'retry' }),
+    });
+
+    await expect(active.processNext()).resolves.toMatchObject({
+      disposition: 'dead_lettered',
+      rejectionCode: 'attempt_budget_exhausted',
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { status: 'dead_letter', rejectionCode: 'attempt_budget_exhausted' },
+    ]);
+  });
+
+  it('records explicit terminal failures without retrying them', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.failed'));
+    const active = worker(queue, {
+      user_input: async () => ({
+        disposition: 'failed',
+        rejectionCode: 'policy_denied',
+      }),
+    });
+
+    await expect(active.processNext()).resolves.toMatchObject({
+      disposition: 'failed',
+      rejectionCode: 'policy_denied',
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { status: 'failed', rejectionCode: 'policy_denied' },
+    ]);
+  });
+
+  it.each([
+    ['missing handler', {}, 'session_command_handler_unavailable'],
+    [
+      'unexpected handler exception',
+      { user_input: async () => Promise.reject(new Error('provider failed')) },
+      'session_command_handler_unexpected_error',
+    ],
+    [
+      'invalid handler result',
+      { user_input: async () => ({ disposition: 'failed' as const, rejectionCode: '' }) },
+      'session_command_handler_unexpected_error',
+    ],
+  ])('fails closed for %s', async (_label, handlers, rejectionCode) => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command(`command.${rejectionCode}`));
+
+    await expect(worker(queue, handlers).processNext()).resolves.toMatchObject({
+      disposition: 'dead_lettered',
+      rejectionCode,
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { status: 'dead_letter', rejectionCode },
+    ]);
+  });
+
+  it('claims only the requested Session scope', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.other', { userId: 'user.other', sessionId: 'other' }));
+    await queue.enqueue(command('command.target'));
+    const active = worker(queue, {
+      user_input: async () => ({ disposition: 'applied' }),
+    });
+
+    await expect(active.processNext(scope)).resolves.toMatchObject({
+      commandId: 'command.target',
+    });
+    await expect(
+      queue.list({ scope: { userId: 'user.other', sessionId: 'other' } })
+    ).resolves.toMatchObject([{ status: 'queued' }]);
+  });
+
+  it('renews a claim while a handler runs beyond the original lease', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(initialTime));
+    const now = () => new Date(Date.now()).toISOString();
+    const queue = new InMemorySessionQueue({ now });
+    await queue.enqueue(command('command.long-running'));
+    const renew = vi.spyOn(queue, 'renew');
+    const active = new DurableSessionCommandWorker({
+      queue,
+      workerId: 'worker.long-running',
+      leaseMs: 900,
+      renewalIntervalMs: 300,
+      maxHandlerDurationMs: 5_000,
+      now,
+      handlers: {
+        user_input: async ({ signal }) => {
+          await delay(2_000, signal);
+          return { disposition: 'applied' };
+        },
+      },
+    });
+
+    const running = active.processNext();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(running).resolves.toMatchObject({ disposition: 'applied' });
+    expect(renew.mock.calls.length).toBeGreaterThanOrEqual(6);
+    await expect(queue.list({ scope })).resolves.toMatchObject([{ status: 'applied' }]);
+  });
+
+  it('aborts the handler and refuses write-back when lease renewal fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(initialTime));
+    const now = () => new Date(Date.now()).toISOString();
+    const queue = new InMemorySessionQueue({ now });
+    await queue.enqueue(command('command.renewal-failure'));
+    vi.spyOn(queue, 'renew').mockRejectedValueOnce(
+      Object.assign(new Error('claim lost'), { code: 'RUNTIME_SESSION_QUEUE_CONFLICT' })
+    );
+    const onLeaseRenewalFailure = vi.fn();
+    const handlerAborted = vi.fn();
+    const telemetryRecorder = new InMemoryTelemetryRecorder();
+    const active = new DurableSessionCommandWorker({
+      queue,
+      workerId: 'worker.renewal-failure',
+      leaseMs: 900,
+      renewalIntervalMs: 300,
+      maxHandlerDurationMs: 5_000,
+      now,
+      onLeaseRenewalFailure,
+      operationalTelemetry: new RuntimeOperationalTelemetry({
+        recorder: telemetryRecorder,
+        now,
+      }),
+      monotonicNow: () => Date.now(),
+      handlers: {
+        user_input: async ({ signal }) => {
+          signal.addEventListener('abort', handlerAborted, { once: true });
+          await delay(2_000, signal);
+          return { disposition: 'applied' };
+        },
+      },
+    });
+
+    const running = active.processNext();
+    await vi.advanceTimersByTimeAsync(300);
+
+    await expect(running).resolves.toMatchObject({
+      disposition: 'lease_lost',
+      rejectionCode: 'session_command_claim_lost',
+    });
+    expect(handlerAborted).toHaveBeenCalledTimes(1);
+    expect(onLeaseRenewalFailure).toHaveBeenCalledTimes(1);
+    expect(
+      telemetryRecorder.list(RUNTIME_OPERATIONAL_METRIC_NAMES.leaseRenewalTotal)
+    ).toMatchObject([
+      {
+        value: 1,
+        attributes: { resource: 'session_command', outcome: 'failed' },
+      },
+    ]);
+    await expect(queue.list({ scope })).resolves.toMatchObject([{ status: 'claimed' }]);
+  });
+
+  it('does not redeliver a command when completion commits but its acknowledgement is lost', async () => {
+    const queue = new InMemorySessionQueue({ now: () => initialTime });
+    await queue.enqueue(command('command.lost-completion-ack'));
+    const complete = queue.complete.bind(queue);
+    const queueWithLostAck = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === 'complete') {
+          return async (request: Parameters<typeof complete>[0]) => {
+            await complete(request);
+            throw new Error('completion acknowledgement lost');
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const handler = vi.fn(async () => ({ disposition: 'applied' as const }));
+    const uncertainWorker = new DurableSessionCommandWorker({
+      queue: queueWithLostAck,
+      workerId: 'worker.lost-ack',
+      leaseMs: 1_000,
+      handlers: { user_input: handler },
+      now: () => initialTime,
+    });
+
+    await expect(uncertainWorker.processNext()).resolves.toMatchObject({
+      disposition: 'lease_lost',
+      rejectionCode: 'session_command_claim_lost',
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([
+      { id: 'command.lost-completion-ack', status: 'applied' },
+    ]);
+    await expect(worker(queue, { user_input: handler }).processNext()).resolves.toEqual({
+      disposition: 'idle',
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts an overlong handler without committing its eventual result', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(initialTime));
+    const now = () => new Date(Date.now()).toISOString();
+    const queue = new InMemorySessionQueue({ now });
+    await queue.enqueue(command('command.timeout'));
+    const active = new DurableSessionCommandWorker({
+      queue,
+      workerId: 'worker.timeout',
+      leaseMs: 900,
+      renewalIntervalMs: 300,
+      maxHandlerDurationMs: 500,
+      now,
+      handlers: {
+        user_input: async ({ signal }) => {
+          await delay(2_000, signal);
+          return { disposition: 'applied' };
+        },
+      },
+    });
+
+    const running = active.processNext();
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(running).resolves.toMatchObject({
+      disposition: 'aborted',
+      rejectionCode: 'session_command_handler_timeout',
+    });
+    await expect(queue.list({ scope })).resolves.toMatchObject([{ status: 'claimed' }]);
+  });
+});
+
+function worker(
+  queue: InMemorySessionQueue,
+  handlers: ConstructorParameters<typeof DurableSessionCommandWorker>[0]['handlers'],
+  now: () => string = () => initialTime
+): DurableSessionCommandWorker {
+  return new DurableSessionCommandWorker({
+    queue,
+    workerId: 'session-command-worker.test',
+    leaseMs: 1_000,
+    handlers,
+    now,
+  });
+}
+
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      resolve();
+    };
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      reject(new Error('aborted'));
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}

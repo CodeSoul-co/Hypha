@@ -24,13 +24,13 @@ incompatible.
 
 ## Provider Requirements and Available Surfaces
 
-| Provider kind    | Isolation expectation                                                                                       | Required lifecycle behavior                                                                                                           | Available framework surface                                                                                                |
-| ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `mock`           | No external process, filesystem, or network side effect                                                     | Deterministic result and lifecycle for tests                                                                                          | Contracts and test doubles; never a security sandbox                                                                       |
-| `local_process`  | No process or network isolation may be assumed; managed-root checks provide only filesystem confinement     | Cancellation and process-tree kill require a platform process group or Job Object before those capabilities may be reported           | `LocalWorkspaceRuntime` provides bounded file execution but does not implement `SandboxProvider`                           |
-| `docker`         | Process, filesystem, namespace, resource, mount, security, network, and image-digest controls are mandatory | Stop, forced kill, receipt capture, and container cleanup are idempotent and reconciled                                               | Environment validation and capability requirements; no concrete Docker adapter                                             |
-| `remote_sandbox` | Provider contract attests enforceable process, filesystem, network, resource, and tenant isolation          | Create, execute, output stream, Artifact transfer, cancel, terminate, cleanup, health, and remote receipt reconciliation are required | `RemoteSandboxProvider` defines the provider-neutral port and requires `remoteExecution: true`; no concrete remote adapter |
-| `custom`         | No capability is inferred from the provider name                                                            | Every claimed capability requires adapter contract tests and runtime health evidence                                                  | Provider-neutral extension port                                                                                            |
+| Provider kind    | Isolation expectation                                                                                       | Required lifecycle behavior                                                                                                           | Available framework surface                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `mock`           | No external process, filesystem, or network side effect                                                     | Deterministic result and lifecycle for tests                                                                                          | Contracts and test doubles; never a security sandbox                                                                                    |
+| `local_process`  | No process or network isolation may be assumed; managed-root checks provide only filesystem confinement     | Cancellation and process-tree kill require a platform process group or Job Object before those capabilities may be reported           | `LocalProcessExecutionProvider`, `LocalWorkspaceRuntime`, and an explicit `LocalProcessSandboxProviderFactory`; no default registration |
+| `docker`         | Process, filesystem, namespace, resource, mount, security, network, and image-digest controls are mandatory | Stop, forced kill, receipt capture, and container cleanup are idempotent and reconciled                                               | `DockerSandboxProvider` and an explicit `DockerSandboxProviderFactory`; no default registration or Server composition                   |
+| `remote_sandbox` | Provider contract attests enforceable process, filesystem, network, resource, and tenant isolation          | Create, execute, output stream, Artifact transfer, cancel, terminate, cleanup, health, and remote receipt reconciliation are required | `RemoteSandboxProviderAdapter`, its Factory, and the governed HTTP transport; no default registration or endpoint assumption            |
+| `custom`         | No capability is inferred from the provider name                                                            | Every claimed capability requires adapter contract tests and runtime health evidence                                                  | Provider-neutral extension port                                                                                                         |
 
 ## Minimum Negotiation Rules
 
@@ -47,6 +47,12 @@ incompatible.
 
 Capability negotiation is fail-closed. A local adapter reports `false` for a guarantee it cannot
 enforce; configuration, documentation, or best-effort cleanup is not sufficient evidence.
+
+The concrete Docker adapter reports process, filesystem, and network isolation; CPU, memory, and
+PID limits; cancellation and process-tree kill; and image-digest pinning. It reports disk limits,
+snapshots, and remote execution as unsupported. These claims apply only to an explicitly registered
+Factory on a deployment with current real-daemon acceptance evidence. Exporting the Factory does not
+register it automatically or make the deployment release-ready.
 
 ## Evidence Required for Capability Claims
 

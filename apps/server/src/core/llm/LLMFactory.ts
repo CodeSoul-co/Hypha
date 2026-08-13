@@ -29,11 +29,13 @@ import {
   CachedLLMProvider,
   MemoryCacheStore,
   NoopCacheStore,
+  RedisCacheStore,
   ServingCacheManager,
   SQLiteCacheStore,
   type CachePolicy,
   type CacheScope,
   type CacheStore,
+  type RedisCacheClient,
   type ServingCacheTraceSink,
 } from '@hypha/serving-cache';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
@@ -41,6 +43,7 @@ import { GeminiAdapter } from './adapters/GeminiAdapter';
 import { OllamaAdapter } from './adapters/OllamaAdapter';
 import { llmConfig, getConfig, servingCacheConfig } from '../../config';
 import { logger } from '../../utils/logger';
+import { createCacheRedisClient } from '../../services/cacheRedis';
 
 // OpenAI compatible provider configurations
 interface CompatibleProviderConfig {
@@ -672,12 +675,16 @@ function wrapWithServingCache(
     enabled: true,
     mode: config.mode,
     ttlMs: config.ttlMs,
-    cacheErrors: config.cacheErrors,
-    cacheStreaming: config.cacheStreaming,
     respectNoCache: config.respectNoCache,
+    failureMode: config.failureMode,
+    scopeRequirement: config.scopeRequirement,
+    operationTimeoutMs: config.operationTimeoutMs,
+    singleflight: config.singleflight,
+    maxEntryBytes: config.maxEntryBytes,
+    circuitBreaker: config.circuitBreaker,
   };
   const cache = new ServingCacheManager({
-    store: createServingCacheStore(config.store, config.sqlite.path),
+    store: createServingCacheStore(config),
     policy,
   });
   return new CachedLLMProvider(provider, cache, {
@@ -701,22 +708,26 @@ function wrapWithServingCache(
   });
 }
 
-function createServingCacheStore(
-  store: ReturnType<typeof servingCacheConfig>['store'],
-  sqlitePath: string
-): CacheStore {
-  switch (store) {
+function createServingCacheStore(config: ReturnType<typeof servingCacheConfig>): CacheStore {
+  switch (config.store) {
     case 'memory':
-      sharedMemoryServingCacheStore = sharedMemoryServingCacheStore ?? new MemoryCacheStore();
+      sharedMemoryServingCacheStore =
+        sharedMemoryServingCacheStore ?? new MemoryCacheStore(config.memory);
       return sharedMemoryServingCacheStore;
     case 'sqlite': {
-      const filename = path.resolve(process.cwd(), sqlitePath);
+      const filename = path.resolve(process.cwd(), config.sqlite.path);
       const existing = sharedSQLiteServingCacheStores.get(filename);
       if (existing) return existing;
-      const next = new SQLiteCacheStore({ filename });
+      const next = new SQLiteCacheStore({ filename, maxEntries: config.sqlite.maxEntries });
       sharedSQLiteServingCacheStores.set(filename, next);
       return next;
     }
+    case 'redis':
+      return new RedisCacheStore({
+        client: createCacheRedisClient() as unknown as RedisCacheClient,
+        prefix: config.redis.prefix,
+        closeClient: true,
+      });
     case 'noop':
     case 'off':
     default:

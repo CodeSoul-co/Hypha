@@ -2,7 +2,9 @@ import type {
   CommandExecutionRequest,
   CommandExecutionResult,
   CommandExecutionStatus,
+  ExecutionReceipt,
 } from './command-execution';
+import type { ProviderHealth } from './execution';
 
 export interface ExecutionLease {
   id: string;
@@ -24,6 +26,11 @@ export interface ExecutionRecord {
   sandboxId?: string;
   attempt: number;
   idempotencyFingerprint?: string;
+  /**
+   * Immutable Provider terminal evidence persisted before Artifact finalization and terminal CAS.
+   * Once present, Store implementations must reject removal or replacement.
+   */
+  terminalReceipt?: ExecutionReceipt;
   result?: CommandExecutionResult;
   lease?: ExecutionLease;
   createdAt: string;
@@ -141,5 +148,11 @@ export interface ExecutionStore {
   acquireLease(request: ExecutionLeaseAcquireRequest): Promise<ExecutionRecord>;
   renewLease(request: ExecutionLeaseRenewRequest): Promise<ExecutionRecord>;
   releaseLease(request: ExecutionLeaseReleaseRequest): Promise<ExecutionRecord>;
+  health(): Promise<ProviderHealth>;
   close?(): Promise<void>;
+}
+
+export interface ExecutionStoreFactory {
+  readonly storeId: string;
+  create(): Promise<ExecutionStore>;
 }

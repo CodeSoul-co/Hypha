@@ -1,0 +1,96 @@
+name: Repository and platform gates
+
+on:
+  pull_request:
+    branches: [dev, domain, cache-base, dev-domain-merge, dev-merge, main]
+  push:
+    branches:
+      [tools, runtime, domain-tools, dev, domain, cache-base, dev-domain-merge, dev-merge, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tool-mcp-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform-security:
+    name: Platform security (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Skill filesystem and server composition
+        run: >-
+          npm run test:unit -- --runInBand
+          apps/server/src/services/SkillInstallFilesystem.test.ts
+          apps/server/src/services/SecretResolver.test.ts
+          apps/server/src/core/tools/ToolManager.test.ts
+      - name: Real MCP transports with zero skipped tests
+        run: >-
+          npm exec -- vitest run packages/mcp/src/mcp.test.ts
+          --reporter=json --outputFile=mcp-results.json
+      - name: Assert zero skipped MCP tests
+        run: >-
+          node -e "const r=require('./mcp-results.json');
+          if((r.numPendingTests??0)!==0) {
+          throw new Error('Skipped MCP tests: '+r.numPendingTests); }"
+
+  repository-gates:
+    name: Repository gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - run: npm audit
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:unit
+      - run: npm run test:packages
+      - name: Integration tests with WorkCache enabled
+        run: npm run test:integration
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017/hypha_test
+          REDIS_URL: redis://127.0.0.1:6379
+      - name: Integration tests with WorkCache disabled
+        run: npm run test:integration
+        env:
+          HYPHA_WORKCACHE: 'off'
+          MONGODB_URI: mongodb://127.0.0.1:27017/hypha_test_cache_off
+          REDIS_URL: redis://127.0.0.1:6379

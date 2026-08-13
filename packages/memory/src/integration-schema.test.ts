@@ -58,6 +58,18 @@ describe('memory integration schemas', () => {
     expect(
       domainMemoryDependencySnapshotSchema.safeParse({ ...snapshot, createdAt: 'today' }).success
     ).toBe(false);
+    expect(
+      domainMemoryDependencySnapshotSchema.safeParse({
+        ...snapshot,
+        capabilitySnapshots: { 'provider.memory.native': { search: true } },
+      }).success
+    ).toBe(false);
+    expect(
+      domainMemoryDependencySnapshotSchema.safeParse({
+        ...snapshot,
+        stateBindings: [{ stateId: 'Reasoning', binding: workflowStateMemoryBindingExample }],
+      }).success
+    ).toBe(false);
   });
 
   it('validates cache, replay and evaluation fixtures', () => {
@@ -83,6 +95,28 @@ describe('memory integration schemas', () => {
       validateMemoryEvaluationCase({
         ...memoryEvaluationCaseExample,
         metricIds: [],
+      })
+    ).toThrow();
+  });
+  it('requires Event and Provider facts and rejects cache-only replay references', () => {
+    expect(() =>
+      validateMemoryReplayReference({
+        ...memoryReplayReferenceExample,
+        eventIds: [],
+      })
+    ).toThrow();
+    expect(() =>
+      validateMemoryReplayReference({
+        ...memoryReplayReferenceExample,
+        memoryVersionIds: [],
+      })
+    ).toThrow();
+    expect(() =>
+      validateMemoryReplayReference({
+        ...memoryReplayReferenceExample,
+        cacheKey: 'memory-search-cache:stale',
+        cacheHit: true,
+        cachedEnvelope: { contextHash: 'cache-only' },
       })
     ).toThrow();
   });

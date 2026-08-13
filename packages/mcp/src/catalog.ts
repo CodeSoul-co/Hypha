@@ -1,11 +1,18 @@
 import { randomUUID } from 'crypto';
 import { z, type ZodType } from 'zod';
-import { defineSpecSchema, type JsonSchema, type TelemetryRecorder } from '@hypha/core';
+import {
+  FrameworkError,
+  defineSpecSchema,
+  type JsonSchema,
+  type SideEffectLevel,
+  type TelemetryRecorder,
+} from '@hypha/core';
 import {
   MCPToolAdapter,
   ToolRegistry,
   createToolSchemaSpec,
   hashToolContract,
+  validateEffectiveCapabilityAccess,
   type ToolCallContext,
   type ToolContractSnapshot,
   type ToolContractSnapshotStore,
@@ -57,6 +64,7 @@ export interface MCPCapabilityRecord {
   firstSeenAt: string;
   lastSeenAt: string;
   approvedAt?: string;
+  approvalExpiresAt?: string;
   removedAt?: string;
   metadata?: Record<string, unknown>;
 }
@@ -101,6 +109,7 @@ export const mcpCapabilityRecordSchema = z.object({
   firstSeenAt: z.string().min(1),
   lastSeenAt: z.string().min(1),
   approvedAt: z.string().optional(),
+  approvalExpiresAt: z.string().optional(),
   removedAt: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
 }) as ZodType<MCPCapabilityRecord>;
@@ -160,6 +169,7 @@ export const mcpCapabilityRecordJsonSchema: JsonSchema = {
     firstSeenAt: { type: 'string' },
     lastSeenAt: { type: 'string' },
     approvedAt: { type: 'string' },
+    approvalExpiresAt: { type: 'string' },
     removedAt: { type: 'string' },
     metadata: { type: 'object' },
   },
@@ -206,12 +216,17 @@ export interface MCPCapabilityQuarantineRequest extends MCPCapabilityRef {
 
 export interface MCPCapabilityApprovalRequest extends MCPCapabilityRef {
   approvedBy: string;
+  expiresAt?: string;
   restrictions?: string[];
+  sideEffectLevel?: SideEffectLevel;
 }
 
 export interface MCPCapabilityCatalogStore {
   list(serverId?: string): Promise<MCPCapabilityRecord[]>;
-  save(record: MCPCapabilityRecord): Promise<void>;
+  save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean>;
 }
 
 export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
@@ -225,8 +240,100 @@ export class InMemoryMCPCapabilityCatalogStore implements MCPCapabilityCatalogSt
     );
   }
 
-  async save(record: MCPCapabilityRecord): Promise<void> {
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
+    if (options && 'expected' in options) {
+      const current = this.records.get(record.id);
+      if (JSON.stringify(current ?? null) !== JSON.stringify(options.expected ?? null))
+        return false;
+    }
     this.records.set(record.id, clone(record));
+    return true;
+  }
+}
+
+export interface RedisLikeMCPStoreClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<unknown>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
+  eval?(
+    script: string,
+    numberOfKeys: number,
+    ...args: Array<string | number>
+  ): Promise<number | string | null>;
+}
+
+/** Multi-worker catalog store. Redis key operations are idempotent per capability id. */
+export class RedisMCPCapabilityCatalogStore implements MCPCapabilityCatalogStore {
+  private readonly namespace: string;
+
+  constructor(
+    private readonly client: RedisLikeMCPStoreClient,
+    namespace = 'hypha:mcp:catalog:v1'
+  ) {
+    this.namespace = namespace.replace(/:+$/, '');
+  }
+
+  async list(serverId?: string): Promise<MCPCapabilityRecord[]> {
+    const ids = await this.client.smembers(this.indexKey(serverId));
+    const records = await Promise.all(ids.map((id) => this.client.get(this.recordKey(id))));
+    return records
+      .filter((raw): raw is string => raw !== null)
+      .map((raw) => JSON.parse(raw) as MCPCapabilityRecord)
+      .filter((record) => !serverId || record.serverId === serverId);
+  }
+
+  async save(
+    record: MCPCapabilityRecord,
+    options?: { expected?: MCPCapabilityRecord | null }
+  ): Promise<boolean> {
+    if (options && 'expected' in options) {
+      if (!this.client.eval) {
+        throw catalogError(
+          'MCP_CATALOG_CAS_UNAVAILABLE',
+          'Shared MCP catalog requires Redis EVAL for compare-and-set writes.'
+        );
+      }
+      const result = await this.client.eval(
+        [
+          "local current = redis.call('GET', KEYS[1])",
+          "if ARGV[1] == '__NULL__' then",
+          '  if current then return 0 end',
+          'elseif current ~= ARGV[1] then',
+          '  return 0',
+          'end',
+          "redis.call('SET', KEYS[1], ARGV[2])",
+          "redis.call('SADD', KEYS[2], ARGV[3])",
+          "redis.call('SADD', KEYS[3], ARGV[3])",
+          'return 1',
+        ].join('\n'),
+        3,
+        this.recordKey(record.id),
+        this.indexKey(),
+        this.indexKey(record.serverId),
+        options.expected === null ? '__NULL__' : JSON.stringify(options.expected),
+        JSON.stringify(record),
+        record.id
+      );
+      return Number(result) === 1;
+    }
+    await this.client.set(this.recordKey(record.id), JSON.stringify(record));
+    await Promise.all([
+      this.client.sadd(this.indexKey(), record.id),
+      this.client.sadd(this.indexKey(record.serverId), record.id),
+    ]);
+    return true;
+  }
+
+  private indexKey(serverId?: string): string {
+    return `${this.namespace}:index:${serverId ?? 'all'}`;
+  }
+
+  private recordKey(id: string): string {
+    return `${this.namespace}:record:${id}`;
   }
 }
 
@@ -240,14 +347,29 @@ export interface MCPSchemaCacheEntry {
   cachedAt: string;
 }
 
+export interface MCPSchemaCacheOptions {
+  maxEntries?: number;
+  now?: () => string;
+}
+
 export class MCPSchemaCache {
   private readonly entries = new Map<string, MCPSchemaCacheEntry>();
+  private readonly maxEntries: number;
+  private readonly now: () => string;
+
+  constructor(options: MCPSchemaCacheOptions = {}) {
+    this.maxEntries = Math.max(1, options.maxEntries ?? 10_000);
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
 
   get(ref: MCPCapabilityRef & { protocolVersion?: string }): MCPSchemaCacheEntry | null {
     if (!ref.capabilityHash) return null;
-    return clone(
-      this.entries.get(schemaCacheKey({ ...ref, capabilityHash: ref.capabilityHash })) ?? null
-    );
+    const key = schemaCacheKey({ ...ref, capabilityHash: ref.capabilityHash });
+    const entry = this.entries.get(key);
+    if (!entry) return null;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return clone(entry);
   }
 
   set(record: MCPCapabilityRecord): MCPSchemaCacheEntry {
@@ -258,9 +380,15 @@ export class MCPSchemaCache {
       capabilityHash: record.capabilityHash,
       protocolVersion: record.protocolVersion,
       schema: record.normalizedToolSpec?.inputSchema,
-      cachedAt: new Date().toISOString(),
+      cachedAt: this.now(),
     };
+    this.entries.delete(entry.key);
     this.entries.set(entry.key, entry);
+    while (this.entries.size > this.maxEntries) {
+      const oldestKey = this.entries.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.entries.delete(oldestKey);
+    }
     return clone(entry);
   }
 
@@ -273,6 +401,10 @@ export class MCPSchemaCache {
       }
     }
     return removed;
+  }
+
+  size(): number {
+    return this.entries.size;
   }
 }
 
@@ -454,36 +586,78 @@ export class MCPCapabilityCatalog {
 
   async quarantine(request: MCPCapabilityQuarantineRequest): Promise<void> {
     const record = await this.requireCapability(request);
-    await this.store.save({
-      ...record,
-      driftState: 'quarantined',
-      trust: {
-        ...record.trust,
-        restrictions: [...(record.trust.restrictions ?? []), request.reason],
+    const saved = await this.store.save(
+      {
+        ...record,
+        driftState: 'quarantined',
+        trust: {
+          ...record.trust,
+          restrictions: [...(record.trust.restrictions ?? []), request.reason],
+        },
       },
-    });
+      { expected: record }
+    );
+    if (!saved) {
+      throw catalogError(
+        'MCP_CATALOG_CONFLICT',
+        'MCP capability changed while it was being quarantined.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
   }
 
   async approveRevision(request: MCPCapabilityApprovalRequest): Promise<void> {
     const record = await this.requireCapability(request);
     const approvedAt = this.now();
-    await this.store.save({
-      ...record,
-      driftState: 'approved',
-      approvedAt,
-      trust: {
-        ...record.trust,
-        level: record.trust.level === 'untrusted' ? 'restricted' : record.trust.level,
-        approvedBy: request.approvedBy,
+    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.parse(approvedAt)) {
+      throw catalogError(
+        'MCP_APPROVAL_EXPIRED',
+        'MCP capability approval expiry must be later than the approval time.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
+    assertSideEffectOverrideIsSafe(record, request.sideEffectLevel);
+    const normalizedToolSpec =
+      request.sideEffectLevel && record.normalizedToolSpec
+        ? { ...record.normalizedToolSpec, sideEffectLevel: request.sideEffectLevel }
+        : record.normalizedToolSpec;
+    const saved = await this.store.save(
+      {
+        ...record,
+        driftState: 'approved',
+        normalizedToolSpec,
         approvedAt,
-        restrictions: request.restrictions ?? record.trust.restrictions,
+        approvalExpiresAt: request.expiresAt,
+        metadata: {
+          ...(record.metadata ?? {}),
+          ...(request.sideEffectLevel === undefined
+            ? {}
+            : { approvedSideEffectLevel: request.sideEffectLevel }),
+        },
+        trust: {
+          ...record.trust,
+          level: record.trust.level === 'untrusted' ? 'restricted' : record.trust.level,
+          approvedBy: request.approvedBy,
+          approvedAt,
+          restrictions: request.restrictions ?? record.trust.restrictions,
+        },
       },
-    });
+      { expected: record }
+    );
+    if (!saved) {
+      throw catalogError(
+        'MCP_CATALOG_CONFLICT',
+        'MCP capability changed while its revision was being approved.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
     await this.emit('mcp.capability.approved', {
       serverId: record.serverId,
       capabilityId: record.remoteName,
       capabilityHash: record.capabilityHash,
       approvedBy: request.approvedBy,
+      expiresAt: request.expiresAt,
+      sideEffectLevel: request.sideEffectLevel,
     });
   }
 
@@ -494,25 +668,20 @@ export class MCPCapabilityCatalog {
   ): Promise<ToolSpec[]> {
     const imported: ToolSpec[] = [];
     for (const ref of refs) {
-      const record = await this.requireCapability(ref);
-      if (
-        record.kind !== 'tool' ||
-        record.driftState === 'quarantined' ||
-        record.driftState === 'removed'
-      ) {
-        throw new Error(
-          `MCP capability is not importable: ${record.serverId}/${record.remoteName}`
-        );
-      }
+      const record = await this.requirePinnedApprovedCapability(ref, 'tool');
       const spec = record.normalizedToolSpec!;
       registry.registerAdapter(
         spec,
         new MCPToolAdapter(`mcp:${record.serverId}`, record.serverId, record.remoteName, {
-          invoke: (request) =>
-            this.options.gateway.call({
+          invoke: async (request) => {
+            await this.assertInvocationAuthorized(record, request.context);
+            const result = await this.options.gateway.call({
               ...request,
               context: { ...context, ...request.context },
-            }),
+            });
+            await this.assertInvocationAuthorized(record, request.context);
+            return normalizeMCPToolOutput(result);
+          },
           health: async () => ({ status: 'unknown', checkedAt: this.now() }),
         }),
         { replace: true }
@@ -529,7 +698,9 @@ export class MCPCapabilityCatalog {
   }
 
   async snapshot(runId: string, refs: MCPCapabilityRef[]): Promise<ToolContractSnapshot> {
-    const records = await Promise.all(refs.map((ref) => this.requireCapability(ref)));
+    const records = await Promise.all(
+      refs.map((ref) => this.requirePinnedApprovedCapability(ref, 'tool'))
+    );
     const toolContracts = records.map((record) => {
       if (!record.normalizedToolSpec) throw new Error(`Capability is not a Tool: ${record.id}`);
       const spec = record.normalizedToolSpec;
@@ -569,7 +740,13 @@ export class MCPCapabilityCatalog {
   ): MCPCapabilityRecord {
     const now = this.now();
     const capabilityHash = descriptor.capabilityHash!;
-    const normalizedToolSpec = descriptor.type === 'tool' ? catalogToolSpec(descriptor) : undefined;
+    const discoveredToolSpec = descriptor.type === 'tool' ? catalogToolSpec(descriptor) : undefined;
+    const normalizedToolSpec =
+      prior?.driftState === 'approved' &&
+      prior.capabilityHash === capabilityHash &&
+      prior.normalizedToolSpec
+        ? prior.normalizedToolSpec
+        : discoveredToolSpec;
     const quarantined = shouldQuarantine(
       driftTypes,
       this.options.trustPolicy,
@@ -593,17 +770,152 @@ export class MCPCapabilityCatalog {
       descriptor: clone(descriptor) as unknown as Record<string, unknown>,
       normalizedToolSpec,
       trust,
-      driftState: quarantined
-        ? 'quarantined'
-        : driftTypes.length === 0
-          ? 'stable'
-          : prior
-            ? 'changed'
-            : 'new',
+      driftState:
+        !quarantined &&
+        driftTypes.length === 0 &&
+        prior?.driftState === 'approved' &&
+        prior.capabilityHash === capabilityHash
+          ? 'approved'
+          : quarantined
+            ? 'quarantined'
+            : driftTypes.length === 0
+              ? 'stable'
+              : prior
+                ? 'changed'
+                : 'new',
       driftTypes,
       firstSeenAt: prior?.firstSeenAt ?? now,
       lastSeenAt: now,
+      approvedAt:
+        driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
+          ? prior.approvedAt
+          : undefined,
+      approvalExpiresAt:
+        driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
+          ? prior.approvalExpiresAt
+          : undefined,
+      metadata:
+        driftTypes.length === 0 && prior?.capabilityHash === capabilityHash
+          ? prior.metadata
+          : undefined,
     };
+  }
+
+  private async requirePinnedApprovedCapability(
+    ref: MCPCapabilityRef,
+    kind?: MCPCapabilityKind
+  ): Promise<MCPCapabilityRecord> {
+    if (!ref.capabilityHash) {
+      throw catalogError(
+        'MCP_CAPABILITY_HASH_REQUIRED',
+        'MCP capability operations require an explicitly pinned capability hash.',
+        { serverId: ref.serverId, capabilityId: ref.capabilityId }
+      );
+    }
+    const record = await this.requireCapability(ref);
+    this.assertApproved(record, kind);
+    return record;
+  }
+
+  private assertApproved(record: MCPCapabilityRecord, kind?: MCPCapabilityKind): void {
+    const expired =
+      record.approvalExpiresAt !== undefined &&
+      Date.parse(record.approvalExpiresAt) <= Date.parse(this.now());
+    if (
+      (kind && record.kind !== kind) ||
+      record.driftState !== 'approved' ||
+      !record.approvedAt ||
+      !record.trust.approvedBy ||
+      !record.trust.approvedAt ||
+      record.trust.level === 'untrusted' ||
+      expired
+    ) {
+      throw catalogError(
+        expired ? 'MCP_APPROVAL_EXPIRED' : 'MCP_CAPABILITY_NOT_APPROVED',
+        `MCP capability is not an active approved revision: ${record.serverId}/${record.remoteName}`,
+        {
+          serverId: record.serverId,
+          capabilityId: record.remoteName,
+          capabilityHash: record.capabilityHash,
+          driftState: record.driftState,
+          approvalExpiresAt: record.approvalExpiresAt,
+        }
+      );
+    }
+  }
+
+  private async assertInvocationAuthorized(
+    record: MCPCapabilityRecord,
+    context: ToolCallContext
+  ): Promise<void> {
+    const signal = context.abortSignal ?? context.signal;
+    if (signal?.aborted) {
+      throw catalogError('MCP_REQUEST_CANCELLED', 'MCP invocation was cancelled before dispatch.');
+    }
+    if (context.deadlineAt && Date.parse(context.deadlineAt) <= Date.parse(this.now())) {
+      throw catalogError('MCP_REQUEST_TIMEOUT', 'MCP invocation deadline expired before dispatch.');
+    }
+    const approved = await this.requirePinnedApprovedCapability(
+      {
+        serverId: record.serverId,
+        capabilityId: record.remoteName,
+        kind: record.kind,
+        capabilityHash: record.capabilityHash,
+      },
+      'tool'
+    );
+    const snapshotRef = context.contractSnapshotRef;
+    const snapshot = snapshotRef ? await this.snapshotStore.get(snapshotRef) : null;
+    const contract = snapshot?.toolContracts.find(
+      (candidate) =>
+        candidate.toolId === approved.normalizedToolSpec?.id &&
+        candidate.sourceCapabilityHash === approved.capabilityHash &&
+        candidate.toolRevision === approved.normalizedToolSpec?.revision
+    );
+    if (!snapshot || snapshot.runId !== context.runId || !contract) {
+      throw catalogError(
+        'MCP_CAPABILITY_SNAPSHOT_MISMATCH',
+        'MCP invocation is not pinned by the active Run Tool contract snapshot.',
+        {
+          serverId: record.serverId,
+          capabilityId: record.remoteName,
+          capabilityHash: record.capabilityHash,
+          snapshotRef,
+          runId: context.runId,
+        }
+      );
+    }
+    const capabilityDenial = validateEffectiveCapabilityAccess({
+      snapshot,
+      context,
+      spec: approved.normalizedToolSpec!,
+    });
+    if (capabilityDenial) {
+      throw catalogError('MCP_CAPABILITY_SCOPE_DENIED', capabilityDenial, {
+        serverId: record.serverId,
+        capabilityId: record.remoteName,
+        capabilityHash: record.capabilityHash,
+        capabilitySnapshotRef: context.capabilitySnapshotRef,
+      });
+    }
+    const active = await this.getCapability({
+      serverId: record.serverId,
+      capabilityId: record.remoteName,
+      kind: record.kind,
+    });
+    if (
+      active &&
+      !same(
+        (active.descriptor as { serverIdentity?: unknown }).serverIdentity,
+        (approved.descriptor as { serverIdentity?: unknown }).serverIdentity
+      )
+    ) {
+      throw catalogError(
+        'MCP_SERVER_IDENTITY_DRIFT',
+        'MCP server identity changed after the capability revision was approved.',
+        { serverId: record.serverId, capabilityId: record.remoteName }
+      );
+    }
   }
 
   private async requireCapability(ref: MCPCapabilityRef): Promise<MCPCapabilityRecord> {
@@ -631,6 +943,38 @@ export class MCPCapabilityCatalog {
   }
 }
 
+function assertSideEffectOverrideIsSafe(
+  record: MCPCapabilityRecord,
+  approved: SideEffectLevel | undefined
+): void {
+  if (!approved) return;
+  if (record.kind !== 'tool' || !record.normalizedToolSpec) {
+    throw catalogError(
+      'MCP_SIDE_EFFECT_OVERRIDE_INVALID',
+      'Side-effect approval is only valid for MCP Tool capabilities.',
+      { serverId: record.serverId, capabilityId: record.remoteName }
+    );
+  }
+  const declared = (record.descriptor as { sideEffectLevel?: SideEffectLevel }).sideEffectLevel;
+  if (declared && sideEffectRank(approved) < sideEffectRank(declared)) {
+    throw catalogError(
+      'MCP_SIDE_EFFECT_OVERRIDE_UNSAFE',
+      'Approved side-effect level cannot be lower than the server-declared level.',
+      { serverId: record.serverId, capabilityId: record.remoteName, declared, approved }
+    );
+  }
+}
+
+function sideEffectRank(level: SideEffectLevel): number {
+  return {
+    none: 0,
+    read: 1,
+    write: 2,
+    external_effect: 3,
+    irreversible: 4,
+  }[level];
+}
+
 export class InMemoryToolContractSnapshotStore implements ToolContractSnapshotStore {
   private readonly snapshots = new Map<string, ToolContractSnapshot>();
 
@@ -640,6 +984,30 @@ export class InMemoryToolContractSnapshotStore implements ToolContractSnapshotSt
 
   async save(snapshot: ToolContractSnapshot): Promise<void> {
     this.snapshots.set(snapshot.id, clone(snapshot));
+  }
+}
+
+export class RedisToolContractSnapshotStore implements ToolContractSnapshotStore {
+  private readonly namespace: string;
+
+  constructor(
+    private readonly client: Pick<RedisLikeMCPStoreClient, 'get' | 'set'>,
+    namespace = 'hypha:tool:snapshot:v1'
+  ) {
+    this.namespace = namespace.replace(/:+$/, '');
+  }
+
+  async get(snapshotId: string): Promise<ToolContractSnapshot | null> {
+    const raw = await this.client.get(this.key(snapshotId));
+    return raw === null ? null : (JSON.parse(raw) as ToolContractSnapshot);
+  }
+
+  async save(snapshot: ToolContractSnapshot): Promise<void> {
+    await this.client.set(this.key(snapshot.id), JSON.stringify(snapshot));
+  }
+
+  private key(snapshotId: string): string {
+    return `${this.namespace}:${snapshotId}`;
   }
 }
 
@@ -676,6 +1044,23 @@ function catalogToolSpec(capability: MCPCapabilityDescriptor): ToolSpec {
     },
   };
   return spec;
+}
+
+/**
+ * MCP CallToolResult is a transport envelope. A declared Tool output schema
+ * applies to structuredContent, not to the protocol's content/isError fields.
+ */
+export function normalizeMCPToolOutput(result: unknown): unknown {
+  if (
+    result &&
+    typeof result === 'object' &&
+    Array.isArray((result as { content?: unknown }).content) &&
+    Object.prototype.hasOwnProperty.call(result, 'structuredContent') &&
+    (result as { structuredContent?: unknown }).structuredContent !== undefined
+  ) {
+    return (result as { structuredContent: unknown }).structuredContent;
+  }
+  return result;
 }
 
 function shouldQuarantine(
@@ -762,4 +1147,12 @@ function same(left: unknown, right: unknown): boolean {
 function clone<T>(value: T): T {
   if (value === undefined) return value;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function catalogError(
+  code: string,
+  message: string,
+  context?: Record<string, unknown>
+): FrameworkError {
+  return new FrameworkError({ code, message, context });
 }

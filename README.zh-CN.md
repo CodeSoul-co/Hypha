@@ -5,115 +5,419 @@
 <h1 align="center">hypha</h1>
 
 <p align="center">
-  <strong>面向生产级 LLM Agent 应用的 harness-oriented agent system framework。</strong>
+  <strong>面向生产环境、具备治理能力、持久执行能力和可扩展性的 TypeScript AI Agent 框架。</strong>
 </p>
 
 <p align="center">
   <a href="README.md">English</a> | 中文
 </p>
 
-## 概览
+## hypha 是什么？
 
-hypha 是一个基于 TypeScript 的 LLM Agent 系统框架，用于通过稳定 API 构建可运行、可追踪、可回放、可治理、可评估、可扩展的 agent system。
+hypha 是一个用于开发 Agent 产品的 TypeScript 源码工作区。它不把 Agent 简化为一次模型调用，
+而是将 ReAct 推理循环、显式有限状态机（FSM）、持久事件、受策略控制的副作用、回放、恢复、评估
+和 provider-neutral 扩展契约组合为统一框架。
 
-框架将可复用的 agent-system 契约和展示媒介分离。API Server、CLI 和 Web 客户端都应作为同一套框架模型的调用入口，而不是核心运行时行为的定义位置。
+框架严格分离产品领域声明与运行时内核。产品通过 `DomainPack` 定义任务和工作流；hypha 将其编译为
+FSM Process 与版本化依赖快照。API、CLI、Worker 或其他应用界面可以复用同一套 Runtime，而无需把
+产品规则写入 Framework Core。
 
-## 核心模型
+## 产品模型
 
-hypha 采用 ReAct + FSM 执行模型。ReAct 描述 agent 的观察、推理、行动、观察结果和验证循环；FSM 将这个循环显式表达为状态、受 guard 控制的转移、重试、trace event 和终态结果。
+| 概念         | 职责                                                                                                       |
+| ------------ | ---------------------------------------------------------------------------------------------------------- |
+| `DomainPack` | 声明任务、工作流、输出契约、Skill、Tool、MCP、Memory、Context、Policy、Evaluation、Regression 与部署引用。 |
+| `Agent`      | 选择模型别名，并接收 DomainPack 编译出的能力引用。                                                         |
+| `Session`    | 保存用户与产品上下文，引用 DomainPack 和可选 Session Profile。                                             |
+| `Run`        | Session 下的一次持久化执行。                                                                               |
+| `Event`      | 最小事实记录；状态、回放、审计与回归视图都从 Event 投影。                                                  |
+| `Artifact`   | 保存内容寻址的输入、输出、Checkpoint 与执行证据。                                                          |
 
-运行时模型以事件为先：
+Canonical 执行路径如下：
 
-- `DomainPack` 声明领域级定义，包括任务结构、WorkflowSpec、工具、MCP profile、memory profile、skill policy、权限、评估规则和输出契约。
-- `Session` 是运行时的用户或业务上下文容器，可以引用某个 DomainPack，并按 SessionProfile 初始化 metadata。
-- `Run` 是 Session 下的一次具体执行实例。
-- `Event` 是最小事实记录。trace、replay、audit、regression 和 state projection 都从 events 派生。
-
-包级运行时提供 `FSMRuntime`、`ReActAgentRunner`、`RunManager` 和 `HarnessedReActFSMRunner`，用于执行带治理和 trace 的最小 agent 状态闭环。异常恢复同样由 FSM 显式管理：有界重试与熔断等待进入 `Recovering`，已提交副作用进入 `Compensating`，提交状态不确定的副作用进入 `Quarantined`。
-
-## API 文档
-
-公开文档以 API 和字段说明为主：
-
-- [文档索引](docs/README.md)：架构、包边界、指南和 API reference 的入口。
-- [HTTP API](docs/api/http.md)：REST endpoint、鉴权方式、请求体、响应结构和运行时约定。
-- [Framework API](docs/api/framework.md)：DomainPack、Session、Run、Event、execution、inference、memory、tool、MCP、skill 和 model provider 的 TypeScript 契约。
-- [Execution 契约](docs/architecture/execution.md)：provider-neutral 的 Workspace、Sandbox、Command、Store、Event 与 cache fingerprint 边界。
-- [架构说明](docs/reference/architecture.md)：package 职责、harness 语义、runtime 模型和扩展边界。
-- [Storage](docs/reference/storage.md)：document、messaging、relational、vector 和 artifact 存储在本地、自托管、托管云部署中的配置约定。
-- [Domain Pack 指南](docs/guides/domain-packs.md)：声明 workflow、tool、memory、skill、policy、评估和输出契约的字段约定与示例。
-
-服务启动后，也可以访问 `/api/v1/docs` 查看运行时路由索引。
-
-## 运行模式
-
-hypha 默认采用单用户运行模式，适合本地和自托管部署。系统会根据 `auth.singleUser` 准备 owner 账号，公开注册默认关闭；只有显式启用多用户模式时才开放注册。
-
-内部 API 仍保留 `userId` 边界，用于 session、memory、token usage、API key 和 session queue。这样默认部署保持简单，同时保留多用户客户端需要的并发模型。
-
-## 跨模块协同恢复
-
-Hypha 使用同一套 FSM 恢复契约协调 inference、tool、MCP、memory、execution、storage、消息投递、policy 与 cache 异常。参与模块按依赖顺序执行，已经完成的上游不会重复运行；系统通过稳定的 receipt、revision、hash 或 provider state 判断是否真正取得进展，而不是把再次循环视为进展。有界重试、对账、兼容 fallback、降级、补偿、人工复核、隔离、取消和失败都具有显式策略与 trace event。
-
-写入结果不确定时必须先对账再决定是否重放。可选 cache 失败时可以 bypass，但不能改变源操作结果；WorkCache 只保存与 policy/spec/provider revision 匹配并重新校验过的恢复知识，用作加速提示。Event log 与 FSM snapshot 始终是真相源。详见 [FSM 异常恢复](docs/architecture/fsm-recovery.md)。
-
-## Inference Runtime
-
-Agent inference 由 `@hypha/inference` 提供：prompt 编译、prefix 分段、Plasmod cache 协调、backend 路由和统一响应。默认物理 backend 是 SGLang，同时通过同一套 backend registry 支持 vLLM、llama.cpp 和 OpenAI API。
-
-默认 backend 与 endpoint 在 `config.yaml` 或 `.env` 中配置，例如 `HYPHA_INFERENCE_DEFAULT_BACKEND=sglang` 和 `SGLANG_BASE_URL=http://localhost:30000`。
-
-## Serving Cache
-
-Hypha Serving Cache 是 LLM provider 调用前后的轻量 middleware。它提供 exact request-level cache、确定性 cache key、可插拔 store、cache policy、prompt prefix metadata 和 trace event，不改变 agent runtime 或 Domain Pack 接口。
-
-exact cache key 来自已解析的 provider、model、system 或 prefix content、messages、tools/function schema、生成参数，以及可选 scope 字段，例如 `userId`、`sessionId`、`projectId` 和 `domainPackId`。`requestId`、timestamp 和 `undefined` 值不会进入 key。
-
-通过 `HYPHA_SERVING_CACHE=memory` 或 `HYPHA_SERVING_CACHE=sqlite` 开启；默认 `off` 会保持 provider 原路径。`HYPHA_SERVING_CACHE_MODE` 支持 `off`、`read`、`write` 和 `readwrite`，`HYPHA_SERVING_CACHE_TTL_MS` 控制过期时间，SQLite 文件路径由 `HYPHA_SERVING_CACHE_SQLITE_PATH` 设置。
-
-运行时 trace 可能包含 `llm.cache.lookup`、`llm.cache.hit`、`llm.cache.miss`、`llm.cache.write` 和 `llm.cache.bypass`。当前版本中 streaming request 会 bypass cache。本层不实现 semantic cache、cache tree、WorkCache 调度、provider KV cache 管理或 CPU/GPU cache migration。
-
-## WorkCache
-
-`@hypha/workcache` 是从事件流派生的类型化运行时缓存，用于复用 agent 运行过程中的 artifact。它消费现有 Hypha events，将事件映射到 `PlanTree`、`ComputationTree`、`ToolTree`、`ObservationTree`、`VerificationTree`、`MemoryTree`、`RecoveryTree` 或 `PromptPrefixTree`，并存储 `CacheBlock`，不改变 DomainPack、Session、Run 或 Event 语义。
-
-内置 Server 配置默认使用 `HYPHA_WORKCACHE=memory`。设置 `HYPHA_WORKCACHE=off` 可关闭并停止追加 `workcache.*` 事件；设置为 `sqlite` 时，文件由 `HYPHA_WORKCACHE_SQLITE_PATH` 指定。`HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS` 控制 prompt prefix materialization 的预算。
-
-WorkCache 与 Serving Cache 分离。Serving Cache 复用 exact LLM API response；WorkCache 组织 event-derived runtime artifacts。Tool block 只允许 read-only side effect、稳定 args、permission scope 和 validity metadata。Verification block 需要严格的 source、test、environment hash。Recovery block 只是带 revision 匹配和过期时间的策略提示，不能替代 FSM、Event 或 receipt 证据。
-
-## 受治理的 Tool 与 MCP
-
-Local、HTTP、Plugin、Mock 与 MCP capability 统一通过 `ToolAdapter`、`ToolRegistry` 和 `GovernedToolRunner` 执行。每次调用都会形成可持久化的 Invocation，并统一处理 schema、permission、policy、人工审批、幂等、重试、超时、取消、artifact、event、observation、cache validity 与恢复语义。
-
-动态 MCP capability 的连接状态、catalog、trust、drift、schema cache 与 Run contract snapshot 相互分离。运行中的 Run 使用不可变 snapshot，远端 capability 变化不会静默替换当前执行或 replay 使用的契约。
-
-参见 [Tool/MCP 架构](docs/architecture/tool-mcp.md)、[安全指南](docs/guides/tool-mcp-security.md) 与 [Adapter 指南](docs/guides/tool-adapters.md)。
-
-服务端内置受治理、无副作用的 `utility.json`、`utility.text` 与 `utility.hash`，用于有边界的 JSON 处理、字面文本变换和 SHA-256 指纹。参见[通用工具指南](docs/guides/common-utility-tools.md)与 [FSM 异常恢复架构](docs/architecture/fsm-recovery.md)。
-
-## 受治理的 Execution 契约
-
-`@hypha/core` 提供 provider-neutral 的受管 Workspace、sandbox environment、command execution、带 revision 的 record/lease、生命周期 event 与确定性 cache fingerprint 契约。文件系统、进程、容器、远端 provider、存储、artifact、policy 与 secret 的具体实现都保留在 adapter 和 harness 边界之后。Adapter 执行副作用之前，框架会验证路径、身份、状态转换、终态证据、敏感事件字段、幂等边界与 stale-writer fencing。
-
-契约分层与扩展规则参见 [Execution 架构](docs/architecture/execution.md)。
-
-## 开发命令
-
-```bash
-npm install
-npm run dev
-npm run build
-npm run typecheck
-npm test
-npm run lint
-npm run cli -- --help
+```text
+DomainPack
+  -> 校验后的 Binding 与依赖快照
+  -> FSM Process
+  -> 有界 ReAct Quantum
+  -> 受治理的 Tool / MCP / Memory / Execution Activity
+  -> Event + Receipt + Artifact 证据
+  -> Projection、Continuation、Recovery、Replay 与 Evaluation
 ```
 
-- `npm run dev`：使用 dotenv 启动 Express API server。
-- `npm run build`：编译 framework packages、API server 和 CLI。
-- `npm test`：运行 unit、package 和 integration 测试套件。
-- `npm run cli -- --help`：查看 CLI client 命令。
+任何 Cache Hit 或 Provider Response 都不能授权副作用、推进 FSM，也不能替代 Event 与 Artifact
+证据。Tool、MCP、Memory、文件、Execution 和外部写入必须经过 Policy、Trace、Cancellation、
+Deadline、Idempotency 与 Harness 边界。
 
-## 支持协议
+## 内置能力
+
+| 模块            | Runtime 能力                                                                                                                                                                                 |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime         | ReAct + FSM、持久 Session Command、有界 Continuation、Timer、Lease、Fencing、Cancellation、Recovery Worker、人工复核、Replay、Audit 与 Regression Projection。                               |
+| Domain          | YAML/JSON/TypeScript DomainPack、运行时校验、Overlay、Registry、确定性编译器、依赖快照与 Agent Patch。                                                                                       |
+| Memory          | 统一治理契约下的 Hypha Native Memory、Native Lite、Mem0 OSS、Mem0 Platform 与 Vertex AI Memory Bank Adapter。                                                                                |
+| Tool 与 MCP     | Local、HTTP、Plugin、Mock、MCP Adapter 共用一条受治理 Invocation 路径，并支持 Capability Snapshot 与 Drift Control。                                                                         |
+| Skill 与 Prompt | Built-in、Filesystem、Package、签名 Remote Skill Registry、渐进加载、版本化 Prompt 引用与模板。                                                                                              |
+| Execution       | Provider-neutral Workspace、Sandbox、Command、Artifact、Store、Lease、Recovery 与 Cache 契约，以及 Local Process、Docker、Remote HTTP、SQLite、PostgreSQL、本地文件、S3-compatible Adapter。 |
+| Cache           | Exact LLM Serving Cache，以及有边界、有作用域、可失效的 Event-derived WorkCache。                                                                                                            |
+| 应用界面        | 使用同一 Framework Runtime 的 Express API Server 与示例 CLI。                                                                                                                                |
+
+## 快速开始
+
+### 环境要求
+
+- Node.js 22 或更高版本
+- npm
+- MongoDB 与 Redis（内置 API Server 需要）
+- 至少一个已配置的模型 Provider，或可访问的本地模型服务
+
+### 1. 安装工作区
+
+```bash
+git clone https://github.com/CodeSoul-co/Hypha.git
+cd Hypha
+npm ci
+cp .env.example .env
+```
+
+如果只需要临时本地环境，可以使用容器启动 MongoDB 与 Redis：
+
+```bash
+docker run -d --name hypha-mongodb -p 27017:27017 mongo:8
+docker run -d --name hypha-redis -p 6379:6379 redis:7-alpine
+```
+
+也可以通过 `MONGODB_URI` 与 `REDIS_URL` 使用自托管或托管服务。
+
+### 2. 配置身份与模型 Provider
+
+编辑 `.env`。Credential 不应写入 `config.yaml` 或提交到源码仓库。
+
+```bash
+HYPHA_OWNER_EMAIL=owner@example.com
+HYPHA_OWNER_PASSWORD=replace-with-a-private-password
+JWT_SECRET=replace-with-at-least-32-random-characters
+
+HYPHA_LLM_DEFAULT_PROVIDER=openai
+HYPHA_LLM_DEFAULT_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your-provider-key
+```
+
+默认部署为单用户模式：系统在启动时创建已配置的 Owner，注册接口保持关闭。内部数据访问仍然
+保留 user、Session、Run、Workspace 与 tenant 边界。
+
+### 3. 启动并验证 Server
+
+```bash
+npm run dev
+```
+
+在另一个终端执行：
+
+```bash
+curl -fsS http://127.0.0.1:3000/api/v1/health
+curl -fsS http://127.0.0.1:3000/api/v1/ready
+```
+
+`/health` 只表示进程存活；`/ready` 才是流量门禁。当 Storage、所选模型 Provider、Memory、
+Canonical Runtime Graph 或必要 Worker 没有就绪时，`/ready` 会失败关闭。路由文档位于
+`http://127.0.0.1:3000/api/v1/docs`。
+
+### 4. 使用 CLI
+
+```bash
+npm run cli -- login --email owner@example.com
+npm run cli -- chat "解释当前 Runtime" --stream
+npm run cli -- tools
+npm run cli -- skills
+npm run cli -- workflows
+```
+
+CLI 默认将 Endpoint 配置与 JWT 保存到 `~/.hypha`。可通过 `HYPHA_BASE_URL` 与 `HYPHA_HOME`
+连接其他 Server 或隔离不同客户端配置。
+
+## 使用 DomainPack 开发 Agent
+
+DomainPack 是框架支持的产品集成边界。产品特定的 Task、Prompt、Workflow、Rule 与 Capability
+选择应放在 DomainPack 或产品应用中，而不是写入 `@hypha/core`、`@hypha/kernel` 或通用 Runtime。
+
+### 1. 声明 Domain
+
+可以从 [`configs/domain-packs/minimal.domain.yaml`](configs/domain-packs/minimal.domain.yaml)
+开始。生产级 DomainPack 通常包含：
+
+| 声明                                     | 控制内容                                                                                |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `taskSchemas`                            | 可接受的任务类型、输入 Schema、输出契约引用与默认 Workflow。                            |
+| `outputContracts`                        | 可由程序验证的最终输出 Schema。                                                         |
+| `sessionProfiles`                        | 默认 Metadata，以及 Memory、Context、Reasoning、Tool、MCP、Skill、Policy Profile 引用。 |
+| `workflows`                              | FSM State、Transition、Guard、Retry/Timeout、人工复核与 State-scoped Capability。       |
+| `tools`, `toolProfiles`                  | 稳定 Tool Contract，以及允许绑定到可执行 Adapter 的 Profile。                           |
+| `mcpProfiles`                            | Server 引用、Capability Import Rule、Trust Policy 与版本固定策略。                      |
+| `memoryProfiles`, `contextProfiles`      | Memory 选择、读写策略、Context Source、Provenance 与 Token Budget。                     |
+| `allowedSkills`, `skillPolicies`         | Agent 可加载的 Skill，以及每个 Skill 可使用的 Tool 与 Policy。                          |
+| `allowedPromptRefs`, `defaultPromptRefs` | 必须由应用组合层解析的版本化 Prompt Template。                                          |
+| `policies`, `businessRules`              | Permission、Approval、Precondition、Postcondition 与输出约束。                          |
+| `evaluationProfiles`, `regressionCases`  | Event-derived 验收与回归定义。                                                          |
+
+Provider URL、Bearer Token、API Key 与部署 Secret 不应写入 DomainPack。DomainPack 只选择稳定的
+Profile 引用，由可信应用组合层将其解析为真实 Provider。
+
+### 2. 加载、校验与编译
+
+```ts
+import {
+  applyDomainAgentPatch,
+  compileDomainPackToHarnessedSystem,
+  DomainPackRegistry,
+  LocalDomainPackLoader,
+} from '@hypha/domain';
+
+const registry = new DomainPackRegistry();
+
+await new LocalDomainPackLoader({
+  directories: ['configs/domain-packs'],
+}).loadInto(registry);
+
+const domainPack = registry.get('domain.minimal', '0.0.0');
+if (!domainPack) throw new Error('DomainPack not found');
+
+const compiled = compileDomainPackToHarnessedSystem(domainPack, {
+  agentRef: { id: 'agent.default', version: '1.0.0' },
+  taskSchemaId: 'task.minimal',
+  workflowId: 'workflow.minimal',
+  sessionProfileId: 'session.local',
+  memoryProfileId: 'memory.local',
+});
+
+const agent = applyDomainAgentPatch(
+  {
+    id: 'agent.default',
+    version: '1.0.0',
+    name: 'Default Agent',
+    modelAlias: 'default-chat',
+  },
+  compiled.agentPatch
+);
+```
+
+编译器会验证内部引用，并输出应用组合所需的完整数据：
+
+| 编译结果                 | 集成方式                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `fsmProcess`             | 注册 Runtime 实际执行的精确 `FSMProcessSpec`。                                                 |
+| `harnessedSystem`        | 绑定 Agent、FSM、Policy、Trace、Memory、MCP、Context、Tool、Skill、Evaluation 与 Output 引用。 |
+| `agentPatch`             | 将已解析的 Prompt、Skill、Tool、Memory、Context、Reasoning 与 Policy 引用应用到 Agent。        |
+| `bindings`               | 只注册已选择的具体 Capability 与 State-level Allowlist。                                       |
+| `sessionInitialization`  | 创建 Session Metadata 与默认 Profile 引用。                                                    |
+| `dependencySnapshot`     | 持久化 Replay 和 Cache Validity 所需的完整版本化依赖闭包。                                     |
+| `processHash` 与 `audit` | 证明某个 Run 使用的编译输入与 Workflow 身份。                                                  |
+
+### 3. 显式注册编译结果
+
+DomainPack 文件不会因为存在于磁盘上就自动获得执行权限。应用启动时，可信组合层必须：
+
+1. 将 DomainPack 加载到 `DomainPackRegistry`，并编译选定的 Task、Workflow 与 Profile。
+2. 解析 Agent 的模型别名和版本化 Prompt 引用。
+3. 注册所选 Skill，并执行 Workflow State 的 `allowedSkills` 与 `requiredSkills`。
+4. 通过 Governed Tool Runner，把声明的 Tool Contract 绑定到 Local、HTTP、Plugin、Execution 或
+   MCP Adapter。
+5. 连接并审批编译结果要求的精确 MCP Capability Revision。
+6. 通过 Server Memory Runtime 配置解析所选 Memory Profile。
+7. 使用 `sessionInitialization` 创建 Session，并将 `processHash` 与 `dependencySnapshot` 和 Run
+   的 Event Evidence 一起持久化。
+8. 通过 Canonical Runtime 执行 `fsmProcess`，仅从 Event 与持久 Checkpoint 派生状态。
+
+显式激活可以防止未经审核的 YAML、Skill、Tool 或 Remote MCP Catalog 变化静默获得运行权限。
+
+### 4. 在 Workflow State 收窄 Capability
+
+DomainPack 的 Capability 声明是上限；每个 Workflow State 应继续收窄权限：
+
+```yaml
+states:
+  - id: Research
+    goal: Collect bounded evidence.
+    allowedTools: [common.search]
+    allowedSkills: [skill.context-enrichment]
+    requiredSkills: [skill.context-enrichment]
+    allowedMCPProfiles: [mcp.local]
+    permissionScopes: [search.query]
+    policyRefs: [policy.readonly]
+    timeoutPolicy:
+      timeoutMs: 30000
+      onTimeout: fail
+    retryPolicy:
+      maxAttempts: 2
+```
+
+如果必要 Skill 或 Capability 缺失、不可信、被 Policy 拒绝、已过期，或与 Run Snapshot 不一致，
+系统会在 Inference 或 Dispatch 之前失败关闭。
+
+### 5. 使用 Overlay 扩展 DomainPack
+
+通过 `extendDomainPack()` 按稳定 ID Upsert 或删除声明，并分配新版本，无需复制整个基础包：
+
+```ts
+import { extendDomainPack } from '@hypha/domain';
+
+const customized = extendDomainPack(domainPack, {
+  version: '1.1.0',
+  defaultSkills: [{ id: 'skill.context-enrichment', version: '0.0.0' }],
+  remove: { regressionCases: ['regression.obsolete'] },
+});
+```
+
+扩展结果会再次经过完整校验。因此，删除被引用的 Tool、Policy、Prompt、Skill、Memory Profile 或
+Output Contract 时，必须同步更新所有依赖引用。
+
+### 6. 将 Domain 作为产品契约测试
+
+每个受支持的 DomainPack 选择组合都应验证：
+
+- Schema 校验与未解析引用拒绝；
+- 确定性的 `processHash` 与依赖快照；
+- 合法和非法 FSM Transition、Retry、Timeout、Cancellation 与 Terminal State；
+- State-scoped Tool、MCP、Skill、Prompt、Memory 与 Policy Enforcement；
+- 人工复核的 Approve、Reject、Expiry 与 Resume Revalidation；
+- Event-derived Replay、Audit、Regression 与 Output Contract Validation；
+- Cache 开启或关闭时，Source-of-truth 行为保持一致。
+
+完整字段与示例请参见 [`DomainPack 指南`](docs/guides/domain-packs.md)和
+[`Framework API`](docs/api/framework.md)。
+
+## 配置 Memory
+
+内置 Server 读取 [`configs/memory-profiles.yaml`](configs/memory-profiles.yaml)。可以修改其中的
+Active Profile，或通过 `HYPHA_MEMORY_CONFIG_PATH` 指向另一份经过校验的 Profile Set。
+
+| Profile              | 适用拓扑                    | 部署配置                                                                             |
+| -------------------- | --------------------------- | ------------------------------------------------------------------------------------ |
+| `native-lite`        | Embedded、单进程            | 本地 SQLite Record、进程内 Working State、本地 Vector 与 Embedding Adapter。         |
+| `native-default`     | 持久化 Hypha Native Runtime | MongoDB Record/History/Outbox Evidence 与 Redis Working State。                      |
+| `mem0-oss`           | 自托管 Mem0                 | `HYPHA_MEM0_OSS_URL`、可选 API Key，以及 Hypha 自有持久 Mapping/Operation Evidence。 |
+| `mem0-platform`      | 托管 Mem0                   | `HYPHA_MEM0_PLATFORM_TOKEN` 与 Hypha 自有持久 Mapping/Operation Evidence。           |
+| `memorybank-managed` | Vertex AI Memory Bank       | Project、Location、Reasoning Engine 与短期 Google Authorization 配置。               |
+
+Profile 不会把 Credential 写入 DomainPack 或 Memory Spec。Provider 调用保持 Scope 隔离、可审计、
+幂等、Revision-aware，并在重放不确定写入之前完成对账。参见
+[`Memory Provider Profile`](docs/guides/memory-provider-profiles.md)与
+[`外部 Memory Runtime`](docs/guides/memory-external-provider-runtime.md)。
+
+## 配置 Tool、MCP、Skill 与 Prompt
+
+- Tool Definition 与可信 Adapter Binding 位于 `config.yaml`、`configs/tools.yaml` 和应用组合层。
+- Local MCP 使用 Command 与 Args；Remote MCP 使用 Endpoint 与 Secret Reference。新发现的
+  Capability Revision 必须满足 Trust 与 Approval Policy。
+- Skill 可以来自 Built-in、`~/.hypha/skills`、Package Registry 或显式启用的签名 Remote Registry。
+  必要 Skill 不可用时，Startup 或 Context Construction 会失败。
+- Prompt Template 位于 `apps/server/src/prompts`。DomainPack 引用版本化 Prompt ID，不把部署相关
+  Prompt 加载逻辑写入 Core。
+
+Server 内置受治理的 `utility.json`、`utility.text`、`utility.hash`、Filesystem、Search 与真实 Local
+stdio MCP 路径。配置和调用契约参见 [`Tool Adapter`](docs/guides/tool-adapters.md)、
+[`Tool/MCP 安全`](docs/guides/tool-mcp-security.md)和 [`HTTP API`](docs/api/http.md)。
+
+## Runtime、Execution 与恢复
+
+Express Server 在启动时组合 Canonical Event Authority 与持久执行图。Session-command、ReAct
+Continuation、Timer、Recovery 与 Reconciliation Worker 会在 Readiness 前执行初始扫描；关闭时则
+在 Provider 仍可用时完成 Worker Drain。
+
+长程任务以有界 Quantum 推进。下一轮从 Event、Checkpoint、Artifact、Capability Snapshot 与
+Provider Receipt 重建。Recovery 使用显式的有界 Retry、Reconciliation、Fallback、Degradation、
+Compensation、Human Review、Quarantine、Cancellation 与 Failure State；重复进入 Loop 本身不被视为
+有效进展。
+
+Execution Provider 必须显式注册。框架提供 Local Process、Docker、Remote Sandbox HTTP、
+PostgreSQL Execution Record 与 S3-compatible Artifact Adapter；部署只应激活其明确授信且能够完成
+真实验证的 Provider。参见 [`Execution 架构`](docs/architecture/execution.md)与
+[`Runtime 模型`](docs/reference/runtime-model.md)。
+
+## Cache 模型
+
+- **Serving Cache**：复用 Exact、Normalized 的模型响应。通过 `HYPHA_SERVING_CACHE=memory`、
+  `sqlite` 或 `redis` 开启。
+- **WorkCache**：保存从 Event 派生的有界投影。可设置 `HYPHA_WORKCACHE=off`、`memory`、`sqlite`
+  或 `redis`。
+- **Tool Result Cache**：仅对符合要求的 `none`/`read` 调用启用；读取还必须携带稳定的外部状态证据。
+
+所有 Cache 都是可丢弃的 View。Cache Miss 或故障可以 Bypass；Cache Hit 不能授权副作用、跳过
+Policy、伪造 Receipt 或推进 FSM。
+
+## HTTP API
+
+默认 API Prefix 为 `/api/v1`。受保护的 Route 使用
+`Authorization: Bearer <jwt>`。主要接口包括：
+
+- `/chat` 与 `/chat/stream`：Agent 交互；
+- `/runtime/runs/:runId` 及其 `/events`、`/replay`、`/audit`、`/regression` 投影；
+- `/tools`、`/tool-invocations`、`/tool-approvals` 与 `/mcp`：受治理 Capability；
+- `/memory` 与 `/memory-admin`：具备 Scope 的 Memory 操作；
+- `/skills`、`/workflows`、`/models`、`/usage`、`/status` 与 `/docs`。
+
+请求与响应契约参见 [`docs/api/http.md`](docs/api/http.md)。
+
+## 生产部署
+
+接入生产流量之前：
+
+1. 设置 `NODE_ENV=production`，替换 Owner 与 JWT Secret，并使用专用 `.env` 或 Secret Manager。
+2. 配置持久 MongoDB 与 Redis Endpoint、TLS、Authentication、Backup 与 Retention。
+3. 配置至少一个健康的模型 Provider 和稳定 Model Alias。
+4. 限制 Filesystem Root；非必要时关闭 Process Execution；使用 Container 或 Remote Sandbox 隔离
+   不可信代码。
+5. 固定并审批 MCP Capability、Skill Artifact、DomainPack Version、Prompt 与 Provider Revision。
+6. 持久化 `data/`，或使用经过目标环境验收的 Provider 替换 Local Adapter。
+7. 仅在 `/api/v1/ready` 成功后接入流量。
+8. 在目标环境执行 Release 与真实 Provider Acceptance Suite，所有必要用例必须 0 skipped。
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+npm test
+npm run test:release
+```
+
+当必要的真实 Memory 或 Execution Service、Credential 不可用时，`npm run test:release` 会主动失败。
+
+完成构建后，可以使用生产环境启动编译后的 Server：
+
+```bash
+npm run build
+NODE_ENV=production npm start
+```
+
+## Workspace Package
+
+| Package                                       | 职责                                                                                   |
+| --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `@hypha/core`                                 | 公共 Spec、Schema、Event、Policy、Runtime、Artifact、Workspace 与 Execution Contract。 |
+| `@hypha/fsm`                                  | FSM Spec、Snapshot、Transition、Guard 与 Recovery Semantics。                          |
+| `@hypha/kernel`                               | 受治理的 ReAct 与 FSM Coordination。                                                   |
+| `@hypha/harness`                              | 有界执行、Tracing、Recovery、Continuation 与 Side-effect Hook。                        |
+| `@hypha/domain`                               | DomainPack Loading、Validation、Overlay、Registry 与 Compilation。                     |
+| `@hypha/memory`                               | Memory Profile、Provider Adapter、Context Assembly、Migration 与 Governance。          |
+| `@hypha/tools`、`@hypha/mcp`、`@hypha/skills` | Capability Contract、Registry、Execution、Trust 与 Progressive Loading。               |
+| `@hypha/inference`、`@hypha/models`           | Model Alias、Routing、Inference Backend、Prompt Compilation 与 Normalized Response。   |
+| `@hypha/storage`、`@hypha/adapters-local`     | Storage Contract 与本地/自托管 Provider Adapter。                                      |
+| `@hypha/serving-cache`、`@hypha/workcache`    | Exact Model Response Cache 与 Event-derived Runtime Cache。                            |
+| `@hypha/testing`                              | Contract Fixture 与测试支持。                                                          |
+
+## 文档
+
+- [文档索引](docs/README.md)
+- [系统架构](docs/reference/architecture.md)
+- [Framework API](docs/api/framework.md)
+- [HTTP API](docs/api/http.md)
+- [DomainPack](docs/guides/domain-packs.md)
+- [本地开发](docs/guides/local-development.md)
+- [Memory](docs/architecture/memory.md)
+- [Tool 与 MCP](docs/architecture/tool-mcp.md)
+- [Execution](docs/architecture/execution.md)
+- [FSM Recovery](docs/architecture/fsm-recovery.md)
+
+## License
 
 MIT

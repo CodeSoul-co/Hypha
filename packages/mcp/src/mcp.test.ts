@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
 import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@hypha/core';
-import { GovernedToolRunner, ToolRegistry } from '@hypha/tools';
+import {
+  GovernedToolRunner,
+  ToolRegistry,
+  hashToolContract,
+  toolContractSnapshotExample,
+} from '@hypha/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -10,17 +15,23 @@ import {
   MCPCapabilityCatalog,
   MCPSchemaCache,
   MCPConnectionManager,
+  NORMALIZED_MCP_ERROR_CODES,
   SDKMCPConnectionSessionFactory,
   MockMCPGateway,
   classicMCPIntegrationSpec,
   createClassicMCPMockGateway,
   governedMCPIntegrationDefinition,
   governedMCPIntegrationJsonSchemas,
+  mcpCapabilityRecordExample,
   mcpCapabilityRecordDefinition,
   mcpConnectionRecordDefinition,
   mcpIntegrationSpecDefinition,
   mcpSpecJsonSchemas,
+  normalizeMCPToolOutput,
   normalizeMCPToolSpec,
+  normalizedMCPErrorSchema,
+  RedisMCPCapabilityCatalogStore,
+  RedisToolContractSnapshotStore,
   registerMCPGatewayTools,
   validateMCPIntegrationSpec,
   type MCPConnectionSession,
@@ -30,6 +41,170 @@ import {
 } from './index';
 
 describe('@hypha/mcp normalization', () => {
+  it('unwraps structured Tool output without misclassifying domain objects', () => {
+    expect(
+      normalizeMCPToolOutput({
+        content: [{ type: 'text', text: '{"value":"hypha"}' }],
+        structuredContent: { value: 'hypha' },
+      })
+    ).toEqual({ value: 'hypha' });
+    const domainValue = { structuredContent: { value: 'domain-field' } };
+    expect(normalizeMCPToolOutput(domainValue)).toBe(domainValue);
+  });
+
+  it('persists an explicit side-effect approval and rejects unsafe downgrades', async () => {
+    const capabilities: MCPCapabilityDescriptor[] = [
+      {
+        id: 'side-effect-review',
+        version: '1.0.0',
+        serverId: 'review-server',
+        capabilityId: 'lookup',
+        type: 'tool',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        trustLevel: 'untrusted',
+        declarationSource: 'server',
+      },
+    ];
+    const catalog = new MCPCapabilityCatalog({
+      integration: {
+        id: 'side-effect-review',
+        version: '1.0.0',
+        servers: [{ id: 'review-server', mode: 'local' }],
+      },
+      gateway: new MockMCPGateway(capabilities),
+      trustPolicy: {
+        defaultTrustLevel: 'restricted',
+        requireApprovalForNewCapability: true,
+        requireApprovalForSchemaChange: true,
+      },
+      driftPolicy: {
+        onDescriptionChange: 'snapshot_next_run',
+        onSchemaChange: 'require_approval',
+        onRemoval: 'allow_existing_run',
+        onServerIdentityChange: 'quarantine',
+      },
+    });
+    const discovered = (await catalog.refresh('review-server')).capabilities[0];
+    await catalog.approveRevision({
+      serverId: 'review-server',
+      capabilityId: 'lookup',
+      capabilityHash: discovered.capabilityHash,
+      approvedBy: 'admin.review',
+      sideEffectLevel: 'read',
+    });
+    await expect(catalog.refresh('review-server')).resolves.toMatchObject({
+      capabilities: [
+        expect.objectContaining({
+          driftState: 'approved',
+          normalizedToolSpec: expect.objectContaining({ sideEffectLevel: 'read' }),
+          metadata: expect.objectContaining({ approvedSideEffectLevel: 'read' }),
+        }),
+      ],
+    });
+
+    capabilities[0].sideEffectLevel = 'write';
+    const changed = (await catalog.refresh('review-server')).capabilities[0];
+    await expect(
+      catalog.approveRevision({
+        serverId: 'review-server',
+        capabilityId: 'lookup',
+        capabilityHash: changed.capabilityHash,
+        approvedBy: 'admin.review',
+        sideEffectLevel: 'read',
+      })
+    ).rejects.toMatchObject({ code: 'MCP_SIDE_EFFECT_OVERRIDE_UNSAFE' });
+  });
+
+  it('keeps NormalizedMCPError TypeScript, Zod, and JSON Schema in parity', () => {
+    const jsonSchema = governedMCPIntegrationJsonSchemas.NormalizedMCPError;
+    expect(jsonSchema.required).toEqual(['code', 'message', 'retryable']);
+    expect(jsonSchema.additionalProperties).toBe(false);
+    expect((jsonSchema.properties?.code as { enum?: unknown[] }).enum).toEqual([
+      ...NORMALIZED_MCP_ERROR_CODES,
+    ]);
+    for (const code of NORMALIZED_MCP_ERROR_CODES) {
+      expect(
+        normalizedMCPErrorSchema.parse({ code, message: `fixture:${code}`, retryable: false })
+      ).toMatchObject({ code });
+    }
+    expect(() =>
+      normalizedMCPErrorSchema.parse({
+        code: 'MCP_INTERNAL_ERROR',
+        message: 'unexpected field',
+        retryable: false,
+        unexpected: true,
+      })
+    ).toThrow();
+  });
+  it('persists catalog records and contract snapshots in a shared Redis-compatible store', async () => {
+    const strings = new Map<string, string>();
+    const sets = new Map<string, Set<string>>();
+    const redis = {
+      async get(key: string) {
+        return strings.get(key) ?? null;
+      },
+      async set(key: string, value: string) {
+        strings.set(key, value);
+        return 'OK';
+      },
+      async sadd(key: string, ...members: string[]) {
+        const values = sets.get(key) ?? new Set<string>();
+        const size = values.size;
+        members.forEach((member) => values.add(member));
+        sets.set(key, values);
+        return values.size - size;
+      },
+      async smembers(key: string) {
+        return Array.from(sets.get(key) ?? []);
+      },
+    };
+    const catalog = new RedisMCPCapabilityCatalogStore(redis, 'test:catalog');
+    await catalog.save(mcpCapabilityRecordExample);
+    await expect(catalog.list(mcpCapabilityRecordExample.serverId)).resolves.toEqual([
+      mcpCapabilityRecordExample,
+    ]);
+
+    const snapshots = new RedisToolContractSnapshotStore(redis, 'test:snapshots');
+    await snapshots.save(toolContractSnapshotExample);
+    await expect(snapshots.get(toolContractSnapshotExample.id)).resolves.toEqual(
+      toolContractSnapshotExample
+    );
+  });
+
+  it('bounds the MCP schema cache with least-recently-used eviction', () => {
+    const schemaCache = new MCPSchemaCache({
+      maxEntries: 2,
+      now: () => '2026-07-21T00:00:00.000Z',
+    });
+    for (let index = 0; index < 3; index += 1) {
+      schemaCache.set({
+        ...mcpCapabilityRecordExample,
+        id: `record-${index}`,
+        remoteName: `capability-${index}`,
+        capabilityHash: `sha256:capability-${index}`,
+      });
+    }
+
+    expect(schemaCache.size()).toBe(2);
+    expect(
+      schemaCache.get({
+        serverId: mcpCapabilityRecordExample.serverId,
+        capabilityId: 'capability-0',
+        capabilityHash: 'sha256:capability-0',
+        protocolVersion: mcpCapabilityRecordExample.protocolVersion,
+      })
+    ).toBeNull();
+    expect(
+      schemaCache.get({
+        serverId: mcpCapabilityRecordExample.serverId,
+        capabilityId: 'capability-2',
+        capabilityHash: 'sha256:capability-2',
+        protocolVersion: mcpCapabilityRecordExample.protocolVersion,
+      })
+    ).not.toBeNull();
+  });
+
   it('filters and normalizes MCP capabilities before tool use', async () => {
     const gateway = new MockMCPGateway([
       {
@@ -174,6 +349,12 @@ describe('@hypha/mcp normalization', () => {
       capabilityHash: initial.capabilityHash,
       approvedBy: 'admin-1',
     });
+    const unchanged = await catalog.refresh('catalog-fixture', 'unchanged-after-approval');
+    expect(unchanged.capabilities[0]).toMatchObject({
+      capabilityHash: initial.capabilityHash,
+      driftState: 'approved',
+      approvedAt: expect.any(String),
+    });
 
     const registry = new ToolRegistry();
     await catalog.importTools(registry, [
@@ -233,6 +414,181 @@ describe('@hypha/mcp normalization', () => {
     );
     expect(telemetry.sum('mcp_capability_drift_total')).toBeGreaterThanOrEqual(2);
     expect(telemetry.sum('mcp_capability_quarantined_total')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('fails closed unless import, snapshot, and invocation use the same live approved revision', async () => {
+    let now = '2026-07-22T00:00:00.000Z';
+    const gateway = new MockMCPGateway([
+      {
+        id: 'strict-search',
+        version: '1.0.0',
+        serverId: 'strict-server',
+        capabilityId: 'search',
+        type: 'tool',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        sideEffectLevel: 'read',
+        permissionScope: ['search.read'],
+        trustLevel: 'reviewed',
+        declarationSource: 'server',
+        protocolVersion: '2025-11-25',
+        serverIdentity: { name: 'strict-server', version: '1.0.0' },
+      },
+    ]);
+    gateway.registerToolHandler('strict-server', 'search', ({ input }) => ({ input }));
+    const catalog = new MCPCapabilityCatalog({
+      integration: {
+        id: 'strict-integration',
+        version: '1.0.0',
+        servers: [{ id: 'strict-server', mode: 'local' }],
+      },
+      gateway,
+      trustPolicy: {
+        defaultTrustLevel: 'restricted',
+        requireApprovalForNewCapability: true,
+        requireApprovalForSchemaChange: true,
+      },
+      driftPolicy: {
+        onDescriptionChange: 'snapshot_next_run',
+        onSchemaChange: 'require_approval',
+        onRemoval: 'allow_existing_run',
+        onServerIdentityChange: 'quarantine',
+      },
+      now: () => now,
+    });
+    const discovered = await catalog.refresh('strict-server');
+    const capability = discovered.capabilities[0];
+    const ref = {
+      serverId: 'strict-server',
+      capabilityId: 'search',
+      capabilityHash: capability.capabilityHash,
+    };
+    const registry = new ToolRegistry();
+
+    await expect(catalog.importTools(registry, [ref])).rejects.toMatchObject({
+      code: 'MCP_CAPABILITY_NOT_APPROVED',
+    });
+    await expect(
+      catalog.importTools(registry, [{ serverId: 'strict-server', capabilityId: 'search' }])
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_HASH_REQUIRED' });
+    await expect(
+      catalog.approveRevision({
+        ...ref,
+        approvedBy: 'admin.strict',
+        expiresAt: '2026-07-21T00:00:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'MCP_APPROVAL_EXPIRED' });
+
+    await catalog.approveRevision({
+      ...ref,
+      approvedBy: 'admin.strict',
+      expiresAt: '2026-07-23T00:00:00.000Z',
+    });
+    await catalog.importTools(registry, [ref]);
+    const adapter = registry.getAdapter('mcp.strict-server.search')!;
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'hypha' },
+        context: {
+          runId: 'run.strict',
+          stepId: 'search',
+          invocationId: 'invocation.no-snapshot',
+        },
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SNAPSHOT_MISMATCH' });
+
+    const snapshot = await catalog.snapshot('run.strict', [ref]);
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'hypha' },
+        context: {
+          runId: 'run.strict',
+          stepId: 'search',
+          invocationId: 'invocation.approved',
+          contractSnapshotRef: snapshot.id,
+        },
+      })
+    ).resolves.toMatchObject({ output: { input: { query: 'hypha' } } });
+
+    const capabilityBody = {
+      runId: 'run.strict',
+      agentId: 'agent.strict',
+      principalId: 'user.strict',
+      createdAt: now,
+      skillRevisions: [],
+      allowedToolIds: ['mcp.strict-server.search'],
+      allowedMCPServerIds: [],
+      memoryAccess: 'none' as const,
+      allowedExecutionProfiles: [],
+      maximumSideEffectLevel: 'read' as const,
+      requiresHumanReview: false,
+      policyRefs: ['strict.policy'],
+    };
+    snapshot.effectiveCapabilities = {
+      id: 'agent-capability:run.strict:agent.strict',
+      ...capabilityBody,
+      snapshotHash: hashToolContract(capabilityBody),
+    };
+    await catalog.snapshotStore.save(snapshot);
+    const capabilityContext = {
+      runId: 'run.strict',
+      stepId: 'search',
+      contractSnapshotRef: snapshot.id,
+      capabilitySnapshotRef: snapshot.id,
+      agentId: 'agent.strict',
+      principal: {
+        id: 'user.strict',
+        principalId: 'user.strict',
+        type: 'user' as const,
+        agentId: 'agent.strict',
+        permissionScopes: ['search.read'],
+      },
+    };
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'blocked' },
+        context: capabilityContext,
+      })
+    ).rejects.toMatchObject({ code: 'MCP_CAPABILITY_SCOPE_DENIED' });
+
+    snapshot.effectiveCapabilities = {
+      ...snapshot.effectiveCapabilities,
+      allowedMCPServerIds: ['strict-server'],
+    };
+    await catalog.snapshotStore.save(snapshot);
+    expect((await catalog.snapshotStore.get(snapshot.id))?.effectiveCapabilities).toMatchObject({
+      allowedMCPServerIds: ['strict-server'],
+    });
+    expect(registry.getSpec('mcp.strict-server.search')?.sourceRef).toMatchObject({
+      mcpServerId: 'strict-server',
+    });
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'allowed' },
+        context: capabilityContext,
+      })
+    ).resolves.toMatchObject({ output: { input: { query: 'allowed' } } });
+
+    gateway.registerToolHandler('strict-server', 'search', ({ input }) => {
+      now = '2026-07-24T00:00:00.000Z';
+      return { input };
+    });
+    await expect(
+      adapter.execute({
+        toolId: 'mcp.strict-server.search',
+        input: { query: 'expired-during-call' },
+        context: capabilityContext,
+      })
+    ).rejects.toMatchObject({ code: 'MCP_APPROVAL_EXPIRED' });
+
+    now = '2026-07-24T00:00:00.000Z';
+    await expect(catalog.snapshot('run.expired', [ref])).rejects.toMatchObject({
+      code: 'MCP_APPROVAL_EXPIRED',
+    });
   });
 
   it('registers discovered MCP tools into the governed ToolRunner path', async () => {
@@ -532,6 +888,338 @@ describe('@hypha/mcp normalization', () => {
     expect(createCount).toBe(2);
   });
 
+  it('bounds reconnect supervision by jittered backoff and elapsed-time budget', async () => {
+    let createCount = 0;
+    let elapsedMs = 0;
+    const sleeps: number[] = [];
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        createCount += 1;
+        return {
+          async connect() {
+            throw new Error('transport unavailable');
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      monotonicNow: () => elapsedMs,
+      random: () => 1,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        elapsedMs += ms;
+      },
+    });
+    manager.register({
+      id: 'bounded-reconnect',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      reconnectPolicy: {
+        maxAttempts: 5,
+        backoffMs: 100,
+        maxBackoffMs: 200,
+        jitterRatio: 0.25,
+        maxElapsedMs: 300,
+      },
+    });
+
+    await expect(manager.reconnect('bounded-reconnect')).rejects.toMatchObject({
+      code: 'MCP_CONNECTION_FAILED',
+    });
+    expect(createCount).toBe(2);
+    expect(sleeps).toEqual([125]);
+    await expect(manager.get('bounded-reconnect')).resolves.toMatchObject({
+      state: 'failed',
+      reconnectAttempts: 2,
+    });
+  });
+
+  it('rejects an oversized Tool frame before it can enter governed observations', async () => {
+    const manager = new MCPConnectionManager({
+      sessionFactory: {
+        create() {
+          return {
+            async connect() {
+              return { negotiatedProtocolVersion: '2025-11-25' };
+            },
+            async listCapabilities() {
+              return [];
+            },
+            async callTool() {
+              return { content: 'x'.repeat(2_048) };
+            },
+            async ping() {},
+            async close() {},
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'bounded-frame',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: { maxToolResultBytes: 512 },
+    });
+
+    await expect(
+      manager.call({
+        serverId: 'bounded-frame',
+        capabilityId: 'oversized',
+        input: {},
+        context: {
+          runId: 'run.frame',
+          stepId: 'step.frame',
+          invocationId: 'invocation.frame',
+        },
+      })
+    ).rejects.toMatchObject({
+      code: 'MCP_CONTENT_TOO_LARGE',
+      retryable: false,
+    });
+    await expect(manager.get('bounded-frame')).resolves.toMatchObject({
+      activeRequestCount: 0,
+    });
+  });
+
+  it('rejects Resource and Prompt results cancelled or expired while awaiting the server', async () => {
+    let now = '2026-07-23T00:00:00.000Z';
+    let resolveResource:
+      | ((value: { contents: Array<{ uri: string; text: string }> }) => void)
+      | undefined;
+    let resolvePrompt:
+      | ((value: { messages: Array<{ role: string; content: string }> }) => void)
+      | undefined;
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return {};
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          readResource: async () =>
+            new Promise((resolve) => {
+              resolveResource = resolve;
+            }),
+          getPrompt: async () =>
+            new Promise((resolve) => {
+              resolvePrompt = resolve;
+            }),
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      now: () => now,
+    });
+    manager.register({
+      id: 'post-await-guards',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+    });
+    await manager.connect('post-await-guards');
+
+    const resource = manager.readResource({
+      serverId: 'post-await-guards',
+      uri: 'fixture://slow',
+      context: {
+        invocationId: 'resource-slow',
+        deadlineAt: '2026-07-23T00:01:00.000Z',
+      },
+    });
+    for (let attempt = 0; attempt < 20 && !resolveResource; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(resolveResource).toBeTypeOf('function');
+    await manager.cancelRequest('post-await-guards:resource-slow');
+    resolveResource?.({ contents: [{ uri: 'fixture://slow', text: 'late' }] });
+    await expect(resource).rejects.toMatchObject({ code: 'MCP_REQUEST_CANCELLED' });
+
+    const prompt = manager.getPrompt({
+      serverId: 'post-await-guards',
+      name: 'slow-prompt',
+      context: {
+        invocationId: 'prompt-slow',
+        deadlineAt: '2026-07-23T00:01:00.000Z',
+      },
+    });
+    for (let attempt = 0; attempt < 20 && !resolvePrompt; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(resolvePrompt).toBeTypeOf('function');
+    now = '2026-07-23T00:02:00.000Z';
+    resolvePrompt?.({ messages: [{ role: 'user', content: 'late' }] });
+    await expect(prompt).rejects.toMatchObject({ code: 'MCP_REQUEST_TIMEOUT' });
+  });
+
+  it('marks remote Resource and Prompt content untrusted and externalizes oversized payloads', async () => {
+    const artifactWrites: Array<{
+      kind: 'resource' | 'prompt';
+      contentHash: string;
+      bytes: Uint8Array;
+    }> = [];
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return {
+              negotiatedProtocolVersion: '2025-11-25',
+              serverInfo: { name: 'remote-content', version: '2.0.0' },
+            };
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            return {};
+          },
+          async readResource(uri) {
+            return {
+              contents: [{ uri, text: uri.endsWith('/large') ? 'sensitive'.repeat(64) : 'safe' }],
+            };
+          },
+          async getPrompt(name) {
+            return {
+              messages: [
+                {
+                  role: 'user',
+                  content: name === 'large' ? 'private'.repeat(64) : 'hello',
+                },
+              ],
+            };
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({
+      sessionFactory: factory,
+      contentArtifacts: {
+        async store(input) {
+          artifactWrites.push({
+            kind: input.kind,
+            contentHash: input.contentHash,
+            bytes: input.bytes,
+          });
+          return {
+            artifactRef: `artifact://${input.serverId}/${input.kind}`,
+            contentHash: input.contentHash,
+            sizeBytes: input.bytes.byteLength,
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'remote-content',
+      mode: 'remote',
+      version: '2.0.0',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: {
+        maxResourceBytes: 160,
+        maxPromptBytes: 160,
+        maxPromptTokens: 40,
+        oversizeAction: 'artifact',
+      },
+    });
+    await manager.connect('remote-content');
+
+    const inline = await manager.readResource({
+      serverId: 'remote-content',
+      uri: 'fixture://document/small',
+    });
+    expect(inline.metadata).toMatchObject({
+      trust: 'untrusted',
+      provenance: {
+        source: 'mcp',
+        serverId: 'remote-content',
+        kind: 'resource',
+      },
+    });
+    expect(inline.metadata?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+
+    const resource = await manager.readResource({
+      serverId: 'remote-content',
+      uri: 'fixture://document/large',
+    });
+    expect(resource.metadata).toMatchObject({
+      externalized: true,
+      artifactRef: 'artifact://remote-content/resource',
+      trust: 'untrusted',
+    });
+    expect(JSON.stringify(resource)).not.toContain('sensitive');
+
+    const prompt = await manager.getPrompt({
+      serverId: 'remote-content',
+      name: 'large',
+    });
+    expect(prompt.metadata).toMatchObject({
+      externalized: true,
+      artifactRef: 'artifact://remote-content/prompt',
+      trust: 'untrusted',
+    });
+    expect(JSON.stringify(prompt)).not.toContain('private');
+    expect(artifactWrites).toHaveLength(2);
+    expect(artifactWrites.every((write) => write.contentHash.length === 64)).toBe(true);
+  });
+
+  it('rejects oversized MCP content when artifact externalization is not enabled', async () => {
+    const manager = new MCPConnectionManager({
+      sessionFactory: {
+        create() {
+          return {
+            async connect() {
+              return {};
+            },
+            async listCapabilities() {
+              return [];
+            },
+            async callTool() {
+              return {};
+            },
+            async readResource(uri) {
+              return { contents: [{ uri, text: 'oversized-content' }] };
+            },
+            async ping() {},
+            async close() {},
+          };
+        },
+      },
+    });
+    manager.register({
+      id: 'reject-content',
+      mode: 'remote',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      contentPolicy: { maxResourceBytes: 8, oversizeAction: 'reject' },
+    });
+    await manager.connect('reject-content');
+
+    await expect(
+      manager.readResource({
+        serverId: 'reject-content',
+        uri: 'fixture://document/large',
+      })
+    ).rejects.toMatchObject({
+      code: 'MCP_CONTENT_TOO_LARGE',
+      retryable: false,
+    });
+  });
+
   it('connects to and cleans up a real stdio MCP server through the stable SDK adapter', async () => {
     const manager = new MCPConnectionManager({
       sessionFactory: new SDKMCPConnectionSessionFactory(),
@@ -722,6 +1410,12 @@ describe('@hypha/mcp normalization', () => {
       initializationTimeoutMs: 10_000,
       requestTimeoutMs: 5000,
       shutdownTimeoutMs: 5000,
+      egressPolicy: {
+        requireTls: false,
+        denyPrivateNetworks: false,
+        allowedHosts: ['127.0.0.1'],
+        maxRedirects: 0,
+      },
     });
 
     try {
@@ -988,5 +1682,60 @@ describe('@hypha/mcp normalization', () => {
       ])
     );
     expect(events.filter((event) => event.type === 'mcp.call.completed')).toHaveLength(5);
+  });
+
+  it('enforces per-server bulkhead, rate limit, and circuit breaker policies', async () => {
+    let release: (() => void) | undefined;
+    let shouldFail = false;
+    const factory: MCPConnectionSessionFactory = {
+      create() {
+        return {
+          async connect() {
+            return { serverCapabilities: { tools: {} } };
+          },
+          async listCapabilities() {
+            return [];
+          },
+          async callTool() {
+            if (shouldFail) throw new Error('provider failed');
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return { ok: true };
+          },
+          async ping() {},
+          async close() {},
+        };
+      },
+    };
+    const manager = new MCPConnectionManager({ sessionFactory: factory });
+    manager.register({
+      id: 'guarded',
+      mode: 'fixture',
+      transport: { type: 'custom', adapterRef: 'fixture' },
+      requestGuardPolicy: {
+        maxConcurrentRequests: 1,
+        rateLimit: { maxRequests: 2, windowMs: 60_000 },
+        circuitBreaker: { failureThreshold: 1, resetAfterMs: 60_000 },
+      },
+    });
+    const request = (invocationId: string) =>
+      manager.call({
+        serverId: 'guarded',
+        capabilityId: 'echo',
+        input: {},
+        context: { runId: 'run-guard', stepId: 'call', invocationId },
+      });
+
+    const first = request('first');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(request('bulkhead')).rejects.toMatchObject({ code: 'MCP_BULKHEAD_REJECTED' });
+    release?.();
+    await expect(first).resolves.toEqual({ ok: true });
+
+    shouldFail = true;
+    await expect(request('failure')).rejects.toMatchObject({ code: 'MCP_CONNECTION_FAILED' });
+    await expect(request('circuit')).rejects.toMatchObject({ code: 'MCP_CIRCUIT_OPEN' });
+    await manager.closeAll();
   });
 });

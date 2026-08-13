@@ -12,24 +12,24 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 ## Package Boundary Summary
 
-| Package                 | Public Surface                                                                                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                     |
-| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                       |
-| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                   |
-| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers. |
-| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                      |
-| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                  |
-| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                  |
-| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                       |
-| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                    |
-| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.   |
-| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                |
-| `@hypha/memory`         | `MemoryProvider`, `MemoryManager`, scopes, records, hybrid memory.                                                                                 |
-| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                 |
-| `@hypha/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.           |
-| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                            |
-| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                        |
+| Package                 | Public Surface                                                                                                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@hypha/core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                                                                        |
+| `@hypha/storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                                                                          |
+| `@hypha/domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                                                                      |
+| `@hypha/fsm`            | `FSMProcessSpec`, `FSMSnapshot`, `FSMRuntime`, guarded transitions, validated resume, anomaly classification, recovery policy and circuit helpers.                                                    |
+| `@hypha/kernel`         | `ReActAgentSpec`, `ReActRunner`, `ReActAgentRunner`, context builder and verifier interfaces.                                                                                                         |
+| `@hypha/inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                                                                     |
+| `@hypha/models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                                                                     |
+| `@hypha/serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                                                                          |
+| `@hypha/workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                                                                       |
+| `@hypha/tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.                                                      |
+| `@hypha/mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                                                                   |
+| `@hypha/memory`         | Versioned Memory profiles, managed operations, scoped records/history, atomic persistence and index outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. |
+| `@hypha/skills`         | `SkillSpec`, local skill loading, selection, context loading, activation policy, and skill policy.                                                                                                    |
+| `@hypha/harness`        | Event-first runtime views, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression projections.                                                              |
+| `@hypha/adapters-local` | SQLite/JSON/file/vector local adapters.                                                                                                                                                               |
+| `@hypha/testing`        | Deterministic evaluators, output contract validation, replay fixtures, trace diffs, and regression runners.                                                                                           |
 
 Harness is a system-level architecture concept, not a reason to collapse every runtime primitive into one package. Keep FSM semantics independent, keep app surfaces outside packages, and use harness APIs for event-derived runtime views and governance evidence.
 
@@ -37,7 +37,7 @@ Harness is a system-level architecture concept, not a reason to collapse every r
 
 Framework specs expose a common validation surface: `*SpecSchema` for Zod validation, `*SpecJsonSchema` for external tooling, `*SpecDefinition` for bundled schema/example metadata, `*SpecExample` for fixtures, and `validate*Spec(input)` for typed parsing.
 
-Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
+Schema exports are available for `HarnessedAgentSystemSpec`, `PolicySpec`, `OutputContractSpec`, `ContextSpec`, `TraceSpec`, `EvaluationSpec`, `ReplaySpec`, `RegressionSpec`, `DeploymentSpec`, `StorageProviderProfile`, `StorageTopologySpec`, `ReActAgentSpec`, `ModelProviderSpec`, `ModelAliasSpec`, `ModelRoutingSpec`, `ToolSpec`, `MemorySpec`, `FSMProcessSpec`, `SkillSpec`, `MCPIntegrationSpec`, `WorkflowSpec`, `DomainPackSpec`, `WorkspaceSpec`, and `ExecutionEnvironmentSpec`. Core also exports validators and JSON Schemas for Workspace operations and snapshots, Sandbox lifecycle/provider capabilities, Command execution, Execution Activity, Tool binding and risk evidence, authorization dispatch, output collection, Execution Store/lease/recovery, lifecycle Events, and cache fingerprints.
 
 `createPolicySpecEngine(policy)` creates a basic `PolicyEngine` from `PolicySpec`. Rules are evaluated in order and can match `sideEffectLevels`, `scopes`, and simple expressions `true` or `default`. Effects map to allow, deny, or human-review-required decisions; unmatched rules use `defaultEffect`.
 
@@ -163,6 +163,51 @@ handoff. `RuntimeMessage` fields include `id`, `type`, `userId`, `sessionId`,
 `message.delivered`, `message.retrying`, `message.acknowledged`, `message.failed`, and
 `message.dead_lettered`. Constructor options bound delivery attempts and retry delay/multiplier;
 `fail({ retry: true })` requeues only inside that budget.
+
+Durable runtime orchestration contracts are exported from `@hypha/core`:
+
+| API                                                     | Contract                                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `DurableEventStore`, `DurableEventRuntime`              | Expected-revision event append, idempotent batches, schema validation/upcasting, scoped reads, and checksum-verified import/export. |
+| `ProjectionEngine`                                      | Deterministic state reduction from ordered event streams with projection revisions.                                                 |
+| `SessionQueue`                                          | User/session-scoped command enqueue, claim/release, complete, fail, retry, and dead-letter behavior.                                |
+| `RuntimeMessageInboxStore`, `RuntimeMessageOutboxStore` | Idempotent inbound handling and durable outbound delivery boundaries.                                                               |
+| `RunLeaseStore`, `StateExecutionClaimStore`             | Lease epoch, fencing token, revision guard, heartbeat/renewal, completion, and stale-worker rejection.                              |
+| `RuntimeResourceCoordinator`                            | Shared or exclusive resource claims scoped to a run and protected by lease guards.                                                  |
+| `RuntimeRunControlService`, `DurableRuntimeTimerWorker` | Persisted pause/resume/signal commands and due-timer delivery.                                                                      |
+| `RuntimeCancellationService`                            | Scoped cancellation fan-out with per-target results and idempotent command reuse.                                                   |
+| `RuntimeCheckpointService`, `RuntimeRecoveryService`    | Lease-guarded checkpoint creation/load and event-derived recovery decisions.                                                        |
+| `RuntimeReplayService`, `RuntimeQueryService`           | Read-only replay verification and query views derived from persisted runtime evidence.                                              |
+
+`createRuntimeHelperSdk()` and `createRuntimeIoHelperSdk()` provide deterministic transition, wait,
+clock, id, event, and resource helpers. `DefaultRuntimeActivityHelper` dispatches tool, memory,
+model, execution, or custom work through a port and commits the corresponding lifecycle observation;
+it does not execute provider-specific side effects in core. `BoundedFSMDriver` and
+`RuntimeExecutionContext` are exported by `@hypha/harness` for budgeted FSM advancement using those
+ports.
+
+## Execution Activity, Governance, and Output
+
+The Runtime-to-Execution boundary is exported from `@hypha/core` as provider-neutral contracts and
+strict Zod/JSON Schema validators:
+
+| API                               | Contract                                                                                                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ExecutionActivityRequest`        | Binds activity, operation, Run, FSM state attempt, Workspace, fencing token, optional deadline, and idempotency identity to one Command or Workspace operation.                  |
+| `ExecutionActivityResult`         | Returns one terminal status with unique durable Event references, optional Artifact/snapshot references, and required normalized error evidence for every unsuccessful terminal. |
+| `ExecutionToolBinding`            | Declares the governed Tool operation, Execution profile, required permission scopes, side-effect level, and optional Human Review policy.                                        |
+| `DefaultExecutionRiskEvaluator`   | Derives deterministic risk rules and isolation recommendations from validated Tool, request, environment, and Workspace specs; it does not authorize the operation.              |
+| `ExecutionAuthorizationEvidence`  | Binds Invocation, Activity, Run, Tool revision, principal, input hash, Policy decision, risk assessment, optional approval, and validity window.                                 |
+| `GovernedExecutionPort`           | Fails closed on invalid scope, operation, approval, cancellation, deadline, authorization, or verifier evidence before calling an injected `ExecutionOperationDispatcher`.       |
+| `DefaultExecutionOutputPlanner`   | Selects final file mutations using safe relative patterns, integrity evidence, Artifact/byte budgets, and deterministic ordering.                                                |
+| `DefaultExecutionOutputCollector` | Creates/finalizes output Artifacts through an injected manager and verifies returned schema, scope, provenance, integrity, status, and version identity.                         |
+| `ExecutionResultCache`            | Reuses only completed, deterministic read-only result projections under an exact user/Workspace scope, bounded Store timeout, validity hashes, and Artifact integrity checks.    |
+
+Concrete process, container, remote sandbox, or object-store implementations remain adapter-owned.
+An implementation is not implied merely because the framework contract or registry entry exists.
+An Execution Cache hit is a reusable projection, not a new execution receipt: Workspace writes,
+external effects, irreversible operations, unstable environments, failed results, and unverifiable
+Artifact references always bypass or invalidate the Cache.
 
 ## Evaluation, Replay, and Regression
 
@@ -376,7 +421,10 @@ Core exports:
 | `WorkCachePolicy`                 | Store, prompt budget, unknown-event policy, extension-event flag, and per-tree TTL/max entries. |
 | `WorkCacheRecoveryKnowledgeStore` | Revision-safe `RecoveryKnowledgePort` backed by `RecoveryTree` blocks.                          |
 | `MemoryWorkCacheStore`            | In-memory store.                                                                                |
-| `SQLiteWorkCacheStore`            | Persistent store backed by `workcache_blocks`.                                                  |
+| `SQLiteWorkCacheStore`            | Bounded persistent store backed by `workcache_blocks`.                                          |
+| `RedisWorkCacheStore`             | Shared, TTL-aware store with atomic latest-key maintenance.                                     |
+| `TimeoutWorkCacheStore`           | Bounds provider-neutral store calls.                                                            |
+| `RedisWorkCacheInvalidationBus`   | Propagates invalidation to peer hot indexes.                                                    |
 
 Default source event alignment:
 
@@ -391,9 +439,10 @@ Default source event alignment:
 | `recovery.attempt.completed`, `recovery.case.resolved`, `recovery.case.escalated`                                | `RecoveryTree`     |
 | `llm.cache.write` with prefix metadata                                                                           | `PromptPrefixTree` |
 
-Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite`,
+Runtime configuration uses `HYPHA_WORKCACHE=off|memory|sqlite|redis`,
 `HYPHA_WORKCACHE_SQLITE_PATH`, `HYPHA_WORKCACHE_PROMPT_BUDGET_TOKENS`, and
-per-tree TTL fields under `workCache.trees` in `config.yaml`.
+per-tree TTL fields under `workCache.trees` in `config.yaml`. The default
+scope requirement is `user`; `unknown` validity is a miss, not a reusable hit.
 
 `PromptPrefixTree` stores one `CacheBlock<PromptPrefixBlockValue>` per stable
 prompt block. A block value contains `id`, `type`, `hash`, `content`,
@@ -408,10 +457,12 @@ Derived audit events are `workcache.lookup`, `workcache.hit`,
 `workcache.bypass`, and `workcache.prefix.materialized`. Each payload includes
 `sourceEventId`, `sourceEventType`, `treeType`, `blockId`, and `cacheKey`.
 
-`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by failure
-fingerprint, participant, and policy/spec/provider revision. Values include strategy, outcome,
-evidence hash, expiry, and verified/negative validation. Expired or mismatched blocks are removed;
-the runtime supervisor revalidates hits and remains the only component that advances the FSM case.
+`WorkCacheManager.getRecoveryKnowledgePort()` exposes recovery strategy hints keyed by structured
+tenant/user/workspace/session/agent/DomainPack scope, failure fingerprint, participant, and
+policy/spec/provider revision. Core exports strict Zod and JSON Schemas for scoped recovery
+knowledge. Values include strategy, outcome, evidence hash, expiry, and verified/negative
+validation. Unscoped, malformed, expired, or mismatched blocks are rejected or removed; the runtime
+supervisor revalidates hits and remains the only component that advances the FSM case.
 
 ## Inference
 
@@ -455,11 +506,39 @@ Cache references:
 
 ## Memory
 
-`MemoryRecord` fields include `id`, `type`, `value`, `source`, `confidence`, `provenance`, `visibility`, `expiresAt`, `createdAt`, and `updatedAt`.
+`MemoryProfileSpec` binds a management provider, record store, optional working/vector/artifact
+stores, embedding/reranker providers, and explicit scope, retrieval, write, retention,
+consolidation, conflict, privacy, fallback, indexing, and context policies. Top-level profile and
+provider contracts reject undeclared fields consistently in TypeScript validation and exported JSON
+Schema.
 
-Supported memory types are `working`, `episodic`, `semantic`, `procedural`, `artifact`, and `governance`.
+`MemoryManagementProvider` implements `add`, `search`, `get`, `list`, optimistic `update`, `delete`,
+optional `history`, capabilities, health, and close. Requests carry `operationId`,
+`MemoryPrincipal`, `ManagedMemoryScope`, and the applicable profile ref. Managed record types include
+`working`, `episodic`, `semantic`, `procedural`, `preference`, `artifact`, `governance`,
+`reflection`, and `custom`.
 
-`MemoryProvider` implements `read`, `search`, `write`, `update`, `invalidate`, `summarize`, and `audit`. `MemoryScope` can include `workspaceId`, `sessionId`, `runId`, and `userId`.
+`CachedMemoryManagementProvider` optionally wraps any managed provider with a versioned,
+scope-qualified search cache. Its identity includes principal roles/permission scopes and retrieval
+semantics; `operationId` and trace metadata are excluded. It caches only searches that explicitly
+set `updateAccessStats: false`, validates returned records at runtime, bounds entry size and Store
+latency, coalesces only identical scoped reads, and invalidates the scope after every successful
+mutation. Monotonic scope revisions fence searches that overlap mutations; retries are bounded and
+failed invalidation quarantines that scope before another lookup. `InMemoryMemorySearchCacheStore`
+is the bounded local implementation and `RedisMemorySearchCacheStore` provides the same key-bound,
+TTL-limited contract for shared local, self-hosted, or managed Redis.
+
+`ManagedMemoryRecord` contains record/version ids, revision, content, canonical text, explicit scope
+and scope hash, visibility, source, provenance, confidence, status, relations, index status, content
+hash, and timestamps. `ManagedMemoryRecordStore` uses compare-and-set revisions and scope-qualified
+lookups. `MemoryPersistenceUnitOfWork` declares durability and atomic record/outbox support;
+`StructuredMemoryPersistenceUnitOfWork` supplies that boundary over a transactional structured
+store.
+
+`DefaultMemoryRetrievalPipeline` applies principal/scope and hard record filters before deterministic
+score fusion, then returns a retrieval snapshot and explanation. `IndexOutboxWorker` leases exact
+record versions for vector upsert/delete, retries with a bounded attempt budget, and dead-letters an
+exhausted index job without discarding the structured source record.
 
 ## Tools, MCP, and Skills
 
@@ -484,6 +563,12 @@ MCP events, and supports recovery. Calls return structured results such as `comp
 `denied`, `conflict`, `cancelled`, or `human_review_required`. Audit inclusion and redaction apply to
 both request and completion events.
 
+`ToolResultCache` is an optional acceleration boundary. The package exports bounded
+`InMemoryToolResultCache`, shared `RedisToolResultCache`, strict runtime/JSON schemas, and an
+Artifact verification port. Cache entries are versioned, key-bound safe projections. `read` Tools
+must provide `context.metadata.externalStateVersion`; Tools with sensitive output declarations or
+side effects bypass result reuse.
+
 Application-level local tools can expose `ITool.governance` metadata. `ToolManager.describeTool()` carries that metadata into server ReAct, workflow, and direct HTTP tool execution, so local tools and MCP tools use the same `ToolSpec` governance path.
 
 The server also registers `utility.json`, `utility.text`, and `utility.hash`. Their pure executors and
@@ -492,7 +577,7 @@ lookup, literal text inspection/transformation, and SHA-256 over text or canonic
 prototype-pollution keys, excessive JSON depth/nodes, oversized text/results, and arbitrary search
 regex. See [Common Utility Tools](../guides/common-utility-tools.md).
 
-The built-in server `search` tool is a governed local tool with `permissionScope: ["web.search"]`. It defaults to deterministic offline results. Set `WEB_SEARCH_PROVIDER=auto` to try `WEB_SEARCH_PROVIDER_ORDER` with fallback, `WEB_SEARCH_PROVIDER=china` to prefer `WEB_SEARCH_CHINA_PROVIDER_ORDER` (`baidu,so360,stub` by default), `WEB_SEARCH_PROVIDER=baidu` or `so360` for mainland China no-key suggest providers, `WEB_SEARCH_PROVIDER=wikipedia` for Wikipedia OpenSearch, or `WEB_SEARCH_PROVIDER=duckduckgo` for a DuckDuckGo Instant Answer-compatible endpoint. `WEB_SEARCH_FALLBACK_PROVIDERS`, provider-specific endpoints, `WEB_SEARCH_TIMEOUT_MS`, and `WEB_SEARCH_USER_AGENT` control deployment-specific transport details.
+The built-in server `search` tool is a governed local tool with `permissionScope: ["web.search"]`. Set `WEB_SEARCH_PROVIDER=auto` to try `WEB_SEARCH_PROVIDER_ORDER` with real HTTP fallback, `WEB_SEARCH_PROVIDER=china` to prefer `WEB_SEARCH_CHINA_PROVIDER_ORDER` (`baidu,so360` by default), `WEB_SEARCH_PROVIDER=baidu` or `so360` for mainland China no-key suggest providers, `WEB_SEARCH_PROVIDER=wikipedia` for Wikipedia OpenSearch, or `WEB_SEARCH_PROVIDER=duckduckgo` for a DuckDuckGo Instant Answer-compatible endpoint. The deterministic `stub` provider is restricted to tests and non-production development; production rejects it at lifecycle loading and request time. `WEB_SEARCH_FALLBACK_PROVIDERS`, provider-specific endpoints, `WEB_SEARCH_TIMEOUT_MS`, and `WEB_SEARCH_USER_AGENT` control deployment-specific transport details.
 
 `MCPIntegrationSpec` declares servers, capability allow/deny rules, trust, import policy,
 resource/tool/prompt policies, version pins, and hashing. `MCPConnectionManager` owns stdio and
@@ -549,9 +634,15 @@ Skill instructions loaded only after activation.
 
 Harnessed runs record `skill.selected`, `skill.loaded`, and `skill.completed` for activated skills. Skill-provided tools are not executed directly; tool actions still go through `ToolRunner` and the same policy/trace path as non-skill tool calls.
 
-## Memory and Context
+## Memory Runtime and Context Assembly
 
-`@hypha/memory` exposes `MemoryManager` over any `MemoryProvider`. The manager enforces write policy before provider side effects and can record standard trace events when constructed with a `TraceRecorder`:
+`MemoryManager` accepts either the managed provider contract above or the compatibility
+`MemoryProvider` contract. The compatibility surface retains `read`, `search`, `write`, `update`,
+`invalidate`, `summarize`, and `audit` for existing storage backbones; managed callers use
+`add/search/get/list/update/delete/history` request objects with explicit principal and scope.
+
+Compatibility writes still enforce `MemoryWritePolicy` before provider side effects and can record
+standard trace events when constructed with a `TraceRecorder`:
 
 ```ts
 const manager = new MemoryManager(storage.memory, { trace: storage.eventStore });
@@ -562,21 +653,33 @@ await manager.write(scope, record, {
 });
 ```
 
-`MemoryRecord` requires `id`, `type`, `value`, `provenance`, and `createdAt`. Long-term records such as `episodic`, `semantic`, and `procedural` require `allowLongTerm: true`; `requireProvenance: true` rejects records without provenance. Reads and searches emit `memory.read.requested` and `memory.read.completed`; writes emit `memory.write.requested`, `memory.write.validated`, and `memory.write.committed` or `memory.write.rejected`.
+Compatibility `MemoryRecord` requires `id`, `type`, `value`, `provenance`, and `createdAt`.
+Long-term records such as `episodic`, `semantic`, and `procedural` require `allowLongTerm: true`;
+`requireProvenance: true` rejects records without provenance. Managed and compatibility operations
+emit reference-only memory lifecycle events and normalize failures for FSM recovery.
 
-`@hypha/kernel` provides `MemoryContextBuilder` for model context construction. It retrieves memory through `MemoryManager.search()`, enforces configured `memoryTypes`, applies `ContextBudget` (`maxMessages`, `maxMemoryItems`, `maxMemoryChars`, `maxTotalChars`), tags each included record with `ContextProvenance`, and prepends a system context message with clear data/instruction boundaries. Use `createEpisodicMemorySync()` with `ReActRunner` when verified observations should become episodic memory.
+The managed `DefaultMemoryContextBuilder` resolves registered sources, applies policy, sensitivity,
+deduplication, stable ordering, per-source and total token budgets, deterministic extractive
+compaction, and `ContextProvenance`. `DefaultContextInjectionGateway` preserves the boundary between
+memory data and instructions. The kernel compatibility `MemoryContextBuilder` remains available for
+existing ReAct assembly, and `createEpisodicMemorySync()` routes verified observations through the
+same policy and trace path. See [Governed Memory](../architecture/memory.md).
 
 ## Local Adapters
 
 `@hypha/adapters-local` provides development and self-hosted adapters:
 
-| Adapter                    | Storage                 | Purpose                                                                                                                                                                                      |
-| -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SQLiteEventStore`         | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
-| `SQLiteStructuredStore`    | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
-| `LocalVectorIndexProvider` | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
-| `FileArtifactStore`        | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
-| `MockEmbeddingProvider`    | deterministic vectors   | Repeatable local embeddings for tests and offline development.                                                                                                                               |
+| Adapter                          | Storage                 | Purpose                                                                                                                                                                                      |
+| -------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SQLiteEventStore`               | SQLite or JSON fallback | Event store and trace recorder for replay, audit, regression, and projection. Uses `node:sqlite` when available, otherwise `better-sqlite3`, with JSON sidecar fallback only in `auto` mode. |
+| `SQLiteStructuredStore`          | SQLite or JSON fallback | Structured source-of-truth records with indexed tables. Uses the same SQLite/JSON fallback behavior.                                                                                         |
+| `LocalVectorIndexProvider`       | JSON file               | Persistent local vector search with metadata filters.                                                                                                                                        |
+| `FileArtifactStore`              | filesystem              | Artifact bytes and hash metadata under a configured root.                                                                                                                                    |
+| `LocalHashEmbeddingProvider`     | lexical hash vectors    | Repeatable zero-dependency lexical embeddings for local/offline use; inject a model-backed Provider for semantic retrieval.                                                                  |
+| `MockEmbeddingProvider`          | deterministic vectors   | Test fixture only; it is never selected by `createLocalStorageBackbone`.                                                                                                                     |
+| `InMemoryExecutionCacheStore`    | bounded memory          | Local `ExecutionCacheStore` with LRU-style eviction, byte limits, defensive copies, and strict physical/logical key binding.                                                                 |
+| `RedisExecutionCacheStore`       | Redis-compatible KV     | Shared local/self-hosted/managed Store with TTL, serialized-size limits, runtime validation, and physical/logical key binding.                                                               |
+| `NodeExecutionFingerprintHasher` | Node crypto             | SHA-256 implementation for canonical Execution command, validity, scope, and Result Cache keys.                                                                                              |
 
 `createLocalStorageBackbone(options)` returns a complete local stack: `eventStore`, `structured`, `vector`, `artifacts`, `embeddings`, `memory`, and storage `profiles`. Use it when a local runtime needs event persistence, structured memory, semantic recall, and artifact storage without wiring each adapter manually.
 

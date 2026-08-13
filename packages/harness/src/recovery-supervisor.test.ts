@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InMemoryEventStore, type RecoveryFailure } from '@hypha/core';
+import {
+  InMemoryEventSchemaRegistry,
+  InMemoryEventStore,
+  registerRuntimeOrchestrationEventSchemas,
+  type RecoveryFailure,
+} from '@hypha/core';
 import { defaultReActFSMProcessSpec, FSMRuntime } from '@hypha/fsm';
 import { runRecoverySupervisor } from './recovery-supervisor';
 
@@ -71,6 +76,7 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     const result = await runRecoverySupervisor({
       fsm,
       caseId: 'case_memory_execution',
+      userId: 'user-recovery',
       trace,
       now: () => '2026-07-16T00:00:00.100Z',
       policy: { maxNoProgressCycles: 1 },
@@ -107,6 +113,7 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     });
     expect(memoryExecute).toHaveBeenCalledTimes(2);
     expect(execution).toHaveBeenCalledOnce();
+    expect(execution.mock.calls[0]?.[0].scope).toEqual({ userId: 'user-recovery' });
     expect(result.snapshot).toMatchObject({
       status: 'degraded',
       noProgressCycles: 1,
@@ -115,6 +122,14 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     expect(fsm.getSnapshot().currentState).toBe('Reasoning');
     const events = await trace.list({ runId: 'run_coordinated' });
     expect(events.map((event) => event.type)).toContain('recovery.case.resolved');
+    const schemas = new InMemoryEventSchemaRegistry();
+    await registerRuntimeOrchestrationEventSchemas(schemas);
+    for (const event of events.filter((item) => item.type.startsWith('recovery.case.'))) {
+      await expect(schemas.validate(event)).resolves.toEqual(
+        expect.objectContaining({ valid: true })
+      );
+      expect(event.userId).toBe('user-recovery');
+    }
     expect(
       events
         .filter((event) => event.type === 'recovery.attempt.completed')
@@ -123,6 +138,9 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
       expect.arrayContaining([
         expect.objectContaining({
           knowledge: expect.objectContaining({
+            key: expect.objectContaining({
+              scope: expect.objectContaining({ userId: 'user-recovery' }),
+            }),
             strategy: 'degrade',
             outcome: 'degraded',
             validation: { status: 'verified' },
@@ -151,6 +169,7 @@ describe('@hypha/harness coordinated recovery supervisor', () => {
     const result = await runRecoverySupervisor({
       fsm,
       caseId: 'case_unknown_execution',
+      userId: 'user-recovery',
       now: () => '2026-07-16T00:00:00.100Z',
       participants: [
         {

@@ -5,6 +5,7 @@ import type {
   MemoryManagementCapabilities,
   MemoryPrincipal,
   NormalizedMemoryError,
+  MemoryProfileSpec,
 } from './contracts';
 import type {
   ContextBuildInput,
@@ -15,13 +16,19 @@ import type {
 import type { ManagedMemorySearchRequest, MemoryManagementProvider } from './operations';
 import { hashMemoryScope, normalizeMemoryError, sha256 } from './memory-utils';
 import type { MemoryEventContext, MemoryEventPublisher } from './memory-events';
+import type { MemoryProviderReturnEvidence } from './provider-return-evidence';
 
 export type MemoryActivityOperation =
+  | 'add'
   | 'extract'
   | 'search'
+  | 'get'
+  | 'list'
+  | 'update'
   | 'write'
   | 'maintain'
   | 'delete'
+  | 'history'
   | 'build_context';
 
 export interface MemoryActivityRequest {
@@ -43,6 +50,7 @@ export interface MemoryActivityResult {
   contextEnvelopeRef?: string;
   eventIds: string[];
   error?: NormalizedMemoryError;
+  evidence?: MemoryProviderReturnEvidence;
   output?: unknown;
 }
 
@@ -201,7 +209,7 @@ export class DefaultMemoryActivityPort implements MemoryActivityPort {
 
     try {
       const type =
-        result.status === 'completed'
+        result.status === 'completed' || result.status === 'partial'
           ? 'memory.activity.completed'
           : result.status === 'cancelled'
             ? 'memory.activity.cancelled'
@@ -216,7 +224,11 @@ export class DefaultMemoryActivityPort implements MemoryActivityPort {
       };
     }
 
-    await this.notify(result.status === 'completed' ? 'onCompleted' : 'onFailed', request, result);
+    await this.notify(
+      result.status === 'completed' || result.status === 'partial' ? 'onCompleted' : 'onFailed',
+      request,
+      result
+    );
     return result;
   }
 
@@ -424,6 +436,7 @@ export interface DomainMemoryDependencySnapshot {
 
 export interface MemoryCacheValidityInput {
   memoryProfileRevision: string;
+  mutationGeneration: string;
   contextProfileRevision?: string;
   scopeHash: string;
   queryHash?: string;
@@ -440,6 +453,7 @@ export interface MemoryCacheInvalidation {
   reason: 'created' | 'updated' | 'invalidated' | 'deleted' | 'provider_revision';
   memoryIds: string[];
   memoryVersionIds?: string[];
+  mutationGeneration: string;
   validityHash: string;
 }
 
@@ -471,8 +485,8 @@ export function createDomainMemoryDependencySnapshot(
 ): DomainMemoryDependencySnapshot {
   const normalized = {
     ...input,
-    providerRefs: [...input.providerRefs].sort(compareSpecRefs),
-    policyRefs: [...input.policyRefs].sort(compareSpecRefs),
+    providerRefs: normalizeSpecRefs(input.providerRefs),
+    policyRefs: normalizeSpecRefs(input.policyRefs),
   };
   return {
     ...normalized,
@@ -498,6 +512,39 @@ export function validateMemoryBindingCapabilities(
   }
   if (binding.autoCapture && access !== 'write' && access !== 'read_write') {
     errors.push('autoCapture requires write or read_write access.');
+  }
+  return errors;
+}
+export function validateMemoryProfileCapabilities(
+  profile: MemoryProfileSpec,
+  capabilities: MemoryManagementCapabilities
+): string[] {
+  const errors: string[] = [];
+  if (profile.retrievalPolicy.defaultMode === 'hybrid' && !capabilities.hybridSearch) {
+    errors.push('Memory provider does not support hybrid search required by the retrieval policy.');
+  }
+  if (profile.writePolicy.conflictDetection && !capabilities.conflictDetection) {
+    errors.push(
+      'Memory provider does not support conflict detection required by the write policy.'
+    );
+  }
+  if (profile.retentionPolicy.retainHistory && !capabilities.history) {
+    errors.push('Memory provider does not support history required by the retention policy.');
+  }
+  if (profile.consolidationPolicy?.enabled && !capabilities.consolidate) {
+    errors.push(
+      'Memory provider does not support consolidation required by the consolidation policy.'
+    );
+  }
+  if (profile.conflictPolicy?.detectOnWrite && !capabilities.conflictDetection) {
+    errors.push(
+      'Memory provider does not support conflict detection required by the conflict policy.'
+    );
+  }
+  if (profile.indexingPolicy?.mode === 'async_outbox' && !capabilities.asyncWrite) {
+    errors.push(
+      'Memory provider does not support asynchronous writes required by the indexing policy.'
+    );
   }
   return errors;
 }
@@ -599,5 +646,15 @@ function sameSpecRef(left: SpecRef, right: SpecRef): boolean {
 }
 
 function compareSpecRefs(left: SpecRef, right: SpecRef): number {
-  return `${left.id}@${left.version ?? ''}`.localeCompare(`${right.id}@${right.version ?? ''}`);
+  return specRefKey(left).localeCompare(specRefKey(right));
+}
+
+function normalizeSpecRefs(refs: readonly SpecRef[]): SpecRef[] {
+  const unique = new Map<string, SpecRef>();
+  for (const ref of refs) unique.set(specRefKey(ref), { ...ref });
+  return [...unique.values()].sort(compareSpecRefs);
+}
+
+function specRefKey(ref: SpecRef): string {
+  return `${ref.id}@${ref.version ?? ''}#${ref.revision ?? ''}`;
 }

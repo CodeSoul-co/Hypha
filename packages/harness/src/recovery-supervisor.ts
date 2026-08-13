@@ -1,6 +1,7 @@
 import {
   createFrameworkEvent,
   defaultRecoveryConvergencePolicy,
+  hashCanonicalJson,
   recoveryEvidenceHash,
   recoveryFailureFingerprint,
   recoveryKnowledgeKeyMatches,
@@ -13,6 +14,7 @@ import {
   type RecoveryKnowledge,
   type RecoveryKnowledgeKey,
   type RecoveryKnowledgePort,
+  type RecoveryKnowledgeScope,
   type RecoveryModule,
   type RecoveryStrategy,
   type TraceRecorder,
@@ -28,6 +30,7 @@ export interface RecoveryParticipantResult<TOutput = unknown> {
 export interface RecoveryParticipantContext {
   caseId: string;
   runId: string;
+  scope: RecoveryKnowledgeScope;
   participantId: string;
   module: RecoveryModule;
   cycle: number;
@@ -63,6 +66,8 @@ export interface RecoverySupervisorScheduler {
 export interface RecoverySupervisorOptions {
   fsm: FSMRuntime;
   caseId: string;
+  userId: string;
+  tenantId?: string;
   participants: RecoveryParticipant[];
   policy?: Partial<RecoveryConvergencePolicy>;
   knowledge?: RecoveryKnowledgePort;
@@ -71,6 +76,7 @@ export interface RecoverySupervisorOptions {
   workspaceId?: string;
   stepId?: string;
   agentId?: string;
+  domainPackId?: string;
   scheduler?: RecoverySupervisorScheduler;
   maxInlineDelayMs?: number;
   signal?: AbortSignal;
@@ -108,6 +114,7 @@ export async function runRecoverySupervisor(
   };
   const now = options.now ?? (() => new Date().toISOString());
   const runId = options.fsm.getSnapshot().runId;
+  const knowledgeScope = recoveryKnowledgeScope(options);
   const outputs: Record<string, unknown> = {};
   const completed = new Set<string>();
   const recorder = new RecoveryEventRecorder(options, runId, now);
@@ -157,6 +164,7 @@ export async function runRecoverySupervisor(
               'retry',
               'recovered',
               pendingRetry.evidenceAfterHash ?? recoveryEvidenceHash(result.evidence),
+              knowledgeScope,
               now()
             );
             await recorder.record('recovery.attempt.completed', snapshot, {
@@ -191,6 +199,7 @@ export async function runRecoverySupervisor(
             'retry',
             'failed',
             pendingRetry.evidenceAfterHash ?? recoveryEvidenceHash(failure.evidence),
+            knowledgeScope,
             now()
           );
           await recorder.record('recovery.attempt.completed', snapshot, {
@@ -229,6 +238,7 @@ export async function runRecoverySupervisor(
           fsmDecision,
           policy,
           options.knowledge,
+          knowledgeScope,
           now()
         );
         await recorder.record('recovery.strategy.selected', snapshot, {
@@ -336,6 +346,7 @@ export async function runRecoverySupervisor(
                 ? 'compensated'
                 : 'recovered',
             snapshot.lastEvidenceHash,
+            knowledgeScope,
             now()
           );
           await recorder.record('recovery.attempt.completed', snapshot, {
@@ -367,6 +378,7 @@ export async function runRecoverySupervisor(
             action,
             'failed',
             snapshot.lastEvidenceHash,
+            knowledgeScope,
             now()
           );
           await recorder.record('recovery.attempt.completed', snapshot, {
@@ -431,6 +443,7 @@ async function selectStrategy(
   decision: FSMRecoveryDecision,
   policy: RecoveryConvergencePolicy,
   knowledge: RecoveryKnowledgePort | undefined,
+  scope: RecoveryKnowledgeScope,
   now: string
 ): Promise<RecoveryStrategy> {
   const repeatedStrategy = snapshot.attempts.filter(
@@ -448,7 +461,7 @@ async function selectStrategy(
     return availableEscalation(policy.onNoProgress, participant);
   }
 
-  const key = knowledgeKey(participant, failure);
+  const key = knowledgeKey(participant, failure, scope);
   const hint = await knowledge?.get(key);
   if (hint) {
     const validTime = !hint.expiresAt || Date.parse(hint.expiresAt) > Date.parse(now);
@@ -543,10 +556,11 @@ async function rememberOutcome(
   strategy: RecoveryStrategy,
   outcome: RecoveryKnowledge['outcome'],
   evidenceHash: string,
+  scope: RecoveryKnowledgeScope,
   now: string
 ): Promise<RecoveryKnowledge> {
   const item: RecoveryKnowledge = {
-    key: knowledgeKey(participant, failure),
+    key: knowledgeKey(participant, failure, scope),
     strategy,
     outcome,
     evidenceHash,
@@ -559,14 +573,29 @@ async function rememberOutcome(
 
 function knowledgeKey(
   participant: RecoveryParticipant,
-  failure: RecoveryFailure
+  failure: RecoveryFailure,
+  scope: RecoveryKnowledgeScope
 ): RecoveryKnowledgeKey {
   return {
     fingerprint: recoveryFailureFingerprint(failure),
     participantId: participant.id,
+    scope,
     policyRevision: failure.evidence.policyRevision,
     specRevision: failure.evidence.specRevision,
     providerRevision: failure.evidence.providerRevision,
+  };
+}
+
+function recoveryKnowledgeScope(options: RecoverySupervisorOptions): RecoveryKnowledgeScope {
+  const userId = options.userId.trim();
+  if (!userId) throw new Error('Recovery supervisor requires a non-empty userId.');
+  return {
+    userId,
+    ...(options.tenantId ? { tenantId: options.tenantId } : {}),
+    ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(options.domainPackId ? { domainPackId: options.domainPackId } : {}),
   };
 }
 
@@ -684,6 +713,7 @@ function participantContext(
   return {
     caseId: options.caseId,
     runId: options.fsm.getSnapshot().runId,
+    scope: recoveryKnowledgeScope(options),
     participantId: participant.id,
     module: participant.module,
     cycle,
@@ -816,21 +846,100 @@ class RecoveryEventRecorder {
         id: `${snapshot.id}:${String(this.sequence).padStart(4, '0')}:${type}`,
         type,
         runId: this.runId,
+        ...(this.options.tenantId === undefined ? {} : { tenantId: this.options.tenantId }),
+        userId: this.options.userId,
         sessionId: this.options.sessionId,
         workspaceId: this.options.workspaceId,
         stepId: this.options.stepId,
         agentId: this.options.agentId,
         fsmState: this.options.fsm.getSnapshot().currentState,
         timestamp: this.now(),
-        payload: {
-          caseId: snapshot.id,
-          rootFingerprint: snapshot.rootFingerprint,
-          status: snapshot.status,
-          cycles: snapshot.cycles,
-          ...payload,
-        },
+        payload: recoveryEventPayload(type, snapshot, payload),
         metadata: this.options.metadata,
       })
     );
   }
+}
+
+function recoveryEventPayload(
+  type: FrameworkEventType,
+  snapshot: RecoveryCaseSnapshot,
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const base = {
+    caseId: snapshot.id,
+    rootFingerprint: snapshot.rootFingerprint,
+    status: snapshot.status,
+    cycles: snapshot.cycles,
+    ...payload,
+  };
+  if (
+    type !== 'recovery.case.opened' &&
+    type !== 'recovery.case.resolved' &&
+    type !== 'recovery.case.escalated'
+  ) {
+    return base;
+  }
+
+  const failure = recordValue(payload.failure) ?? recordValue(snapshot.lastFailure) ?? {};
+  const strategy = stringValue(payload.strategy);
+  return {
+    ...base,
+    supervisorStatus: snapshot.status,
+    status:
+      type === 'recovery.case.opened'
+        ? 'active'
+        : type === 'recovery.case.resolved'
+          ? 'recovered'
+          : 'suspended',
+    candidateId: snapshot.id,
+    candidateHash: hashCanonicalJson({
+      caseId: snapshot.id,
+      rootFingerprint: snapshot.rootFingerprint,
+      lastEvidenceHash: snapshot.lastEvidenceHash,
+      cycles: snapshot.cycles,
+    }),
+    reason:
+      stringValue(payload.reason) ??
+      stringValue(failure.category) ??
+      stringValue(failure.code) ??
+      'CUSTOM',
+    safeAction: recoverySafeAction(strategy),
+    ...(type === 'recovery.case.opened'
+      ? {}
+      : {
+          disposition:
+            type === 'recovery.case.resolved'
+              ? strategy === 'retry'
+                ? 'requeued'
+                : 'recovered'
+              : 'requires_review',
+        }),
+  };
+}
+
+function recoverySafeAction(strategy: string | undefined): string {
+  switch (strategy) {
+    case 'retry':
+      return 'requeue';
+    case 'reconcile':
+      return 'apply_observation';
+    case 'compensate':
+      return 'compensate_activity';
+    case 'fail':
+    case 'cancel':
+      return 'mark_failed';
+    default:
+      return 'manual_review';
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

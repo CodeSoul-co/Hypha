@@ -108,10 +108,18 @@ export class ThinkingCache {
         metadata: { hit: false, kind: identity.kind, ...location },
       };
     }
+    if (!scopeSatisfies(identity.scope, this.manager.policy.scopeRequirement)) {
+      return {
+        hit: false,
+        reason: 'scope_missing',
+        metadata: { hit: false, kind: identity.kind, ...location },
+      };
+    }
     try {
       const result = await this.manager.lookup<ThinkingCacheEntry<T>>({
         treeType: 'ComputationTree',
         cacheKey: location.cacheKey,
+        scope: identity.scope,
       });
       await this.emit('workcache.lookup', identity, context, location, {
         ageMs: result.hit ? result.ageMs : undefined,
@@ -166,11 +174,14 @@ export class ThinkingCache {
       source: 'computed',
     };
     if (!this.enabled) return metadata;
+    if (!scopeSatisfies(identity.scope, this.manager.policy.scopeRequirement)) return metadata;
 
     const timestamp = this.now();
     const ttlMs = this.manager.policy.trees.ComputationTree.ttlMs;
     try {
-      await this.manager.forest.write<ThinkingCacheEntry<T>>({
+      const wrote = await this.manager.write<ThinkingCacheEntry<T>>({
+        schemaVersion: '1.0',
+        keyVersion: '1',
         id: location.blockId,
         treeType: 'ComputationTree',
         nodeType: 'computation',
@@ -186,6 +197,7 @@ export class ThinkingCache {
         expiresAt: ttlMs ? timestamp + ttlMs : undefined,
         sourceEventId: context.sourceEventId,
         sourceEventType: context.sourceEventType ?? 'inference.requested',
+        scope: identity.scope,
         provenance: options.provenance,
         validity: {
           status: 'valid',
@@ -209,7 +221,10 @@ export class ThinkingCache {
         },
         tags: ['thinking-cache', `thinking-${identity.kind}`, ...(options.tags ?? [])],
       });
-      await this.emit('workcache.write', identity, context, location, { ttlMs });
+      await this.emit(wrote ? 'workcache.write' : 'workcache.bypass', identity, context, location, {
+        ttlMs,
+        reason: wrote ? undefined : 'write_rejected',
+      });
     } catch (error) {
       await this.emit('workcache.bypass', identity, context, location, {
         reason: error instanceof Error ? `write_failed:${error.message}` : 'write_failed',
@@ -221,16 +236,37 @@ export class ThinkingCache {
   async getOrCompute<T>(
     options: Omit<ThinkingCacheWriteOptions<T>, 'value'> & {
       compute: () => Promise<T>;
+      projectForCache?: (value: T) => T;
+      hydrateCached?: (value: T, source: 'store' | 'in_flight') => T;
     }
   ): Promise<{ value: T; metadata: ThinkingCacheMetadata }> {
+    if (!scopeSatisfies(options.identity.scope, this.manager.policy.scopeRequirement)) {
+      const location = thinkingCacheLocation(options.identity);
+      return {
+        value: await options.compute(),
+        metadata: {
+          hit: false,
+          kind: options.identity.kind,
+          ...location,
+          source: 'computed',
+        },
+      };
+    }
     const lookup = await this.lookup<T>(options.identity, options.context);
-    if (lookup.hit) return { value: lookup.value, metadata: lookup.metadata };
+    if (lookup.hit) {
+      return {
+        value: options.hydrateCached ? options.hydrateCached(lookup.value, 'store') : lookup.value,
+        metadata: lookup.metadata,
+      };
+    }
 
     const location = thinkingCacheLocation(options.identity);
     const pending = this.inFlight.get(location.cacheKey) as Promise<T> | undefined;
     if (pending) {
       return {
-        value: await pending,
+        value: options.hydrateCached
+          ? options.hydrateCached(await pending, 'in_flight')
+          : await pending,
         metadata: {
           hit: true,
           kind: options.identity.kind,
@@ -244,7 +280,10 @@ export class ThinkingCache {
     this.inFlight.set(location.cacheKey, computation);
     try {
       const value = await computation;
-      const metadata = await this.write({ ...options, value });
+      const metadata = await this.write({
+        ...options,
+        value: options.projectForCache ? options.projectForCache(value) : value,
+      });
       return { value, metadata };
     } finally {
       this.inFlight.delete(location.cacheKey);
@@ -258,21 +297,34 @@ export class ThinkingCache {
     location: { cacheKey: string; blockId: string },
     payload: Pick<WorkCacheAuditEvent['payload'], 'reason' | 'ageMs' | 'ttlMs'>
   ): Promise<void> {
-    await this.trace?.({
-      type,
-      runId: context.runId,
-      stepId: context.stepId,
-      timestamp: new Date(this.now()).toISOString(),
-      payload: {
-        sourceEventId: context.sourceEventId,
-        sourceEventType: context.sourceEventType ?? 'inference.requested',
-        treeType: 'ComputationTree',
-        nodeType: 'computation',
-        ...location,
-        ...payload,
-      },
-    });
+    try {
+      await this.trace?.({
+        type,
+        runId: context.runId,
+        stepId: context.stepId,
+        timestamp: new Date(this.now()).toISOString(),
+        payload: {
+          sourceEventId: context.sourceEventId,
+          sourceEventType: context.sourceEventType ?? 'inference.requested',
+          treeType: 'ComputationTree',
+          nodeType: 'computation',
+          ...location,
+          ...payload,
+        },
+      });
+    } catch {
+      // Cache observability is best effort and cannot change inference behavior.
+    }
   }
+}
+
+function scopeSatisfies(
+  scope: ThinkingCacheScope,
+  requirement: WorkCacheManager['policy']['scopeRequirement']
+): boolean {
+  if (requirement === 'none') return true;
+  if (requirement === 'session') return Boolean(scope.userId && scope.sessionId);
+  return Boolean(scope.userId);
 }
 
 function thinkingCacheLocation(identity: ThinkingCacheIdentity): {
@@ -284,6 +336,7 @@ function thinkingCacheLocation(identity: ThinkingCacheIdentity): {
     cacheKey: createWorkCacheKey({
       treeType: 'ComputationTree',
       nodeType: 'computation',
+      scope: identity.scope,
       identity: { namespace: 'thinking-cache', schemaVersion: '1', ...identity },
     }),
     blockId: `workcache:thinking:${identity.kind}:${identityHash}`,

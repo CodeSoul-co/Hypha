@@ -2,6 +2,7 @@ import { Router } from 'express';
 import chatRoutes from './chat.routes';
 import authRoutes from './auth.routes';
 import memoryRoutes from './memory.routes';
+import memoryAdminRoutes from './memory-admin.routes';
 import skillRoutes from './skill.routes';
 import toolRoutes from './tool.routes';
 import workflowRoutes from './workflow.routes';
@@ -13,6 +14,8 @@ import devRoutes from './dev.routes';
 import runtimeRoutes from './runtime.routes';
 import { approvalRouter, invocationRouter } from './tool-runtime.routes';
 import mcpRoutes from './mcp.routes';
+import { asyncHandler } from '../middleware/errorHandler';
+import { getServerProductReadiness } from '../services/ServerProductReadiness';
 
 const router = Router();
 
@@ -28,9 +31,30 @@ router.get('/health', (_req, res) => {
   });
 });
 
+// Readiness check: fail closed until the canonical execution graph and every
+// durable Runtime worker are actually running. This is intentionally distinct
+// from the process liveness endpoint above.
+router.get(
+  '/ready',
+  asyncHandler(async (_req, res) => {
+    const readiness = await getServerProductReadiness();
+    res.status(readiness.ready ? 200 : 503).json({
+      success: readiness.ready,
+      data: {
+        ...readiness,
+        status: readiness.status,
+        runtime: readiness.components.runtime,
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+      },
+    });
+  })
+);
+
 // Mount routes
 router.use('/auth', authRoutes);
 router.use('/chat', chatRoutes);
+router.use('/memory/admin', memoryAdminRoutes);
 router.use('/memory', memoryRoutes);
 router.use('/skills', skillRoutes);
 router.use('/tools', toolRoutes);
