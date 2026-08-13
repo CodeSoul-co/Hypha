@@ -4,6 +4,12 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "dependencies": {
+    "@hypha/core": "0.0.0",
+    "@hypha/inference": "0.0.0",
+    "better-sqlite3": "^11.10.0",
+    "zod": "^3.22.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
