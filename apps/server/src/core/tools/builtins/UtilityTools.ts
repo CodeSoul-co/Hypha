@@ -9,7 +9,7 @@ import {
   type JsonUtilityInput,
   type TextUtilityInput,
   type ToolSpec,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 import { BaseTool, type ITool, type ToolDefinition, type ToolGovernanceSpec } from '../types';
 
 abstract class UtilityToolBase extends BaseTool {

@@ -1,4 +1,4 @@
-import type { CredentialLease, SecretProvider } from '@hypha/tools';
+import type { CredentialLease, SecretProvider } from '@codesoul-co/tools';
 import {
   EnvironmentSecretResolver,
   LocalDevelopmentSecretProvider,

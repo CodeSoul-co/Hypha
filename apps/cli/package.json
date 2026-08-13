@@ -1,5 +1,5 @@
 {
-  "name": "@hypha/cli",
+  "name": "@codesoul-co/cli",
   "version": "0.0.0",
   "private": true,
   "bin": {

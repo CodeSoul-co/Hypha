@@ -3,7 +3,7 @@ import type {
   CommandExecutionRequest,
   ExecutionEnvironmentSpec,
   SandboxCreateRequest,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { describe, expect, it } from 'vitest';
 import { LocalSandboxLifecycle } from './local-sandbox-lifecycle';
 

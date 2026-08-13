@@ -1,4 +1,4 @@
-import type { SpecRef } from '@hypha/core';
+import type { SpecRef } from '@codesoul-co/core';
 
 export interface MemoryContractSpecRef extends SpecRef {
   revision?: string;

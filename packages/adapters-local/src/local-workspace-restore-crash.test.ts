@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ArtifactManager, ExecutionPrincipal } from '@hypha/core';
+import type { ArtifactManager, ExecutionPrincipal } from '@codesoul-co/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LocalWorkspaceAdapter } from './local-workspace-adapter';
 import { workspaceRestoreJournalPath } from './local-workspace-restore-journal';

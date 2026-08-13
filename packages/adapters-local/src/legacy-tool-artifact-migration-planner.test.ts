@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ExecutionPrincipal } from '@hypha/core';
+import type { ExecutionPrincipal } from '@codesoul-co/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolArtifactManagerContext } from './artifact-manager-tool-port';
 import { ArtifactStoreToolPort, FileArtifactStore } from './index';

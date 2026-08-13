@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFrameworkEvent, type RecoveryKnowledge } from '@hypha/core';
+import { createFrameworkEvent, type RecoveryKnowledge } from '@codesoul-co/core';
 import { WorkCacheManager } from './manager';
 import { WorkCacheRecoveryKnowledgeStore } from './recovery-knowledge';
 import { MemoryWorkCacheStore } from './stores/memory-store';
@@ -27,7 +27,7 @@ function knowledge(overrides: Partial<RecoveryKnowledge> = {}): RecoveryKnowledg
   };
 }
 
-describe('@hypha/workcache recovery knowledge', () => {
+describe('@codesoul-co/workcache recovery knowledge', () => {
   it('reuses only exact failure, participant, policy, spec, and provider revisions', async () => {
     const store = new MemoryWorkCacheStore();
     const recovery = new WorkCacheRecoveryKnowledgeStore(store, {

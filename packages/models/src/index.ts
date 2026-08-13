@@ -10,7 +10,7 @@ import {
   type SpecMetadata,
   type SpecRef,
   type VersionedSpec,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 
 export type ModelProviderType = 'openai' | 'openai-compatible' | 'mock' | string;
 

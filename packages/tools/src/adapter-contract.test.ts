@@ -48,7 +48,7 @@ function adapters(): Array<{ name: string; adapter: ToolAdapter }> {
   ];
 }
 
-describe('@hypha/tools ToolAdapter contract', () => {
+describe('@codesoul-co/tools ToolAdapter contract', () => {
   for (const { name, adapter } of adapters()) {
     it(`${name} exposes executable capabilities, health, and a normalized envelope`, async () => {
       await expect(adapter.capabilities()).resolves.toMatchObject({

@@ -1,4 +1,4 @@
-import type { ToolSpec } from '@hypha/tools';
+import type { ToolSpec } from '@codesoul-co/tools';
 
 // Tool types
 export interface ToolDefinition {

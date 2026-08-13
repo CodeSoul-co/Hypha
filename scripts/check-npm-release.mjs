@@ -8,7 +8,7 @@ const root = process.cwd();
 const rootManifest = readJson(path.join(root, 'package.json'));
 const packagesRoot = path.join(root, 'packages');
 const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
-const privatePackageAllowlist = new Set(['@hypha/workcache']);
+const privatePackageAllowlist = new Set(['@codesoul-co/workcache']);
 const failures = [];
 
 const manifests = fs
@@ -17,7 +17,7 @@ const manifests = fs
   .map((entry) => path.join(packagesRoot, entry.name, 'package.json'))
   .filter(fs.existsSync)
   .map((manifestPath) => ({ manifestPath, manifest: readJson(manifestPath) }))
-  .filter(({ manifest }) => manifest.name?.startsWith('@hypha/'));
+  .filter(({ manifest }) => manifest.name?.startsWith('@codesoul-co/'));
 
 for (const { manifestPath, manifest } of manifests) {
   const packageRoot = path.dirname(manifestPath);
@@ -82,7 +82,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Validated ${manifests.filter(({ manifest }) => manifest.private === false).length} publishable @hypha packages at ${rootManifest.version}.\n`
+    `Validated ${manifests.filter(({ manifest }) => manifest.private === false).length} publishable @codesoul-co packages at ${rootManifest.version}.\n`
   );
 }
 

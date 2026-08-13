@@ -12,7 +12,7 @@ import {
   type ArtifactRecord,
   type ExecutionRecord,
   type ExecutionOutputArtifactManager,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { SQLiteExecutionStore } from './sqlite-execution-store';
 
 describe('SQLite Execution Store durable worker integration', () => {

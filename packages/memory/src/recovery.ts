@@ -4,7 +4,7 @@ import {
   type RecoveryFailure,
   type RecoverySideEffectState,
   type RecoveryStrategy,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 
 export type MemoryRecoveryOperation =
   | 'read'

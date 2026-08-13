@@ -251,7 +251,7 @@ export interface MemoryRuntimeFactoryOptions {
 export interface MemoryRuntimeCompositionReceipt {
   runtimeId: string;
   serviceInstanceId: string;
-  serviceContract: '@hypha/memory.MemoryApplicationService';
+  serviceContract: '@codesoul-co/memory.MemoryApplicationService';
   activeProfileId: string;
   providerId: string;
   providerSpecId: string;
@@ -411,7 +411,7 @@ export class MemoryRuntimeFactory {
       const compositionReceipt: MemoryRuntimeCompositionReceipt = {
         runtimeId: `memory-runtime:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
         serviceInstanceId: `memory-service:${sha256({ profileHash, createdAt, sequence: this.sequence }).slice(7, 39)}`,
-        serviceContract: '@hypha/memory.MemoryApplicationService',
+        serviceContract: '@codesoul-co/memory.MemoryApplicationService',
         activeProfileId: config.activeProfile,
         providerId: provider.id,
         providerSpecId: selected.management.id,

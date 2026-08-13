@@ -9,7 +9,7 @@ import type {
   WorkspaceRuntimeConfig,
   WorkspaceRuntimePort,
   WorkspaceRuntimeRequest,
-} from '@hypha/tools';
+} from '@codesoul-co/tools';
 import { WorkspaceControlPlaneGuard } from './workspace-control-plane-guard';
 import {
   hasSingleLinkRegularFileIdentity,

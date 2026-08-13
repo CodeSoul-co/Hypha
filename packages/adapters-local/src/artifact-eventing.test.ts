@@ -8,7 +8,7 @@ import type {
   ArtifactPutRequest,
   ArtifactStorageRef,
   ExecutionPrincipal,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   DefaultArtifactGarbageCollector,
   DefaultArtifactManager,
@@ -16,7 +16,7 @@ import {
   EventingArtifactGarbageCollector,
   EventingArtifactManager,
   EventingArtifactRetentionProcessor,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { hashArtifactBytes } from './artifact-content-io';
 import { InMemoryArtifactRecordRepository } from './in-memory-artifact-record-repository';
 import { InMemoryExecutionArtifactStore } from './in-memory-execution-artifact-store';

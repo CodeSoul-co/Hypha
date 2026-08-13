@@ -1,4 +1,4 @@
-import { FrameworkError } from '@hypha/core';
+import { FrameworkError } from '@codesoul-co/core';
 import { createDefaultInferenceBackendRegistry, InferenceBackendRegistry } from './backends';
 import { InMemoryPlasmodHotLayer } from './plasmod';
 import { DefaultPrefixSegmenter } from './prefix';

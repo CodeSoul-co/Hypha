@@ -147,7 +147,7 @@ The CLI stores its endpoint configuration and JWT under `~/.hypha` by default. S
 
 Domain Packs are the supported product-integration boundary. Product-specific tasks, prompts,
 workflows, rules, and capability selections belong in a Domain Pack or product application—not in
-`@hypha/core`, `@hypha/kernel`, or the generic Runtime.
+`@codesoul-co/core`, `@codesoul-co/kernel`, or the generic Runtime.
 
 For an application that consumes a versioned npm release, including separate Prompt, Skill, Tool,
 policy, contract test, and HTTP Run submission, see the
@@ -184,7 +184,7 @@ import {
   compileDomainPackToHarnessedSystem,
   DomainPackRegistry,
   LocalDomainPackLoader,
-} from '@hypha/domain';
+} from '@codesoul-co/domain';
 
 const registry = new DomainPackRegistry();
 
@@ -253,7 +253,7 @@ State ids, transitions, guards, retry/timeout declarations, and terminal states.
 the framework-owned Harness FSM so a product graph cannot bypass reasoning, policy, activity,
 observation, verification, memory, or recovery phases.
 
-Use `analyzeFSMTopology()` from `@hypha/fsm` to inspect reachability, dead ends, and cycles. The
+Use `analyzeFSMTopology()` from `@codesoul-co/fsm` to inspect reachability, dead ends, and cycles. The
 Server exposes `GET /runtime/runs/:runId/fsm` and the governed
 `POST /runtime/runs/:runId/fsm/transitions` owner endpoint. Manual transitions require exact process
 identity, expected State and Run revision, an idempotency key, a reason, and any guard variables;
@@ -289,7 +289,7 @@ from the Run snapshot fail closed before inference or dispatch.
 Use `extendDomainPack()` to upsert or remove declarations by stable id, then assign a new version:
 
 ```ts
-import { extendDomainPack } from '@hypha/domain';
+import { extendDomainPack } from '@codesoul-co/domain';
 
 const customized = extendDomainPack(domainPack, {
   version: '1.1.0',
@@ -441,17 +441,17 @@ published; registry publication is a maintainer release step. See
 
 | Package                                       | Responsibility                                                                                |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `@hypha/core`                                 | Public specs, schemas, Events, policy, runtime, Artifact, Workspace, and Execution contracts. |
-| `@hypha/fsm`                                  | FSM specs, custom topology analysis, snapshots, transitions, guards, and recovery semantics.  |
-| `@hypha/kernel`                               | Governed ReAct and FSM coordination.                                                          |
-| `@hypha/harness`                              | Bounded execution, tracing, recovery, continuation, and side-effect hooks.                    |
-| `@hypha/domain`                               | DomainPack loading, validation, overlays, registry, and compilation.                          |
-| `@hypha/memory`                               | Memory profiles, provider adapters, context assembly, migration, and governance.              |
-| `@hypha/tools`, `@hypha/mcp`, `@hypha/skills` | Capability contracts, registries, execution, trust, and progressive loading.                  |
-| `@hypha/inference`, `@hypha/models`           | Model aliases, routing, inference backends, prompt compilation, and normalized responses.     |
-| `@hypha/storage`, `@hypha/adapters-local`     | Storage contracts and local/self-hosted provider adapters.                                    |
-| `@hypha/serving-cache`, `@hypha/workcache`    | Exact model-response cache and event-derived runtime cache.                                   |
-| `@hypha/testing`                              | Contract fixtures and test support.                                                           |
+| `@codesoul-co/core`                                 | Public specs, schemas, Events, policy, runtime, Artifact, Workspace, and Execution contracts. |
+| `@codesoul-co/fsm`                                  | FSM specs, custom topology analysis, snapshots, transitions, guards, and recovery semantics.  |
+| `@codesoul-co/kernel`                               | Governed ReAct and FSM coordination.                                                          |
+| `@codesoul-co/harness`                              | Bounded execution, tracing, recovery, continuation, and side-effect hooks.                    |
+| `@codesoul-co/domain`                               | DomainPack loading, validation, overlays, registry, and compilation.                          |
+| `@codesoul-co/memory`                               | Memory profiles, provider adapters, context assembly, migration, and governance.              |
+| `@codesoul-co/tools`, `@codesoul-co/mcp`, `@codesoul-co/skills` | Capability contracts, registries, execution, trust, and progressive loading.                  |
+| `@codesoul-co/inference`, `@codesoul-co/models`           | Model aliases, routing, inference backends, prompt compilation, and normalized responses.     |
+| `@codesoul-co/storage`, `@codesoul-co/adapters-local`     | Storage contracts and local/self-hosted provider adapters.                                    |
+| `@codesoul-co/serving-cache`, `@codesoul-co/workcache`    | Exact model-response cache and event-derived runtime cache.                                   |
+| `@codesoul-co/testing`                              | Contract fixtures and test support.                                                           |
 
 ## Documentation
 

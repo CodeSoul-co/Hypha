@@ -14,24 +14,24 @@ import {
   type EventSchemaDefinition,
   type EventStreamHead,
   type RuntimeOrchestrationProjection,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   InMemoryExecutionArtifactStore,
   SQLiteDurableEventStore,
   SQLiteProjectionStore,
   SQLiteReActContinuationCheckpointStore,
   SQLiteSessionQueue,
-} from '@hypha/adapters-local';
+} from '@codesoul-co/adapters-local';
 import type {
   ReActContinuationScheduleRequest,
   ReActContinuationScheduler,
   ReActQuantumExecutor,
-} from '@hypha/harness';
+} from '@codesoul-co/harness';
 import {
   ServerIngressReActContinuationScheduler,
   reActContinuationIdempotencyKey,
-} from '@hypha/harness';
-import { type ReActContinuationCheckpoint, type ReActRunResult } from '@hypha/kernel';
+} from '@codesoul-co/harness';
+import { type ReActContinuationCheckpoint, type ReActRunResult } from '@codesoul-co/kernel';
 import {
   createServerReActContinuationCommandIngress,
   ServerSessionCommandRuntime,

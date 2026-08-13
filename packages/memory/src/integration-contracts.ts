@@ -1,4 +1,4 @@
-import type { SpecRef } from '@hypha/core';
+import type { SpecRef } from '@codesoul-co/core';
 import type {
   ManagedMemoryScope,
   ManagedMemoryType,

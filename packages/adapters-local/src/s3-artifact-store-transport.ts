@@ -1,5 +1,5 @@
 import { PassThrough, type Readable } from 'node:stream';
-import type { ArtifactByteRange } from '@hypha/core';
+import type { ArtifactByteRange } from '@codesoul-co/core';
 import { Client, CopyDestinationOptions, CopySourceOptions } from 'minio';
 import {
   normalizeS3ArtifactClientConfig,

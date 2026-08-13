@@ -3,7 +3,7 @@ import type {
   InferenceResponse,
   ReasoningRequest,
   ReasoningStrategyDescriptor,
-} from '@hypha/inference';
+} from '@codesoul-co/inference';
 import { ThinkingCache, type ThinkingCacheEntryKind } from './thinking-cache';
 import {
   hydrateInferenceResponse,

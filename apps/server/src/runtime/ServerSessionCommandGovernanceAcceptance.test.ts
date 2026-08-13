@@ -6,8 +6,8 @@ import {
   InMemoryTelemetryRecorder,
   RUNTIME_OPERATIONAL_METRIC_NAMES,
   RuntimeOperationalTelemetry,
-} from '@hypha/core';
-import { InMemoryExecutionArtifactStore, SQLiteSessionQueue } from '@hypha/adapters-local';
+} from '@codesoul-co/core';
+import { InMemoryExecutionArtifactStore, SQLiteSessionQueue } from '@codesoul-co/adapters-local';
 import {
   ServerSessionCommandRuntime,
   type ServerSessionCommandInput,

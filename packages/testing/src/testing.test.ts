@@ -7,8 +7,8 @@ import {
   InMemoryEventStore,
   type FrameworkEvent,
   type OutputContractSpec,
-} from '@hypha/core';
-import { domainPackSpecDefinition, validateDomainPackSpec } from '@hypha/domain';
+} from '@codesoul-co/core';
+import { domainPackSpecDefinition, validateDomainPackSpec } from '@codesoul-co/domain';
 import {
   assertEventTypes,
   assertStatePath,
@@ -21,7 +21,7 @@ import {
   TraceCompletenessEvaluator,
 } from './index';
 
-describe('@hypha/testing golden helpers', () => {
+describe('@codesoul-co/testing golden helpers', () => {
   it('checks golden event types and state paths', () => {
     const fixture = {
       id: 'fixture',

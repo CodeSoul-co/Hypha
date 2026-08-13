@@ -1,7 +1,7 @@
 import {
   InMemoryMemoryLifecycleTaskStore,
   canonicalMemoryRuntimeConfigExample,
-} from '@hypha/memory';
+} from '@codesoul-co/memory';
 import {
   ServerMemoryAdministration,
   validateServerMemoryConfiguration,

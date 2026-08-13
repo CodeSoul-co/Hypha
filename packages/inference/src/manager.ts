@@ -1,4 +1,4 @@
-import { FrameworkError, type RecoveryFailure } from '@hypha/core';
+import { FrameworkError, type RecoveryFailure } from '@codesoul-co/core';
 import { deserialize, serialize } from 'node:v8';
 import { inferenceCacheScopeHash, isKvCacheExpired, runInferenceCacheOperation } from './cache';
 import { classifyInferenceCacheFailure, classifyInferenceFailure } from './recovery';

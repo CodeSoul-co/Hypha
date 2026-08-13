@@ -73,7 +73,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
     "@google/generative-ai": "^0.2.0",
-    "@hypha/workcache": "0.0.0",
+    "@codesoul-co/workcache": "0.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",

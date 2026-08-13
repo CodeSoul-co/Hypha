@@ -1,15 +1,15 @@
 # Releases and npm Packages
 
 The repository is a private npm workspace. Framework libraries explicitly marked `private: false`
-are public release artifacts named `@hypha/*`; packages still marked private are not published.
+are public release artifacts named `@codesoul-co/*`; packages still marked private are not published.
 “Public” here describes the intended package metadata and access level, not current registry
 availability. The Express Server and example CLI remain source/deployment surfaces; publishing a
 framework package does not publish or operate a Server.
 
 ## Release contract
 
-- All public `@hypha/*` packages in one release use the same Semantic Version.
-- Internal `@hypha/*` dependencies use the exact release version.
+- All public `@codesoul-co/*` packages in one release use the same Semantic Version.
+- Internal `@codesoul-co/*` dependencies use the exact release version.
 - Each package publishes only `dist/` plus npm-generated metadata.
 - Node.js 22 or newer is required.
 - `npm run release:check:npm` builds package output, verifies declared source dependencies, checks

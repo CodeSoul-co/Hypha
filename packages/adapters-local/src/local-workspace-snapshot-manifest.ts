@@ -1,4 +1,4 @@
-import type { WorkspaceSnapshotManifest } from '@hypha/core';
+import type { WorkspaceSnapshotManifest } from '@codesoul-co/core';
 import { hashArtifactBytes } from './artifact-content-io';
 
 export function encodeWorkspaceSnapshotManifest(manifest: WorkspaceSnapshotManifest): Uint8Array {

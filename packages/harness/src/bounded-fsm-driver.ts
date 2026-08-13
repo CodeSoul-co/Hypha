@@ -18,7 +18,7 @@ import {
   type RuntimeWaitIntent,
   type StateExecutionClaim,
   type StateExecutionClaimStore,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import {
   evaluateGuardExpression,
   validateFSMProcessSpec,
@@ -26,7 +26,7 @@ import {
   type FSMProcessSpec,
   type FSMStateSpec,
   type FSMTransitionSpec,
-} from '@hypha/fsm';
+} from '@codesoul-co/fsm';
 
 export type BoundedFSMDriverDisposition =
   | 'completed'

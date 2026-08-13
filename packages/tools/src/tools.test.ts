@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'crypto';
-import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@hypha/core';
+import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@codesoul-co/core';
 import {
   GovernedToolRunner,
   HttpToolAdapter,
@@ -33,7 +33,7 @@ import {
   validateToolSpec,
 } from './index';
 
-describe('@hypha/tools governed runner', () => {
+describe('@codesoul-co/tools governed runner', () => {
   it('provides one executable Adapter contract for local, plugin, mock, HTTP, and MCP tools', async () => {
     const local = new LocalFunctionToolAdapter('adapter.local', async (input) => ({ input }));
     const plugin = new PluginToolAdapter('adapter.plugin', async () => ({ plugin: true }));

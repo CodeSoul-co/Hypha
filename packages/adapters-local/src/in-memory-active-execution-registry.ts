@@ -1,4 +1,4 @@
-import type { ExecutionCancelRequest } from '@hypha/core';
+import type { ExecutionCancelRequest } from '@codesoul-co/core';
 import { executionProviderError } from './execution-provider-error';
 
 export interface ActiveExecutionHandle {

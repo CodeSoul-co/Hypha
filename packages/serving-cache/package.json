@@ -1,5 +1,5 @@
 {
-  "name": "@hypha/serving-cache",
+  "name": "@codesoul-co/serving-cache",
   "version": "1.0.0",
   "private": false,
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@hypha/models": "1.0.0",
+    "@codesoul-co/models": "1.0.0",
     "better-sqlite3": "^11.10.0",
     "zod": "^3.22.0"
   },

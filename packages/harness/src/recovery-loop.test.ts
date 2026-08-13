@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { defaultReActFSMProcessSpec, FSMRuntime, type FSMAnomaly } from '@hypha/fsm';
+import { defaultReActFSMProcessSpec, FSMRuntime, type FSMAnomaly } from '@codesoul-co/fsm';
 import { runFSMRecoveryLoop } from './recovery-loop';
 
 async function reasoningRuntime(runId: string): Promise<FSMRuntime> {
@@ -11,7 +11,7 @@ async function reasoningRuntime(runId: string): Promise<FSMRuntime> {
   return fsm;
 }
 
-describe('@hypha/harness explicit FSM recovery loop', () => {
+describe('@codesoul-co/harness explicit FSM recovery loop', () => {
   it('executes an explicitly scheduled bounded retry and closes the circuit on success', async () => {
     const fsm = await reasoningRuntime('run_retry');
     const execute = vi

@@ -1,5 +1,5 @@
 {
-  "name": "@hypha/testing",
+  "name": "@codesoul-co/testing",
   "version": "1.0.0",
   "private": false,
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@hypha/core": "1.0.0"
+    "@codesoul-co/core": "1.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

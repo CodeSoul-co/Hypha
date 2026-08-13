@@ -7,7 +7,7 @@ import {
   type OutputContractSpec,
   type TraceRecorder,
   type TraceSpec,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 
 export type EvaluationStatus = 'passed' | 'failed';
 

@@ -1,4 +1,4 @@
-import type { JsonSchema } from '@hypha/core';
+import type { JsonSchema } from '@codesoul-co/core';
 import {
   LocalFunctionToolAdapter,
   type ToolAdapter,

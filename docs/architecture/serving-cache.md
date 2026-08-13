@@ -100,7 +100,7 @@ never cached.
 
 ## Stores
 
-`@hypha/serving-cache` exposes `CacheStore`, `NoopCacheStore`,
+`@codesoul-co/serving-cache` exposes `CacheStore`, `NoopCacheStore`,
 `MemoryCacheStore`, `SQLiteCacheStore`, and `RedisCacheStore`. Store
 implementations persist versioned, runtime-validated `CacheEntry` records.
 Every store verifies that the physical lookup key matches `CacheEntry.key`;

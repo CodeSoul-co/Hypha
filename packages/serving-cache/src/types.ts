@@ -1,4 +1,4 @@
-import type { ModelProvider, ModelRequest, ModelResponse } from '@hypha/models';
+import type { ModelProvider, ModelRequest, ModelResponse } from '@codesoul-co/models';
 
 export type CacheType = 'exact' | 'prefix-metadata' | 'semantic';
 export type CacheMode = 'off' | 'read' | 'write' | 'readwrite';

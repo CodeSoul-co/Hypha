@@ -1,4 +1,4 @@
-import type { FrameworkEventType } from '@hypha/core';
+import type { FrameworkEventType } from '@codesoul-co/core';
 import type { NormalizedMemoryError } from './contracts';
 import { sha256 } from './memory-utils';
 

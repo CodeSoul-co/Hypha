@@ -1,4 +1,4 @@
-import type { ExecutionStore } from '@hypha/core';
+import type { ExecutionStore } from '@codesoul-co/core';
 import {
   SQLiteExecutionStoreFoundation,
   type SQLiteExecutionStoreFoundationErrorCode,

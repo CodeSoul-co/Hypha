@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { validateCommandExecutionRequest, type CommandExecutionRequest } from '@hypha/core';
+import { validateCommandExecutionRequest, type CommandExecutionRequest } from '@codesoul-co/core';
 import type { DockerCliResult } from './docker-cli-transport';
 import type {
   DockerExecutionCollectedOutputs,

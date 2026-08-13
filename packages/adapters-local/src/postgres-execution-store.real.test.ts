@@ -8,7 +8,7 @@ import {
   executionLeaseRenewRequestExample,
   executionRecordCompareAndSetRequestExample,
   executionRecordCreateRequestExample,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerCliTransport, type DockerCliResult } from './docker-cli-transport';

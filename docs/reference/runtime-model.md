@@ -52,7 +52,7 @@ The exact event sequence depends on the route, workflow, tools, memory writes, p
 
 ## Durable Orchestration Building Blocks
 
-`@hypha/core` exposes provider-neutral runtime contracts together with in-memory reference
+`@codesoul-co/core` exposes provider-neutral runtime contracts together with in-memory reference
 implementations. Durable adapters can implement the same interfaces without changing FSM or
 DomainPack semantics.
 
@@ -66,7 +66,7 @@ DomainPack semantics.
 | Determinism  | Runtime helper APIs provide recorded transition, wait, clock, id, event, resource, and activity observations instead of reading untracked process state.                        |
 | Lifecycle    | Control, timer, cancellation, checkpoint, recovery, replay, and query services persist commands and observations before deriving the next action.                               |
 
-`BoundedFSMDriver` in `@hypha/harness` advances an FSM only while a transition is supported by
+`BoundedFSMDriver` in `@codesoul-co/harness` advances an FSM only while a transition is supported by
 current event-derived state and the configured step/time budgets. It returns an explicit completed,
 waiting, yielded, cancelled, failed, or exhausted result; exhaustion is never converted into another
 unbounded loop. `RuntimeExecutionContext` carries the scoped runtime ports used by the driver and
@@ -169,7 +169,7 @@ records and contribute normalized failure evidence. See
 
 ## Message Bus
 
-`@hypha/harness` exposes `MessageBus` and `InMemoryMessageBus` as the transport
+`@codesoul-co/harness` exposes `MessageBus` and `InMemoryMessageBus` as the transport
 contract for future multi-workflow and multi-agent execution. The current
 single-agent runtime can ignore it, but clients that need asynchronous handoff
 can publish `RuntimeMessage` records scoped by `userId`, `sessionId`, and

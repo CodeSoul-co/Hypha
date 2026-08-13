@@ -19,12 +19,12 @@ import type {
   ModelToolDescriptor,
   ModelUsage,
   NormalizedToolCall,
-} from '@hypha/models';
+} from '@codesoul-co/models';
 import {
   OpenAICompatibleModelProvider,
   OpenAIModelProvider,
   createDeepSeekProvider,
-} from '@hypha/models';
+} from '@codesoul-co/models';
 import {
   CachedLLMProvider,
   MemoryCacheStore,
@@ -37,7 +37,7 @@ import {
   type CacheStore,
   type RedisCacheClient,
   type ServingCacheTraceSink,
-} from '@hypha/serving-cache';
+} from '@codesoul-co/serving-cache';
 import { ClaudeAdapter } from './adapters/ClaudeAdapter';
 import { GeminiAdapter } from './adapters/GeminiAdapter';
 import { OllamaAdapter } from './adapters/OllamaAdapter';

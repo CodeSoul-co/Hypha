@@ -1,4 +1,4 @@
-import type { ExecutionStore, ExecutionStoreFactory } from '@hypha/core';
+import type { ExecutionStore, ExecutionStoreFactory } from '@codesoul-co/core';
 import {
   PostgresExecutionStoreConnection,
   type PostgresExecutionStoreConnectionOptions,

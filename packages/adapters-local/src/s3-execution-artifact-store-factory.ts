@@ -1,4 +1,4 @@
-import type { ArtifactStoreProvider, ArtifactStoreProviderFactory } from '@hypha/core';
+import type { ArtifactStoreProvider, ArtifactStoreProviderFactory } from '@codesoul-co/core';
 import {
   S3_EXECUTION_ARTIFACT_STORE_ID,
   S3ExecutionArtifactStore,

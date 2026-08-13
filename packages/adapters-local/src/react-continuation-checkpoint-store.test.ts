@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import type { ReActContinuationCheckpoint } from '@hypha/kernel';
+import type { ReActContinuationCheckpoint } from '@codesoul-co/kernel';
 import { SQLiteReActContinuationCheckpointStore } from './react-continuation-checkpoint-store';
 
 const scopeHash = 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';

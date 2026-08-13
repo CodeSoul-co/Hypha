@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ArtifactByteSource } from '@hypha/core';
+import type { ArtifactByteSource } from '@codesoul-co/core';
 import { ArtifactContentLimitError } from './artifact-content-io';
 import { S3ArtifactTransferAbortedError } from './s3-artifact-store-transport';
 

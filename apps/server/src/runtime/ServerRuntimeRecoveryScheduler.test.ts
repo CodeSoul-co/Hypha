@@ -4,7 +4,7 @@ import type {
   RuntimeRecoveryResult,
   RuntimeRecoveryScanRequest,
   RuntimeRecoveryScanResult,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { ServerRuntimeRecoveryScheduler } from './ServerRuntimeRecoveryScheduler';
 
 const checkedAt = '2026-07-22T10:00:00.000Z';

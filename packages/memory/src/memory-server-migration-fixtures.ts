@@ -5,7 +5,7 @@ const canonicalId = memoryServerMigrationAcceptance.sharedFixture.canonicalServi
 const canonicalReceipt = {
   runtimeId: 'memory-runtime:acceptance',
   serviceInstanceId: canonicalId,
-  serviceContract: '@hypha/memory.MemoryApplicationService' as const,
+  serviceContract: '@codesoul-co/memory.MemoryApplicationService' as const,
   activeProfileId: 'memory.profile.native',
   providerId: 'memory.provider.native',
   providerSpecId: 'memory.provider.native',

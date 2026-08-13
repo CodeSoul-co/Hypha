@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { FrameworkEvent, RecoveryKnowledgePort } from '@hypha/core';
+import type { FrameworkEvent, RecoveryKnowledgePort } from '@codesoul-co/core';
 import { WorkGraphIndex } from './graph';
 import { hashStableJson } from './key';
 import { fallbackAuditIdentity, sameValidity, workCacheScopeFromEvent } from './materializers';

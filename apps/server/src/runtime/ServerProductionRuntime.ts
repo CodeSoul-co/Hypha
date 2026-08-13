@@ -5,11 +5,11 @@ import {
   type RuntimeCancellationRecoveryPort,
   type RuntimeRecoveryCandidateReason,
   type RuntimeRecoveryRequeuePort,
-} from '@hypha/core';
-import type { FSMProcessSpec } from '@hypha/fsm';
-import type { BoundedStateExecutorInput } from '@hypha/harness';
-import type { InferenceProvider } from '@hypha/inference';
-import type { ToolRunner } from '@hypha/tools';
+} from '@codesoul-co/core';
+import type { FSMProcessSpec } from '@codesoul-co/fsm';
+import type { BoundedStateExecutorInput } from '@codesoul-co/harness';
+import type { InferenceProvider } from '@codesoul-co/inference';
+import type { ToolRunner } from '@codesoul-co/tools';
 import { RuntimeTransitionDispatcher } from './RuntimeTransitionDispatcher';
 import type { ServerRuntimeCompositionBindings } from './ServerRuntimeComposition';
 import type { ServerRuntimeWorkerBindings } from './ServerRuntimeWorkerLifecycle';

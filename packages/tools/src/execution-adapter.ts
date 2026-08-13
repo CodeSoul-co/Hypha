@@ -9,7 +9,7 @@ import {
   type ExecutionDispatchRequest,
   type ExecutionToolBinding,
   type NormalizedExecutionError,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { providerHealthSchema, type ProviderHealth, type ToolSource } from './contracts';
 import type {
   AdapterCancellationRequest,

@@ -2,8 +2,8 @@ import type {
   CommandOutputChunk,
   ExecutionPrincipal,
   RemoteOutputStreamRequest,
-} from '@hypha/core';
-import { validateCommandOutputChunk } from '@hypha/core';
+} from '@codesoul-co/core';
+import { validateCommandOutputChunk } from '@codesoul-co/core';
 import { executionProviderError } from './execution-provider-error';
 import { cloneExecutionValue, hashExecutionBytes } from './execution-provider-values';
 

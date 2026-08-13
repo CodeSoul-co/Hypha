@@ -1,5 +1,5 @@
 import { z, type ZodType } from 'zod';
-import type { JsonSchema } from '@hypha/core';
+import type { JsonSchema } from '@codesoul-co/core';
 import type { MemoryServerMigrationAcceptance } from './memory-server-migration-contract';
 import { memoryContractSpecRefJsonSchema, memoryContractSpecRefSchema } from './profile-contract';
 import { managedMemoryScopeSchema, normalizedMemoryErrorSchema } from './record-contract';
@@ -8,7 +8,7 @@ export const memoryServerMigrationAcceptanceSchema: ZodType<MemoryServerMigratio
   .object({
     contractRef: memoryContractSpecRefSchema,
     issues: z.tuple([z.literal('P0-1'), z.literal('P0-2'), z.literal('P0-3')]),
-    canonicalService: z.literal('@hypha/memory.MemoryApplicationService'),
+    canonicalService: z.literal('@codesoul-co/memory.MemoryApplicationService'),
     requiredConsumers: z.tuple([
       z.literal('chat'),
       z.literal('memory-routes'),
@@ -206,7 +206,7 @@ export const memoryServerMigrationAcceptanceJsonSchema: JsonSchema = strictObjec
   {
     contractRef: memoryContractSpecRefJsonSchema,
     issues: { type: 'array', items: { enum: ['P0-1', 'P0-2', 'P0-3'] }, minItems: 3 },
-    canonicalService: { enum: ['@hypha/memory.MemoryApplicationService'] },
+    canonicalService: { enum: ['@codesoul-co/memory.MemoryApplicationService'] },
     requiredConsumers: {
       type: 'array',
       items: { enum: ['chat', 'memory-routes', 'tool', 'workflow', 'harness'] },

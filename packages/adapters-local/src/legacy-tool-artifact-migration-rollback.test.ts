@@ -1,4 +1,4 @@
-import type { ArtifactRecord, ExecutionPrincipal } from '@hypha/core';
+import type { ArtifactRecord, ExecutionPrincipal } from '@codesoul-co/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { LegacyToolArtifactMigrationExecutionResult } from './legacy-tool-artifact-migration-executor';
 import type { LegacyToolArtifactMigrationPlan } from './legacy-tool-artifact-migration-planner';

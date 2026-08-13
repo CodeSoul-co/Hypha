@@ -28,7 +28,7 @@ import {
   type SandboxStatus,
   type SandboxStatusRequest,
   type SandboxTerminateRequest,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 
 const defaultCapabilities: SandboxProviderCapabilities = {
   processIsolation: false,

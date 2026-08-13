@@ -337,4 +337,4 @@ export interface InferenceBackendRegistryEntry {
   backend: InferenceBackend;
   default?: boolean;
 }
-import type { RecoveryFailure } from '@hypha/core';
+import type { RecoveryFailure } from '@codesoul-co/core';

@@ -18,8 +18,8 @@ import {
   type RecoveryModule,
   type RecoveryStrategy,
   type TraceRecorder,
-} from '@hypha/core';
-import { FSMRuntime, type FSMAnomaly, type FSMRecoveryDecision } from '@hypha/fsm';
+} from '@codesoul-co/core';
+import { FSMRuntime, type FSMAnomaly, type FSMRecoveryDecision } from '@codesoul-co/fsm';
 
 export interface RecoveryParticipantResult<TOutput = unknown> {
   output: TOutput;

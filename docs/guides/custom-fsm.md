@@ -11,7 +11,7 @@ Hypha supports two deliberately separate FSM modes:
 ## Define and inspect a topology
 
 ```ts
-import { analyzeFSMTopology, parseFSMProcessSpec } from '@hypha/fsm';
+import { analyzeFSMTopology, parseFSMProcessSpec } from '@codesoul-co/fsm';
 
 const process = parseFSMProcessSpec({
   id: 'release.approval',

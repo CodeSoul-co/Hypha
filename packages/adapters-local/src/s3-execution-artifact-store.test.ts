@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import type { ArtifactPutRequest } from '@hypha/core';
+import type { ArtifactPutRequest } from '@codesoul-co/core';
 import { readArtifactStream } from './artifact-content-io';
 import {
   HYPHA_CONTENT_HASH_METADATA_KEY,

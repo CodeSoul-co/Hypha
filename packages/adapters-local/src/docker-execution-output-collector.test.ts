@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { CommandExecutionRequest } from '@hypha/core';
+import type { CommandExecutionRequest } from '@codesoul-co/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DockerCliResult } from './docker-cli-transport';
 import {

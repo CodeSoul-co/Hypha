@@ -8,7 +8,7 @@ import {
   hashCanonicalJson,
   type FrameworkEvent,
   type JsonSchema,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 import { DurableEventStoreBridge } from './durable-event-store-bridge';
 
 const payloadSchema: JsonSchema = {

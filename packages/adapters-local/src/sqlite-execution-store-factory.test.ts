@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ExecutionStoreRegistry, executionRecordCreateRequestExample } from '@hypha/core';
+import { ExecutionStoreRegistry, executionRecordCreateRequestExample } from '@codesoul-co/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   SQLITE_EXECUTION_STORE_ID,

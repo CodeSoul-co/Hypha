@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ArtifactByteRange, ArtifactGetRequest, ArtifactObjectMetadata } from '@hypha/core';
+import type { ArtifactByteRange, ArtifactGetRequest, ArtifactObjectMetadata } from '@codesoul-co/core';
 import { ArtifactStoreAdapterError, artifactStoreError } from './artifact-store-adapter-error';
 
 export const HYPHA_CONTENT_HASH_METADATA_KEY = 'hypha-content-hash';

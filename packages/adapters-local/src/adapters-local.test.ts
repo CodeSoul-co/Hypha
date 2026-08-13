@@ -15,19 +15,19 @@ import {
   FileToolContractSnapshotStore,
   FileToolObservationStore,
 } from './index';
-import { createFrameworkEvent } from '@hypha/core';
+import { createFrameworkEvent } from '@codesoul-co/core';
 import {
   LegacyVectorIndexStoreAdapter,
   StructuredManagedMemoryRecordStore,
   StructuredMemoryPersistenceUnitOfWork,
   hashMemoryScope,
   managedMemoryRecordExample,
-} from '@hypha/memory';
+} from '@codesoul-co/memory';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-describe('@hypha/adapters-local reference providers', () => {
+describe('@codesoul-co/adapters-local reference providers', () => {
   it('persists MCP catalog revisions, Tool snapshots, and artifactized Tool output', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hypha-tool-bindings-'));
     const catalog = new FileMCPCapabilityCatalogStore(path.join(root, 'mcp-catalog.json'));

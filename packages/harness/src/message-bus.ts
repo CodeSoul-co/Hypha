@@ -3,7 +3,7 @@ import {
   FrameworkError,
   type FrameworkEvent,
   type TraceRecorder,
-} from '@hypha/core';
+} from '@codesoul-co/core';
 
 export type MessageAddressKind = 'runtime' | 'session' | 'workflow' | 'agent' | 'tool' | 'human';
 

@@ -17,7 +17,7 @@ The local backbone is designed for a complete local harness:
 Create the full local stack:
 
 ```ts
-import { createLocalStorageBackbone } from '@hypha/adapters-local';
+import { createLocalStorageBackbone } from '@codesoul-co/adapters-local';
 
 const storage = createLocalStorageBackbone({
   rootPath: './data/storage',
@@ -61,7 +61,7 @@ semantic embedding model. Inject a concrete `EmbeddingProvider` through the
 
 Use `StorageTopologySpec` to group profiles and declare default refs for relational, document, messaging, cache, vector, artifact, event, and memory stores. `messagingRef` is the primary queue/stream/pub-sub default; `cacheRef` can point to the same Redis profile when cache behavior is colocated.
 
-Common profile factories are exported from `@hypha/storage`:
+Common profile factories are exported from `@codesoul-co/storage`:
 
 ```ts
 import {
@@ -71,7 +71,7 @@ import {
   createKafkaStorageProfile,
   createQdrantStorageProfile,
   createPineconeStorageProfile,
-} from '@hypha/storage';
+} from '@codesoul-co/storage';
 
 const eventStore = createSQLiteStorageProfile({ role: 'event_log' });
 const mongo = createMongoStorageProfile({ deployment: 'cloud', tls: true });

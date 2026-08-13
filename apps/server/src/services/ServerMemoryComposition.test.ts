@@ -4,9 +4,9 @@ import type {
   ProviderHealth,
   MemoryProviderTelemetry,
   MemoryRuntimeCompositionReceipt,
-} from '@hypha/memory';
-import { InMemoryEventStore } from '@hypha/core';
-import { MemoryOperationalMetrics } from '@hypha/memory';
+} from '@codesoul-co/memory';
+import { InMemoryEventStore } from '@codesoul-co/core';
+import { MemoryOperationalMetrics } from '@codesoul-co/memory';
 import {
   createServerMemoryEventPublisher,
   createServerMemoryTelemetry,
@@ -26,7 +26,7 @@ function runtime(
   const receipt: MemoryRuntimeCompositionReceipt = {
     runtimeId: 'memory-runtime:test',
     serviceInstanceId: 'memory-service:test',
-    serviceContract: '@hypha/memory.MemoryApplicationService',
+    serviceContract: '@codesoul-co/memory.MemoryApplicationService',
     activeProfileId: 'native-test',
     providerId: 'memory.provider.native-test',
     providerSpecId: 'memory.provider.native-test',

@@ -11,7 +11,7 @@ const baseContext = {
   providerRevision: 'postgres-17',
 };
 
-describe('@hypha/storage recovery classification', () => {
+describe('@codesoul-co/storage recovery classification', () => {
   it('permits bounded read retry and a compatible replica fallback', () => {
     const failure = classifyStorageFailure(
       { code: 'ETIMEDOUT', message: 'read timed out' },
