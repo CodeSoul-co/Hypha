@@ -26,15 +26,16 @@ const describeTopology = required ? describe : describe.skip;
 const mongoUri =
   process.env.HYPHA_TEST_NATIVE_REPLICA_SET_URI ??
   'mongodb://host.docker.internal:27117,host.docker.internal:27118,host.docker.internal:27119/hypha_native_production_test?replicaSet=hypha-rs&retryWrites=true&w=majority';
+const topologyHost = process.env.HYPHA_TEST_NATIVE_HOST ?? '127.0.0.1';
 const sentinels = [
-  { host: '127.0.0.1', port: 27301 },
-  { host: '127.0.0.1', port: 27302 },
-  { host: '127.0.0.1', port: 27303 },
+  { host: topologyHost, port: 27301 },
+  { host: topologyHost, port: 27302 },
+  { host: topologyHost, port: 27303 },
 ];
 const natMap = {
-  'host.docker.internal:27201': { host: '127.0.0.1', port: 27201 },
-  'host.docker.internal:27202': { host: '127.0.0.1', port: 27202 },
-  'host.docker.internal:27203': { host: '127.0.0.1', port: 27203 },
+  'host.docker.internal:27201': { host: topologyHost, port: 27201 },
+  'host.docker.internal:27202': { host: topologyHost, port: 27202 },
+  'host.docker.internal:27203': { host: topologyHost, port: 27203 },
 };
 
 jest.setTimeout(120_000);
@@ -501,7 +502,7 @@ describeTopology('Native Redis + MongoDB production topology acceptance', () => 
     const namespace = 'hypha:native-production:redis:' + Date.now();
     redisNamespaces.push(namespace);
     const first = redisClient();
-    const sentinel = new Redis(27301, '127.0.0.1', {
+    const sentinel = new Redis(27301, topologyHost, {
       lazyConnect: true,
       maxRetriesPerRequest: 2,
     });
