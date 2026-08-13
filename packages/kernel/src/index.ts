@@ -1141,8 +1141,45 @@ export class DefaultVerifier implements Verifier {
         reason: 'Observation requires human review.',
       };
     }
+    const failedTool = failedToolObservation(observation);
+    if (failedTool) {
+      return {
+        type: 'model',
+        reason: `Tool ${failedTool.toolId} ended with ${failedTool.status}: ${failedTool.reason}`,
+      };
+    }
     return { type: 'finish', input: observation.value };
   }
+}
+
+function failedToolObservation(
+  observation: ReActObservation
+): { toolId: string; status: string; reason: string } | undefined {
+  if (
+    observation.source !== 'tool' ||
+    !observation.value ||
+    typeof observation.value !== 'object' ||
+    Array.isArray(observation.value)
+  ) {
+    return undefined;
+  }
+  const value = observation.value as Record<string, unknown>;
+  if (
+    typeof value.toolId !== 'string' ||
+    !['failed', 'denied', 'conflict'].includes(String(value.status))
+  ) {
+    return undefined;
+  }
+  const error = value.error;
+  const reason =
+    typeof error === 'string'
+      ? error
+      : error &&
+          typeof error === 'object' &&
+          typeof (error as Record<string, unknown>).message === 'string'
+        ? String((error as Record<string, unknown>).message)
+        : 'Tool execution did not complete.';
+  return { toolId: value.toolId, status: String(value.status), reason };
 }
 
 export class BasicReActAgentRuntime implements ReActAgentRuntime {
@@ -1557,7 +1594,21 @@ export class ReActRunner {
           action = inferred.action;
           continue;
         }
-        if (action.type === 'finish' || action.type === 'model') {
+        if (action.type === 'model') {
+          const error = new Error(
+            action.reason ??
+              'Tool observation requires another Model turn, but continueAfterTool is disabled.'
+          );
+          await pushStep('fail', observation, error.message);
+          return {
+            runId: context.runId,
+            status: 'failed',
+            steps,
+            error,
+            finalAction: action,
+          };
+        }
+        if (action.type === 'finish') {
           const output = action.input ?? observation.value;
           await pushStep('complete', action, output);
           await clearCheckpoint();
