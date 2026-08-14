@@ -21,6 +21,18 @@ import {
 
 export * from './remote-registry';
 
+/**
+ * Resolves the directory that ships Hypha's built-in skills
+ * (context-enrichment, intent-classification) inside this npm package.
+ *
+ * The published tarball includes `builtins/` next to `dist/`, so consumers
+ * can load the framework built-ins without a source checkout of the Server.
+ */
+export function resolveBuiltinSkillsDirectory(): string {
+  // Compiled CJS output lives in <pkg>/dist; the shipped data lives in <pkg>/builtins.
+  return path.resolve(__dirname, '..', 'builtins');
+}
+
 export interface SkillRef {
   id: string;
   version?: string;

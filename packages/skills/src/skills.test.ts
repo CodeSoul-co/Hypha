@@ -6,6 +6,7 @@ import {
   DefaultSkillPolicy,
   createEffectiveAgentCapabilitySnapshot,
   LocalSkillLoader,
+  resolveBuiltinSkillsDirectory,
   SkillContextLoader,
   SkillRegistry,
   SkillResolver,
@@ -209,7 +210,7 @@ describe('@codesoul-co/hypha-skills resolver', () => {
   it('loads a real local markdown skill and activates it progressively', async () => {
     const registry = new SkillRegistry();
     const loader = new LocalSkillLoader({
-      directories: ['apps/server/src/core/skills/builtins'],
+      directories: [resolveBuiltinSkillsDirectory()],
       recursive: false,
     });
     await loader.loadInto(registry);

@@ -10,6 +10,7 @@ import {
   SkillRegistry,
   SkillSelector,
   loadSkillMarkdownFile,
+  resolveBuiltinSkillsDirectory,
   parseSkillMarkdown,
   type LoadedSkillContext,
   type SignedSkillRegistryEntry,
@@ -22,7 +23,7 @@ import { listSkillFiles, type ParsedSkillFile } from './parser';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 
-const DEFAULT_BUILTIN_DIR = path.resolve(process.cwd(), 'apps/server/src/core/skills/builtins');
+const DEFAULT_BUILTIN_DIR = resolveBuiltinSkillsDirectory();
 
 function skillDataRoot(): string {
   return path.resolve(

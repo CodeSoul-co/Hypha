@@ -12,7 +12,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "builtins"
   ],
   "publishConfig": {
     "access": "public"
