@@ -11,6 +11,9 @@ or operate a Server. The complete v1.0.0 package atlas is available in the
 - All public `@codesoul-co/hypha-*` packages in one release use the same Semantic Version.
 - Internal `@codesoul-co/hypha-*` dependencies use the exact release version.
 - Each package publishes only `dist/` plus npm-generated metadata.
+- `@codesoul-co/hypha-skills` additionally ships the framework built-in skills
+  (`builtins/`) and exposes `resolveBuiltinSkillsDirectory()` so npm consumers can load
+  `context-enrichment` and `intent-classification` without a Server source checkout.
 - Node.js 22 or newer is required.
 - `npm run release:check:npm` builds package output, verifies declared source dependencies, checks
   package metadata, and validates the files that `npm pack` would include.
