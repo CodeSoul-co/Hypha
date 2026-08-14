@@ -2,7 +2,7 @@
 
 These packages add context or side effects. Merely naming a capability in a Domain Pack does not grant execution authority; trusted composition must register it and policy must allow it.
 
-## `hypha-memory`
+## [`hypha-memory`](./memory)
 
 Memory contracts describe scoped structured, vector, artifact, episodic and semantic memory.
 
@@ -21,7 +21,7 @@ const memory = validateMemorySpec({
 
 Bind a concrete MemoryProvider in trusted composition. Production reads and writes should carry `userId`, Session/Run scope, policy evidence and trace hooks. A memory write is an effect, not an invisible callback.
 
-## `hypha-skills`
+## [`hypha-skills`](./skills)
 
 Skills are versioned instruction assets selected and progressively loaded into Agent context.
 
@@ -39,7 +39,7 @@ const selector = new SkillSelector(registry);
 
 Keep the short description/index cheap to load. Resolve the full instruction body only after selection, authorization and trust checks.
 
-## `hypha-tools`
+## [`hypha-tools`](./tools)
 
 Tools combine a typed contract with a separately registered handler.
 
@@ -59,7 +59,7 @@ tools.register(spec, async (input) => ({ input, source: 'local-index' }));
 
 Use the governed runner in real execution so timeout, cancellation, policy, trace and receipts wrap the handler. Keep host filesystem and external write authority out of model-generated input.
 
-## `hypha-mcp`
+## [`hypha-mcp`](./mcp)
 
 MCP integrations describe allowed servers/capabilities and normalize their tools behind the same Tool path.
 

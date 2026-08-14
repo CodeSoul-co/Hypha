@@ -23,7 +23,7 @@ features:
   - icon: '01'
     title: Spec 先于 Provider
     details: 版本化 TypeScript 契约与运行时校验，使应用代码不与基础设施实现绑定。
-    link: /zh/packages/contracts
+    link: /zh/packages/core
   - icon: '02'
     title: ReAct + FSM 执行
     details: 将受保护的 Harness 生命周期与应用自己定义的工作流拓扑明确分离。
@@ -31,7 +31,7 @@ features:
   - icon: '03'
     title: 所有副作用均受治理
     details: Tool、MCP、Memory 与外部写入统一经过 Policy、Trace 和 Harness 边界。
-    link: /zh/packages/capabilities
+    link: /zh/packages/tools
   - icon: '04'
     title: Event 始终是事实来源
     details: Session 是产品视图；回放与评估均从 Event 流派生状态。
@@ -39,7 +39,7 @@ features:
   - icon: '05'
     title: Local-first 组合
     details: 从 SQLite、文件和确定性适配器开始，之后可替换 Provider 而不迁移产品契约。
-    link: /zh/packages/product-runtime
+    link: /zh/packages/adapters-local
   - icon: '06'
     title: 完整可运行示例
     details: 覆盖全部 15 个包，编译 Domain Pack、运行自定义 FSM 并提交持久化命令。

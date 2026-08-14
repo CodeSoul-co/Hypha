@@ -34,21 +34,21 @@ EVENTS → REPLAY → TESTING
 
 | Package | Primary boundary | Typical entry point |
 | --- | --- | --- |
-| [`hypha-core`](./contracts) | Versioned framework contracts | `createFrameworkEvent` |
-| [`hypha-storage`](./contracts#hypha-storage) | Provider-neutral storage profiles | `createSQLiteStorageProfile` |
-| [`hypha-fsm`](./execution) | Validated FSM topology/runtime | `parseFSMProcessSpec` |
-| [`hypha-kernel`](./execution#hypha-kernel) | ReAct reasoning contracts | `reactAgentSpecDefinition` |
-| [`hypha-harness`](./execution#hypha-harness) | Event-first execution and projection | `SessionProjector` |
-| [`hypha-models`](./intelligence) | Model providers and routing | `ModelRegistry` |
-| [`hypha-inference`](./intelligence#hypha-inference) | Normalized inference backend | `InferenceManager` |
-| [`hypha-memory`](./capabilities) | Governed scoped memory | `memorySpecDefinition` |
-| [`hypha-skills`](./capabilities#hypha-skills) | Progressive instruction loading | `SkillRegistry` |
-| [`hypha-tools`](./capabilities#hypha-tools) | Typed governed tool execution | `ToolRegistry` |
-| [`hypha-mcp`](./capabilities#hypha-mcp) | Governed MCP integration | `mcpIntegrationSpecDefinition` |
-| [`hypha-domain`](./product-runtime) | Domain Pack compilation | `compileDomainPackToHarnessedSystem` |
-| [`hypha-adapters-local`](./product-runtime#hypha-adapters-local) | Local provider composition | `createLocalStorageProfiles` |
-| [`hypha-serving-cache`](./product-runtime#hypha-serving-cache) | Scoped response cache | `ServingCacheManager` |
-| [`hypha-testing`](./product-runtime#hypha-testing) | Replay/regression helpers | `assertStatePath` |
+| [`hypha-core`](./core) | Versioned framework contracts | `createFrameworkEvent` |
+| [`hypha-storage`](./storage) | Provider-neutral storage profiles | `createSQLiteStorageProfile` |
+| [`hypha-fsm`](./fsm) | Validated FSM topology/runtime | `parseFSMProcessSpec` |
+| [`hypha-kernel`](./kernel) | ReAct reasoning contracts | `reactAgentSpecDefinition` |
+| [`hypha-harness`](./harness) | Event-first execution and projection | `SessionProjector` |
+| [`hypha-models`](./models) | Model providers and routing | `ModelRegistry` |
+| [`hypha-inference`](./inference) | Normalized inference backend | `InferenceManager` |
+| [`hypha-memory`](./memory) | Governed scoped memory | `memorySpecDefinition` |
+| [`hypha-skills`](./skills) | Progressive instruction loading | `SkillRegistry` |
+| [`hypha-tools`](./tools) | Typed governed tool execution | `ToolRegistry` |
+| [`hypha-mcp`](./mcp) | Governed MCP integration | `mcpIntegrationSpecDefinition` |
+| [`hypha-domain`](./domain) | Domain Pack compilation | `compileDomainPackToHarnessedSystem` |
+| [`hypha-adapters-local`](./adapters-local) | Local provider composition | `createLocalStorageBackbone` |
+| [`hypha-serving-cache`](./serving-cache) | Scoped response cache | `ServingCacheManager` |
+| [`hypha-testing`](./testing) | Replay/regression helpers | `assertStatePath` |
 
 ::: warning Package boundary
 The Express API under `apps/server` and the example CLI are application surfaces, not npm framework packages. Install the libraries in your own application, or run the Server from the Hypha repository.

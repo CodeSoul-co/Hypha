@@ -1,70 +1,165 @@
 # Compose a full system
 
-This is the recommended dependency order for a production composition. Each step creates a boundary consumed by the next one.
+A complete Hypha application has four explicit layers: product definitions, trusted composition, governed execution and Event-derived product views. Build them in that order so provider choices cannot leak into framework contracts.
 
-## 1. Product layer
+## 1. Pin the package set
 
-Define a Domain Pack containing Task/output schemas, Workflow, Agent patch, capability allow-lists, Memory/reasoning profiles, policies, evaluations and deployment defaults. Validate it with `hypha-domain`.
+Use one release line throughout an application. The runnable example pins all packages to `1.0.1`; install only the modules you need, but do not mix incompatible versions.
 
-## 2. Execution layer
+```bash
+npm install \
+  @codesoul-co/hypha-core@1.0.1 \
+  @codesoul-co/hypha-storage@1.0.1 \
+  @codesoul-co/hypha-fsm@1.0.1 \
+  @codesoul-co/hypha-domain@1.0.1 \
+  @codesoul-co/hypha-kernel@1.0.1 \
+  @codesoul-co/hypha-harness@1.0.1
+```
 
-Compile the Domain Pack to a Harnessed system. Apply its Agent patch, keep the protected ReAct FSM for Agent execution, and optionally map the Workflow to a separate application FSM.
+Add Models/Inference, capability and adapter packages when the corresponding boundary is used.
+
+## 2. Create the product definition
+
+Keep product-owned files separate from server/provider configuration.
+
+```text
+agent/
+├── domain-pack.yaml   # task/output/workflow/profile/policy definitions
+├── prompt.json        # immutable prompt revision
+├── skill.md           # progressively loaded skill
+└── hypha.user.yaml    # deployment overlay; no secrets
+src/
+├── composition.ts     # trusted provider/registry wiring
+├── agent.ts           # Domain compilation and Agent patch
+└── api.ts             # HTTP/CLI/product surface
+```
+
+The Domain Pack contains Task/output schemas, the application Workflow, capability allow-lists, Memory/reasoning profiles, policies and regression/evaluation references. Validate it with [`hypha-domain`](/packages/domain).
+
+## 3. Compile the Domain Pack and Agent
+
+```ts
+import {
+  applyDomainAgentPatch,
+  compileDomainPackToHarnessedSystem,
+  loadDomainPackFile,
+} from '@codesoul-co/hypha-domain';
+import type { ReActAgentSpec } from '@codesoul-co/hypha-kernel';
+
+const domainPack = await loadDomainPackFile('./agent/domain-pack.yaml');
+const compiled = compileDomainPackToHarnessedSystem(domainPack, {
+  agentRef: { id: 'agent.release-research', version: '1.0.0' },
+  taskSchemaId: 'task.research',
+  workflowId: 'workflow.research',
+  memoryProfileId: 'memory.release',
+  reasoningProfileId: 'reasoning.release',
+  agentSkillRefs: [{ id: 'skill.release-research', version: '1.0.0' }],
+  agentToolRefs: ['search'],
+});
+
+const baseAgent: ReActAgentSpec & Record<string, unknown> = {
+  id: 'agent.release-research',
+  version: '1.0.0',
+  name: 'Release research agent',
+  modelAlias: 'reasoning.primary',
+};
+
+const agent = applyDomainAgentPatch(baseAgent, compiled.agentPatch);
+```
+
+Keep the outputs distinct:
 
 ```text
 DomainPack
  ├─ Agent patch ─→ Kernel ReAct Agent
- ├─ Bindings ────→ Skills / Tools / Memory / Profiles
- ├─ Harness FSM ─→ Harnessed ReAct execution
- └─ Workflow ────→ optional custom FSMProcessSpec
+ ├─ Bindings ────→ Skills / Tools / MCP / Memory / profiles
+ ├─ Harness FSM ─→ protected ReAct execution lifecycle
+ └─ Workflow FSM → application-owned product topology
 ```
 
-## 3. Intelligence layer
+## 4. Bind persistence
 
-Register a model provider and inference backend, then connect model aliases from the reasoning profile. Keep provider credentials in environment/secret resolution.
+Local-first composition can create actual SQLite, vector and artifact stores with one call.
 
-## 4. Capability layer
+```ts
+import { createLocalStorageBackbone } from '@codesoul-co/hypha-adapters-local';
+import { EventFirstRuntime } from '@codesoul-co/hypha-harness';
 
-Register:
+const local = createLocalStorageBackbone({
+  rootPath: './var/hypha',
+  sqliteMode: 'sqlite',
+});
 
-- Skills as versioned, trust-scored instruction assets.
-- Tools as typed contracts plus handlers.
-- MCP gateways as discovered capabilities normalized into the ToolRegistry.
-- Memory providers with user/Session/Run scopes.
+const runtime = new EventFirstRuntime(local.eventStore);
+await runtime.createSession({
+  id: 'session-1',
+  userId: 'owner',
+  domainPackRef: compiled.bindings.domainPackRef,
+});
 
-The Domain Pack allow-list narrows what an Agent may request. Policy still decides whether a specific invocation may execute.
+await runtime.createRun({
+  id: 'run-1',
+  sessionId: 'session-1',
+  userId: 'owner',
+  domainPackRef: compiled.bindings.domainPackRef,
+  workflowRef: compiled.workflowRef,
+  agentRef: { id: agent.id, version: agent.version },
+  input: { question: 'What changed in this release?' },
+});
+```
 
-## 5. Persistence and cache
+For multiple processes, replace in-memory/local coordination with durable Event, queue, lease, checkpoint and claim stores. Keep the same Core/Storage ports and scopes.
 
-For local operation, create Event SQLite, structured SQLite, vector and artifact profiles using `hypha-adapters-local`. In production, replace providers via `hypha-storage` and Memory interfaces.
+## 5. Register intelligence and capabilities
 
-Serving cache is optional and scoped. It never becomes the source of truth.
+At startup, trusted code should:
 
-## 6. Harness wiring
+1. Register Model providers and resolve `reasoning.primary` through [`hypha-models`](/packages/models) or [`hypha-inference`](/packages/inference).
+2. Register Skill metadata, apply trust policy, then progressively load selected content with [`hypha-skills`](/packages/skills).
+3. Register Tool specs/handlers and execute through a governed runner from [`hypha-tools`](/packages/tools).
+4. Discover approved MCP capabilities and bridge them into the Tool registry with [`hypha-mcp`](/packages/mcp).
+5. Bind a scoped, governed Memory manager from [`hypha-memory`](/packages/memory).
+6. Optionally add [`hypha-serving-cache`](/packages/serving-cache) as a scoped projection cache.
 
-Connect policy, traces, EventStore, model inference, governed Tool/MCP runners and governed Memory to the runner/runtime. Verify that every effect produces a receipt or failure Event.
+Domain Pack allow-lists narrow what may be requested. Registries, Policy and governed runners still decide what may execute.
 
-## 7. API surface
-
-The repository Server exposes durable command APIs. An application registers Prompt/Skill revisions during deployment, waits for `/ready`, creates/uses a Session, submits a Run command and follows Run Events/replay.
+## 6. Wire governed execution
 
 ```text
-web / CLI / service
-  → Session command
-  → per-user queue
-  → Run + Events
-  → projected Session / stream / replay
+HTTP / CLI / service command
+  → per-user Session queue
+  → Run manager + lease/revision
+  → Harness FSM phase
+  → Kernel ReAct step
+  → inference or governed effect port
+  → receipt + Framework Event
+  → Session/Run/replay projection
 ```
 
-## 8. Release gates
+Every Tool, MCP, Memory write, file operation and external write must produce a receipt or normalized failure Event. Cancellation and deadlines propagate through the same chain.
+
+## 7. Expose the product surface
+
+The repository Server implements durable command APIs. A client authenticates, waits for `/ready`, registers immutable Prompt/Skill revisions during deployment, creates or reuses a Session and submits `start-run` with an idempotency key. The initial response is command acceptance—not the final result.
+
+For a human FSM adjustment, first read the current FSM view and submit the expected process version, state and Run revision. See [Control an FSM](/guide/fsm-control).
+
+## 8. Observe and operate
+
+Store/inspect the command ID, Run ID and Event IDs. Build UI and automation from projected Session/Run state, but diagnose and replay from the Event stream. Redact secrets and bound model/Tool output before telemetry.
+
+## Release gates
 
 Before deployment, prove:
 
-- Domain Pack loading and deterministic compilation;
+- Domain Pack load and deterministic compilation;
+- all selected package versions and dependency hashes;
 - cache enabled and disabled behavior;
-- Replay and regression fixtures;
+- replay and regression fixtures;
 - invalid/stale FSM transition rejection;
-- Tool/MCP/Memory policy denial and timeout paths;
-- user/Session/Run isolation;
-- runtime smoke against real persistence dependencies.
+- Tool/MCP/Memory denial, timeout and cancellation paths;
+- user/Session/Run isolation and concurrent queue behavior;
+- restart/recovery and terminal convergence;
+- runtime smoke with real persistence/transports and zero skipped acceptance cases.
 
-The [release-agent example](/guide/examples) implements the product definition, package tour, compilation contract and HTTP/FSM entry points.
+The [release-agent example](/guide/examples) provides the concrete files, all-package tour, deterministic contract test and HTTP/FSM clients.
