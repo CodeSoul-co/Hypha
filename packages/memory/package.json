@@ -1,6 +1,6 @@
 {
   "name": "@codesoul-co/hypha-memory",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": false,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,7 +22,7 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@codesoul-co/hypha-core": "1.0.0",
+    "@codesoul-co/hypha-core": "1.0.1",
     "zod": "^3.22.0"
   },
   "scripts": {

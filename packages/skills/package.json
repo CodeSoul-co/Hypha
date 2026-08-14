@@ -1,6 +1,6 @@
 {
   "name": "@codesoul-co/hypha-skills",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": false,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,8 +23,8 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@codesoul-co/hypha-core": "1.0.0",
-    "@codesoul-co/hypha-tools": "1.0.0",
+    "@codesoul-co/hypha-core": "1.0.1",
+    "@codesoul-co/hypha-tools": "1.0.1",
     "yaml": "^2.3.0",
     "zod": "^3.22.0"
   },
