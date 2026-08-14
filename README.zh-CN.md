@@ -564,21 +564,3 @@ Hypha v1.0.1 已发布 15 个版本对齐的 npm Library；应用应在整个依
 
 商业产品可以依据 Apache-2.0 使用本软件，但修改后的 Fork 与第三方产品必须使用自己的主品牌。
 完整品牌素材条款参见 [BRAND_POLICY.md](BRAND_POLICY.md)。
-
-## Star 增长趋势
-
-<p align="center">
-  <a href="https://www.star-history.com/?repos=CodeSoul-co%2FHypha&type=date&legend=top-left">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&theme=dark&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0&v=20260814" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0&v=20260814" />
-      <img src="https://api.star-history.com/chart?repos=CodeSoul-co/Hypha&type=date&legend=top-left&sealed_token=aKwp_mXdU7F6pWRA42-ZfjYXVIEQ8LyGSKDhVpsZI1dhyj0GsG_AHfy8WwTwRZ8aIESytHK02aCD7V1OLCi_6zaCLeaBEjX6qlNVI-493US37hjxwJRnkCehxem_hMTqLmFZNyBO0FzKUPNNtkee_LNTpcSlA6KOZCKsPICstm0w_8ld3U9AYlKgzT-0&v=20260814"
-           alt="Hypha GitHub Star History 增长曲线"
-           width="900" />
-    </picture>
-  </a>
-</p>
-
-<p align="center">
-  <sub>由 Star History 提供实时图表</sub>
-</p>
