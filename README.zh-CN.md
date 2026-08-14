@@ -14,6 +14,16 @@
   <a href="README.md">English</a> | 中文
 </p>
 
+<p align="center">
+  <a href="https://codesoul-co.github.io/Hypha/"><strong>用户使用文档</strong></a>
+  · <a href="https://hypha.code-soul.com/"><strong>官方网站</strong></a>
+  · <a href="https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.0">v1.0.0 Release</a>
+  · <a href="https://www.npmjs.com/org/codesoul-co">npm Packages</a>
+</p>
+
+> **当前公开版本：** v1.0.0，共 15 个版本对齐的 `@codesoul-co/hypha-*` 包。
+> [版本化用户文档](https://codesoul-co.github.io/Hypha/)包含全部包的 API 用法、自定义 FSM 控制和完整系统组合示例。
+
 ## hypha 是什么？
 
 hypha 是一个开源 TypeScript 框架，由相互协作的 **Agent Core** 与 **Production Harness** 两层构成。
@@ -40,12 +50,12 @@ Receipt 或 Checkpoint 证据。
   推理、Tool、Memory、Execution 与 Inference。</em>
 </p>
 
-| 层 | 主要职责 |
-| --- | --- |
-| **Agent Core** | 推理/ReAct、规划、Tool 选择、Memory 访问，以及模型与 Context 编排。 |
-| **Production Harness** | FSM 执行、Event/Checkpoint 控制、Policy/Approval、Continuation、恢复、审计与回放。 |
-| **DomainPack** | 声明产品特定的任务、Workflow、Capability、Memory、Skill、Prompt、Policy、Evaluation 与输出契约，并将其编译到共享 Runtime。 |
-| **Cache & Reuse Plane** | 复用已验证的模型工作、推理结构、Tool/Execution 结果、Memory/Context 投影和 Prefix/KV 状态，但不成为事实来源或授权依据。 |
+| 层                      | 主要职责                                                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Agent Core**          | 推理/ReAct、规划、Tool 选择、Memory 访问，以及模型与 Context 编排。                                                        |
+| **Production Harness**  | FSM 执行、Event/Checkpoint 控制、Policy/Approval、Continuation、恢复、审计与回放。                                         |
+| **DomainPack**          | 声明产品特定的任务、Workflow、Capability、Memory、Skill、Prompt、Policy、Evaluation 与输出契约，并将其编译到共享 Runtime。 |
+| **Cache & Reuse Plane** | 复用已验证的模型工作、推理结构、Tool/Execution 结果、Memory/Context 投影和 Prefix/KV 状态，但不成为事实来源或授权依据。    |
 
 这种分层让同一套 Runtime 能够支持差异很大的 Agent 产品。Coding Agent、Finance Agent、Legal Agent
 或 Research Agent 可以共享 Core + Harness，只需替换 DomainPack、Capability Binding、Policy、
@@ -56,14 +66,14 @@ Evaluation Contract 与领域状态。
 Cache 在 hypha 中是一等控制面，而非单一的响应缓存功能。Exact LLM Response、推理子图、Tool Result、
 Memory Projection 与 KV Prefix 的有效性和失效条件各不相同，因此系统将其拆分为多个复用层。
 
-| Cache 层 | 可复用单元 | 典型有效性边界 |
-| --- | --- | --- |
-| **Serving Cache** | Exact、Normalized 的模型响应 | 模型/Provider 身份、Normalized Request、Scope、TTL 与响应有效性。 |
-| **Thinking Cache** | 推理节点、路径或可复用子图 | 模型/Provider、推理策略/版本、Prompt Block、Tool Schema、Inference Parameter 与 Scope。 |
-| **WorkCache** | 从 Event 派生的类型化 Agent 工作 | Source Event Provenance、依赖/Revision Closure、Scope、Validity State 与未来需求。 |
-| **Tool / Execution Cache** | 符合条件的只读 Tool Result 或确定性 Execution Result | Capability Revision、Policy、外部状态证据、Workspace/Environment Snapshot、Idempotency 与 Scope。 |
-| **Memory / Context Cache** | Memory Search 与已组装的 Context Projection | Memory Scope、Mutation Generation、Source Revision、Provenance 与 Context Policy。 |
-| **Prefix / KV Cache** | Prompt Prefix Block、Provider Prefix 或后端 KV Segment | 模型/Backend、Agent/Session/Domain Scope、Prompt Dependency 与 Prefix/KV Revision。 |
+| Cache 层                   | 可复用单元                                             | 典型有效性边界                                                                                    |
+| -------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| **Serving Cache**          | Exact、Normalized 的模型响应                           | 模型/Provider 身份、Normalized Request、Scope、TTL 与响应有效性。                                 |
+| **Thinking Cache**         | 推理节点、路径或可复用子图                             | 模型/Provider、推理策略/版本、Prompt Block、Tool Schema、Inference Parameter 与 Scope。           |
+| **WorkCache**              | 从 Event 派生的类型化 Agent 工作                       | Source Event Provenance、依赖/Revision Closure、Scope、Validity State 与未来需求。                |
+| **Tool / Execution Cache** | 符合条件的只读 Tool Result 或确定性 Execution Result   | Capability Revision、Policy、外部状态证据、Workspace/Environment Snapshot、Idempotency 与 Scope。 |
+| **Memory / Context Cache** | Memory Search 与已组装的 Context Projection            | Memory Scope、Mutation Generation、Source Revision、Provenance 与 Context Policy。                |
+| **Prefix / KV Cache**      | Prompt Prefix Block、Provider Prefix 或后端 KV Segment | 模型/Backend、Agent/Session/Domain Scope、Prompt Dependency 与 Prefix/KV Revision。               |
 
 <p align="center">
   <img src="docs/readme/cache-tree-management.png"
@@ -77,16 +87,16 @@ Leaf 保存完整 Logical Key。插入新 Leaf 不需要重建无关分支，过
 
 WorkCache 将这种查找模式扩展为面向 Agent 执行的**语义 Cache Tree**：
 
-| 语义 Tree | 复用内容 |
-| --- | --- |
-| `PlanTree` | Plan、Plan Branch 与可复用的 Planning Artifact。 |
-| `ComputationTree` | 推理/计算节点与派生工作，同时也是 Thinking Cache 的天然承载层。 |
-| `ToolTree` | 符合条件的 Tool Call Result 及其 Provenance/Validity Metadata。 |
-| `ObservationTree` | 与 Source Evidence 和 Scope 绑定的可复用 Observation。 |
-| `VerificationTree` | Verification、Checking 与 Output Validation 工作。 |
-| `MemoryTree` | 有效性跟随 Memory Mutation Generation 与 Scope 的 Memory-derived Projection。 |
-| `RecoveryTree` | 按 Failure Context 与相关 Runtime Revision 索引的 Recovery Knowledge；Hit 仅用于建议，必须重新验证。 |
-| `PromptPrefixTree` | Provider/Backend Prefix Reuse 使用的稳定 Prompt Block 与 Prefix Materialization。 |
+| 语义 Tree          | 复用内容                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
+| `PlanTree`         | Plan、Plan Branch 与可复用的 Planning Artifact。                                                     |
+| `ComputationTree`  | 推理/计算节点与派生工作，同时也是 Thinking Cache 的天然承载层。                                      |
+| `ToolTree`         | 符合条件的 Tool Call Result 及其 Provenance/Validity Metadata。                                      |
+| `ObservationTree`  | 与 Source Evidence 和 Scope 绑定的可复用 Observation。                                               |
+| `VerificationTree` | Verification、Checking 与 Output Validation 工作。                                                   |
+| `MemoryTree`       | 有效性跟随 Memory Mutation Generation 与 Scope 的 Memory-derived Projection。                        |
+| `RecoveryTree`     | 按 Failure Context 与相关 Runtime Revision 索引的 Recovery Knowledge；Hit 仅用于建议，必须重新验证。 |
+| `PromptPrefixTree` | Provider/Backend Prefix Reuse 使用的稳定 Prompt Block 与 Prefix Materialization。                    |
 
 核心不变量是**复用不产生授权**。Cache Hit 可以避免重复计算，但不能授权 Tool、跳过 Policy 或
 Approval、伪造 Receipt、推进 FSM，或取代 Event 与 Artifact 证据。因此，Cache Lookup、Validation、
@@ -133,16 +143,16 @@ Deadline、Idempotency 与 Harness 边界。
 
 ## 内置能力
 
-| 模块            | Runtime 能力                                                                                                                                                                                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime         | ReAct + FSM、持久 Session Command、有界 Continuation、Timer、Lease、Fencing、Cancellation、Recovery Worker、人工复核、Replay、Audit 与 Regression Projection。                               |
-| Domain          | YAML/JSON/TypeScript DomainPack、运行时校验、Overlay、Registry、确定性编译器、依赖快照与 Agent Patch。                                                                                       |
-| Memory          | 统一治理契约下的 Hypha Native Memory、Native Lite、Mem0 OSS、Mem0 Platform 与 Vertex AI Memory Bank Adapter。                                                                                |
-| Tool 与 MCP     | Local、HTTP、Plugin、Mock、MCP Adapter 共用一条受治理 Invocation 路径，并支持 Capability Snapshot 与 Drift Control。                                                                         |
-| Skill 与 Prompt | Built-in、Filesystem、Package、签名 Remote Skill Registry、渐进加载、版本化 Prompt 引用与模板。                                                                                              |
-| Execution       | Provider-neutral Workspace、Sandbox、Command、Artifact、Store、Lease、Recovery 与 Cache 契约，以及 Local Process、Docker、Remote HTTP、SQLite、PostgreSQL、本地文件、S3-compatible Adapter。 |
+| 模块            | Runtime 能力                                                                                                                                                                                   |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime         | ReAct + FSM、持久 Session Command、有界 Continuation、Timer、Lease、Fencing、Cancellation、Recovery Worker、人工复核、Replay、Audit 与 Regression Projection。                                 |
+| Domain          | YAML/JSON/TypeScript DomainPack、运行时校验、Overlay、Registry、确定性编译器、依赖快照与 Agent Patch。                                                                                         |
+| Memory          | 统一治理契约下的 Hypha Native Memory、Native Lite、Mem0 OSS、Mem0 Platform 与 Vertex AI Memory Bank Adapter。                                                                                  |
+| Tool 与 MCP     | Local、HTTP、Plugin、Mock、MCP Adapter 共用一条受治理 Invocation 路径，并支持 Capability Snapshot 与 Drift Control。                                                                           |
+| Skill 与 Prompt | Built-in、Filesystem、Package、签名 Remote Skill Registry、渐进加载、版本化 Prompt 引用与模板。                                                                                                |
+| Execution       | Provider-neutral Workspace、Sandbox、Command、Artifact、Store、Lease、Recovery 与 Cache 契约，以及 Local Process、Docker、Remote HTTP、SQLite、PostgreSQL、本地文件、S3-compatible Adapter。   |
 | Cache           | Serving Cache、Event-derived WorkCache、Thinking Cache、类型化语义 Cache Tree、Capability Result Cache、Memory/Context Projection、Prefix/KV Reuse，以及有 Scope 的 Validity 与 Invalidation。 |
-| 应用界面        | 使用同一 Framework Runtime 的 Express API Server 与示例 CLI。                                                                                                                                |
+| 应用界面        | 使用同一 Framework Runtime 的 Express API Server 与示例 CLI。                                                                                                                                  |
 
 ## 快速开始
 
@@ -156,7 +166,7 @@ Deadline、Idempotency 与 Harness 边界。
 ### 1. 安装工作区
 
 ```bash
-git clone https://github.com/CodeSoul-co/hypha-Hypha.git
+git clone https://github.com/CodeSoul-co/Hypha.git
 cd Hypha
 npm ci
 cp .env.example .env
@@ -234,19 +244,19 @@ HTTP Run 提交示例，请参见 [`release-agent` 示例](examples/release-agen
 可以从 [`configs/domain-packs/minimal.domain.yaml`](configs/domain-packs/minimal.domain.yaml)
 开始。生产级 DomainPack 通常包含：
 
-| 声明                                     | 控制内容                                                                                                        |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `taskSchemas`                            | 可接受的任务类型、输入 Schema、输出契约引用与默认 Workflow。                                                    |
-| `outputContracts`                        | 可由程序验证的最终输出 Schema。                                                                                 |
-| `sessionProfiles`                        | 默认 Metadata，以及 Memory、Context、Reasoning、Tool、MCP、Skill、Policy Profile 引用。                         |
-| `workflows`                              | Domain Pipeline Stage、Guard、Retry/Timeout 意图、人工复核与 State-scoped Capability；不定义 Harness FSM 拓扑。 |
-| `tools`, `toolProfiles`                  | 稳定 Tool Contract，以及允许绑定到可执行 Adapter 的 Profile。                                                   |
-| `mcpProfiles`                            | Server 引用、Capability Import Rule、Trust Policy 与版本固定策略。                                              |
-| `memoryProfiles`, `contextProfiles`      | Memory 选择、读写策略、Context Source、Provenance 与 Token Budget。                                             |
-| `allowedSkills`, `skillPolicies`         | Agent 可加载的 Skill，以及每个 Skill 可使用的 Tool 与 Policy。                                                  |
-| `allowedPromptRefs`, `defaultPromptRefs` | 必须由应用组合层解析的版本化 Prompt Template。                                                                  |
-| `policies`, `businessRules`              | Permission、Approval、Precondition、Postcondition 与输出约束。                                                  |
-| `evaluationProfiles`, `regressionCases`  | Event-derived 验收与回归定义。                                                                                  |
+| 声明                                     | 控制内容                                                                                                                                                      |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `taskSchemas`                            | 可接受的任务类型、输入 Schema、输出契约引用与默认 Workflow。                                                                                                  |
+| `outputContracts`                        | 可由程序验证的最终输出 Schema。                                                                                                                               |
+| `sessionProfiles`                        | 默认 Metadata，以及 Memory、Context、Reasoning、Tool、MCP、Skill、Policy Profile 引用。                                                                       |
+| `workflows`                              | 产品 Stage、Guard、Retry/Timeout、人工复核、State-scoped Capability 与拓扑证据。ReAct Run 保留受保护的 Harness FSM；Custom FSM Run 可使用独立验证的应用拓扑。 |
+| `tools`, `toolProfiles`                  | 稳定 Tool Contract，以及允许绑定到可执行 Adapter 的 Profile。                                                                                                 |
+| `mcpProfiles`                            | Server 引用、Capability Import Rule、Trust Policy 与版本固定策略。                                                                                            |
+| `memoryProfiles`, `contextProfiles`      | Memory 选择、读写策略、Context Source、Provenance 与 Token Budget。                                                                                           |
+| `allowedSkills`, `skillPolicies`         | Agent 可加载的 Skill，以及每个 Skill 可使用的 Tool 与 Policy。                                                                                                |
+| `allowedPromptRefs`, `defaultPromptRefs` | 必须由应用组合层解析的版本化 Prompt Template。                                                                                                                |
+| `policies`, `businessRules`              | Permission、Approval、Precondition、Postcondition 与输出约束。                                                                                                |
+| `evaluationProfiles`, `regressionCases`  | Event-derived 验收与回归定义。                                                                                                                                |
 
 Provider URL、Bearer Token、API Key 与部署 Secret 不应写入 DomainPack。DomainPack 只选择稳定的
 Profile 引用，由可信应用组合层将其解析为真实 Provider。
@@ -504,28 +514,29 @@ NODE_ENV=production npm start
 
 ## Workspace Package
 
-Manifest 中设置了 `private: false` 的 Framework Library 是版本对齐、可公开发布的 `@codesoul-co/hypha-*` npm
-release artifact；根 Workspace、内置 Server、CLI 及所有标记为 private 的 Package 仍是源码/部署
-Surface。`package.json` 中出现版本号不表示该版本已经上传 npm Registry，实际发布仍由 Maintainer
-在 Release Gate 全部通过后执行。参见 [Release 与 npm Package](docs/guides/releases.md)及
-[升级指南](UPGRADING.md)。
+Hypha v1.0.0 已发布 15 个版本对齐的 npm Library；应用应在整个依赖图中固定相同的精确版本。
+根 Workspace、内置 Server、CLI 及所有标记为 private 的 Package 仍是源码/部署 Surface。参见
+[交互式 Package 文档](https://codesoul-co.github.io/Hypha/#packages)、
+[Release 与 npm Package](docs/guides/releases.md)及[升级指南](UPGRADING.md)。
 
-| Package                                       | 职责                                                                                   |
-| --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `@codesoul-co/hypha-core`                                 | 公共 Spec、Schema、Event、Policy、Runtime、Artifact、Workspace 与 Execution Contract。 |
-| `@codesoul-co/hypha-fsm`                                  | FSM Spec、自定义拓扑分析、Snapshot、Transition、Guard 与 Recovery Semantics。          |
-| `@codesoul-co/hypha-kernel`                               | 受治理的 ReAct 与 FSM Coordination。                                                   |
-| `@codesoul-co/hypha-harness`                              | 有界执行、Tracing、Recovery、Continuation 与 Side-effect Hook。                        |
-| `@codesoul-co/hypha-domain`                               | DomainPack Loading、Validation、Overlay、Registry 与 Compilation。                     |
-| `@codesoul-co/hypha-memory`                               | Memory Profile、Provider Adapter、Context Assembly、Migration 与 Governance。          |
+| Package                                                                           | 职责                                                                                   |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `@codesoul-co/hypha-core`                                                         | 公共 Spec、Schema、Event、Policy、Runtime、Artifact、Workspace 与 Execution Contract。 |
+| `@codesoul-co/hypha-fsm`                                                          | FSM Spec、自定义拓扑分析、Snapshot、Transition、Guard 与 Recovery Semantics。          |
+| `@codesoul-co/hypha-kernel`                                                       | 受治理的 ReAct 与 FSM Coordination。                                                   |
+| `@codesoul-co/hypha-harness`                                                      | 有界执行、Tracing、Recovery、Continuation 与 Side-effect Hook。                        |
+| `@codesoul-co/hypha-domain`                                                       | DomainPack Loading、Validation、Overlay、Registry 与 Compilation。                     |
+| `@codesoul-co/hypha-memory`                                                       | Memory Profile、Provider Adapter、Context Assembly、Migration 与 Governance。          |
 | `@codesoul-co/hypha-tools`、`@codesoul-co/hypha-mcp`、`@codesoul-co/hypha-skills` | Capability Contract、Registry、Execution、Trust 与 Progressive Loading。               |
-| `@codesoul-co/hypha-inference`、`@codesoul-co/hypha-models`           | Model Alias、Routing、Inference Backend、Prompt Compilation 与 Normalized Response。   |
-| `@codesoul-co/hypha-storage`、`@codesoul-co/hypha-adapters-local`     | Storage Contract 与本地/自托管 Provider Adapter。                                      |
-| `@codesoul-co/hypha-serving-cache`、`@codesoul-co/hypha-workcache`    | Exact Model Response Cache 与 Event-derived Runtime Cache。                            |
-| `@codesoul-co/hypha-testing`                              | Contract Fixture 与测试支持。                                                          |
+| `@codesoul-co/hypha-inference`、`@codesoul-co/hypha-models`                       | Model Alias、Routing、Inference Backend、Prompt Compilation 与 Normalized Response。   |
+| `@codesoul-co/hypha-storage`、`@codesoul-co/hypha-adapters-local`                 | Storage Contract 与本地/自托管 Provider Adapter。                                      |
+| `@codesoul-co/hypha-serving-cache`                                                | 使用 Memory、SQLite 与 Redis Store 的 Exact Model Response Cache。                     |
+| `@codesoul-co/hypha-testing`                                                      | Contract Fixture 与测试支持。                                                          |
 
 ## 文档
 
+- [版本化用户文档与完整 Package Atlas](https://codesoul-co.github.io/Hypha/)
+- [官方网站](https://hypha.code-soul.com/)
 - [文档索引](docs/README.md)
 - [系统架构](docs/reference/architecture.md)
 - [Framework API](docs/api/framework.md)

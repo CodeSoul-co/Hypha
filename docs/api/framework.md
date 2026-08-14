@@ -12,8 +12,8 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 
 ## Package Boundary Summary
 
-| Package                 | Public Surface                                                                                                                                                                                        |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package                             | Public Surface                                                                                                                                                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@codesoul-co/hypha-core`           | Spec primitives, schemas, events, errors, policy interfaces, and governed execution contracts.                                                                                                        |
 | `@codesoul-co/hypha-storage`        | Storage profiles/topology, connection resolution, provider-neutral `classifyStorageFailure()` and `adviseStorageRecovery()`.                                                                          |
 | `@codesoul-co/hypha-domain`         | `DomainPackSpec`, `WorkflowSpec`, `SessionProfileSpec`, loader, overlay, registry, and DomainPack compiler APIs.                                                                                      |
@@ -22,7 +22,6 @@ The framework API is exposed through the TypeScript packages under `packages/*`.
 | `@codesoul-co/hypha-inference`      | Prompt compiler, prefix segmenter, Plasmod hot layer, backend registry, cache providers, reasoning orchestration.                                                                                     |
 | `@codesoul-co/hypha-models`         | `ModelProvider`, normalized model requests/responses, OpenAI-compatible adapters.                                                                                                                     |
 | `@codesoul-co/hypha-serving-cache`  | Exact LLM response cache middleware, cache keys, policies, stores, prompt prefix metadata, and trace events.                                                                                          |
-| `@codesoul-co/hypha-workcache`      | Runtime type registry, event-derived cache blocks, typed cache forest, WorkCache manager, memory/SQLite stores.                                                                                       |
 | `@codesoul-co/hypha-tools`          | `ToolSpec`, `ToolRegistry`, `GovernedToolRunner`, `MockToolRunner`, safe schema validation, common JSON/text/hash tools, side-effect governance.                                                      |
 | `@codesoul-co/hypha-mcp`            | `MCPIntegrationSpec`, `MockMCPGateway`, capability discovery, and MCP tool registration into governed tool runners.                                                                                   |
 | `@codesoul-co/hypha-memory`         | Versioned Memory profiles, managed operations, scoped records/history, atomic persistence and index outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. |
@@ -66,25 +65,25 @@ and derived-cache invalidation requirements. Ambiguous mutations are never marke
 
 `DomainPackSpec` declares domain-level capabilities and contracts.
 
-| Field                            | Type                   | Description                                                                               |
-| -------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------- |
-| `id`, `version`, `name`          | string                 | Stable identity and display name.                                                         |
-| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.                                                 |
-| `workflows`                      | `WorkflowSpec[]`       | Domain pipelines and capability/policy bindings; they do not define Harness FSM topology. |
-| `defaultWorkflow`                | string                 | Workflow id used when none is specified.                                                  |
-| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.                                               |
-| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                                                              |
-| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                                                            |
-| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.                                                      |
-| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.                                                       |
-| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.                                                       |
-| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.                                                      |
-| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.                                                   |
-| `businessRules`                  | `BusinessRuleSpec[]`   | Abstract domain rules bound to output/policy/evaluation refs.                             |
-| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.                                            |
-| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                                                                     |
-| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                                                                         |
-| `metadata`                       | object                 | Domain-specific metadata.                                                                 |
+| Field                            | Type                   | Description                                                                                                                                                                         |
+| -------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`, `version`, `name`          | string                 | Stable identity and display name.                                                                                                                                                   |
+| `taskSchemas`                    | `TaskSchemaSpec[]`     | Supported task types and input contracts.                                                                                                                                           |
+| `workflows`                      | `WorkflowSpec[]`       | Product state/transition evidence and capability/policy bindings. ReAct compilation retains the protected Harness FSM; custom Runs can bind a separately validated application FSM. |
+| `defaultWorkflow`                | string                 | Workflow id used when none is specified.                                                                                                                                            |
+| `sessionProfiles`                | `SessionProfileSpec[]` | Defaults for initializing runtime sessions.                                                                                                                                         |
+| `outputContracts`                | `OutputContractSpec[]` | Structured output contracts.                                                                                                                                                        |
+| `allowedSkills`, `defaultSkills` | `SkillRef[]`           | Skill allow-list and defaults.                                                                                                                                                      |
+| `skillPolicies`                  | `SkillPolicyBinding[]` | Skill-to-policy/tool/trust bindings.                                                                                                                                                |
+| `tools`                          | `ToolSpec[]`           | Local or normalized tool contracts.                                                                                                                                                 |
+| `mcpProfiles`                    | `MCPIntegrationSpec[]` | MCP server and capability profiles.                                                                                                                                                 |
+| `memoryProfiles`                 | `MemorySpec[]`         | Memory provider and policy profiles.                                                                                                                                                |
+| `contextProfiles`                | `ContextSpec[]`        | Context source and provenance profiles.                                                                                                                                             |
+| `businessRules`                  | `BusinessRuleSpec[]`   | Abstract domain rules bound to output/policy/evaluation refs.                                                                                                                       |
+| `policies`                       | `PolicySpec[]`         | Permission, audit, review, and retry policies.                                                                                                                                      |
+| `evaluationProfiles`             | `EvaluationSpec[]`     | Evaluation contracts.                                                                                                                                                               |
+| `regressionCases`                | `RegressionSpec[]`     | Regression cases.                                                                                                                                                                   |
+| `metadata`                       | object                 | Domain-specific metadata.                                                                                                                                                           |
 
 `SessionProfileSpec` may define `metadataSchema`, `defaultMetadata`, and default references for memory, context, tool, MCP, skill, and policy profiles.
 
@@ -252,7 +251,13 @@ contain at least one item.
 | `states`         | `WorkflowStateSpec[]`      | State goals, contracts, policies, tools, skills, and timeouts. |
 | `transitions`    | `WorkflowTransitionSpec[]` | Allowed state transitions and guards.                          |
 
-`WorkflowSpec` is a Domain pipeline declaration. Its state ids, transitions, guards, Tool/Skill/Profile bindings, and output rules remain Domain evidence and scheduling inputs; they never become Harness FSM state ids or transitions. `compileWorkflowToFSM(domainPack, options)` is retained for compatibility, validates that the workflow exists, and returns the framework-owned ReAct Harness `FSMProcessSpec`. Passing a non-canonical `fsmProcessId` fails closed.
+`WorkflowSpec` is a product pipeline declaration. During ReAct system compilation, its state ids,
+transitions, guards, Tool/Skill/Profile bindings, and output rules remain Domain evidence while
+`compileWorkflowToFSM(domainPack, options)` returns the framework-owned ReAct Harness
+`FSMProcessSpec`; passing a non-canonical `fsmProcessId` fails closed. This does not prevent custom
+FSM Runs: applications may construct and validate a separate `FSMProcessSpec` from product workflow
+evidence, start the Run with that spec, inspect the projected revision, and advance only declared
+edges through the governed manual transition API. See [Custom FSM Topologies](../guides/custom-fsm.md).
 
 The Harness FSM tracks system capability phases such as context construction, reasoning, action selection, policy checking, governed activity execution (Tool, MCP, Execution, file, Memory write, or external write), observation, verification, memory synchronization, recovery, human review, and terminal lifecycle. Domain stages may select and bind capabilities within those phases, but cannot add, remove, rename, or reconnect them. `FSMSnapshot` records `processId`, `runId`, `currentState`, `statePath`, `status`, `updatedAt`, and optional persisted recovery counters/circuits.
 
@@ -402,9 +407,10 @@ Trace events are `llm.cache.lookup`, `llm.cache.hit`, `llm.cache.miss`,
 `llm.cache.write`, and `llm.cache.bypass`. Streaming requests always bypass
 cache in the first version.
 
-## WorkCache
+## Internal WorkCache capability
 
-`@codesoul-co/hypha-workcache` exposes an event-derived typed runtime cache. It consumes
+WorkCache is present in this source workspace as a private, non-published package in v1.0.0. It is
+not one of the 15 public npm installation targets. The internal capability consumes
 existing `FrameworkEvent` records and writes `CacheBlock<T>` entries into
 primary trees without changing Session, Run, Event, DomainPack, or Serving
 Cache contracts.

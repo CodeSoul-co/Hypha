@@ -22,7 +22,7 @@ interface FSMView {
 }
 
 async function main(): Promise<void> {
-  const { domainPack, compiled } = await buildReleaseAgent();
+  const { domainPack, compiled, customFsm } = await buildReleaseAgent();
   const login = await request<{ token: string }>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
           version: compiled.bindings.workflow.version,
         },
         domainPack,
-        fsm: compiled.fsmProcess,
+        fsm: customFsm,
         metadata: { source: 'npm-custom-fsm-example' },
       }),
     }

@@ -2,6 +2,10 @@
 
 This directory contains public documentation for using hypha APIs, specs, runtime conventions, and extension points. It intentionally describes stable contracts rather than internal planning notes.
 
+The published v1.0.0 user guide, all-package atlas, FSM walkthrough, and full-system example are
+available at [codesoul-co.github.io/Hypha](https://codesoul-co.github.io/Hypha/). The project website
+is [hypha.code-soul.com](https://hypha.code-soul.com/).
+
 ## Start Here
 
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.

@@ -1,10 +1,10 @@
 # Releases and npm Packages
 
-The repository is a private npm workspace. Framework libraries explicitly marked `private: false`
-are public release artifacts named `@codesoul-co/hypha-*`; packages still marked private are not published.
-“Public” here describes the intended package metadata and access level, not current registry
-availability. The Express Server and example CLI remain source/deployment surfaces; publishing a
-framework package does not publish or operate a Server.
+The repository is a private npm workspace. Release v1.0.0 publishes 15 public framework libraries
+named `@codesoul-co/hypha-*`; packages still marked private are not published. The Express Server
+and example CLI remain source/deployment surfaces; publishing a framework package does not publish
+or operate a Server. The complete v1.0.0 package atlas is available in the
+[published user guide](https://codesoul-co.github.io/Hypha/#packages).
 
 ## Release contract
 
@@ -52,4 +52,5 @@ the matching Git tag and public release entry.
 
 [`examples/release-agent`](../../examples/release-agent/README.md) shows a product-owned Agent with
 separate DomainPack, Prompt, Skill, policy, Tool declaration, compilation, contract test, Server
-registration, and Run submission.
+registration, and Run submission. `npm run tour` imports and exercises a representative public
+boundary from all 15 v1.0.0 packages.
