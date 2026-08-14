@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@codesoul-co/hypha-core": "1.0.0",
-    "@codesoul-co/hypha-inference": "1.0.0",
+    "@codesoul-co/hypha-core": "1.0.1",
+    "@codesoul-co/hypha-inference": "1.0.1",
     "better-sqlite3": "^11.10.0",
     "zod": "^3.22.0"
   },

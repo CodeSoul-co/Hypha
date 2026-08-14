@@ -1,6 +1,6 @@
 {
   "name": "hypha",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Harness-oriented agent system framework for production-grade LLM agent applications",
   "main": "dist/apps/server/app.js",
