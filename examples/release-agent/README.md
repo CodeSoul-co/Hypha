@@ -24,7 +24,7 @@ by naming it.
 
 ## Public packages used
 
-The example pins the complete v1.0.0 release line. The packages remain separate so an application
+The example pins the complete v1.0.1 release line. The packages remain separate so an application
 can depend on only the layers it needs.
 
 | Package                | How this example uses it                                                                                   |
@@ -57,7 +57,7 @@ npm run compile-agent
 npm test
 ```
 
-All `@codesoul-co/hypha-*` dependencies should remain on one release line. v1.0.0 is the current
+All `@codesoul-co/hypha-*` dependencies should remain on one release line. v1.0.1 is the current
 published release represented by this example. During Hypha repository development, the root
 command `npm run typecheck:release-example` checks the same source against workspace packages.
 

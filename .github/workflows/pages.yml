@@ -32,16 +32,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: website/package-lock.json
       - name: Install dependencies
-        run: npm ci
-      - name: Build static documentation
-        run: npm exec -- vite build website --base=/Hypha/
+        run: npm ci --prefix website
+      - name: Build VitePress documentation
+        run: npm --prefix website run build
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: website/dist
+          path: website/.vitepress/dist
 
   deploy:
     environment:

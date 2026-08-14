@@ -17,11 +17,11 @@
 <p align="center">
   <a href="https://codesoul-co.github.io/Hypha/"><strong>用户使用文档</strong></a>
   · <a href="https://hypha.code-soul.com/"><strong>官方网站</strong></a>
-  · <a href="https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.0">v1.0.0 Release</a>
+  · <a href="https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.1">v1.0.1 Release</a>
   · <a href="https://www.npmjs.com/org/codesoul-co">npm Packages</a>
 </p>
 
-> **当前公开版本：** v1.0.0，共 15 个版本对齐的 `@codesoul-co/hypha-*` 包。
+> **当前公开版本：** v1.0.1，共 15 个版本对齐的 `@codesoul-co/hypha-*` 包。
 > [版本化用户文档](https://codesoul-co.github.io/Hypha/)包含全部包的 API 用法、自定义 FSM 控制和完整系统组合示例。
 
 ## hypha 是什么？
@@ -514,9 +514,9 @@ NODE_ENV=production npm start
 
 ## Workspace Package
 
-Hypha v1.0.0 已发布 15 个版本对齐的 npm Library；应用应在整个依赖图中固定相同的精确版本。
+Hypha v1.0.1 已发布 15 个版本对齐的 npm Library；应用应在整个依赖图中固定相同的精确版本。
 根 Workspace、内置 Server、CLI 及所有标记为 private 的 Package 仍是源码/部署 Surface。参见
-[交互式 Package 文档](https://codesoul-co.github.io/Hypha/#packages)、
+[VitePress Package 文档](https://codesoul-co.github.io/Hypha/zh/packages/)、
 [Release 与 npm Package](docs/guides/releases.md)及[升级指南](UPGRADING.md)。
 
 | Package                                                                           | 职责                                                                                   |
@@ -535,7 +535,7 @@ Hypha v1.0.0 已发布 15 个版本对齐的 npm Library；应用应在整个依
 
 ## 文档
 
-- [版本化用户文档与完整 Package Atlas](https://codesoul-co.github.io/Hypha/)
+- [中英双语 VitePress 文档与完整 Package 参考](https://codesoul-co.github.io/Hypha/zh/)
 - [官方网站](https://hypha.code-soul.com/)
 - [文档索引](docs/README.md)
 - [系统架构](docs/reference/architecture.md)
