@@ -4,12 +4,13 @@ const release = '1.0.1';
 
 export default defineConfig({
   base: '/Hypha/',
+  appearance: false,
   cleanUrls: true,
   lastUpdated: true,
   sitemap: { hostname: 'https://codesoul-co.github.io/Hypha/' },
   head: [
     ['link', { rel: 'icon', href: '/Hypha/hypha-logo.png' }],
-    ['meta', { name: 'theme-color', content: '#0c332b' }],
+    ['meta', { name: 'theme-color', content: '#ffffff' }],
     ['meta', { property: 'og:image', content: 'https://codesoul-co.github.io/Hypha/hypha-logo.png' }],
   ],
   locales: {
