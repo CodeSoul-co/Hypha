@@ -75,4 +75,3 @@ Provider availability does not grant permission. Select providers through a prof
 Test add/search/update/delete, retention, user isolation, cursor pagination, cancellation, provider timeouts, outbox redelivery and permanent failure/dead-letter handling. A replay must rebuild Memory-related product state from Events without assuming the external index is the source of truth.
 
 For local stores, see [`hypha-adapters-local`](./adapters-local).
-

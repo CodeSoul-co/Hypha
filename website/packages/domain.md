@@ -71,4 +71,3 @@ State bindings can narrow allowed Tools, Skills, prompt refs, MCP profiles, Memo
 - Recompile and compare dependency hashes when a referenced definition changes.
 
 The runnable composition is documented in [Compose a full system](/guide/full-system).
-

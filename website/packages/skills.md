@@ -71,4 +71,3 @@ For remote skills, verify signatures, hashes, SBOM/transparency data and depende
 - Untrusted assets cannot escape their root.
 - Progressive loading omits unrelated skill bodies.
 - Effective capability snapshots change when a skill adds/removes Tool access.
-

@@ -63,4 +63,3 @@ In-memory adapters are process-local. For multiple server instances, use durable
 ## Testing
 
 Use temporary directories, close/reopen stores to prove durability, inject failures, and verify path traversal, cleanup and crash recovery. Real Docker/PostgreSQL/Redis/S3 acceptance tests must run with zero skipped cases before claiming those providers are release-ready.
-

@@ -69,4 +69,3 @@ Script timeout, cancellation, transient/permanent failure, stale revision, dupli
 2. Unit tests isolate deterministic behavior.
 3. Integration tests use real persistence/transports.
 4. Replay/regression tests protect end-to-end semantics across releases.
-

@@ -51,4 +51,3 @@ expect(passed).toBe(true);
 ```
 
 不能归一化掉 Scope、Revision、Operation Identity 或 Terminal Status。测试 Timeout、Cancellation、临时/永久故障、旧 Revision、重复 Idempotency Key 和 Dispatch 后崩溃，并同时断言返回值和 Event/Receipt。
-

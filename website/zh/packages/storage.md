@@ -76,4 +76,3 @@ console.info(redactStorageConnection(resolved));
 按显式引用或默认角色选择 Provider，启动时确认能力，再构造具体 Adapter，仅向 Runtime 暴露中立 Port。`classifyStorageFailure` 和 `adviseStorageRecovery` 可归一化故障；只有安全且幂等的操作才能重试。
 
 本地具体实现见 [`hypha-adapters-local`](./adapters-local)。
-

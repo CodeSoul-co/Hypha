@@ -54,4 +54,3 @@ Session 投影可以随时丢弃；崩溃、迁移或 Replay 后都应从 Event 
 多进程部署要使用持久 Event、Queue、Lease 与 Checkpoint Store。默认单用户部署同样保留 `userId` 边界，避免 Web/CLI 竞争同一 Session。
 
 人工调整应用 FSM 时使用 `GovernedFSMTransitionService`，要求 `runtime.fsm.transition` 权限、Owner 和预期 revision，并先记录迁移证据。长任务使用 Quantum/Continuation，重试前先协调不确定副作用。
-

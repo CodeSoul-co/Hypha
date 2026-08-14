@@ -66,4 +66,3 @@ Choose fail-open or fail-closed based on the operation. A cache outage may be sa
 - No-op store: disable caching without branching application logic.
 
 Test exact hits/misses, key stability, TTL, oversize rejection, corruption, store timeout and scope isolation.
-

@@ -88,4 +88,3 @@ For local development, [`hypha-adapters-local`](./adapters-local) constructs act
 ## Failure handling
 
 `classifyStorageFailure` and `adviseStorageRecovery` normalize common storage failure context. Retry only operations that are safe and idempotent; connection loss must not cause the runtime to duplicate an Event append or external write.
-

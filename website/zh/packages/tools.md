@@ -51,4 +51,3 @@ Registry 示例适合确定性本地使用；生产必须经过 Governed Runner�
 `sideEffectLevel` 只是 Policy 输入，不等于授权。文件、命令、网络和外部写入需要显式 Scope 与 Adapter 限制，Host Path 与 Secret 不可直接来自模型输入。
 
 如果 Dispatch 后崩溃，应根据持久 Invocation/Receipt 协调结果，不能盲目重试。测试 Schema、拒绝、Approval、Timeout、Cancellation、Output Limit、重复 Idempotency Key 与 Receipt Reconciliation。
-

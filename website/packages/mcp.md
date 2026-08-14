@@ -72,4 +72,3 @@ Record the server identity, protocol/version and capability contract used by a R
 Exercise real local transports in release acceptance, assert zero skipped cases, and cover initialization failure, timeout, cancellation, malicious endpoints, capability drift and cleanup. Use mock gateways only for deterministic unit tests.
 
 See [`hypha-tools`](./tools) for governed invocation and [`hypha-domain`](./domain) for per-workflow capability allow-lists.
-

@@ -63,4 +63,3 @@ Configure finite step, token, time and recovery budgets. The caller must handle 
 ## Boundary to remember
 
 Kernel owns reasoning semantics. [`hypha-domain`](./domain) owns product definitions; [`hypha-fsm`](./fsm) owns allowed state movement; applications own HTTP, CLI and UI behavior.
-
