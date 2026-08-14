@@ -2,7 +2,7 @@
 
 Model packages normalize provider behavior. Application and Kernel code should address aliases or backend IDs, not provider SDK types.
 
-## `hypha-models`
+## [`hypha-models`](./models)
 
 Register implementations behind a stable provider interface and validate routing independently.
 
@@ -25,7 +25,7 @@ if (!provider) throw new Error('Model provider is not registered');
 
 Use `MockModelProvider` for deterministic contract tests. Register a concrete provider only in trusted server composition and address it through a versioned alias such as `reasoning.primary`.
 
-## `hypha-inference`
+## [`hypha-inference`](./inference)
 
 InferenceManager normalizes requests before they reach a backend. It is the integration point for prompt evidence and prefix/KV cache coordination.
 

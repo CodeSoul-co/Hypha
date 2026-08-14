@@ -118,11 +118,51 @@ function packageSidebar(title: string, prefix = ''): DefaultTheme.SidebarItem[] 
       text: title,
       items: [
         { text: 'Overview / 总览', link: `${prefix}/packages/` },
-        { text: 'Core & Storage', link: `${prefix}/packages/contracts` },
-        { text: 'FSM, Kernel & Harness', link: `${prefix}/packages/execution` },
-        { text: 'Models & Inference', link: `${prefix}/packages/intelligence` },
-        { text: 'Memory, Skills, Tools & MCP', link: `${prefix}/packages/capabilities` },
-        { text: 'Domain, Local, Cache & Testing', link: `${prefix}/packages/product-runtime` },
+      ],
+    },
+    {
+      text: 'Contracts / 契约',
+      collapsed: false,
+      items: [
+        { text: 'Core', link: `${prefix}/packages/core` },
+        { text: 'Storage', link: `${prefix}/packages/storage` },
+      ],
+    },
+    {
+      text: 'Execution / 执行',
+      collapsed: false,
+      items: [
+        { text: 'FSM', link: `${prefix}/packages/fsm` },
+        { text: 'Kernel', link: `${prefix}/packages/kernel` },
+        { text: 'Harness', link: `${prefix}/packages/harness` },
+      ],
+    },
+    {
+      text: 'Intelligence / 推理',
+      collapsed: true,
+      items: [
+        { text: 'Models', link: `${prefix}/packages/models` },
+        { text: 'Inference', link: `${prefix}/packages/inference` },
+      ],
+    },
+    {
+      text: 'Capabilities / 能力',
+      collapsed: true,
+      items: [
+        { text: 'Memory', link: `${prefix}/packages/memory` },
+        { text: 'Skills', link: `${prefix}/packages/skills` },
+        { text: 'Tools', link: `${prefix}/packages/tools` },
+        { text: 'MCP', link: `${prefix}/packages/mcp` },
+      ],
+    },
+    {
+      text: 'Composition / 组合',
+      collapsed: true,
+      items: [
+        { text: 'Domain', link: `${prefix}/packages/domain` },
+        { text: 'Adapters Local', link: `${prefix}/packages/adapters-local` },
+        { text: 'Serving Cache', link: `${prefix}/packages/serving-cache` },
+        { text: 'Testing', link: `${prefix}/packages/testing` },
       ],
     },
   ];

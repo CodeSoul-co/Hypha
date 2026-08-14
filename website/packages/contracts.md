@@ -2,7 +2,7 @@
 
 These packages define shared language. Import their specs at composition boundaries; keep provider SDK objects outside the contracts.
 
-## `hypha-core`
+## [`hypha-core`](./core)
 
 Use Core for versioned system specs, framework Events, in-memory Event storage and policy primitives.
 
@@ -30,7 +30,7 @@ An Event carries the user, Session and Run scopes required for audit and replay.
 
 **Use when:** you publish a framework-facing contract, create evidence, evaluate policy or need an in-memory EventStore for tests.
 
-## `hypha-storage`
+## [`hypha-storage`](./storage)
 
 Storage profiles describe topology without handing credentials to framework code. Resolution happens in trusted composition; redaction happens before logging.
 

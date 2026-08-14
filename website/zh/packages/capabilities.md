@@ -2,7 +2,7 @@
 
 这些模块提供上下文或副作用。Domain Pack 中出现一个能力名称并不会自动赋予执行权；可信组合层必须注册它，Policy 还必须允许本次调用。
 
-## `hypha-memory`
+## [`hypha-memory`](./memory)
 
 Memory 契约描述带作用域的 Structured、Vector、Artifact、Episodic 与 Semantic Memory。
 
@@ -16,7 +16,7 @@ const memory = validateMemorySpec({
 
 Concrete MemoryProvider 在可信组合层绑定。生产读写应带 `userId`、Session/Run Scope、Policy 证据与 Trace Hook。Memory Write 是副作用，不是隐藏 Callback。
 
-## `hypha-skills`
+## [`hypha-skills`](./skills)
 
 Skill 是经过版本化、按需选择并渐进式加载到 Agent Context 的指令资产。
 
@@ -29,7 +29,7 @@ const selector = new SkillSelector(registry);
 
 保持 Skill 索引与短描述轻量；只有完成选择、授权与信任检查后才加载完整指令正文。
 
-## `hypha-tools`
+## [`hypha-tools`](./tools)
 
 Tool 由类型化契约与独立注册的 Handler 组成。
 
@@ -45,7 +45,7 @@ tools.register(spec, async (input) => ({ input, source: 'local-index' }));
 
 实际执行应使用 Governed Runner，由它包装 Timeout、Cancellation、Policy、Trace 与 Receipt。不能让模型生成的输入直接获得 Host Filesystem 或 External Write 权限。
 
-## `hypha-mcp`
+## [`hypha-mcp`](./mcp)
 
 MCP 契约描述允许的 Server/Capability，并把其 Tool 归一化到同一治理路径。
 

@@ -2,7 +2,7 @@
 
 执行层分别回答三个问题：**允许哪些状态**、**Agent 如何推理**、**副作用如何成为持久证据**。
 
-## `hypha-fsm`
+## [`hypha-fsm`](./fsm)
 
 将拓扑定义为数据，先解析与分析，再应用已声明的迁移。
 
@@ -32,7 +32,7 @@ state = applyTransition(review, state, 'Review');
 
 `analyzeFSMTopology` 能在执行前发现不可达节点与死路。并发运行时应通过 Runtime API 提交当前 revision/owner 证据，而不是让多个客户端直接改 Snapshot。
 
-## `hypha-kernel`
+## [`hypha-kernel`](./kernel)
 
 Kernel 提供 Provider-neutral 的 ReAct Agent 与推理契约。它拥有推理循环边界，但不拥有业务工作流。
 
@@ -46,7 +46,7 @@ const agent = reactAgentSpecDefinition.parse({
 
 生产组合应把模型推理、Tool、Memory 与 Trace 绑定到 ReAct Runner，业务逻辑不能直接调用 Provider 或 Tool。
 
-## `hypha-harness`
+## [`hypha-harness`](./harness)
 
 Harness 记录执行证据并投影产品视图。
 

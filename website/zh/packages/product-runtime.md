@@ -2,7 +2,7 @@
 
 这些包把 Framework 契约组合成应用，并证明组合仍然可确定性回放。
 
-## `hypha-domain`
+## [`hypha-domain`](./domain)
 
 Domain Pack 拥有 Task Schema、Workflow、Session 默认值、能力 Allow-list、Memory/Reasoning Profile、Policy 与 Evaluation Fixture。
 
@@ -24,7 +24,7 @@ const compiled = compileDomainPackToHarnessedSystem(pack, {
 
 把 `compiled.agentPatch` 应用到基础 Agent Spec。编译后的 Harness FSM 保护 ReAct 执行；被选中的 Workflow 则可用于独立的应用 FSM。
 
-## `hypha-adapters-local`
+## [`hypha-adapters-local`](./adapters-local)
 
 为 Event/Structured SQLite、Vector 与 Filesystem Artifact 创建本地开发 Profile。
 
@@ -40,7 +40,7 @@ const profiles = createLocalStorageProfiles({
 
 适用于 Local-first 开发与确定性测试。生产环境可替换 Provider，同时保留 Storage/Memory 契约。
 
-## `hypha-serving-cache`
+## [`hypha-serving-cache`](./serving-cache)
 
 Serving Cache 保存有界、有 Scope 的响应投影。
 
@@ -58,7 +58,7 @@ await cache.set(key, { content: '...' }, {
 
 Key 必须满足部署的 Policy Scope 要求。Cache 用于加速 Serving，Run/Event 证据仍是事实来源。
 
-## `hypha-testing`
+## [`hypha-testing`](./testing)
 
 Testing 提供 Replay Fixture 与 State Path 断言。
 

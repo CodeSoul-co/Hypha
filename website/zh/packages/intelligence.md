@@ -2,7 +2,7 @@
 
 模型模块用于标准化 Provider 行为。应用与 Kernel 应使用 Alias 或 Backend ID，而不是依赖具体 Provider SDK 类型。
 
-## `hypha-models`
+## [`hypha-models`](./models)
 
 在稳定接口后注册实现，并独立校验路由。
 
@@ -22,7 +22,7 @@ if (!provider) throw new Error('Model provider is not registered');
 
 确定性契约测试使用 `MockModelProvider`。Concrete Provider 只在可信 Server 组合层注册，并通过 `reasoning.primary` 之类的版本化 Alias 寻址。
 
-## `hypha-inference`
+## [`hypha-inference`](./inference)
 
 InferenceManager 在请求到达 Backend 前完成标准化，也是 Prompt 证据与 Prefix/KV Cache 的协调点。
 

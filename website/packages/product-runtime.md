@@ -2,7 +2,7 @@
 
 These packages turn framework contracts into an application composition and prove that it remains deterministic.
 
-## `hypha-domain`
+## [`hypha-domain`](./domain)
 
 A Domain Pack owns Task schemas, Workflows, Session defaults, capability allow-lists, Memory/reasoning profiles, policies and evaluation fixtures.
 
@@ -27,7 +27,7 @@ const compiled = compileDomainPackToHarnessedSystem(pack, {
 
 Apply `compiled.agentPatch` to your base Agent spec. The compiled Harness FSM protects ReAct execution; the selected Workflow remains the source for an optional application-owned FSM.
 
-## `hypha-adapters-local`
+## [`hypha-adapters-local`](./adapters-local)
 
 Create development profiles for Event/structured SQLite, vectors and filesystem artifacts.
 
@@ -44,7 +44,7 @@ const profiles = createLocalStorageProfiles({
 
 Use this for local-first development and deterministic tests. Production can replace providers while retaining Storage/Memory contracts.
 
-## `hypha-serving-cache`
+## [`hypha-serving-cache`](./serving-cache)
 
 The serving cache stores bounded, scoped response projections.
 
@@ -66,7 +66,7 @@ await cache.set(key, { content: '...' }, {
 
 Scope keys by the policy requirement used in your deployment. Cache entries accelerate serving; Run/Event evidence remains authoritative.
 
-## `hypha-testing`
+## [`hypha-testing`](./testing)
 
 Testing helpers assert replay fixtures and state paths.
 

@@ -2,7 +2,7 @@
 
 The execution layer separates **what states are allowed**, **how an Agent reasons**, and **how effects become durable evidence**.
 
-## `hypha-fsm`
+## [`hypha-fsm`](./fsm)
 
 Define a topology as data, parse it, inspect it, then apply only declared transitions.
 
@@ -38,7 +38,7 @@ state = applyTransition(review, state, 'Review');
 
 `analyzeFSMTopology` surfaces unreachable and dead-end nodes before execution. For concurrent runtimes, submit the current revision/owner evidence through the runtime API rather than mutating snapshots from multiple clients.
 
-## `hypha-kernel`
+## [`hypha-kernel`](./kernel)
 
 Kernel contains provider-neutral ReAct Agent and reasoning contracts. It owns the reasoning loop boundary; it does not own your business workflow.
 
@@ -54,7 +54,7 @@ const agent = reactAgentSpecDefinition.parse({
 
 In a production composition, bind model inference, Tool execution, Memory and traces to the ReAct runner. Do not call providers or tools directly from domain logic.
 
-## `hypha-harness`
+## [`hypha-harness`](./harness)
 
 Harness records execution evidence and projects product views.
 

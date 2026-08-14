@@ -23,7 +23,7 @@ features:
   - icon: '01'
     title: Specs before providers
     details: Versioned TypeScript contracts and runtime validation keep application code independent of infrastructure.
-    link: /packages/contracts
+    link: /packages/core
   - icon: '02'
     title: ReAct + FSM execution
     details: Keep the protected Harness lifecycle separate from the application workflow topology you own.
@@ -31,7 +31,7 @@ features:
   - icon: '03'
     title: Every effect is governed
     details: Tools, MCP, memory and external writes pass through policy, trace and Harness boundaries.
-    link: /packages/capabilities
+    link: /packages/tools
   - icon: '04'
     title: Events remain authoritative
     details: Session is a projected product view. Replay and evaluation derive state from the Event stream.
@@ -39,7 +39,7 @@ features:
   - icon: '05'
     title: Local-first composition
     details: Start with SQLite, files and deterministic adapters, then replace providers without moving product contracts.
-    link: /packages/product-runtime
+    link: /packages/adapters-local
   - icon: '06'
     title: One complete example
     details: Tour all 15 packages, compile a Domain Pack, run a custom FSM and submit durable commands.
