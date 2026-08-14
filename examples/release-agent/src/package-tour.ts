@@ -115,14 +115,14 @@ async function tourPackages() {
   return {
     packages: 15,
     core: coreSpec.id,
-    storage: topology.providers.map((provider) => provider.engine),
+    storage: topology.providers.map((provider: { engine?: string }) => provider.engine),
     fsm: {
       initialState: initialSnapshot.currentState,
       reachableStates: topologyAnalysis.reachableStates.length,
     },
     inference: inferenceResponse.output,
     models: {
-      providers: models.list().map((provider) => provider.id),
+      providers: models.list().map((provider: { id?: string }) => provider.id),
       aliases: routing.aliases.length,
     },
     memory: memory.id,
@@ -131,8 +131,8 @@ async function tourPackages() {
     mcp: mcp.servers.map((server) => server.id),
     domain: domain.id,
     kernel: kernelAgent.id,
-    harness: sessions.map((session) => session.id),
-    localAdapters: localProfiles.map((profile) => profile.engine),
+    harness: sessions.map((session: { id?: string }) => session.id),
+    localAdapters: localProfiles.map((profile: { engine?: string }) => profile.engine),
     servingCache: Boolean(await cache.get(cacheKey)),
     testing: packageFixturePassed,
     composedAgent: releaseAgent.agent.id,
