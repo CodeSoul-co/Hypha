@@ -1,6 +1,6 @@
 {
   "name": "hypha-release-agent-example",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Consumer project demonstrating a versioned Hypha npm release",
   "scripts": {

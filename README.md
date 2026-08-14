@@ -17,11 +17,11 @@
 <p align="center">
   <a href="https://codesoul-co.github.io/Hypha/"><strong>User Guide</strong></a>
   · <a href="https://hypha.code-soul.com/"><strong>Official Website</strong></a>
-  · <a href="https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.0">Release v1.0.0</a>
+  · <a href="https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.1">Release v1.0.1</a>
   · <a href="https://www.npmjs.com/org/codesoul-co">npm Packages</a>
 </p>
 
-> **Current public release:** v1.0.0, with 15 aligned packages named
+> **Current public release:** v1.0.1, with 15 aligned packages named
 > `@codesoul-co/hypha-*`. The [versioned user guide](https://codesoul-co.github.io/Hypha/)
 > includes an API atlas for every package, custom FSM control, and a complete composition example.
 
@@ -538,9 +538,9 @@ NODE_ENV=production npm start
 
 ## Workspace packages
 
-Hypha v1.0.0 publishes 15 version-aligned npm libraries. Pin the exact same version across the
+Hypha v1.0.1 publishes 15 version-aligned npm libraries. Pin the exact same version across the
 dependency graph. The root workspace, bundled Server, CLI, and any package marked private remain
-source/deployment surfaces. See the [interactive package guide](https://codesoul-co.github.io/Hypha/#packages),
+source/deployment surfaces. See the [VitePress package reference](https://codesoul-co.github.io/Hypha/packages/),
 [Releases and npm Packages](docs/guides/releases.md), and [Upgrading](UPGRADING.md).
 
 | Package                                                                           | Responsibility                                                                                |
@@ -559,7 +559,7 @@ source/deployment surfaces. See the [interactive package guide](https://codesoul
 
 ## Documentation
 
-- [Versioned user guide and complete package atlas](https://codesoul-co.github.io/Hypha/)
+- [Bilingual VitePress guide and complete package reference](https://codesoul-co.github.io/Hypha/)
 - [Official website](https://hypha.code-soul.com/)
 - [Documentation index](docs/README.md)
 - [Architecture](docs/reference/architecture.md)
