@@ -53,4 +53,3 @@ Domain Pack Allow-list → 按 id/version 解析 Registry
 模型可以建议 Skill，但可信组合层决定它是否存在、兼容且允许加载。本地资产要防 Path Traversal；远程资产要验证签名、Hash、SBOM/Transparency 与依赖锁，不能让可变正文静默改变 Replay。
 
 测试未知/禁用 Skill、版本锁、资产根目录、渐进加载以及 Tool 权限变化。
-

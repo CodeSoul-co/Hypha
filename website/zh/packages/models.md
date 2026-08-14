@@ -56,4 +56,3 @@ const provider = new OpenAICompatibleModelProvider({
 具体 Provider 只在可信服务启动代码中构造，密钥来自环境或 Secret Store。Agent 引用 `reasoning.primary` 之类 Alias；部署配置映射 Provider/Model，并在接流量前校验能力和 Fallback。
 
 需要 Prompt、Backend 和 Prefix/KV Cache 协调时使用 [`hypha-inference`](./inference)。
-

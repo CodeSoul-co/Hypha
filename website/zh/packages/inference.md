@@ -49,4 +49,3 @@ const response = await inference.infer('echo', {
 Backend Registry 支持 OpenAI API、Ollama、SGLang、vLLM 和 llama.cpp。只注册部署启用的 Backend，在可信层解析 Endpoint/Secret，并传播 Timeout/Cancellation。
 
 生产测试应覆盖未知 Backend、Provider 故障、超时、畸形输出、Cache Miss/Scope 隔离与 Trace 脱敏。
-

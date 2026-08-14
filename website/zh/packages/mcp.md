@@ -49,4 +49,3 @@ Domain Pack Allow-list → Connection Policy/Transport
 本地进程需要可执行文件 Allow-list、参数/环境清理、资源和生命周期限制；远程 Endpoint 需要 HTTPS、Redirect/Host 校验、Auth 与响应上限。OAuth Token 留在 Credential Store。断线重连不能重复不确定副作用。
 
 Release Acceptance 应运行真实 Local Transport 且 0 skipped，并覆盖初始化失败、超时、取消、恶意 Endpoint、Capability Drift 和 Cleanup。
-

@@ -56,4 +56,3 @@ Provider Key、Cache Key、Delete 与 Reconciliation 必须执行同一 Scope，
 Memory 写入是副作用，与 Tool/外部写入一样需要 Policy、Trace 与 Idempotency。检索结果应保留 Provenance，让 Agent 区分已验证证据和回忆上下文。
 
 测试 Add/Search/Update/Delete、Retention、用户隔离、Pagination、Cancellation、Timeout、Outbox 重投与 Dead Letter。Replay 应从 Event 重建 Memory 相关产品状态，而不是把外部索引当事实来源。
-

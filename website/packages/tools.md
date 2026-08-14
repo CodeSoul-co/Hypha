@@ -72,4 +72,3 @@ Assign a stable operation/invocation identity before executing an effect. If the
 Assert schema rejection, denied access, approval, timeout, cancellation, output limits, duplicate idempotency keys and receipt reconciliation. A mock handler returning its input is not sufficient unless the test also verifies the governed boundary.
 
 Use [`hypha-mcp`](./mcp) for MCP discovery/connection and [`hypha-harness`](./harness) for runtime evidence.
-

@@ -74,4 +74,3 @@ const jsonSchema = harnessedAgentSystemSpecDefinition.jsonSchema;
 - Schema 变更使用 Upcaster/Migration，不能静默重解释旧 Event。
 
 相关模块：[`hypha-storage`](./storage)、[`hypha-harness`](./harness)、[`hypha-testing`](./testing)。
-

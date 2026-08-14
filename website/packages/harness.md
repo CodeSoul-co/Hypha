@@ -69,4 +69,3 @@ Use a durable Event store bridge and persistent queue/lease/checkpoint stores wh
 ## Verification
 
 Test simultaneous requests for one Session, cancellation, stale revisions, restart/replay and terminal convergence. Use [`hypha-testing`](./testing) to compare the resulting Event sequence and projection.
-

@@ -47,4 +47,3 @@ const local = createLocalStorageBackbone({
 Local Process/Docker Adapter 本身不是权限边界，必须置于 Core Execution Contract 与 Tool/Harness Governance 后方，并限制命令、环境、Workspace Path、网络、资源、Deadline 和输出。Cancellation/Crash 后要清理进程与容器。
 
 多实例不能使用进程内 Adapter 共享状态，应换成持久 Event/Execution Store 与共享 Queue/Lease/Capacity。测试要关闭重开以验证持久性，并覆盖 Path Traversal、失败注入、Cleanup 和 Crash Recovery。
-

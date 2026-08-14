@@ -46,4 +46,3 @@ const hit = await cache.get(key);
 Key 必须纳入所有影响结果的字段：Provider/Model、Message、Instruction、Tool、Response Format 和 Generation 参数；跨作用域不安全时还要加入 User/Tenant、Policy 与数据版本。
 
 Cache Hit 是优化而非事实。仍要记录本 Run 使用了 Cache，并校验 Artifact/Data 依赖。根据业务选择 Fail-open/Fail-closed；畸形或跨 Scope 数据必须拒绝。测试 Key 稳定性、TTL、Oversize、Corruption、Timeout 与 Scope Isolation。
-

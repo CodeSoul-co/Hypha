@@ -86,4 +86,3 @@ Use `InMemoryEventStore`, in-memory runtime stores and deterministic helpers for
 - [`hypha-storage`](./storage) describes storage topology.
 - [`hypha-harness`](./harness) runs and projects Event-first execution.
 - [`hypha-testing`](./testing) captures and replays traces.
-

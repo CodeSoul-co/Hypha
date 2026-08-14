@@ -50,4 +50,3 @@ Agent 只引用 Alias/Ref，不保存 Provider 对象或密钥。启动时通过
 配置有限的步骤、Token、时间和恢复预算，显式处理完成、失败、取消与人工审核。长任务由 [`hypha-harness`](./harness) 拆成可恢复 Quantum，而不是隐藏在无限循环里。
 
 Kernel 负责推理语义；[`hypha-domain`](./domain) 负责产品定义；[`hypha-fsm`](./fsm) 负责合法状态移动；HTTP/CLI/UI 属于应用层。
-

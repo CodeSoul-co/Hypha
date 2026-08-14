@@ -76,4 +76,3 @@ The backend registry includes OpenAI API, Ollama, SGLang, vLLM and llama.cpp ada
 - Propagate cancellation and deadlines to the transport.
 - Verify cache scope equivalence before reuse.
 - Test provider failure, timeout, malformed output and cache miss paths.
-

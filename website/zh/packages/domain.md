@@ -54,4 +54,3 @@ const agent = applyDomainAgentPatch(
 应用 Workflow 可定义/调整节点、边、Guard、Timeout、Retry 与 Human Review；独立 Harness FSM 仍由 Framework 保护。State Binding 可进一步缩小 Tool、Skill、Prompt、MCP、Memory 与 Permission Scope，但最终仍由 Registry/Policy/Governed Runner 执行授权。
 
 完整示例见[组合完整系统](/zh/guide/full-system)。
-
