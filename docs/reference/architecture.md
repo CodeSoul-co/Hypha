@@ -4,24 +4,24 @@ hypha is a harness-oriented agent system framework. In this repository, "harness
 
 ## Package Map
 
-| Package                 | Responsibility                                                                                                                                                   | Should Not Contain                                                             |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `@codesoul-co/hypha-core`           | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces.                                                                                  | Provider SDKs, database clients, HTTP server code.                             |
-| `@codesoul-co/hypha-storage`        | Storage profiles/topology, connection resolution, provider-neutral failure classification, and recovery advice.                                                  | Concrete database clients or memory behavior.                                  |
-| `@codesoul-co/hypha-domain`         | `DomainPackSpec`, Domain pipeline and capability bindings, `ReasoningSpec`, session initialization, local pack loading, overlays, registry, and compiler.        | Harness FSM topology, business-specific core code, or app routes.              |
-| `@codesoul-co/hypha-fsm`            | FSM process spec, `FSMRuntime`, guarded transitions, validated snapshots, anomaly classification, bounded retry/circuit/compensation/quarantine semantics.       | Tool handlers, model calls, storage adapters.                                  |
-| `@codesoul-co/hypha-kernel`         | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                                                           | Concrete model providers, direct tool side effects.                            |
-| `@codesoul-co/hypha-inference`      | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.                                          | Provider-specific request types in public kernel contracts.                    |
-| `@codesoul-co/hypha-models`         | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.                                  | Agent loop, workflow semantics, or app-specific model preferences.             |
-| `@codesoul-co/hypha-serving-cache`  | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.                                         | Semantic cache, WorkCache graph scheduling, or agent loop changes.             |
-| `@codesoul-co/hypha-workcache`      | Event-derived typed runtime cache blocks, WorkGraph scheduling view, hot-indexed typed cache forest, memory/SQLite stores, and audit events.                     | Source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
-| `@codesoul-co/hypha-tools`          | Tool specs, registry, safe recursive schema validation, governed runner, common JSON/text/hash utilities, side-effect policy and trace events.                   | Direct execution bypassing policy.                                             |
-| `@codesoul-co/hypha-mcp`            | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.                                      | Provider SDK lifecycle as framework core.                                      |
-| `@codesoul-co/hypha-memory`         | Versioned profiles, scoped managed records, atomic persistence/outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. | App session storage rules or direct ungoverned provider writes.                |
-| `@codesoul-co/hypha-skills`         | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                                                         | Workflow replacement logic or direct tool execution.                           |
-| `@codesoul-co/hypha-harness`        | Event-first runtime projections, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression.                               | FSM internals or app-specific state.                                           |
-| `@codesoul-co/hypha-adapters-local` | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                                                         | Framework spec definitions.                                                    |
-| `@codesoul-co/hypha-testing`        | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                                                 | Production runtime behavior or live model/tool execution.                      |
+| Package                              | Responsibility                                                                                                                                                   | Should Not Contain                                                                                           |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `@codesoul-co/hypha-core`            | Shared spec primitives, schema helpers, events, errors, IDs, policy interfaces.                                                                                  | Provider SDKs, database clients, HTTP server code.                                                           |
+| `@codesoul-co/hypha-storage`         | Storage profiles/topology, connection resolution, provider-neutral failure classification, and recovery advice.                                                  | Concrete database clients or memory behavior.                                                                |
+| `@codesoul-co/hypha-domain`          | `DomainPackSpec`, Domain pipeline and capability bindings, `ReasoningSpec`, session initialization, local pack loading, overlays, registry, and compiler.        | Harness FSM topology, business-specific core code, or app routes.                                            |
+| `@codesoul-co/hypha-fsm`             | FSM process spec, `FSMRuntime`, guarded transitions, validated snapshots, anomaly classification, bounded retry/circuit/compensation/quarantine semantics.       | Tool handlers, model calls, storage adapters.                                                                |
+| `@codesoul-co/hypha-kernel`          | ReAct agent spec, context/reasoning builder interfaces, verifier interfaces, executable ReAct runners.                                                           | Concrete model providers, direct tool side effects.                                                          |
+| `@codesoul-co/hypha-inference`       | Prompt compilation, prefix segmentation, Plasmod hot layer, backend registry, prefix/KV cache, reasoning orchestration.                                          | Provider-specific request types in public kernel contracts.                                                  |
+| `@codesoul-co/hypha-models`          | `ModelProvider` abstraction, model aliases/routing, normalized usage/errors/stream events, OpenAI-compatible provider adapters.                                  | Agent loop, workflow semantics, or app-specific model preferences.                                           |
+| `@codesoul-co/hypha-serving-cache`   | Exact LLM response cache middleware, deterministic request keys, prompt prefix metadata, stores, and cache trace events.                                         | Semantic cache, WorkCache graph scheduling, or agent loop changes.                                           |
+| Internal WorkCache workspace package | Event-derived typed runtime cache blocks, WorkGraph scheduling view, hot-indexed typed cache forest, memory/SQLite stores, and audit events.                     | Public npm surface in v1.0.0, source-of-truth events, provider response cache, MessageTree, or KVPrefixTree. |
+| `@codesoul-co/hypha-tools`           | Tool specs, registry, safe recursive schema validation, governed runner, common JSON/text/hash utilities, side-effect policy and trace events.                   | Direct execution bypassing policy.                                                                           |
+| `@codesoul-co/hypha-mcp`             | MCP profile specs, gateway contracts, mock gateway, and capability normalization/registration into governed tool contracts.                                      | Provider SDK lifecycle as framework core.                                                                    |
+| `@codesoul-co/hypha-memory`          | Versioned profiles, scoped managed records, atomic persistence/outbox, deterministic retrieval/context, external adapters, recovery, replay, and cache bindings. | App session storage rules or direct ungoverned provider writes.                                              |
+| `@codesoul-co/hypha-skills`          | Skill specs, refs, local markdown loader, selector, context loader, policy, instruction/assets metadata.                                                         | Workflow replacement logic or direct tool execution.                                                         |
+| `@codesoul-co/hypha-harness`         | Event-first runtime projections, ReAct/FSM runner, cross-module recovery supervisor, bounded message bus, replay/audit/regression.                               | FSM internals or app-specific state.                                                                         |
+| `@codesoul-co/hypha-adapters-local`  | Local SQLite/JSON/file/vector adapters for development and self-hosting.                                                                                         | Framework spec definitions.                                                                                  |
+| `@codesoul-co/hypha-testing`         | Deterministic evaluation, replay fixtures, trace diffs, and regression runners for event/spec/runtime contracts.                                                 | Production runtime behavior or live model/tool execution.                                                    |
 
 ## Harness, Runtime, and FSM
 
@@ -69,7 +69,7 @@ Allowed examples:
 apps/server -> @codesoul-co/hypha-domain -> @codesoul-co/hypha-fsm -> @codesoul-co/hypha-core
 apps/server -> @codesoul-co/hypha-kernel -> @codesoul-co/hypha-inference -> @codesoul-co/hypha-models
 apps/server -> @codesoul-co/hypha-serving-cache -> @codesoul-co/hypha-models
-apps/server -> @codesoul-co/hypha-workcache -> @codesoul-co/hypha-core
+apps/server -> internal WorkCache package -> @codesoul-co/hypha-core
 apps/server -> @codesoul-co/hypha-tools -> @codesoul-co/hypha-core
 apps/server -> @codesoul-co/hypha-storage -> @codesoul-co/hypha-core
 ```
@@ -114,7 +114,7 @@ the model provider.
 
 ## WorkCache
 
-`@codesoul-co/hypha-workcache` consumes existing runtime events and materializes typed
+The internal WorkCache workspace package consumes existing runtime events and materializes typed
 `CacheBlock` records in a hot-indexed `TypedCacheForest`. Its default registry
 aligns only current Hypha events to primary trees: planning/reasoning events to
 `PlanTree`, model/inference completions to `ComputationTree`, tool and MCP

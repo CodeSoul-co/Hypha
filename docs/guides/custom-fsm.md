@@ -36,8 +36,11 @@ const analysis = analyzeFSMTopology(process);
 Analysis does not reject cycles or disconnected states because those choices belong to the product;
 applications should turn the findings they prohibit into deployment or contract-test failures.
 
-DomainPack users can define the same topology under `workflows` and call
-`compileWorkflowToFSM()` or `compileDomainPackToHarnessedSystem()`.
+DomainPack users can define the same product topology under `workflows`. ReAct compilation keeps
+the protected framework Harness FSM, while an application that starts a custom FSM Run can map the
+selected `WorkflowSpec` into a separate `FSMProcessSpec` and validate it with
+`parseFSMProcessSpec()`. The [release-agent example](../../examples/release-agent/src/agent.ts)
+shows this explicit conversion so the two execution modes cannot be confused.
 
 ## Start a custom FSM Run
 

@@ -14,6 +14,17 @@
   English | <a href="README.zh-CN.md">中文</a>
 </p>
 
+<p align="center">
+  <a href="https://codesoul-co.github.io/Hypha/"><strong>User Guide</strong></a>
+  · <a href="https://hypha.code-soul.com/"><strong>Official Website</strong></a>
+  · <a href="https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.0">Release v1.0.0</a>
+  · <a href="https://www.npmjs.com/org/codesoul-co">npm Packages</a>
+</p>
+
+> **Current public release:** v1.0.0, with 15 aligned packages named
+> `@codesoul-co/hypha-*`. The [versioned user guide](https://codesoul-co.github.io/Hypha/)
+> includes an API atlas for every package, custom FSM control, and a complete composition example.
+
 ## What is hypha?
 
 hypha is an open-source TypeScript framework built around two cooperating layers: an **Agent Core**
@@ -41,11 +52,11 @@ Artifact, receipt, or checkpoint evidence.
   Cache & Reuse Plane spans reasoning, tools, Memory, execution, and inference.</em>
 </p>
 
-| Layer | Primary responsibility |
-| --- | --- |
-| **Agent Core** | Reasoning/ReAct, planning, tool selection, Memory access, model and context orchestration. |
-| **Production Harness** | FSM execution, Event/checkpoint control, policy/approval, continuation, recovery, audit, and replay. |
-| **DomainPack** | Declares the product-specific task, workflow, capability, Memory, Skill, Prompt, Policy, evaluation, and output contracts compiled into the shared runtime. |
+| Layer                   | Primary responsibility                                                                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Agent Core**          | Reasoning/ReAct, planning, tool selection, Memory access, model and context orchestration.                                                                                  |
+| **Production Harness**  | FSM execution, Event/checkpoint control, policy/approval, continuation, recovery, audit, and replay.                                                                        |
+| **DomainPack**          | Declares the product-specific task, workflow, capability, Memory, Skill, Prompt, Policy, evaluation, and output contracts compiled into the shared runtime.                 |
 | **Cache & Reuse Plane** | Reuses validated model work, reasoning structures, tool/execution results, Memory/context projections, and prefix/KV state without becoming a source of truth or authority. |
 
 This separation is what lets the same runtime support very different agent products. A coding agent,
@@ -58,14 +69,14 @@ Cache is a first-class control plane in hypha, not a single response-cache featu
 distinguishes several reuse layers because an exact LLM response, a reasoning subgraph, a tool result,
 a Memory projection, and a KV prefix have different validity and invalidation requirements.
 
-| Cache layer | Reusable unit | Typical validity boundary |
-| --- | --- | --- |
-| **Serving Cache** | Exact normalized model response | Model/provider identity, normalized request, scope, TTL, and response validity. |
-| **Thinking Cache** | Reasoning node, path, or reusable subgraph | Model/provider, reasoning strategy/version, prompt blocks, tool schema, inference parameters, and scope. |
-| **WorkCache** | Event-derived typed agent work | Source-event provenance, dependency/revision closure, scope, validity state, and future demand. |
+| Cache layer                | Reusable unit                                                      | Typical validity boundary                                                                                     |
+| -------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| **Serving Cache**          | Exact normalized model response                                    | Model/provider identity, normalized request, scope, TTL, and response validity.                               |
+| **Thinking Cache**         | Reasoning node, path, or reusable subgraph                         | Model/provider, reasoning strategy/version, prompt blocks, tool schema, inference parameters, and scope.      |
+| **WorkCache**              | Event-derived typed agent work                                     | Source-event provenance, dependency/revision closure, scope, validity state, and future demand.               |
 | **Tool / Execution Cache** | Eligible read-only tool results or deterministic execution results | Capability revision, Policy, external-state evidence, workspace/environment snapshot, idempotency, and scope. |
-| **Memory / Context Cache** | Memory search and assembled context projections | Memory scope, mutation generation, source revision, provenance, and context policy. |
-| **Prefix / KV Cache** | Prompt-prefix blocks, provider prefixes, or backend KV segments | Model/backend, Agent/Session/Domain scope, prompt dependencies, and prefix/KV revision. |
+| **Memory / Context Cache** | Memory search and assembled context projections                    | Memory scope, mutation generation, source revision, provenance, and context policy.                           |
+| **Prefix / KV Cache**      | Prompt-prefix blocks, provider prefixes, or backend KV segments    | Model/backend, Agent/Session/Domain scope, prompt dependencies, and prefix/KV revision.                       |
 
 <p align="center">
   <img src="docs/readme/cache-tree-management.png"
@@ -80,16 +91,16 @@ lookup structure, while Event and Artifact evidence remain the source of truth.
 
 WorkCache extends that lookup pattern into **semantic cache trees** for agent execution:
 
-| Semantic tree | What it reuses |
-| --- | --- |
-| `PlanTree` | Plans, plan branches, and reusable planning artifacts. |
-| `ComputationTree` | Reasoning/computation nodes and derived work; also the natural backing plane for Thinking Cache. |
-| `ToolTree` | Eligible tool-call results and their provenance/validity metadata. |
-| `ObservationTree` | Reusable observations tied to source evidence and scope. |
-| `VerificationTree` | Verification, checking, and output-validation work. |
-| `MemoryTree` | Memory-derived projections whose validity follows Memory mutation generations and scope. |
-| `RecoveryTree` | Recovery knowledge keyed by failure context and relevant runtime revisions; hits are advisory and must be revalidated. |
-| `PromptPrefixTree` | Stable prompt blocks and prefix materialization used by provider/backend prefix reuse. |
+| Semantic tree      | What it reuses                                                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `PlanTree`         | Plans, plan branches, and reusable planning artifacts.                                                                 |
+| `ComputationTree`  | Reasoning/computation nodes and derived work; also the natural backing plane for Thinking Cache.                       |
+| `ToolTree`         | Eligible tool-call results and their provenance/validity metadata.                                                     |
+| `ObservationTree`  | Reusable observations tied to source evidence and scope.                                                               |
+| `VerificationTree` | Verification, checking, and output-validation work.                                                                    |
+| `MemoryTree`       | Memory-derived projections whose validity follows Memory mutation generations and scope.                               |
+| `RecoveryTree`     | Recovery knowledge keyed by failure context and relevant runtime revisions; hits are advisory and must be revalidated. |
+| `PromptPrefixTree` | Stable prompt blocks and prefix materialization used by provider/backend prefix reuse.                                 |
 
 The central invariant is **reuse without authority**. A hit may avoid recomputation, but it cannot
 authorize a Tool, skip Policy or Approval, fabricate a receipt, advance the FSM, or replace Event and
@@ -145,7 +156,7 @@ trace, cancellation, deadline, idempotency, and harness boundaries.
 | Tools and MCP      | Local, HTTP, plugin, mock, and MCP adapters through one governed invocation path with capability snapshots and drift control.                                                                            |
 | Skills and prompts | Built-in, filesystem, package, and signed remote Skill registries; progressive loading; versioned prompt references and templates.                                                                       |
 | Execution          | Provider-neutral Workspace, Sandbox, Command, Artifact, Store, lease, recovery, and cache contracts with local-process, Docker, remote HTTP, SQLite, PostgreSQL, local-file, and S3-compatible adapters. |
-| Cache              | Serving Cache, event-derived WorkCache, Thinking Cache, typed semantic cache trees, capability-result caches, Memory/context projections, Prefix/KV reuse, scoped validity, and invalidation.             |
+| Cache              | Serving Cache, event-derived WorkCache, Thinking Cache, typed semantic cache trees, capability-result caches, Memory/context projections, Prefix/KV reuse, scoped validity, and invalidation.            |
 | Surfaces           | Express API server and an example CLI that consume the same framework runtime.                                                                                                                           |
 
 ## Quick start
@@ -160,7 +171,7 @@ trace, cancellation, deadline, idempotency, and harness boundaries.
 ### 1. Install the workspace
 
 ```bash
-git clone https://github.com/CodeSoul-co/hypha-Hypha.git
+git clone https://github.com/CodeSoul-co/Hypha.git
 cd Hypha
 npm ci
 cp .env.example .env
@@ -241,19 +252,19 @@ policy, contract test, and HTTP Run submission, see the
 Start from [`configs/domain-packs/minimal.domain.yaml`](configs/domain-packs/minimal.domain.yaml).
 A production Domain Pack normally defines:
 
-| Declaration                              | What it controls                                                                                                             |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `taskSchemas`                            | Accepted task types, input schemas, output-contract references, and default workflows.                                       |
-| `outputContracts`                        | Machine-verifiable final output schemas.                                                                                     |
-| `sessionProfiles`                        | Default metadata and Memory, Context, Reasoning, Tool, MCP, Skill, and Policy profile references.                            |
-| `workflows`                              | Domain pipeline stages, guards, retry/timeout intent, human review, and state-scoped capabilities; not Harness FSM topology. |
-| `tools`, `toolProfiles`                  | Stable Tool contracts and the profiles allowed to bind them to executable adapters.                                          |
-| `mcpProfiles`                            | Server references, capability import rules, trust policy, and version pinning.                                               |
-| `memoryProfiles`, `contextProfiles`      | Memory selection, retrieval/write policy, context sources, provenance, and token budgets.                                    |
-| `allowedSkills`, `skillPolicies`         | Which Skills an Agent may load and which tools or policies each Skill may use.                                               |
-| `allowedPromptRefs`, `defaultPromptRefs` | Versioned prompt templates that application composition must resolve.                                                        |
-| `policies`, `businessRules`              | Permission, approval, precondition, postcondition, and output constraints.                                                   |
-| `evaluationProfiles`, `regressionCases`  | Event-derived acceptance and regression definitions.                                                                         |
+| Declaration                              | What it controls                                                                                                                                                                                                                |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `taskSchemas`                            | Accepted task types, input schemas, output-contract references, and default workflows.                                                                                                                                          |
+| `outputContracts`                        | Machine-verifiable final output schemas.                                                                                                                                                                                        |
+| `sessionProfiles`                        | Default metadata and Memory, Context, Reasoning, Tool, MCP, Skill, and Policy profile references.                                                                                                                               |
+| `workflows`                              | Product stages, guards, retry/timeout intent, human review, state-scoped capabilities, and topology evidence. ReAct Runs retain the protected Harness FSM; custom FSM Runs may use a separately validated application topology. |
+| `tools`, `toolProfiles`                  | Stable Tool contracts and the profiles allowed to bind them to executable adapters.                                                                                                                                             |
+| `mcpProfiles`                            | Server references, capability import rules, trust policy, and version pinning.                                                                                                                                                  |
+| `memoryProfiles`, `contextProfiles`      | Memory selection, retrieval/write policy, context sources, provenance, and token budgets.                                                                                                                                       |
+| `allowedSkills`, `skillPolicies`         | Which Skills an Agent may load and which tools or policies each Skill may use.                                                                                                                                                  |
+| `allowedPromptRefs`, `defaultPromptRefs` | Versioned prompt templates that application composition must resolve.                                                                                                                                                           |
+| `policies`, `businessRules`              | Permission, approval, precondition, postcondition, and output constraints.                                                                                                                                                      |
+| `evaluationProfiles`, `regressionCases`  | Event-derived acceptance and regression definitions.                                                                                                                                                                            |
 
 Keep provider URLs, bearer tokens, API keys, and deployment secrets out of the Domain Pack. It should
 select stable profile references; the trusted application composition resolves those references to
@@ -527,28 +538,29 @@ NODE_ENV=production npm start
 
 ## Workspace packages
 
-Framework libraries whose manifests set `private: false` are version-aligned public npm release
-artifacts. The root workspace, bundled Server, CLI, and any package marked private remain
-source/deployment surfaces. A manifest version is not proof that a package has already been
-published; registry publication is a maintainer release step. See
-[Releases and npm Packages](docs/guides/releases.md) and [Upgrading](UPGRADING.md).
+Hypha v1.0.0 publishes 15 version-aligned npm libraries. Pin the exact same version across the
+dependency graph. The root workspace, bundled Server, CLI, and any package marked private remain
+source/deployment surfaces. See the [interactive package guide](https://codesoul-co.github.io/Hypha/#packages),
+[Releases and npm Packages](docs/guides/releases.md), and [Upgrading](UPGRADING.md).
 
-| Package                                       | Responsibility                                                                                |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `@codesoul-co/hypha-core`                                 | Public specs, schemas, Events, policy, runtime, Artifact, Workspace, and Execution contracts. |
-| `@codesoul-co/hypha-fsm`                                  | FSM specs, custom topology analysis, snapshots, transitions, guards, and recovery semantics.  |
-| `@codesoul-co/hypha-kernel`                               | Governed ReAct and FSM coordination.                                                          |
-| `@codesoul-co/hypha-harness`                              | Bounded execution, tracing, recovery, continuation, and side-effect hooks.                    |
-| `@codesoul-co/hypha-domain`                               | DomainPack loading, validation, overlays, registry, and compilation.                          |
-| `@codesoul-co/hypha-memory`                               | Memory profiles, provider adapters, context assembly, migration, and governance.              |
+| Package                                                                           | Responsibility                                                                                |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `@codesoul-co/hypha-core`                                                         | Public specs, schemas, Events, policy, runtime, Artifact, Workspace, and Execution contracts. |
+| `@codesoul-co/hypha-fsm`                                                          | FSM specs, custom topology analysis, snapshots, transitions, guards, and recovery semantics.  |
+| `@codesoul-co/hypha-kernel`                                                       | Governed ReAct and FSM coordination.                                                          |
+| `@codesoul-co/hypha-harness`                                                      | Bounded execution, tracing, recovery, continuation, and side-effect hooks.                    |
+| `@codesoul-co/hypha-domain`                                                       | DomainPack loading, validation, overlays, registry, and compilation.                          |
+| `@codesoul-co/hypha-memory`                                                       | Memory profiles, provider adapters, context assembly, migration, and governance.              |
 | `@codesoul-co/hypha-tools`, `@codesoul-co/hypha-mcp`, `@codesoul-co/hypha-skills` | Capability contracts, registries, execution, trust, and progressive loading.                  |
-| `@codesoul-co/hypha-inference`, `@codesoul-co/hypha-models`           | Model aliases, routing, inference backends, prompt compilation, and normalized responses.     |
-| `@codesoul-co/hypha-storage`, `@codesoul-co/hypha-adapters-local`     | Storage contracts and local/self-hosted provider adapters.                                    |
-| `@codesoul-co/hypha-serving-cache`, `@codesoul-co/hypha-workcache`    | Exact model-response cache and event-derived runtime cache.                                   |
-| `@codesoul-co/hypha-testing`                              | Contract fixtures and test support.                                                           |
+| `@codesoul-co/hypha-inference`, `@codesoul-co/hypha-models`                       | Model aliases, routing, inference backends, prompt compilation, and normalized responses.     |
+| `@codesoul-co/hypha-storage`, `@codesoul-co/hypha-adapters-local`                 | Storage contracts and local/self-hosted provider adapters.                                    |
+| `@codesoul-co/hypha-serving-cache`                                                | Exact model-response cache with bounded memory, SQLite, and Redis stores.                     |
+| `@codesoul-co/hypha-testing`                                                      | Contract fixtures and test support.                                                           |
 
 ## Documentation
 
+- [Versioned user guide and complete package atlas](https://codesoul-co.github.io/Hypha/)
+- [Official website](https://hypha.code-soul.com/)
 - [Documentation index](docs/README.md)
 - [Architecture](docs/reference/architecture.md)
 - [Framework API](docs/api/framework.md)

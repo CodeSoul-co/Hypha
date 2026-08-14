@@ -3,7 +3,9 @@ import {
   applyDomainAgentPatch,
   compileDomainPackToHarnessedSystem,
   loadDomainPackFile,
+  type WorkflowSpec,
 } from '@codesoul-co/hypha-domain';
+import { parseFSMProcessSpec, type FSMProcessSpec } from '@codesoul-co/hypha-fsm';
 import type { ReActAgentSpec } from '@codesoul-co/hypha-kernel';
 
 export async function buildReleaseAgent(projectRoot = process.cwd()) {
@@ -26,5 +28,34 @@ export async function buildReleaseAgent(projectRoot = process.cwd()) {
   };
   const agent = applyDomainAgentPatch(baseAgent, compiled.agentPatch);
 
-  return { domainPack, compiled, agent };
+  const customFsm = buildApplicationWorkflowFSM(compiled.bindings.workflow);
+
+  return { domainPack, compiled, customFsm, agent };
+}
+
+function buildApplicationWorkflowFSM(workflow: WorkflowSpec): FSMProcessSpec {
+  return parseFSMProcessSpec({
+    id: workflow.id,
+    version: workflow.version,
+    name: workflow.name,
+    initialState: workflow.initialState,
+    terminalStates: workflow.terminalStates,
+    states: workflow.states.map((state) => ({
+      id: state.id,
+      kind: workflow.terminalStates.includes(state.id)
+        ? state.id.toLowerCase().includes('fail')
+          ? 'failed'
+          : 'completed'
+        : 'domain',
+      timeoutPolicy: state.timeoutPolicy,
+      retryPolicy: state.retryPolicy,
+      policyRefs: state.policyRefs,
+    })),
+    transitions: workflow.transitions.map((transition) => ({
+      from: transition.from,
+      to: transition.to,
+      guard: transition.guard,
+      description: transition.description,
+    })),
+  });
 }

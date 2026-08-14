@@ -6,7 +6,12 @@ async function main(): Promise<void> {
   const second = await buildReleaseAgent();
 
   assert.deepEqual(first.compiled.fsmProcess, second.compiled.fsmProcess);
+  assert.deepEqual(first.customFsm, second.customFsm);
   assert.deepEqual(first.compiled.harnessedSystem, second.compiled.harnessedSystem);
+  assert.equal(first.compiled.fsmProcess.id, 'fsm.react.runtime.default');
+  assert.equal(first.customFsm.id, 'workflow.research');
+  assert.equal(first.customFsm.initialState, 'Research');
+  assert.deepEqual(first.customFsm.terminalStates, ['Completed', 'Failed']);
   assert.equal(first.compiled.bindings.outputContract?.id, 'output.research');
   assert.equal(first.agent.memoryProfileRef, 'memory.release');
   assert.equal(
