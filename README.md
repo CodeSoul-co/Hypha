@@ -119,6 +119,21 @@ control rather than hidden implementation details.
   <em>Ablation-derived component contributions across task success, API-cost saving, and latency saving.</em>
 </p>
 
+## Tau3 benchmark results
+
+The latest three-way comparison was run against Hypha `main@ef33263` with one trial per task
+(385 tasks total). The base model was `deepseek-v4-flash`. Hypha is the framework result and
+Direct is the direct model-call baseline. Neither arm reported a system error.
+
+| Benchmark | Tasks | Hypha | Direct |
+| --------- | ----: | ----: | ------: |
+| Mock | 10 | 0.800 (8/10) | 0.800 (8/10) |
+| Airline | 50 | 0.880 (44/50) | 0.900 (45/50) |
+| Retail | 114 | 0.912 (104/114) | 0.895 (102/114) |
+| Telecom | 114 | 0.605 (69/114) | 0.588 (67/114) |
+| Banking knowledge | 97 | 0.206 (20/97) | 0.196 (19/97) |
+| **Total** | **385** | **0.636 (245/385)** | **0.626 (241/385)** |
+
 ## Product model
 
 | Concept      | Responsibility                                                                                                                               |
