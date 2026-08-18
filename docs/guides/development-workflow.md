@@ -1,40 +1,44 @@
 # Development Workflow
 
-Hypha uses a conventional `dev` to `main` branch model. The current `dev` branch is the development integration branch, the full-system validation branch, and the release-candidate source that previously belonged to `dev-merge`.
+Hypha maintains only `dev` and `main`.
 
 ```text
-feature/* | fix/* | docs/* | chore/*
-                  ↓
-                 dev
-                  ↓
-                main
+dev  ──full validation──>  main
 ```
 
-## Start work
+`dev` is the active development, integration, and release-candidate branch. Implementation, fixes, tests, documentation, examples, dependencies, tooling, and release preparation are committed directly to `dev`.
 
-Create short-lived branches from the latest `dev`:
+`main` is the stable release branch. It receives only a fully validated `dev` candidate and drives the public documentation deployment.
+
+## Update dev
+
+Start by updating `dev`, then make and commit the change on that branch:
 
 ```bash
 git fetch origin --prune
 git switch dev
 git pull --ff-only origin dev
-git switch -c feature/<name>
 ```
 
-Use `fix/*`, `docs/*`, or `chore/*` when those prefixes better describe the change. Module ownership is enforced through package boundaries, review, contracts, and tests rather than through permanent module branches.
+Keep commits focused, review the exact diff, and run the checks appropriate to the change before pushing `dev`.
 
-## Merge into dev
+Do not create or maintain feature, fix, documentation, chore, module, Domain, Cache, or personal remote branches. Temporary local branches or detached worktrees may be used for isolated inspection, but they do not enter the remote workflow.
 
-Open focused pull requests into `dev`. A coherent cross-package feature may update multiple modules, but unrelated changes and broad mechanical formatting must remain separate.
+## Synchronize dev to main
 
-Run the checks appropriate to the change before merging. Public package contract changes require `npm run test:packages`; API or runtime changes require integration tests.
+Only the exact `dev` candidate that passed formatting, lint, typecheck, build, unit, package-contract, and integration gates may update `main`. Runtime releases also verify Cache-enabled and Cache-disabled operation, Replay, Regression, DomainPack loading, and runtime smoke.
 
-## Release dev to main
+Prefer a fast-forward synchronization so `dev` and `main` point at the same validated commit:
 
-Only a fully validated `dev` commit may enter `main`. The release candidate runs lint, typecheck, build, unit, package-contract, and integration gates, including Cache-enabled and Cache-disabled integration coverage.
+```bash
+git switch main
+git pull --ff-only origin main
+git merge --ff-only dev
+git push origin main
+```
 
-After a non-fast-forward release merge creates a main-only merge commit, fast-forward `dev` to `main` so the next development cycle starts from the exact released state.
+## Retired branches
 
-## Retired integration branches
+`dev-merge`, `dev-domain-merge`, and all module, Domain, and Cache branches are retired historical refs. They are not updated and are not part of development, integration, or release.
 
-`dev-merge` and `dev-domain-merge` are retired and no longer accept changes. The old module, Domain, and Cache branch ladder is not a required release path. Existing refs may remain read-only for historical traceability until maintainers separately archive them.
+An urgent production correction may be committed directly to `main` only when waiting for the normal `dev` release is unsafe. The exact correction must then be synchronized immediately back to `dev`.

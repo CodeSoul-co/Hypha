@@ -1,36 +1,33 @@
 # Development and release workflow
 
-Hypha uses a conventional two-branch release model. `dev` is the active integration branch, full-system validation branch, and release-candidate source. `main` contains stable releases and drives the public documentation deployment.
+Hypha maintains only `dev` and `main`.
 
 ```text
-feature/* | fix/* | docs/* | chore/*
-                  ↓
-                 dev
-                  ↓
-                main
+dev  ──full validation──>  main
 ```
 
-## Start from dev
+`dev` is the active development, integration, and release-candidate branch. Implementation, fixes, tests, documentation, examples, dependencies, tooling, and release preparation are committed directly to `dev`.
 
-Create every ordinary change from the latest `dev`:
+`main` is the stable release branch and documentation deployment source. It receives only a fully validated `dev` candidate.
+
+## Work directly on dev
 
 ```bash
 git fetch origin --prune
 git switch dev
 git pull --ff-only origin dev
-git switch -c feature/<name>
 ```
 
-Choose `fix/*`, `docs/*`, or `chore/*` when appropriate. Keep pull requests focused, but a coherent behavior may cross package boundaries when its contracts, implementation, tests, and documentation need to change together.
+Make focused commits directly on `dev`, inspect their exact diff, and run the relevant checks before pushing.
 
-## Validate and merge
+Do not create or maintain additional remote work branches. Module ownership is enforced through package boundaries, review, public contracts, and tests—not branch names.
 
-Short-lived branches merge into `dev`. Module ownership is expressed by package boundaries, reviewers, public contracts, and tests—not by a chain of permanent module branches.
+## Synchronize to main
 
-Before release, the exact `dev` candidate must pass formatting, lint, typecheck, build, unit tests, package-contract tests, and integration tests. Runtime releases also verify Cache-enabled and Cache-disabled operation, replay, regression, DomainPack loading, and the runtime smoke path.
+The exact `dev` candidate must pass formatting, lint, typecheck, build, unit tests, package-contract tests, and integration tests. Runtime releases also verify Cache-enabled and Cache-disabled operation, Replay, Regression, DomainPack loading, and runtime smoke.
 
-## Release to main
+After validation, fast-forward `main` to the same `dev` commit. `dev` and `main` should normally point at the same commit immediately after release.
 
-Only validated `dev` commits merge into `main`. After the release merge, update `dev` to the exact `main` head before starting the next cycle.
+## Retired branches
 
-`dev-merge` and `dev-domain-merge` are retired compatibility refs. The previous module/Domain/Cache branch ladder is no longer a required development or release path.
+`dev-merge`, `dev-domain-merge`, and all module, Domain, and Cache branches are retired historical refs. They receive no updates and are not part of development or release.

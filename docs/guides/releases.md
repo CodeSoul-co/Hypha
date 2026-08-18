@@ -45,7 +45,7 @@ npm publish packages/core --access public
 Publish dependencies before their consumers. Continue with Storage/FSM/Inference/Models/Memory/
 Tools, then Skills/MCP, Domain/Kernel, Harness, local adapters, caches, and testing. Use npm
 provenance in the release workflow where the registry and CI identity support it. Never publish
-from a short-lived work branch or directly from `dev`.
+from any retired or unmaintained branch.
 
 After publication, create a clean temporary consumer, install exact versions from the registry,
 compile it, run its tests, and compare the package metadata with the release commit. Only then create

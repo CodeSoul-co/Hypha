@@ -1,8 +1,8 @@
 # Contributing to Hypha
 
-Hypha uses a conventional two-branch release model. Short-lived work branches merge into `dev`, and a fully validated `dev` release candidate merges into `main`.
+Hypha maintains only two active branches: `dev` and `main`. All ordinary updates are committed directly to `dev`; a fully validated `dev` release candidate is synchronized directly to `main`.
 
-## Start from dev
+## Work directly on dev
 
 Update the shared development baseline before starting work:
 
@@ -10,34 +10,28 @@ Update the shared development baseline before starting work:
 git fetch origin --prune
 git switch dev
 git pull --ff-only origin dev
-git switch -c feature/<name>
 ```
 
-Use `fix/*`, `docs/*`, or `chore/*` when those prefixes describe the change better. Do not create username-prefixed, agent-prefixed, date-only, `tmp/*`, or `wip/*` remote branches.
+Do not create or maintain feature, fix, documentation, chore, module, Domain, Cache, or personal remote branches. Temporary local branches or detached worktrees may be used for inspection, but remote updates belong only to `dev` and `main`.
 
 ## Integration and release flow
 
 ```text
-feature/* | fix/* | docs/* | chore/*
-                  ↓
-                 dev
-                  ↓
-                main
+dev  ──full validation──>  main
 ```
 
 `dev` is the development integration branch, full-system validation branch, and release-candidate source. It assumes the role previously assigned to `dev-merge`.
 
-`dev-merge` and `dev-domain-merge` are retired compatibility refs. Existing module, Domain, and Cache branches are legacy refs or optional collaboration branches; they no longer form a mandatory merge ladder.
+`dev-merge`, `dev-domain-merge`, and all module, Domain, and Cache branches are retired historical refs. They do not accept updates and are not part of development or release.
 
 ## Branch responsibilities
 
-- Make implementation, test, documentation, and example changes on a short-lived branch created from `dev`.
-- Open a focused pull request into `dev`.
+- Commit implementation, fixes, tests, documentation, examples, dependencies, and tooling directly to `dev`.
+- Keep commits focused and review their exact diff before pushing.
 - Module ownership is enforced through package boundaries, reviewers, public contracts, and tests rather than permanent module branches.
 - A coherent behavior may cross package boundaries when its contract, implementation, tests, and documentation must change together. Keep unrelated work separate.
-- `main` receives only a completely validated `dev` release candidate.
+- Synchronize `main` only from a completely validated `dev` release candidate.
 - Do not force-push shared `dev` or `main` history.
-- Delete short-lived remote branches after merge when no longer needed.
 
 ## Validation
 
@@ -60,9 +54,9 @@ Final validation also covers Cache enabled and disabled, Replay, Regression, Dom
 
 After a release merge creates a main-only merge commit, fast-forward `dev` to the exact `main` head before starting the next development cycle.
 
-## Hotfixes
+## Emergency main fixes
 
-An urgent production fix starts from `main` on `hotfix/<name>`. Validate and merge it into `main`, then immediately merge or cherry-pick the exact fix into `dev`. The hotfix is incomplete while `dev` lacks the released change.
+An urgent production fix may be committed directly to `main` only when waiting for the normal `dev` release is unsafe. Validate it, then immediately synchronize the exact fix back to `dev`. The fix is incomplete while `dev` lacks the released commit.
 
 ## Production readiness and acceptance evidence
 
@@ -75,7 +69,7 @@ An urgent production fix starts from `main` on `hotfix/<name>`. Validate and mer
 
 ## Dependency and runtime compatibility
 
-- Root dependency, lockfile, Node engine, TypeScript, lint, and test-runner changes belong on a focused `chore/*` branch based on `dev`.
+- Root dependency, lockfile, Node engine, TypeScript, lint, and test-runner changes use focused commits directly on `dev`.
 - Validate the declared minimum Node version when a security or dependency upgrade changes transitive engine or platform requirements.
 - Do not use `npm audit fix --force` on `dev` or `main`. Review dependency paths, exploitability, engine compatibility, and lockfile changes.
 - Installed-but-unreachable vulnerable code still requires a documented decision: remove or upgrade it, or record the bounded exposure and compensating control.
@@ -107,4 +101,4 @@ An urgent production fix starts from `main` on `hotfix/<name>`. Validate and mer
 
 Public README, guides, API references, examples, package metadata, and release notes describe only capabilities proven by the final `main` commit. Internal audit, remediation, temporary plans, local paths, credentials, and contributor attribution stay out of public documentation.
 
-Documentation changes follow the same short-lived branch → `dev` → `main` path as implementation changes.
+Documentation changes are committed directly to `dev` and synchronized to `main` after validation.
